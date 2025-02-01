@@ -30,5 +30,5 @@ def register_user(request):
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
-def protected_view(request):
+def protected_view():
     return Response({"message": "You are authenticated!"})
