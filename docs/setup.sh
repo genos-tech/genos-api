@@ -17,31 +17,31 @@ python manage.py runserver localhost:8000
 # Create a user
 curl --header "Content-Type: application/json" \
   --request POST \
-  --data '{"email":"asd@asd.com","password":"xyz","username":"asd2"}' \
-  http://localhost:8000/api/v1/register/
+  --data '{"email":"asd@asd.com","password":"xyz","username":"asd3"}' \
+  http://localhost:8000/api/v2/user/register/
 
 # Run API without JWT
 curl -H "Content-Type: application/json" \
   --request POST \
   --data '{"st_chat_group_name":"Chat Group1", "bl_personal":"True"}' \
-  http://localhost:8000/api/v1/createChatGroup/
+  http://localhost:8000/api/v2/chatGroup/create/
 
 # Run API with wrong JWT
 curl -H "Content-Type: application/json" \
   -H "Authorization: Bearer ABC" \
   --request POST \
   --data '{"st_chat_group_name":"Chat Group1", "bl_personal":"True"}' \
-  http://localhost:8000/api/v1/createChatGroup/
+  http://localhost:8000/api/v2/chatGroup/create/
 
 # Login and get JWT
-ACCESS=$(curl --header "Content-Type: application/json" --request POST --data '{"username":"asd2","password":"xyz"}' http://localhost:8000/api/v1/login/ | jq -r '.access')
+ACCESS=$(curl --header "Content-Type: application/json" --request POST --data '{"username":"asd3","password":"xyz"}' http://localhost:8000/api/v2/user/login/ | jq -r '.access')
 
-# Run API with JWT
+# Create new chat groups
 curl -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${ACCESS}" \
   --request POST \
-  --data '{"st_chat_group_name":"Chat Group2", "bl_personal":"True"}' \
-  http://localhost:8000/api/v1/createChatGroup/
+  --data '{"st_chat_group_name":"Chat Group1", "bl_personal":"True"}' \
+  http://localhost:8000/api/v2/chatGroup/create/
 
 # Clear DB Users
 python manage.py shell
@@ -49,7 +49,24 @@ python manage.py shell
 # CustomUser.objects.all().delete()  # Delete all users
 
 # Run API after deleting the user
+curl -H "Authorization: Bearer ${ACCESS}" \
+  --request GET \
+  http://localhost:8000/api/v2/test/
+
+# Get all users
+curl -H "Authorization: Bearer ${ACCESS}" \
+  --request GET \
+  http://localhost:8000/api/v2/user/listAllUsers/
+
+# Get all chat groups
+curl -H "Authorization: Bearer ${ACCESS}" \
+  --request GET \
+  http://localhost:8000/api/v2/chatGroup/myGroups/
+
+# Join chat group
 curl -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${ACCESS}" \
-  --request GET \
-  http://localhost:8000/api/v1/test/
+  --request POST \
+  --data '{"st_chat_group_name":"Chat Group1"}' \
+  http://localhost:8000/api/v2/chatGroup/join/
+
