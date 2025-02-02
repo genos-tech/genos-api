@@ -26,8 +26,8 @@ class ChatGroup(models.Model):
 
 
 class ChatGroupMember(models.Model):
-    id_chat_group = models.IntegerField()
-    id_user = models.IntegerField()
+    id_chat_group = models.IntegerField(blank=False)
+    id_user = models.IntegerField(blank=False)
     dt_join = models.DateTimeField(auto_now_add=True)
     dt_last_read = models.DateTimeField()
 

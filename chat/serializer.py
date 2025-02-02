@@ -39,3 +39,21 @@ class ChatGroupSerializer(serializers.ModelSerializer):
         )
         chat_group.save()
         return chat_group
+
+class ChatGroupMemberSerializer(serializers.ModelSerializer):
+    id_chat_group = serializers.IntegerField()
+    id_user = serializers.IntegerField()
+    dt_last_read = serializers.DateTimeField()
+
+    class Meta:
+        model = models.ChatGroupMember
+        fields = "__all__"
+
+    def create(self, validated_data):
+        chat_group_member = models.ChatGroupMember(
+            id_chat_group=validated_data["id_chat_group"],
+            id_user=validated_data["id_user"],
+            dt_last_read=validated_data["dt_last_read"],
+        )
+        chat_group_member.save()
+        return chat_group_member
