@@ -66,7 +66,7 @@ class GetDMIdView(AuthenticatedAPIView):
             return Response({"dm_id": None}, status=status.HTTP_200_OK)
 
 
-class GetMyDMsView(AuthenticatedAPIView):
+class GetAllMyDMIdsView(AuthenticatedAPIView):
     def get(self, request):
         user_email = request.GET.get("user_email")
 
@@ -82,6 +82,27 @@ class GetMyDMsView(AuthenticatedAPIView):
         )
 
         return Response({"dm_ids": list(dm_ids)}, status=status.HTTP_200_OK)
+
+
+class GetAllMyDMEmailsView(AuthenticatedAPIView):
+    def get(self, request):
+        user_email = request.GET.get("user_email")
+
+        if not user_email:
+            return Response(
+                {"error": "user_email is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Fetch all dm_id values linked to the given email
+        dm_ids = UserDMMapping.objects.filter(user_email=user_email).values_list(
+            "dm_id", flat=True
+        )
+        dm_emails = UserDMMapping.objects.filter(dm_id__in=dm_ids).values_list(
+            "user_email", flat=True
+        )
+
+        return Response({"dm_emails": list(set(dm_emails))}, status=status.HTTP_200_OK)
 
 
 #############################

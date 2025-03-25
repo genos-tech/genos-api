@@ -78,7 +78,7 @@ class GMMembersView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class GetMyGMsView(AuthenticatedAPIView):
+class GetAllMyGMIdsView(AuthenticatedAPIView):
     def get(self, request):
         attendee_email = request.GET.get("attendee_email")
 
@@ -96,6 +96,25 @@ class GetMyGMsView(AuthenticatedAPIView):
             connected_set.add(group_id)
 
         return Response({"gm_ids": list(connected_set)}, status=status.HTTP_200_OK)
+
+
+class GetAllMyGMEmailsView(AuthenticatedAPIView):
+    def get(self, request):
+        attendee_email = request.GET.get("attendee_email")
+
+        if not attendee_email:
+            return Response(
+                {"error": "attendee_email is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Fetch emails that are connected with the given email
+        gm_ids = GMMembers.objects.filter(Q(attendee=attendee_email)).values_list("gm", flat=True)
+        gm_emails = GMMaster.objects.filter(Q(gm_id__in=gm_ids)).values_list(
+            "group_email", flat=True
+        )
+
+        return Response({"gm_emails": list(set(gm_emails))}, status=status.HTTP_200_OK)
 
 
 #############################
@@ -119,11 +138,8 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
         if not gm_ids:
             return Response({"messages": []}, status=status.HTTP_200_OK)
 
-        print("gm_ids:", gm_ids)
-
         # Fetch all messages where the gm_id matches and the user is involved
         raw_messages = GMMessages.objects.filter(gm_id__in=gm_ids)
-        print("raw_messages:", raw_messages)
 
         # Group by dm_id and parent_message_id, then count the replies in each group
         thread_reply_counts = GMThreadMessages.objects.values(
