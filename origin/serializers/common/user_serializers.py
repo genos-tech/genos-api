@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import make_password
 
@@ -25,6 +26,7 @@ class UserSerializer(serializers.ModelSerializer):
             "is_active",
             "is_staff",
         ]
+
         read_only_fields = [
             "id",
             "last_seen",
@@ -56,39 +58,30 @@ class UserCreateSerializer(serializers.ModelSerializer):
         return user
 
 
-class ChatGroupSerializer(serializers.ModelSerializer):
-    st_chat_group_name = serializers.CharField()
-    bl_personal = serializers.BooleanField()
-    id_owner = serializers.IntegerField()
+class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """Custom JWT Login Serializer to include user data"""
 
-    class Meta:
-        model = user_models.ChatGroup
-        fields = "__all__"
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+        token["username"] = user.username  # Add username to JWT payload
+        token["email"] = user.email  # Add email to JWT payload
+        token["profile_image_url"] = user.profile_image_url  # Add profile image URL
+        token["status"] = user.status  # Add user status
+        return token
 
-    def create(self, validated_data):
-        chat_group = user_models.ChatGroup(
-            st_chat_group_name=validated_data["st_chat_group_name"],
-            bl_personal=validated_data["bl_personal"],
-            id_owner=validated_data["id_owner"],
+    def validate(self, attrs):
+        data = super().validate(attrs)
+
+        user = self.user
+        user_data = UserSerializer(user).data
+
+        data.update(
+            {
+                "user": user_data,
+                "access": data["access"],
+                "refresh": data["refresh"],
+            }
         )
-        chat_group.save()
-        return chat_group
 
-
-class ChatGroupMemberSerializer(serializers.ModelSerializer):
-    id_chat_group = serializers.IntegerField()
-    id_user = serializers.IntegerField()
-    dt_last_read = serializers.DateTimeField()
-
-    class Meta:
-        model = user_models.ChatGroupMember
-        fields = "__all__"
-
-    def create(self, validated_data):
-        chat_group_member = user_models.ChatGroupMember(
-            id_chat_group=validated_data["id_chat_group"],
-            id_user=validated_data["id_user"],
-            dt_last_read=validated_data["dt_last_read"],
-        )
-        chat_group_member.save()
-        return chat_group_member
+        return data

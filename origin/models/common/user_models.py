@@ -23,7 +23,7 @@ class CustomUserManager(BaseUserManager):
 
 class CustomUser(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    username = models.CharField(max_length=50, unique=True)
+    username = models.CharField(max_length=50, unique=False)
     email = models.EmailField(unique=True)
     profile_image_url = models.URLField(blank=True, null=True)
     status = models.CharField(
@@ -54,27 +54,3 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
 
     USERNAME_FIELD = "email"  # Use email as the unique identifier
     REQUIRED_FIELDS = ["username"]
-
-
-class ChatGroup(models.Model):
-    id_chat_group = models.AutoField(primary_key=True)
-    st_chat_group_name = models.CharField(max_length=100)
-    bl_personal = models.BooleanField(blank=False)
-    id_owner = models.IntegerField()
-    dt_create = models.DateTimeField(auto_now_add=True)
-
-
-class ChatGroupMember(models.Model):
-    id_chat_group = models.IntegerField(blank=False)
-    id_user = models.IntegerField(blank=False)
-    dt_join = models.DateTimeField(auto_now_add=True)
-    dt_last_read = models.DateTimeField()
-
-
-class ChatGroupMessages(models.Model):
-    id_message = models.AutoField(primary_key=True)
-    id_chat_group = models.IntegerField()
-    id_sender = models.IntegerField()
-    st_sender_name = models.CharField(max_length=100)
-    tx_message_body = models.TextField()
-    dt_create = models.DateTimeField(auto_now_add=True)

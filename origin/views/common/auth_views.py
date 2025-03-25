@@ -6,10 +6,19 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from rest_framework import viewsets, permissions
 from django.contrib.auth import get_user_model
-from rest_framework_simplejwt.views import TokenObtainPairView
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from origin.serializers.common.user_serializers import UserSerializer, UserCreateSerializer
-from rest_framework.views import APIView
+from django.http import JsonResponse
+from django.middleware.csrf import get_token
+from django.contrib.auth import models
+from rest_framework.request import Request
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from .base_auth_api_view import AuthenticatedAPIView
+from origin.serializers.common.user_serializers import (
+    UserSerializer,
+    UserCreateSerializer,
+    CustomTokenObtainPairSerializer,
+)
 
 User = get_user_model()
 
@@ -38,9 +47,10 @@ class UserViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     "user": UserSerializer(user).data,
-                    "access_token": access_token,
-                    "refresh_token": str(refresh),
+                    "access": access_token,
+                    "refresh": str(refresh),
                     "user": {"username": user.username, "email": user.email},
+                    "message": "User creation completed",
                 },
                 status=status.HTTP_201_CREATED,
             )
@@ -48,36 +58,62 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response({"message": serializer.errors.items()}, status=status.HTTP_400_BAD_REQUEST)
 
 
-class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
-    """Custom JWT Login Serializer to include user data"""
+class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = CustomTokenObtainPairSerializer  # Use custom serializer
 
-    def validate(self, attrs):
-        data = super().validate(attrs)
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+        data = response.data
 
-        user = self.user
-        user_data = UserSerializer(user).data
-
-        data.update(
+        # Create JSON response (access token sent in response, refresh token in cookie)
+        response = JsonResponse(
             {
-                "user": user_data,
-                "access_token": data["access"],
-                "refresh_token": data["refresh"],
-                "user": user,
+                "access": data["access"],
+                "refresh": data["refresh"],
+                "username": data["user"]["username"],
+                "email": data["user"]["email"],
+                "profile_image_url": data["user"]["profile_image_url"],
+                "status": data["user"]["status"],
             }
         )
 
-        return data
+        # Set the refresh token in a httpOnly cookie
+        response.set_cookie(
+            key="refresh",
+            value=data["refresh"],
+            httponly=True,
+            secure=False,  # Change to True in production (HTTPS)
+            samesite="Strict",
+        )
+
+        return response
 
 
-class CustomTokenObtainPairView(TokenObtainPairView):
-    """Custom JWT Login View"""
+class CookieTokenRefreshView(TokenRefreshView):
+    def get(self, request: Request, *args, **kwargs):
+        refresh = request.COOKIES.get("refresh")  # Get refresh token from cookies
 
-    serializer_class = CustomTokenObtainPairSerializer
+        if not refresh or refresh == "":
+            return Response({"error": "No refresh token provided"}, status=403)
+
+        # Manually create the serializer with the refresh token
+        serializer = TokenRefreshSerializer(data={"refresh": refresh})
+
+        try:
+            serializer.is_valid(raise_exception=True)
+            return Response(serializer.validated_data)  # Return new access token
+        except (InvalidToken, TokenError):
+            return Response({"error": "Invalid or expired refresh token"}, status=403)
 
 
-class UserInfoView(APIView):
-    permission_classes = [IsAuthenticated]  # Requires authentication
+class LogoutView(TokenRefreshView):
+    def post(self, request):
+        response = JsonResponse({"message": "Signed out"})
+        response.delete_cookie("refresh")
+        return response
 
+
+class UserInfoView(AuthenticatedAPIView):
     def get(self, request):
         user = request.user  # Get the currently authenticated user
         serializer = UserSerializer(user)  # Serialize user data
