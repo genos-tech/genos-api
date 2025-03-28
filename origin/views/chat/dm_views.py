@@ -145,11 +145,12 @@ class DMAllMyMessagesView(AuthenticatedAPIView):
         last_message_dict = {}
         ts_last_message_dict = {}
         for raw_message in raw_messages:
+            chat_id = int(raw_message.dm.dm_id)
             sender_email = str(raw_message.sender.email)
             sender_name = str(raw_message.sender.username)
             receiver_email = str(raw_message.receiver.email)
             receiver_name = str(raw_message.receiver.username)
-            message_id = str(raw_message.message_id)
+            message_id = int(raw_message.message_id)
             content = str(raw_message.message_body)
             ts_sent = str(raw_message.ts_sent_at)
 
@@ -161,9 +162,10 @@ class DMAllMyMessagesView(AuthenticatedAPIView):
                 chat_group_email = sender_email
                 chat_group_name = sender_name
 
-            messageIdWithChatEmail = f"{chat_group_email}-{message_id}"
+            messageIdWithChatId = f"{chat_id}-{message_id}"
             new_message = {
-                "messageIdWithChatEmail": messageIdWithChatEmail,
+                "messageIdWithChatId": messageIdWithChatId,
+                "chatId": chat_id,
                 "messageId": message_id,
                 "chatEmail": chat_group_email,
                 "content": content,
@@ -197,6 +199,7 @@ class DMAllMyMessagesView(AuthenticatedAPIView):
                 ]
             else:
                 message_history_dict[chat_group_email] = {
+                    "chatId": chat_id,
                     "chatName": chat_group_name,
                     "chatEmail": chat_group_email,
                     "messages": [new_message],
@@ -290,8 +293,6 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
                 dm_id=request.data["dm_id"], parent_message_id=request.data["parent_message_id"]
             ),
         }
-
-        print("data:", data)
 
         serializer = DMThreadMessagesSerializer(data=data)
         if serializer.is_valid():

@@ -23,7 +23,7 @@ class GMMasterView(AuthenticatedAPIView):
             data = {
                 "chatName": serializer.data["group_name"],
                 "chatEmail": serializer.data["group_email"],
-                "gmId": serializer.data["gm_id"],
+                "chatId": serializer.data["gm_id"],
                 "message": "Completed GM creation",
             }
             return Response(data, status=status.HTTP_201_CREATED)
@@ -157,17 +157,19 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
         last_message_dict = {}
         ts_last_message_dict = {}
         for raw_message in raw_messages:
+            chat_id = int(raw_message.gm.gm_id)
             chat_group_email = str(raw_message.gm.group_email)
             chat_group_name = str(raw_message.gm.group_name)
-            message_id = str(raw_message.message_id)
+            message_id = int(raw_message.message_id)
             content = str(raw_message.message_body)
             sender_email = str(raw_message.sender.email)
             sender_name = str(raw_message.sender.username)
             ts_sent = str(raw_message.ts_sent_at)
 
-            messageIdWithChatEmail = f"{chat_group_email}-{message_id}"
+            messageIdWithChatId = f"{chat_id}-{message_id}"
             new_message = {
-                "messageIdWithChatEmail": messageIdWithChatEmail,
+                "messageIdWithChatId": messageIdWithChatId,
+                "chatId": chat_id,
                 "messageId": message_id,
                 "chatEmail": chat_group_email,
                 "content": content,
@@ -201,6 +203,7 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
                 ]
             else:
                 message_history_dict[chat_group_email] = {
+                    "chatId": chat_id,
                     "chatEmail": chat_group_email,
                     "chatName": chat_group_name,
                     "messages": [new_message],
