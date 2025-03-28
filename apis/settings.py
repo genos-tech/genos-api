@@ -26,7 +26,7 @@ SECRET_KEY = "django-insecure-1=c=z%cqhlgi$@+w8x3ees)q*q!hosc2lvv^=_dpln(%wipz08
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["192.168.10.2"]
 
 
 # Application definition
@@ -39,10 +39,12 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
-    "chat",
+    "origin",
+    "corsheaders",
 ]
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",  # Add this line at the top
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -51,6 +53,24 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",  # React frontend URL
+    "http://192.168.10.2:3000",  # React frontend URL
+    "http://192.168.10.2:8890",  # Add backend server if necessary
+]
+
+# Allow credentials (cookies, authentication)
+CORS_ALLOW_CREDENTIALS = True
+
+CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+
+# CORS_ALLOW_HEADERS = [
+#     "content-type",
+#     "authorization",
+# ]
+
 
 ROOT_URLCONF = "apis.urls"
 
@@ -72,18 +92,17 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "apis.wsgi.application"
 
-
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql_psycopg2",
-        "NAME": "chat_app",
+        "NAME": "origin",
         "USER": "postgres",
         "PASSWORD": "postgres",
-        "HOST": "192.168.10.14",
-        "PORT": "15432",
+        "HOST": "172.29.30.3",
+        "PORT": "5432",
     }
 }
 
@@ -136,9 +155,32 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    "USER_ID_FIELD": "id_user",  # 🔥 Use `id_user` instead of `id`
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+    "ACCESS_TOKEN_LIFETIME": timedelta(hours=24),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "ALGORITHM": "HS256",
+    "SIGNING_KEY": "your_secret_key",  # Make sure to use env variables instead
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
 }
 
-AUTH_USER_MODEL = "chat.CustomUser"
+AUTH_USER_MODEL = "origin.CustomUser"
+
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:3000",  # React frontend URL
+    "http://192.168.10.2:3000",  # React frontend URL
+    "http://192.168.10.2:8890",  # Add backend server if necessary
+]  # Adjust for your frontend URL
+
+SESSION_COOKIE_SECURE = False  # only for local development
+SESSION_COOKIE_HTTPONLY = True  # Prevents JavaScript access to the session cookie
+SESSION_COOKIE_SAMESITE = "Lax"  # Adjust as needed: "Lax", "Strict", or "None"
+CSRF_COOKIE_NAME = "csrftoken"  # Default cookie name
+CSRF_COOKIE_SECURE = False  # Set to True in production (HTTPS only)
+CSRF_COOKIE_HTTPONLY = (
+    False  # CSRF cookie should be accessible by JavaScript (for CSRF protection)
+)
+CSRF_COOKIE_SAMESITE = "Lax"

@@ -15,10 +15,12 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
-from chat import urls
+from origin.urls.common import urls as common_urls
+from origin.urls.chat import urls as chat_urls
 
 urlpatterns = [
     # path("admin/", admin.site.urls),
 ]
 
-urlpatterns.extend(urls.urlpatterns)
+urlpatterns.extend(common_urls.urlpatterns)
+urlpatterns.extend(chat_urls.urlpatterns)

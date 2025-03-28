@@ -1,0 +1,1 @@
+from .common.auth_views import *

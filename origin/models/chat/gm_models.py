@@ -1,0 +1,121 @@
+from django.db import models
+
+from origin.models.common.user_models import CustomUser
+from origin.models.common.team_models import TeamMaster
+
+
+class GMMaster(models.Model):
+    gm_id = models.BigAutoField(primary_key=True, unique=True)
+    group_email = models.EmailField(blank=False, db_index=True, unique=True)
+    group_name = models.CharField(blank=False)
+    owner_email = models.EmailField(blank=False)
+    owner_team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.CASCADE,
+        related_name="groups_in_team",
+        to_field="team_name",
+    )
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+
+
+class GMMembers(models.Model):
+    gm = models.ForeignKey(
+        GMMaster,
+        on_delete=models.CASCADE,
+        related_name="gm_members",
+        to_field="gm_id",
+    )
+    attendee = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="gm_attendee",
+        to_field="email",
+    )
+    ts_joined_at = models.DateTimeField(auto_now_add=True)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    uid = models.CharField(primary_key=True, max_length=255, unique=True, editable=False)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["gm", "attendee"], name="unique_gm_member")]
+
+    def save(self, *args, **kwargs):
+        """Automatically generate `uid` before saving the model."""
+        self.uid = f"{self.attendee.email}-{self.gm.gm_id}"
+        super().save(*args, **kwargs)
+
+
+class GMMessages(models.Model):
+    gm = models.ForeignKey(
+        GMMaster,
+        on_delete=models.CASCADE,
+        related_name="gm_messages",
+        to_field="gm_id",
+    )
+    sender = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="sent_gm_messages",
+        to_field="email",
+    )
+    message_id = models.IntegerField(blank=False, db_index=True)
+    message_body = models.TextField(blank=False)
+    thread_id = models.IntegerField(blank=True, null=True)
+    ts_sent_at = models.DateTimeField(auto_now=True)
+    ts_edited_at = models.DateTimeField(null=True, blank=True)
+    ts_thread_created_at = models.DateTimeField(null=True, blank=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+    uid = models.CharField(primary_key=True, max_length=255, unique=True, editable=False)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["gm", "message_id"], name="unique_gm_message")
+        ]
+
+    def save(self, *args, **kwargs):
+        """Automatically generate `uid` before saving the model."""
+        self.uid = f"{self.gm.gm_id}-{self.message_id}"
+        super().save(*args, **kwargs)
+
+
+class GMThreadMessages(models.Model):
+    gm = models.ForeignKey(
+        GMMaster,
+        on_delete=models.CASCADE,
+        related_name="gm_thread_messages",
+        to_field="gm_id",
+    )
+    thread_id = models.IntegerField()
+    sender = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="sent_gm_thread_messages",
+        to_field="email",
+    )
+    thread_message_id = models.IntegerField()
+    thread_message_body = models.TextField(blank=False)
+    parent_message_uid = models.ForeignKey(
+        GMMessages,
+        on_delete=models.CASCADE,
+        related_name="thread_messages",
+        to_field="uid",
+    )
+    ts_sent_at = models.DateTimeField(auto_now=True)
+    ts_edited_at = models.DateTimeField(null=True, blank=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+    uid = models.CharField(
+        primary_key=True, max_length=255, unique=True, editable=False
+    )  # Auto-generated unique ID
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["gm_id", "thread_id", "thread_message_id"], name="unique_gm_thread_message"
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        """Automatically generate `uid` before saving the model."""
+        self.uid = f"{self.gm.gm_id}-{self.thread_id}-{self.thread_message_id}"
+        super().save(*args, **kwargs)
