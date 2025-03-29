@@ -16,13 +16,13 @@ class TeamMembers(models.Model):
         TeamMaster,
         on_delete=models.CASCADE,
         related_name="team_members",
-        to_field="team_name",
+        to_field="team_id",
     )
     attendee = models.ForeignKey(
         CustomUser,
         on_delete=models.CASCADE,
         related_name="team_attendees",
-        to_field="email",
+        to_field="id",
     )
     ts_joined_at = models.DateTimeField(auto_now_add=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
@@ -37,5 +37,5 @@ class TeamMembers(models.Model):
 
     def save(self, *args, **kwargs):
         """Automatically generate `uid` before saving the model."""
-        self.uid = f"{self.attendee.email}-{self.team.team_id}"
+        self.uid = f"{self.team.team_id}-{self.attendee.id}"
         super().save(*args, **kwargs)

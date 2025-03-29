@@ -5,6 +5,7 @@ from origin.models.common.team_models import TeamMaster
 
 
 class GMMaster(models.Model):
+    # TODO: add team id for authorization
     gm_id = models.BigAutoField(primary_key=True, unique=True)
     group_email = models.EmailField(blank=False, db_index=True, unique=True)
     group_name = models.CharField(blank=False)

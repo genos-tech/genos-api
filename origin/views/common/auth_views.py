@@ -49,7 +49,7 @@ class UserViewSet(viewsets.ModelViewSet):
                     "user": UserSerializer(user).data,
                     "access": access_token,
                     "refresh": str(refresh),
-                    "user": {"username": user.username, "email": user.email},
+                    "user": {"username": user.username, "email": user.email, "id": user.id},
                     "message": "User creation completed",
                 },
                 status=status.HTTP_201_CREATED,

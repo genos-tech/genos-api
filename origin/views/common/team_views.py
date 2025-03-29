@@ -72,9 +72,9 @@ class GetTeamMembersView(AuthenticatedAPIView):
         user_email = request.GET.get("user_email")
         team_name = request.GET.get("team_name")
 
-        if not user_email:
+        if not user_email or not team_name:
             return Response(
-                {"error": "user_email is required."},
+                {"error": "user_email and team_name are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

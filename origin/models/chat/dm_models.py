@@ -5,8 +5,9 @@ from origin.models.common.user_models import CustomUser
 
 
 class DMMaster(models.Model):
+    # TODO: add team id for authorization
     dm_id = models.AutoField(primary_key=True)
-    user_1_email = models.EmailField(blank=False, db_index=True)
+    user_1_email = models.EmailField(blank=False, db_index=True) # should be user_id
     user_2_email = models.EmailField(blank=False, db_index=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
