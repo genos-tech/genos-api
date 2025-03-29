@@ -7,7 +7,7 @@ from origin.models.common.user_models import CustomUser
 class DMMaster(models.Model):
     # TODO: add team id for authorization
     dm_id = models.AutoField(primary_key=True)
-    user_1_email = models.EmailField(blank=False, db_index=True) # should be user_id
+    user_1_email = models.EmailField(blank=False, db_index=True)  # should be user_id
     user_2_email = models.EmailField(blank=False, db_index=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
@@ -118,7 +118,9 @@ class DMThreadMessages(models.Model):
     ts_sent_at = models.DateTimeField(auto_now=True)
     ts_edited_at = models.DateTimeField(null=True, blank=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
-    uid = models.CharField(primary_key=True, max_length=255, unique=True, editable=False)
+
+    # Refer from Task models
+    foreign_thread_id = models.CharField(primary_key=True, unique=True, editable=False)
 
     class Meta:
         constraints = [
@@ -128,6 +130,5 @@ class DMThreadMessages(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        """Automatically generate `uid` before saving the model."""
-        self.uid = f"{self.dm.dm_id}-{self.thread_id}-{self.thread_message_id}"
+        self.foreign_thread_id = f"0-{self.dm.dm_id}-{self.thread_id}"
         super().save(*args, **kwargs)

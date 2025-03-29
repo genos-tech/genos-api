@@ -36,15 +36,8 @@ class GMMembers(models.Model):
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
-    uid = models.CharField(primary_key=True, max_length=255, unique=True, editable=False)
-
     class Meta:
         constraints = [models.UniqueConstraint(fields=["gm", "attendee"], name="unique_gm_member")]
-
-    def save(self, *args, **kwargs):
-        """Automatically generate `uid` before saving the model."""
-        self.uid = f"{self.attendee.email}-{self.gm.gm_id}"
-        super().save(*args, **kwargs)
 
 
 class GMMessages(models.Model):
@@ -105,9 +98,9 @@ class GMThreadMessages(models.Model):
     ts_sent_at = models.DateTimeField(auto_now=True)
     ts_edited_at = models.DateTimeField(null=True, blank=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
-    uid = models.CharField(
-        primary_key=True, max_length=255, unique=True, editable=False
-    )  # Auto-generated unique ID
+
+    # Refer from Task models
+    foreign_thread_id = models.CharField(primary_key=True, unique=True, editable=False)
 
     class Meta:
         constraints = [
@@ -117,6 +110,5 @@ class GMThreadMessages(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        """Automatically generate `uid` before saving the model."""
-        self.uid = f"{self.gm.gm_id}-{self.thread_id}-{self.thread_message_id}"
+        self.foreign_thread_id = f"1-{self.gm.gm_id}-{self.thread_id}"
         super().save(*args, **kwargs)

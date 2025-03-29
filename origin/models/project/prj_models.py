@@ -46,14 +46,7 @@ class ProjectMembers(models.Model):
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
-    uid = models.CharField(primary_key=True, max_length=255, unique=True, editable=False)
-
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=["project", "attendee"], name="unique_project_member")
         ]
-
-    def save(self, *args, **kwargs):
-        """Automatically generate `uid` before saving the model."""
-        self.uid = f"{self.project.project_id}-{self.attendee.id}"
-        super().save(*args, **kwargs)

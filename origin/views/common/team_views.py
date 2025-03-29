@@ -39,7 +39,7 @@ class CheckTeamExistsView(AuthenticatedAPIView):
 
 class TeamMembersView(AuthenticatedAPIView):
     def post(self, request):
-        data = {"team": request.data["team_name"], "attendee": request.data["attendee_email"]}
+        data = {"team": request.data["team_id"], "attendee": request.data["attendee_id"]}
         serializer = TeamMembersSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
