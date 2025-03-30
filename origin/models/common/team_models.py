@@ -1,12 +1,20 @@
+import uuid
+
 from django.db import models
 
 from origin.models.common.user_models import CustomUser
 
 
 class TeamMaster(models.Model):
-    team_id = models.BigAutoField(primary_key=True, unique=True)
+    team_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     team_name = models.CharField(unique=True, blank=False)
-    owner_email = models.EmailField(blank=False, null=False)
+    team_email = models.EmailField(unique=True)
+    owner = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="own_teams",
+        to_field="id",
+    )
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 

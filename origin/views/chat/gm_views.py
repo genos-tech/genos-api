@@ -17,50 +17,69 @@ from origin.serializers.chat.gm_serializers import (
 #############################
 class GMMasterView(AuthenticatedAPIView):
     def post(self, request):
-        serializer = GMMasterSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            data = {
-                "chatName": serializer.data["group_name"],
-                "chatEmail": serializer.data["group_email"],
-                "chatId": serializer.data["gm_id"],
-                "message": "Completed GM creation",
-            }
-            return Response(data, status=status.HTTP_201_CREATED)
-        # Extract error messages and convert them into a string
-        error_messages = " ".join(
-            [f"{field}: {' '.join(errors)}" for field, errors in serializer.errors.items()]
-        )
-        return Response({"message": error_messages}, status=status.HTTP_400_BAD_REQUEST)
+        owner_team = request.data.get("owner_team", None)
+        group_name = request.data.get("group_name", None)
 
-
-class CheckGMExistsView(AuthenticatedAPIView):
-    def get(self, request):
-        group_email = request.GET.get("group_email", None)
-
-        if not group_email:
+        if not group_name:
             return Response(
-                {"error": "Both group_email is required."},
+                {"error": "Both group_name is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Check if a GM exists in any order
-        exists = GMMaster.objects.filter(Q(group_email=group_email)).exists()
+        exists = GMMaster.objects.filter(
+            Q(owner_team=owner_team, group_name=group_name)
+        ).values_list("gm_id", flat=True)
+
+        if len(exists) == 0:
+            serializer = GMMasterSerializer(data=request.data)
+            if serializer.is_valid():
+                serializer.save()
+                data = {
+                    "chatName": serializer.data["group_name"],
+                    "chatId": serializer.data["gm_id"],
+                    "message": "Completed GM creation",
+                }
+                return Response(data, status=status.HTTP_201_CREATED)
+            # Extract error messages and convert them into a string
+            error_messages = " ".join(
+                [f"{field}: {' '.join(errors)}" for field, errors in serializer.errors.items()]
+            )
+            return Response({"message": error_messages}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({"gm_exists": True, "gm_id": exists[0]}, status=status.HTTP_200_OK)
+
+
+class CheckGMExistsView(AuthenticatedAPIView):
+    def get(self, request):
+        gm_id = request.GET.get("gm_id", None)
+
+        if not gm_id:
+            return Response(
+                {"error": "Both gm_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Check if a GM exists in any order
+        exists = GMMaster.objects.filter(Q(gm_id=gm_id)).exists()
 
         return Response({"gm_exists": exists}, status=status.HTTP_200_OK)
 
 
 class GetGMIdView(AuthenticatedAPIView):
     def get(self, request):
-        group_email = request.GET.get("group_email", None)
+        team_id = request.GET.get("team_id", None)
+        group_name = request.GET.get("group_name", None)
 
-        if not group_email:
+        if not team_id or not group_name:
             return Response(
-                {"error": "group_email is required."},
+                {"error": "Both team_id and group_name are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        gm = GMMaster.objects.filter(Q(group_email=group_email)).values_list("gm_id", flat=True)
+        gm = GMMaster.objects.filter(Q(owner_team=team_id, group_name=group_name)).values_list(
+            "gm_id", flat=True
+        )
 
         if len(gm) == 1:
             return Response({"gm_id": gm[0]}, status=status.HTTP_200_OK)
@@ -70,26 +89,33 @@ class GetGMIdView(AuthenticatedAPIView):
 
 class GMMembersView(AuthenticatedAPIView):
     def post(self, request):
-        data = {"gm": request.data["gm_id"], "attendee": request.data["attendee_email"]}
-        serializer = GMMembersSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        data = {"gm": request.data["gm_id"], "attendee": request.data["attendee_id"]}
+
+        already_joined = GMMembers.objects.filter(
+            Q(gm_id=data["gm"], attendee_id=data["attendee"])
+        ).exists()
+
+        if already_joined:
+            return Response(data, status=status.HTTP_201_CREATED)
+        else:
+            serializer = GMMembersSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class GetAllMyGMIdsView(AuthenticatedAPIView):
     def get(self, request):
-        attendee_email = request.GET.get("attendee_email")
+        attendee_id = request.GET.get("attendee_id")
 
-        if not attendee_email:
+        if not attendee_id:
             return Response(
-                {"error": "attendee_email is required."},
+                {"error": "attendee_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Fetch emails that are connected with the given email
-        gm_ids = GMMembers.objects.filter(Q(attendee=attendee_email)).values_list("gm")
+        gm_ids = GMMembers.objects.filter(Q(attendee=attendee_id)).values_list("gm")
 
         connected_set = set()
         for (group_id,) in gm_ids:
@@ -98,41 +124,22 @@ class GetAllMyGMIdsView(AuthenticatedAPIView):
         return Response({"gm_ids": list(connected_set)}, status=status.HTTP_200_OK)
 
 
-class GetAllMyGMEmailsView(AuthenticatedAPIView):
-    def get(self, request):
-        attendee_email = request.GET.get("attendee_email")
-
-        if not attendee_email:
-            return Response(
-                {"error": "attendee_email is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Fetch emails that are connected with the given email
-        gm_ids = GMMembers.objects.filter(Q(attendee=attendee_email)).values_list("gm", flat=True)
-        gm_emails = GMMaster.objects.filter(Q(gm_id__in=gm_ids)).values_list(
-            "group_email", flat=True
-        )
-
-        return Response({"gm_emails": list(set(gm_emails))}, status=status.HTTP_200_OK)
-
-
 #############################
 # GM Messages views
 #############################
 class GMAllMyMessagesView(AuthenticatedAPIView):
     def get(self, request):
-        attendee_email = request.GET.get("user_email")
+        attendee_id = request.GET.get("user_id")
 
-        if not attendee_email:
+        if not attendee_id:
             return Response(
-                {"error": "attendee_email is required."},
+                {"error": "attendee_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Fetch all gm_ids linked to the user
         gm_ids = list(
-            GMMembers.objects.filter(Q(attendee=attendee_email)).values_list("gm_id", flat=True)
+            GMMembers.objects.filter(Q(attendee=attendee_id)).values_list("gm_id", flat=True)
         )
 
         if not gm_ids:
@@ -158,12 +165,11 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
         ts_last_message_dict = {}
         for raw_message in raw_messages:
             chat_id = int(raw_message.gm.gm_id)
-            chat_group_email = str(raw_message.gm.group_email)
-            chat_group_name = str(raw_message.gm.group_name)
+            chat_name = str(raw_message.gm.group_name)
             message_id = int(raw_message.message_id)
             content = str(raw_message.message_body)
-            sender_email = str(raw_message.sender.email)
             sender_name = str(raw_message.sender.username)
+            sender_id = str(raw_message.sender.id)
             ts_sent = str(raw_message.ts_sent_at)
 
             messageIdWithChatId = f"{chat_id}-{message_id}"
@@ -171,12 +177,11 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
                 "messageIdWithChatId": messageIdWithChatId,
                 "chatId": chat_id,
                 "messageId": message_id,
-                "chatEmail": chat_group_email,
                 "content": content,
                 "sender": {
                     "userName": sender_name,
-                    "userEmail": sender_email,
-                    "avatar_img_path": f"/path/to/user/{chat_group_email}.jpg",
+                    "userId": sender_id,
+                    "avatar_img_path": f"/path/to/user/{chat_id}.jpg",
                 },
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.gm.gm_id}-{message_id}", None
@@ -184,31 +189,28 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
                 "tsSent": ts_sent,
             }
 
-            if chat_group_email in ts_last_message_dict:
-                prev_ts_last_message = ts_last_message_dict[chat_group_email]
+            if chat_id in ts_last_message_dict:
+                prev_ts_last_message = ts_last_message_dict[chat_id]
                 if ts_sent > prev_ts_last_message:
-                    last_message_dict[chat_group_email] = new_message
-                    ts_last_message_dict[chat_group_email] = ts_sent
+                    last_message_dict[chat_id] = new_message
+                    ts_last_message_dict[chat_id] = ts_sent
             else:
-                last_message_dict[chat_group_email] = new_message
-                ts_last_message_dict[chat_group_email] = ts_sent
+                last_message_dict[chat_id] = new_message
+                ts_last_message_dict[chat_id] = ts_sent
 
-            if chat_group_email in message_history_dict:
-                message_history_dict[chat_group_email]["messages"].append(new_message)
-                message_history_dict[chat_group_email]["latestMessage"] = last_message_dict[
-                    chat_group_email
-                ]
-                message_history_dict[chat_group_email]["TSLastMessage"] = ts_last_message_dict[
-                    chat_group_email
-                ]
+            if chat_id in message_history_dict:
+                message_history_dict[chat_id]["messages"].append(new_message)
+                message_history_dict[chat_id]["latestMessage"] = last_message_dict[chat_id]
+                message_history_dict[chat_id]["TSLastMessage"] = ts_last_message_dict[chat_id]
             else:
-                message_history_dict[chat_group_email] = {
+                message_history_dict[chat_id] = {
                     "chatId": chat_id,
-                    "chatEmail": chat_group_email,
-                    "chatName": chat_group_name,
+                    "chatName": chat_name,
+                    "isDm": False,
+                    "dmPartnerUserId": "",
                     "messages": [new_message],
-                    "latestMessage": last_message_dict[chat_group_email],
-                    "TSLastMessage": ts_last_message_dict[chat_group_email],
+                    "latestMessage": last_message_dict[chat_id],
+                    "TSLastMessage": ts_last_message_dict[chat_id],
                 }
 
         message_history = list(message_history_dict.values())
@@ -224,18 +226,24 @@ class GMSingleMessageView(AuthenticatedAPIView):
         else:
             current_message_count = 0
 
-        data = {
-            "gm": request.data["gm_id"],
-            "sender": request.data["sender_email"],
-            "message_id": current_message_count + 1,
-            "message_body": request.data["message_body"],
-        }
-
-        serializer = GMMessagesSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        is_init = request.data.get("is_init")
+        if (is_init in [None, False]) or (is_init == True and current_message_count == 0):
+            data = {
+                "gm": request.data["gm_id"],
+                "sender": request.data["sender_id"],
+                "message_id": current_message_count + 1,
+                "message_body": request.data["message_body"],
+            }
+            serializer = GMMessagesSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response(
+                {"message": "Nothing to do cause it's already initialized"},
+                status=status.HTTP_201_CREATED,
+            )
 
 
 class GMMessagesByIdView(AuthenticatedAPIView):
@@ -282,7 +290,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
         data = {
             "gm": request.data["gm_id"],
             "thread_id": request.data["thread_id"],
-            "sender": request.data["sender_email"],
+            "sender": request.data["sender_id"],
             "thread_message_id": current_thread_message_count + 1,
             "thread_message_body": request.data["message_body"],
             "parent_message_uid": "{gm_id}-{parent_message_id}".format(

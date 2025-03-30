@@ -12,25 +12,18 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
         """
         Get all users and groups in the specified team
         """
-        user_email = request.GET.get("user_email")
-        team_name = request.GET.get("team_name")
+        user_id = request.GET.get("user_id")
+        team_id = request.GET.get("team_id")
 
-        if not user_email:
+        if not user_id:
             return Response(
-                {"error": "user_email is required."},
+                {"error": "user_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not team_name:
+        if not team_id:
             return Response(
-                {"error": "team_name is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        _team_name = TeamMembers.objects.filter(Q(attendee=user_email)).values("team")
-        if len(_team_name) > 0 and _team_name[0]["team"] != team_name:
-            return Response(
-                {"error": f"You're not in the team `{team_name}`"},
+                {"error": "team_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -38,45 +31,51 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
 
         # Get all team members
         team_members = (
-            TeamMembers.objects.filter(team=team_name)
+            TeamMembers.objects.filter(team=team_id)
             .select_related("attendee")
-            .values("attendee__email", "attendee__username")
+            .values("attendee__id", "attendee__username")
         )
 
         dm_ids_of_team_members = DMMaster.objects.filter(
-            Q(user_1_email=user_email) | Q(user_2_email=user_email)
-        ).values_list("dm_id", "user_1_email", "user_2_email")
-        team_member_email_to_dm_id = {}
+            Q(user_1_id=user_id) | Q(user_2_id=user_id)
+        ).values_list("dm_id", "user_1_id", "user_2_id")
+
+        team_member_id_to_dm_id = {}
         for data in dm_ids_of_team_members:
-            if data[1] == user_email:
-                team_member_email_to_dm_id[data[2]] = int(data[0])
+            if str(data[1]) == user_id:
+                team_member_id_to_dm_id[str(data[2])] = int(data[0])
             else:
-                team_member_email_to_dm_id[data[1]] = int(data[0])
+                team_member_id_to_dm_id[str(data[1])] = int(data[0])
+
+        print("")
+        print("team_members:", team_members)
+        print("dm_ids_of_team_members:", dm_ids_of_team_members)
+        print("team_member_id_to_dm_id:", team_member_id_to_dm_id)
+        print("")
 
         for member in list(team_members):
             search_list.append(
                 {
                     "type": "People",
-                    "id": team_member_email_to_dm_id.get(member["attendee__email"], -1),
-                    "name": member["attendee__username"],
-                    "email": member["attendee__email"],
+                    "id": team_member_id_to_dm_id.get(str(member["attendee__id"]), -1),
+                    "name": str(member["attendee__username"]),
+                    "dmPartnerUserId": str(member["attendee__id"]),
                 }
             )
 
         # Get all groups
-        groups_in_team = GMMaster.objects.filter(owner_team=team_name).values(
-            "gm_id", "group_email", "group_name"
-        )
+        groups_in_team = GMMaster.objects.filter(owner_team=team_id).values("gm_id", "group_name")
         for member in list(groups_in_team):
             search_list.append(
                 {
                     "type": "Group",
                     "id": int(member["gm_id"]),
                     "name": member["group_name"],
-                    "email": member["group_email"],
+                    "dmPartnerUserId": "",
                 }
             )
 
+        print("search_list:", search_list)
         return Response(
             {"searchList": search_list},
             status=status.HTTP_200_OK,

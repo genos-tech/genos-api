@@ -71,6 +71,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 "access": data["access"],
                 "refresh": data["refresh"],
                 "username": data["user"]["username"],
+                "user_id": data["user"]["id"],
                 "email": data["user"]["email"],
                 "profile_image_url": data["user"]["profile_image_url"],
                 "status": data["user"]["status"],

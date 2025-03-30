@@ -4,7 +4,6 @@ from origin.views.chat.dm_views import (
     CheckDMExistsView,
     GetDMIdView,
     GetAllMyDMIdsView,
-    GetAllMyDMEmailsView,
     DMAllMyMessagesView,
     DMSingleMessageView,
     DMMessagesByIdView,
@@ -18,7 +17,6 @@ from origin.views.chat.gm_views import (
     GetGMIdView,
     GMMembersView,
     GetAllMyGMIdsView,
-    GetAllMyGMEmailsView,
     GMAllMyMessagesView,
     GMSingleMessageView,
     GMMessagesByIdView,
@@ -33,9 +31,6 @@ urlpatterns = [
     path("api/v2/dm/checkExistence/", CheckDMExistsView.as_view(), name="check_dm_existence"),
     path("api/v2/dm/getDMId/", GetDMIdView.as_view(), name="get_dm_id"),
     path("api/v2/dm/getAllMyDMIds/", GetAllMyDMIdsView.as_view(), name="get_all_my_dm_ids"),
-    path(
-        "api/v2/dm/getAllMyDMEmails/", GetAllMyDMEmailsView.as_view(), name="get_all_my_dm_emails"
-    ),
     path("api/v2/dm/getHistory/", DMAllMyMessagesView.as_view(), name="get_all_my_dm_messages"),
     path("api/v2/dm/addMessage/", DMSingleMessageView.as_view(), name="insert_dm_message"),
     path(
@@ -64,9 +59,6 @@ urlpatterns = [
     path("api/v2/gm/getGMId/", GetGMIdView.as_view(), name="get_gm_id"),
     path("api/v2/gm/join/", GMMembersView.as_view(), name="join_gm"),
     path("api/v2/gm/getAllMyGMIds/", GetAllMyGMIdsView.as_view(), name="get_all_my_gm_ids"),
-    path(
-        "api/v2/gm/getAllMyGMEmails/", GetAllMyGMEmailsView.as_view(), name="get_all_my_gm_emails"
-    ),
     path("api/v2/gm/getHistory/", GMAllMyMessagesView.as_view(), name="get_all_my_gm_messages"),
     path("api/v2/gm/addMessage/", GMSingleMessageView.as_view(), name="insert_gm_message"),
     path(
