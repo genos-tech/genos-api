@@ -62,7 +62,6 @@ class GetMyProjectsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Fetch emails that are connected with the given email
         project_ids = ProjectMembers.objects.filter(Q(attendee=user_id)).values_list(
             "project", flat=True
         )
@@ -91,7 +90,7 @@ class GetProjectMembersView(AuthenticatedAPIView):
         attendees = (
             ProjectMembers.objects.filter(project=project_id)
             .select_related("attendee")
-            .values("attendee__email", "attendee__username")
+            .values("attendee__id", "attendee__username")
         )
 
         project_members = list(attendees)

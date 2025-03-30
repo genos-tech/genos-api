@@ -11,7 +11,14 @@ from origin.serializers.common.team_serializers import TeamMasterSerializer, Tea
 #############################
 class TeamMasterView(AuthenticatedAPIView):
     def post(self, request):
-        serializer = TeamMasterSerializer(data=request.data)
+
+        data = {
+            "team_name": request.data["team_name"],
+            "team_email": request.data["team_email"],
+            "owner": request.data["owner_id"],
+        }
+
+        serializer = TeamMasterSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -23,16 +30,16 @@ class TeamMasterView(AuthenticatedAPIView):
 
 class CheckTeamExistsView(AuthenticatedAPIView):
     def get(self, request):
-        team_name = request.GET.get("team_name", None)
+        team_id = request.GET.get("team_id", None)
 
-        if not team_name:
+        if not team_id:
             return Response(
-                {"error": "Both team_name is required."},
+                {"error": "Both team_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Check if a Team exists in any order
-        exists = TeamMaster.objects.filter(Q(team_name=team_name)).exists()
+        exists = TeamMaster.objects.filter(Q(team_id=team_id)).exists()
 
         return Response({"team_exists": exists}, status=status.HTTP_200_OK)
 
@@ -40,25 +47,34 @@ class CheckTeamExistsView(AuthenticatedAPIView):
 class TeamMembersView(AuthenticatedAPIView):
     def post(self, request):
         data = {"team": request.data["team_id"], "attendee": request.data["attendee_id"]}
-        serializer = TeamMembersSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        # Check if a Team exists in any order
+        exists = TeamMembers.objects.filter(
+            Q(team_id=data["team"], attendee_id=data["attendee"])
+        ).exists()
+
+        if exists:
+            return Response(data, status=status.HTTP_201_CREATED)
+        else:
+            serializer = TeamMembersSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class GetMyTeamsView(AuthenticatedAPIView):
     def get(self, request):
-        user_email = request.GET.get("user_email")
+        user_id = request.GET.get("user_id")
 
-        if not user_email:
+        if not user_id:
             return Response(
-                {"error": "user_email is required."},
+                {"error": "user_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Fetch emails that are connected with the given email
-        team_ids = TeamMembers.objects.filter(Q(attendee=user_email)).values_list("team")
+        team_ids = TeamMembers.objects.filter(Q(attendee=user_id)).values_list("team")
 
         connected_set = set()
         for (team_id,) in team_ids:
@@ -67,28 +83,47 @@ class GetMyTeamsView(AuthenticatedAPIView):
         return Response({"team_ids": list(connected_set)}, status=status.HTTP_200_OK)
 
 
+class GetAllTeamsView(AuthenticatedAPIView):
+    def get(self, request):
+        _teams = TeamMaster.objects.values_list("team_id", "team_name", "team_email")
+        teams = []
+        for (
+            team_id,
+            team_name,
+            team_email,
+        ) in _teams:
+            teams.append(
+                {
+                    "team_id": team_id,
+                    "team_name": team_name,
+                    "team_email": team_email,
+                }
+            )
+        return Response(teams, status=status.HTTP_200_OK)
+
+
 class GetTeamMembersView(AuthenticatedAPIView):
     def get(self, request):
-        user_email = request.GET.get("user_email")
-        team_name = request.GET.get("team_name")
+        user_id = request.GET.get("user_id")
+        team_id = request.GET.get("team_id")
 
-        if not user_email or not team_name:
+        if not user_id or not team_id:
             return Response(
-                {"error": "user_email and team_name are required."},
+                {"error": "user_id and team_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        _team_name = TeamMembers.objects.filter(Q(attendee=user_email)).values("team")
-        if len(_team_name) > 0 and _team_name[0]["team"] != team_name:
+        _team_id = TeamMembers.objects.filter(Q(attendee=user_id)).values("team")
+        if len(_team_id) > 0 and _team_id[0]["team"] != team_id:
             return Response(
-                {"error": f"You're not in the team `{team_name}`"},
+                {"error": f"You're not in the team `{team_id}`"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         attendees = (
-            TeamMembers.objects.filter(team=team_name)
+            TeamMembers.objects.filter(team=team_id)
             .select_related("attendee")
-            .values("attendee__email", "attendee__username")
+            .values("attendee__id", "attendee__username")
         )
 
         team_members = list(attendees)

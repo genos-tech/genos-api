@@ -7,16 +7,25 @@ from origin.models.common.team_models import TeamMaster
 class GMMaster(models.Model):
     # TODO: add team id for authorization
     gm_id = models.BigAutoField(primary_key=True, unique=True)
-    group_email = models.EmailField(blank=False, db_index=True, unique=True)
     group_name = models.CharField(blank=False)
-    owner_email = models.EmailField(blank=False)
+    owner_user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="own_gms",
+        to_field="id",
+    )
     owner_team = models.ForeignKey(
         TeamMaster,
         on_delete=models.CASCADE,
         related_name="groups_in_team",
-        to_field="team_name",
+        to_field="team_id",
     )
     ts_created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["group_name", "owner_team"], name="unique_gm_master")
+        ]
 
 
 class GMMembers(models.Model):
@@ -29,8 +38,8 @@ class GMMembers(models.Model):
     attendee = models.ForeignKey(
         CustomUser,
         on_delete=models.CASCADE,
-        related_name="gm_attendee",
-        to_field="email",
+        related_name="attending_gms",
+        to_field="id",
     )
     ts_joined_at = models.DateTimeField(auto_now_add=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
@@ -51,7 +60,7 @@ class GMMessages(models.Model):
         CustomUser,
         on_delete=models.CASCADE,
         related_name="sent_gm_messages",
-        to_field="email",
+        to_field="id",
     )
     message_id = models.IntegerField(blank=False, db_index=True)
     message_body = models.TextField(blank=False)
@@ -85,7 +94,7 @@ class GMThreadMessages(models.Model):
         CustomUser,
         on_delete=models.CASCADE,
         related_name="sent_gm_thread_messages",
-        to_field="email",
+        to_field="id",
     )
     thread_message_id = models.IntegerField()
     thread_message_body = models.TextField(blank=False)
@@ -100,7 +109,7 @@ class GMThreadMessages(models.Model):
     ts_updated_at = models.DateTimeField(auto_now=True)
 
     # Refer from Task models
-    foreign_thread_id = models.CharField(primary_key=True, unique=True, editable=False)
+    foreign_thread_id = models.CharField(editable=False)
 
     class Meta:
         constraints = [

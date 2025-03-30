@@ -16,48 +16,80 @@ from origin.serializers.chat.dm_serializers import (
 #############################
 class DMMasterView(AuthenticatedAPIView):
     def post(self, request):
-        serializer = DMMasterSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        user_1_id = request.data.get("user_1_id", None)
+        user_2_id = request.data.get("user_2_id", None)
 
-
-class CheckDMExistsView(AuthenticatedAPIView):
-    def get(self, request):
-        user_1_email = request.GET.get("user_1_email", None)
-        user_2_email = request.GET.get("user_2_email", None)
-
-        if not user_1_email or not user_2_email:
+        if not user_1_id or not user_2_id:
             return Response(
-                {"error": "Both user_1_email and user_2_email are required."},
+                {"error": "Both user_1_id and user_2_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Check if a DM exists in any order
         exists = DMMaster.objects.filter(
-            Q(user_1_email=user_1_email, user_2_email=user_2_email)
-            | Q(user_1_email=user_2_email, user_2_email=user_1_email)
-        ).exists()
+            Q(user_1_id=user_1_id, user_2_id=user_2_id)
+            | Q(user_1_id=user_2_id, user_2_id=user_1_id)
+        ).values_list("dm_id", flat=True)
+        
+        if len(exists) == 0:
+            serializer = DMMasterSerializer(data=request.data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+        elif len(exists) == 1:
+            return Response({"dm_exists": True, "dm_id": exists[0]}, status=status.HTTP_200_OK)
+        else:
+            return Response(
+                {"dm_exists": True, "dm_id": None, "error": "Duplicated DMs found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        return Response({"dm_exists": exists}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CheckDMExistsView(AuthenticatedAPIView):
+    def get(self, request):
+        user_1_id = request.GET.get("user_1_id", None)
+        user_2_id = request.GET.get("user_2_id", None)
+
+        if not user_1_id or not user_2_id:
+            return Response(
+                {"error": "Both user_1_id and user_2_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Check if a DM exists in any order
+        exists = DMMaster.objects.filter(
+            Q(user_1_id=user_1_id, user_2_id=user_2_id)
+            | Q(user_1_id=user_2_id, user_2_id=user_1_id)
+        ).values_list("dm_id", flat=True)
+
+        if exists == []:
+            return Response({"dm_exists": False, "dm_id": None}, status=status.HTTP_200_OK)
+        elif len(exists) == 1:
+            return Response({"dm_exists": True, "dm_id": exists[0]}, status=status.HTTP_200_OK)
+        else:
+            return Response(
+                {"dm_exists": True, "dm_id": None, "error": "Duplicated DMs found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 class GetDMIdView(AuthenticatedAPIView):
     def get(self, request):
-        user_1_email = request.GET.get("user_1_email", None)
-        user_2_email = request.GET.get("user_2_email", None)
+        user_1_id = request.GET.get("user_1_id", None)
+        user_2_id = request.GET.get("user_2_id", None)
 
-        if not user_1_email or not user_2_email:
+        if not user_1_id or not user_2_id:
             return Response(
-                {"error": "Both user_1_email and user_2_email are required."},
+                {"error": "Both user_1_id and user_2_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Check if a DM exists in any order
         dm = DMMaster.objects.filter(
-            Q(user_1_email=user_1_email, user_2_email=user_2_email)
-            | Q(user_1_email=user_2_email, user_2_email=user_1_email)
+            Q(user_1_id=user_1_id, user_2_id=user_2_id)
+            | Q(user_1_id=user_2_id, user_2_id=user_1_id)
         ).values_list("dm_id", flat=True)
 
         if len(dm) == 1:
@@ -68,41 +100,17 @@ class GetDMIdView(AuthenticatedAPIView):
 
 class GetAllMyDMIdsView(AuthenticatedAPIView):
     def get(self, request):
-        user_email = request.GET.get("user_email")
+        user_id = request.GET.get("user_id")
 
-        if not user_email:
+        if not user_id:
             return Response(
-                {"error": "user_email is required."},
+                {"error": "user_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Fetch all dm_id values linked to the given email
-        dm_ids = UserDMMapping.objects.filter(user_email=user_email).values_list(
-            "dm_id", flat=True
-        )
+        dm_ids = UserDMMapping.objects.filter(user_id=user_id).values_list("dm_id", flat=True)
 
         return Response({"dm_ids": list(dm_ids)}, status=status.HTTP_200_OK)
-
-
-class GetAllMyDMEmailsView(AuthenticatedAPIView):
-    def get(self, request):
-        user_email = request.GET.get("user_email")
-
-        if not user_email:
-            return Response(
-                {"error": "user_email is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Fetch all dm_id values linked to the given email
-        dm_ids = UserDMMapping.objects.filter(user_email=user_email).values_list(
-            "dm_id", flat=True
-        )
-        dm_emails = UserDMMapping.objects.filter(dm_id__in=dm_ids).values_list(
-            "user_email", flat=True
-        )
-
-        return Response({"dm_emails": list(set(dm_emails))}, status=status.HTTP_200_OK)
 
 
 #############################
@@ -110,17 +118,17 @@ class GetAllMyDMEmailsView(AuthenticatedAPIView):
 #############################
 class DMAllMyMessagesView(AuthenticatedAPIView):
     def get(self, request):
-        user_email = request.GET.get("user_email")
+        user_id = request.GET.get("user_id")
 
-        if not user_email:
+        if not user_id:
             return Response(
-                {"error": "user_email is required."},
+                {"error": "user_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Fetch all dm_ids linked to the user
         dm_ids = list(
-            UserDMMapping.objects.filter(user_email=user_email).values_list("dm_id", flat=True)
+            UserDMMapping.objects.filter(user_id=user_id).values_list("dm_id", flat=True)
         )
 
         if not dm_ids:
@@ -146,33 +154,31 @@ class DMAllMyMessagesView(AuthenticatedAPIView):
         ts_last_message_dict = {}
         for raw_message in raw_messages:
             chat_id = int(raw_message.dm.dm_id)
-            sender_email = str(raw_message.sender.email)
+            sender_id = str(raw_message.sender.id)
             sender_name = str(raw_message.sender.username)
-            receiver_email = str(raw_message.receiver.email)
+            receiver_id = str(raw_message.receiver.id)
             receiver_name = str(raw_message.receiver.username)
             message_id = int(raw_message.message_id)
             content = str(raw_message.message_body)
             ts_sent = str(raw_message.ts_sent_at)
 
-            # In DM, chat_group_email will be partner's email
-            if sender_email == user_email:
-                chat_group_email = receiver_email
-                chat_group_name = receiver_name
+            if sender_id == user_id:
+                dm_partner_user_id = receiver_id
+                chat_name = receiver_name
             else:
-                chat_group_email = sender_email
-                chat_group_name = sender_name
+                dm_partner_user_id = sender_id
+                chat_name = sender_name
 
             messageIdWithChatId = f"{chat_id}-{message_id}"
             new_message = {
                 "messageIdWithChatId": messageIdWithChatId,
                 "chatId": chat_id,
                 "messageId": message_id,
-                "chatEmail": chat_group_email,
                 "content": content,
                 "sender": {
                     "userName": sender_name,
-                    "userEmail": sender_email,
-                    "avatarImgPath": f"/path/to/user/{chat_group_email}.jpg",
+                    "userId": sender_id,
+                    "avatarImgPath": f"/path/to/user/{chat_id}.jpg",
                 },
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.dm.dm_id}-{message_id}", None
@@ -180,31 +186,28 @@ class DMAllMyMessagesView(AuthenticatedAPIView):
                 "tsSent": ts_sent,
             }
 
-            if chat_group_email in ts_last_message_dict:
-                prev_ts_last_message = ts_last_message_dict[chat_group_email]
+            if chat_id in ts_last_message_dict:
+                prev_ts_last_message = ts_last_message_dict[chat_id]
                 if ts_sent > prev_ts_last_message:
-                    last_message_dict[chat_group_email] = new_message
-                    ts_last_message_dict[chat_group_email] = ts_sent
+                    last_message_dict[chat_id] = new_message
+                    ts_last_message_dict[chat_id] = ts_sent
             else:
-                last_message_dict[chat_group_email] = new_message
-                ts_last_message_dict[chat_group_email] = ts_sent
+                last_message_dict[chat_id] = new_message
+                ts_last_message_dict[chat_id] = ts_sent
 
-            if chat_group_email in message_history_dict:
-                message_history_dict[chat_group_email]["messages"].append(new_message)
-                message_history_dict[chat_group_email]["latestMessage"] = last_message_dict[
-                    chat_group_email
-                ]
-                message_history_dict[chat_group_email]["TSLastMessage"] = ts_last_message_dict[
-                    chat_group_email
-                ]
+            if chat_id in message_history_dict:
+                message_history_dict[chat_id]["messages"].append(new_message)
+                message_history_dict[chat_id]["latestMessage"] = last_message_dict[chat_id]
+                message_history_dict[chat_id]["TSLastMessage"] = ts_last_message_dict[chat_id]
             else:
-                message_history_dict[chat_group_email] = {
+                message_history_dict[chat_id] = {
                     "chatId": chat_id,
-                    "chatName": chat_group_name,
-                    "chatEmail": chat_group_email,
+                    "chatName": chat_name,
+                    "isDm": True,
+                    "dmPartnerUserId": dm_partner_user_id,
                     "messages": [new_message],
-                    "latestMessage": last_message_dict[chat_group_email],
-                    "TSLastMessage": ts_last_message_dict[chat_group_email],
+                    "latestMessage": last_message_dict[chat_id],
+                    "TSLastMessage": ts_last_message_dict[chat_id],
                 }
 
         message_history = list(message_history_dict.values())
@@ -220,19 +223,25 @@ class DMSingleMessageView(AuthenticatedAPIView):
         else:
             current_message_count = 0
 
-        data = {
-            "dm": request.data["dm_id"],
-            "sender": request.data["sender_email"],
-            "receiver": request.data["receiver_email"],
-            "message_id": current_message_count + 1,
-            "message_body": request.data["message_body"],
-        }
-
-        serializer = DMMessagesSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        is_init = request.data.get("is_init")
+        if (is_init in [None, False]) or (is_init == True and current_message_count == 0):
+            data = {
+                "dm": request.data["dm_id"],
+                "sender": request.data["sender_id"],
+                "receiver": request.data["receiver_id"],
+                "message_id": current_message_count + 1,
+                "message_body": request.data["message_body"],
+            }
+            serializer = DMMessagesSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response(
+                {"message": "Nothing to do cause it's already initialized"},
+                status=status.HTTP_201_CREATED,
+            )
 
 
 class DMMessagesByIdView(AuthenticatedAPIView):
@@ -268,12 +277,6 @@ class CheckDMThreadExistsView(AuthenticatedAPIView):
 
 class DMSingleThreadMessageView(AuthenticatedAPIView):
     def post(self, request):
-        print('request.data["dm_id"]:', request.data["dm_id"])
-        print('request.data["thread_id"]:', request.data["thread_id"])
-        print('request.data["sender_email"]:', request.data["sender_email"])
-        print('request.data["receiver_email"]:', request.data["receiver_email"])
-        print('request.data["message_body"]:', request.data["message_body"])
-
         dm = DMMaster.objects.filter(dm_id=request.data["dm_id"])
         if len(dm) > 0:
             current_thread_message_count = DMThreadMessages.objects.filter(
@@ -285,8 +288,8 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
         data = {
             "dm": request.data["dm_id"],
             "thread_id": request.data["thread_id"],
-            "sender": request.data["sender_email"],
-            "receiver": request.data["receiver_email"],
+            "sender": request.data["sender_id"],
+            "receiver": request.data["receiver_id"],
             "thread_message_id": current_thread_message_count + 1,
             "thread_message_body": request.data["message_body"],
             "parent_message_uid": "{dm_id}-{parent_message_id}".format(
