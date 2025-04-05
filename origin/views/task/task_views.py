@@ -1,6 +1,7 @@
 from django.db.models import Q
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.parsers import MultiPartParser
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.task.task_models import *
 from origin.serializers.task.task_serializers import *
@@ -9,7 +10,27 @@ from origin.serializers.task.task_serializers import *
 class TaskMasterView(AuthenticatedAPIView):
     def post(self, request):
         print("request.data:", request.data)
-        serializer = TaskMasterSerializer(data=request.data)
+        data = {
+            "team": request.data["team"],
+            "project": request.data["project"],
+            "assignee": request.data["assignee"],
+            "reporter": request.data["reporter"],
+            "title": request.data["title"],
+            "priority": request.data["priority"],
+            "priority_code": 0,
+            "effort_level": request.data["effort_level"],
+            "effort_level_code": 0,
+            "status": request.data["status"],
+            "status_code": 0,
+            "content": request.data["content"],
+            "due_date": request.data["due_date"],
+            "github_url": request.data["github_url"],
+            "github_url_title": request.data["github_url_title"],
+            "general_url": request.data["general_url"],
+            "general_url_title": request.data["general_url_title"],
+            "tags": request.data["tags"],
+        }
+        serializer = TaskMasterSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -66,14 +87,24 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
 
 
 class TaskAttachmentsView(AuthenticatedAPIView):
+    parser_classes = [MultiPartParser]
+
     def post(self, request):
-        attachments_count = TaskAttachments.objects.filter(task=request.data["task"]).count()
+
+        task = request.POST.get("task")
+        attached_type = request.POST.get("attached_type")
+        attached_file = request.FILES.get("attached_file")
+
+        attachments_count = TaskAttachments.objects.filter(task=task).count()
 
         data = {
-            "task": request.data["task"],
+            "task": task,
             "attachment_id": attachments_count + 1,
-            "attachment_body": request.data["attached_file"],
+            "attached_file": attached_file,
+            "attached_type": attached_type,
         }
+
+        print("attached_data:", data)
 
         serializer = TaskAttachmentsSerializer(data=data)
         if serializer.is_valid():

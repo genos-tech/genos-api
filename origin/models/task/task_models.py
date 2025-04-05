@@ -42,9 +42,12 @@ class TaskMaster(models.Model):
     effort_level_code = models.BigIntegerField(blank=True, null=True)
     status_code = models.BigIntegerField(blank=True, null=True)
     content = models.TextField(blank=True, null=True)
-    github_link = models.URLField(blank=True, null=True)
-    general_link = models.URLField(blank=True, null=True)
+    github_url = models.URLField(blank=True, null=True)
+    github_url_title = models.CharField(blank=True, null=True)
+    general_url = models.URLField(blank=True, null=True)
+    general_url_title = models.CharField(blank=True, null=True)
     due_date = models.DateField(blank=True, null=True)
+    tags = models.JSONField(blank=True, null=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
@@ -58,6 +61,7 @@ class TaskAttachments(models.Model):
     )
     attachment_id = models.IntegerField()
     attached_file = models.FileField(upload_to="uploads/")
+    attached_type = models.CharField()
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
