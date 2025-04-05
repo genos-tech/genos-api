@@ -35,13 +35,16 @@ class TaskMaster(models.Model):
         to_field="id",
     )
     title = models.CharField(max_length=255)
-    priority = models.CharField(blank=True,null=True)
-    effort_level = models.CharField(blank=True,null=True)
+    priority = models.CharField(blank=True, null=True)
+    effort_level = models.CharField(blank=True, null=True)
     status = models.CharField()
-    content = models.TextField(blank=True,null=True)
-    github_link = models.URLField(blank=True,null=True)
-    general_link = models.URLField(blank=True,null=True)
-    due_date = models.DateField(blank=True,null=True)
+    priority_code = models.BigIntegerField(blank=True, null=True)
+    effort_level_code = models.BigIntegerField(blank=True, null=True)
+    status_code = models.BigIntegerField(blank=True, null=True)
+    content = models.TextField(blank=True, null=True)
+    github_link = models.URLField(blank=True, null=True)
+    general_link = models.URLField(blank=True, null=True)
+    due_date = models.DateField(blank=True, null=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
@@ -79,7 +82,9 @@ class TaskTags(models.Model):
     ts_updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["task", "tag_name"], name="unique_task_tag")]
+        constraints = [
+            models.UniqueConstraint(fields=["task", "tag_name"], name="unique_task_tag")
+        ]
 
 
 class TaskComments(models.Model):

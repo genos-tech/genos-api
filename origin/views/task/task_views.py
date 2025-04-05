@@ -8,6 +8,7 @@ from origin.serializers.task.task_serializers import *
 
 class TaskMasterView(AuthenticatedAPIView):
     def post(self, request):
+        print("request.data:", request.data)
         serializer = TaskMasterSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
