@@ -1,3 +1,5 @@
+import os
+import base64
 from datetime import datetime
 from django.db.models import Q
 from rest_framework.response import Response
@@ -139,6 +141,21 @@ class GetPreviewTasksView(AuthenticatedAPIView):
 
         response_data = []
         for t in task_with_tags:
+            attached_files = []
+            for _file in t.task_attachments.all().values_list("attached_file", "attached_type"):
+                file_path = _file[0]
+                file_type = _file[1]
+                with open(file_path, "rb") as f:
+                    encoded_file = base64.b64encode(f.read()).decode("utf-8")
+                    attached_files.append(
+                        {
+                            "file": None,
+                            "file_base64": encoded_file,
+                            "name": os.path.basename(file_path),
+                            "type": file_type,
+                        }
+                    )
+
             response_data.append(
                 {
                     "id": t.task_id,
@@ -170,9 +187,21 @@ class GetPreviewTasksView(AuthenticatedAPIView):
                     "daysLeft": (
                         max(0, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
-                    "status": t.status,
-                    "priority": t.priority,
-                    "effortLevel": t.effort_level,
+                    "status": {
+                        "code": 0,
+                        "status": t.status,
+                        "color": "primary",
+                    },
+                    "priority": {
+                        "code": 0,
+                        "priority": t.priority,
+                        "color": "primary",
+                    },
+                    "effortLevel": {
+                        "code": 0,
+                        "level": t.effort_level,
+                        "color": "primary",
+                    },
                     "tags": t.tags,
                     "githubLink": {
                         "url": t.github_url,
@@ -182,9 +211,7 @@ class GetPreviewTasksView(AuthenticatedAPIView):
                         "url": t.general_url,
                         "title": t.general_url_title,
                     },
-                    "attachments": t.task_attachments.all().values_list(
-                        "attached_file", flat=True
-                    ),
+                    "attachments": attached_files,
                     "parentTaskId": t.parent_task_id,
                     "threadId": t.thread_id,
                 },
