@@ -13,6 +13,8 @@ class TaskMasterView(AuthenticatedAPIView):
         data = {
             "team": request.data["team"],
             "project": request.data["project"],
+            "thread_id": request.data.get("thread_id", None),
+            "parent_task_id": request.data.get("parent_task_id", None),
             "assignee": request.data["assignee"],
             "reporter": request.data["reporter"],
             "title": request.data["title"],
@@ -30,6 +32,7 @@ class TaskMasterView(AuthenticatedAPIView):
             "general_url_title": request.data["general_url_title"],
             "tags": request.data["tags"],
         }
+        print("create task data:", data)
         serializer = TaskMasterSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
@@ -37,6 +40,43 @@ class TaskMasterView(AuthenticatedAPIView):
 
         error = serializer.errors
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+    def put(self, request):
+        try:
+            print("request.data:", request.data)
+            task = TaskMaster.objects.get(task_id=request.data["task_id"])
+        except TaskMaster.DoesNotExist:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        data = {
+            "team": request.data.get("team", task.team),
+            "project": request.data.get("project", task.project),
+            "thread_id": request.data.get("thread_id", task.thread_id),
+            "parent_task_id": request.data.get("parent_task_id", task.parent_task_id),
+            "assignee": request.data.get("assignee", task.assignee),
+            "reporter": request.data.get("reporter", task.reporter),
+            "title": request.data.get("title", task.title),
+            "priority": request.data.get("priority", task.priority),
+            "priority_code": task.priority_code,
+            "effort_level": request.data.get("effort_level", task.effort_level),
+            "effort_level_code": task.effort_level_code,
+            "status": request.data.get("status", task.status),
+            "status_code": task.status_code,
+            "content": request.data.get("content", task.content),
+            "due_date": request.data.get("due_date", task.due_date),
+            "github_url": request.data.get("github_url", task.github_url),
+            "github_url_title": request.data.get("github_url_title", task.github_url_title),
+            "general_url": request.data.get("general_url", task.general_url),
+            "general_url_title": request.data.get("general_url_title", task.general_url_title),
+            "tags": request.data.get("tags", task.tags),
+        }
+
+        serializer = TaskMasterSerializer(task, data=data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response([serializer.data], status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class GetTeamTasksView(AuthenticatedAPIView):
