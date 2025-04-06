@@ -1,3 +1,4 @@
+from datetime import datetime
 from django.db.models import Q
 from rest_framework.response import Response
 from rest_framework import status
@@ -9,7 +10,6 @@ from origin.serializers.task.task_serializers import *
 
 class TaskMasterView(AuthenticatedAPIView):
     def post(self, request):
-        print("request.data:", request.data)
         data = {
             "team": request.data["team"],
             "project": request.data["project"],
@@ -49,9 +49,115 @@ class GetTeamTasksView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        tasks = TaskMaster.objects.filter(team=team_id)
-        serializer = TaskMasterSerializer(tasks, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        # tasks = TaskMaster.objects.filter(team=team_id)
+        # serializer = TaskMasterSerializer(tasks, many=True)
+
+        task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(team=team_id)
+        response_data = []
+        for t in task_with_tags:
+            response_data.append(
+                {
+                    "id": t.task_id,
+                    "title": t.title,
+                    "priority": t.priority,
+                    "effortLevel": t.effort_level,
+                    "createdDate": str(t.ts_created_at.date()),
+                    "dueDate": str(t.due_date),
+                    "daysLeft": (
+                        max(0, (t.due_date - datetime.now().date()).days) if t.due_date else None
+                    ),
+                    "status": t.status,
+                    "assigneeId": t.assignee.id,
+                    "assigneeEmail": t.assignee.email,
+                    "assigneeName": t.assignee.username,
+                    "parentTaskId": t.parent_task_id,
+                    "threadId": t.thread_id,
+                    "tags": t.tags,
+                    "teamId": t.team.team_id,
+                    "projectId": t.project.project_id,
+                },
+            )
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+class GetPreviewTasksView(AuthenticatedAPIView):
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        project_id = request.GET.get("project_id")
+        task_id = request.GET.get("task_id")
+
+        if not team_id:
+            return Response(
+                {"error": "team_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        task_with_tags = TaskMaster.objects.prefetch_related("task_attachments").filter(
+            team=team_id, project_id=project_id, task_id=task_id
+        )
+
+        response_data = []
+        for t in task_with_tags:
+            response_data.append(
+                {
+                    "id": t.task_id,
+                    "project": {
+                        "id": t.project.project_id,
+                        "name": t.project.project_name,
+                        "color": "primary",
+                    },
+                    "title": t.title,
+                    "body": t.content,
+                    "assignee": {
+                        "teamId": t.team.team_id,
+                        "userId": t.assignee.id,
+                        "userName": t.assignee.username,
+                        "userEmail": t.assignee.email,
+                        "avatarImgPath": f"/img/path/to/{t.assignee.email}",
+                        "online": True,
+                    },
+                    "reporter": {
+                        "teamId": t.team.team_id,
+                        "userId": t.reporter.id,
+                        "userName": t.reporter.username,
+                        "userEmail": t.reporter.email,
+                        "avatarImgPath": f"/img/path/to/{t.reporter.email}",
+                        "online": True,
+                    },
+                    "createdDate": str(t.ts_created_at.date()),
+                    "dueDate": str(t.due_date),
+                    "daysLeft": (
+                        max(0, (t.due_date - datetime.now().date()).days) if t.due_date else None
+                    ),
+                    "status": t.status,
+                    "priority": t.priority,
+                    "effortLevel": t.effort_level,
+                    "tags": t.tags,
+                    "githubLink": {
+                        "url": t.github_url,
+                        "title": t.github_url_title,
+                    },
+                    "generalLink": {
+                        "url": t.general_url,
+                        "title": t.general_url_title,
+                    },
+                    "attachments": t.task_attachments.all().values_list(
+                        "attached_file", flat=True
+                    ),
+                    "parentTaskId": t.parent_task_id,
+                    "threadId": t.thread_id,
+                },
+            )
+            break
+
+        if len(response_data) == 1:
+            return Response(response_data, status=status.HTTP_200_OK)
+        else:
+            print(response_data)
+            return Response(
+                {"error": "Failed to fetch expected task data"}, status=status.HTTP_400_BAD_REQUEST
+            )
 
 
 class GetProjectTasksView(AuthenticatedAPIView):
@@ -65,9 +171,38 @@ class GetProjectTasksView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        tasks = TaskMaster.objects.filter(team=team_id, project=project_id)
-        serializer = TaskMasterSerializer(tasks, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        # tasks = TaskMaster.objects.filter(team=team_id, project=project_id)
+        # serializer = TaskMasterSerializer(tasks, many=True)
+
+        task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
+            team=team_id, project_id=project_id
+        )
+        response_data = []
+        for t in task_with_tags:
+            response_data.append(
+                {
+                    "id": t.task_id,
+                    "title": t.title,
+                    "priority": t.priority,
+                    "effortLevel": t.effort_level,
+                    "createdDate": str(t.ts_created_at.date()),
+                    "dueDate": str(t.due_date),
+                    "daysLeft": (
+                        max(0, (t.due_date - datetime.now().date()).days) if t.due_date else None
+                    ),
+                    "status": t.status,
+                    "assigneeId": t.assignee.id,
+                    "assigneeEmail": t.assignee.email,
+                    "assigneeName": t.assignee.username,
+                    "parentTaskId": t.parent_task_id,
+                    "threadId": t.thread_id,
+                    "tags": t.tags,
+                    "teamId": t.team.team_id,
+                    "projectId": t.project.project_id,
+                },
+            )
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 class GetMyAssignedTasksView(AuthenticatedAPIView):
@@ -81,9 +216,38 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        tasks = TaskMaster.objects.filter(team=team_id, assignee=user_id)
-        serializer = TaskMasterSerializer(tasks, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        # tasks = TaskMaster.objects.filter(team=team_id, assignee=user_id)
+        # serializer = TaskMasterSerializer(tasks, many=True)
+
+        task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
+            team=team_id, assignee=user_id
+        )
+        response_data = []
+        for t in task_with_tags:
+            response_data.append(
+                {
+                    "id": t.task_id,
+                    "title": t.title,
+                    "priority": t.priority,
+                    "effortLevel": t.effort_level,
+                    "createdDate": str(t.ts_created_at.date()),
+                    "dueDate": str(t.due_date),
+                    "daysLeft": (
+                        max(0, (t.due_date - datetime.now().date()).days) if t.due_date else None
+                    ),
+                    "status": t.status,
+                    "assigneeId": t.assignee.id,
+                    "assigneeEmail": t.assignee.email,
+                    "assigneeName": t.assignee.username,
+                    "parentTaskId": t.parent_task_id,
+                    "threadId": t.thread_id,
+                    "tags": t.tags,
+                    "teamId": t.team.team_id,
+                    "projectId": t.project.project_id,
+                },
+            )
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 class TaskAttachmentsView(AuthenticatedAPIView):
