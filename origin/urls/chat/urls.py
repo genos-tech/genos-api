@@ -24,6 +24,7 @@ from origin.views.chat.gm_views import (
     GMSingleThreadMessageView,
     GMThreadMessagesByIdView,
 )
+from origin.views.chat.search_views import GetTeamMembersAndGroupsView
 
 urlpatterns = [
     # DM urls
@@ -80,5 +81,11 @@ urlpatterns = [
         "api/v2/gm/getThreadMessagesById/",
         GMThreadMessagesByIdView.as_view(),
         name="get_gm_thread_messages_by_id",
+    ),
+    # Search
+    path(
+        "api/v2/search/teamMembersAndGroups/",
+        GetTeamMembersAndGroupsView.as_view(),
+        name="search_team_members_and_groups",
     ),
 ]

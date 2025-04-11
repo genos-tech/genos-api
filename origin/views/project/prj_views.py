@@ -38,6 +38,35 @@ class CheckProjectExistsView(AuthenticatedAPIView):
         return Response({"project_exists": exists}, status=status.HTTP_200_OK)
 
 
+class GetTeamProjectsView(AuthenticatedAPIView):
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+
+        if not team_id:
+            return Response(
+                {"error": "team_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        projects = (
+            ProjectMaster.objects.filter(Q(team=team_id))
+            .values_list("project_id", "project_name")
+            .order_by("ts_updated_at")
+            .reverse()
+        )
+
+        team_projects = []
+        for project in list(projects):
+            team_projects.append(
+                {
+                    "projectId": project[0],
+                    "projectName": project[1],
+                }
+            )
+
+        return Response(team_projects, status=status.HTTP_200_OK)
+
+
 class ProjectMembersView(AuthenticatedAPIView):
     def post(self, request):
         data = {
