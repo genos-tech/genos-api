@@ -14,12 +14,6 @@ class TaskAttachmentsSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-class TaskTagsSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = TaskTags
-        fields = "__all__"
-
-
 class TaskCommentsSerializer(serializers.ModelSerializer):
     class Meta:
         model = TaskComments

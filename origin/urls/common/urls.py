@@ -2,7 +2,6 @@ from django.urls import path
 
 from origin.views.common.auth_views import *
 from origin.views.common.team_views import *
-from origin.views.common.search_views import GetTeamMembersAndGroupsView
 
 user_list = UserViewSet.as_view({"post": "create"})
 
@@ -19,9 +18,4 @@ urlpatterns = [
         "api/v2/team/getAllTeams/", GetAllTeamsView.as_view(), name="get_all_team"
     ),  # TODO: Must be abolish
     path("api/v2/team/getTeamMembers/", GetTeamMembersView.as_view(), name="get_team_members"),
-    path(
-        "api/v2/search/teamMembersAndGroups/",
-        GetTeamMembersAndGroupsView.as_view(),
-        name="search_team_members_and_groups",
-    ),
 ]

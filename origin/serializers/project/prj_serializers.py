@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.project.prj_models import *
 
 
 class ProjectMasterSerializer(serializers.ModelSerializer):
@@ -11,4 +11,10 @@ class ProjectMasterSerializer(serializers.ModelSerializer):
 class ProjectMembersSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProjectMembers
+        fields = "__all__"
+
+
+class ProjectTagsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProjectTags
         fields = "__all__"

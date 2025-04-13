@@ -30,7 +30,7 @@ class DMMasterView(AuthenticatedAPIView):
             Q(user_1_id=user_1_id, user_2_id=user_2_id)
             | Q(user_1_id=user_2_id, user_2_id=user_1_id)
         ).values_list("dm_id", flat=True)
-        
+
         if len(exists) == 0:
             serializer = DMMasterSerializer(data=request.data)
             if serializer.is_valid():
@@ -295,6 +295,7 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
             "parent_message_uid": "{dm_id}-{parent_message_id}".format(
                 dm_id=request.data["dm_id"], parent_message_id=request.data["parent_message_id"]
             ),
+            "task": request.data["task"],
         }
 
         serializer = DMThreadMessagesSerializer(data=data)

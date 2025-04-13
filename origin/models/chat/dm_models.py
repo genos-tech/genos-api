@@ -2,6 +2,7 @@ from django.db import models
 from django.core.exceptions import ValidationError
 
 from origin.models.common.user_models import CustomUser
+from origin.models.task.task_models import TaskMaster
 
 
 class DMMaster(models.Model):
@@ -71,6 +72,14 @@ class DMMessages(models.Model):
     message_id = models.IntegerField()
     message_body = models.TextField(blank=False)
     thread_id = models.IntegerField(blank=True, null=True)
+    task = models.ForeignKey(
+        TaskMaster,
+        on_delete=models.CASCADE,
+        related_name="dm_thread_task",
+        to_field="task_id",
+        null=True,
+        blank=True,
+    )
     ts_sent_at = models.DateTimeField(auto_now=True)
     ts_edited_at = models.DateTimeField(null=True, blank=True)
     ts_thread_created_at = models.DateTimeField(null=True, blank=True)

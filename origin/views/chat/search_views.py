@@ -33,7 +33,7 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
         team_members = (
             TeamMembers.objects.filter(team=team_id)
             .select_related("attendee")
-            .values("attendee__id", "attendee__username")
+            .values("attendee__id", "attendee__username", "attendee__email")
         )
 
         dm_ids_of_team_members = DMMaster.objects.filter(
@@ -47,18 +47,13 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
             else:
                 team_member_id_to_dm_id[str(data[1])] = int(data[0])
 
-        print("")
-        print("team_members:", team_members)
-        print("dm_ids_of_team_members:", dm_ids_of_team_members)
-        print("team_member_id_to_dm_id:", team_member_id_to_dm_id)
-        print("")
-
         for member in list(team_members):
             search_list.append(
                 {
                     "type": "People",
                     "id": team_member_id_to_dm_id.get(str(member["attendee__id"]), -1),
                     "name": str(member["attendee__username"]),
+                    "email": str(member["attendee__email"]),
                     "dmPartnerUserId": str(member["attendee__id"]),
                 }
             )
@@ -71,6 +66,7 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
                     "type": "Group",
                     "id": int(member["gm_id"]),
                     "name": member["group_name"],
+                    "email": None,
                     "dmPartnerUserId": "",
                 }
             )

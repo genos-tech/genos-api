@@ -104,28 +104,30 @@ class GetAllTeamsView(AuthenticatedAPIView):
 
 class GetTeamMembersView(AuthenticatedAPIView):
     def get(self, request):
-        user_id = request.GET.get("user_id")
         team_id = request.GET.get("team_id")
+        user_id = request.GET.get("user_id")
 
         if not user_id or not team_id:
             return Response(
-                {"error": "user_id and team_id are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        _team_id = TeamMembers.objects.filter(Q(attendee=user_id)).values("team")
-        if len(_team_id) > 0 and _team_id[0]["team"] != team_id:
-            return Response(
-                {"error": f"You're not in the team `{team_id}`"},
+                {"error": "team_id and user_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         attendees = (
             TeamMembers.objects.filter(team=team_id)
             .select_related("attendee")
-            .values("attendee__id", "attendee__username")
+            .values("attendee__id", "attendee__username", "attendee__email")
         )
 
-        team_members = list(attendees)
+        response_data = []
+        for attendee in attendees:
+            response_data.append({
+                "teamId": team_id,
+                "userId": attendee["attendee__id"],
+                "userName": attendee["attendee__username"],
+                "userEmail": attendee["attendee__email"],
+                "avatarImgPath": f"{attendee["attendee__email"]}.png",
+                "online": False,
+            })
 
-        return Response({"team_members": team_members}, status=status.HTTP_200_OK)
+        return Response(response_data, status=status.HTTP_200_OK)
