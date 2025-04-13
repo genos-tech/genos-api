@@ -49,6 +49,6 @@ class GetTeamTasksView(AuthenticatedAPIView):
                 )
 
         return Response(
-            team_tasks,
+            sorted(team_tasks, key=lambda x: x["projectId"]),
             status=status.HTTP_200_OK,
         )

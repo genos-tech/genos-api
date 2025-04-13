@@ -2,11 +2,8 @@ from django.db.models import Q
 from rest_framework.response import Response
 from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.models.project.prj_models import ProjectMaster, ProjectMembers
-from origin.serializers.project.prj_serializers import (
-    ProjectMasterSerializer,
-    ProjectMembersSerializer,
-)
+from origin.models.project.prj_models import *
+from origin.serializers.project.prj_serializers import *
 
 
 class ProjectMasterView(AuthenticatedAPIView):
@@ -125,3 +122,53 @@ class GetProjectMembersView(AuthenticatedAPIView):
         project_members = list(attendees)
 
         return Response({"project_members": project_members}, status=status.HTTP_200_OK)
+
+
+class ProjectTagsView(AuthenticatedAPIView):
+    def post(self, request):
+        tag_count = ProjectTags.objects.filter(project=request.data["project_id"]).count()
+
+        data = {
+            "team": request.data["team_id"],
+            "project": request.data["project_id"],
+            "tag_id": tag_count + 1,
+            "tag_name": request.data["tag_name"],
+            "tag_color": request.data["tag_color"],
+            "tag_text_color": request.data["tag_text_color"],
+        }
+
+        print(data)
+
+        serializer = ProjectTagsSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        error = serializer.errors
+        return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        project_id = request.GET.get("project_id")
+
+        if not team_id or not project_id:
+            return Response(
+                {"error": "team_id and project_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        tags = ProjectTags.objects.filter(team=team_id, project=project_id).values(
+            "tag_name", "tag_color", "tag_text_color"
+        )
+
+        response_body = []
+        for tag in tags:
+            response_body.append(
+                {
+                    "tagName": tag["tag_name"],
+                    "tagColor": tag["tag_color"],
+                    "tagTextColor": tag["tag_text_color"],
+                }
+            )
+
+        return Response(response_body, status=status.HTTP_200_OK)

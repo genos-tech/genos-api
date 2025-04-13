@@ -8,6 +8,7 @@ from rest_framework.parsers import MultiPartParser
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.task.task_models import *
 from origin.serializers.task.task_serializers import *
+from origin.models.project.prj_models import *
 
 
 class TaskMasterView(AuthenticatedAPIView):
@@ -106,7 +107,7 @@ class GetTeamTasksView(AuthenticatedAPIView):
                     "createdDate": str(t.ts_created_at.date()),
                     "dueDate": str(t.due_date),
                     "daysLeft": (
-                        max(0, (t.due_date - datetime.now().date()).days) if t.due_date else None
+                        max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
                     "status": t.status,
                     "assigneeId": t.assignee.id,
@@ -123,7 +124,66 @@ class GetTeamTasksView(AuthenticatedAPIView):
         return Response(response_data, status=status.HTTP_200_OK)
 
 
+class GetTeamTasksByTagView(AuthenticatedAPIView):
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+
+        if not team_id:
+            return Response(
+                {"error": "team_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(team=team_id)
+        response_data = []
+
+        projects = {}
+        for t in task_with_tags:
+            if t.tags:
+                if t.project.project_id not in projects:
+                    projects[t.project.project_id] = {
+                        "projectId": t.project.project_id,
+                        "projectName": t.project.project_name,
+                        "tags": {},
+                    }
+
+                for tag in t.tags:
+                    if tag["tag_name"] not in projects[t.project.project_id]["tags"]:
+                        projects[t.project.project_id]["tags"][tag["tag_name"]] = {
+                            "tagName": tag["tag_name"],
+                            "tagColor": tag["tag_color"],
+                            "tagTextColor": tag["tag_text_color"],
+                            "tasks": [],
+                        }
+                        projects[t.project.project_id]["tags"][tag["tag_name"]]["tasks"].append(
+                            {
+                                "taskId": t.task_id,
+                                "title": t.title,
+                                "status": t.status,
+                            }
+                        )
+
+        for project_id, project_tasks in projects.items():
+            response_data.append(project_tasks)
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
 class GetPreviewTasksView(AuthenticatedAPIView):
+    STATUS_COLOR_MAP = {
+        "open": {"chipColor": "#0044c2", "textColor": "white"},
+        "wip": {"chipColor": "#ffff23", "textColor": "black"},
+        "pending": {"chipColor": "#ffa823", "textColor": "white"},
+        "closed": {"chipColor": "#1dc200", "textColor": "white"},
+        "deleted": {"chipColor": "#ff2323", "textColor": "white"},
+    }
+
+    PRIORITY_EFFORT_LEVEL_COLOR_MAP = {
+        "low": {"chipColor": "#0044c2", "textColor": "white"},
+        "medium": {"chipColor": "#1dc200", "textColor": "white"},
+        "high": {"chipColor": "#ff2323", "textColor": "white"},
+    }
+
     def get(self, request):
         team_id = request.GET.get("team_id")
         project_id = request.GET.get("project_id")
@@ -160,9 +220,8 @@ class GetPreviewTasksView(AuthenticatedAPIView):
                 {
                     "id": t.task_id,
                     "project": {
-                        "id": t.project.project_id,
-                        "name": t.project.project_name,
-                        "color": "primary",
+                        "projectId": t.project.project_id,
+                        "projectName": t.project.project_name,
                     },
                     "title": t.title,
                     "body": t.content,
@@ -185,22 +244,45 @@ class GetPreviewTasksView(AuthenticatedAPIView):
                     "createdDate": str(t.ts_created_at.date()),
                     "dueDate": str(t.due_date),
                     "daysLeft": (
-                        max(0, (t.due_date - datetime.now().date()).days) if t.due_date else None
+                        max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
                     "status": {
                         "code": 0,
                         "status": t.status,
-                        "color": "primary",
+                        "color": self.STATUS_COLOR_MAP[t.status.lower()]["chipColor"],
+                        "textColor": self.STATUS_COLOR_MAP[t.status.lower()]["textColor"],
                     },
                     "priority": {
                         "code": 0,
                         "priority": t.priority,
-                        "color": "primary",
+                        "color": (
+                            self.PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["chipColor"]
+                            if t.priority
+                            else None
+                        ),
+                        "textColor": (
+                            self.PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["textColor"]
+                            if t.priority
+                            else None
+                        ),
                     },
                     "effortLevel": {
                         "code": 0,
                         "level": t.effort_level,
-                        "color": "primary",
+                        "color": (
+                            self.PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()][
+                                "chipColor"
+                            ]
+                            if t.effort_level
+                            else None
+                        ),
+                        "textColor": (
+                            self.PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()][
+                                "textColor"
+                            ]
+                            if t.effort_level
+                            else None
+                        ),
                     },
                     "tags": t.tags,
                     "githubLink": {
@@ -216,7 +298,6 @@ class GetPreviewTasksView(AuthenticatedAPIView):
                     "threadId": t.thread_id,
                 },
             )
-            break
 
         if len(response_data) == 1:
             return Response(response_data, status=status.HTTP_200_OK)
@@ -255,7 +336,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
                     "createdDate": str(t.ts_created_at.date()),
                     "dueDate": str(t.due_date),
                     "daysLeft": (
-                        max(0, (t.due_date - datetime.now().date()).days) if t.due_date else None
+                        max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
                     "status": t.status,
                     "assigneeId": t.assignee.id,
@@ -300,7 +381,7 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
                     "createdDate": str(t.ts_created_at.date()),
                     "dueDate": str(t.due_date),
                     "daysLeft": (
-                        max(0, (t.due_date - datetime.now().date()).days) if t.due_date else None
+                        max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
                     "status": t.status,
                     "assigneeId": t.assignee.id,
@@ -385,36 +466,6 @@ class TaskCommentsByIdView(AuthenticatedAPIView):
         if task_id:
             comments = TaskComments.objects.filter(task=task_id)
             serializer = TaskCommentsSerializer(comments, many=True)
-            return Response(serializer.data)
-        else:
-            return Response("task_id is not found", status=status.HTTP_400_BAD_REQUEST)
-
-
-class TaskTagsView(AuthenticatedAPIView):
-    def post(self, request):
-        tag_count = TaskTags.objects.filter(task=request.data["task_id"]).count()
-
-        data = {
-            "task": request.data["task_id"],
-            "tag_id": tag_count + 1,
-            "tag_name": request.data["tag_name"],
-        }
-
-        serializer = TaskTagsSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-        error = serializer.errors
-        return Response(error, status=status.HTTP_400_BAD_REQUEST)
-
-
-class TaskTagsByIdView(AuthenticatedAPIView):
-    def get(self, request):
-        task_id = request.GET.get("task_id", None)
-        if task_id:
-            tags = TaskTags.objects.filter(task=task_id)
-            serializer = TaskTagsSerializer(tags, many=True)
             return Response(serializer.data)
         else:
             return Response("task_id is not found", status=status.HTTP_400_BAD_REQUEST)

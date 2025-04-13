@@ -27,7 +27,7 @@ class ProjectMembers(models.Model):
     team = models.ForeignKey(
         TeamMaster,
         on_delete=models.CASCADE,
-        related_name="team_master",
+        related_name="team_project_members",
         to_field="team_id",
     )
     project = models.ForeignKey(
@@ -49,4 +49,30 @@ class ProjectMembers(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=["project", "attendee"], name="unique_project_member")
+        ]
+
+
+class ProjectTags(models.Model):
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.CASCADE,
+        related_name="team_tags",
+        to_field="team_id",
+    )
+    project = models.ForeignKey(
+        ProjectMaster,
+        on_delete=models.CASCADE,
+        related_name="project_tags",
+        to_field="project_id",
+    )
+    tag_id = models.IntegerField()
+    tag_name = models.CharField(max_length=20)
+    tag_color = models.CharField(max_length=10)
+    tag_text_color = models.CharField(max_length=10)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["project", "tag_name"], name="unique_project_tag")
         ]
