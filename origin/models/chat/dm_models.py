@@ -128,16 +128,9 @@ class DMThreadMessages(models.Model):
     ts_edited_at = models.DateTimeField(null=True, blank=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
-    # Refer from Task models
-    foreign_thread_id = models.CharField(editable=False)
-
     class Meta:
         constraints = [
             models.UniqueConstraint(
                 fields=["dm_id", "thread_id", "thread_message_id"], name="unique_dm_thread_message"
             )
         ]
-
-    def save(self, *args, **kwargs):
-        self.foreign_thread_id = f"0-{self.dm.dm_id}-{self.thread_id}"
-        super().save(*args, **kwargs)

@@ -16,6 +16,8 @@ class TaskMasterView(AuthenticatedAPIView):
         data = {
             "team": request.data["team"],
             "project": request.data["project"],
+            "chat_type": request.data.get("chat_type", None),
+            "chat_id": request.data.get("chat_id", None),
             "thread_id": request.data.get("thread_id", None),
             "parent_task_id": request.data.get("parent_task_id", None),
             "assignee": request.data["assignee"],

@@ -18,9 +18,9 @@ class TaskMaster(models.Model):
         related_name="project_tasks_master",
         to_field="project_id",
     )
-    thread_id = models.CharField(
-        blank=True, null=True
-    )  # dm: 0-{dm_id}-{thread_id}, gm: 1-{gm_id}-{thread_id}
+    chat_type = models.CharField(max_length=5, null=True, blank=True)  # "dm" or "gm"
+    chat_id = models.IntegerField(null=True, blank=True)
+    thread_id = models.IntegerField(null=True, blank=True)
     task_id = models.BigAutoField(primary_key=True, unique=True)
     parent_task_id = models.BigIntegerField(blank=True, null=True)
     assignee = models.ForeignKey(
