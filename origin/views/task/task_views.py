@@ -364,9 +364,6 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # tasks = TaskMaster.objects.filter(team=team_id, assignee=user_id)
-        # serializer = TaskMasterSerializer(tasks, many=True)
-
         task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
             team=team_id, assignee=user_id
         )
@@ -464,8 +461,35 @@ class TaskCommentsByIdView(AuthenticatedAPIView):
     def get(self, request):
         task_id = request.GET.get("task_id", None)
         if task_id:
-            comments = TaskComments.objects.filter(task=task_id)
-            serializer = TaskCommentsSerializer(comments, many=True)
-            return Response(serializer.data)
+            comments = (
+                TaskComments.objects.filter(task=task_id)
+                .select_related("sender")
+                .values(
+                    "task",
+                    "comment_id",
+                    "comment_body",
+                    "ts_sent_at",
+                    "sender__id",
+                    "sender__username",
+                )
+            )
+
+            response_data = []
+            for comment in comments:
+                response_data.append(
+                    {
+                        "taskId": comment["task"],
+                        "senderId": comment["sender__id"],
+                        "senderName": comment["sender__username"],
+                        "commentId": comment["comment_id"],
+                        "commentBody": comment["comment_body"],
+                        "sentAt": comment["ts_sent_at"].strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                )
+
+            return Response(
+                sorted(response_data, key=lambda x: x["sentAt"], reverse=False),
+                status=status.HTTP_201_CREATED,
+            )
         else:
             return Response("task_id is not found", status=status.HTTP_400_BAD_REQUEST)
