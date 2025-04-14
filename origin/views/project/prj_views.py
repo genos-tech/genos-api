@@ -137,8 +137,6 @@ class ProjectTagsView(AuthenticatedAPIView):
             "tag_text_color": request.data["tag_text_color"],
         }
 
-        print(data)
-
         serializer = ProjectTagsSerializer(data=data)
         if serializer.is_valid():
             serializer.save()

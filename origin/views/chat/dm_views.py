@@ -309,7 +309,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
     def get(self, request):
         dm_id = request.GET.get("dm_id", None)
         thread_id = request.GET.get("thread_id", None)
-        print(dm_id, thread_id)
+
         if dm_id and thread_id:
             messages = DMThreadMessages.objects.filter(dm_id=int(dm_id), thread_id=int(thread_id))
             serializer = DMThreadMessagesSerializer(messages, many=True)  # Serialize data
