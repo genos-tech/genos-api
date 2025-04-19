@@ -626,6 +626,8 @@ class TaskCommentsByIdView(AuthenticatedAPIView):
                     }
                 )
 
+            print("comment:", response_data)
+
             return Response(
                 sorted(response_data, key=lambda x: x["sentAt"], reverse=False),
                 status=status.HTTP_201_CREATED,

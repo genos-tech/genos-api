@@ -42,7 +42,7 @@ class TaskMaster(models.Model):
     priority_code = models.BigIntegerField(blank=True, null=True)
     effort_level_code = models.BigIntegerField(blank=True, null=True)
     status_code = models.BigIntegerField(blank=True, null=True)
-    content = models.TextField(blank=True, null=True)
+    content = models.JSONField(blank=True, null=True)
     github_url = models.URLField(blank=True, null=True)
     github_url_title = models.CharField(blank=True, null=True)
     general_url = models.URLField(blank=True, null=True)
