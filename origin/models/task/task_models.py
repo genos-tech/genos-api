@@ -114,7 +114,7 @@ class TaskComments(models.Model):
         to_field="id",
     )
     comment_id = models.IntegerField()
-    comment_body = models.TextField()
+    comment_body = models.JSONField()
     ts_sent_at = models.DateTimeField(auto_now=True)
     ts_edited_at = models.DateTimeField(null=True, blank=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

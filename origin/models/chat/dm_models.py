@@ -70,7 +70,7 @@ class DMMessages(models.Model):
         to_field="id",
     )
     message_id = models.IntegerField()
-    message_body = models.TextField(blank=False)
+    message_body = models.JSONField(blank=False)
     thread_id = models.IntegerField(blank=True, null=True)
     task = models.ForeignKey(
         TaskMaster,
@@ -117,7 +117,7 @@ class DMThreadMessages(models.Model):
         to_field="id",
     )
     thread_message_id = models.IntegerField()
-    thread_message_body = models.TextField(blank=False)
+    thread_message_body = models.JSONField(blank=False)
     parent_message_uid = models.ForeignKey(
         DMMessages,
         on_delete=models.CASCADE,

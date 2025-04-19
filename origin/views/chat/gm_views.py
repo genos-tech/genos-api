@@ -167,7 +167,7 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
             chat_id = int(raw_message.gm.gm_id)
             chat_name = str(raw_message.gm.group_name)
             message_id = int(raw_message.message_id)
-            content = str(raw_message.message_body)
+            content = raw_message.message_body
             sender_name = str(raw_message.sender.username)
             sender_id = str(raw_message.sender.id)
             ts_sent = str(raw_message.ts_sent_at)
@@ -198,9 +198,20 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
                 last_message_dict[chat_id] = new_message
                 ts_last_message_dict[chat_id] = ts_sent
 
+            try:
+                # TODO: Need to consider the case that the first line
+                # (i.e., message_body[0]) is empty but later exists.
+                latest_message_text = last_message_dict[chat_id]["content"][0]["content"][-1][
+                    "text"
+                ]
+            except:
+                print("gm_views", last_message_dict[chat_id]["content"])
+                latest_message_text = "Failed to get text..."
+
             if chat_id in message_history_dict:
                 message_history_dict[chat_id]["messages"].append(new_message)
                 message_history_dict[chat_id]["latestMessage"] = last_message_dict[chat_id]
+                message_history_dict[chat_id]["latestMessageText"] = latest_message_text
                 message_history_dict[chat_id]["TSLastMessage"] = ts_last_message_dict[chat_id]
             else:
                 message_history_dict[chat_id] = {
@@ -210,6 +221,7 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
                     "dmPartnerUserId": "",
                     "messages": [new_message],
                     "latestMessage": last_message_dict[chat_id],
+                    "latestMessageText": latest_message_text,
                     "TSLastMessage": ts_last_message_dict[chat_id],
                 }
 
