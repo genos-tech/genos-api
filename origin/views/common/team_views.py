@@ -52,6 +52,7 @@ class CheckTeamExistsView(AuthenticatedAPIView):
 class TeamMembersView(AuthenticatedAPIView):
     def post(self, request):
         data = {"team": request.data["team_id"], "attendee": request.data["attendee_id"]}
+        print(data)
 
         # Check if a Team exists in any order
         exists = TeamMembers.objects.filter(
