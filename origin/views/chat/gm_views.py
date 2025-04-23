@@ -227,7 +227,7 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
 
         message_history = list(message_history_dict.values())
 
-        return Response({"messageHistory": message_history}, status=status.HTTP_200_OK)
+        return Response(message_history, status=status.HTTP_200_OK)
 
 
 class GMSingleMessageView(AuthenticatedAPIView):

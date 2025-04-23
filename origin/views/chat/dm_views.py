@@ -196,7 +196,7 @@ class DMAllMyMessagesView(AuthenticatedAPIView):
                 ts_last_message_dict[chat_id] = ts_sent
 
             try:
-                # TODO: Need to consider the case that the first line 
+                # TODO: Need to consider the case that the first line
                 # (i.e., message_body[0]) is empty but later exists.
                 latest_message_text = last_message_dict[chat_id]["content"][0]["content"][-1][
                     "text"
@@ -224,7 +224,7 @@ class DMAllMyMessagesView(AuthenticatedAPIView):
 
         message_history = list(message_history_dict.values())
 
-        return Response({"messageHistory": message_history}, status=status.HTTP_200_OK)
+        return Response(message_history, status=status.HTTP_200_OK)
 
 
 class DMSingleMessageView(AuthenticatedAPIView):
