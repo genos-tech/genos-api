@@ -1,29 +1,6 @@
 from django.urls import path
-from origin.views.chat.dm_views import (
-    DMMasterView,
-    CheckDMExistsView,
-    GetDMIdView,
-    GetAllMyDMIdsView,
-    DMAllMyMessagesView,
-    DMSingleMessageView,
-    DMMessagesByIdView,
-    CheckDMThreadExistsView,
-    DMSingleThreadMessageView,
-    DMThreadMessagesByIdView,
-)
-from origin.views.chat.gm_views import (
-    GMMasterView,
-    CheckGMExistsView,
-    GetGMIdView,
-    GMMembersView,
-    GetAllMyGMIdsView,
-    GMAllMyMessagesView,
-    GMSingleMessageView,
-    GMMessagesByIdView,
-    CheckGMThreadExistsView,
-    GMSingleThreadMessageView,
-    GMThreadMessagesByIdView,
-)
+from origin.views.chat.dm_views import *
+from origin.views.chat.gm_views import *
 from origin.views.chat.search_views import GetTeamMembersAndGroupsView
 
 urlpatterns = [

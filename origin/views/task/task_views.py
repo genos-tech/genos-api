@@ -11,11 +11,28 @@ from origin.serializers.task.task_serializers import *
 from origin.models.project.prj_models import *
 
 
+STATUS_COLOR_MAP = {
+    "open": {"chipColor": "#0044c2", "textColor": "white"},
+    "wip": {"chipColor": "#ffff23", "textColor": "black"},
+    "pending": {"chipColor": "#ffa823", "textColor": "white"},
+    "closed": {"chipColor": "#1dc200", "textColor": "white"},
+    "deleted": {"chipColor": "#ff2323", "textColor": "white"},
+}
+
+PRIORITY_EFFORT_LEVEL_COLOR_MAP = {
+    "low": {"chipColor": "#0044c2", "textColor": "white"},
+    "medium": {"chipColor": "#1dc200", "textColor": "white"},
+    "high": {"chipColor": "#ff2323", "textColor": "white"},
+}
+
+
 class TaskMasterView(AuthenticatedAPIView):
     def post(self, request):
         data = {
             "team": request.data["team"],
             "project": request.data["project"],
+            "chat_type": request.data.get("chat_type", None),
+            "chat_id": request.data.get("chat_id", None),
             "thread_id": request.data.get("thread_id", None),
             "parent_task_id": request.data.get("parent_task_id", None),
             "assignee": request.data["assignee"],
@@ -105,7 +122,7 @@ class GetTeamTasksView(AuthenticatedAPIView):
                     "priority": t.priority,
                     "effortLevel": t.effort_level,
                     "createdDate": str(t.ts_created_at.date()),
-                    "dueDate": str(t.due_date),
+                    "dueDate": str(t.due_date) if t.due_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
@@ -116,6 +133,7 @@ class GetTeamTasksView(AuthenticatedAPIView):
                     "parentTaskId": t.parent_task_id,
                     "threadId": t.thread_id,
                     "tags": t.tags,
+                    "concatTags": "-".join([tag["tagName"] for tag in t.tags]),
                     "teamId": t.team.team_id,
                     "projectId": t.project.project_id,
                 },
@@ -169,29 +187,153 @@ class GetTeamTasksByTagView(AuthenticatedAPIView):
         return Response(response_data, status=status.HTTP_200_OK)
 
 
-class GetPreviewTasksView(AuthenticatedAPIView):
-    STATUS_COLOR_MAP = {
-        "open": {"chipColor": "#0044c2", "textColor": "white"},
-        "wip": {"chipColor": "#ffff23", "textColor": "black"},
-        "pending": {"chipColor": "#ffa823", "textColor": "white"},
-        "closed": {"chipColor": "#1dc200", "textColor": "white"},
-        "deleted": {"chipColor": "#ff2323", "textColor": "white"},
-    }
+class GetTaskByThreadIdView(AuthenticatedAPIView):
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        chat_type = request.GET.get("chat_type")
+        chat_id = request.GET.get("chat_id")
+        thread_id = request.GET.get("thread_id")
 
-    PRIORITY_EFFORT_LEVEL_COLOR_MAP = {
-        "low": {"chipColor": "#0044c2", "textColor": "white"},
-        "medium": {"chipColor": "#1dc200", "textColor": "white"},
-        "high": {"chipColor": "#ff2323", "textColor": "white"},
-    }
+        if not team_id or not chat_type or not chat_id or not thread_id:
+            return Response(
+                {"error": "Wrong parameters."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
+        target_task = TaskMaster.objects.filter(
+            team=team_id,
+            chat_type=chat_type,
+            chat_id=chat_id,
+            thread_id=thread_id,
+        ).values_list("project", "task_id")
+
+        if len(target_task) > 1:
+            return Response(
+                {"error": "Duplicated tasks found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if len(target_task) == 0:
+            return Response({}, status=status.HTTP_200_OK)
+
+        task_with_tags = TaskMaster.objects.prefetch_related("task_attachments").filter(
+            team=team_id, project_id=target_task[0][0], task_id=target_task[0][1]
+        )
+
+        response_data = []
+        for t in task_with_tags:
+            attached_files = []
+            for _file in t.task_attachments.all().values_list("attached_file", "attached_type"):
+                file_path = _file[0]
+                file_type = _file[1]
+                with open(file_path, "rb") as f:
+                    encoded_file = base64.b64encode(f.read()).decode("utf-8")
+                    attached_files.append(
+                        {
+                            "file": None,
+                            "file_base64": encoded_file,
+                            "name": os.path.basename(file_path),
+                            "type": file_type,
+                        }
+                    )
+
+            response_data.append(
+                {
+                    "id": t.task_id,
+                    "project": {
+                        "projectId": t.project.project_id,
+                        "projectName": t.project.project_name,
+                    },
+                    "title": t.title,
+                    "body": t.content,
+                    "assignee": {
+                        "teamId": t.team.team_id,
+                        "userId": t.assignee.id,
+                        "userName": t.assignee.username,
+                        "userEmail": t.assignee.email,
+                        "avatarImgPath": f"/img/path/to/{t.assignee.email}",
+                        "online": True,
+                    },
+                    "reporter": {
+                        "teamId": t.team.team_id,
+                        "userId": t.reporter.id,
+                        "userName": t.reporter.username,
+                        "userEmail": t.reporter.email,
+                        "avatarImgPath": f"/img/path/to/{t.reporter.email}",
+                        "online": True,
+                    },
+                    "createdDate": str(t.ts_created_at.date()),
+                    "dueDate": str(t.due_date) if t.due_date else None,
+                    "daysLeft": (
+                        max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
+                    ),
+                    "status": {
+                        "code": 0,
+                        "status": t.status,
+                        "color": STATUS_COLOR_MAP[t.status.lower()]["chipColor"],
+                        "textColor": STATUS_COLOR_MAP[t.status.lower()]["textColor"],
+                    },
+                    "priority": {
+                        "code": 0,
+                        "priority": t.priority,
+                        "color": (
+                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["chipColor"]
+                            if t.priority
+                            else None
+                        ),
+                        "textColor": (
+                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["textColor"]
+                            if t.priority
+                            else None
+                        ),
+                    },
+                    "effortLevel": {
+                        "code": 0,
+                        "level": t.effort_level,
+                        "color": (
+                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["chipColor"]
+                            if t.effort_level
+                            else None
+                        ),
+                        "textColor": (
+                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["textColor"]
+                            if t.effort_level
+                            else None
+                        ),
+                    },
+                    "tags": t.tags,
+                    "githubLink": {
+                        "url": t.github_url,
+                        "title": t.github_url_title,
+                    },
+                    "generalLink": {
+                        "url": t.general_url,
+                        "title": t.general_url_title,
+                    },
+                    "attachments": attached_files,
+                    "parentTaskId": t.parent_task_id,
+                    "threadId": t.thread_id,
+                },
+            )
+
+        if len(response_data) == 1:
+            return Response(response_data, status=status.HTTP_200_OK)
+        else:
+            print(response_data)
+            return Response(
+                {"error": "Failed to fetch expected task data"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+class GetTaskView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
         project_id = request.GET.get("project_id")
         task_id = request.GET.get("task_id")
 
-        if not team_id:
+        if not team_id or not project_id or not task_id:
             return Response(
-                {"error": "team_id is required."},
+                {"error": "team_id/project_id/task_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -242,26 +384,26 @@ class GetPreviewTasksView(AuthenticatedAPIView):
                         "online": True,
                     },
                     "createdDate": str(t.ts_created_at.date()),
-                    "dueDate": str(t.due_date),
+                    "dueDate": str(t.due_date) if t.due_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
                     "status": {
                         "code": 0,
                         "status": t.status,
-                        "color": self.STATUS_COLOR_MAP[t.status.lower()]["chipColor"],
-                        "textColor": self.STATUS_COLOR_MAP[t.status.lower()]["textColor"],
+                        "color": STATUS_COLOR_MAP[t.status.lower()]["chipColor"],
+                        "textColor": STATUS_COLOR_MAP[t.status.lower()]["textColor"],
                     },
                     "priority": {
                         "code": 0,
                         "priority": t.priority,
                         "color": (
-                            self.PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["chipColor"]
+                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["chipColor"]
                             if t.priority
                             else None
                         ),
                         "textColor": (
-                            self.PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["textColor"]
+                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["textColor"]
                             if t.priority
                             else None
                         ),
@@ -270,16 +412,12 @@ class GetPreviewTasksView(AuthenticatedAPIView):
                         "code": 0,
                         "level": t.effort_level,
                         "color": (
-                            self.PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()][
-                                "chipColor"
-                            ]
+                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["chipColor"]
                             if t.effort_level
                             else None
                         ),
                         "textColor": (
-                            self.PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()][
-                                "textColor"
-                            ]
+                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["textColor"]
                             if t.effort_level
                             else None
                         ),
@@ -334,7 +472,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
                     "priority": t.priority,
                     "effortLevel": t.effort_level,
                     "createdDate": str(t.ts_created_at.date()),
-                    "dueDate": str(t.due_date),
+                    "dueDate": str(t.due_date) if t.due_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
@@ -345,6 +483,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
                     "parentTaskId": t.parent_task_id,
                     "threadId": t.thread_id,
                     "tags": t.tags,
+                    "concatTags": "-".join([tag["tagName"] for tag in t.tags]),
                     "teamId": t.team.team_id,
                     "projectId": t.project.project_id,
                 },
@@ -376,7 +515,7 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
                     "priority": t.priority,
                     "effortLevel": t.effort_level,
                     "createdDate": str(t.ts_created_at.date()),
-                    "dueDate": str(t.due_date),
+                    "dueDate": str(t.due_date) if t.due_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
@@ -483,9 +622,11 @@ class TaskCommentsByIdView(AuthenticatedAPIView):
                         "senderName": comment["sender__username"],
                         "commentId": comment["comment_id"],
                         "commentBody": comment["comment_body"],
-                        "sentAt": comment["ts_sent_at"].strftime("%Y-%m-%d %H:%M:%S"),
+                        "sentAt": str(comment["ts_sent_at"]),
                     }
                 )
+
+            print("comment:", response_data)
 
             return Response(
                 sorted(response_data, key=lambda x: x["sentAt"], reverse=False),

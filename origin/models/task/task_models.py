@@ -18,9 +18,9 @@ class TaskMaster(models.Model):
         related_name="project_tasks_master",
         to_field="project_id",
     )
-    thread_id = models.CharField(
-        blank=True, null=True
-    )  # dm: 0-{dm_id}-{thread_id}, gm: 1-{gm_id}-{thread_id}
+    chat_type = models.CharField(max_length=5, null=True, blank=True)  # "dm" or "gm"
+    chat_id = models.IntegerField(null=True, blank=True)
+    thread_id = models.IntegerField(null=True, blank=True)
     task_id = models.BigAutoField(primary_key=True, unique=True)
     parent_task_id = models.BigIntegerField(blank=True, null=True)
     assignee = models.ForeignKey(
@@ -42,7 +42,7 @@ class TaskMaster(models.Model):
     priority_code = models.BigIntegerField(blank=True, null=True)
     effort_level_code = models.BigIntegerField(blank=True, null=True)
     status_code = models.BigIntegerField(blank=True, null=True)
-    content = models.TextField(blank=True, null=True)
+    content = models.JSONField(blank=True, null=True)
     github_url = models.URLField(blank=True, null=True)
     github_url_title = models.CharField(blank=True, null=True)
     general_url = models.URLField(blank=True, null=True)
@@ -114,7 +114,7 @@ class TaskComments(models.Model):
         to_field="id",
     )
     comment_id = models.IntegerField()
-    comment_body = models.TextField()
+    comment_body = models.JSONField()
     ts_sent_at = models.DateTimeField(auto_now=True)
     ts_edited_at = models.DateTimeField(null=True, blank=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

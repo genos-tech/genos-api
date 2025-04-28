@@ -21,7 +21,12 @@ class TeamMasterView(AuthenticatedAPIView):
         serializer = TeamMasterSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            data = {
+                "teamId": serializer.data["team_id"],
+                "teamName": serializer.data["team_name"],
+                "teamEmail": serializer.data["team_email"],
+            }
+            return Response(data, status=status.HTTP_201_CREATED)
 
         error = serializer.errors
         error["hint"] = "Try with different team_name"
@@ -47,6 +52,7 @@ class CheckTeamExistsView(AuthenticatedAPIView):
 class TeamMembersView(AuthenticatedAPIView):
     def post(self, request):
         data = {"team": request.data["team_id"], "attendee": request.data["attendee_id"]}
+        print(data)
 
         # Check if a Team exists in any order
         exists = TeamMembers.objects.filter(
@@ -94,9 +100,9 @@ class GetAllTeamsView(AuthenticatedAPIView):
         ) in _teams:
             teams.append(
                 {
-                    "team_id": team_id,
-                    "team_name": team_name,
-                    "team_email": team_email,
+                    "teamId": team_id,
+                    "teamName": team_name,
+                    "teamEmail": team_email,
                 }
             )
         return Response(teams, status=status.HTTP_200_OK)

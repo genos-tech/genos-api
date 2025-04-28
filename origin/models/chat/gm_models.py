@@ -64,7 +64,7 @@ class GMMessages(models.Model):
         to_field="id",
     )
     message_id = models.IntegerField(blank=False, db_index=True)
-    message_body = models.TextField(blank=False)
+    message_body = models.JSONField(blank=False)
     thread_id = models.IntegerField(blank=True, null=True)
     task = models.ForeignKey(
         TaskMaster,
@@ -106,7 +106,7 @@ class GMThreadMessages(models.Model):
         to_field="id",
     )
     thread_message_id = models.IntegerField()
-    thread_message_body = models.TextField(blank=False)
+    thread_message_body = models.JSONField(blank=False)
     parent_message_uid = models.ForeignKey(
         GMMessages,
         on_delete=models.CASCADE,
@@ -117,16 +117,9 @@ class GMThreadMessages(models.Model):
     ts_edited_at = models.DateTimeField(null=True, blank=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
-    # Refer from Task models
-    foreign_thread_id = models.CharField(editable=False)
-
     class Meta:
         constraints = [
             models.UniqueConstraint(
                 fields=["gm_id", "thread_id", "thread_message_id"], name="unique_gm_thread_message"
             )
         ]
-
-    def save(self, *args, **kwargs):
-        self.foreign_thread_id = f"1-{self.gm.gm_id}-{self.thread_id}"
-        super().save(*args, **kwargs)
