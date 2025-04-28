@@ -622,7 +622,7 @@ class TaskCommentsByIdView(AuthenticatedAPIView):
                         "senderName": comment["sender__username"],
                         "commentId": comment["comment_id"],
                         "commentBody": comment["comment_body"],
-                        "sentAt": comment["ts_sent_at"].strftime("%Y-%m-%d %H:%M:%S"),
+                        "sentAt": str(comment["ts_sent_at"]),
                     }
                 )
 
