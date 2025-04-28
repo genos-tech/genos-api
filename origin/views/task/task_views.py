@@ -331,9 +331,9 @@ class GetTaskView(AuthenticatedAPIView):
         project_id = request.GET.get("project_id")
         task_id = request.GET.get("task_id")
 
-        if not team_id:
+        if not team_id or not project_id or not task_id:
             return Response(
-                {"error": "team_id is required."},
+                {"error": "team_id/project_id/task_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
