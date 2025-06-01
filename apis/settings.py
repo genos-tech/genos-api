@@ -26,7 +26,7 @@ SECRET_KEY = "django-insecure-1=c=z%cqhlgi$@+w8x3ees)q*q!hosc2lvv^=_dpln(%wipz08
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ["192.168.10.13"]
+ALLOWED_HOSTS = ["localhost"]
 
 
 # Application definition
@@ -57,8 +57,8 @@ MIDDLEWARE = [
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",  # React frontend URL
-    "http://192.168.10.13:3000",  # React frontend URL
-    "http://192.168.10.13:8890",  # Add backend server if necessary
+    "http://localhost:3000",  # React frontend URL
+    "http://localhost:8890",  # Add backend server if necessary
 ]
 
 # Allow credentials (cookies, authentication)
@@ -171,8 +171,8 @@ AUTH_USER_MODEL = "origin.CustomUser"
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",  # React frontend URL
-    "http://192.168.10.13:3000",  # React frontend URL
-    "http://192.168.10.13:8890",  # Add backend server if necessary
+    "http://localhost:3000",  # React frontend URL
+    "http://localhost:8890",  # Add backend server if necessary
 ]  # Adjust for your frontend URL
 
 SESSION_COOKIE_SECURE = False  # only for local development
