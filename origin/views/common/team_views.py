@@ -4,7 +4,7 @@ from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.serializers.common.team_serializers import TeamMasterSerializer, TeamMembersSerializer
-
+from origin.models.common.user_models import CustomUser
 
 #############################
 # Team Master views
@@ -135,5 +135,48 @@ class GetTeamMembersView(AuthenticatedAPIView):
                 "avatarImgPath": f"{attendee["attendee__email"]}.png",
                 "online": False,
             })
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+class GetTeamMemberInfoView(AuthenticatedAPIView):
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        user_id = request.GET.get("user_id")
+
+        if not user_id or not team_id:
+            return Response(
+                {"error": "team_id and user_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        member_info = (
+            TeamMembers.objects.filter(Q(team=team_id, attendee=user_id))
+            .select_related("attendee")
+            .values("team__team_name", "attendee__id", "attendee__username", "attendee__email", "attendee__profile_image_url")
+        )
+        
+        if len(member_info) == 0:
+            return Response(
+                {"error": f"Not found the user (id={user_id})."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        elif len(member_info) > 1:
+            return Response(
+                {"error": f"Found duplicated users (id={user_id})."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        else:
+            member_info = member_info[0]
+
+        response_data = {
+                "teamId": team_id,
+                "teamName": member_info["team__team_name"],
+                "userId": member_info["attendee__id"],
+                "userName": member_info["attendee__username"],
+                "userEmail": member_info["attendee__email"],
+                "avatarImgPath": member_info["attendee__profile_image_url"],
+                "online": False, # TODO: NO NEED?? Should it be passed via WS?
+            }
 
         return Response(response_data, status=status.HTTP_200_OK)

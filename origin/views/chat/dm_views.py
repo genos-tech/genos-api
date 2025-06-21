@@ -118,11 +118,13 @@ class GetAllMyDMIdsView(AuthenticatedAPIView):
 #############################
 class DMAllMyMessagesView(AuthenticatedAPIView):
     def get(self, request):
+        team_id = request.GET.get("team_id")
+        team_name = request.GET.get("team_name")
         user_id = request.GET.get("user_id")
 
         if not user_id:
             return Response(
-                {"error": "user_id is required."},
+                {"error": "team_id, team_name, and user_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -156,17 +158,35 @@ class DMAllMyMessagesView(AuthenticatedAPIView):
             chat_id = int(raw_message.dm.dm_id)
             sender_id = str(raw_message.sender.id)
             sender_name = str(raw_message.sender.username)
+            sender_email = str(raw_message.sender.email)
+            sender_avatar_img_path = raw_message.sender.profile_image_url
             receiver_id = str(raw_message.receiver.id)
             receiver_name = str(raw_message.receiver.username)
+            receiver_email = str(raw_message.receiver.email)
+            receiver_avatar_img_path = raw_message.receiver.profile_image_url
             message_id = int(raw_message.message_id)
             content = raw_message.message_body
             ts_sent = str(raw_message.ts_sent_at)
 
             if sender_id == user_id:
-                dm_partner_user_id = receiver_id
+                partner = {
+                    "teamId": team_id,
+                    "teamName": team_name,
+                    "userName": receiver_name,
+                    "userId": receiver_id,
+                    "userEmail": receiver_email,
+                    "avatarImgPath": receiver_avatar_img_path,
+                }
                 chat_name = receiver_name
             else:
-                dm_partner_user_id = sender_id
+                partner = {
+                    "teamId": team_id,
+                    "teamName": team_name,
+                    "userName": sender_name,
+                    "userId": sender_id,
+                    "userEmail": sender_email,
+                    "avatarImgPath": sender_avatar_img_path,
+                }
                 chat_name = sender_name
 
             messageIdWithChatId = f"{chat_id}-{message_id}"
@@ -178,7 +198,12 @@ class DMAllMyMessagesView(AuthenticatedAPIView):
                 "sender": {
                     "userName": sender_name,
                     "userId": sender_id,
-                    "avatarImgPath": f"/path/to/user/{chat_id}.jpg",
+                    "avatarImgPath": sender_avatar_img_path,
+                },
+                "receiver": {
+                    "userName": receiver_name,
+                    "userId": receiver_id,
+                    "avatarImgPath": receiver_avatar_img_path,
                 },
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.dm.dm_id}-{message_id}", None
@@ -215,7 +240,7 @@ class DMAllMyMessagesView(AuthenticatedAPIView):
                     "chatId": chat_id,
                     "chatName": chat_name,
                     "isDm": True,
-                    "dmPartnerUserId": dm_partner_user_id,
+                    "dmPartnerUser": partner,
                     "messages": [new_message],
                     "latestMessage": last_message_dict[chat_id],
                     "latestMessageText": latest_message_text,

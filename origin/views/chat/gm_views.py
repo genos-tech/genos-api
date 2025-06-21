@@ -129,11 +129,13 @@ class GetAllMyGMIdsView(AuthenticatedAPIView):
 #############################
 class GMAllMyMessagesView(AuthenticatedAPIView):
     def get(self, request):
+        team_id = request.GET.get("team_id")
+        team_name = request.GET.get("team_name")
         attendee_id = request.GET.get("user_id")
 
         if not attendee_id:
             return Response(
-                {"error": "attendee_id is required."},
+                {"error": "team_id, team_name and attendee_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -168,8 +170,10 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
             chat_name = str(raw_message.gm.group_name)
             message_id = int(raw_message.message_id)
             content = raw_message.message_body
-            sender_name = str(raw_message.sender.username)
             sender_id = str(raw_message.sender.id)
+            sender_name = str(raw_message.sender.username)
+            sender_email = str(raw_message.sender.email)
+            sender_avatar_img_path = raw_message.sender.profile_image_url
             ts_sent = str(raw_message.ts_sent_at)
 
             messageIdWithChatId = f"{chat_id}-{message_id}"
@@ -179,9 +183,12 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
                 "messageId": message_id,
                 "content": content,
                 "sender": {
+                    "teamId": team_id,
+                    "teamName": team_name,
                     "userName": sender_name,
+                    "userEmail": sender_email,
                     "userId": sender_id,
-                    "avatar_img_path": f"/path/to/user/{chat_id}.jpg",
+                    "avatar_img_path": sender_avatar_img_path,
                 },
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.gm.gm_id}-{message_id}", None
@@ -218,7 +225,7 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
                     "chatId": chat_id,
                     "chatName": chat_name,
                     "isDm": False,
-                    "dmPartnerUserId": "",
+                    "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
                     "messages": [new_message],
                     "latestMessage": last_message_dict[chat_id],
                     "latestMessageText": latest_message_text,

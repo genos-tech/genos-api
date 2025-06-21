@@ -54,7 +54,11 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
                     "id": team_member_id_to_dm_id.get(str(member["attendee__id"]), -1),
                     "name": str(member["attendee__username"]),
                     "email": str(member["attendee__email"]),
-                    "dmPartnerUserId": str(member["attendee__id"]),
+                    "dmPartnerUser": {
+                        "userName": str(member["attendee__username"]),
+                        "userId": str(member["attendee__id"]),
+                        "avatarImgPath": "",
+                    },
                 }
             )
 
@@ -67,7 +71,7 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
                     "id": int(member["gm_id"]),
                     "name": member["group_name"],
                     "email": None,
-                    "dmPartnerUserId": "",
+                    "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
                 }
             )
 
