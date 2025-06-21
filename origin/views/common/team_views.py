@@ -6,6 +6,7 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.serializers.common.team_serializers import TeamMasterSerializer, TeamMembersSerializer
 from origin.models.common.user_models import CustomUser
 
+
 #############################
 # Team Master views
 #############################
@@ -122,19 +123,26 @@ class GetTeamMembersView(AuthenticatedAPIView):
         attendees = (
             TeamMembers.objects.filter(team=team_id)
             .select_related("attendee")
-            .values("attendee__id", "attendee__username", "attendee__email")
+            .values(
+                "attendee__id",
+                "attendee__username",
+                "attendee__email",
+                "attendee__profile_image_url",
+            )
         )
 
         response_data = []
         for attendee in attendees:
-            response_data.append({
-                "teamId": team_id,
-                "userId": attendee["attendee__id"],
-                "userName": attendee["attendee__username"],
-                "userEmail": attendee["attendee__email"],
-                "avatarImgPath": f"{attendee["attendee__email"]}.png",
-                "online": False,
-            })
+            response_data.append(
+                {
+                    "teamId": team_id,
+                    "userId": attendee["attendee__id"],
+                    "userName": attendee["attendee__username"],
+                    "userEmail": attendee["attendee__email"],
+                    "avatarImgPath": {attendee["attendee__profile_image_url"]},
+                    "online": False,
+                }
+            )
 
         return Response(response_data, status=status.HTTP_200_OK)
 
@@ -153,9 +161,15 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
         member_info = (
             TeamMembers.objects.filter(Q(team=team_id, attendee=user_id))
             .select_related("attendee")
-            .values("team__team_name", "attendee__id", "attendee__username", "attendee__email", "attendee__profile_image_url")
+            .values(
+                "team__team_name",
+                "attendee__id",
+                "attendee__username",
+                "attendee__email",
+                "attendee__profile_image_url",
+            )
         )
-        
+
         if len(member_info) == 0:
             return Response(
                 {"error": f"Not found the user (id={user_id})."},
@@ -170,13 +184,13 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
             member_info = member_info[0]
 
         response_data = {
-                "teamId": team_id,
-                "teamName": member_info["team__team_name"],
-                "userId": member_info["attendee__id"],
-                "userName": member_info["attendee__username"],
-                "userEmail": member_info["attendee__email"],
-                "avatarImgPath": member_info["attendee__profile_image_url"],
-                "online": False, # TODO: NO NEED?? Should it be passed via WS?
-            }
+            "teamId": team_id,
+            "teamName": member_info["team__team_name"],
+            "userId": member_info["attendee__id"],
+            "userName": member_info["attendee__username"],
+            "userEmail": member_info["attendee__email"],
+            "avatarImgPath": member_info["attendee__profile_image_url"],
+            "online": False,  # TODO: NO NEED?? Should it be passed via WS?
+        }
 
         return Response(response_data, status=status.HTTP_200_OK)
