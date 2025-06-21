@@ -18,4 +18,9 @@ urlpatterns = [
         "api/v2/team/getAllTeams/", GetAllTeamsView.as_view(), name="get_all_team"
     ),  # TODO: Must be abolish
     path("api/v2/team/getTeamMembers/", GetTeamMembersView.as_view(), name="get_team_members"),
+    path(
+        "api/v2/team/getTeamMemberInfo/",
+        GetTeamMemberInfoView.as_view(),
+        name="get_team_member_info",
+    ),
 ]
