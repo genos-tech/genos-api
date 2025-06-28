@@ -345,13 +345,17 @@ class GetTaskView(AuthenticatedAPIView):
         response_data = []
         for t in task_with_tags:
             attached_files = []
-            for _file in t.task_attachments.all().values_list("attached_file", "attached_type"):
-                file_path = _file[0]
-                file_type = _file[1]
+            for _file in t.task_attachments.all().values_list(
+                "attachment_id", "attached_file", "attached_type"
+            ):
+                attachment_id = _file[0]
+                file_path = _file[1]
+                file_type = _file[2]
                 with open(file_path, "rb") as f:
                     encoded_file = base64.b64encode(f.read()).decode("utf-8")
                     attached_files.append(
                         {
+                            "attachment_id": attachment_id,
                             "file": None,
                             "file_base64": encoded_file,
                             "name": os.path.basename(file_path),
@@ -560,7 +564,18 @@ class TaskAttachmentsView(AuthenticatedAPIView):
         serializer = TaskAttachmentsSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+            with open("." + serializer.data["attached_file"], "rb") as f:
+                encoded_file = base64.b64encode(f.read()).decode("utf-8")
+
+            return Response(
+                {
+                    **serializer.data,
+                    "file_base64": encoded_file,
+                    "name": os.path.basename(serializer.data["attached_file"]),
+                },
+                status=status.HTTP_201_CREATED,
+            )
 
         error = serializer.errors
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
@@ -577,6 +592,28 @@ class TaskAttachmentsView(AuthenticatedAPIView):
         attachments = TaskMaster.objects.filter(task=task)
         serializer = TaskMasterSerializer(attachments, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        task = request.GET.get("task")
+        attachment_id = request.GET.get("attachment_id")
+
+        if not task or not attachment_id:
+            return Response(
+                {"error": "Both 'task' and 'attachment_id' are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            attachment = TaskAttachments.objects.get(task=task, attachment_id=attachment_id)
+            attachment.delete()
+            return Response(
+                {"message": "Attachment deleted successfully."}, status=status.HTTP_204_NO_CONTENT
+            )
+        except TaskAttachments.DoesNotExist:
+            return Response(
+                {"error": "Attachment not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
 
 class TaskCommentsView(AuthenticatedAPIView):
