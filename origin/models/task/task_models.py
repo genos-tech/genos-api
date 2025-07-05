@@ -1,4 +1,6 @@
 from django.db import models
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 
 from origin.models.common.user_models import CustomUser
 from origin.models.common.team_models import TeamMaster
@@ -22,7 +24,7 @@ class TaskMaster(models.Model):
     chat_id = models.IntegerField(null=True, blank=True)
     thread_id = models.IntegerField(null=True, blank=True)
     task_id = models.BigAutoField(primary_key=True, unique=True)
-    root_task_id = models.BigIntegerField(blank=False, null=False)
+    root_task_id = models.BigIntegerField(blank=True, null=True)
     parent_task_id = models.BigIntegerField(blank=True, null=True)
     assignee = models.ForeignKey(
         CustomUser,
@@ -52,6 +54,13 @@ class TaskMaster(models.Model):
     tags = models.JSONField(blank=True, null=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
+
+
+@receiver(post_save, sender=TaskMaster)
+def set_root_task_id(sender, instance, created, **kwargs):
+    if created and instance.root_task_id is None:
+        instance.root_task_id = instance.task_id
+        instance.save(update_fields=["root_task_id"])
 
 
 class TaskAttachments(models.Model):
