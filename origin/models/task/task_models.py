@@ -22,6 +22,7 @@ class TaskMaster(models.Model):
     chat_id = models.IntegerField(null=True, blank=True)
     thread_id = models.IntegerField(null=True, blank=True)
     task_id = models.BigAutoField(primary_key=True, unique=True)
+    root_task_id = models.BigIntegerField(blank=False, null=False)
     parent_task_id = models.BigIntegerField(blank=True, null=True)
     assignee = models.ForeignKey(
         CustomUser,
