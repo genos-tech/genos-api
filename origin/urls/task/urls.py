@@ -15,6 +15,7 @@ urlpatterns = [
     ),
     path("api/v2/task/attachment/", TaskAttachmentsView.as_view(), name="manage_task_attachment"),
     path("api/v2/task/getTask/", GetTaskView.as_view(), name="get_task"),
+    path("api/v2/task/childTasks/", ChildTaskView.as_view(), name="child_tasks"),
     path(
         "api/v2/task/getTaskByThreadId/",
         GetTaskByThreadIdView.as_view(),

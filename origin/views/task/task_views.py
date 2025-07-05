@@ -190,6 +190,146 @@ class GetTeamTasksByTagView(AuthenticatedAPIView):
         return Response(response_data, status=status.HTTP_200_OK)
 
 
+class ChildTaskView(AuthenticatedAPIView):
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        project_id = request.GET.get("project_id")
+        current_task_id = request.GET.get("current_task_id")
+
+        if not team_id or not project_id or not current_task_id:
+            return Response(
+                {"error": "Wrong parameters."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        target_tasks = TaskMaster.objects.filter(
+            team=team_id,
+            project=project_id,
+            parent_task_id=current_task_id,
+        ).values_list("project", "task_id")
+
+        if len(target_tasks) == 0:
+            return Response({}, status=status.HTTP_200_OK)
+
+        response_data = []
+
+        for target_task in target_tasks:
+            task_attachments = TaskMaster.objects.prefetch_related("task_attachments").filter(
+                team=team_id, project_id=target_task[0], task_id=target_task[1]
+            )
+
+            for t in task_attachments:
+                attached_files = []
+                for _file in t.task_attachments.all().values_list(
+                    "attached_file", "attached_type"
+                ):
+                    file_path = _file[0]
+                    file_type = _file[1]
+                    with open(file_path, "rb") as f:
+                        encoded_file = base64.b64encode(f.read()).decode("utf-8")
+                        attached_files.append(
+                            {
+                                "file": None,
+                                "file_base64": encoded_file,
+                                "name": os.path.basename(file_path),
+                                "type": file_type,
+                            }
+                        )
+
+                response_data.append(
+                    {
+                        "id": t.task_id,
+                        "project": {
+                            "projectId": t.project.project_id,
+                            "projectName": t.project.project_name,
+                        },
+                        "title": t.title,
+                        "body": t.content,
+                        "assignee": {
+                            "teamId": t.team.team_id,
+                            "userId": t.assignee.id,
+                            "userName": t.assignee.username,
+                            "userEmail": t.assignee.email,
+                            "avatarImgPath": t.assignee.profile_image_url,
+                            "online": True,
+                        },
+                        "reporter": {
+                            "teamId": t.team.team_id,
+                            "userId": t.reporter.id,
+                            "userName": t.reporter.username,
+                            "userEmail": t.reporter.email,
+                            "avatarImgPath": t.reporter.profile_image_url,
+                            "online": True,
+                        },
+                        "createdDate": str(t.ts_created_at.date()),
+                        "dueDate": str(t.due_date) if t.due_date else None,
+                        "daysLeft": (
+                            max(-1, (t.due_date - datetime.now().date()).days)
+                            if t.due_date
+                            else None
+                        ),
+                        "status": {
+                            "code": 0,
+                            "status": t.status,
+                            "color": STATUS_COLOR_MAP[t.status.lower()]["chipColor"],
+                            "textColor": STATUS_COLOR_MAP[t.status.lower()]["textColor"],
+                        },
+                        "priority": {
+                            "code": 0,
+                            "priority": t.priority,
+                            "color": (
+                                PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["chipColor"]
+                                if t.priority
+                                else None
+                            ),
+                            "textColor": (
+                                PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["textColor"]
+                                if t.priority
+                                else None
+                            ),
+                        },
+                        "effortLevel": {
+                            "code": 0,
+                            "level": t.effort_level,
+                            "color": (
+                                PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()][
+                                    "chipColor"
+                                ]
+                                if t.effort_level
+                                else None
+                            ),
+                            "textColor": (
+                                PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()][
+                                    "textColor"
+                                ]
+                                if t.effort_level
+                                else None
+                            ),
+                        },
+                        "tags": t.tags,
+                        "githubLink": {
+                            "url": t.github_url,
+                            "title": t.github_url_title,
+                        },
+                        "generalLink": {
+                            "url": t.general_url,
+                            "title": t.general_url_title,
+                        },
+                        "attachments": attached_files,
+                        "parentTaskId": t.parent_task_id,
+                        "rootTaskId": t.root_task_id,
+                        "threadId": t.thread_id,
+                    },
+                )
+
+        if len(response_data) > 0:
+            return Response(response_data, status=status.HTTP_200_OK)
+        else:
+            return Response(
+                {"error": "Failed to fetch expected task data"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+
 class GetTaskByThreadIdView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
@@ -219,12 +359,12 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
         if len(target_task) == 0:
             return Response({}, status=status.HTTP_200_OK)
 
-        task_with_tags = TaskMaster.objects.prefetch_related("task_attachments").filter(
+        task_attachments = TaskMaster.objects.prefetch_related("task_attachments").filter(
             team=team_id, project_id=target_task[0][0], task_id=target_task[0][1]
         )
 
         response_data = []
-        for t in task_with_tags:
+        for t in task_attachments:
             attached_files = []
             for _file in t.task_attachments.all().values_list("attached_file", "attached_type"):
                 file_path = _file[0]
@@ -341,12 +481,12 @@ class GetTaskView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        task_with_tags = TaskMaster.objects.prefetch_related("task_attachments").filter(
+        task_attachments = TaskMaster.objects.prefetch_related("task_attachments").filter(
             team=team_id, project_id=project_id, task_id=task_id
         )
 
         response_data = []
-        for t in task_with_tags:
+        for t in task_attachments:
             attached_files = []
             for _file in t.task_attachments.all().values_list(
                 "attachment_id", "attached_file", "attached_type"
