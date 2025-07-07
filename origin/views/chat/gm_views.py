@@ -225,6 +225,7 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
                     "chatId": chat_id,
                     "chatName": chat_name,
                     "isDm": False,
+                    "chatType": 2,
                     "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
                     "messages": [new_message],
                     "latestMessage": last_message_dict[chat_id],
