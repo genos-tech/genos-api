@@ -1,4 +1,4 @@
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from rest_framework.response import Response
 from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -16,6 +16,29 @@ class ProjectMasterView(AuthenticatedAPIView):
         error = serializer.errors
         error["hint"] = "Try with different project_name"
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request):
+        team_id = request.GET.get("team_id")
+        project_id = request.GET.get("project_id")
+
+        if not team_id or not project_id:
+            return Response(
+                {"error": "Both 'team_id' and 'project_id' are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            attachment = ProjectMaster.objects.get(team=team_id, project_id=project_id)
+            attachment.delete()
+            return Response(
+                {"message": f"Project `{project_id}` deleted successfully."}, status=status.HTTP_204_NO_CONTENT
+            )
+        except ProjectMaster.DoesNotExist:
+            return Response(
+                {"error": "Project not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
 
 
 class CheckProjectExistsView(AuthenticatedAPIView):
@@ -38,28 +61,28 @@ class CheckProjectExistsView(AuthenticatedAPIView):
 class GetTeamProjectsView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
+        attendee_id = request.GET.get("attendee_id")
 
-        if not team_id:
+        if not team_id or not attendee_id:
             return Response(
-                {"error": "team_id is required."},
+                {"error": "team_id and attendee_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        projects = (
-            ProjectMaster.objects.filter(Q(team=team_id))
-            .values_list("project_id", "project_name")
-            .order_by("ts_updated_at")
-            .reverse()
+        member_exists_subquery = ProjectMembers.objects.filter(
+            project=OuterRef("project_id"), team=team_id, attendee=attendee_id
         )
 
-        team_projects = []
-        for project in list(projects):
-            team_projects.append(
-                {
-                    "projectId": project[0],
-                    "projectName": project[1],
-                }
-            )
+        projects = ProjectMaster.objects.annotate(is_joined=Exists(member_exists_subquery))
+
+        team_projects = [
+            {
+                "projectId": project.project_id,
+                "projectName": str(project.project_name),
+                "isJoined": project.is_joined,
+            }
+            for project in projects
+        ]
 
         return Response(team_projects, status=status.HTTP_200_OK)
 
@@ -75,7 +98,10 @@ class ProjectMembersView(AuthenticatedAPIView):
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        error = serializer.errors
+        error["hint"] = f"Failed to join project: {request.data["project_id"]}"
+        return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
 
 class GetMyProjectsView(AuthenticatedAPIView):
