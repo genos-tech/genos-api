@@ -35,6 +35,8 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
+    is_system_user = models.BooleanField(default=False)
+
     token = models.CharField(max_length=100, null=True, blank=True)
     token_expiration = models.DateTimeField(null=True, blank=True)
     ts_last_login_at = models.DateTimeField(null=True, auto_now=True)

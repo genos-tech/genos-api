@@ -46,7 +46,6 @@ class UserViewSet(viewsets.ModelViewSet):
 
             return Response(
                 {
-                    "user": UserSerializer(user).data,
                     "access": access_token,
                     "refresh": str(refresh),
                     "user": {"username": user.username, "email": user.email, "id": user.id},

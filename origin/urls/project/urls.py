@@ -5,7 +5,7 @@ from origin.views.project.search_views import *
 
 
 urlpatterns = [
-    path("api/v2/project/create/", ProjectMasterView.as_view(), name="create_project"),
+    path("api/v2/project/", ProjectMasterView.as_view(), name="project_management"),
     path("api/v2/project/exist/", CheckProjectExistsView.as_view(), name="exist_project"),
     path("api/v2/project/join/", ProjectMembersView.as_view(), name="exist_project"),
     path(
