@@ -13,6 +13,12 @@ class ProjectMaster(models.Model):
     )
     project_id = models.BigAutoField(primary_key=True, unique=True)
     project_name = models.CharField(unique=True, blank=False)
+    project_system_user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="projects",
+        to_field="id",
+    )
     owner = models.ForeignKey(
         CustomUser,
         on_delete=models.CASCADE,
