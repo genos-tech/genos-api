@@ -1,4 +1,3 @@
-from collections import defaultdict
 from django.db.models import Count, Q
 from rest_framework.response import Response
 from rest_framework import status
