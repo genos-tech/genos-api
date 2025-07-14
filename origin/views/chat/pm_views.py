@@ -38,8 +38,6 @@ class PMAllMyMessagesView(AuthenticatedAPIView):
         # Fetch all messages where the project_id matches and the user is involved
         raw_messages = PMMessages.objects.filter(project__in=project_ids)
 
-        print("raw_messages:", raw_messages)
-
         # Group by dm_id and parent_message_id, then count the replies in each group
         thread_reply_counts = PMThreadMessages.objects.values(
             "parent_message_uid__project__project_id", "parent_message_uid__message_id"
@@ -58,6 +56,7 @@ class PMAllMyMessagesView(AuthenticatedAPIView):
         for raw_message in raw_messages:
             chat_id = int(raw_message.project.project_id)
             chat_name = str(raw_message.project.project_name)
+            project_system_user_id = str(raw_message.project.project_system_user.id)
             message_id = int(raw_message.message_id)
             content = raw_message.message_body
             sender_id = str(raw_message.sender.id)
@@ -70,6 +69,7 @@ class PMAllMyMessagesView(AuthenticatedAPIView):
             new_message = {
                 "messageIdWithChatId": messageIdWithChatId,
                 "chatId": chat_id,
+                "systemUserId": project_system_user_id,
                 "messageId": message_id,
                 "content": content,
                 "sender": {
@@ -78,7 +78,7 @@ class PMAllMyMessagesView(AuthenticatedAPIView):
                     "userName": sender_name,
                     "userEmail": sender_email,
                     "userId": sender_id,
-                    "avatar_img_path": sender_avatar_img_path,
+                    "avatarImgPath": sender_avatar_img_path,
                 },
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.project.project_id}-{message_id}", None
@@ -114,6 +114,7 @@ class PMAllMyMessagesView(AuthenticatedAPIView):
                 message_history_dict[chat_id] = {
                     "chatId": chat_id,
                     "chatName": chat_name,
+                    "systemUserId": project_system_user_id,
                     "isDm": False,
                     "chatType": 3,
                     "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},

@@ -187,7 +187,7 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
                     "userName": sender_name,
                     "userEmail": sender_email,
                     "userId": sender_id,
-                    "avatar_img_path": sender_avatar_img_path,
+                    "avatarImgPath": sender_avatar_img_path,
                 },
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.gm.gm_id}-{message_id}", None
