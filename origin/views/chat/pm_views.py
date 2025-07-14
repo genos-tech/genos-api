@@ -47,7 +47,7 @@ class PMAllMyMessagesView(AuthenticatedAPIView):
 
         thread_reply_count_map = {}
         for reply_count_info in thread_reply_counts:
-            project_id = reply_count_info["parent_message_uid_project_project_id"]
+            project_id = reply_count_info["parent_message_uid__project__project_id"]
             message_id = reply_count_info["parent_message_uid__message_id"]
             reply_count = reply_count_info["num_of_replies"]
             thread_reply_count_map[f"{project_id}-{message_id}"] = reply_count
