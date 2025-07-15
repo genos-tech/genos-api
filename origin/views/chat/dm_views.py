@@ -335,6 +335,9 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
             "task": request.data["task"],
         }
 
+        if "ts_sent" in request.data:
+            data["ts_sent_at"] = request.data["ts_sent"]
+
         serializer = DMThreadMessagesSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
