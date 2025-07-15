@@ -1,6 +1,7 @@
 from django.urls import path
 from origin.views.chat.dm_views import *
 from origin.views.chat.gm_views import *
+from origin.views.chat.pm_views import *
 from origin.views.chat.search_views import GetTeamMembersAndGroupsView
 
 urlpatterns = [
@@ -58,6 +59,29 @@ urlpatterns = [
         "api/v2/gm/getThreadMessagesById/",
         GMThreadMessagesByIdView.as_view(),
         name="get_gm_thread_messages_by_id",
+    ),
+    # PM urls
+    path("api/v2/pm/getHistory/", PMAllMyMessagesView.as_view(), name="get_all_my_pm_messages"),
+    path("api/v2/pm/addMessage/", PMSingleMessageView.as_view(), name="insert_pm_message"),
+    path(
+        "api/v2/pm/getMessagesById/",
+        PMMessagesByIdView.as_view(),
+        name="get_pm_messages_by_id",
+    ),
+    path(
+        "api/v2/pm/checkThreadExistence/",
+        CheckPMThreadExistsView.as_view(),
+        name="check_pm_thread_existence",
+    ),
+    path(
+        "api/v2/pm/addThreadMessage/",
+        PMSingleThreadMessageView.as_view(),
+        name="insert_pm_thread_message",
+    ),
+    path(
+        "api/v2/pm/getThreadMessagesById/",
+        PMThreadMessagesByIdView.as_view(),
+        name="get_pm_thread_messages_by_id",
     ),
     # Search
     path(

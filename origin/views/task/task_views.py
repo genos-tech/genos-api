@@ -242,6 +242,7 @@ class ChildTaskView(AuthenticatedAPIView):
                         "project": {
                             "projectId": t.project.project_id,
                             "projectName": t.project.project_name,
+                            "projectUserId": t.project.project_system_user.id,
                         },
                         "title": t.title,
                         "body": t.content,
@@ -386,6 +387,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                     "project": {
                         "projectId": t.project.project_id,
                         "projectName": t.project.project_name,
+                        "projectUserId": t.project.project_system_user.id,
                     },
                     "title": t.title,
                     "body": t.content,
@@ -512,6 +514,7 @@ class GetTaskView(AuthenticatedAPIView):
                     "project": {
                         "projectId": t.project.project_id,
                         "projectName": t.project.project_name,
+                        "projectUserId": t.project.project_system_user.id,
                     },
                     "title": t.title,
                     "body": t.content,

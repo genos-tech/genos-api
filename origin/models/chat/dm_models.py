@@ -1,5 +1,6 @@
 from django.db import models
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 
 from origin.models.common.user_models import CustomUser
 from origin.models.task.task_models import TaskMaster
@@ -124,7 +125,7 @@ class DMThreadMessages(models.Model):
         related_name="thread_messages",
         to_field="uid",
     )
-    ts_sent_at = models.DateTimeField(auto_now=True)
+    ts_sent_at = models.DateTimeField(default=timezone.now)
     ts_edited_at = models.DateTimeField(null=True, blank=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 

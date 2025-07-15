@@ -1,4 +1,3 @@
-from collections import defaultdict
 from django.db.models import Count, Q
 from rest_framework.response import Response
 from rest_framework import status
@@ -188,7 +187,7 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
                     "userName": sender_name,
                     "userEmail": sender_email,
                     "userId": sender_id,
-                    "avatar_img_path": sender_avatar_img_path,
+                    "avatarImgPath": sender_avatar_img_path,
                 },
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.gm.gm_id}-{message_id}", None

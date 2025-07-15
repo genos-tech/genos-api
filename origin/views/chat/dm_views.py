@@ -1,4 +1,3 @@
-from collections import defaultdict
 from django.db.models import Count, Q
 from rest_framework.response import Response
 from rest_framework import status
@@ -335,6 +334,9 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
             ),
             "task": request.data["task"],
         }
+
+        if "ts_sent" in request.data:
+            data["ts_sent_at"] = request.data["ts_sent"]
 
         serializer = DMThreadMessagesSerializer(data=data)
         if serializer.is_valid():
