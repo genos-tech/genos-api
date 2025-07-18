@@ -73,7 +73,7 @@ class GetTeamProjectsView(AuthenticatedAPIView):
             project=OuterRef("project_id"), team=team_id, attendee=attendee_id
         )
 
-        projects = ProjectMaster.objects.annotate(is_joined=Exists(member_exists_subquery))
+        projects = ProjectMaster.objects.filter(team=team_id).annotate(is_joined=Exists(member_exists_subquery))
 
         team_projects = [
             {
@@ -103,24 +103,6 @@ class ProjectMembersView(AuthenticatedAPIView):
         error = serializer.errors
         error["hint"] = f"Failed to join project: {request.data["project_id"]}"
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
-
-
-class GetMyProjectsView(AuthenticatedAPIView):
-    def get(self, request):
-        user_id = request.GET.get("user_id")
-
-        if not user_id:
-            return Response(
-                {"error": "user_id is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        project_ids = ProjectMembers.objects.filter(Q(attendee=user_id)).values_list(
-            "project", flat=True
-        )
-
-        return Response({"project_ids": list(project_ids)}, status=status.HTTP_200_OK)
-
 
 class GetProjectMembersView(AuthenticatedAPIView):
     def get(self, request):

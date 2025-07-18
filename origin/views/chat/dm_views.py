@@ -15,19 +15,20 @@ from origin.serializers.chat.dm_serializers import (
 #############################
 class DMMasterView(AuthenticatedAPIView):
     def post(self, request):
+        team_id = request.data.get("team", None)
         user_1_id = request.data.get("user_1_id", None)
         user_2_id = request.data.get("user_2_id", None)
 
-        if not user_1_id or not user_2_id:
+        if not team_id or not user_1_id or not user_2_id:
             return Response(
-                {"error": "Both user_1_id and user_2_id are required."},
+                {"error": "team_id, user_1_id, and user_2_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Check if a DM exists in any order
         exists = DMMaster.objects.filter(
-            Q(user_1_id=user_1_id, user_2_id=user_2_id)
-            | Q(user_1_id=user_2_id, user_2_id=user_1_id)
+            Q(team=team_id, user_1_id=user_1_id, user_2_id=user_2_id)
+            | Q(team=team_id, user_1_id=user_2_id, user_2_id=user_1_id)
         ).values_list("dm_id", flat=True)
 
         if len(exists) == 0:
@@ -48,47 +49,54 @@ class DMMasterView(AuthenticatedAPIView):
 
 class CheckDMExistsView(AuthenticatedAPIView):
     def get(self, request):
+        team_id = request.GET.get("team_id", None)
         user_1_id = request.GET.get("user_1_id", None)
         user_2_id = request.GET.get("user_2_id", None)
 
-        if not user_1_id or not user_2_id:
+        if not team_id and not user_1_id or not user_2_id:
             return Response(
-                {"error": "Both user_1_id and user_2_id are required."},
+                {"error": "team_id, user_1_id and user_2_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Check if a DM exists in any order
         exists = DMMaster.objects.filter(
-            Q(user_1_id=user_1_id, user_2_id=user_2_id)
-            | Q(user_1_id=user_2_id, user_2_id=user_1_id)
+            Q(team=team_id, user_1_id=user_1_id, user_2_id=user_2_id)
+            | Q(team=team_id, user_1_id=user_2_id, user_2_id=user_1_id)
         ).values_list("dm_id", flat=True)
 
-        if exists == []:
+        if len(exists) == 0:
             return Response({"dm_exists": False, "dm_id": None}, status=status.HTTP_200_OK)
         elif len(exists) == 1:
             return Response({"dm_exists": True, "dm_id": exists[0]}, status=status.HTTP_200_OK)
         else:
             return Response(
-                {"dm_exists": True, "dm_id": None, "error": "Duplicated DMs found"},
+                {
+                    "dm_exists": True,
+                    "dm_id": None,
+                    "exists": exists,
+                    "error": "Duplicated DMs found",
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
 
 class GetDMIdView(AuthenticatedAPIView):
     def get(self, request):
+        team_id = request.GET.get("team_id", None)
         user_1_id = request.GET.get("user_1_id", None)
         user_2_id = request.GET.get("user_2_id", None)
 
-        if not user_1_id or not user_2_id:
+        if not team_id and not user_1_id or not user_2_id:
             return Response(
-                {"error": "Both user_1_id and user_2_id are required."},
+                {"error": "team_id, user_1_id and user_2_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Check if a DM exists in any order
         dm = DMMaster.objects.filter(
-            Q(user_1_id=user_1_id, user_2_id=user_2_id)
-            | Q(user_1_id=user_2_id, user_2_id=user_1_id)
+            Q(team=team_id, user_1_id=user_1_id, user_2_id=user_2_id)
+            | Q(team=team_id, user_1_id=user_2_id, user_2_id=user_1_id)
         ).values_list("dm_id", flat=True)
 
         if len(dm) == 1:
@@ -136,7 +144,7 @@ class DMAllMyMessagesView(AuthenticatedAPIView):
             return Response({"messages": []}, status=status.HTTP_200_OK)
 
         # Fetch all messages where the dm_id matches and the user is involved
-        raw_messages = DMMessages.objects.filter(dm_id__in=dm_ids)
+        raw_messages = DMMessages.objects.filter(dm__team=team_id, dm_id__in=dm_ids)
 
         # Group by dm_id and parent_message_id, then count the replies in each group
         thread_reply_counts = DMThreadMessages.objects.values(
