@@ -168,6 +168,7 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
                 "attendee__username",
                 "attendee__email",
                 "attendee__profile_image_url",
+                "attendee__is_system_user",
             )
         )
 
@@ -192,6 +193,7 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
             "userEmail": member_info["attendee__email"],
             "avatarImgPath": member_info["attendee__profile_image_url"],
             "online": False,  # TODO: NO NEED?? Should it be passed via WS?
+            "isSystemUser": member_info["attendee__is_system_user"],
         }
 
         return Response(response_data, status=status.HTTP_200_OK)
