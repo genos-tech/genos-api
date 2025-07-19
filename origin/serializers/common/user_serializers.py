@@ -45,7 +45,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = user_models.CustomUser
-        fields = ["id", "username", "email", "password", "profile_image_url"]
+        fields = ["id", "username", "email", "password", "profile_image_url", "is_system_user"]
 
     def create(self, validated_data):
         """Override create method to hash password"""
@@ -54,6 +54,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
             username=validated_data["username"],
             password=validated_data["password"],
             profile_image_url=validated_data.get("profile_image_url", ""),
+            is_system_user=validated_data.get("is_system_user", False),
         )
         return user
 

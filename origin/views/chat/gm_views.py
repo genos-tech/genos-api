@@ -140,7 +140,9 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
 
         # Fetch all gm_ids linked to the user
         gm_ids = list(
-            GMMembers.objects.filter(Q(attendee=attendee_id)).values_list("gm_id", flat=True)
+            GMMembers.objects.filter(Q(gm__owner_team=team_id, attendee=attendee_id)).values_list(
+                "gm_id", flat=True
+            )
         )
 
         if not gm_ids:

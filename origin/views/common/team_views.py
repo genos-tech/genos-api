@@ -121,13 +121,14 @@ class GetTeamMembersView(AuthenticatedAPIView):
             )
 
         attendees = (
-            TeamMembers.objects.filter(team=team_id)
+            TeamMembers.objects.filter(Q(team_id=team_id, attendee__is_system_user=False))
             .select_related("attendee")
             .values(
                 "attendee__id",
                 "attendee__username",
                 "attendee__email",
                 "attendee__profile_image_url",
+                "attendee__is_system_user",
             )
         )
 

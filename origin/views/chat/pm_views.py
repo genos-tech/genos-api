@@ -27,7 +27,7 @@ class PMAllMyMessagesView(AuthenticatedAPIView):
 
         # Fetch all project_ids linked to the user
         project_ids = list(
-            ProjectMembers.objects.filter(Q(attendee=attendee_id)).values_list(
+            ProjectMembers.objects.filter(Q(team=team_id, attendee=attendee_id)).values_list(
                 "project_id", flat=True
             )
         )
