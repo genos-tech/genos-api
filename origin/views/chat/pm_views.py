@@ -85,6 +85,7 @@ class PMAllMyMessagesView(AuthenticatedAPIView):
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.project.project_id}-{message_id}", None
                 ),
+                "taskId": raw_message.task.task_id if raw_message.task else raw_message.task,
                 "tsSent": ts_sent,
             }
 
@@ -149,6 +150,7 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 "sender": request.data["sender_id"],
                 "message_id": current_message_count + 1,
                 "message_body": request.data["message_body"],
+                "task": request.data["task_id"],
             }
             serializer = PMMessagesSerializer(data=data)
             if serializer.is_valid():
