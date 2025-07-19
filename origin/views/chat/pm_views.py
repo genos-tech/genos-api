@@ -63,6 +63,7 @@ class PMAllMyMessagesView(AuthenticatedAPIView):
             sender_name = str(raw_message.sender.username)
             sender_email = str(raw_message.sender.email)
             sender_avatar_img_path = raw_message.sender.profile_image_url
+            is_system_user = raw_message.sender.is_system_user
             ts_sent = str(raw_message.ts_sent_at)
 
             messageIdWithChatId = f"{chat_id}-{message_id}"
@@ -79,10 +80,12 @@ class PMAllMyMessagesView(AuthenticatedAPIView):
                     "userEmail": sender_email,
                     "userId": sender_id,
                     "avatarImgPath": sender_avatar_img_path,
+                    "isSystemUser": is_system_user,
                 },
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.project.project_id}-{message_id}", None
                 ),
+                "taskId": raw_message.task.task_id if raw_message.task else raw_message.task,
                 "tsSent": ts_sent,
             }
 
@@ -122,6 +125,12 @@ class PMAllMyMessagesView(AuthenticatedAPIView):
                     "latestMessage": last_message_dict[chat_id],
                     "latestMessageText": latest_message_text,
                     "TSLastMessage": ts_last_message_dict[chat_id],
+                    "project": {
+                        "projectId": int(raw_message.project.project_id),
+                        "projectName": raw_message.project.project_name,
+                        "isJoined": True,
+                        "systemUserId": project_system_user_id,
+                    },
                 }
 
         message_history = list(message_history_dict.values())
@@ -147,6 +156,7 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 "sender": request.data["sender_id"],
                 "message_id": current_message_count + 1,
                 "message_body": request.data["message_body"],
+                "task": request.data["task_id"],
             }
             serializer = PMMessagesSerializer(data=data)
             if serializer.is_valid():
