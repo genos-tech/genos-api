@@ -125,6 +125,12 @@ class PMAllMyMessagesView(AuthenticatedAPIView):
                     "latestMessage": last_message_dict[chat_id],
                     "latestMessageText": latest_message_text,
                     "TSLastMessage": ts_last_message_dict[chat_id],
+                    "project": {
+                        "projectId": int(raw_message.project.project_id),
+                        "projectName": raw_message.project.project_name,
+                        "isJoined": True,
+                        "systemUserId": project_system_user_id,
+                    },
                 }
 
         message_history = list(message_history_dict.values())

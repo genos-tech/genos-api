@@ -80,7 +80,7 @@ class GetTeamProjectsView(AuthenticatedAPIView):
                 "projectId": project.project_id,
                 "projectName": str(project.project_name),
                 "isJoined": project.is_joined,
-                "projectUserId": project.project_system_user.id,
+                "systemUserId": project.project_system_user.id,
             }
             for project in projects
         ]
