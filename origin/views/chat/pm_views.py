@@ -2,7 +2,7 @@ from django.db.models import Count, Q
 from rest_framework.response import Response
 from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.models.project.prj_models import ProjectMembers
+from origin.models.project.prj_models import ProjectMembers, ProjectMaster
 from origin.models.chat.pm_models import PMMessages, PMThreadMessages
 from origin.serializers.chat.pm_serializers import (
     PMMessagesSerializer,
@@ -172,7 +172,6 @@ class PMSingleMessageView(AuthenticatedAPIView):
 
     def put(self, request):
         try:
-            print("request.data:", request.data)
             if request.data["message_id"] == None:
                 message = PMMessages.objects.get(
                     project=request.data["project_id"], task=request.data["task_id"]
@@ -182,7 +181,9 @@ class PMSingleMessageView(AuthenticatedAPIView):
                     project=request.data["project_id"], message_id=request.data["message_id"]
                 )
             else:
-                raise PMMessages.DoesNotExist
+                Response(
+                    "Either message_id or task_id is required.", status=status.HTTP_400_BAD_REQUEST
+                )
         except PMMessages.DoesNotExist:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -201,27 +202,65 @@ class PMSingleMessageView(AuthenticatedAPIView):
 #############################
 # PM Thread Messages views
 #############################
+class CheckPMThreadExistsView(AuthenticatedAPIView):
+    def get(self, request):
+        project_id = request.GET.get("project_id", None)
+        thread_id = request.GET.get("thread_id", None)
+
+        if not project_id or not thread_id:
+            return Response(
+                {"error": "Both project_id and thread_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Check if a DM exists in any order
+        exists = PMThreadMessages.objects.filter(
+            Q(project=project_id, thread_id=thread_id)
+        ).exists()
+
+        return Response({"pm_thread_exists": exists}, status=status.HTTP_200_OK)
+
+
 class PMSingleThreadMessageView(AuthenticatedAPIView):
     def post(self, request):
-        project = ProjectMembers.objects.filter(project_id=request.data["project_id"])
+        try:
+            if request.data["thread_id"]:
+                thread_id = request.data["thread_id"]
+            elif request.data["thread_id"] == None and request.data["task_id"]:
+                message = PMMessages.objects.get(
+                    project=request.data["project_id"], task=request.data["task_id"]
+                )
+                thread_id = message.message_id
+                if not isinstance(thread_id, int):
+                    Response(
+                        "Failed to get thread_id from task_id.", status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                Response(
+                    "Either thread_id or task_id is required.", status=status.HTTP_400_BAD_REQUEST
+                )
+        except PMMessages.DoesNotExist:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        project = ProjectMaster.objects.filter(project_id=request.data["project_id"])
         if len(project) > 0:
             current_thread_message_count = PMThreadMessages.objects.filter(
-                project=project[0].project.project_id, thread_id=request.data["thread_id"]
+                project=project[0].project_id, thread_id=thread_id
             ).count()
         else:
             Response("project is not found", status=status.HTTP_400_BAD_REQUEST)
 
         data = {
             "project": request.data["project_id"],
-            "thread_id": request.data["thread_id"],
+            "thread_id": thread_id,
             "sender": request.data["sender_id"],
             "thread_message_id": current_thread_message_count + 1,
             "thread_message_body": request.data["message_body"],
             "parent_message_uid": "{project_id}-{parent_message_id}".format(
                 project_id=request.data["project_id"],
-                parent_message_id=request.data["parent_message_id"],
+                parent_message_id=thread_id,
             ),
-            "task": request.data["task"],
+            "task": request.data["task_id"],
         }
 
         serializer = PMThreadMessagesSerializer(data=data)
@@ -229,3 +268,62 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PMThreadMessagesByIdView(AuthenticatedAPIView):
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        team_name = request.GET.get("team_name")
+        project_id = request.GET.get("pm_id", None)
+        thread_id = request.GET.get("thread_id", None)
+
+        if not team_id or not team_name or not project_id or not thread_id:
+            return Response(
+                "project_id and/or thread_id is not found", status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Fetch all messages where the project_id matches and the user is involved
+        raw_messages = PMThreadMessages.objects.filter(project=project_id, thread_id=thread_id)
+
+        thread_messages = []
+        for raw_message in raw_messages:
+            chat_id = int(raw_message.project.project_id)
+            message_id = int(raw_message.thread_message_id)
+            content = raw_message.thread_message_body
+            sender_id = str(raw_message.sender.id)
+            sender_name = str(raw_message.sender.username)
+            sender_email = str(raw_message.sender.email)
+            sender_avatar_img_path = raw_message.sender.profile_image_url
+            is_system_user = raw_message.sender.is_system_user
+            ts_sent = str(raw_message.ts_sent_at)
+
+            try:
+                contentText = " ".join([c["text"] for c in content[0]["content"]])
+            except:
+                print("pm_views", content["content"])
+                contentText = "Failed to get text..."
+
+            messageIdWithChatIdAndThreadId = f"{chat_id}-{thread_id}-{message_id}"
+            new_message = {
+                "chatType": 2,
+                "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
+                "chatId": chat_id,
+                "threadId": thread_id,
+                "messageId": message_id,
+                "content": content,
+                "contentText": contentText,
+                "sender": {
+                    "teamId": team_id,
+                    "teamName": team_name,
+                    "userName": sender_name,
+                    "userEmail": sender_email,
+                    "userId": sender_id,
+                    "avatarImgPath": sender_avatar_img_path,
+                    "isSystemUser": is_system_user,
+                },
+                "taskId": None,
+                "tsSent": ts_sent,
+            }
+            thread_messages.append(new_message)
+
+        return Response(thread_messages, status=status.HTTP_200_OK)

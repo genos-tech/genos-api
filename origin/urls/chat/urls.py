@@ -68,6 +68,16 @@ urlpatterns = [
         PMSingleThreadMessageView.as_view(),
         name="pm_single_thread_message",
     ),
+    path(
+        "api/v2/pm/checkThreadExistence/",
+        CheckPMThreadExistsView.as_view(),
+        name="check_pm_thread_existence",
+    ),
+    path(
+        "api/v2/pm/getThreadMessagesById/",
+        PMThreadMessagesByIdView.as_view(),
+        name="get_pm_thread_messages_by_id",
+    ),
     # Search
     path(
         "api/v2/search/teamMembersAndGroups/",

@@ -132,7 +132,7 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
         team_name = request.GET.get("team_name")
         attendee_id = request.GET.get("user_id")
 
-        if not attendee_id:
+        if not team_id or not team_name or not attendee_id:
             return Response(
                 {"error": "team_id, team_name and attendee_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -329,14 +329,56 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
 
 class GMThreadMessagesByIdView(AuthenticatedAPIView):
     def get(self, request):
+        team_id = request.GET.get("team_id")
+        team_name = request.GET.get("team_name")
         gm_id = request.GET.get("gm_id", None)
         thread_id = request.GET.get("thread_id", None)
-        print(gm_id, thread_id)
-        if gm_id and thread_id:
-            messages = GMThreadMessages.objects.filter(gm_id=int(gm_id), thread_id=int(thread_id))
-            serializer = GMThreadMessagesSerializer(messages, many=True)  # Serialize data
-            return Response(serializer.data)  # Return JSON response
-        else:
+
+        if not team_id or not team_name or not gm_id or not thread_id:
             return Response(
                 "gm_id and/or thread_id is not found", status=status.HTTP_400_BAD_REQUEST
             )
+
+        # Fetch all messages where the gm_id matches and the user is involved
+        raw_messages = GMThreadMessages.objects.filter(gm=gm_id, thread_id=thread_id)
+
+        thread_messages = []
+        for raw_message in raw_messages:
+            chat_id = int(raw_message.gm.gm_id)
+            message_id = int(raw_message.thread_message_id)
+            content = raw_message.thread_message_body
+            sender_id = str(raw_message.sender.id)
+            sender_name = str(raw_message.sender.username)
+            sender_email = str(raw_message.sender.email)
+            sender_avatar_img_path = raw_message.sender.profile_image_url
+            ts_sent = str(raw_message.ts_sent_at)
+
+            try:
+                contentText = " ".join([c["text"] for c in content[0]["content"]])
+            except:
+                print("gm_views", content["content"])
+                contentText = "Failed to get text..."
+
+            messageIdWithChatIdAndThreadId = f"{chat_id}-{thread_id}-{message_id}"
+            new_message = {
+                "chatType": 2,
+                "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
+                "chatId": chat_id,
+                "threadId": thread_id,
+                "messageId": message_id,
+                "content": content,
+                "contentText": contentText,
+                "sender": {
+                    "teamId": team_id,
+                    "teamName": team_name,
+                    "userName": sender_name,
+                    "userEmail": sender_email,
+                    "userId": sender_id,
+                    "avatarImgPath": sender_avatar_img_path,
+                },
+                "taskId": None,
+                "tsSent": ts_sent,
+            }
+            thread_messages.append(new_message)
+
+        return Response(thread_messages, status=status.HTTP_200_OK)
