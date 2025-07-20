@@ -102,9 +102,9 @@ class PMAllMyMessagesView(AuthenticatedAPIView):
             try:
                 # TODO: Need to consider the case that the first line
                 # (i.e., message_body[0]) is empty but later exists.
-                latest_message_text = last_message_dict[chat_id]["content"][0]["content"][-1][
-                    "text"
-                ]
+                latest_message_text = " ".join(
+                    [c["text"] for c in last_message_dict[chat_id]["content"][0]["content"]]
+                )
             except:
                 print("project_views", last_message_dict[chat_id]["content"])
                 latest_message_text = "Failed to get text..."
