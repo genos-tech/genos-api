@@ -230,9 +230,9 @@ class DMAllMyMessagesView(AuthenticatedAPIView):
             try:
                 # TODO: Need to consider the case that the first line
                 # (i.e., message_body[0]) is empty but later exists.
-                latest_message_text = last_message_dict[chat_id]["content"][0]["content"][-1][
-                    "text"
-                ]
+                latest_message_text = " ".join(
+                    [c["text"] for c in last_message_dict[chat_id]["content"][0]["content"]]
+                )
             except:
                 print("dm_views", last_message_dict[chat_id]["content"])
                 latest_message_text = "Failed to get text..."
@@ -355,14 +355,56 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
 
 class DMThreadMessagesByIdView(AuthenticatedAPIView):
     def get(self, request):
+        team_id = request.GET.get("team_id")
+        team_name = request.GET.get("team_name")
         dm_id = request.GET.get("dm_id", None)
         thread_id = request.GET.get("thread_id", None)
 
-        if dm_id and thread_id:
-            messages = DMThreadMessages.objects.filter(dm_id=int(dm_id), thread_id=int(thread_id))
-            serializer = DMThreadMessagesSerializer(messages, many=True)  # Serialize data
-            return Response(serializer.data)  # Return JSON response
-        else:
+        if not team_id or not team_name or not dm_id or not thread_id:
             return Response(
                 "dm_id and/or thread_id is not found", status=status.HTTP_400_BAD_REQUEST
             )
+
+        # Fetch all messages where the dm_id matches and the user is involved
+        raw_messages = DMThreadMessages.objects.filter(dm=dm_id, thread_id=thread_id)
+
+        thread_messages = []
+        for raw_message in raw_messages:
+            chat_id = int(raw_message.dm.dm_id)
+            message_id = int(raw_message.thread_message_id)
+            content = raw_message.thread_message_body
+            sender_id = str(raw_message.sender.id)
+            sender_name = str(raw_message.sender.username)
+            sender_email = str(raw_message.sender.email)
+            sender_avatar_img_path = raw_message.sender.profile_image_url
+            ts_sent = str(raw_message.ts_sent_at)
+
+            try:
+                contentText = " ".join([c["text"] for c in content[0]["content"]])
+            except:
+                print("dm_views", content["content"])
+                contentText = "Failed to get text..."
+
+            messageIdWithChatIdAndThreadId = f"{chat_id}-{thread_id}-{message_id}"
+            new_message = {
+                "chatType": 2,
+                "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
+                "chatId": chat_id,
+                "threadId": thread_id,
+                "messageId": message_id,
+                "content": content,
+                "contentText": contentText,
+                "sender": {
+                    "teamId": team_id,
+                    "teamName": team_name,
+                    "userName": sender_name,
+                    "userEmail": sender_email,
+                    "userId": sender_id,
+                    "avatarImgPath": sender_avatar_img_path,
+                },
+                "taskId": None,
+                "tsSent": ts_sent,
+            }
+            thread_messages.append(new_message)
+
+        return Response(thread_messages, status=status.HTTP_200_OK)
