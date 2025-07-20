@@ -85,7 +85,8 @@ class PMAllMyMessagesView(AuthenticatedAPIView):
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.project.project_id}-{message_id}", None
                 ),
-                "taskId": raw_message.task.task_id if raw_message.task else raw_message.task,
+                "taskId": raw_message.task.task_id if raw_message.task else None,
+                "taskStatus": raw_message.task.status if raw_message.task else None,
                 "tsSent": ts_sent,
             }
 
@@ -101,9 +102,9 @@ class PMAllMyMessagesView(AuthenticatedAPIView):
             try:
                 # TODO: Need to consider the case that the first line
                 # (i.e., message_body[0]) is empty but later exists.
-                latest_message_text = last_message_dict[chat_id]["content"][0]["content"][-1][
-                    "text"
-                ]
+                latest_message_text = " ".join(
+                    [c["text"] for c in last_message_dict[chat_id]["content"][0]["content"]]
+                )
             except:
                 print("project_views", last_message_dict[chat_id]["content"])
                 latest_message_text = "Failed to get text..."
@@ -169,40 +170,37 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 status=status.HTTP_201_CREATED,
             )
 
+    def put(self, request):
+        try:
+            print("request.data:", request.data)
+            if request.data["message_id"] == None:
+                message = PMMessages.objects.get(
+                    project=request.data["project_id"], task=request.data["task_id"]
+                )
+            elif request.data["task_id"] == None:
+                message = PMMessages.objects.get(
+                    project=request.data["project_id"], message_id=request.data["message_id"]
+                )
+            else:
+                raise PMMessages.DoesNotExist
+        except PMMessages.DoesNotExist:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
-class PMMessagesByIdView(AuthenticatedAPIView):
-    def get(self, request):
-        project_id = request.GET.get("project_id", None)
-        if project_id:
-            messages = PMMessages.objects.filter(project_id=int(project_id))
-            serializer = PMMessagesSerializer(messages, many=True)  # Serialize data
-            return Response(serializer.data)  # Return JSON response
-        else:
-            return Response("project_id is not found", status=status.HTTP_400_BAD_REQUEST)
+        data = {
+            "message_body": request.data.get("message_body", message.message_body),
+        }
+
+        serializer = PMMessagesSerializer(message, data=data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 #############################
 # PM Thread Messages views
 #############################
-class CheckPMThreadExistsView(AuthenticatedAPIView):
-    def get(self, request):
-        project_id = request.GET.get("project_id", None)
-        thread_id = request.GET.get("thread_id", None)
-
-        if not project_id or not thread_id:
-            return Response(
-                {"error": "Both project_id and thread_id are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Check if a DM exists in any order
-        exists = PMThreadMessages.objects.filter(
-            Q(project=project_id, thread_id=thread_id)
-        ).exists()
-
-        return Response({"pm_thread_exists": exists}, status=status.HTTP_200_OK)
-
-
 class PMSingleThreadMessageView(AuthenticatedAPIView):
     def post(self, request):
         project = ProjectMembers.objects.filter(project_id=request.data["project_id"])
@@ -231,19 +229,3 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-class PMThreadMessagesByIdView(AuthenticatedAPIView):
-    def get(self, request):
-        project_id = request.GET.get("project_id", None)
-        thread_id = request.GET.get("thread_id", None)
-        if project_id and thread_id:
-            messages = PMThreadMessages.objects.filter(
-                project_id=int(project_id), thread_id=int(thread_id)
-            )
-            serializer = PMThreadMessagesSerializer(messages, many=True)  # Serialize data
-            return Response(serializer.data)  # Return JSON response
-        else:
-            return Response(
-                "project_id and/or thread_id is not found", status=status.HTTP_400_BAD_REQUEST
-            )
