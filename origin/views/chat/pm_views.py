@@ -13,7 +13,7 @@ from origin.serializers.chat.pm_serializers import (
 #############################
 # PM Messages views
 #############################
-class PMAllMyMessagesView(AuthenticatedAPIView):
+class PMHistoryView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
         team_name = request.GET.get("team_name")
@@ -188,7 +188,11 @@ class PMSingleMessageView(AuthenticatedAPIView):
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
         data = {
-            "message_body": request.data.get("message_body", message.message_body),
+            "message_body": (
+                request.data["message_body"]
+                if request.data["message_body"]
+                else message.message_body
+            ),
         }
 
         serializer = PMMessagesSerializer(message, data=data, partial=True)
