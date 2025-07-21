@@ -65,7 +65,7 @@ class CheckGMExistsView(AuthenticatedAPIView):
         return Response({"gm_exists": exists}, status=status.HTTP_200_OK)
 
 
-class GetGMIdView(AuthenticatedAPIView):
+class GMIdView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id", None)
         group_name = request.GET.get("group_name", None)
@@ -104,7 +104,7 @@ class GMMembersView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class GetAllMyGMIdsView(AuthenticatedAPIView):
+class AllGMIdsView(AuthenticatedAPIView):
     def get(self, request):
         attendee_id = request.GET.get("attendee_id")
 
@@ -126,7 +126,7 @@ class GetAllMyGMIdsView(AuthenticatedAPIView):
 #############################
 # GM Messages views
 #############################
-class GMAllMyMessagesView(AuthenticatedAPIView):
+class GMHistoryView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
         team_name = request.GET.get("team_name")
@@ -194,6 +194,22 @@ class GMAllMyMessagesView(AuthenticatedAPIView):
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.gm.gm_id}-{message_id}", None
                 ),
+                "taskId": raw_message.task.task_id if raw_message.task else None,
+                "taskStatus": raw_message.task.status if raw_message.task else None,
+                "project": {
+                    "projectId": (
+                        raw_message.task.project.project_id if raw_message.task else None
+                    ),
+                    "projectName": (
+                        raw_message.task.project.project_name if raw_message.task else None
+                    ),
+                    "isJoined": True if raw_message.task else False,
+                    "systemUserId": (
+                        raw_message.task.project.project_system_user.id
+                        if raw_message.task
+                        else None
+                    ),
+                },
                 "tsSent": ts_sent,
             }
 
@@ -265,6 +281,34 @@ class GMSingleMessageView(AuthenticatedAPIView):
                 {"message": "Nothing to do cause it's already initialized"},
                 status=status.HTTP_201_CREATED,
             )
+
+    def put(self, request):
+        gm_id = request.data["gm_id"]
+        message_id = request.data["message_id"]
+
+        if not gm_id or not message_id:
+            return Response(
+                {"error": "gm_id and message_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        message = GMMessages.objects.get(gm=gm_id, message_id=message_id)
+
+        data = {
+            "message_body": (
+                request.data["message_body"]
+                if request.data["message_body"]
+                else message.message_body
+            ),
+            "task": (request.data["task_id"] if request.data["task_id"] else message.task.task_id),
+        }
+
+        serializer = GMMessagesSerializer(message, data=data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class GMMessagesByIdView(AuthenticatedAPIView):
@@ -351,6 +395,7 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
             sender_name = str(raw_message.sender.username)
             sender_email = str(raw_message.sender.email)
             sender_avatar_img_path = raw_message.sender.profile_image_url
+            is_system_user = raw_message.sender.is_system_user
             ts_sent = str(raw_message.ts_sent_at)
 
             try:
@@ -375,8 +420,31 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                     "userEmail": sender_email,
                     "userId": sender_id,
                     "avatarImgPath": sender_avatar_img_path,
+                    "isSystemUser": is_system_user,
                 },
-                "taskId": None,
+                "taskId": (
+                    raw_message.parent_message_uid.task.task_id
+                    if raw_message.parent_message_uid.task
+                    else None
+                ),
+                "project": {
+                    "projectId": (
+                        raw_message.parent_message_uid.task.project.project_id
+                        if raw_message.parent_message_uid.task
+                        else None
+                    ),
+                    "projectName": (
+                        raw_message.parent_message_uid.task.project.project_name
+                        if raw_message.parent_message_uid.task
+                        else None
+                    ),
+                    "isJoined": True if raw_message.parent_message_uid.task else False,
+                    "systemUserId": (
+                        raw_message.parent_message_uid.task.project.project_system_user.id
+                        if raw_message.parent_message_uid.task
+                        else None
+                    ),
+                },
                 "tsSent": ts_sent,
             }
             thread_messages.append(new_message)

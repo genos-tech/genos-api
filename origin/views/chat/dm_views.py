@@ -81,7 +81,7 @@ class CheckDMExistsView(AuthenticatedAPIView):
             )
 
 
-class GetDMIdView(AuthenticatedAPIView):
+class DMIdView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id", None)
         user_1_id = request.GET.get("user_1_id", None)
@@ -105,7 +105,7 @@ class GetDMIdView(AuthenticatedAPIView):
             return Response({"dm_id": None}, status=status.HTTP_200_OK)
 
 
-class GetAllMyDMIdsView(AuthenticatedAPIView):
+class AllDMIdsView(AuthenticatedAPIView):
     def get(self, request):
         user_id = request.GET.get("user_id")
 
@@ -123,7 +123,7 @@ class GetAllMyDMIdsView(AuthenticatedAPIView):
 #############################
 # DM Messages views
 #############################
-class DMAllMyMessagesView(AuthenticatedAPIView):
+class DMHistoryView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
         team_name = request.GET.get("team_name")
@@ -215,6 +215,22 @@ class DMAllMyMessagesView(AuthenticatedAPIView):
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.dm.dm_id}-{message_id}", None
                 ),
+                "taskId": raw_message.task.task_id if raw_message.task else None,
+                "taskStatus": raw_message.task.status if raw_message.task else None,
+                "project": {
+                    "projectId": (
+                        raw_message.task.project.project_id if raw_message.task else None
+                    ),
+                    "projectName": (
+                        raw_message.task.project.project_name if raw_message.task else None
+                    ),
+                    "isJoined": True if raw_message.task else False,
+                    "systemUserId": (
+                        raw_message.task.project.project_system_user.id
+                        if raw_message.task
+                        else None
+                    ),
+                },
                 "tsSent": ts_sent,
             }
 
@@ -287,6 +303,34 @@ class DMSingleMessageView(AuthenticatedAPIView):
                 {"message": "Nothing to do cause it's already initialized"},
                 status=status.HTTP_201_CREATED,
             )
+
+    def put(self, request):
+        dm_id = request.data["dm_id"]
+        message_id = request.data["message_id"]
+
+        if not dm_id or not message_id:
+            return Response(
+                {"error": "dm_id and message_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        message = DMMessages.objects.get(dm=dm_id, message_id=message_id)
+
+        data = {
+            "message_body": (
+                request.data["message_body"]
+                if request.data["message_body"]
+                else message.message_body
+            ),
+            "task": (request.data["task_id"] if request.data["task_id"] else message.task.task_id),
+        }
+
+        serializer = DMMessagesSerializer(message, data=data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class DMMessagesByIdView(AuthenticatedAPIView):
@@ -368,6 +412,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
         # Fetch all messages where the dm_id matches and the user is involved
         raw_messages = DMThreadMessages.objects.filter(dm=dm_id, thread_id=thread_id)
 
+        task_exist = False
         thread_messages = []
         for raw_message in raw_messages:
             chat_id = int(raw_message.dm.dm_id)
@@ -377,6 +422,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
             sender_name = str(raw_message.sender.username)
             sender_email = str(raw_message.sender.email)
             sender_avatar_img_path = raw_message.sender.profile_image_url
+            is_system_user = raw_message.sender.is_system_user
             ts_sent = str(raw_message.ts_sent_at)
 
             try:
@@ -384,6 +430,15 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
             except:
                 print("dm_views", content["content"])
                 contentText = "Failed to get text..."
+
+            _task_id = (
+                raw_message.parent_message_uid.task.task_id
+                if raw_message.parent_message_uid.task
+                else None
+            )
+            if _task_id:
+                task_id = _task_id
+                task_exist = True
 
             messageIdWithChatIdAndThreadId = f"{chat_id}-{thread_id}-{message_id}"
             new_message = {
@@ -401,10 +456,38 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
                     "userEmail": sender_email,
                     "userId": sender_id,
                     "avatarImgPath": sender_avatar_img_path,
+                    "isSystemUser": is_system_user,
                 },
-                "taskId": None,
+                "taskId": _task_id,
+                "project": {
+                    "projectId": (
+                        raw_message.parent_message_uid.task.project.project_id
+                        if raw_message.parent_message_uid.task
+                        else None
+                    ),
+                    "projectName": (
+                        raw_message.parent_message_uid.task.project.project_name
+                        if raw_message.parent_message_uid.task
+                        else None
+                    ),
+                    "isJoined": True if raw_message.parent_message_uid.task else False,
+                    "systemUserId": (
+                        raw_message.parent_message_uid.task.project.project_system_user.id
+                        if raw_message.parent_message_uid.task
+                        else None
+                    ),
+                },
                 "tsSent": ts_sent,
             }
             thread_messages.append(new_message)
 
-        return Response(thread_messages, status=status.HTTP_200_OK)
+        _thread_messages = []
+        if task_exist:
+            for m in thread_messages:
+                m["taskExist"] = True
+                m["taskId"] = task_id
+                _thread_messages.append(m)
+        else:
+            _thread_messages = thread_messages
+
+        return Response(_thread_messages, status=status.HTTP_200_OK)
