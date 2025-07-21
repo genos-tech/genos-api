@@ -399,7 +399,13 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
             ts_sent = str(raw_message.ts_sent_at)
 
             try:
-                contentText = " ".join([c["text"] for c in content[0]["content"]])
+                contentText_list = []
+                for c in content[0]["content"]:
+                    if "text" in c:
+                        contentText_list.append(c["text"])
+                    elif "href" in c:
+                        contentText_list.append(c["content"][0]["text"])
+                contentText = " ".join(contentText_list)
             except:
                 print("gm_views", content["content"])
                 contentText = "Failed to get text..."
