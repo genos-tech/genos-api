@@ -62,7 +62,7 @@ urlpatterns = [
     ),
     # PM urls
     path("api/v2/pm/history/", PMHistoryView.as_view(), name="pm_history"),
-    path("api/v2/pm/singleMessage/", PMSingleMessageView.as_view(), name="pm_message"),
+    path("api/v2/pm/message/", PMSingleMessageView.as_view(), name="pm_message"),
     path(
         "api/v2/pm/threadMessage/",
         PMSingleThreadMessageView.as_view(),
