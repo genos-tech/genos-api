@@ -65,6 +65,7 @@ class PMHistoryView(AuthenticatedAPIView):
             sender_avatar_img_path = raw_message.sender.profile_image_url
             is_system_user = raw_message.sender.is_system_user
             ts_sent = str(raw_message.ts_sent_at)
+            ts_updated_at = str(raw_message.ts_updated_at)
 
             messageIdWithChatId = f"{chat_id}-{message_id}"
             new_message = {
@@ -87,7 +88,7 @@ class PMHistoryView(AuthenticatedAPIView):
                 ),
                 "taskId": raw_message.task.task_id if raw_message.task else None,
                 "taskStatus": raw_message.task.status if raw_message.task else None,
-                "tsSent": ts_sent,
+                "tsSent": ts_updated_at,
             }
 
             if chat_id in ts_last_message_dict:
@@ -273,6 +274,36 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    def put(self, request):
+        project_id = request.data["project_id"]
+        thread_id = request.data["thread_id"]
+        message_id = request.data["message_id"]
+
+        if not project_id or not thread_id or not message_id:
+            return Response(
+                {"error": "project_id, thread_id, and message_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        message = PMThreadMessages.objects.get(
+            project=project_id, thread_id=thread_id, thread_message_id=message_id
+        )
+
+        data = {
+            "thread_message_body": (
+                request.data["message_body"]
+                if request.data["message_body"]
+                else message.message_body
+            )
+        }
+
+        serializer = PMThreadMessagesSerializer(message, data=data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 class PMThreadMessagesByIdView(AuthenticatedAPIView):
     def get(self, request):
@@ -299,7 +330,7 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
             sender_email = str(raw_message.sender.email)
             sender_avatar_img_path = raw_message.sender.profile_image_url
             is_system_user = raw_message.sender.is_system_user
-            ts_sent = str(raw_message.ts_sent_at)
+            ts_updated_at = str(raw_message.ts_updated_at)
 
             try:
                 contentText_list = []
@@ -315,7 +346,7 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
 
             messageIdWithChatIdAndThreadId = f"{chat_id}-{thread_id}-{message_id}"
             new_message = {
-                "chatType": 2,
+                "chatType": 3,
                 "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
                 "chatId": chat_id,
                 "threadId": thread_id,
@@ -332,7 +363,7 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                     "isSystemUser": is_system_user,
                 },
                 "taskId": None,
-                "tsSent": ts_sent,
+                "tsSent": ts_updated_at,
             }
             thread_messages.append(new_message)
 
