@@ -211,7 +211,8 @@ class GMHistoryView(AuthenticatedAPIView):
                         else None
                     ),
                 },
-                "tsSent": ts_updated_at,
+                "tsSent": ts_sent,
+                "tsUpdated": ts_updated_at,
             }
 
             if chat_id in ts_last_message_dict:
@@ -428,7 +429,14 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
             sender_email = str(raw_message.sender.email)
             sender_avatar_img_path = raw_message.sender.profile_image_url
             is_system_user = raw_message.sender.is_system_user
+            ts_sent = str(raw_message.ts_sent_at)
             ts_updated_at = str(raw_message.ts_updated_at)
+
+            # Get the parent ts_sent/ts_updated_at for the first thread message.
+            if raw_message.thread_message_id == 1:
+                parent_message = GMMessages.objects.filter(gm=gm_id, message_id=thread_id)[0]
+                ts_sent = parent_message.ts_sent_at
+                ts_updated_at = parent_message.ts_updated_at
 
             try:
                 contentText_list = []
@@ -483,7 +491,8 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                         else None
                     ),
                 },
-                "tsSent": ts_updated_at,
+                "tsSent": ts_sent,
+                "tsUpdated": ts_updated_at,
             }
             thread_messages.append(new_message)
 
