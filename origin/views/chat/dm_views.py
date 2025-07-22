@@ -174,6 +174,7 @@ class DMHistoryView(AuthenticatedAPIView):
             message_id = int(raw_message.message_id)
             content = raw_message.message_body
             ts_sent = str(raw_message.ts_sent_at)
+            ts_updated_at = str(raw_message.ts_updated_at)
 
             if sender_id == user_id:
                 partner = {
@@ -231,7 +232,7 @@ class DMHistoryView(AuthenticatedAPIView):
                         else None
                     ),
                 },
-                "tsSent": ts_sent,
+                "tsSent": ts_updated_at,
             }
 
             if chat_id in ts_last_message_dict:
@@ -315,6 +316,7 @@ class DMSingleMessageView(AuthenticatedAPIView):
             )
 
         message = DMMessages.objects.get(dm=dm_id, message_id=message_id)
+        _tmp_task_id = message.task.task_id if message.task else None
 
         data = {
             "message_body": (
@@ -322,7 +324,7 @@ class DMSingleMessageView(AuthenticatedAPIView):
                 if request.data["message_body"]
                 else message.message_body
             ),
-            "task": (request.data["task_id"] if request.data["task_id"] else message.task.task_id),
+            "task": (request.data["task_id"] if request.data["task_id"] else _tmp_task_id),
         }
 
         serializer = DMMessagesSerializer(message, data=data, partial=True)
@@ -396,6 +398,36 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    def put(self, request):
+        dm_id = request.data["dm_id"]
+        thread_id = request.data["thread_id"]
+        message_id = request.data["message_id"]
+
+        if not dm_id or not thread_id or not message_id:
+            return Response(
+                {"error": "dm_id, thread_id, and message_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        message = DMThreadMessages.objects.get(
+            dm=dm_id, thread_id=thread_id, thread_message_id=message_id
+        )
+
+        data = {
+            "thread_message_body": (
+                request.data["message_body"]
+                if request.data["message_body"]
+                else message.message_body
+            )
+        }
+
+        serializer = DMThreadMessagesSerializer(message, data=data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 class DMThreadMessagesByIdView(AuthenticatedAPIView):
     def get(self, request):
@@ -423,7 +455,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
             sender_email = str(raw_message.sender.email)
             sender_avatar_img_path = raw_message.sender.profile_image_url
             is_system_user = raw_message.sender.is_system_user
-            ts_sent = str(raw_message.ts_sent_at)
+            ts_updated_at = str(raw_message.ts_updated_at)
 
             try:
                 contentText_list = []
@@ -448,7 +480,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
 
             messageIdWithChatIdAndThreadId = f"{chat_id}-{thread_id}-{message_id}"
             new_message = {
-                "chatType": 2,
+                "chatType": 1,
                 "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
                 "chatId": chat_id,
                 "threadId": thread_id,
@@ -483,7 +515,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
                         else None
                     ),
                 },
-                "tsSent": ts_sent,
+                "tsSent": ts_updated_at,
             }
             thread_messages.append(new_message)
 
