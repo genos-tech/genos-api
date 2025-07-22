@@ -29,8 +29,7 @@ class PMMessages(models.Model):
         null=True,
         blank=True,
     )
-    ts_sent_at = models.DateTimeField(auto_now=True)
-    ts_edited_at = models.DateTimeField(null=True, blank=True)
+    ts_sent_at = models.DateTimeField(auto_now_add=True)
     ts_thread_created_at = models.DateTimeField(null=True, blank=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
     uid = models.CharField(primary_key=True, max_length=255, unique=True, editable=False)
@@ -68,13 +67,13 @@ class PMThreadMessages(models.Model):
         related_name="pm_thread_messages",
         to_field="uid",
     )
-    ts_sent_at = models.DateTimeField(auto_now=True)
-    ts_edited_at = models.DateTimeField(null=True, blank=True)
+    ts_sent_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["project_id", "thread_id", "thread_message_id"], name="unique_pm_thread_message"
+                fields=["project_id", "thread_id", "thread_message_id"],
+                name="unique_pm_thread_message",
             )
         ]

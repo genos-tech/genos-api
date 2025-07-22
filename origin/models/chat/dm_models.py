@@ -94,8 +94,7 @@ class DMMessages(models.Model):
         null=True,
         blank=True,
     )
-    ts_sent_at = models.DateTimeField(auto_now=True)
-    ts_edited_at = models.DateTimeField(null=True, blank=True)
+    ts_sent_at = models.DateTimeField(auto_now_add=True)
     ts_thread_created_at = models.DateTimeField(null=True, blank=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
     uid = models.CharField(primary_key=True, max_length=255, editable=False)
@@ -138,8 +137,7 @@ class DMThreadMessages(models.Model):
         related_name="thread_messages",
         to_field="uid",
     )
-    ts_sent_at = models.DateTimeField(default=timezone.now)
-    ts_edited_at = models.DateTimeField(null=True, blank=True)
+    ts_sent_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
