@@ -811,8 +811,6 @@ class TaskCommentsView(AuthenticatedAPIView):
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
-class TaskCommentsByIdView(AuthenticatedAPIView):
     def get(self, request):
         task_id = request.GET.get("task_id", None)
         if task_id:
