@@ -784,8 +784,33 @@ class TaskCommentsView(AuthenticatedAPIView):
         error = serializer.errors
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
+    def put(self, request):
+        task_id = request.data["task_id"]
+        comment_id = request.data["comment_id"]
 
-class TaskCommentsByIdView(AuthenticatedAPIView):
+        if not task_id or not comment_id:
+            return Response(
+                {"error": "task_id and comment_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        message = TaskComments.objects.get(task=task_id, comment_id=comment_id)
+
+        data = {
+            "comment_body": (
+                request.data["comment_body"]
+                if request.data["comment_body"]
+                else message.comment_body
+            )
+        }
+
+        serializer = TaskCommentsSerializer(message, data=data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
     def get(self, request):
         task_id = request.GET.get("task_id", None)
         if task_id:
@@ -797,6 +822,7 @@ class TaskCommentsByIdView(AuthenticatedAPIView):
                     "comment_id",
                     "comment_body",
                     "ts_sent_at",
+                    "ts_updated_at",
                     "sender__id",
                     "sender__username",
                 )
@@ -811,12 +837,13 @@ class TaskCommentsByIdView(AuthenticatedAPIView):
                         "senderName": comment["sender__username"],
                         "commentId": comment["comment_id"],
                         "commentBody": comment["comment_body"],
-                        "sentAt": str(comment["ts_sent_at"]),
+                        "tsSent": str(comment["ts_sent_at"]),
+                        "tsUpdated": str(comment["ts_updated_at"]),
                     }
                 )
 
             return Response(
-                sorted(response_data, key=lambda x: x["sentAt"], reverse=False),
+                sorted(response_data, key=lambda x: x["tsSent"], reverse=False),
                 status=status.HTTP_201_CREATED,
             )
         else:
