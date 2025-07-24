@@ -81,7 +81,9 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        team_ids = TeamMembers.objects.filter(Q(attendee=user_id)).values_list("team")
+        team_ids = TeamMembers.objects.filter(
+            Q(attendee=user_id, team__is_deleted=False)
+        ).values_list("team")
 
         connected_set = set()
         for (team_id,) in team_ids:
@@ -92,20 +94,22 @@ class GetMyTeamsView(AuthenticatedAPIView):
 
 class GetAllTeamsView(AuthenticatedAPIView):
     def get(self, request):
-        _teams = TeamMaster.objects.values_list("team_id", "team_name", "team_email")
+        _teams = TeamMaster.objects.values_list("team_id", "team_name", "team_email", "is_deleted")
         teams = []
         for (
             team_id,
             team_name,
             team_email,
+            is_deleted,
         ) in _teams:
-            teams.append(
-                {
-                    "teamId": team_id,
-                    "teamName": team_name,
-                    "teamEmail": team_email,
-                }
-            )
+            if is_deleted == False:
+                teams.append(
+                    {
+                        "teamId": team_id,
+                        "teamName": team_name,
+                        "teamEmail": team_email,
+                    }
+                )
         return Response(teams, status=status.HTTP_200_OK)
 
 
