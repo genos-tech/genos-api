@@ -52,6 +52,7 @@ class TaskMaster(models.Model):
     general_url_title = models.CharField(blank=True, null=True)
     due_date = models.DateField(blank=True, null=True)
     tags = models.JSONField(blank=True, null=True)
+    is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
@@ -125,6 +126,7 @@ class TaskComments(models.Model):
     )
     comment_id = models.IntegerField()
     comment_body = models.JSONField()
+    is_deleted = models.BooleanField(default=False)
     ts_sent_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 

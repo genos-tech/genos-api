@@ -17,6 +17,7 @@ class DMMaster(models.Model):
     dm_id = models.AutoField(primary_key=True)
     user_1_id = models.UUIDField(blank=False, db_index=True)  # should be user_id
     user_2_id = models.UUIDField(blank=False, db_index=True)
+    is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
@@ -94,6 +95,7 @@ class DMMessages(models.Model):
         null=True,
         blank=True,
     )
+    is_deleted = models.BooleanField(default=False)
     ts_sent_at = models.DateTimeField(auto_now_add=True)
     ts_thread_created_at = models.DateTimeField(null=True, blank=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
@@ -137,6 +139,7 @@ class DMThreadMessages(models.Model):
         related_name="thread_messages",
         to_field="uid",
     )
+    is_deleted = models.BooleanField(default=False)
     ts_sent_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 

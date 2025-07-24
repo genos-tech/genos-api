@@ -32,6 +32,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         default="offline",
     )
     last_seen = models.DateTimeField(auto_now=True)
+    is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 

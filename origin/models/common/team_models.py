@@ -15,6 +15,7 @@ class TeamMaster(models.Model):
         related_name="own_teams",
         to_field="id",
     )
+    is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
@@ -32,6 +33,7 @@ class TeamMembers(models.Model):
         related_name="team_attendees",
         to_field="id",
     )
+    is_deleted = models.BooleanField(default=False)
     ts_joined_at = models.DateTimeField(auto_now_add=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

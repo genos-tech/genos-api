@@ -29,6 +29,7 @@ class PMMessages(models.Model):
         null=True,
         blank=True,
     )
+    is_deleted = models.BooleanField(default=False)
     ts_sent_at = models.DateTimeField(auto_now_add=True)
     ts_thread_created_at = models.DateTimeField(null=True, blank=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
@@ -67,6 +68,7 @@ class PMThreadMessages(models.Model):
         related_name="pm_thread_messages",
         to_field="uid",
     )
+    is_deleted = models.BooleanField(default=False)
     ts_sent_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
