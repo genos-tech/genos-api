@@ -24,28 +24,30 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
 
         # Get all tasks
         tasks = (
-            ProjectMaster.objects.prefetch_related("project_tasks_master")
-            .filter(team=team_id)
+            TaskMaster.objects.filter(team=team_id)
+            .exclude(status__in=["Deleted"])
             .values_list(
-                "project_id",
-                "project_name",
-                "project_tasks_master__task_id",
-                "project_tasks_master__title",
-                "project_tasks_master__status",
+                "project__project_id",
+                "project__project_name",
+                "tags",
+                "task_id",
+                "title",
+                "status",
             )
-            .order_by("project_tasks_master__ts_updated_at")
+            .order_by("ts_updated_at")
             .reverse()
         )
 
         for task in list(tasks)[:top_n]:
-            if task[2] and task[4] not in ["Deleted"]:  # TODO: delete this
+            if task[2]:  # TODO: delete this
                 team_tasks.append(
                     {
                         "projectId": task[0],
                         "projectName": task[1],
-                        "taskId": task[2],
-                        "title": task[3],
-                        "status": task[4],
+                        "projectTags": task[2],
+                        "taskId": task[3],
+                        "title": task[4],
+                        "status": task[5],
                     }
                 )
 

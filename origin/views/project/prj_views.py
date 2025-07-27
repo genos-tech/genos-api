@@ -1,3 +1,4 @@
+from collections import defaultdict
 from django.db.models import Exists, OuterRef, Q
 from rest_framework.response import Response
 from rest_framework import status
@@ -58,7 +59,7 @@ class CheckProjectExistsView(AuthenticatedAPIView):
         return Response({"project_exists": exists}, status=status.HTTP_200_OK)
 
 
-class GetTeamProjectsView(AuthenticatedAPIView):
+class ProjectsView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
         attendee_id = request.GET.get("attendee_id")
@@ -74,11 +75,19 @@ class GetTeamProjectsView(AuthenticatedAPIView):
         )
 
         projects = ProjectMaster.objects.filter(team=team_id).annotate(is_joined=Exists(member_exists_subquery))
+        project_tags = defaultdict(list)
+        for project_tag in ProjectTags.objects.filter(team=team_id):
+            project_tags[project_tag.project.project_id].append({
+                "tagName":project_tag.tag_name,
+                "tagColor":project_tag.tag_color,
+                "tagTextColor":project_tag.tag_text_color
+            })
 
         team_projects = [
             {
                 "projectId": project.project_id,
                 "projectName": str(project.project_name),
+                "projectTags": project_tags[project.project_id],
                 "isJoined": project.is_joined,
                 "systemUserId": project.project_system_user.id,
             }
@@ -104,7 +113,7 @@ class ProjectMembersView(AuthenticatedAPIView):
         error["hint"] = f"Failed to join project: {request.data["project_id"]}"
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
-class GetProjectMembersView(AuthenticatedAPIView):
+class ProjectMembersView(AuthenticatedAPIView):
     def get(self, request):
         user_id = request.GET.get("user_id")
         project_id = request.GET.get("project_id")
