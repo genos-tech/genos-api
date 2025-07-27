@@ -123,6 +123,7 @@ class GetTeamTasksView(AuthenticatedAPIView):
                     "priority": t.priority,
                     "effortLevel": t.effort_level,
                     "createdDate": str(t.ts_created_at.date()),
+                    "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
@@ -263,6 +264,7 @@ class ChildTaskView(AuthenticatedAPIView):
                             "online": True,
                         },
                         "createdDate": str(t.ts_created_at.date()),
+                        "updatedAt": str(t.ts_updated_at),
                         "dueDate": str(t.due_date) if t.due_date else None,
                         "daysLeft": (
                             max(-1, (t.due_date - datetime.now().date()).days)
@@ -408,6 +410,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                         "online": True,
                     },
                     "createdDate": str(t.ts_created_at.date()),
+                    "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
@@ -535,6 +538,7 @@ class GetTaskView(AuthenticatedAPIView):
                         "online": True,
                     },
                     "createdDate": str(t.ts_created_at.date()),
+                    "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
@@ -624,6 +628,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
                     "priority": t.priority,
                     "effortLevel": t.effort_level,
                     "createdDate": str(t.ts_created_at.date()),
+                    "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
@@ -669,6 +674,7 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
                     "priority": t.priority,
                     "effortLevel": t.effort_level,
                     "createdDate": str(t.ts_created_at.date()),
+                    "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None

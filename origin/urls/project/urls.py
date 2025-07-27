@@ -1,7 +1,6 @@
 from django.urls import path
 
 from origin.views.project.prj_views import *
-from origin.views.project.search_views import *
 
 
 urlpatterns = [
@@ -18,10 +17,4 @@ urlpatterns = [
     ),
     path("api/v2/project/createProjectTag/", ProjectTagsView.as_view(), name="create_project_tag"),
     path("api/v2/project/getProjectTags/", ProjectTagsView.as_view(), name="get_project_tags"),
-    # Search
-    path(
-        "api/v2/search/getTeamTasks/",
-        GetTeamTasksView.as_view(),
-        name="search_team_tasks",
-    ),
 ]

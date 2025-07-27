@@ -1,6 +1,7 @@
 from django.urls import path
 
 from origin.views.task.task_views import *
+from origin.views.task.search_views import *
 
 
 urlpatterns = [
@@ -23,4 +24,10 @@ urlpatterns = [
     ),
     path("api/v2/task/updateTask/", TaskMasterView.as_view(), name="update_task"),
     path("api/v2/task/comment/", TaskCommentsView.as_view(), name="add_task_comment"),
+    # Search
+    path(
+        "api/v2/search/teamTasks/",
+        GetSearchTeamTasksView.as_view(),
+        name="search_team_tasks",
+    ),
 ]
