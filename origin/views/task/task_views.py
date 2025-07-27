@@ -118,11 +118,12 @@ class GetTeamTasksView(AuthenticatedAPIView):
         for t in task_with_tags:
             response_data.append(
                 {
-                    "id": t.task_id,
+                    "id": str(t.task_id),
                     "title": t.title,
                     "priority": t.priority,
                     "effortLevel": t.effort_level,
                     "createdDate": str(t.ts_created_at.date()),
+                    "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
@@ -132,12 +133,12 @@ class GetTeamTasksView(AuthenticatedAPIView):
                     "assigneeEmail": t.assignee.email,
                     "assigneeName": t.assignee.username,
                     "assigneeImgPath": t.assignee.profile_image_url,
-                    "parentTaskId": t.parent_task_id,
-                    "rootTaskId": t.root_task_id,
+                    "parentTaskId": str(t.parent_task_id),
+                    "rootTaskId": str(t.root_task_id),
                     "threadId": t.thread_id,
                     "tags": t.tags,
-                    "concatTags": "-".join([tag["tagName"] for tag in t.tags]),
-                    "teamId": t.team.team_id,
+                    "concatTags": "/" + "/".join([tag["tagName"] for tag in t.tags]) + "/",
+                    "teamId": str(t.team.team_id),
                     "projectId": t.project.project_id,
                 },
             )
@@ -229,7 +230,7 @@ class ChildTaskView(AuthenticatedAPIView):
                         encoded_file = base64.b64encode(f.read()).decode("utf-8")
                         attached_files.append(
                             {
-                                "file": None,
+                                "file": file_path,
                                 "file_base64": encoded_file,
                                 "name": os.path.basename(file_path),
                                 "type": file_type,
@@ -263,6 +264,7 @@ class ChildTaskView(AuthenticatedAPIView):
                             "online": True,
                         },
                         "createdDate": str(t.ts_created_at.date()),
+                        "updatedAt": str(t.ts_updated_at),
                         "dueDate": str(t.due_date) if t.due_date else None,
                         "daysLeft": (
                             max(-1, (t.due_date - datetime.now().date()).days)
@@ -374,7 +376,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                     encoded_file = base64.b64encode(f.read()).decode("utf-8")
                     attached_files.append(
                         {
-                            "file": None,
+                            "file": file_path,
                             "file_base64": encoded_file,
                             "name": os.path.basename(file_path),
                             "type": file_type,
@@ -408,6 +410,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                         "online": True,
                     },
                     "createdDate": str(t.ts_created_at.date()),
+                    "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
@@ -501,7 +504,7 @@ class GetTaskView(AuthenticatedAPIView):
                     attached_files.append(
                         {
                             "attachment_id": attachment_id,
-                            "file": None,
+                            "file": file_path,
                             "file_base64": encoded_file,
                             "name": os.path.basename(file_path),
                             "type": file_type,
@@ -535,6 +538,7 @@ class GetTaskView(AuthenticatedAPIView):
                         "online": True,
                     },
                     "createdDate": str(t.ts_created_at.date()),
+                    "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
@@ -624,6 +628,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
                     "priority": t.priority,
                     "effortLevel": t.effort_level,
                     "createdDate": str(t.ts_created_at.date()),
+                    "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
@@ -637,7 +642,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
                     "rootTaskId": t.root_task_id,
                     "threadId": t.thread_id,
                     "tags": t.tags,
-                    "concatTags": "-".join([tag["tagName"] for tag in t.tags]),
+                    "concatTags": "/" + "/".join([tag["tagName"] for tag in t.tags]) + "/",
                     "teamId": t.team.team_id,
                     "projectId": t.project.project_id,
                 },
@@ -669,6 +674,7 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
                     "priority": t.priority,
                     "effortLevel": t.effort_level,
                     "createdDate": str(t.ts_created_at.date()),
+                    "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
@@ -696,38 +702,44 @@ class TaskAttachmentsView(AuthenticatedAPIView):
     def post(self, request):
 
         task = request.POST.get("task")
+        attachment_id = request.POST.get("attachment_id")
         attached_type = request.POST.get("attached_type")
         attached_file = request.FILES.get("attached_file")
 
-        attachments_count = TaskAttachments.objects.filter(task=task).count()
+        # Add only a new attachment
+        if attachment_id != "" and int(attachment_id) == -1:
 
-        data = {
-            "task": task,
-            "attachment_id": attachments_count + 1,
-            "attached_file": attached_file,
-            "attached_type": attached_type,
-        }
+            attachments_count = TaskAttachments.objects.filter(task=task).count()
 
-        print("attached_data:", data)
+            data = {
+                "task": task,
+                "attachment_id": attachments_count + 1,
+                "attached_file": attached_file,
+                "attached_type": attached_type,
+            }
 
-        serializer = TaskAttachmentsSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
+            print("attached_data:", data)
 
-            with open("." + serializer.data["attached_file"], "rb") as f:
-                encoded_file = base64.b64encode(f.read()).decode("utf-8")
+            serializer = TaskAttachmentsSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
 
-            return Response(
-                {
-                    **serializer.data,
-                    "file_base64": encoded_file,
-                    "name": os.path.basename(serializer.data["attached_file"]),
-                },
-                status=status.HTTP_201_CREATED,
-            )
+                with open("." + serializer.data["attached_file"], "rb") as f:
+                    encoded_file = base64.b64encode(f.read()).decode("utf-8")
 
-        error = serializer.errors
-        return Response(error, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {
+                        **serializer.data,
+                        "file_base64": encoded_file,
+                        "name": os.path.basename(serializer.data["attached_file"]),
+                    },
+                    status=status.HTTP_201_CREATED,
+                )
+
+            error = serializer.errors
+            return Response(error, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({"no attachment updated"}, status=status.HTTP_201_CREATED)
 
     def get(self, request):
         task = request.GET.get("task_id")

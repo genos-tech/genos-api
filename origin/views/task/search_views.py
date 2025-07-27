@@ -6,12 +6,13 @@ from origin.models.project.prj_models import *
 from origin.models.task.task_models import *
 
 
-class GetTeamTasksView(AuthenticatedAPIView):
+class GetSearchTeamTasksView(AuthenticatedAPIView):
     def get(self, request):
         """
         Get all tasks
         """
         team_id = request.GET.get("team_id")
+        top_n = int(request.GET.get("top_n"))
 
         if not team_id:
             return Response(
@@ -23,28 +24,30 @@ class GetTeamTasksView(AuthenticatedAPIView):
 
         # Get all tasks
         tasks = (
-            ProjectMaster.objects.prefetch_related("project_tasks_master")
-            .filter(team=team_id)
+            TaskMaster.objects.filter(team=team_id)
+            .exclude(status__in=["Deleted"])
             .values_list(
-                "project_id",
-                "project_name",
-                "project_tasks_master__task_id",
-                "project_tasks_master__title",
-                "project_tasks_master__status",
+                "project__project_id",
+                "project__project_name",
+                "tags",
+                "task_id",
+                "title",
+                "status",
             )
-            .order_by("project_tasks_master__ts_updated_at")
+            .order_by("ts_updated_at")
             .reverse()
         )
 
-        for task in list(tasks):
+        for task in list(tasks)[:top_n]:
             if task[2]:  # TODO: delete this
                 team_tasks.append(
                     {
                         "projectId": task[0],
                         "projectName": task[1],
-                        "taskId": task[2],
-                        "title": task[3],
-                        "status": task[4],
+                        "projectTags": task[2],
+                        "taskId": task[3],
+                        "title": task[4],
+                        "status": task[5],
                     }
                 )
 
