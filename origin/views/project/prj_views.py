@@ -97,7 +97,7 @@ class ProjectsView(AuthenticatedAPIView):
         return Response(team_projects, status=status.HTTP_200_OK)
 
 
-class ProjectMembersView(AuthenticatedAPIView):
+class JoinProjectView(AuthenticatedAPIView):
     def post(self, request):
         data = {
             "team": request.data["team_id"],
