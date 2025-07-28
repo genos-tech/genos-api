@@ -739,7 +739,7 @@ class TaskAttachmentsView(AuthenticatedAPIView):
             error = serializer.errors
             return Response(error, status=status.HTTP_400_BAD_REQUEST)
         else:
-            return Response({"no attachment updated"}, status=status.HTTP_201_CREATED)
+            return Response({}, status=status.HTTP_201_CREATED)
 
     def get(self, request):
         task = request.GET.get("task_id")
