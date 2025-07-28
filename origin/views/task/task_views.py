@@ -1,7 +1,7 @@
 import os
 import base64
 from datetime import datetime
-from django.db.models import Q
+from django.db.models import Max
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
@@ -709,11 +709,13 @@ class TaskAttachmentsView(AuthenticatedAPIView):
         # Add only a new attachment
         if attachment_id != "" and int(attachment_id) == -1:
 
-            attachments_count = TaskAttachments.objects.filter(task=task).count()
+            curr_attachments_id = TaskAttachments.objects.filter(task=task).aggregate(
+                Max("attachment_id")
+            )["attachment_id__max"]
 
             data = {
                 "task": task,
-                "attachment_id": attachments_count + 1,
+                "attachment_id": (int(curr_attachments_id) if curr_attachments_id else 0) + 1,
                 "attached_file": attached_file,
                 "attached_type": attached_type,
             }
