@@ -2,6 +2,7 @@ from django.urls import path
 
 from origin.views.common.auth_views import *
 from origin.views.common.team_views import *
+from origin.views.common.reaction_views import *
 
 user_list = UserViewSet.as_view({"post": "create"})
 
@@ -23,4 +24,5 @@ urlpatterns = [
         GetTeamMemberInfoView.as_view(),
         name="get_team_member_info",
     ),
+    path("api/v2/reaction/", ReactionView.as_view(), name="reaction"),
 ]
