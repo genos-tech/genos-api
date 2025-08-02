@@ -194,8 +194,8 @@ class GetTeamTasksByTagView(AuthenticatedAPIView):
 class ChildTaskView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
-        project_id = request.GET.get("project_id")
-        current_task_id = request.GET.get("current_task_id")
+        project_id = int(request.GET.get("project_id"))
+        current_task_id = int(request.GET.get("current_task_id"))
 
         if not team_id or not project_id or not current_task_id:
             return Response(
@@ -336,9 +336,9 @@ class ChildTaskView(AuthenticatedAPIView):
 class GetTaskByThreadIdView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
-        chat_type = request.GET.get("chat_type")
-        chat_id = request.GET.get("chat_id")
-        thread_id = request.GET.get("thread_id")
+        chat_type = request.GET.get("chat_type")  # "dm" or "gm"
+        chat_id = int(request.GET.get("chat_id"))
+        thread_id = int(request.GET.get("thread_id"))
 
         if not team_id or not chat_type or not chat_id or not thread_id:
             return Response(
@@ -477,8 +477,8 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
 class GetTaskView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
-        project_id = request.GET.get("project_id")
-        task_id = request.GET.get("task_id")
+        project_id = int(request.GET.get("project_id"))
+        task_id = int(request.GET.get("task_id"))
 
         if not team_id or not project_id or not task_id:
             return Response(
@@ -605,7 +605,7 @@ class GetTaskView(AuthenticatedAPIView):
 class GetProjectTasksView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
-        project_id = request.GET.get("project_id")
+        project_id = int(request.GET.get("project_id"))
 
         if not team_id:
             return Response(
@@ -744,7 +744,7 @@ class TaskAttachmentsView(AuthenticatedAPIView):
             return Response({}, status=status.HTTP_201_CREATED)
 
     def get(self, request):
-        task = request.GET.get("task_id")
+        task = int(request.GET.get("task_id"))
 
         if not task:
             return Response(
@@ -826,7 +826,7 @@ class TaskCommentsView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def get(self, request):
-        task_id = request.GET.get("task_id", None)
+        task_id = int(request.GET.get("task_id"))
         if task_id:
             comments = (
                 TaskComments.objects.filter(task=task_id)

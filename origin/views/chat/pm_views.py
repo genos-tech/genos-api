@@ -2,12 +2,10 @@ from django.db.models import Count, Q
 from rest_framework.response import Response
 from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.models.common.reaction_models import *
 from origin.models.project.prj_models import ProjectMembers, ProjectMaster
 from origin.models.chat.pm_models import PMMessages, PMThreadMessages
-from origin.serializers.chat.pm_serializers import (
-    PMMessagesSerializer,
-    PMThreadMessagesSerializer,
-)
+from origin.serializers.chat.pm_serializers import *
 
 
 #############################
@@ -50,6 +48,11 @@ class PMHistoryView(AuthenticatedAPIView):
             reply_count = reply_count_info["num_of_replies"]
             thread_reply_count_map[f"{project_id}-{message_id}"] = reply_count
 
+        # Fetch reactions
+        raw_reactions = ReactionFact.objects.filter(
+            chat_type=3, chat_id__in=project_ids, is_thread=False
+        )
+
         message_history_dict = {}
         last_message_dict = {}
         ts_last_message_dict = {}
@@ -66,6 +69,31 @@ class PMHistoryView(AuthenticatedAPIView):
             is_system_user = raw_message.sender.is_system_user
             ts_sent = str(raw_message.ts_sent_at)
             ts_updated_at = str(raw_message.ts_updated_at)
+
+            reactions = raw_reactions.filter(message_id=int(raw_message.message_id)).values_list(
+                "reaction_id",
+                "reaction_emoji",
+                "sender__username",
+                "sender__id",
+                "sender__profile_image_url",
+                "ts_created_at",
+            )
+            my_reactions = []
+            all_reactions = []
+            for reaction in reactions:
+                _reaction = {
+                    "id": int(reaction[0]),
+                    "emoji": reaction[1],
+                    "sender": {
+                        "userName": reaction[2],
+                        "userId": reaction[3],
+                        "avatarImgPath": reaction[4],
+                    },
+                    "tsSent": reaction[5],
+                }
+                if str(reaction[3]) == attendee_id:
+                    my_reactions.append(_reaction)
+                all_reactions.append(_reaction)
 
             messageIdWithChatId = f"{chat_id}-{message_id}"
             new_message = {
@@ -86,6 +114,7 @@ class PMHistoryView(AuthenticatedAPIView):
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.project.project_id}-{message_id}", None
                 ),
+                "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
                 "taskId": raw_message.task.task_id if raw_message.task else None,
                 "taskStatus": raw_message.task.status if raw_message.task else None,
                 "tsSent": ts_sent,
@@ -142,6 +171,90 @@ class PMHistoryView(AuthenticatedAPIView):
 
 
 class PMSingleMessageView(AuthenticatedAPIView):
+    def get(self, request):
+        user_id = request.GET.get("user_id")
+        project_id = int(request.GET.get("project_id"))
+        message_id = int(request.GET.get("message_id"))
+
+        if not user_id or not project_id or not message_id:
+            return Response(
+                {"error": "user_id, project_id and message_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        pm = PMMessages.objects.filter(project=project_id, message_id=message_id)
+        if len(pm) == 0:
+            return Response(
+                {"error": "GM not found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        elif len(pm) > 1:
+            return Response(
+                {"error": "Duplicated GM found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        else:
+            pm = pm[0]
+
+        raw_reactions = ReactionFact.objects.filter(
+            chat_type=3, chat_id=project_id, message_id=message_id, is_thread=False
+        )
+        all_reactions = []
+        my_reactions = []
+        for raw_reaction in raw_reactions:
+            reaction = {
+                "id": int(raw_reaction.reaction_id),
+                "emoji": raw_reaction.reaction_emoji,
+                "sender": {
+                    "userName": raw_reaction.sender.username,
+                    "userId": raw_reaction.sender.id,
+                    "avatarImgPath": raw_reaction.sender.profile_image_url,
+                },
+                "tsSent": raw_reaction.ts_created_at,
+            }
+            all_reactions.append(reaction)
+            if raw_reaction.sender.id == user_id:
+                my_reactions.append(reaction)
+
+        thread_reply_counts = (
+            PMThreadMessages.objects.filter(project=project_id, thread_id=message_id)
+            .values("parent_message_uid__project__project_id", "parent_message_uid__message_id")
+            .annotate(num_of_replies=Count("thread_message_id"))
+        )
+        reply_count = 0
+        if len(thread_reply_counts) == 1:
+            reply_count = int(thread_reply_counts[0]["num_of_replies"])
+        elif len(thread_reply_counts) > 1:
+            print("Error!!!! thread_reply_counts has multiple thread found")
+
+        message = {
+            "messageIdWithChatId": f"{project_id}-{message_id}",
+            "chatId": int(project_id),
+            "messageId": int(message_id),
+            "content": pm.message_body,
+            "sender": {
+                "userId": pm.sender.id,
+                "userName": pm.sender.username,
+                "userEmail": pm.sender.email,
+                "avatarImgPath": pm.sender.profile_image_url,
+                "isSystemUser": pm.sender.is_system_user,
+            },
+            "numReplies": reply_count,
+            "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+            "taskId": pm.task.task_id if pm.task else None,
+            "taskStatus": pm.task.status if pm.task else None,
+            "project": {
+                "projectId": (pm.task.project.project_id if pm.task else None),
+                "projectName": (pm.task.project.project_name if pm.task else None),
+                "isJoined": True,
+                "systemUserId": (pm.task.project.project_system_user.id if pm.task else None),
+            },
+            "tsSent": pm.ts_sent_at,
+            "tsUpdated": pm.ts_updated_at,
+        }
+
+        return Response(message, status=status.HTTP_200_OK)
+
     def post(self, request):
         project = ProjectMembers.objects.filter(project=request.data["project_id"])
 
@@ -174,7 +287,7 @@ class PMSingleMessageView(AuthenticatedAPIView):
 
     def put(self, request):
         try:
-            if request.data["message_id"] == None:
+            if int(request.data["message_id"]) == None:
                 message = PMMessages.objects.get(
                     project=request.data["project_id"], task=request.data["task_id"]
                 )
@@ -210,8 +323,8 @@ class PMSingleMessageView(AuthenticatedAPIView):
 #############################
 class CheckPMThreadExistsView(AuthenticatedAPIView):
     def get(self, request):
-        project_id = request.GET.get("project_id", None)
-        thread_id = request.GET.get("thread_id", None)
+        project_id = int(request.GET.get("project_id"))
+        thread_id = int(request.GET.get("thread_id"))
 
         if not project_id or not thread_id:
             return Response(
@@ -228,10 +341,112 @@ class CheckPMThreadExistsView(AuthenticatedAPIView):
 
 
 class PMSingleThreadMessageView(AuthenticatedAPIView):
+    def get(self, request):
+        user_id = request.GET.get("user_id")
+        project_id = int(request.GET.get("project_id"))
+        thread_id = int(request.GET.get("thread_id"))
+        message_id = int(request.GET.get("message_id"))
+
+        if not user_id or not project_id or not thread_id or not message_id:
+            return Response(
+                {"error": "user_id, project_id, thread_id and message_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        pm = PMThreadMessages.objects.filter(
+            project=project_id, thread_id=thread_id, thread_message_id=message_id
+        )
+        if len(pm) == 0:
+            return Response(
+                {"error": "GM not found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        elif len(pm) > 1:
+            return Response(
+                {"error": "Duplicated GM found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        else:
+            pm = pm[0]
+
+        raw_reactions = ReactionFact.objects.filter(
+            chat_type=2, chat_id=project_id, message_id=message_id, is_thread=True
+        )
+        all_reactions = []
+        my_reactions = []
+        for raw_reaction in raw_reactions:
+            reaction = {
+                "id": int(raw_reaction.reaction_id),
+                "emoji": raw_reaction.reaction_emoji,
+                "sender": {
+                    "userName": raw_reaction.sender.username,
+                    "userId": raw_reaction.sender.id,
+                    "avatarImgPath": raw_reaction.sender.profile_image_url,
+                },
+                "tsSent": raw_reaction.ts_created_at,
+            }
+            all_reactions.append(reaction)
+            if str(raw_reaction.sender.id) == user_id:
+                my_reactions.append(reaction)
+
+        try:
+            contentText_list = []
+            for c in pm.thread_message_body[0]["content"]:
+                if "text" in c:
+                    contentText_list.append(c["text"])
+                elif "href" in c:
+                    contentText_list.append(c["content"][0]["text"])
+            contentText = " ".join(contentText_list)
+        except:
+            print("pm_views", pm.thread_message_body["content"])
+            contentText = "Failed to get text..."
+
+        messageIdWithChatIdAndThreadId = f"{project_id}-{thread_id}-{message_id}"
+        message = {
+            "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
+            "chatId": project_id,
+            "threadId": pm.thread_id,
+            "messageId": pm.thread_message_id,
+            "content": pm.thread_message_body,
+            "contentText": contentText,
+            "sender": {
+                "userId": pm.sender.id,
+                "userName": pm.sender.username,
+                "userEmail": pm.sender.email,
+                "avatarImgPath": pm.sender.profile_image_url,
+                "isSystemUser": pm.sender.is_system_user,
+            },
+            "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+            "taskId": pm.parent_message_uid.task.task_id if pm.parent_message_uid.task else None,
+            "taskExist": True if pm.parent_message_uid.task else False,
+            "project": {
+                "projectId": (
+                    pm.parent_message_uid.task.project.project_id
+                    if pm.parent_message_uid.task
+                    else None
+                ),
+                "projectName": (
+                    pm.parent_message_uid.task.project.project_name
+                    if pm.parent_message_uid.task
+                    else None
+                ),
+                "isJoined": True,
+                "systemUserId": (
+                    pm.parent_message_uid.task.project.project_system_user.id
+                    if pm.parent_message_uid.task
+                    else None
+                ),
+            },
+            "tsSent": pm.ts_sent_at,
+            "tsUpdated": pm.ts_updated_at,
+        }
+
+        return Response(message, status=status.HTTP_200_OK)
+
     def post(self, request):
         try:
             if request.data["thread_id"]:
-                thread_id = request.data["thread_id"]
+                thread_id = int(request.data["thread_id"])
             elif request.data["thread_id"] == None and request.data["task_id"]:
                 message = PMMessages.objects.get(
                     project=request.data["project_id"], task=request.data["task_id"]
@@ -276,9 +491,9 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request):
-        project_id = request.data["project_id"]
-        thread_id = request.data["thread_id"]
-        message_id = request.data["message_id"]
+        project_id = int(request.data["project_id"])
+        thread_id = int(request.data["thread_id"])
+        message_id = int(request.data["message_id"])
 
         if not project_id or not thread_id or not message_id:
             return Response(
@@ -310,8 +525,8 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
         team_name = request.GET.get("team_name")
-        project_id = request.GET.get("pm_id", None)
-        thread_id = request.GET.get("thread_id", None)
+        project_id = int(request.GET.get("pm_id"))
+        thread_id = int(request.GET.get("thread_id"))
 
         if not team_id or not team_name or not project_id or not thread_id:
             return Response(

@@ -20,7 +20,9 @@ class TaskMaster(models.Model):
         related_name="project_tasks_master",
         to_field="project_id",
     )
-    chat_type = models.CharField(max_length=5, null=True, blank=True)  # "dm" or "gm"
+    chat_type = models.CharField(
+        max_length=5, null=True, blank=True
+    )  # "dm" or "gm" TODO: Must use int (0=dm, 1=gm, 2=pm)
     chat_id = models.IntegerField(null=True, blank=True)
     thread_id = models.IntegerField(null=True, blank=True)
     task_id = models.BigAutoField(primary_key=True, unique=True)

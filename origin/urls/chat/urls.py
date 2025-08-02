@@ -13,11 +13,6 @@ urlpatterns = [
     path("api/v2/dm/history/", DMHistoryView.as_view(), name="get_all_my_dm_messages"),
     path("api/v2/dm/message/", DMSingleMessageView.as_view(), name="insert_dm_message"),
     path(
-        "api/v2/dm/messagesById/",
-        DMMessagesByIdView.as_view(),
-        name="get_dm_messages_by_id",
-    ),
-    path(
         "api/v2/dm/checkThreadExistence/",
         CheckDMThreadExistsView.as_view(),
         name="check_dm_thread_existence",
@@ -40,11 +35,6 @@ urlpatterns = [
     path("api/v2/gm/join/", GMMembersView.as_view(), name="join_gm"),
     path("api/v2/gm/history/", GMHistoryView.as_view(), name="get_all_my_gm_messages"),
     path("api/v2/gm/message/", GMSingleMessageView.as_view(), name="insert_gm_message"),
-    path(
-        "api/v2/gm/messagesById/",
-        GMMessagesByIdView.as_view(),
-        name="get_gm_messages_by_id",
-    ),
     path(
         "api/v2/gm/checkThreadExistence/",
         CheckGMThreadExistsView.as_view(),

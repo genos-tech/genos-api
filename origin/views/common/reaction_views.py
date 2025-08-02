@@ -10,18 +10,22 @@ from origin.serializers.common.reaction_serializers import *
 class ReactionView(AuthenticatedAPIView):
     def post(self, request):
 
+        is_thread = int(request.data["is_thread_binary"]) == 1
+
         current_max_reaction_id = ReactionFact.objects.filter(
+            team_id=request.data["team_id"],
             chat_type=request.data["chat_type"],
             chat_id=request.data["chat_id"],
             message_id=request.data["message_id"],
-            is_thread=request.data["is_thread"],
+            is_thread=is_thread,
         ).aggregate(max_id=Max("reaction_id"))["max_id"]
 
         data = {
+            "team": request.data["team_id"],
             "chat_type": request.data["chat_type"],
             "chat_id": request.data["chat_id"],
-            "message_id": request.data["message_id"],
-            "is_thread": request.data["is_thread"],
+            "message_id": int(request.data["message_id"]),
+            "is_thread": is_thread,
             "reaction_id": current_max_reaction_id + 1 if current_max_reaction_id else 1,
             "reaction_emoji": request.data["reaction_emoji"],
             "sender": request.data["sender_id"],
@@ -34,33 +38,39 @@ class ReactionView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request):
+        team_id = request.GET.get("team_id")
+        sender_id = request.GET.get("sender_id")
         chat_type = request.GET.get("chat_type")
         chat_id = request.GET.get("chat_id")
-        message_id = request.GET.get("message_id")
+        message_id = int(request.GET.get("message_id"))
         is_thread_binary = request.GET.get("is_thread_binary")
-        reaction_id = request.GET.get("reaction_id")
+        reaction_emoji = request.GET.get("reaction_emoji")
 
         if (
-            not chat_type
+            not team_id
+            or not sender_id
+            or not chat_type
             or not chat_id
             or not message_id
             or not is_thread_binary
-            or not reaction_id
+            or not reaction_emoji
         ):
             return Response(
                 {
-                    "error": "`chat_type`, `chat_id`, `message_id`, `is_thread_binary`, and `reaction_id` are required."
+                    "error": "`team_id`, `sender_id`, `chat_type`, `chat_id`, `message_id`, `is_thread_binary`, and `reaction_emoji` are required."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
             reaction = ReactionFact.objects.get(
+                team=team_id,
+                sender=sender_id,
                 chat_type=int(chat_type),
                 chat_id=int(chat_id),
                 message_id=int(message_id),
-                is_thread=is_thread_binary == 1,
-                reaction_id=int(reaction_id),
+                is_thread=int(is_thread_binary) == 1,
+                reaction_emoji=reaction_emoji,
             )
             reaction.delete()
             return Response(

@@ -1,9 +1,16 @@
 from django.db import models
 
+
+from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
 
 
 class ReactionFact(models.Model):
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.CASCADE,
+        to_field="team_id",
+    )
     chat_type = models.IntegerField(blank=False, null=False)
     chat_id = models.IntegerField(blank=False, null=False)
     message_id = models.IntegerField(blank=False, null=False)
