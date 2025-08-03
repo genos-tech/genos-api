@@ -2,7 +2,7 @@ from django.db.models import Count, Q
 from rest_framework.response import Response
 from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.models.common.reaction_models import *
+from origin.models.chat.reaction_models import *
 from origin.models.chat.gm_models import GMMaster, GMMembers, GMMessages, GMThreadMessages
 from origin.serializers.chat.gm_serializers import *
 

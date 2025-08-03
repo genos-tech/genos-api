@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from origin.models.common.reaction_models import *
+from origin.models.chat.reaction_models import *
 
 
 class ReactionFactSerializer(serializers.ModelSerializer):

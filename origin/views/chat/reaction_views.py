@@ -3,11 +3,11 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.models.common.reaction_models import *
-from origin.serializers.common.reaction_serializers import *
+from origin.models.chat.reaction_models import *
+from origin.serializers.chat.reaction_serializers import *
 
 
-class ReactionView(AuthenticatedAPIView):
+class ChatReactionView(AuthenticatedAPIView):
     def post(self, request):
 
         is_thread = int(request.data["is_thread_binary"]) == 1

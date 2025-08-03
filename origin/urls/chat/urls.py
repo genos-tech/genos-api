@@ -3,6 +3,7 @@ from origin.views.chat.dm_views import *
 from origin.views.chat.gm_views import *
 from origin.views.chat.pm_views import *
 from origin.views.chat.search_views import GetTeamMembersAndGroupsView
+from origin.views.chat.reaction_views import *
 
 urlpatterns = [
     # DM urls
@@ -74,4 +75,6 @@ urlpatterns = [
         GetTeamMembersAndGroupsView.as_view(),
         name="search_team_members_and_groups",
     ),
+    # Reaction
+    path("api/v2/chat/reaction/", ChatReactionView.as_view(), name="chat_reaction"),
 ]

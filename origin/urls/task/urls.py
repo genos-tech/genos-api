@@ -30,4 +30,10 @@ urlpatterns = [
         GetSearchTeamTasksView.as_view(),
         name="search_team_tasks",
     ),
+    # Reaction
+    path(
+        "api/v2/task/comment/reaction/",
+        TaskCommentReactionView.as_view(),
+        name="task_comment_reaction",
+    ),
 ]

@@ -136,3 +136,40 @@ class TaskComments(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["task", "comment_id"], name="unique_task_comment")
         ]
+
+
+class TaskCommentReactionFact(models.Model):
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.CASCADE,
+        to_field="team_id",
+    )
+    task = models.ForeignKey(
+        TaskMaster,
+        on_delete=models.CASCADE,
+        related_name="task_comment_reactions",
+        to_field="task_id",
+    )
+    comment_id = models.IntegerField(blank=False, null=False)
+    reaction_id = models.IntegerField(blank=False, null=False)
+    reaction_emoji = models.CharField(blank=False, null=False)
+    sender = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        to_field="id",
+    )
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+    uid = models.CharField(primary_key=True, max_length=255, editable=False)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["task", "comment_id", "reaction_id"],
+                name="unique_task_comment_reaction",
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        self.uid = f"{self.task.task_id}-{self.comment_id}-{self.reaction_id}"
+        super().save(*args, **kwargs)

@@ -2,7 +2,7 @@ from django.db.models import Count, Q
 from rest_framework.response import Response
 from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.models.common.reaction_models import *
+from origin.models.chat.reaction_models import *
 from origin.models.project.prj_models import ProjectMembers, ProjectMaster
 from origin.models.chat.pm_models import PMMessages, PMThreadMessages
 from origin.serializers.chat.pm_serializers import *
@@ -287,7 +287,7 @@ class PMSingleMessageView(AuthenticatedAPIView):
 
     def put(self, request):
         try:
-            if int(request.data["message_id"]) == None:
+            if request.data["message_id"] == None:
                 message = PMMessages.objects.get(
                     project=request.data["project_id"], task=request.data["task_id"]
                 )
