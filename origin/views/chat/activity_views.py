@@ -6,16 +6,16 @@ from datetime import timedelta
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 from .modules.activity import (
-    get_dm_thread_message_activity,
-    get_gm_thread_message_activity,
-    get_pm_thread_message_activity,
+    get_dm_reaction_activity,
+    get_dm_thread_activity,
+    get_dm_thread_reaction_activity,
+    get_gm_reaction_activity,
+    get_gm_thread_activity,
+    get_gm_thread_reaction_activity,
+    get_pm_reaction_activity,
+    get_pm_thread_activity,
+    get_pm_thread_reaction_activity,
     get_task_comment_activity,
-    get_dm_message_reaction_activity,
-    get_dm_thread_message_reaction_activity,
-    get_gm_message_reaction_activity,
-    get_gm_thread_message_reaction_activity,
-    get_pm_message_reaction_activity,
-    get_pm_thread_message_reaction_activity,
     get_task_comment_reaction_activity,
 )
 
@@ -53,19 +53,19 @@ class ActivityHistoryView(AuthenticatedAPIView):
         #######################
         # Fetch all project_ids linking to the user
         # DM thread messages
-        dm_thread_messages, my_all_dm_ids = get_dm_thread_message_activity.get(
+        dm_thread_messages, my_all_dm_ids = get_dm_thread_activity.get(
             user_id, team_id, n_days_ago
         )
         all_activities.extend(dm_thread_messages)
 
         # GM thread messages
-        gm_thread_messages, my_all_gm_ids = get_gm_thread_message_activity.get(
+        gm_thread_messages, my_all_gm_ids = get_gm_thread_activity.get(
             user_id, team_id, n_days_ago
         )
         all_activities.extend(gm_thread_messages)
 
         # PM thread messages
-        pm_thread_messages, my_all_project_ids = get_pm_thread_message_activity.get(
+        pm_thread_messages, my_all_project_ids = get_pm_thread_activity.get(
             user_id, team_id, n_days_ago
         )
         all_activities.extend(pm_thread_messages)
@@ -78,37 +78,37 @@ class ActivityHistoryView(AuthenticatedAPIView):
         # 3. Reacted messages/comments
         #######################
         # DM message reactions
-        dm_reacted_messages = get_dm_message_reaction_activity.get(
+        dm_reacted_messages = get_dm_reaction_activity.get(
             user_id, team_id, my_all_dm_ids, n_days_ago
         )
         all_activities.extend(dm_reacted_messages)
 
         # DM thread message reactions
-        dm_reacted_thread_messages = get_dm_thread_message_reaction_activity.get(
+        dm_reacted_thread_messages = get_dm_thread_reaction_activity.get(
             user_id, team_id, my_all_dm_ids, n_days_ago
         )
         all_activities.extend(dm_reacted_thread_messages)
 
         # GM message reactions
-        gm_reacted_messages = get_gm_message_reaction_activity.get(
+        gm_reacted_messages = get_gm_reaction_activity.get(
             user_id, team_id, my_all_gm_ids, n_days_ago
         )
         all_activities.extend(gm_reacted_messages)
 
         # GM thread message reactions
-        gm_reacted_thread_messages = get_gm_thread_message_reaction_activity.get(
+        gm_reacted_thread_messages = get_gm_thread_reaction_activity.get(
             user_id, team_id, my_all_gm_ids, n_days_ago
         )
         all_activities.extend(gm_reacted_thread_messages)
 
         # PM message reactions
-        pm_reacted_messages = get_pm_message_reaction_activity.get(
+        pm_reacted_messages = get_pm_reaction_activity.get(
             user_id, team_id, my_all_project_ids, n_days_ago
         )
         all_activities.extend(pm_reacted_messages)
 
         # PM thread message reactions
-        pm_reacted_thread_messages = get_pm_thread_message_reaction_activity.get(
+        pm_reacted_thread_messages = get_pm_thread_reaction_activity.get(
             user_id, team_id, my_all_project_ids, n_days_ago
         )
         all_activities.extend(pm_reacted_thread_messages)
