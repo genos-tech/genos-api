@@ -2,6 +2,11 @@ from django.db.models import Q
 from datetime import datetime
 
 from origin.models.chat.dm_models import *
+from origin.views.chat.modules.common import generate_first_line
+
+CHAT_TYPE = 1
+ACTIVITY_TYPE = 1
+IS_THREAD = 1
 
 
 def get(user_id: str, team_id: str, n_days_ago: datetime):
@@ -12,11 +17,7 @@ def get(user_id: str, team_id: str, n_days_ago: datetime):
     dm_thread_messages = []
     for message in _dm_thread_messages:
         if message.sender.is_system_user == False:
-            try:
-                content = " ".join([c["text"] for c in message.thread_message_body[0]["content"]])
-            except:
-                print("[ERROR] dm_thread_message", message.thread_message_body)
-                content = "Failed to get text..."
+            content = generate_first_line.get(message.thread_message_body[0])
 
             if str(user_id) == str(message.sender.id):
                 chat_name = message.receiver.username
@@ -36,18 +37,18 @@ def get(user_id: str, team_id: str, n_days_ago: datetime):
             dm_thread_messages.append(
                 {
                     "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{message_id}".format(
-                        activity_type=1,
-                        chat_type=1,
+                        activity_type=ACTIVITY_TYPE,
+                        chat_type=CHAT_TYPE,
                         chat_id=message.dm.dm_id,
-                        is_thread=1,
+                        is_thread=IS_THREAD,
                         message_id=message.thread_message_id,
                     ),
-                    "activityType": 1,
-                    "chatType": 1,  # dm
+                    "activityType": ACTIVITY_TYPE,
+                    "chatType": CHAT_TYPE,  # dm
                     "chatId": int(message.dm.dm_id),
                     "chatName": chat_name,
                     "dmPartnerUser": dm_partner_user,
-                    "isThread": True,
+                    "isThread": IS_THREAD == 1,
                     "threadId": int(message.thread_id),
                     "messageId": int(message.thread_message_id),
                     "messageUniqueKey": f"{message.dm.dm_id}-{message.thread_id}",

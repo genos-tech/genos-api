@@ -2,6 +2,11 @@ from django.db.models import Q
 from datetime import datetime
 
 from origin.models.task.task_models import *
+from origin.views.chat.modules.common import generate_first_line
+
+CHAT_TYPE = 4
+ACTIVITY_TYPE = 2
+IS_THREAD = 0
 
 
 def get(user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime):
@@ -33,12 +38,7 @@ def get(user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime):
 
     reacted_task_comment = []
     for comment in _reacted_task_comment:
-        try:
-            content = " ".join([c["text"] for c in comment.comment_body[0]["content"]])
-        except:
-            print("[ERROR] reacted_task_comment", comment.comment_body)
-            content = "Failed to get text..."
-
+        content = generate_first_line.get(comment.comment_body[0])
         reactions = task_comment_raw_reactions.filter(
             comment_id=int(comment.comment_id)
         ).values_list(
@@ -77,18 +77,18 @@ def get(user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime):
         reacted_task_comment.append(
             {
                 "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{comment_id}".format(
-                    activity_type=2,
-                    chat_type=4,
+                    activity_type=ACTIVITY_TYPE,
+                    chat_type=CHAT_TYPE,
                     chat_id=comment.task.project.project_id,
-                    is_thread=0,
+                    is_thread=IS_THREAD,
                     comment_id=comment.comment_id,
                 ),
-                "activityType": 2,  # reaction activity
-                "chatType": 4,  # task comment
+                "activityType": ACTIVITY_TYPE,  # reaction activity
+                "chatType": CHAT_TYPE,  # task comment
                 "chatId": int(comment.task.project.project_id),
                 "chatName": comment.task.project.project_name,
                 "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
-                "isThread": False,
+                "isThread": IS_THREAD == 1,
                 "threadId": -1,
                 "messageId": int(comment.comment_id),
                 "messageUniqueKey": f"{comment.task.project.project_id}-{comment.task.task_id}",

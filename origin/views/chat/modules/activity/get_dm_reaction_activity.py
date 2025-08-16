@@ -3,11 +3,16 @@ from datetime import datetime
 
 from origin.models.chat.reaction_models import *
 from origin.models.chat.dm_models import *
+from origin.views.chat.modules.common import generate_first_line
+
+CHAT_TYPE = 1
+ACTIVITY_TYPE = 2
+IS_THREAD = 0
 
 
 def get(user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
     dm_raw_reactions = ReactionFact.objects.filter(
-        Q(team=team_id, chat_type=1, chat_id__in=my_all_dm_ids, is_thread=False),
+        Q(team=team_id, chat_type=1, chat_id__in=my_all_dm_ids, is_thread=IS_THREAD == 1),
         ts_created_at__gte=n_days_ago,
     ).values(
         "chat_id",
@@ -31,12 +36,7 @@ def get(user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
     dm_reacted_messages = []
     for message in _dm_reacted_messages:
         if message.sender.is_system_user == False:
-            try:
-                content = " ".join([c["text"] for c in message.message_body[0]["content"]])
-            except:
-                print("[ERROR] dm_reacted_message", message.message_body)
-                content = "Failed to get text..."
-
+            content = generate_first_line.get(message.message_body[0])
             reactions = dm_raw_reactions.filter(message_id=int(message.message_id)).values_list(
                 "reaction_id",
                 "reaction_emoji",
@@ -88,18 +88,18 @@ def get(user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
             dm_reacted_messages.append(
                 {
                     "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{message_id}".format(
-                        activity_type=2,
-                        chat_type=1,
+                        activity_type=ACTIVITY_TYPE,
+                        chat_type=CHAT_TYPE,
                         chat_id=message.dm.dm_id,
-                        is_thread=0,
+                        is_thread=IS_THREAD,
                         message_id=message.message_id,
                     ),
-                    "activityType": 2,
-                    "chatType": 1,  # dm
+                    "activityType": ACTIVITY_TYPE,
+                    "chatType": CHAT_TYPE,  # dm
                     "chatId": int(message.dm.dm_id),
                     "chatName": chat_name,
                     "dmPartnerUser": dm_partner_user,
-                    "isThread": False,
+                    "isThread": IS_THREAD == 1,
                     "threadId": -1,
                     "messageId": int(message.message_id),
                     "messageUniqueKey": f"{message.dm.dm_id}-{message.message_id}",

@@ -3,11 +3,16 @@ from datetime import datetime
 
 from origin.models.chat.reaction_models import *
 from origin.models.chat.pm_models import *
+from origin.views.chat.modules.common import generate_first_line
+
+CHAT_TYPE = 3
+ACTIVITY_TYPE = 2
+IS_THREAD = 1
 
 
 def get(user_id: str, team_id: str, my_all_pm_ids, n_days_ago: datetime):
     pm_raw_reactions = ReactionFact.objects.filter(
-        Q(team=team_id, chat_type=3, chat_id__in=my_all_pm_ids, is_thread=True),
+        Q(team=team_id, chat_type=3, chat_id__in=my_all_pm_ids, is_thread=IS_THREAD == 1),
         ts_created_at__gte=n_days_ago,
     ).values(
         "chat_id",
@@ -30,12 +35,7 @@ def get(user_id: str, team_id: str, my_all_pm_ids, n_days_ago: datetime):
 
     pm_reacted_thread_messages = []
     for message in _pm_reacted_thread_messages:
-        try:
-            content = " ".join([c["text"] for c in message.thread_message_body[0]["content"]])
-        except:
-            print("[ERROR] pm_reacted_thread_message", message.thread_message_body)
-            content = "Failed to get text..."
-
+        content = generate_first_line.get(message.thread_message_body[0])
         reactions = pm_raw_reactions.filter(message_id=int(message.thread_message_id)).values_list(
             "reaction_id",
             "reaction_emoji",
@@ -72,18 +72,18 @@ def get(user_id: str, team_id: str, my_all_pm_ids, n_days_ago: datetime):
         pm_reacted_thread_messages.append(
             {
                 "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{message_id}".format(
-                    activity_type=2,
-                    chat_type=3,
+                    activity_type=ACTIVITY_TYPE,
+                    chat_type=CHAT_TYPE,
                     chat_id=message.project.project_id,
-                    is_thread=1,
+                    is_thread=IS_THREAD,
                     message_id=message.thread_message_id,
                 ),
-                "activityType": 2,  # reaction activity
-                "chatType": 3,  # pm
+                "activityType": ACTIVITY_TYPE,  # reaction activity
+                "chatType": CHAT_TYPE,  # pm
                 "chatId": int(message.project.project_id),
                 "chatName": message.project.project_name,
                 "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
-                "isThread": True,
+                "isThread": IS_THREAD == 1,
                 "threadId": int(message.thread_id),
                 "messageId": int(message.thread_message_id),
                 "messageUniqueKey": f"{message.project.project_id}-{message.thread_id}",

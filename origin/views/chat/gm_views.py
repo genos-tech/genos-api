@@ -5,6 +5,7 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.reaction_models import *
 from origin.models.chat.gm_models import GMMaster, GMMembers, GMMessages, GMThreadMessages
 from origin.serializers.chat.gm_serializers import *
+from origin.views.chat.modules.common import generate_first_line
 
 
 #############################
@@ -251,15 +252,7 @@ class GMHistoryView(AuthenticatedAPIView):
                 last_message_dict[chat_id] = new_message
                 ts_last_message_dict[chat_id] = ts_sent
 
-            try:
-                # TODO: Need to consider the case that the first line
-                # (i.e., message_body[0]) is empty but later exists.
-                latest_message_text = " ".join(
-                    [c["text"] for c in last_message_dict[chat_id]["content"][0]["content"]]
-                )
-            except:
-                print("gm_views", last_message_dict[chat_id]["content"])
-                latest_message_text = "Failed to get text..."
+            latest_message_text = generate_first_line.get(last_message_dict[chat_id]["content"][0])
 
             if chat_id in message_history_dict:
                 message_history_dict[chat_id]["messages"].append(new_message)
@@ -494,18 +487,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
             if str(raw_reaction.sender.id) == user_id:
                 my_reactions.append(reaction)
 
-        try:
-            contentText_list = []
-            for c in gm.thread_message_body[0]["content"]:
-                if "text" in c:
-                    contentText_list.append(c["text"])
-                elif "href" in c:
-                    contentText_list.append(c["content"][0]["text"])
-            contentText = " ".join(contentText_list)
-        except:
-            print("gm_views", gm.thread_message_body["content"])
-            contentText = "Failed to get text..."
-
+        contentText = generate_first_line.get(gm.thread_message_body[0])
         messageIdWithChatIdAndThreadId = f"{gm_id}-{thread_id}-{message_id}"
         message = {
             "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
@@ -640,18 +622,7 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                 ts_sent = parent_message.ts_sent_at
                 ts_updated_at = parent_message.ts_updated_at
 
-            try:
-                contentText_list = []
-                for c in content[0]["content"]:
-                    if "text" in c:
-                        contentText_list.append(c["text"])
-                    elif "href" in c:
-                        contentText_list.append(c["content"][0]["text"])
-                contentText = " ".join(contentText_list)
-            except:
-                print("gm_views", content["content"])
-                contentText = "Failed to get text..."
-
+            contentText = generate_first_line.get(content[0])
             messageIdWithChatIdAndThreadId = f"{chat_id}-{thread_id}-{message_id}"
             new_message = {
                 "chatType": 2,

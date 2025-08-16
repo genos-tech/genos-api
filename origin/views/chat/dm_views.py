@@ -5,6 +5,7 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.reaction_models import *
 from origin.models.chat.dm_models import *
 from origin.serializers.chat.dm_serializers import *
+from origin.views.chat.modules.common import generate_first_line
 
 
 #############################
@@ -273,15 +274,7 @@ class DMHistoryView(AuthenticatedAPIView):
                 last_message_dict[chat_id] = new_message
                 ts_last_message_dict[chat_id] = ts_sent
 
-            try:
-                # TODO: Need to consider the case that the first line
-                # (i.e., message_body[0]) is empty but later exists.
-                latest_message_text = " ".join(
-                    [c["text"] for c in last_message_dict[chat_id]["content"][0]["content"]]
-                )
-            except:
-                print("dm_views", last_message_dict[chat_id]["content"])
-                latest_message_text = "Failed to get text..."
+            latest_message_text = generate_first_line.get(last_message_dict[chat_id]["content"][0])
 
             if chat_id in message_history_dict:
                 message_history_dict[chat_id]["messages"].append(new_message)
@@ -524,18 +517,7 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
             if str(raw_reaction.sender.id) == user_id:
                 my_reactions.append(reaction)
 
-        try:
-            contentText_list = []
-            for c in dm.thread_message_body[0]["content"]:
-                if "text" in c:
-                    contentText_list.append(c["text"])
-                elif "href" in c:
-                    contentText_list.append(c["content"][0]["text"])
-            contentText = " ".join(contentText_list)
-        except:
-            print("dm_views", dm.thread_message_body["content"])
-            contentText = "Failed to get text..."
-
+        contentText = generate_first_line.get(dm.thread_message_body[0])
         messageIdWithChatIdAndThreadId = f"{dm_id}-{thread_id}-{message_id}"
         message = {
             "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
@@ -719,17 +701,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
                 ts_sent = parent_message.ts_sent_at
                 ts_updated_at = parent_message.ts_updated_at
 
-            try:
-                contentText_list = []
-                for c in content[0]["content"]:
-                    if "text" in c:
-                        contentText_list.append(c["text"])
-                    elif "href" in c:
-                        contentText_list.append(c["content"][0]["text"])
-                contentText = " ".join(contentText_list)
-            except:
-                print("dm_views", content["content"])
-                contentText = "Failed to get text..."
+            contentText = generate_first_line.get(content[0])
 
             _task_id = (
                 raw_message.parent_message_uid.task.task_id

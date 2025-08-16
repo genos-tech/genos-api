@@ -1,3 +1,4 @@
+from pprint import pprint
 from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
@@ -17,13 +18,18 @@ from .modules.activity import (
     get_pm_thread_reaction_activity,
     get_task_comment_activity,
     get_task_comment_reaction_activity,
+    get_dm_mention_activity,
+    get_dm_thread_mention_activity,
+    get_gm_mention_activity,
+    get_pm_mention_activity,
+    get_task_comment_mention_activity,
 )
 
 
 #############################
 # Activity views
-# 1. User mentioned DM, GM, PM messages and task comments
-# 2. Thread messages and Task comments
+# 1. Thread messages and Task comments
+# 2. User mentioned DM, GM, PM messages and task comments
 # 3. Reacted messages
 # activityType: {1: message or comment, 2: reaction}
 #############################
@@ -45,11 +51,7 @@ class ActivityHistoryView(AuthenticatedAPIView):
         n_days_ago = timezone.now() - timedelta(days=30)
 
         #######################
-        # 1. User mentioned DM, GM, PM messages
-        #######################
-
-        #######################
-        # 2. Thread messages
+        # 1. Thread messages
         #######################
         # Fetch all project_ids linking to the user
         # DM thread messages
@@ -73,6 +75,36 @@ class ActivityHistoryView(AuthenticatedAPIView):
         # Task comments
         task_comments = get_task_comment_activity.get(team_id, my_all_project_ids, n_days_ago)
         all_activities.extend(task_comments)
+
+        #######################
+        # 2. User mentioned DM, GM, PM messages, and task comment.
+        #######################
+        dm_me_mentioned_messages = get_dm_mention_activity.get(
+            user_id, team_id, my_all_dm_ids, n_days_ago
+        )
+        all_activities.extend(dm_me_mentioned_messages)
+
+        # NOTE: Maybe no need to add me-mentioned thread messages because
+        #       the thread messages are added in the step-1 above.
+        # dm_me_mentioned_thread_messages = get_dm_thread_mention_activity.get(
+        #     user_id, team_id, my_all_dm_ids, n_days_ago
+        # )
+        # all_activities.extend(dm_me_mentioned_thread_messages)
+
+        gm_me_mentioned_messages = get_gm_mention_activity.get(
+            user_id, team_id, my_all_gm_ids, n_days_ago
+        )
+        all_activities.extend(gm_me_mentioned_messages)
+
+        pm_me_mentioned_messages = get_pm_mention_activity.get(
+            user_id, team_id, my_all_project_ids, n_days_ago
+        )
+        all_activities.extend(pm_me_mentioned_messages)
+
+        task_me_mentioned_comments = get_task_comment_mention_activity.get(
+            user_id, team_id, my_all_project_ids, n_days_ago
+        )
+        all_activities.extend(task_me_mentioned_comments)
 
         #######################
         # 3. Reacted messages/comments
