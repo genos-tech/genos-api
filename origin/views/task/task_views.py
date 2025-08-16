@@ -945,3 +945,81 @@ class TaskCommentReactionView(AuthenticatedAPIView):
                 {"error": "Reaction not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+
+class TaskCommentMentionView(AuthenticatedAPIView):
+    def post(self, request):
+        res = []
+        try:
+            for mentioned_user_id in list(request.data["mentioned_user_ids"]):
+                data = {
+                    "team": request.data["team_id"],
+                    "task": request.data["task_id"],
+                    "comment_id": int(request.data["comment_id"]),
+                    "mentioned_user": mentioned_user_id,
+                }
+
+                serializer = TaskCommentMentionFactSerializer(data=data)
+                if serializer.is_valid():
+                    serializer.save()
+                    res.append(serializer.data)
+        except:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(res, status=status.HTTP_201_CREATED)
+
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        task_id = request.GET.get("task_id")
+        comment_id = request.GET.get("comment_id")
+
+        if not team_id or not task_id or not comment_id:
+            return Response(
+                {"error": "team_id, task_id, and comment_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        mentions = TaskCommentMentionFact.objects.filter(
+            team=team_id,
+            task=task_id,
+            comment_id=comment_id,
+        ).values()
+
+        mentioned_user_ids = []
+        for mention in mentions:
+            mentioned_user_ids.append(mention["mentioned_user_id"])
+
+        return Response(mentioned_user_ids, status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        team_id = request.GET.get("team_id")
+        task_id = request.GET.get("task_id")
+        comment_id = request.GET.get("comment_id")
+        mentioned_user_ids = request.GET.get("mentioned_user_ids")
+
+        if not team_id or not mentioned_user_ids or not task_id or not comment_id:
+            return Response(
+                {
+                    "error": "`team_id`, `mentioned_user_ids`, `task_id`, `comment_id` are required."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            for mentioned_user_id in list(str(mentioned_user_ids).split(",")):
+                reaction = TaskCommentMentionFact.objects.get(
+                    team=team_id,
+                    task=int(task_id),
+                    comment_id=comment_id,
+                    mentioned_user=mentioned_user_id,
+                )
+                reaction.delete()
+            return Response(
+                {"message": f"Mention deleted successfully."},
+                status=status.HTTP_204_NO_CONTENT,
+            )
+        except TaskCommentMentionFact.DoesNotExist:
+            return Response(
+                {"error": "Mention not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )

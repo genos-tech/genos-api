@@ -95,7 +95,9 @@ class PMHistoryView(AuthenticatedAPIView):
                     my_reactions.append(_reaction)
                 all_reactions.append(_reaction)
 
-            messageIdWithChatId = f"{chat_id}-{message_id}"
+            messageIdWithChatId = (
+                f"{chat_id}-{raw_message.task.task_id if raw_message.task else 0}"
+            )
             new_message = {
                 "messageIdWithChatId": messageIdWithChatId,
                 "chatId": chat_id,

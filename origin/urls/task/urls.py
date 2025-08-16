@@ -36,4 +36,6 @@ urlpatterns = [
         TaskCommentReactionView.as_view(),
         name="task_comment_reaction",
     ),
+    # Mention
+    path("api/v2/task/comment/mention/", TaskCommentMentionView.as_view(), name="comment_mention"),
 ]

@@ -2,8 +2,10 @@ from django.urls import path
 from origin.views.chat.dm_views import *
 from origin.views.chat.gm_views import *
 from origin.views.chat.pm_views import *
-from origin.views.chat.search_views import GetTeamMembersAndGroupsView
+from origin.views.chat.search_views import *
 from origin.views.chat.reaction_views import *
+from origin.views.chat.activity_views import *
+from origin.views.chat.mention_views import *
 
 urlpatterns = [
     # DM urls
@@ -77,4 +79,8 @@ urlpatterns = [
     ),
     # Reaction
     path("api/v2/chat/reaction/", ChatReactionView.as_view(), name="chat_reaction"),
+    # Activity
+    path("api/v2/chat/activity/", ActivityHistoryView.as_view(), name="chat_activity"),
+    # Mention
+    path("api/v2/chat/mention/", ChatMentionView.as_view(), name="chat_mention"),
 ]

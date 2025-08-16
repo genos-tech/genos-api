@@ -24,3 +24,9 @@ class TaskCommentReactionFactSerializer(serializers.ModelSerializer):
     class Meta:
         model = TaskCommentReactionFact
         fields = "__all__"
+
+
+class TaskCommentMentionFactSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TaskCommentMentionFact
+        fields = "__all__"
