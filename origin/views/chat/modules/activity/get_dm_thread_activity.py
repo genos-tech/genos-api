@@ -36,11 +36,12 @@ def get(user_id: str, team_id: str, n_days_ago: datetime):
 
             dm_thread_messages.append(
                 {
-                    "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{message_id}".format(
+                    "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{thread_id}-{message_id}".format(
                         activity_type=ACTIVITY_TYPE,
                         chat_type=CHAT_TYPE,
                         chat_id=message.dm.dm_id,
                         is_thread=IS_THREAD,
+                        thread_id=message.thread_id,
                         message_id=message.thread_message_id,
                     ),
                     "activityType": ACTIVITY_TYPE,
