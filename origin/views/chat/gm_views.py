@@ -2,13 +2,10 @@ from django.db.models import Count, Q
 from rest_framework.response import Response
 from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.models.chat.reaction_models import *
 from origin.models.chat.gm_models import GMMaster, GMMembers, GMMessages, GMThreadMessages
-from origin.serializers.chat.gm_serializers import (
-    GMMasterSerializer,
-    GMMembersSerializer,
-    GMMessagesSerializer,
-    GMThreadMessagesSerializer,
-)
+from origin.serializers.chat.gm_serializers import *
+from origin.views.chat.modules.common import generate_first_line
 
 
 #############################
@@ -51,7 +48,7 @@ class GMMasterView(AuthenticatedAPIView):
 
 class CheckGMExistsView(AuthenticatedAPIView):
     def get(self, request):
-        gm_id = request.GET.get("gm_id", None)
+        gm_id = int(request.GET.get("gm_id"))
 
         if not gm_id:
             return Response(
@@ -151,7 +148,7 @@ class GMHistoryView(AuthenticatedAPIView):
         # Fetch all messages where the gm_id matches and the user is involved
         raw_messages = GMMessages.objects.filter(gm_id__in=gm_ids)
 
-        # Group by dm_id and parent_message_id, then count the replies in each group
+        # Group by gm_id and parent_message_id, then count the replies in each group
         thread_reply_counts = GMThreadMessages.objects.values(
             "parent_message_uid__gm__gm_id", "parent_message_uid__message_id"
         ).annotate(num_of_replies=Count("thread_message_id"))
@@ -162,6 +159,11 @@ class GMHistoryView(AuthenticatedAPIView):
             message_id = reply_count_info["parent_message_uid__message_id"]
             reply_count = reply_count_info["num_of_replies"]
             thread_reply_count_map[f"{gm_id}-{message_id}"] = reply_count
+
+        # Fetch reactions
+        raw_reactions = ReactionFact.objects.filter(
+            chat_type=2, chat_id__in=gm_ids, is_thread=False
+        )
 
         message_history_dict = {}
         last_message_dict = {}
@@ -177,6 +179,31 @@ class GMHistoryView(AuthenticatedAPIView):
             sender_avatar_img_path = raw_message.sender.profile_image_url
             ts_updated_at = str(raw_message.ts_updated_at)
             ts_sent = str(raw_message.ts_sent_at)
+
+            reactions = raw_reactions.filter(message_id=int(raw_message.message_id)).values_list(
+                "reaction_id",
+                "reaction_emoji",
+                "sender__username",
+                "sender__id",
+                "sender__profile_image_url",
+                "ts_created_at",
+            )
+            my_reactions = []
+            all_reactions = []
+            for reaction in reactions:
+                _reaction = {
+                    "id": int(reaction[0]),
+                    "emoji": reaction[1],
+                    "sender": {
+                        "userName": reaction[2],
+                        "userId": reaction[3],
+                        "avatarImgPath": reaction[4],
+                    },
+                    "tsSent": reaction[5],
+                }
+                if str(reaction[3]) == attendee_id:
+                    my_reactions.append(_reaction)
+                all_reactions.append(_reaction)
 
             messageIdWithChatId = f"{chat_id}-{message_id}"
             new_message = {
@@ -195,6 +222,7 @@ class GMHistoryView(AuthenticatedAPIView):
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.gm.gm_id}-{message_id}", None
                 ),
+                "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
                 "taskId": raw_message.task.task_id if raw_message.task else None,
                 "taskStatus": raw_message.task.status if raw_message.task else None,
                 "project": {
@@ -224,15 +252,7 @@ class GMHistoryView(AuthenticatedAPIView):
                 last_message_dict[chat_id] = new_message
                 ts_last_message_dict[chat_id] = ts_sent
 
-            try:
-                # TODO: Need to consider the case that the first line
-                # (i.e., message_body[0]) is empty but later exists.
-                latest_message_text = " ".join(
-                    [c["text"] for c in last_message_dict[chat_id]["content"][0]["content"]]
-                )
-            except:
-                print("gm_views", last_message_dict[chat_id]["content"])
-                latest_message_text = "Failed to get text..."
+            latest_message_text = generate_first_line.get(last_message_dict[chat_id]["content"][0])
 
             if chat_id in message_history_dict:
                 message_history_dict[chat_id]["messages"].append(new_message)
@@ -258,6 +278,90 @@ class GMHistoryView(AuthenticatedAPIView):
 
 
 class GMSingleMessageView(AuthenticatedAPIView):
+    def get(self, request):
+        user_id = request.GET.get("user_id")
+        gm_id = int(request.GET.get("gm_id"))
+        message_id = int(request.GET.get("message_id"))
+
+        if not user_id or not gm_id or not message_id:
+            return Response(
+                {"error": "user_id, gm_id and message_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        gm = GMMessages.objects.filter(gm=gm_id, message_id=message_id)
+        if len(gm) == 0:
+            return Response(
+                {"error": "GM not found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        elif len(gm) > 1:
+            return Response(
+                {"error": "Duplicated GM found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        else:
+            gm = gm[0]
+
+        raw_reactions = ReactionFact.objects.filter(
+            chat_type=2, chat_id=gm_id, message_id=message_id, is_thread=False
+        )
+        all_reactions = []
+        my_reactions = []
+        for raw_reaction in raw_reactions:
+            reaction = {
+                "id": int(raw_reaction.reaction_id),
+                "emoji": raw_reaction.reaction_emoji,
+                "sender": {
+                    "userName": raw_reaction.sender.username,
+                    "userId": raw_reaction.sender.id,
+                    "avatarImgPath": raw_reaction.sender.profile_image_url,
+                },
+                "tsSent": raw_reaction.ts_created_at,
+            }
+            all_reactions.append(reaction)
+            if raw_reaction.sender.id == user_id:
+                my_reactions.append(reaction)
+
+        thread_reply_counts = (
+            GMThreadMessages.objects.filter(gm=gm_id, thread_id=message_id)
+            .values("parent_message_uid__gm__gm_id", "parent_message_uid__message_id")
+            .annotate(num_of_replies=Count("thread_message_id"))
+        )
+        reply_count = 0
+        if len(thread_reply_counts) == 1:
+            reply_count = int(thread_reply_counts[0]["num_of_replies"])
+        elif len(thread_reply_counts) > 1:
+            print("Error!!!! thread_reply_counts has multiple thread found")
+
+        message = {
+            "messageIdWithChatId": f"{gm_id}-{message_id}",
+            "chatId": int(gm_id),
+            "messageId": int(message_id),
+            "content": gm.message_body,
+            "sender": {
+                "userId": gm.sender.id,
+                "userName": gm.sender.username,
+                "userEmail": gm.sender.email,
+                "avatarImgPath": gm.sender.profile_image_url,
+                "isSystemUser": gm.sender.is_system_user,
+            },
+            "numReplies": reply_count,
+            "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+            "taskId": gm.task.task_id if gm.task else None,
+            "taskStatus": gm.task.status if gm.task else None,
+            "project": {
+                "projectId": (gm.task.project.project_id if gm.task else None),
+                "projectName": (gm.task.project.project_name if gm.task else None),
+                "isJoined": True,
+                "systemUserId": (gm.task.project.project_system_user.id if gm.task else None),
+            },
+            "tsSent": gm.ts_sent_at,
+            "tsUpdated": gm.ts_updated_at,
+        }
+
+        return Response(message, status=status.HTTP_200_OK)
+
     def post(self, request):
         gm = GMMaster.objects.filter(gm_id=request.data["gm_id"])
         if len(gm) > 0:
@@ -285,8 +389,8 @@ class GMSingleMessageView(AuthenticatedAPIView):
             )
 
     def put(self, request):
-        gm_id = request.data["gm_id"]
-        message_id = request.data["message_id"]
+        gm_id = int(request.data["gm_id"])
+        message_id = int(request.data["message_id"])
 
         if not gm_id or not message_id:
             return Response(
@@ -314,24 +418,13 @@ class GMSingleMessageView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class GMMessagesByIdView(AuthenticatedAPIView):
-    def get(self, request):
-        gm_id = request.GET.get("gm_id", None)
-        if gm_id:
-            messages = GMMessages.objects.filter(gm_id=int(gm_id))
-            serializer = GMMessagesSerializer(messages, many=True)  # Serialize data
-            return Response(serializer.data)  # Return JSON response
-        else:
-            return Response("gm_id is not found", status=status.HTTP_400_BAD_REQUEST)
-
-
 #############################
 # GM Thread Messages views
 #############################
 class CheckGMThreadExistsView(AuthenticatedAPIView):
     def get(self, request):
-        gm_id = request.GET.get("gm_id", None)
-        thread_id = request.GET.get("thread_id", None)
+        gm_id = int(request.GET.get("gm_id"))
+        thread_id = int(request.GET.get("thread_id"))
 
         if not gm_id or not thread_id:
             return Response(
@@ -339,13 +432,104 @@ class CheckGMThreadExistsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Check if a DM exists in any order
+        # Check if a GM exists in any order
         exists = GMThreadMessages.objects.filter(Q(gm=gm_id, thread_id=thread_id)).exists()
 
         return Response({"gm_thread_exists": exists}, status=status.HTTP_200_OK)
 
 
 class GMSingleThreadMessageView(AuthenticatedAPIView):
+    def get(self, request):
+        user_id = request.GET.get("user_id")
+        gm_id = int(request.GET.get("gm_id"))
+        thread_id = int(request.GET.get("thread_id"))
+        message_id = int(request.GET.get("message_id"))
+
+        if not user_id or not gm_id or not thread_id or not message_id:
+            return Response(
+                {"error": "user_id, gm_id, thread_id and message_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        gm = GMThreadMessages.objects.filter(
+            gm=gm_id, thread_id=thread_id, thread_message_id=message_id
+        )
+        if len(gm) == 0:
+            return Response(
+                {"error": "GM not found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        elif len(gm) > 1:
+            return Response(
+                {"error": "Duplicated GM found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        else:
+            gm = gm[0]
+
+        raw_reactions = ReactionFact.objects.filter(
+            chat_type=2, chat_id=gm_id, message_id=message_id, is_thread=True
+        )
+        all_reactions = []
+        my_reactions = []
+        for raw_reaction in raw_reactions:
+            reaction = {
+                "id": int(raw_reaction.reaction_id),
+                "emoji": raw_reaction.reaction_emoji,
+                "sender": {
+                    "userName": raw_reaction.sender.username,
+                    "userId": raw_reaction.sender.id,
+                    "avatarImgPath": raw_reaction.sender.profile_image_url,
+                },
+                "tsSent": raw_reaction.ts_created_at,
+            }
+            all_reactions.append(reaction)
+            if str(raw_reaction.sender.id) == user_id:
+                my_reactions.append(reaction)
+
+        contentText = generate_first_line.get(gm.thread_message_body[0])
+        messageIdWithChatIdAndThreadId = f"{gm_id}-{thread_id}-{message_id}"
+        message = {
+            "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
+            "chatId": int(gm_id),
+            "threadId": gm.thread_id,
+            "messageId": gm.thread_message_id,
+            "content": gm.thread_message_body,
+            "contentText": contentText,
+            "sender": {
+                "userId": gm.sender.id,
+                "userName": gm.sender.username,
+                "userEmail": gm.sender.email,
+                "avatarImgPath": gm.sender.profile_image_url,
+                "isSystemUser": gm.sender.is_system_user,
+            },
+            "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+            "taskId": gm.parent_message_uid.task.task_id if gm.parent_message_uid.task else None,
+            "taskExist": True if gm.parent_message_uid.task else False,
+            "project": {
+                "projectId": (
+                    gm.parent_message_uid.task.project.project_id
+                    if gm.parent_message_uid.task
+                    else None
+                ),
+                "projectName": (
+                    gm.parent_message_uid.task.project.project_name
+                    if gm.parent_message_uid.task
+                    else None
+                ),
+                "isJoined": True,
+                "systemUserId": (
+                    gm.parent_message_uid.task.project.project_system_user.id
+                    if gm.parent_message_uid.task
+                    else None
+                ),
+            },
+            "tsSent": gm.ts_sent_at,
+            "tsUpdated": gm.ts_updated_at,
+        }
+
+        return Response(message, status=status.HTTP_200_OK)
+
     def post(self, request):
         gm = GMMaster.objects.filter(gm_id=request.data["gm_id"])
         if len(gm) > 0:
@@ -374,9 +558,9 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request):
-        gm_id = request.data["gm_id"]
-        thread_id = request.data["thread_id"]
-        message_id = request.data["message_id"]
+        gm_id = int(request.data["gm_id"])
+        thread_id = int(request.data["thread_id"])
+        message_id = int(request.data["message_id"])
 
         if not gm_id or not thread_id or not message_id:
             return Response(
@@ -408,8 +592,8 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
         team_name = request.GET.get("team_name")
-        gm_id = request.GET.get("gm_id", None)
-        thread_id = request.GET.get("thread_id", None)
+        gm_id = int(request.GET.get("gm_id"))
+        thread_id = int(request.GET.get("thread_id"))
 
         if not team_id or not team_name or not gm_id or not thread_id:
             return Response(
@@ -438,18 +622,7 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                 ts_sent = parent_message.ts_sent_at
                 ts_updated_at = parent_message.ts_updated_at
 
-            try:
-                contentText_list = []
-                for c in content[0]["content"]:
-                    if "text" in c:
-                        contentText_list.append(c["text"])
-                    elif "href" in c:
-                        contentText_list.append(c["content"][0]["text"])
-                contentText = " ".join(contentText_list)
-            except:
-                print("gm_views", content["content"])
-                contentText = "Failed to get text..."
-
+            contentText = generate_first_line.get(content[0])
             messageIdWithChatIdAndThreadId = f"{chat_id}-{thread_id}-{message_id}"
             new_message = {
                 "chatType": 2,

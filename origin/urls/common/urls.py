@@ -2,6 +2,7 @@ from django.urls import path
 
 from origin.views.common.auth_views import *
 from origin.views.common.team_views import *
+from origin.views.chat.reaction_views import *
 
 user_list = UserViewSet.as_view({"post": "create"})
 

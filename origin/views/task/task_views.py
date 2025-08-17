@@ -5,25 +5,16 @@ from django.db.models import Max
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
+
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.task.task_models import *
 from origin.serializers.task.task_serializers import *
 from origin.models.project.prj_models import *
+from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.models.chat.reaction_models import *
+from origin.serializers.chat.reaction_serializers import *
 
-
-STATUS_COLOR_MAP = {
-    "open": {"chipColor": "#0044c2", "textColor": "white"},
-    "wip": {"chipColor": "#ffff23", "textColor": "black"},
-    "pending": {"chipColor": "#ffa823", "textColor": "white"},
-    "closed": {"chipColor": "#1dc200", "textColor": "white"},
-    "deleted": {"chipColor": "#ff2323", "textColor": "white"},
-}
-
-PRIORITY_EFFORT_LEVEL_COLOR_MAP = {
-    "low": {"chipColor": "#0044c2", "textColor": "white"},
-    "medium": {"chipColor": "#1dc200", "textColor": "white"},
-    "high": {"chipColor": "#ff2323", "textColor": "white"},
-}
+from .common_color import STATUS_COLOR_MAP, PRIORITY_EFFORT_LEVEL_COLOR_MAP
 
 
 class TaskMasterView(AuthenticatedAPIView):
@@ -194,8 +185,8 @@ class GetTeamTasksByTagView(AuthenticatedAPIView):
 class ChildTaskView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
-        project_id = request.GET.get("project_id")
-        current_task_id = request.GET.get("current_task_id")
+        project_id = int(request.GET.get("project_id"))
+        current_task_id = int(request.GET.get("current_task_id"))
 
         if not team_id or not project_id or not current_task_id:
             return Response(
@@ -336,9 +327,9 @@ class ChildTaskView(AuthenticatedAPIView):
 class GetTaskByThreadIdView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
-        chat_type = request.GET.get("chat_type")
-        chat_id = request.GET.get("chat_id")
-        thread_id = request.GET.get("thread_id")
+        chat_type = request.GET.get("chat_type")  # "dm" or "gm"
+        chat_id = int(request.GET.get("chat_id"))
+        thread_id = int(request.GET.get("thread_id"))
 
         if not team_id or not chat_type or not chat_id or not thread_id:
             return Response(
@@ -477,8 +468,8 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
 class GetTaskView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
-        project_id = request.GET.get("project_id")
-        task_id = request.GET.get("task_id")
+        project_id = int(request.GET.get("project_id"))
+        task_id = int(request.GET.get("task_id"))
 
         if not team_id or not project_id or not task_id:
             return Response(
@@ -605,7 +596,7 @@ class GetTaskView(AuthenticatedAPIView):
 class GetProjectTasksView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
-        project_id = request.GET.get("project_id")
+        project_id = int(request.GET.get("project_id"))
 
         if not team_id:
             return Response(
@@ -744,7 +735,7 @@ class TaskAttachmentsView(AuthenticatedAPIView):
             return Response({}, status=status.HTTP_201_CREATED)
 
     def get(self, request):
-        task = request.GET.get("task_id")
+        task = int(request.GET.get("task_id"))
 
         if not task:
             return Response(
@@ -826,8 +817,13 @@ class TaskCommentsView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def get(self, request):
-        task_id = request.GET.get("task_id", None)
+        user_id = request.GET.get("user_id")
+        task_id = int(request.GET.get("task_id"))
         if task_id:
+
+            # Fetch reactions
+            raw_reactions = TaskCommentReactionFact.objects.filter(task_id=task_id)
+
             comments = (
                 TaskComments.objects.filter(task=task_id)
                 .select_related("sender")
@@ -844,6 +840,33 @@ class TaskCommentsView(AuthenticatedAPIView):
 
             response_data = []
             for comment in comments:
+                reactions = raw_reactions.filter(
+                    comment_id=int(comment["comment_id"])
+                ).values_list(
+                    "reaction_id",
+                    "reaction_emoji",
+                    "sender__username",
+                    "sender__id",
+                    "sender__profile_image_url",
+                    "ts_created_at",
+                )
+                my_reactions = []
+                all_reactions = []
+                for reaction in reactions:
+                    _reaction = {
+                        "id": int(reaction[0]),
+                        "emoji": reaction[1],
+                        "sender": {
+                            "userName": reaction[2],
+                            "userId": reaction[3],
+                            "avatarImgPath": reaction[4],
+                        },
+                        "tsSent": reaction[5],
+                    }
+                    if str(reaction[3]) == user_id:
+                        my_reactions.append(_reaction)
+                    all_reactions.append(_reaction)
+
                 response_data.append(
                     {
                         "taskId": comment["task"],
@@ -851,6 +874,7 @@ class TaskCommentsView(AuthenticatedAPIView):
                         "senderName": comment["sender__username"],
                         "commentId": comment["comment_id"],
                         "commentBody": comment["comment_body"],
+                        "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
                         "tsSent": str(comment["ts_sent_at"]),
                         "tsUpdated": str(comment["ts_updated_at"]),
                     }
@@ -862,3 +886,140 @@ class TaskCommentsView(AuthenticatedAPIView):
             )
         else:
             return Response("task_id is not found", status=status.HTTP_400_BAD_REQUEST)
+
+
+class TaskCommentReactionView(AuthenticatedAPIView):
+    def post(self, request):
+
+        current_max_reaction_id = TaskCommentReactionFact.objects.filter(
+            team_id=request.data["team_id"],
+            task_id=request.data["task_id"],
+            comment_id=request.data["comment_id"],
+        ).aggregate(max_id=Max("reaction_id"))["max_id"]
+
+        data = {
+            "team": request.data["team_id"],
+            "task": request.data["task_id"],
+            "comment_id": int(request.data["comment_id"]),
+            "reaction_id": current_max_reaction_id + 1 if current_max_reaction_id else 1,
+            "reaction_emoji": request.data["reaction_emoji"],
+            "sender": request.data["sender_id"],
+        }
+
+        serializer = TaskCommentReactionFactSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request):
+        team_id = request.GET.get("team_id")
+        sender_id = request.GET.get("sender_id")
+        task_id = request.GET.get("task_id")
+        comment_id = int(request.GET.get("comment_id"))
+        reaction_emoji = request.GET.get("reaction_emoji")
+
+        if not team_id or not sender_id or not task_id or not comment_id or not reaction_emoji:
+            return Response(
+                {
+                    "error": "`team_id`, `sender_id`, `task_id`, `comment_id`, and `reaction_emoji` are required."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            reaction = TaskCommentReactionFact.objects.get(
+                team=team_id,
+                sender=sender_id,
+                task_id=int(task_id),
+                comment_id=int(comment_id),
+                reaction_emoji=reaction_emoji,
+            )
+            reaction.delete()
+            return Response(
+                {"message": f"Reaction deleted successfully."},
+                status=status.HTTP_204_NO_CONTENT,
+            )
+        except TaskCommentReactionFact.DoesNotExist:
+            return Response(
+                {"error": "Reaction not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+
+class TaskCommentMentionView(AuthenticatedAPIView):
+    def post(self, request):
+        res = []
+        try:
+            for mentioned_user_id in list(request.data["mentioned_user_ids"]):
+                data = {
+                    "team": request.data["team_id"],
+                    "task": request.data["task_id"],
+                    "comment_id": int(request.data["comment_id"]),
+                    "mentioned_user": mentioned_user_id,
+                }
+
+                serializer = TaskCommentMentionFactSerializer(data=data)
+                if serializer.is_valid():
+                    serializer.save()
+                    res.append(serializer.data)
+        except:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(res, status=status.HTTP_201_CREATED)
+
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        task_id = request.GET.get("task_id")
+        comment_id = request.GET.get("comment_id")
+
+        if not team_id or not task_id or not comment_id:
+            return Response(
+                {"error": "team_id, task_id, and comment_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        mentions = TaskCommentMentionFact.objects.filter(
+            team=team_id,
+            task=task_id,
+            comment_id=comment_id,
+        ).values()
+
+        mentioned_user_ids = []
+        for mention in mentions:
+            mentioned_user_ids.append(mention["mentioned_user_id"])
+
+        return Response(mentioned_user_ids, status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        team_id = request.GET.get("team_id")
+        task_id = request.GET.get("task_id")
+        comment_id = request.GET.get("comment_id")
+        mentioned_user_ids = request.GET.get("mentioned_user_ids")
+
+        if not team_id or not mentioned_user_ids or not task_id or not comment_id:
+            return Response(
+                {
+                    "error": "`team_id`, `mentioned_user_ids`, `task_id`, `comment_id` are required."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            for mentioned_user_id in list(str(mentioned_user_ids).split(",")):
+                reaction = TaskCommentMentionFact.objects.get(
+                    team=team_id,
+                    task=int(task_id),
+                    comment_id=comment_id,
+                    mentioned_user=mentioned_user_id,
+                )
+                reaction.delete()
+            return Response(
+                {"message": f"Mention deleted successfully."},
+                status=status.HTTP_204_NO_CONTENT,
+            )
+        except TaskCommentMentionFact.DoesNotExist:
+            return Response(
+                {"error": "Mention not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )

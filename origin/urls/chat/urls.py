@@ -2,7 +2,10 @@ from django.urls import path
 from origin.views.chat.dm_views import *
 from origin.views.chat.gm_views import *
 from origin.views.chat.pm_views import *
-from origin.views.chat.search_views import GetTeamMembersAndGroupsView
+from origin.views.chat.search_views import *
+from origin.views.chat.reaction_views import *
+from origin.views.chat.activity_views import *
+from origin.views.chat.mention_views import *
 
 urlpatterns = [
     # DM urls
@@ -12,11 +15,6 @@ urlpatterns = [
     path("api/v2/dm/ids/", AllDMIdsView.as_view(), name="get_all_my_dm_ids"),
     path("api/v2/dm/history/", DMHistoryView.as_view(), name="get_all_my_dm_messages"),
     path("api/v2/dm/message/", DMSingleMessageView.as_view(), name="insert_dm_message"),
-    path(
-        "api/v2/dm/messagesById/",
-        DMMessagesByIdView.as_view(),
-        name="get_dm_messages_by_id",
-    ),
     path(
         "api/v2/dm/checkThreadExistence/",
         CheckDMThreadExistsView.as_view(),
@@ -40,11 +38,6 @@ urlpatterns = [
     path("api/v2/gm/join/", GMMembersView.as_view(), name="join_gm"),
     path("api/v2/gm/history/", GMHistoryView.as_view(), name="get_all_my_gm_messages"),
     path("api/v2/gm/message/", GMSingleMessageView.as_view(), name="insert_gm_message"),
-    path(
-        "api/v2/gm/messagesById/",
-        GMMessagesByIdView.as_view(),
-        name="get_gm_messages_by_id",
-    ),
     path(
         "api/v2/gm/checkThreadExistence/",
         CheckGMThreadExistsView.as_view(),
@@ -84,4 +77,10 @@ urlpatterns = [
         GetTeamMembersAndGroupsView.as_view(),
         name="search_team_members_and_groups",
     ),
+    # Reaction
+    path("api/v2/chat/reaction/", ChatReactionView.as_view(), name="chat_reaction"),
+    # Activity
+    path("api/v2/chat/activity/", ActivityHistoryView.as_view(), name="chat_activity"),
+    # Mention
+    path("api/v2/chat/mention/", ChatMentionView.as_view(), name="chat_mention"),
 ]
