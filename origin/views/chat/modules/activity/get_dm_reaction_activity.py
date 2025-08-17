@@ -113,7 +113,11 @@ def get(user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
                         "avatarImgPath": message.sender.profile_image_url,
                     },
                     "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
-                    "tsSent": message.ts_sent_at,
+                    "tsSent": (
+                        latest_reaction["tsSent"]
+                        if "tsSent" in latest_reaction
+                        else message.ts_sent_at
+                    ),
                 }
             )
 

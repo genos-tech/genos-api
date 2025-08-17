@@ -19,11 +19,12 @@ def get(team_id: str, my_all_project_ids, n_days_ago: datetime):
         content = generate_first_line.get(comment.comment_body[0])
         task_comments.append(
             {
-                "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{message_id}".format(
+                "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{task_id}-{message_id}".format(
                     activity_type=ACTIVITY_TYPE,
                     chat_type=CHAT_TYPE,
                     chat_id=comment.task.project.project_id,
                     is_thread=IS_THREAD,
+                    task_id=comment.task.task_id,
                     message_id=comment.comment_id,
                 ),
                 "activityType": ACTIVITY_TYPE,
