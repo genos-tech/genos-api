@@ -145,7 +145,6 @@ class PMHistoryView(AuthenticatedAPIView):
                     "chatId": chat_id,
                     "chatName": chat_name,
                     "systemUserId": project_system_user_id,
-                    "isDm": False,
                     "chatType": 3,
                     "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
                     "messages": [new_message],

@@ -263,7 +263,6 @@ class GMHistoryView(AuthenticatedAPIView):
                 message_history_dict[chat_id] = {
                     "chatId": chat_id,
                     "chatName": chat_name,
-                    "isDm": False,
                     "chatType": 2,
                     "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
                     "messages": [new_message],
