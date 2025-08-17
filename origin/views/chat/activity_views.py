@@ -151,4 +151,6 @@ class ActivityHistoryView(AuthenticatedAPIView):
         )
         all_activities.extend(reacted_task_comment)
 
+        all_activities = sorted(all_activities, key=lambda x: x["tsSent"], reverse=True)
+
         return Response(all_activities, status=status.HTTP_200_OK)
