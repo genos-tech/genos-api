@@ -42,8 +42,8 @@ class ChatReactionView(AuthenticatedAPIView):
         sender_id = request.GET.get("sender_id")
         chat_type = request.GET.get("chat_type")
         chat_id = request.GET.get("chat_id")
-        message_id = int(request.GET.get("message_id"))
-        is_thread_binary = int(request.GET.get("is_thread_binary"))
+        message_id = request.GET.get("message_id")
+        is_thread_binary = request.GET.get("is_thread_binary")
         reaction_emoji = request.GET.get("reaction_emoji")
 
         if (
@@ -63,7 +63,7 @@ class ChatReactionView(AuthenticatedAPIView):
             )
 
         try:
-            if is_thread_binary == 1:
+            if int(is_thread_binary) == 1:
                 chat_id = int(request.GET.get("thread_id"))
 
             reaction = ReactionFact.objects.get(
@@ -75,7 +75,7 @@ class ChatReactionView(AuthenticatedAPIView):
                 is_thread=int(is_thread_binary) == 1,
                 reaction_emoji=reaction_emoji,
             )
-            print("Get reaction:",reaction)
+            print("Get reaction:", reaction)
             reaction.delete()
             return Response(
                 {"message": f"Reaction deleted successfully."},
