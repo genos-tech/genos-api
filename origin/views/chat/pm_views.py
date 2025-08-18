@@ -383,7 +383,7 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
             if str(raw_reaction.sender.id) == user_id:
                 my_reactions.append(reaction)
 
-        contentText = generate_first_line.get(gm.thread_message_body[0])
+        contentText = generate_first_line.get(pm.thread_message_body[0])
         messageIdWithChatIdAndThreadId = f"{project_id}-{thread_id}-{message_id}"
         message = {
             "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
