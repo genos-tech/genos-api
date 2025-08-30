@@ -40,14 +40,25 @@ class CheckTeamExistsView(AuthenticatedAPIView):
 
         if not team_id:
             return Response(
-                {"error": "Both team_id is required."},
+                {"error": "team_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Check if a Team exists in any order
-        exists = TeamMaster.objects.filter(Q(team_id=team_id)).exists()
+        team_info = TeamMaster.objects.filter(Q(team_id=team_id)).values()
+        if len(team_info) == 1:
+            res = {
+                "exist": True,
+                "teamDetails": {
+                    "teamId": team_info[0]["team_id"],
+                    "teamName": team_info[0]["team_name"],
+                    "teamEmail": team_info[0]["team_email"],
+                },
+            }
+        else:
+            res = {"exist": False, "teamDetails": []}
 
-        return Response({"team_exists": exists}, status=status.HTTP_200_OK)
+        return Response(res, status=status.HTTP_200_OK)
 
 
 class TeamMembersView(AuthenticatedAPIView):
@@ -81,15 +92,21 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        team_ids = TeamMembers.objects.filter(
+        raw_my_teams = TeamMembers.objects.filter(
             Q(attendee=user_id, team__is_deleted=False)
-        ).values_list("team")
+        ).values_list("team__team_id", "team__team_name", "team__team_email")
 
-        connected_set = set()
-        for (team_id,) in team_ids:
-            connected_set.add(team_id)
+        my_teams = []
+        for team in raw_my_teams:
+            my_teams.append(
+                {
+                    "teamId": team[0],
+                    "teamName": team[1],
+                    "teamEmail": team[2],
+                }
+            )
 
-        return Response({"team_ids": list(connected_set)}, status=status.HTTP_200_OK)
+        return Response(my_teams, status=status.HTTP_200_OK)
 
 
 class GetAllTeamsView(AuthenticatedAPIView):
