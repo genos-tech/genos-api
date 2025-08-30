@@ -3,8 +3,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.models.common.inbox_models import InboxItems
 from origin.serializers.common.team_serializers import TeamMasterSerializer, TeamMembersSerializer
-from origin.models.common.user_models import CustomUser
 
 
 #############################
@@ -23,9 +23,11 @@ class TeamMasterView(AuthenticatedAPIView):
         if serializer.is_valid():
             serializer.save()
             data = {
-                "teamId": serializer.data["team_id"],
-                "teamName": serializer.data["team_name"],
-                "teamEmail": serializer.data["team_email"],
+                "teamDetails": {
+                    "teamId": serializer.data["team_id"],
+                    "teamName": serializer.data["team_name"],
+                    "teamEmail": serializer.data["team_email"],
+                }
             }
             return Response(data, status=status.HTTP_201_CREATED)
 
@@ -71,6 +73,30 @@ class TeamMembersView(AuthenticatedAPIView):
             Q(team_id=data["team"], attendee_id=data["attendee"])
         ).exists()
 
+        if exists:
+            return Response(data, status=status.HTTP_201_CREATED)
+        else:
+            serializer = TeamMembersSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class TeamMembersByInboxView(AuthenticatedAPIView):
+    def post(self, request):
+        team_id = request.data["team_id"]
+        inbox_item_id = int(request.data["item_id"])
+
+        attendee_id = str(
+            InboxItems.objects.filter(item_id=inbox_item_id).values_list("sender")[0][0]
+        )
+
+        # Check if a Team exists in any order
+        exists = TeamMembers.objects.filter(Q(team_id=team_id, attendee_id=attendee_id)).exists()
+
+        data = {"team": team_id, "attendee": attendee_id}
         if exists:
             return Response(data, status=status.HTTP_201_CREATED)
         else:
