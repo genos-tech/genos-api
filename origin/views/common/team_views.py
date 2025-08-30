@@ -3,8 +3,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.models.common.inbox_models import InboxItems
 from origin.serializers.common.team_serializers import TeamMasterSerializer, TeamMembersSerializer
-from origin.models.common.user_models import CustomUser
 
 
 #############################
@@ -23,9 +23,11 @@ class TeamMasterView(AuthenticatedAPIView):
         if serializer.is_valid():
             serializer.save()
             data = {
-                "teamId": serializer.data["team_id"],
-                "teamName": serializer.data["team_name"],
-                "teamEmail": serializer.data["team_email"],
+                "teamDetails": {
+                    "teamId": serializer.data["team_id"],
+                    "teamName": serializer.data["team_name"],
+                    "teamEmail": serializer.data["team_email"],
+                }
             }
             return Response(data, status=status.HTTP_201_CREATED)
 
@@ -40,14 +42,25 @@ class CheckTeamExistsView(AuthenticatedAPIView):
 
         if not team_id:
             return Response(
-                {"error": "Both team_id is required."},
+                {"error": "team_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Check if a Team exists in any order
-        exists = TeamMaster.objects.filter(Q(team_id=team_id)).exists()
+        team_info = TeamMaster.objects.filter(Q(team_id=team_id)).values()
+        if len(team_info) == 1:
+            res = {
+                "exist": True,
+                "teamDetails": {
+                    "teamId": team_info[0]["team_id"],
+                    "teamName": team_info[0]["team_name"],
+                    "teamEmail": team_info[0]["team_email"],
+                },
+            }
+        else:
+            res = {"exist": False, "teamDetails": []}
 
-        return Response({"team_exists": exists}, status=status.HTTP_200_OK)
+        return Response(res, status=status.HTTP_200_OK)
 
 
 class TeamMembersView(AuthenticatedAPIView):
@@ -71,6 +84,30 @@ class TeamMembersView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+class TeamMembersByInboxView(AuthenticatedAPIView):
+    def post(self, request):
+        team_id = request.data["team_id"]
+        inbox_item_id = int(request.data["item_id"])
+
+        attendee_id = str(
+            InboxItems.objects.filter(item_id=inbox_item_id).values_list("sender")[0][0]
+        )
+
+        # Check if a Team exists in any order
+        exists = TeamMembers.objects.filter(Q(team_id=team_id, attendee_id=attendee_id)).exists()
+
+        data = {"team": team_id, "attendee": attendee_id}
+        if exists:
+            return Response(data, status=status.HTTP_201_CREATED)
+        else:
+            serializer = TeamMembersSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
 class GetMyTeamsView(AuthenticatedAPIView):
     def get(self, request):
         user_id = request.GET.get("user_id")
@@ -81,15 +118,21 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        team_ids = TeamMembers.objects.filter(
+        raw_my_teams = TeamMembers.objects.filter(
             Q(attendee=user_id, team__is_deleted=False)
-        ).values_list("team")
+        ).values_list("team__team_id", "team__team_name", "team__team_email")
 
-        connected_set = set()
-        for (team_id,) in team_ids:
-            connected_set.add(team_id)
+        my_teams = []
+        for team in raw_my_teams:
+            my_teams.append(
+                {
+                    "teamId": team[0],
+                    "teamName": team[1],
+                    "teamEmail": team[2],
+                }
+            )
 
-        return Response({"team_ids": list(connected_set)}, status=status.HTTP_200_OK)
+        return Response(my_teams, status=status.HTTP_200_OK)
 
 
 class GetAllTeamsView(AuthenticatedAPIView):

@@ -1,0 +1,31 @@
+from django.db import models
+
+from origin.models.common.user_models import CustomUser
+from origin.models.common.team_models import TeamMaster
+
+
+class InboxItems(models.Model):
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.CASCADE,
+        to_field="team_id",
+    )
+    sender = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="sender_inboxes",
+        to_field="id",
+    )
+    receiver = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="receiver_inboxes",
+        to_field="id",
+    )
+    item_id = models.AutoField(primary_key=True)
+    item_body = models.CharField(blank=False)
+    # item_type = {0: "Activity message", 1: "join team request"}
+    item_type = models.IntegerField(blank=False)
+    is_read = models.BooleanField(default=False)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
