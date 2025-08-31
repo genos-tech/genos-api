@@ -40,8 +40,8 @@ class ProjectMasterView(AuthenticatedAPIView):
                 )
             else:
                 return Response(
-                    {"message": f"Only project owner can delete the project `{project_id}`."},
-                    status=status.HTTP_400_BAD_REQUEST,
+                    {"message": f"Only project owner can delete the project."},
+                    status=status.HTTP_200_OK,
                 )
         except ProjectMaster.DoesNotExist:
             return Response(
