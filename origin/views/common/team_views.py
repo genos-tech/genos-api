@@ -84,7 +84,7 @@ class TeamMembersView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class TeamMembersByInboxView(AuthenticatedAPIView):
+class JoinTeamFromInboxView(AuthenticatedAPIView):
     def post(self, request):
         team_id = request.data["team_id"]
         inbox_item_id = int(request.data["item_id"])
@@ -93,7 +93,7 @@ class TeamMembersByInboxView(AuthenticatedAPIView):
             InboxItems.objects.filter(item_id=inbox_item_id).values_list("sender")[0][0]
         )
 
-        # Check if a Team exists in any order
+        # Check if the attendee is not joined yet.
         exists = TeamMembers.objects.filter(Q(team_id=team_id, attendee_id=attendee_id)).exists()
 
         data = {"team": team_id, "attendee": attendee_id}

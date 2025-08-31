@@ -4,6 +4,7 @@ from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.serializers.common.inbox_serializers import *
 from origin.models.common.team_models import *
+from origin.models.project.prj_models import *
 
 
 #############################
@@ -16,7 +17,7 @@ class InboxItemView(AuthenticatedAPIView):
             "sender": request.data["sender_id"],
             "receiver": request.data["receiver_id"],
             "item_body": request.data["item_body"],
-            "item_type": request.data["item_type"],
+            "item_type": request.data["item_type"],  # Must be '0'
             "is_read": False,
         }
 
@@ -41,7 +42,6 @@ class InboxItemView(AuthenticatedAPIView):
         inbox_item = InboxItems.objects.get(team=team_id, item_id=item_id)
 
         data = {"is_read": bool(request.data["is_read"])}
-        print("inbox put data:", data)
 
         serializer = InboxItemsSerializer(inbox_item, data=data, partial=True)
         if serializer.is_valid():
@@ -86,9 +86,48 @@ class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
         data = {
             "team": request.data["team_id"],
             "sender": request.data["sender_id"],
-            "receiver": team_owner_id[0],
+            "receiver": team_owner_id[0],  # Send to the team owner
             "item_body": request.data["item_body"],
-            "item_type": request.data["item_type"],
+            "item_type": request.data["item_type"],  # Must be '1'
+            "is_read": False,
+        }
+
+        is_already_requested = (
+            len(
+                InboxItems.objects.filter(
+                    team=data["team"],
+                    sender=data["sender"],
+                    receiver=data["receiver"],
+                    item_type=data["item_type"],
+                ).values()
+            )
+            > 0
+        )
+
+        serializer = InboxItemsSerializer(data=data)
+        if serializer.is_valid():
+            if is_already_requested == False:
+                serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        error = serializer.errors
+        return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+
+class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
+    def post(self, request):
+        project_owner_id = ProjectMaster.objects.filter(
+            team_id=request.data["team_id"],
+            project_id=request.data["item_optionals"]["project_id"],
+        ).values_list("owner", flat=True)
+
+        data = {
+            "team": request.data["team_id"],
+            "sender": request.data["sender_id"],
+            "receiver": project_owner_id[0],  # Send to the project owner
+            "item_body": request.data["item_body"],
+            "item_type": request.data["item_type"],  # Must be '2'
+            "item_optionals": request.data["item_optionals"],
             "is_read": False,
         }
 
