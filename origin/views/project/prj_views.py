@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.project.prj_models import *
+from origin.models.common.inbox_models import InboxItems
 from origin.serializers.project.prj_serializers import *
 
 
@@ -17,8 +18,9 @@ class ProjectMasterView(AuthenticatedAPIView):
         error = serializer.errors
         error["hint"] = "Try with different project_name"
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
-    
+
     def delete(self, request):
+        request_user_id = request.user.id
         team_id = request.GET.get("team_id")
         project_id = request.GET.get("project_id")
 
@@ -29,17 +31,23 @@ class ProjectMasterView(AuthenticatedAPIView):
             )
 
         try:
-            attachment = ProjectMaster.objects.get(team=team_id, project_id=project_id)
-            attachment.delete()
-            return Response(
-                {"message": f"Project `{project_id}` deleted successfully."}, status=status.HTTP_204_NO_CONTENT
-            )
+            target_project = ProjectMaster.objects.get(team=team_id, project_id=project_id)
+            if str(request_user_id) == str(target_project.owner.id):
+                target_project.delete()
+                return Response(
+                    {"message": f"Project `{project_id}` deleted successfully."},
+                    status=status.HTTP_204_NO_CONTENT,
+                )
+            else:
+                return Response(
+                    {"message": f"Only project owner can delete the project `{project_id}`."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         except ProjectMaster.DoesNotExist:
             return Response(
-                {"error": "Project not found."},
+                {"message": "Project not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-
 
 
 class CheckProjectExistsView(AuthenticatedAPIView):
@@ -74,14 +82,18 @@ class ProjectsView(AuthenticatedAPIView):
             project=OuterRef("project_id"), team=team_id, attendee=attendee_id
         )
 
-        projects = ProjectMaster.objects.filter(team=team_id).annotate(is_joined=Exists(member_exists_subquery))
+        projects = ProjectMaster.objects.filter(team=team_id).annotate(
+            is_joined=Exists(member_exists_subquery)
+        )
         project_tags = defaultdict(list)
         for project_tag in ProjectTags.objects.filter(team=team_id):
-            project_tags[project_tag.project.project_id].append({
-                "tagName":project_tag.tag_name,
-                "tagColor":project_tag.tag_color,
-                "tagTextColor":project_tag.tag_text_color
-            })
+            project_tags[project_tag.project.project_id].append(
+                {
+                    "tagName": project_tag.tag_name,
+                    "tagColor": project_tag.tag_color,
+                    "tagTextColor": project_tag.tag_text_color,
+                }
+            )
 
         team_projects = [
             {
@@ -112,6 +124,38 @@ class JoinProjectView(AuthenticatedAPIView):
         error = serializer.errors
         error["hint"] = f"Failed to join project: {request.data["project_id"]}"
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+
+class JoinProjectFromInboxView(AuthenticatedAPIView):
+    def post(self, request):
+        team_id = request.data["team_id"]
+        inbox_item_id = int(request.data["item_id"])
+
+        inbox_item = InboxItems.objects.filter(item_id=inbox_item_id).values_list(
+            "sender", "item_optionals"
+        )[0]
+        print("inbox_item:", inbox_item)
+        attendee_id = inbox_item[0]
+        project_id = inbox_item[1]["project_id"]
+
+        # Check if the attendee is not joined yet.
+        exists = ProjectMembers.objects.filter(
+            Q(team_id=team_id, project_id=project_id, attendee_id=attendee_id)
+        ).exists()
+
+        data = {"team": team_id, "project": project_id, "attendee": attendee_id}
+        if exists:
+            return Response(data, status=status.HTTP_201_CREATED)
+        else:
+            serializer = ProjectMembersSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        error = serializer.errors
+        error["hint"] = f"Failed to join project: {request.data["project_id"]}"
+        return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
 
 class ProjectMembersView(AuthenticatedAPIView):
     def get(self, request):

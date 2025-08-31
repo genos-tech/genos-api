@@ -19,7 +19,7 @@ urlpatterns = [
     path("api/v2/team/join/", TeamMembersView.as_view(), name="exist_team"),
     path(
         "api/v2/team/join/fromInbox/",
-        TeamMembersByInboxView.as_view(),
+        JoinTeamFromInboxView.as_view(),
         name="join_team_from_inbox",
     ),
     path("api/v2/team/getMyTeams/", GetMyTeamsView.as_view(), name="get_my_team"),
@@ -35,5 +35,10 @@ urlpatterns = [
         "api/v2/inbox/joinTeamRequest/",
         InboxItemForJoinTeamRequestView.as_view(),
         name="inbox_join_team_request_item",
+    ),
+    path(
+        "api/v2/inbox/joinProjectRequest/",
+        InboxItemForJoinProjectRequestView.as_view(),
+        name="inbox_join_project_request_item",
     ),
 ]
