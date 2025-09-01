@@ -23,7 +23,7 @@ class InboxItems(models.Model):
         to_field="id",
     )
     item_id = models.AutoField(primary_key=True)
-    item_body = models.CharField(blank=False)
+    item_body = models.JSONField(blank=True, null=True)
     # item_type = {0: "Activity message", 1: "join team request", 2: "join project request"}
     item_type = models.IntegerField(blank=False)
     item_optionals = models.JSONField(blank=True, null=True)
