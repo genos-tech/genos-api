@@ -134,26 +134,32 @@ class JoinProjectFromInboxView(AuthenticatedAPIView):
         inbox_item = InboxItems.objects.filter(item_id=inbox_item_id).values_list(
             "sender", "item_optionals"
         )[0]
-        print("inbox_item:", inbox_item)
+
         attendee_id = inbox_item[0]
         project_id = inbox_item[1]["project_id"]
 
         # Check if the attendee is not joined yet.
-        exists = ProjectMembers.objects.filter(
+        is_joined = ProjectMembers.objects.filter(
             Q(team_id=team_id, project_id=project_id, attendee_id=attendee_id)
         ).exists()
 
         data = {"team": team_id, "project": project_id, "attendee": attendee_id}
-        if exists:
+        if is_joined:
             return Response(data, status=status.HTTP_201_CREATED)
         else:
-            serializer = ProjectMembersSerializer(data=data)
-            if serializer.is_valid():
-                serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            project_exists = ProjectMaster.objects.filter(
+                Q(team=team_id, project_id=project_id)
+            ).exists()
+            if project_exists:
+                serializer = ProjectMembersSerializer(data=data)
+                if serializer.is_valid():
+                    serializer.save()
+                    return Response(serializer.data, status=status.HTTP_201_CREATED)
+            else:
+                return Response(data, status=status.HTTP_200_OK)
 
         error = serializer.errors
-        error["hint"] = f"Failed to join project: {request.data["project_id"]}"
+        error["hint"] = f"Failed to join project: {project_id}"
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
 
