@@ -635,7 +635,9 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
             )
 
         # Fetch all messages where the dm_id matches and the user is involved
-        raw_messages = DMThreadMessages.objects.filter(dm=dm_id, thread_id=thread_id)
+        raw_messages = DMThreadMessages.objects.filter(dm=dm_id, thread_id=thread_id).order_by(
+            "ts_sent_at"
+        )
 
         # Fetch reactions
         raw_reactions = ReactionFact.objects.filter(chat_type=1, chat_id=dm_id, is_thread=True)
@@ -655,7 +657,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
             ts_updated_at = str(raw_message.ts_updated_at)
 
             if message_id == 1:
-                # fetch the first thread message reactions.
+                # fetch the first thread message reactions -> the parent message reaction.
                 reactions = ReactionFact.objects.filter(
                     chat_type=1, chat_id=dm_id, is_thread=False, message_id=thread_id
                 ).values_list(

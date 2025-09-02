@@ -15,6 +15,7 @@ class MentionFact(models.Model):
     chat_id = models.IntegerField(blank=False, null=False)
     message_id = models.IntegerField(blank=False, null=False)
     is_thread = models.BooleanField(blank=False, null=False)
+    thread_id = models.IntegerField(blank=False, null=False)
     mentioned_user = models.ForeignKey(
         CustomUser,
         on_delete=models.CASCADE,
@@ -27,11 +28,11 @@ class MentionFact(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["chat_type", "chat_id", "message_id", "is_thread", "mentioned_user"],
+                fields=["chat_type", "chat_id", "thread_id", "message_id", "mentioned_user"],
                 name="unique_mentioned_user",
             )
         ]
 
     def save(self, *args, **kwargs):
-        self.uid = f"{self.chat_type}-{self.chat_id}-{self.message_id}-{1 if self.is_thread else 0}-{self.mentioned_user}"
+        self.uid = f"{self.chat_type}-{self.chat_id}-{self.thread_id}-{self.message_id}-{self.mentioned_user}"
         super().save(*args, **kwargs)

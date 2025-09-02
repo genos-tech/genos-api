@@ -13,9 +13,11 @@ from .modules.activity import (
     get_gm_reaction_activity,
     get_gm_thread_activity,
     get_gm_thread_reaction_activity,
+    get_gm_thread_mention_activity,
     get_pm_reaction_activity,
     get_pm_thread_activity,
     get_pm_thread_reaction_activity,
+    get_pm_thread_mention_activity,
     get_task_comment_activity,
     get_task_comment_reaction_activity,
     get_dm_mention_activity,
@@ -86,20 +88,30 @@ class ActivityHistoryView(AuthenticatedAPIView):
 
         # NOTE: Maybe no need to add me-mentioned thread messages because
         #       the thread messages are added in the step-1 above.
-        # dm_me_mentioned_thread_messages = get_dm_thread_mention_activity.get(
-        #     user_id, team_id, my_all_dm_ids, n_days_ago
-        # )
-        # all_activities.extend(dm_me_mentioned_thread_messages)
+        dm_me_mentioned_thread_messages = get_dm_thread_mention_activity.get(
+            user_id, team_id, my_all_dm_ids, n_days_ago
+        )
+        all_activities.extend(dm_me_mentioned_thread_messages)
 
         gm_me_mentioned_messages = get_gm_mention_activity.get(
             user_id, team_id, my_all_gm_ids, n_days_ago
         )
         all_activities.extend(gm_me_mentioned_messages)
 
+        gm_me_mentioned_thread_messages = get_gm_thread_mention_activity.get(
+            user_id, team_id, my_all_gm_ids, n_days_ago
+        )
+        all_activities.extend(gm_me_mentioned_thread_messages)
+
         pm_me_mentioned_messages = get_pm_mention_activity.get(
             user_id, team_id, my_all_project_ids, n_days_ago
         )
         all_activities.extend(pm_me_mentioned_messages)
+
+        pm_me_mentioned_thread_messages = get_pm_thread_mention_activity.get(
+            user_id, team_id, my_all_project_ids, n_days_ago
+        )
+        all_activities.extend(pm_me_mentioned_thread_messages)
 
         task_me_mentioned_comments = get_task_comment_mention_activity.get(
             user_id, team_id, my_all_project_ids, n_days_ago

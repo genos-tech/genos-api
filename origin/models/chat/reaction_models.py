@@ -15,6 +15,7 @@ class ReactionFact(models.Model):
     chat_id = models.IntegerField(blank=False, null=False)
     message_id = models.IntegerField(blank=False, null=False)
     is_thread = models.BooleanField(blank=False, null=False)
+    thread_id = models.IntegerField(blank=False, null=False)
     reaction_id = models.IntegerField(blank=False, null=False)
     reaction_emoji = models.CharField(blank=False, null=False)
     sender = models.ForeignKey(
@@ -29,11 +30,11 @@ class ReactionFact(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["chat_type", "chat_id", "message_id", "is_thread", "reaction_id"],
+                fields=["chat_type", "chat_id", "thread_id", "message_id", "reaction_id"],
                 name="unique_reaction",
             )
         ]
 
     def save(self, *args, **kwargs):
-        self.uid = f"{self.chat_type}-{self.chat_id}-{self.message_id}-{1 if self.is_thread else 0}-{self.reaction_id}"
+        self.uid = f"{self.chat_type}-{self.chat_id}-{self.thread_id}-{self.message_id}-{self.reaction_id}"
         super().save(*args, **kwargs)

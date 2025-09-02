@@ -26,6 +26,7 @@ class ChatReactionView(AuthenticatedAPIView):
             "chat_id": request.data["chat_id"],
             "message_id": int(request.data["message_id"]),
             "is_thread": is_thread,
+            "thread_id": int(request.data["thread_id"]),
             "reaction_id": current_max_reaction_id + 1 if current_max_reaction_id else 1,
             "reaction_emoji": request.data["reaction_emoji"],
             "sender": request.data["sender_id"],
@@ -42,6 +43,7 @@ class ChatReactionView(AuthenticatedAPIView):
         sender_id = request.GET.get("sender_id")
         chat_type = request.GET.get("chat_type")
         chat_id = request.GET.get("chat_id")
+        thread_id = request.GET.get("thread_id")
         message_id = request.GET.get("message_id")
         is_thread_binary = request.GET.get("is_thread_binary")
         reaction_emoji = request.GET.get("reaction_emoji")
@@ -51,31 +53,29 @@ class ChatReactionView(AuthenticatedAPIView):
             or not sender_id
             or not chat_type
             or not chat_id
+            or not thread_id
             or not message_id
             or not is_thread_binary
             or not reaction_emoji
         ):
             return Response(
                 {
-                    "error": "`team_id`, `sender_id`, `chat_type`, `chat_id`, `message_id`, `is_thread_binary`, and `reaction_emoji` are required."
+                    "error": "`team_id`, `sender_id`, `chat_type`, `chat_id`, `thread_id`,  `message_id`, `is_thread_binary`, and `reaction_emoji` are required."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
-            if int(is_thread_binary) == 1:
-                chat_id = int(request.GET.get("thread_id"))
-
             reaction = ReactionFact.objects.get(
                 team=team_id,
                 sender=sender_id,
                 chat_type=int(chat_type),
                 chat_id=int(chat_id),
+                thread_id=int(thread_id),
                 message_id=int(message_id),
                 is_thread=int(is_thread_binary) == 1,
                 reaction_emoji=reaction_emoji,
             )
-            print("Get reaction:", reaction)
             reaction.delete()
             return Response(
                 {"message": f"Reaction deleted successfully."},
