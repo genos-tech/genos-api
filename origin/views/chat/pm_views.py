@@ -384,7 +384,8 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
                 my_reactions.append(reaction)
 
         contentText = generate_first_line.get(pm.thread_message_body[0])
-        messageIdWithChatIdAndThreadId = f"{project_id}-{thread_id}-{message_id}"
+        task_id = pm.parent_message_uid.task.task_id if pm.parent_message_uid.task else -1
+        messageIdWithChatIdAndThreadId = f"{project_id}-{task_id}-{message_id}"
         message = {
             "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
             "chatId": project_id,
@@ -400,7 +401,7 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
                 "isSystemUser": pm.sender.is_system_user,
             },
             "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
-            "taskId": pm.parent_message_uid.task.task_id if pm.parent_message_uid.task else None,
+            "taskId": task_id,
             "taskExist": True if pm.parent_message_uid.task else False,
             "project": {
                 "projectId": (
@@ -508,6 +509,7 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
         team_name = request.GET.get("team_name")
+        user_id = request.GET.get("user_id")
         project_id = int(request.GET.get("pm_id"))
         thread_id = int(request.GET.get("thread_id"))
 
@@ -517,7 +519,14 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
             )
 
         # Fetch all messages where the project_id matches and the user is involved
-        raw_messages = PMThreadMessages.objects.filter(project=project_id, thread_id=thread_id)
+        raw_messages = PMThreadMessages.objects.filter(
+            project=project_id, thread_id=thread_id
+        ).order_by("ts_sent_at")
+
+        # Fetch reactions
+        raw_reactions = ReactionFact.objects.filter(
+            chat_type=3, chat_id=project_id, is_thread=True
+        )
 
         thread_messages = []
         for raw_message in raw_messages:
@@ -532,6 +541,33 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
             ts_sent = str(raw_message.ts_sent_at)
             ts_updated_at = str(raw_message.ts_updated_at)
 
+            reactions = raw_reactions.filter(
+                message_id=int(raw_message.thread_message_id)
+            ).values_list(
+                "reaction_id",
+                "reaction_emoji",
+                "sender__username",
+                "sender__id",
+                "sender__profile_image_url",
+                "ts_created_at",
+            )
+            my_reactions = []
+            all_reactions = []
+            for reaction in reactions:
+                _reaction = {
+                    "id": int(reaction[0]),
+                    "emoji": reaction[1],
+                    "sender": {
+                        "userName": reaction[2],
+                        "userId": reaction[3],
+                        "avatarImgPath": reaction[4],
+                    },
+                    "tsSent": reaction[5],
+                }
+                if str(reaction[3]) == user_id:
+                    my_reactions.append(_reaction)
+                all_reactions.append(_reaction)
+
             # Get the parent ts_sent/ts_updated_at for the first thread message.
             if raw_message.thread_message_id == 1:
                 parent_message = PMMessages.objects.filter(
@@ -541,7 +577,12 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                 ts_updated_at = parent_message.ts_updated_at
 
             contentText = generate_first_line.get(content[0])
-            messageIdWithChatIdAndThreadId = f"{chat_id}-{thread_id}-{message_id}"
+            task_id = (
+                raw_message.parent_message_uid.task.task_id
+                if raw_message.parent_message_uid.task
+                else -1
+            )
+            messageIdWithChatIdAndThreadId = f"{chat_id}-{task_id}-{message_id}"
             new_message = {
                 "chatType": 3,
                 "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
@@ -559,7 +600,8 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                     "avatarImgPath": sender_avatar_img_path,
                     "isSystemUser": is_system_user,
                 },
-                "taskId": None,
+                "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+                "taskId": task_id,
                 "tsSent": ts_sent,
                 "tsUpdated": ts_updated_at,
             }

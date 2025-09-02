@@ -20,64 +20,62 @@ def get(user_id: str, team_id: str, n_days_ago: datetime):
     )
     pm_thread_messages = []
     for message in _pm_thread_messages:
-        if message.sender.is_system_user == False:
-            content = generate_first_line.get(message.thread_message_body[0])
-            pm_thread_messages.append(
-                {
-                    "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{thread_id}-{message_id}".format(
-                        activity_type=ACTIVITY_TYPE,
-                        chat_type=CHAT_TYPE,
-                        chat_id=message.project.project_id,
-                        is_thread=IS_THREAD,
-                        thread_id=message.thread_id,
-                        message_id=message.thread_message_id,
-                    ),
-                    "activityType": ACTIVITY_TYPE,
-                    "chatType": CHAT_TYPE,  # pm
-                    "chatId": int(message.project.project_id),
-                    "chatName": message.project.project_name,
-                    "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
-                    "isThread": IS_THREAD == 1,
-                    "threadId": int(message.thread_id),
-                    "messageId": int(message.thread_message_id),
-                    "messageUniqueKey": f"{message.project.project_id}-{message.thread_id}",
-                    "threadMessageUniqueKey": f"{message.project.project_id}-{message.thread_id}-{message.thread_message_id}",
-                    "taskId": (
-                        int(message.parent_message_uid.task.task_id)
+        content = generate_first_line.get(message.thread_message_body[0])
+        task_id = (
+            int(message.parent_message_uid.task.task_id) if message.parent_message_uid.task else -1
+        )
+        pm_thread_messages.append(
+            {
+                "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{thread_id}-{message_id}".format(
+                    activity_type=ACTIVITY_TYPE,
+                    chat_type=CHAT_TYPE,
+                    chat_id=message.project.project_id,
+                    is_thread=IS_THREAD,
+                    thread_id=message.thread_id,
+                    message_id=message.thread_message_id,
+                ),
+                "activityType": ACTIVITY_TYPE,
+                "chatType": CHAT_TYPE,  # pm
+                "chatId": int(message.project.project_id),
+                "chatName": message.project.project_name,
+                "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
+                "isThread": IS_THREAD == 1,
+                "threadId": int(message.thread_id),
+                "messageId": int(message.thread_message_id),
+                "messageUniqueKey": f"{message.project.project_id}-{task_id}",
+                "threadMessageUniqueKey": f"{message.project.project_id}-{task_id}-{message.thread_message_id}",
+                "taskId": task_id,
+                "project": {
+                    "projectId": (
+                        message.parent_message_uid.task.project.project_id
                         if message.parent_message_uid.task
-                        else -1
+                        else None
                     ),
-                    "project": {
-                        "projectId": (
-                            message.parent_message_uid.task.project.project_id
-                            if message.parent_message_uid.task
-                            else None
-                        ),
-                        "projectName": (
-                            message.parent_message_uid.task.project.project_name
-                            if message.parent_message_uid.task
-                            else None
-                        ),
-                        "isJoined": True if message.parent_message_uid.task else False,
-                        "systemUserId": (
-                            message.parent_message_uid.task.project.project_system_user.id
-                            if message.parent_message_uid.task
-                            else None
-                        ),
-                    },
-                    "firstLineContent": content,
-                    "latestReaction": {
-                        "emoji": "",
-                        "senderName": "",
-                        "tsSent": "",
-                    },
-                    "sender": {
-                        "userName": message.sender.username,
-                        "userId": message.sender.id,
-                        "avatarImgPath": message.sender.profile_image_url,
-                    },
-                    "reactions": {"myReactions": [], "allReactions": []},
-                    "tsSent": message.ts_sent_at,
-                }
-            )
+                    "projectName": (
+                        message.parent_message_uid.task.project.project_name
+                        if message.parent_message_uid.task
+                        else None
+                    ),
+                    "isJoined": True if message.parent_message_uid.task else False,
+                    "systemUserId": (
+                        message.parent_message_uid.task.project.project_system_user.id
+                        if message.parent_message_uid.task
+                        else None
+                    ),
+                },
+                "firstLineContent": content,
+                "latestReaction": {
+                    "emoji": "",
+                    "senderName": "",
+                    "tsSent": "",
+                },
+                "sender": {
+                    "userName": message.sender.username,
+                    "userId": message.sender.id,
+                    "avatarImgPath": message.sender.profile_image_url,
+                },
+                "reactions": {"myReactions": [], "allReactions": []},
+                "tsSent": message.ts_sent_at,
+            }
+        )
     return pm_thread_messages, my_all_project_ids

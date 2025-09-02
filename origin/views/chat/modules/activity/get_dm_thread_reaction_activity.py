@@ -1,4 +1,5 @@
-from django.db.models import Q
+from django.db.models import Q, Value, CharField
+from django.db.models.functions import Concat
 from datetime import datetime
 
 from origin.models.chat.reaction_models import *
@@ -16,6 +17,7 @@ def get(user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
         ts_created_at__gte=n_days_ago,
     ).values(
         "chat_id",
+        "thread_id",
         "message_id",
         "reaction_id",
         "reaction_emoji",
@@ -31,6 +33,28 @@ def get(user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
     ).filter(
         Q(dm__in=list(set([row["chat_id"] for row in dm_raw_reactions])))
         & Q(thread_message_id__in=list(set([row["message_id"] for row in dm_raw_reactions])))
+    )
+
+    _dm_reacted_thread_messages = (
+        DMThreadMessages.objects.filter(Q(dm__team=team_id) & Q(ts_sent_at__gte=n_days_ago))
+        .annotate(
+            uid=Concat(
+                "dm",
+                Value("/"),
+                "thread_id",
+                Value("/"),
+                "thread_message_id",
+                output_field=CharField(),
+            )
+        )
+        .filter(
+            uid__in=list(
+                {
+                    f"{row['chat_id']}/{row['thread_id']}/{row['message_id']}"
+                    for row in dm_raw_reactions
+                }
+            )
+        )
     )
 
     dm_reacted_thread_messages = []
@@ -89,11 +113,11 @@ def get(user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
 
             dm_reacted_thread_messages.append(
                 {
-                    "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{message_id}".format(
+                    "activityId": "{activity_type}-{chat_type}-{chat_id}-{thread_id}-{message_id}".format(
                         activity_type=ACTIVITY_TYPE,
                         chat_type=CHAT_TYPE,
                         chat_id=message.dm.dm_id,
-                        is_thread=IS_THREAD,
+                        thread_id=message.thread_id,
                         message_id=message.thread_message_id,
                     ),
                     "activityType": ACTIVITY_TYPE,

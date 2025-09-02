@@ -38,6 +38,7 @@ def get(user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime):
     for message in _pm_me_mentioned_messages:
         content = generate_first_line.get(message.message_body[0])
 
+        task_id = int(message.task.task_id) if message.task else -1
         pm_me_mentioned_messages.append(
             {
                 "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{message_id}".format(
@@ -45,7 +46,7 @@ def get(user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime):
                     chat_type=CHAT_TYPE,
                     chat_id=message.project.project_id,
                     is_thread=IS_THREAD,
-                    message_id=message.message_id,
+                    message_id=task_id,
                 ),
                 "activityType": ACTIVITY_TYPE,
                 "chatType": CHAT_TYPE,
@@ -55,9 +56,9 @@ def get(user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime):
                 "isThread": IS_THREAD == 1,
                 "threadId": -1,
                 "messageId": int(message.message_id),
-                "messageUniqueKey": f"{message.project.project_id}-{message.message_id}",
+                "messageUniqueKey": f"{message.project.project_id}-{task_id}",
                 "threadMessageUniqueKey": "",
-                "taskId": int(message.task.task_id) if message.task else -1,
+                "taskId": task_id,
                 "project": {
                     "projectId": (message.task.project.project_id if message.task else None),
                     "projectName": (message.task.project.project_name if message.task else None),

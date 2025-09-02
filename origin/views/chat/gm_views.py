@@ -591,16 +591,22 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
         team_name = request.GET.get("team_name")
+        user_id = request.GET.get("user_id")
         gm_id = int(request.GET.get("gm_id"))
         thread_id = int(request.GET.get("thread_id"))
 
-        if not team_id or not team_name or not gm_id or not thread_id:
+        if not team_id or not team_name or not user_id or not gm_id or not thread_id:
             return Response(
                 "gm_id and/or thread_id is not found", status=status.HTTP_400_BAD_REQUEST
             )
 
         # Fetch all messages where the gm_id matches and the user is involved
-        raw_messages = GMThreadMessages.objects.filter(gm=gm_id, thread_id=thread_id)
+        raw_messages = GMThreadMessages.objects.filter(gm=gm_id, thread_id=thread_id).order_by(
+            "ts_sent_at"
+        )
+
+        # Fetch reactions
+        raw_reactions = ReactionFact.objects.filter(chat_type=2, chat_id=gm_id, is_thread=True)
 
         thread_messages = []
         for raw_message in raw_messages:
@@ -614,6 +620,46 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
             is_system_user = raw_message.sender.is_system_user
             ts_sent = str(raw_message.ts_sent_at)
             ts_updated_at = str(raw_message.ts_updated_at)
+
+            if message_id == 1:
+                # fetch the first thread message reactions -> the parent message reaction.
+                reactions = ReactionFact.objects.filter(
+                    chat_type=2, chat_id=gm_id, is_thread=False, message_id=thread_id
+                ).values_list(
+                    "reaction_id",
+                    "reaction_emoji",
+                    "sender__username",
+                    "sender__id",
+                    "sender__profile_image_url",
+                    "ts_created_at",
+                )
+            else:
+                reactions = raw_reactions.filter(
+                    message_id=int(raw_message.thread_message_id)
+                ).values_list(
+                    "reaction_id",
+                    "reaction_emoji",
+                    "sender__username",
+                    "sender__id",
+                    "sender__profile_image_url",
+                    "ts_created_at",
+                )
+            my_reactions = []
+            all_reactions = []
+            for reaction in reactions:
+                _reaction = {
+                    "id": int(reaction[0]),
+                    "emoji": reaction[1],
+                    "sender": {
+                        "userName": reaction[2],
+                        "userId": reaction[3],
+                        "avatarImgPath": reaction[4],
+                    },
+                    "tsSent": reaction[5],
+                }
+                if str(reaction[3]) == user_id:
+                    my_reactions.append(_reaction)
+                all_reactions.append(_reaction)
 
             # Get the parent ts_sent/ts_updated_at for the first thread message.
             if raw_message.thread_message_id == 1:
@@ -640,6 +686,7 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                     "avatarImgPath": sender_avatar_img_path,
                     "isSystemUser": is_system_user,
                 },
+                "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
                 "taskId": (
                     raw_message.parent_message_uid.task.task_id
                     if raw_message.parent_message_uid.task
