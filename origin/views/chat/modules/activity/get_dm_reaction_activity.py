@@ -10,7 +10,7 @@ ACTIVITY_TYPE = 2
 IS_THREAD = 0
 
 
-def get(user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
+def get(all_activities: dict, user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
     dm_raw_reactions = ReactionFact.objects.filter(
         Q(team=team_id, chat_type=1, chat_id__in=my_all_dm_ids, is_thread=IS_THREAD == 1),
         ts_created_at__gte=n_days_ago,
@@ -25,7 +25,7 @@ def get(user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
         "ts_created_at",
     )
 
-    _dm_reacted_messages = DMMessages.objects.filter(
+    dm_reacted_messages = DMMessages.objects.filter(
         dm__team=team_id,
         ts_sent_at__gte=n_days_ago,
     ).filter(
@@ -33,8 +33,7 @@ def get(user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
         & Q(message_id__in=list(set([row["message_id"] for row in dm_raw_reactions])))
     )
 
-    dm_reacted_messages = []
-    for message in _dm_reacted_messages:
+    for message in dm_reacted_messages:
         if message.sender.is_system_user == False:
             content = generate_first_line.get(message.message_body[0])
             reactions = dm_raw_reactions.filter(message_id=int(message.message_id)).values_list(
@@ -85,40 +84,38 @@ def get(user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
                     "avatarImgPath": message.sender.profile_image_url,
                 }
 
-            dm_reacted_messages.append(
-                {
-                    "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{message_id}".format(
-                        activity_type=ACTIVITY_TYPE,
-                        chat_type=CHAT_TYPE,
-                        chat_id=message.dm.dm_id,
-                        is_thread=IS_THREAD,
-                        message_id=message.message_id,
-                    ),
-                    "activityType": ACTIVITY_TYPE,
-                    "chatType": CHAT_TYPE,  # dm
-                    "chatId": int(message.dm.dm_id),
-                    "chatName": chat_name,
-                    "dmPartnerUser": dm_partner_user,
-                    "isThread": IS_THREAD == 1,
-                    "threadId": -1,
-                    "messageId": int(message.message_id),
-                    "messageUniqueKey": f"{message.dm.dm_id}-{message.message_id}",
-                    "threadMessageUniqueKey": "",
-                    "taskId": int(message.task.task_id) if message.task else -1,
-                    "firstLineContent": content,
-                    "latestReaction": latest_reaction,
-                    "sender": {
-                        "userName": message.sender.username,
-                        "userId": message.sender.id,
-                        "avatarImgPath": message.sender.profile_image_url,
-                    },
-                    "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
-                    "tsSent": (
-                        latest_reaction["tsSent"]
-                        if "tsSent" in latest_reaction
-                        else message.ts_sent_at
-                    ),
-                }
+            activity_id = "{activity_type}-{chat_type}-{chat_id}-{message_id}".format(
+                activity_type=ACTIVITY_TYPE,
+                chat_type=CHAT_TYPE,
+                chat_id=message.dm.dm_id,
+                message_id=message.message_id,
             )
+            all_activities[activity_id] = {
+                "activityId": activity_id,
+                "activityType": ACTIVITY_TYPE,
+                "chatType": CHAT_TYPE,  # dm
+                "chatId": int(message.dm.dm_id),
+                "chatName": chat_name,
+                "dmPartnerUser": dm_partner_user,
+                "isThread": IS_THREAD == 1,
+                "threadId": -1,
+                "messageId": int(message.message_id),
+                "messageUniqueKey": f"{message.dm.dm_id}-{message.message_id}",
+                "threadMessageUniqueKey": "",
+                "taskId": int(message.task.task_id) if message.task else -1,
+                "firstLineContent": content,
+                "latestReaction": latest_reaction,
+                "sender": {
+                    "userName": message.sender.username,
+                    "userId": message.sender.id,
+                    "avatarImgPath": message.sender.profile_image_url,
+                },
+                "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+                "tsSent": (
+                    latest_reaction["tsSent"]
+                    if "tsSent" in latest_reaction
+                    else message.ts_sent_at
+                ),
+            }
 
-    return dm_reacted_messages
+    return all_activities

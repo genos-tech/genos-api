@@ -10,7 +10,9 @@ ACTIVITY_TYPE = 3
 IS_THREAD = 0
 
 
-def get(user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime):
+def get(
+    all_activities: dict, user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime
+):
     pm_raw_me_mentioned = MentionFact.objects.filter(
         Q(
             team=team_id,
@@ -26,7 +28,7 @@ def get(user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime):
         "ts_created_at",
     )
 
-    _pm_me_mentioned_messages = PMMessages.objects.filter(
+    pm_me_mentioned_messages = PMMessages.objects.filter(
         project__team=team_id,
         ts_sent_at__gte=n_days_ago,
     ).filter(
@@ -34,45 +36,43 @@ def get(user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime):
         & Q(message_id__in=list(set([row["message_id"] for row in pm_raw_me_mentioned])))
     )
 
-    pm_me_mentioned_messages = []
-    for message in _pm_me_mentioned_messages:
+    for message in pm_me_mentioned_messages:
         content = generate_first_line.get(message.message_body[0])
 
         task_id = int(message.task.task_id) if message.task else -1
-        pm_me_mentioned_messages.append(
-            {
-                "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{message_id}".format(
-                    activity_type=ACTIVITY_TYPE,
-                    chat_type=CHAT_TYPE,
-                    chat_id=message.project.project_id,
-                    is_thread=IS_THREAD,
-                    message_id=task_id,
-                ),
-                "activityType": ACTIVITY_TYPE,
-                "chatType": CHAT_TYPE,
-                "chatId": int(message.project.project_id),
-                "chatName": message.project.project_name,
-                "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
-                "isThread": IS_THREAD == 1,
-                "threadId": -1,
-                "messageId": int(message.message_id),
-                "messageUniqueKey": f"{message.project.project_id}-{task_id}",
-                "threadMessageUniqueKey": "",
-                "taskId": task_id,
-                "project": {
-                    "projectId": (message.task.project.project_id if message.task else None),
-                    "projectName": (message.task.project.project_name if message.task else None),
-                    "isJoined": True if message.task else False,
-                    "systemUserId": (
-                        message.task.project.project_system_user.id if message.task else None
-                    ),
-                },
-                "firstLineContent": content,
-                "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
-                "sender": {"userName": "", "userId": "", "avatarImgPath": ""},
-                "reactions": {"myReactions": [], "allReactions": []},
-                "tsSent": message.ts_sent_at,
-            }
-        )
 
-    return pm_me_mentioned_messages
+        activity_id = "{activity_type}-{chat_type}-{chat_id}-{message_id}".format(
+            activity_type=ACTIVITY_TYPE,
+            chat_type=CHAT_TYPE,
+            chat_id=message.project.project_id,
+            message_id=task_id,
+        )
+        all_activities["-".join(activity_id.split("-")[1:])] = {
+            "activityId": activity_id,
+            "activityType": ACTIVITY_TYPE,
+            "chatType": CHAT_TYPE,
+            "chatId": int(message.project.project_id),
+            "chatName": message.project.project_name,
+            "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
+            "isThread": IS_THREAD == 1,
+            "threadId": -1,
+            "messageId": int(message.message_id),
+            "messageUniqueKey": f"{message.project.project_id}-{task_id}",
+            "threadMessageUniqueKey": "",
+            "taskId": task_id,
+            "project": {
+                "projectId": (message.task.project.project_id if message.task else None),
+                "projectName": (message.task.project.project_name if message.task else None),
+                "isJoined": True if message.task else False,
+                "systemUserId": (
+                    message.task.project.project_system_user.id if message.task else None
+                ),
+            },
+            "firstLineContent": content,
+            "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
+            "sender": {"userName": "", "userId": "", "avatarImgPath": ""},
+            "reactions": {"myReactions": [], "allReactions": []},
+            "tsSent": message.ts_sent_at,
+        }
+
+    return all_activities

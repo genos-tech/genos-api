@@ -9,7 +9,9 @@ ACTIVITY_TYPE = 2
 IS_THREAD = 0
 
 
-def get(user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime):
+def get(
+    all_activities: dict, user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime
+):
     task_comment_raw_reactions = TaskCommentReactionFact.objects.filter(
         Q(team=team_id, task__project__in=my_all_project_ids),
         ts_created_at__gte=n_days_ago,
@@ -24,7 +26,7 @@ def get(user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime):
         "ts_created_at",
     )
 
-    _reacted_task_comment = TaskComments.objects.filter(
+    reacted_task_comment = TaskComments.objects.filter(
         task__team=team_id,
         ts_sent_at__gte=n_days_ago,
     ).filter(
@@ -36,8 +38,7 @@ def get(user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime):
         & Q(comment_id__in=list(set([row["comment_id"] for row in task_comment_raw_reactions])))
     )
 
-    reacted_task_comment = []
-    for comment in _reacted_task_comment:
+    for comment in reacted_task_comment:
         content = generate_first_line.get(comment.comment_body[0])
         reactions = task_comment_raw_reactions.filter(
             comment_id=int(comment.comment_id)
@@ -74,47 +75,43 @@ def get(user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime):
                     "tsSent": reaction[5],
                 }
 
-        reacted_task_comment.append(
-            {
-                "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{task_id}-{message_id}".format(
-                    activity_type=ACTIVITY_TYPE,
-                    chat_type=CHAT_TYPE,
-                    chat_id=comment.task.project.project_id,
-                    is_thread=IS_THREAD,
-                    task_id=comment.task.task_id,
-                    message_id=comment.comment_id,
-                ),
-                "activityType": ACTIVITY_TYPE,  # reaction activity
-                "chatType": CHAT_TYPE,  # task comment
-                "chatId": int(comment.task.project.project_id),
-                "chatName": comment.task.project.project_name,
-                "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
-                "isThread": IS_THREAD == 1,
-                "threadId": -1,
-                "messageId": int(comment.comment_id),
-                "messageUniqueKey": f"{comment.task.project.project_id}-{comment.task.task_id}",
-                "threadMessageUniqueKey": "",
-                "taskId": int(comment.task.task_id) if comment.task else -1,
-                "project": {
-                    "projectId": comment.task.project.project_id,
-                    "projectName": comment.task.project.project_name,
-                    "isJoined": True,
-                    "systemUserId": None,
-                },
-                "firstLineContent": content,
-                "latestReaction": latest_reaction,
-                "sender": {
-                    "userName": comment.sender.username,
-                    "userId": comment.sender.id,
-                    "avatarImgPath": comment.sender.profile_image_url,
-                },
-                "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
-                "tsSent": (
-                    latest_reaction["tsSent"]
-                    if "tsSent" in latest_reaction
-                    else comment.ts_sent_at
-                ),
-            }
+        activity_id = "{activity_type}-{chat_type}-{chat_id}-{task_id}-{message_id}".format(
+            activity_type=ACTIVITY_TYPE,
+            chat_type=CHAT_TYPE,
+            chat_id=comment.task.project.project_id,
+            task_id=comment.task.task_id,
+            message_id=comment.comment_id,
         )
+        all_activities[activity_id] = {
+            "activityId": activity_id,
+            "activityType": ACTIVITY_TYPE,  # reaction activity
+            "chatType": CHAT_TYPE,  # task comment
+            "chatId": int(comment.task.project.project_id),
+            "chatName": comment.task.project.project_name,
+            "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
+            "isThread": IS_THREAD == 1,
+            "threadId": -1,
+            "messageId": int(comment.comment_id),
+            "messageUniqueKey": f"{comment.task.project.project_id}-{comment.task.task_id}",
+            "threadMessageUniqueKey": "",
+            "taskId": int(comment.task.task_id) if comment.task else -1,
+            "project": {
+                "projectId": comment.task.project.project_id,
+                "projectName": comment.task.project.project_name,
+                "isJoined": True,
+                "systemUserId": None,
+            },
+            "firstLineContent": content,
+            "latestReaction": latest_reaction,
+            "sender": {
+                "userName": comment.sender.username,
+                "userId": comment.sender.id,
+                "avatarImgPath": comment.sender.profile_image_url,
+            },
+            "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+            "tsSent": (
+                latest_reaction["tsSent"] if "tsSent" in latest_reaction else comment.ts_sent_at
+            ),
+        }
 
-    return reacted_task_comment
+    return all_activities

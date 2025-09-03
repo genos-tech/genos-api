@@ -10,7 +10,7 @@ ACTIVITY_TYPE = 3
 IS_THREAD = 0
 
 
-def get(user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
+def get(all_activities: dict, user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
     dm_raw_me_mentioned = MentionFact.objects.filter(
         Q(
             team=team_id,
@@ -34,7 +34,6 @@ def get(user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
         & Q(message_id__in=list(set([row["message_id"] for row in dm_raw_me_mentioned])))
     )
 
-    dm_me_mentioned_messages = []
     for message in _dm_me_mentioned_messages:
         content = generate_first_line.get(message.message_body[0])
 
@@ -53,32 +52,30 @@ def get(user_id: str, team_id: str, my_all_dm_ids, n_days_ago: datetime):
                 "avatarImgPath": message.sender.profile_image_url,
             }
 
-        dm_me_mentioned_messages.append(
-            {
-                "activityId": "{activity_type}-{chat_type}-{chat_id}-{is_thread}-{message_id}".format(
-                    activity_type=ACTIVITY_TYPE,
-                    chat_type=CHAT_TYPE,
-                    chat_id=message.dm.dm_id,
-                    is_thread=IS_THREAD,
-                    message_id=message.message_id,
-                ),
-                "activityType": ACTIVITY_TYPE,
-                "chatType": CHAT_TYPE,
-                "chatId": int(message.dm.dm_id),
-                "chatName": chat_name,
-                "dmPartnerUser": dm_partner_user,
-                "isThread": IS_THREAD == 1,
-                "threadId": -1,
-                "messageId": int(message.message_id),
-                "messageUniqueKey": f"{message.dm.dm_id}-{message.message_id}",
-                "threadMessageUniqueKey": "",
-                "taskId": int(message.task.task_id) if message.task else -1,
-                "firstLineContent": content,
-                "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
-                "sender": {"userName": "", "userId": "", "avatarImgPath": ""},
-                "reactions": {"myReactions": [], "allReactions": []},
-                "tsSent": message.ts_sent_at,
-            }
+        activity_id = "{activity_type}-{chat_type}-{chat_id}-{message_id}".format(
+            activity_type=ACTIVITY_TYPE,
+            chat_type=CHAT_TYPE,
+            chat_id=message.dm.dm_id,
+            message_id=message.message_id,
         )
+        all_activities["-".join(activity_id.split("-")[1:])] = {
+            "activityId": activity_id,
+            "activityType": ACTIVITY_TYPE,
+            "chatType": CHAT_TYPE,
+            "chatId": int(message.dm.dm_id),
+            "chatName": chat_name,
+            "dmPartnerUser": dm_partner_user,
+            "isThread": IS_THREAD == 1,
+            "threadId": -1,
+            "messageId": int(message.message_id),
+            "messageUniqueKey": f"{message.dm.dm_id}-{message.message_id}",
+            "threadMessageUniqueKey": "",
+            "taskId": int(message.task.task_id) if message.task else -1,
+            "firstLineContent": content,
+            "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
+            "sender": {"userName": "", "userId": "", "avatarImgPath": ""},
+            "reactions": {"myReactions": [], "allReactions": []},
+            "tsSent": message.ts_sent_at,
+        }
 
-    return dm_me_mentioned_messages
+    return all_activities
