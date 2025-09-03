@@ -11,7 +11,7 @@ ACTIVITY_TYPE = 3
 IS_THREAD = 1
 
 
-def get(user_id: str, team_id: str, my_all_gm_ids, n_days_ago: datetime):
+def get(all_activities: dict, user_id: str, team_id: str, my_all_gm_ids, n_days_ago: datetime):
     gm_raw_me_mentions = MentionFact.objects.filter(
         Q(
             team=team_id,
@@ -28,7 +28,7 @@ def get(user_id: str, team_id: str, my_all_gm_ids, n_days_ago: datetime):
         "ts_created_at",
     )
 
-    _gm_me_mentioned_thread_messages = (
+    gm_me_mentioned_thread_messages = (
         GMThreadMessages.objects.filter(Q(gm__owner_team=team_id) & Q(ts_sent_at__gte=n_days_ago))
         .annotate(
             uid=Concat(
@@ -50,58 +50,55 @@ def get(user_id: str, team_id: str, my_all_gm_ids, n_days_ago: datetime):
         )
     )
 
-    gm_me_mentioned_thread_messages = []
-    for message in _gm_me_mentioned_thread_messages:
+    for message in gm_me_mentioned_thread_messages:
         content = generate_first_line.get(message.thread_message_body[0])
-
-        gm_me_mentioned_thread_messages.append(
-            {
-                "activityId": "{activity_type}-{chat_type}-{chat_id}-{thread_id}-{message_id}".format(
-                    activity_type=ACTIVITY_TYPE,
-                    chat_type=CHAT_TYPE,
-                    chat_id=message.gm.gm_id,
-                    thread_id=message.thread_id,
-                    message_id=message.thread_message_id,
-                ),
-                "activityType": ACTIVITY_TYPE,
-                "chatType": CHAT_TYPE,
-                "chatId": int(message.gm.gm_id),
-                "chatName": message.gm.group_name,
-                "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
-                "isThread": IS_THREAD == 1,
-                "threadId": int(message.thread_id),
-                "messageId": int(message.thread_message_id),
-                "messageUniqueKey": f"{message.gm.gm_id}-{message.thread_id}",
-                "threadMessageUniqueKey": f"{message.gm.gm_id}-{message.thread_id}-{message.thread_message_id}",
-                "taskId": (
-                    int(message.parent_message_uid.task.task_id)
-                    if message.parent_message_uid.task
-                    else -1
-                ),
-                "project": {
-                    "projectId": (
-                        message.parent_message_uid.task.project.project_id
-                        if message.parent_message_uid.task
-                        else None
-                    ),
-                    "projectName": (
-                        message.parent_message_uid.task.project.project_name
-                        if message.parent_message_uid.task
-                        else None
-                    ),
-                    "isJoined": True if message.parent_message_uid.task else False,
-                    "systemUserId": (
-                        message.parent_message_uid.task.project.project_system_user.id
-                        if message.parent_message_uid.task
-                        else None
-                    ),
-                },
-                "firstLineContent": content,
-                "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
-                "sender": {"userName": "", "userId": "", "avatarImgPath": ""},
-                "reactions": {"myReactions": [], "allReactions": []},
-                "tsSent": message.ts_sent_at,
-            }
+        activity_id = "{activity_type}-{chat_type}-{chat_id}-{thread_id}-{message_id}".format(
+            activity_type=ACTIVITY_TYPE,
+            chat_type=CHAT_TYPE,
+            chat_id=message.gm.gm_id,
+            thread_id=message.thread_id,
+            message_id=message.thread_message_id,
         )
+        all_activities["-".join(activity_id.split("-")[1:])] = {
+            "activityId": activity_id,
+            "activityType": ACTIVITY_TYPE,
+            "chatType": CHAT_TYPE,
+            "chatId": int(message.gm.gm_id),
+            "chatName": message.gm.group_name,
+            "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
+            "isThread": IS_THREAD == 1,
+            "threadId": int(message.thread_id),
+            "messageId": int(message.thread_message_id),
+            "messageUniqueKey": f"{message.gm.gm_id}-{message.thread_id}",
+            "threadMessageUniqueKey": f"{message.gm.gm_id}-{message.thread_id}-{message.thread_message_id}",
+            "taskId": (
+                int(message.parent_message_uid.task.task_id)
+                if message.parent_message_uid.task
+                else -1
+            ),
+            "project": {
+                "projectId": (
+                    message.parent_message_uid.task.project.project_id
+                    if message.parent_message_uid.task
+                    else None
+                ),
+                "projectName": (
+                    message.parent_message_uid.task.project.project_name
+                    if message.parent_message_uid.task
+                    else None
+                ),
+                "isJoined": True if message.parent_message_uid.task else False,
+                "systemUserId": (
+                    message.parent_message_uid.task.project.project_system_user.id
+                    if message.parent_message_uid.task
+                    else None
+                ),
+            },
+            "firstLineContent": content,
+            "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
+            "sender": {"userName": "", "userId": "", "avatarImgPath": ""},
+            "reactions": {"myReactions": [], "allReactions": []},
+            "tsSent": message.ts_sent_at,
+        }
 
-    return gm_me_mentioned_thread_messages
+    return all_activities
