@@ -53,6 +53,10 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_pm_ids, n_days_
     for message in pm_me_mentioned_thread_messages:
         content = generate_first_line.get(message.thread_message_body[0])
 
+        task_id = (
+            int(message.parent_message_uid.task.task_id) if message.parent_message_uid.task else -1
+        )
+
         activity_id = "{activity_type}-{chat_type}-{chat_id}-{thread_id}-{message_id}".format(
             activity_type=ACTIVITY_TYPE,
             chat_type=CHAT_TYPE,
@@ -70,8 +74,8 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_pm_ids, n_days_
             "isThread": IS_THREAD == 1,
             "threadId": int(message.thread_id),
             "messageId": int(message.thread_message_id),
-            "messageUniqueKey": f"{message.project.project_id}-{message.thread_id}",
-            "threadMessageUniqueKey": f"{message.project.project_id}-{message.thread_id}-{message.thread_message_id}",
+            "messageUniqueKey": f"{message.project.project_id}-{task_id}",
+            "threadMessageUniqueKey": f"{message.project.project_id}-{task_id}-{message.thread_message_id}",
             "taskId": (
                 int(message.parent_message_uid.task.task_id)
                 if message.parent_message_uid.task
