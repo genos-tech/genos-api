@@ -63,9 +63,7 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
             )
         else:
             tasks = (
-                TaskMaster.objects.filter(
-                    team=team_id, status__in=statuses, project=int(project_id)
-                )
+                TaskMaster.objects.filter(team=team_id, status__in=statuses, project=project_id)
                 .values_list(
                     "project__project_id",
                     "project__project_name",
@@ -80,7 +78,7 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
             )
 
         _team_tasks = defaultdict(list)
-        for task in list(tasks)[:top_n]:
+        for task in list(tasks)[: top_n if top_n != -1 else 100000]:
             _team_tasks[str(task[5]).lower()].append(
                 {
                     "projectId": task[0],
@@ -97,6 +95,8 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
                     "tsUpdated": task[6],
                 }
             )
+
+        print("_team_tasks:", _team_tasks)
 
         team_tasks = []
         for _status in STATUS_MAP.keys():
