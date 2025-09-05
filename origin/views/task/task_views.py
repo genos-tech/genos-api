@@ -244,7 +244,6 @@ class ChildTaskView(AuthenticatedAPIView):
                             "userName": t.assignee.username,
                             "userEmail": t.assignee.email,
                             "avatarImgPath": t.assignee.profile_image_url,
-                            "online": True,
                         },
                         "reporter": {
                             "teamId": t.team.team_id,
@@ -252,7 +251,6 @@ class ChildTaskView(AuthenticatedAPIView):
                             "userName": t.reporter.username,
                             "userEmail": t.reporter.email,
                             "avatarImgPath": t.reporter.profile_image_url,
-                            "online": True,
                         },
                         "createdDate": str(t.ts_created_at.date()),
                         "updatedAt": str(t.ts_updated_at),
@@ -390,7 +388,6 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                         "userName": t.assignee.username,
                         "userEmail": t.assignee.email,
                         "avatarImgPath": t.assignee.profile_image_url,
-                        "online": True,
                     },
                     "reporter": {
                         "teamId": t.team.team_id,
@@ -398,7 +395,6 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                         "userName": t.reporter.username,
                         "userEmail": t.reporter.email,
                         "avatarImgPath": t.reporter.profile_image_url,
-                        "online": True,
                     },
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
@@ -518,7 +514,6 @@ class GetTaskView(AuthenticatedAPIView):
                         "userName": t.assignee.username,
                         "userEmail": t.assignee.email,
                         "avatarImgPath": t.assignee.profile_image_url,
-                        "online": True,
                     },
                     "reporter": {
                         "teamId": t.team.team_id,
@@ -526,7 +521,6 @@ class GetTaskView(AuthenticatedAPIView):
                         "userName": t.reporter.username,
                         "userEmail": t.reporter.email,
                         "avatarImgPath": t.reporter.profile_image_url,
-                        "online": True,
                     },
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
