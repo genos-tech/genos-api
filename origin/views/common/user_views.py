@@ -9,7 +9,7 @@ from origin.serializers.common.user_serializers import UserSerializer
 #############################
 # User views
 #############################
-class UserStatusView(AuthenticatedAPIView):
+class UserProfileView(AuthenticatedAPIView):
     def put(self, request):
         request_user_id = request.user.id
         user_id = request.data["user_id"]
@@ -29,9 +29,10 @@ class UserStatusView(AuthenticatedAPIView):
         user = CustomUser.objects.get(id=user_id)
 
         data = {
-            "custom_status": (
-                request.data["custom_status"] if request.data["custom_status"] else ""
-            ),
+            "custom_status": request.data.get("custom_status", user.custom_status),
+            "is_offline_forced": request.data.get("is_offline_forced", user.is_offline_forced),
+            "role": request.data.get("role", user.role),
+            "base_country": request.data.get("base_country", user.base_country),
         }
 
         serializer = UserSerializer(user, data=data, partial=True)

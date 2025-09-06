@@ -455,12 +455,8 @@ class DMSingleMessageView(AuthenticatedAPIView):
         _tmp_task_id = message.task.task_id if message.task else None
 
         data = {
-            "message_body": (
-                request.data["message_body"]
-                if request.data["message_body"]
-                else message.message_body
-            ),
-            "task": (request.data["task_id"] if request.data["task_id"] else _tmp_task_id),
+            "message_body": request.data.get("message_body", message.message_body),
+            "task": request.data.get("task_id", _tmp_task_id),
         }
 
         serializer = DMMessagesSerializer(message, data=data, partial=True)
@@ -635,13 +631,7 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
             dm=dm_id, thread_id=thread_id, thread_message_id=message_id
         )
 
-        data = {
-            "thread_message_body": (
-                request.data["message_body"]
-                if request.data["message_body"]
-                else message.message_body
-            )
-        }
+        data = {"thread_message_body": request.data.get("message_body", message.message_body)}
 
         serializer = DMThreadMessagesSerializer(message, data=data, partial=True)
         if serializer.is_valid():

@@ -25,13 +25,12 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     username = models.CharField(max_length=50, unique=False)
     email = models.EmailField(unique=True)
+    phone_number = models.CharField(max_length=20, blank=True, null=True)
     profile_image_url = models.URLField(blank=True, null=True)
-    status = models.CharField(
-        max_length=20,
-        choices=[("online", "Online"), ("offline", "Offline"), ("away", "Away")],
-        default="offline",
-    )
+    is_offline_forced = models.BooleanField(default=False)
     custom_status = models.CharField(max_length=50, blank=True, null=True)
+    role = models.CharField(max_length=50, blank=True, null=True)
+    base_country = models.CharField(max_length=50, blank=True, null=True)
     last_seen = models.DateTimeField(auto_now=True)
     is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)

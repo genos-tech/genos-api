@@ -316,11 +316,7 @@ class PMSingleMessageView(AuthenticatedAPIView):
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
         data = {
-            "message_body": (
-                request.data["message_body"]
-                if request.data["message_body"]
-                else message.message_body
-            ),
+            "message_body": request.data.get("message_body", message.message_body),
         }
 
         serializer = PMMessagesSerializer(message, data=data, partial=True)
@@ -514,13 +510,7 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
             project=project_id, thread_id=thread_id, thread_message_id=message_id
         )
 
-        data = {
-            "thread_message_body": (
-                request.data["message_body"]
-                if request.data["message_body"]
-                else message.message_body
-            )
-        }
+        data = {"thread_message_body": request.data.get("message_body", message.message_body)}
 
         serializer = PMThreadMessagesSerializer(message, data=data, partial=True)
         if serializer.is_valid():
