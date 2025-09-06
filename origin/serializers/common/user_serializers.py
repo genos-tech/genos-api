@@ -1,7 +1,5 @@
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from django.contrib.auth import get_user_model
-from django.contrib.auth.hashers import make_password
 
 from origin.models.common import user_models
 
@@ -15,6 +13,7 @@ class UserSerializer(serializers.ModelSerializer):
             "email",
             "profile_image_url",
             "status",
+            "custom_status",
             "last_seen",
             "ts_created_at",
             "ts_updated_at",

@@ -31,6 +31,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         choices=[("online", "Online"), ("offline", "Offline"), ("away", "Away")],
         default="offline",
     )
+    custom_status = models.CharField(max_length=50, blank=True, null=True)
     last_seen = models.DateTimeField(auto_now=True)
     is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)

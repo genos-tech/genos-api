@@ -42,6 +42,7 @@ def get(all_activities: dict, user_id: str, team_id: str, n_days_ago: datetime):
                 "avatarImgPath": "",
                 "tsLastSeen": "",
                 "tsJoined": "",
+                "customStatus": "",
             },
             "isThread": IS_THREAD == 1,
             "threadId": int(message.thread_id),

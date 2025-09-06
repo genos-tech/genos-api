@@ -199,6 +199,7 @@ class DMHistoryView(AuthenticatedAPIView):
                         "avatarImgPath": reaction[4],
                         "tsLastSeen": "",
                         "tsJoined": "",
+                        "customStatus": "",
                     },
                     "tsSent": reaction[5],
                 }
@@ -216,6 +217,7 @@ class DMHistoryView(AuthenticatedAPIView):
                     "avatarImgPath": receiver_avatar_img_path,
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                 }
                 chat_name = receiver_name
             else:
@@ -228,6 +230,7 @@ class DMHistoryView(AuthenticatedAPIView):
                     "avatarImgPath": sender_avatar_img_path,
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                 }
                 chat_name = sender_name
 
@@ -243,6 +246,7 @@ class DMHistoryView(AuthenticatedAPIView):
                     "avatarImgPath": sender_avatar_img_path,
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                 },
                 "receiver": {
                     "userName": receiver_name,
@@ -250,6 +254,7 @@ class DMHistoryView(AuthenticatedAPIView):
                     "avatarImgPath": receiver_avatar_img_path,
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                 },
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.dm.dm_id}-{message_id}", None
@@ -349,6 +354,7 @@ class DMSingleMessageView(AuthenticatedAPIView):
                     "avatarImgPath": raw_reaction.sender.profile_image_url,
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                 },
                 "tsSent": raw_reaction.ts_created_at,
             }
@@ -379,6 +385,7 @@ class DMSingleMessageView(AuthenticatedAPIView):
                 "avatarImgPath": dm.sender.profile_image_url,
                 "tsLastSeen": "",
                 "tsJoined": "",
+                "customStatus": "",
                 "isSystemUser": dm.sender.is_system_user,
             },
             "receiver": {
@@ -388,6 +395,7 @@ class DMSingleMessageView(AuthenticatedAPIView):
                 "avatarImgPath": dm.receiver.profile_image_url,
                 "tsLastSeen": "",
                 "tsJoined": "",
+                "customStatus": "",
                 "isSystemUser": dm.receiver.is_system_user,
             },
             "numReplies": reply_count,
@@ -527,6 +535,7 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
                     "avatarImgPath": raw_reaction.sender.profile_image_url,
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                 },
                 "tsSent": raw_reaction.ts_created_at,
             }
@@ -550,6 +559,7 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
                 "avatarImgPath": dm.sender.profile_image_url,
                 "tsLastSeen": "",
                 "tsJoined": "",
+                "customStatus": "",
                 "isSystemUser": dm.sender.is_system_user,
             },
             "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
@@ -711,6 +721,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
                         "avatarImgPath": reaction[4],
                         "tsLastSeen": "",
                         "tsJoined": "",
+                        "customStatus": "",
                     },
                     "tsSent": reaction[5],
                 }
@@ -753,6 +764,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
                     "avatarImgPath": sender_avatar_img_path,
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                     "isSystemUser": is_system_user,
                 },
                 "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},

@@ -200,6 +200,7 @@ class GMHistoryView(AuthenticatedAPIView):
                         "avatarImgPath": reaction[4],
                         "tsLastSeen": "",
                         "tsJoined": "",
+                        "customStatus": "",
                     },
                     "tsSent": reaction[5],
                 }
@@ -222,6 +223,7 @@ class GMHistoryView(AuthenticatedAPIView):
                     "avatarImgPath": sender_avatar_img_path,
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                 },
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.gm.gm_id}-{message_id}", None
@@ -274,6 +276,7 @@ class GMHistoryView(AuthenticatedAPIView):
                         "avatarImgPath": "",
                         "tsLastSeen": "",
                         "tsJoined": "",
+                        "customStatus": "",
                     },
                     "messages": [new_message],
                     "latestMessage": last_message_dict[chat_id],
@@ -327,6 +330,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
                     "avatarImgPath": raw_reaction.sender.profile_image_url,
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                 },
                 "tsSent": raw_reaction.ts_created_at,
             }
@@ -357,6 +361,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
                 "avatarImgPath": gm.sender.profile_image_url,
                 "tsLastSeen": "",
                 "tsJoined": "",
+                "customStatus": "",
                 "isSystemUser": gm.sender.is_system_user,
             },
             "numReplies": reply_count,
@@ -495,6 +500,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
                     "avatarImgPath": raw_reaction.sender.profile_image_url,
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                 },
                 "tsSent": raw_reaction.ts_created_at,
             }
@@ -518,6 +524,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
                 "avatarImgPath": gm.sender.profile_image_url,
                 "tsLastSeen": "",
                 "tsJoined": "",
+                "customStatus": "",
                 "isSystemUser": gm.sender.is_system_user,
             },
             "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
@@ -674,6 +681,7 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                         "avatarImgPath": reaction[4],
                         "tsLastSeen": "",
                         "tsJoined": "",
+                        "customStatus": "",
                     },
                     "tsSent": reaction[5],
                 }
@@ -706,6 +714,7 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                     "avatarImgPath": sender_avatar_img_path,
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                     "isSystemUser": is_system_user,
                 },
                 "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},

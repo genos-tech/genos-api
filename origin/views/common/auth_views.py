@@ -70,6 +70,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 "email": data["user"]["email"],
                 "profile_image_url": data["user"]["profile_image_url"],
                 "ts_joined_at": data["user"]["ts_created_at"],
+                "custom_status": data["user"]["custom_status"],
                 "status": data["user"]["status"],
             }
         )

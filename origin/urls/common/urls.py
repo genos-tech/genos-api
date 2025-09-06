@@ -1,6 +1,7 @@
 from django.urls import path
 
 from origin.views.common.auth_views import *
+from origin.views.common.user_views import *
 from origin.views.common.team_views import *
 from origin.views.common.inbox_views import *
 from origin.views.chat.reaction_views import *
@@ -13,6 +14,7 @@ urlpatterns = [
     path("api/v2/user/signin/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("api/v2/user/signin/refresh/", CookieTokenRefreshView.as_view(), name="token_refresh"),
     path("api/v2/user/signout/", LogoutView.as_view(), name="signout"),
+    path("api/v2/user/status/", UserStatusView.as_view(), name="update_status"),
     # Team
     path("api/v2/team/create/", TeamMasterView.as_view(), name="join_team"),
     path("api/v2/team/exist/", CheckTeamExistsView.as_view(), name="exist_team"),

@@ -62,6 +62,7 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
                         "avatarImgPath": "",
                         "tsLastSeen": "",
                         "tsJoined": "",
+                        "customStatus": "",
                     },
                 }
             )

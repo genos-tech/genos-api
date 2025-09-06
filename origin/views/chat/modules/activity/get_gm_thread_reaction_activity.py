@@ -106,6 +106,7 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_gm_ids, n_days_
                     "avatarImgPath": "",
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                 },
                 "isThread": IS_THREAD == 1,
                 "threadId": int(message.thread_id),

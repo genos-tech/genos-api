@@ -63,6 +63,7 @@ def get(
                     "avatarImgPath": reaction[4],
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                 },
                 "tsSent": reaction[5],
             }
@@ -96,6 +97,7 @@ def get(
                 "avatarImgPath": "",
                 "tsLastSeen": "",
                 "tsJoined": "",
+                "customStatus": "",
             },
             "isThread": IS_THREAD == 1,
             "threadId": -1,
@@ -117,6 +119,7 @@ def get(
                 "avatarImgPath": comment.sender.profile_image_url,
                 "tsLastSeen": "",
                 "tsJoined": "",
+                "customStatus": "",
             },
             "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
             "tsSent": (

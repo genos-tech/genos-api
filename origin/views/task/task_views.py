@@ -246,6 +246,7 @@ class ChildTaskView(AuthenticatedAPIView):
                             "avatarImgPath": t.assignee.profile_image_url,
                             "tsLastSeen": "",
                             "tsJoined": "",
+                            "customStatus": "",
                         },
                         "reporter": {
                             "teamId": t.team.team_id,
@@ -255,6 +256,7 @@ class ChildTaskView(AuthenticatedAPIView):
                             "avatarImgPath": t.reporter.profile_image_url,
                             "tsLastSeen": "",
                             "tsJoined": "",
+                            "customStatus": "",
                         },
                         "createdDate": str(t.ts_created_at.date()),
                         "updatedAt": str(t.ts_updated_at),
@@ -394,6 +396,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                         "avatarImgPath": t.assignee.profile_image_url,
                         "tsLastSeen": "",
                         "tsJoined": "",
+                        "customStatus": "",
                     },
                     "reporter": {
                         "teamId": t.team.team_id,
@@ -403,6 +406,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                         "avatarImgPath": t.reporter.profile_image_url,
                         "tsLastSeen": "",
                         "tsJoined": "",
+                        "customStatus": "",
                     },
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
@@ -524,6 +528,7 @@ class GetTaskView(AuthenticatedAPIView):
                         "avatarImgPath": t.assignee.profile_image_url,
                         "tsLastSeen": "",
                         "tsJoined": "",
+                        "customStatus": "",
                     },
                     "reporter": {
                         "teamId": t.team.team_id,
@@ -533,6 +538,7 @@ class GetTaskView(AuthenticatedAPIView):
                         "avatarImgPath": t.reporter.profile_image_url,
                         "tsLastSeen": "",
                         "tsJoined": "",
+                        "customStatus": "",
                     },
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
@@ -868,6 +874,7 @@ class TaskCommentsView(AuthenticatedAPIView):
                             "avatarImgPath": reaction[4],
                             "tsLastSeen": "",
                             "tsJoined": "",
+                            "customStatus": "",
                         },
                         "tsSent": reaction[5],
                     }

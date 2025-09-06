@@ -26,6 +26,7 @@ def get(all_activities: dict, user_id: str, team_id: str, n_days_ago: datetime):
                     "avatarImgPath": message.receiver.profile_image_url,
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                 }
             else:
                 chat_name = message.sender.username
@@ -35,6 +36,7 @@ def get(all_activities: dict, user_id: str, team_id: str, n_days_ago: datetime):
                     "avatarImgPath": message.sender.profile_image_url,
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                 }
 
             activity_id = "{activity_type}-{chat_type}-{chat_id}-{thread_id}-{message_id}".format(
@@ -91,6 +93,7 @@ def get(all_activities: dict, user_id: str, team_id: str, n_days_ago: datetime):
                     "avatarImgPath": message.sender.profile_image_url,
                     "tsLastSeen": "",
                     "tsJoined": "",
+                    "customStatus": "",
                 },
                 "reactions": {"myReactions": [], "allReactions": []},
                 "tsSent": message.ts_sent_at,

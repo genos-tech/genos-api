@@ -90,6 +90,7 @@ def get(
                 "avatarImgPath": "",
                 "tsLastSeen": "",
                 "tsJoined": "",
+                "customStatus": "",
             },
             "isThread": IS_THREAD == 1,
             "threadId": -1,

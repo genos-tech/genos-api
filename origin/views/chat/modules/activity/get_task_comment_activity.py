@@ -35,6 +35,7 @@ def get(all_activities: dict, team_id: str, my_all_project_ids, n_days_ago: date
                 "avatarImgPath": "",
                 "tsLastSeen": "",
                 "tsJoined": "",
+                "customStatus": "",
             },
             "isThread": IS_THREAD == 1,
             "threadId": -1,

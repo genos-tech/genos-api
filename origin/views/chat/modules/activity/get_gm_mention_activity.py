@@ -68,6 +68,7 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_gm_ids, n_days_
                 "userId": "",
                 "avatarImgPath": "",
                 "tsJoined": "",
+                "customStatus": "",
             },
             "reactions": {"myReactions": [], "allReactions": []},
             "tsSent": message.ts_sent_at,
