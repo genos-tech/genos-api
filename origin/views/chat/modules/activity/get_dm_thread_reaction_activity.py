@@ -73,6 +73,8 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_dm_ids, n_days_
                         "userName": reaction[2],
                         "userId": reaction[3],
                         "avatarImgPath": reaction[4],
+                        "tsLastSeen": "",
+                        "tsJoined": "",
                     },
                     "tsSent": reaction[5],
                 }
@@ -93,6 +95,8 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_dm_ids, n_days_
                     "userName": message.receiver.username,
                     "userId": message.receiver.id,
                     "avatarImgPath": message.receiver.profile_image_url,
+                    "tsLastSeen": "",
+                    "tsJoined": "",
                 }
             else:
                 chat_name = message.sender.username
@@ -100,6 +104,8 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_dm_ids, n_days_
                     "userName": message.sender.username,
                     "userId": message.sender.id,
                     "avatarImgPath": message.sender.profile_image_url,
+                    "tsLastSeen": "",
+                    "tsJoined": "",
                 }
 
             activity_id = "{activity_type}-{chat_type}-{chat_id}-{thread_id}-{message_id}".format(
@@ -150,6 +156,8 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_dm_ids, n_days_
                     "userName": message.sender.username,
                     "userId": message.sender.id,
                     "avatarImgPath": message.sender.profile_image_url,
+                    "tsLastSeen": "",
+                    "tsJoined": "",
                 },
                 "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
                 "tsSent": message.ts_sent_at,

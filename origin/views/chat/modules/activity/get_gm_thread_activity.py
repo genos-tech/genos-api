@@ -34,7 +34,13 @@ def get(all_activities: dict, user_id: str, team_id: str, n_days_ago: datetime):
                 "chatType": CHAT_TYPE,  # gm
                 "chatId": int(message.gm.gm_id),
                 "chatName": message.gm.group_name,
-                "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
+                "dmPartnerUser": {
+                    "userName": "",
+                    "userId": "",
+                    "avatarImgPath": "",
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                },
                 "isThread": IS_THREAD == 1,
                 "threadId": int(message.thread_id),
                 "messageId": int(message.thread_message_id),
@@ -73,6 +79,8 @@ def get(all_activities: dict, user_id: str, team_id: str, n_days_ago: datetime):
                     "userName": message.sender.username,
                     "userId": message.sender.id,
                     "avatarImgPath": message.sender.profile_image_url,
+                    "tsLastSeen": "",
+                    "tsJoined": "",
                 },
                 "reactions": {"myReactions": [], "allReactions": []},
                 "tsSent": message.ts_sent_at,

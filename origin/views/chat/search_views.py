@@ -60,6 +60,8 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
                         "userName": str(member["attendee__username"]),
                         "userId": str(member["attendee__id"]),
                         "avatarImgPath": "",
+                        "tsLastSeen": "",
+                        "tsJoined": "",
                     },
                 }
             )

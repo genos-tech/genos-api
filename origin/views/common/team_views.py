@@ -175,6 +175,7 @@ class GetTeamMembersView(AuthenticatedAPIView):
                 "attendee__username",
                 "attendee__email",
                 "attendee__profile_image_url",
+                "attendee__ts_created_at",
                 "attendee__is_system_user",
             )
         )
@@ -188,6 +189,8 @@ class GetTeamMembersView(AuthenticatedAPIView):
                     "userName": attendee["attendee__username"],
                     "userEmail": attendee["attendee__email"],
                     "avatarImgPath": attendee["attendee__profile_image_url"],
+                    "tsLastSeen": "",
+                    "tsJoined": attendee["attendee__ts_created_at"],
                 }
             )
 
@@ -238,6 +241,8 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
             "userName": member_info["attendee__username"],
             "userEmail": member_info["attendee__email"],
             "avatarImgPath": member_info["attendee__profile_image_url"],
+            "tsLastSeen": "",
+            "tsJoined": "",
             "isSystemUser": member_info["attendee__is_system_user"],
         }
 

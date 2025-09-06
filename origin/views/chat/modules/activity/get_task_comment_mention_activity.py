@@ -48,7 +48,13 @@ def get(
             "chatType": CHAT_TYPE,  # task comment
             "chatId": int(comment.task.project.project_id),
             "chatName": comment.task.project.project_name,
-            "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
+            "dmPartnerUser": {
+                "userName": "",
+                "userId": "",
+                "avatarImgPath": "",
+                "tsLastSeen": "",
+                "tsJoined": "",
+            },
             "isThread": IS_THREAD == 1,
             "threadId": -1,
             "messageId": int(comment.comment_id),
@@ -63,7 +69,13 @@ def get(
             },
             "firstLineContent": content,
             "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
-            "sender": {"userName": "", "userId": "", "avatarImgPath": ""},
+            "sender": {
+                "userName": "",
+                "userId": "",
+                "avatarImgPath": "",
+                "tsLastSeen": "",
+                "tsJoined": "",
+            },
             "reactions": {"myReactions": [], "allReactions": []},
             "tsSent": comment.ts_sent_at,
         }

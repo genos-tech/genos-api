@@ -100,7 +100,13 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_gm_ids, n_days_
                 "chatType": CHAT_TYPE,  # gm
                 "chatId": int(message.gm.gm_id),
                 "chatName": message.gm.group_name,
-                "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
+                "dmPartnerUser": {
+                    "userName": "",
+                    "userId": "",
+                    "avatarImgPath": "",
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                },
                 "isThread": IS_THREAD == 1,
                 "threadId": int(message.thread_id),
                 "messageId": int(message.thread_message_id),

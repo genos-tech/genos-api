@@ -197,6 +197,8 @@ class DMHistoryView(AuthenticatedAPIView):
                         "userName": reaction[2],
                         "userId": reaction[3],
                         "avatarImgPath": reaction[4],
+                        "tsLastSeen": "",
+                        "tsJoined": "",
                     },
                     "tsSent": reaction[5],
                 }
@@ -212,6 +214,8 @@ class DMHistoryView(AuthenticatedAPIView):
                     "userId": receiver_id,
                     "userEmail": receiver_email,
                     "avatarImgPath": receiver_avatar_img_path,
+                    "tsLastSeen": "",
+                    "tsJoined": "",
                 }
                 chat_name = receiver_name
             else:
@@ -222,6 +226,8 @@ class DMHistoryView(AuthenticatedAPIView):
                     "userId": sender_id,
                     "userEmail": sender_email,
                     "avatarImgPath": sender_avatar_img_path,
+                    "tsLastSeen": "",
+                    "tsJoined": "",
                 }
                 chat_name = sender_name
 
@@ -235,11 +241,15 @@ class DMHistoryView(AuthenticatedAPIView):
                     "userName": sender_name,
                     "userId": sender_id,
                     "avatarImgPath": sender_avatar_img_path,
+                    "tsLastSeen": "",
+                    "tsJoined": "",
                 },
                 "receiver": {
                     "userName": receiver_name,
                     "userId": receiver_id,
                     "avatarImgPath": receiver_avatar_img_path,
+                    "tsLastSeen": "",
+                    "tsJoined": "",
                 },
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.dm.dm_id}-{message_id}", None
@@ -337,6 +347,8 @@ class DMSingleMessageView(AuthenticatedAPIView):
                     "userName": raw_reaction.sender.username,
                     "userId": raw_reaction.sender.id,
                     "avatarImgPath": raw_reaction.sender.profile_image_url,
+                    "tsLastSeen": "",
+                    "tsJoined": "",
                 },
                 "tsSent": raw_reaction.ts_created_at,
             }
@@ -365,6 +377,8 @@ class DMSingleMessageView(AuthenticatedAPIView):
                 "userName": dm.sender.username,
                 "userEmail": dm.sender.email,
                 "avatarImgPath": dm.sender.profile_image_url,
+                "tsLastSeen": "",
+                "tsJoined": "",
                 "isSystemUser": dm.sender.is_system_user,
             },
             "receiver": {
@@ -372,6 +386,8 @@ class DMSingleMessageView(AuthenticatedAPIView):
                 "userName": dm.receiver.username,
                 "userEmail": dm.receiver.email,
                 "avatarImgPath": dm.receiver.profile_image_url,
+                "tsLastSeen": "",
+                "tsJoined": "",
                 "isSystemUser": dm.receiver.is_system_user,
             },
             "numReplies": reply_count,
@@ -509,6 +525,8 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
                     "userName": raw_reaction.sender.username,
                     "userId": raw_reaction.sender.id,
                     "avatarImgPath": raw_reaction.sender.profile_image_url,
+                    "tsLastSeen": "",
+                    "tsJoined": "",
                 },
                 "tsSent": raw_reaction.ts_created_at,
             }
@@ -530,6 +548,8 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
                 "userName": dm.sender.username,
                 "userEmail": dm.sender.email,
                 "avatarImgPath": dm.sender.profile_image_url,
+                "tsLastSeen": "",
+                "tsJoined": "",
                 "isSystemUser": dm.sender.is_system_user,
             },
             "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
@@ -689,6 +709,8 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
                         "userName": reaction[2],
                         "userId": reaction[3],
                         "avatarImgPath": reaction[4],
+                        "tsLastSeen": "",
+                        "tsJoined": "",
                     },
                     "tsSent": reaction[5],
                 }
@@ -729,6 +751,8 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
                     "userEmail": sender_email,
                     "userId": sender_id,
                     "avatarImgPath": sender_avatar_img_path,
+                    "tsLastSeen": "",
+                    "tsJoined": "",
                     "isSystemUser": is_system_user,
                 },
                 "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
