@@ -814,11 +814,7 @@ class TaskCommentsView(AuthenticatedAPIView):
         message = TaskComments.objects.get(task=task_id, comment_id=comment_id)
 
         data = {
-            "comment_body": (
-                request.data["comment_body"]
-                if request.data["comment_body"]
-                else message.comment_body
-            )
+            "comment_body": request.data.get("comment_body", message.comment_body),
         }
 
         serializer = TaskCommentsSerializer(message, data=data, partial=True)

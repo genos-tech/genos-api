@@ -176,6 +176,9 @@ class GetTeamMembersView(AuthenticatedAPIView):
                 "attendee__username",
                 "attendee__email",
                 "attendee__profile_image_url",
+                "attendee__is_offline_forced",
+                "attendee__role",
+                "attendee__base_country",
                 "attendee__custom_status",
                 "attendee__ts_created_at",
                 "attendee__is_system_user",
@@ -192,6 +195,17 @@ class GetTeamMembersView(AuthenticatedAPIView):
                     "userName": attendee["attendee__username"],
                     "userEmail": attendee["attendee__email"],
                     "avatarImgPath": attendee["attendee__profile_image_url"],
+                    "isOfflineForced": (
+                        attendee["attendee__is_offline_forced"]
+                        if attendee["attendee__is_offline_forced"]
+                        else ""
+                    ),
+                    "role": (attendee["attendee__role"] if attendee["attendee__role"] else ""),
+                    "baseCountry": (
+                        attendee["attendee__base_country"]
+                        if attendee["attendee__base_country"]
+                        else ""
+                    ),
                     "customStatus": (
                         attendee["attendee__custom_status"]
                         if attendee["attendee__custom_status"]
@@ -228,6 +242,9 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
                 "attendee__username",
                 "attendee__email",
                 "attendee__profile_image_url",
+                "attendee__is_offline_forced",
+                "attendee__role",
+                "attendee__base_country",
                 "attendee__custom_status",
                 "attendee__is_system_user",
             )
@@ -255,6 +272,17 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
             "avatarImgPath": member_info["attendee__profile_image_url"],
             "tsLastSeen": "",
             "tsJoined": "",
+            "isOfflineForced": (
+                member_info["attendee__is_offline_forced"]
+                if member_info["attendee__is_offline_forced"]
+                else ""
+            ),
+            "role": (member_info["attendee__role"] if member_info["attendee__role"] else ""),
+            "baseCountry": (
+                member_info["attendee__base_country"]
+                if member_info["attendee__base_country"]
+                else ""
+            ),
             "customStatus": (
                 member_info["member_info__custom_status"]
                 if member_info["attendee__custom_status"]
