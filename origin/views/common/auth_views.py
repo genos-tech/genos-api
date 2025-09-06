@@ -1,14 +1,10 @@
-from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from rest_framework import viewsets, permissions
 from django.contrib.auth import get_user_model
 from django.http import JsonResponse
-from django.middleware.csrf import get_token
-from django.contrib.auth import models
 from rest_framework.request import Request
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -73,6 +69,8 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 "user_id": data["user"]["id"],
                 "email": data["user"]["email"],
                 "profile_image_url": data["user"]["profile_image_url"],
+                "ts_joined_at": data["user"]["ts_created_at"],
+                "custom_status": data["user"]["custom_status"],
                 "status": data["user"]["status"],
             }
         )

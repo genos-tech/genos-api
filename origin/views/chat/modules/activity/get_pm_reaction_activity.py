@@ -84,7 +84,14 @@ def get(
             "chatType": CHAT_TYPE,  # pm
             "chatId": int(message.project.project_id),
             "chatName": message.project.project_name,
-            "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
+            "dmPartnerUser": {
+                "userName": "",
+                "userId": "",
+                "avatarImgPath": "",
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
+            },
             "isThread": IS_THREAD == 1,
             "threadId": -1,
             "messageId": int(message.message_id),

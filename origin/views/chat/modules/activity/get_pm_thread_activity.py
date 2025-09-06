@@ -36,7 +36,14 @@ def get(all_activities: dict, user_id: str, team_id: str, n_days_ago: datetime):
             "chatType": CHAT_TYPE,  # pm
             "chatId": int(message.project.project_id),
             "chatName": message.project.project_name,
-            "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
+            "dmPartnerUser": {
+                "userName": "",
+                "userId": "",
+                "avatarImgPath": "",
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
+            },
             "isThread": IS_THREAD == 1,
             "threadId": int(message.thread_id),
             "messageId": int(message.thread_message_id),

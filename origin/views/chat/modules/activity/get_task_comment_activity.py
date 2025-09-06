@@ -29,7 +29,14 @@ def get(all_activities: dict, team_id: str, my_all_project_ids, n_days_ago: date
             "chatType": CHAT_TYPE,  # task comment
             "chatId": int(comment.task.project.project_id),
             "chatName": comment.task.project.project_name,
-            "dmPartnerUser": {"userName": "", "userId": "", "avatarImgPath": ""},
+            "dmPartnerUser": {
+                "userName": "",
+                "userId": "",
+                "avatarImgPath": "",
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
+            },
             "isThread": IS_THREAD == 1,
             "threadId": -1,
             "messageId": int(comment.comment_id),

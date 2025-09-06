@@ -159,6 +159,7 @@ class GetAllTeamsView(AuthenticatedAPIView):
 class GetTeamMembersView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
+        team_name = request.GET.get("team_name")
         user_id = request.GET.get("user_id")
 
         if not user_id or not team_id:
@@ -175,6 +176,8 @@ class GetTeamMembersView(AuthenticatedAPIView):
                 "attendee__username",
                 "attendee__email",
                 "attendee__profile_image_url",
+                "attendee__custom_status",
+                "attendee__ts_created_at",
                 "attendee__is_system_user",
             )
         )
@@ -184,12 +187,23 @@ class GetTeamMembersView(AuthenticatedAPIView):
             response_data.append(
                 {
                     "teamId": team_id,
+                    "teamName": team_name,
                     "userId": attendee["attendee__id"],
                     "userName": attendee["attendee__username"],
                     "userEmail": attendee["attendee__email"],
                     "avatarImgPath": attendee["attendee__profile_image_url"],
+                    "customStatus": (
+                        attendee["attendee__custom_status"]
+                        if attendee["attendee__custom_status"]
+                        else ""
+                    ),
+                    "tsLastSeen": "",
+                    "tsJoined": attendee["attendee__ts_created_at"],
                 }
             )
+
+        print("response_data:")
+        print(response_data)
 
         return Response(response_data, status=status.HTTP_200_OK)
 
@@ -214,6 +228,7 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
                 "attendee__username",
                 "attendee__email",
                 "attendee__profile_image_url",
+                "attendee__custom_status",
                 "attendee__is_system_user",
             )
         )
@@ -238,6 +253,13 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
             "userName": member_info["attendee__username"],
             "userEmail": member_info["attendee__email"],
             "avatarImgPath": member_info["attendee__profile_image_url"],
+            "tsLastSeen": "",
+            "tsJoined": "",
+            "customStatus": (
+                member_info["member_info__custom_status"]
+                if member_info["attendee__custom_status"]
+                else ""
+            ),
             "isSystemUser": member_info["attendee__is_system_user"],
         }
 
