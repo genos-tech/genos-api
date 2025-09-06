@@ -70,7 +70,6 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["username"] = user.username  # Add username to JWT payload
         token["email"] = user.email  # Add email to JWT payload
         token["profile_image_url"] = user.profile_image_url  # Add profile image URL
-        token["status"] = user.status  # Add user status
         return token
 
     def validate(self, attrs):
