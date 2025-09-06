@@ -11,13 +11,15 @@ class GMMaster(models.Model):
     group_name = models.CharField(blank=False)
     owner_user = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="own_gms",
         to_field="id",
     )
     owner_team = models.ForeignKey(
         TeamMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="groups_in_team",
         to_field="team_id",
     )
@@ -33,13 +35,15 @@ class GMMaster(models.Model):
 class GMMembers(models.Model):
     gm = models.ForeignKey(
         GMMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="gm_members",
         to_field="gm_id",
     )
     attendee = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="attending_gms",
         to_field="id",
     )
@@ -54,13 +58,15 @@ class GMMembers(models.Model):
 class GMMessages(models.Model):
     gm = models.ForeignKey(
         GMMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="gm_messages",
         to_field="gm_id",
     )
     sender = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="sent_gm_messages",
         to_field="id",
     )
@@ -69,10 +75,10 @@ class GMMessages(models.Model):
     thread_id = models.IntegerField(blank=True, null=True)
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="gm_thread_task",
         to_field="task_id",
-        null=True,
         blank=True,
     )
     is_deleted = models.BooleanField(default=False)
@@ -95,14 +101,16 @@ class GMMessages(models.Model):
 class GMThreadMessages(models.Model):
     gm = models.ForeignKey(
         GMMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="gm_thread_messages",
         to_field="gm_id",
     )
     thread_id = models.IntegerField()
     sender = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="sent_gm_thread_messages",
         to_field="id",
     )
@@ -110,7 +118,8 @@ class GMThreadMessages(models.Model):
     thread_message_body = models.JSONField(blank=False)
     parent_message_uid = models.ForeignKey(
         GMMessages,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="thread_messages",
         to_field="uid",
     )

@@ -7,18 +7,21 @@ from origin.models.common.team_models import TeamMaster
 class InboxItems(models.Model):
     team = models.ForeignKey(
         TeamMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         to_field="team_id",
     )
     sender = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="sender_inboxes",
         to_field="id",
     )
     receiver = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="receiver_inboxes",
         to_field="id",
     )

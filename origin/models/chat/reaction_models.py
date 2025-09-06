@@ -8,7 +8,8 @@ from origin.models.common.user_models import CustomUser
 class ReactionFact(models.Model):
     team = models.ForeignKey(
         TeamMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         to_field="team_id",
     )
     chat_type = models.IntegerField(blank=False, null=False)
@@ -20,7 +21,8 @@ class ReactionFact(models.Model):
     reaction_emoji = models.CharField(blank=False, null=False)
     sender = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         to_field="id",
     )
     ts_created_at = models.DateTimeField(auto_now_add=True)

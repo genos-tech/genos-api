@@ -8,13 +8,15 @@ from origin.models.task.task_models import TaskMaster
 class PMMessages(models.Model):
     project = models.ForeignKey(
         ProjectMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="pm_messages",
         to_field="project_id",
     )
     sender = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="sent_pm_messages",
         to_field="id",
     )
@@ -23,10 +25,10 @@ class PMMessages(models.Model):
     thread_id = models.IntegerField(blank=True, null=True)
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="pm_thread_task",
         to_field="task_id",
-        null=True,
         blank=True,
     )
     is_deleted = models.BooleanField(default=False)
@@ -49,14 +51,16 @@ class PMMessages(models.Model):
 class PMThreadMessages(models.Model):
     project = models.ForeignKey(
         ProjectMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="thread_messages",
         to_field="project_id",
     )
     thread_id = models.IntegerField()
     sender = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="sent_pm_thread_messages",
         to_field="id",
     )
@@ -64,7 +68,8 @@ class PMThreadMessages(models.Model):
     thread_message_body = models.JSONField(blank=False)
     parent_message_uid = models.ForeignKey(
         PMMessages,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="pm_thread_messages",
         to_field="uid",
     )

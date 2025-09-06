@@ -10,7 +10,8 @@ from origin.models.task.task_models import TaskMaster
 class DMMaster(models.Model):
     team = models.ForeignKey(
         TeamMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="team_dm_master",
         to_field="team_id",
     )
@@ -68,19 +69,22 @@ class UserDMMapping(models.Model):
 class DMMessages(models.Model):
     dm = models.ForeignKey(
         DMMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="dm_messages",
         to_field="dm_id",
     )
     sender = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="sent_dm_messages",
         to_field="id",
     )
     receiver = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="received_messages",
         to_field="id",
     )
@@ -89,10 +93,10 @@ class DMMessages(models.Model):
     thread_id = models.IntegerField(blank=True, null=True)
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="dm_thread_task",
         to_field="task_id",
-        null=True,
         blank=True,
     )
     is_deleted = models.BooleanField(default=False)
@@ -114,20 +118,23 @@ class DMMessages(models.Model):
 class DMThreadMessages(models.Model):
     dm = models.ForeignKey(
         DMMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="dm_thread_messages",
         to_field="dm_id",
     )
     thread_id = models.IntegerField()
     sender = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="sent_dm_thread_messages",
         to_field="id",
     )
     receiver = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="received_thread_messages",
         to_field="id",
     )
@@ -135,7 +142,8 @@ class DMThreadMessages(models.Model):
     thread_message_body = models.JSONField(blank=False)
     parent_message_uid = models.ForeignKey(
         DMMessages,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="thread_messages",
         to_field="uid",
     )

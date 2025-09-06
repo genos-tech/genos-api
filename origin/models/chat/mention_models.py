@@ -8,7 +8,8 @@ from origin.models.common.user_models import CustomUser
 class MentionFact(models.Model):
     team = models.ForeignKey(
         TeamMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         to_field="team_id",
     )
     chat_type = models.IntegerField(blank=False, null=False)
@@ -18,7 +19,8 @@ class MentionFact(models.Model):
     thread_id = models.IntegerField(blank=False, null=False)
     mentioned_user = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         to_field="id",
     )
     ts_created_at = models.DateTimeField(auto_now_add=True)

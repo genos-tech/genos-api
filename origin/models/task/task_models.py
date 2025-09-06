@@ -10,13 +10,15 @@ from origin.models.project.prj_models import ProjectMaster
 class TaskMaster(models.Model):
     team = models.ForeignKey(
         TeamMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="team_tasks_master",
         to_field="team_id",
     )
     project = models.ForeignKey(
         ProjectMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="project_tasks_master",
         to_field="project_id",
     )
@@ -30,13 +32,15 @@ class TaskMaster(models.Model):
     parent_task_id = models.BigIntegerField(blank=True, null=True)
     assignee = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="assigned_tasks_master",
         to_field="id",
     )
     reporter = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="reported_tasks_master",
         to_field="id",
     )
@@ -69,7 +73,8 @@ def set_root_task_id(sender, instance, created, **kwargs):
 class TaskAttachments(models.Model):
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="task_attachments",
         to_field="task_id",
     )
@@ -90,13 +95,15 @@ class TaskAttachments(models.Model):
 class TaskTags(models.Model):
     project = models.ForeignKey(
         ProjectMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="project_task_tags",
         to_field="project_id",
     )
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="task_tags",
         to_field="task_id",
     )
@@ -116,13 +123,15 @@ class TaskTags(models.Model):
 class TaskComments(models.Model):
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="task_comments",
         to_field="task_id",
     )
     sender = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="user_task_comments",
         to_field="id",
     )
@@ -141,12 +150,14 @@ class TaskComments(models.Model):
 class TaskCommentReactionFact(models.Model):
     team = models.ForeignKey(
         TeamMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         to_field="team_id",
     )
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="task_comment_reactions",
         to_field="task_id",
     )
@@ -155,7 +166,8 @@ class TaskCommentReactionFact(models.Model):
     reaction_emoji = models.CharField(blank=False, null=False)
     sender = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         to_field="id",
     )
     ts_created_at = models.DateTimeField(auto_now_add=True)
@@ -178,18 +190,21 @@ class TaskCommentReactionFact(models.Model):
 class TaskCommentMentionFact(models.Model):
     team = models.ForeignKey(
         TeamMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         to_field="team_id",
     )
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         to_field="task_id",
     )
     comment_id = models.IntegerField(blank=False, null=False)
     mentioned_user = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         to_field="id",
     )
     ts_created_at = models.DateTimeField(auto_now_add=True)

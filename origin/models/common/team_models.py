@@ -11,7 +11,8 @@ class TeamMaster(models.Model):
     team_email = models.EmailField(unique=True)
     owner = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="own_teams",
         to_field="id",
     )
@@ -23,13 +24,15 @@ class TeamMaster(models.Model):
 class TeamMembers(models.Model):
     team = models.ForeignKey(
         TeamMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="team_members",
         to_field="team_id",
     )
     attendee = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="team_attendees",
         to_field="id",
     )
