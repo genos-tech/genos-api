@@ -265,30 +265,18 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
 
         response_data = {
             "teamId": team_id,
-            "teamName": member_info["team__team_name"],
-            "userId": member_info["attendee__id"],
-            "userName": member_info["attendee__username"],
-            "userEmail": member_info["attendee__email"],
-            "avatarImgPath": member_info["attendee__profile_image_url"],
+            "teamName": member_info.get("team__team_name", None),
+            "userId": member_info.get("attendee__id", None),
+            "userName": member_info.get("attendee__username", None),
+            "userEmail": member_info.get("attendee__email", None),
+            "avatarImgPath": member_info.get("attendee__profile_image_url", None),
             "tsLastSeen": "",
             "tsJoined": "",
-            "isOfflineForced": (
-                member_info["attendee__is_offline_forced"]
-                if member_info["attendee__is_offline_forced"]
-                else ""
-            ),
-            "role": (member_info["attendee__role"] if member_info["attendee__role"] else ""),
-            "baseCountry": (
-                member_info["attendee__base_country"]
-                if member_info["attendee__base_country"]
-                else ""
-            ),
-            "customStatus": (
-                member_info["member_info__custom_status"]
-                if member_info["attendee__custom_status"]
-                else ""
-            ),
-            "isSystemUser": member_info["attendee__is_system_user"],
+            "isOfflineForced": member_info.get("attendee__is_offline_forced", ""),
+            "role": member_info.get("attendee__role", ""),
+            "baseCountry": member_info.get("attendee__base_country", ""),
+            "customStatus": member_info.get("member_info__custom_status", ""),
+            "isSystemUser": member_info.get("attendee__is_system_user", None),
         }
 
         return Response(response_data, status=status.HTTP_200_OK)
