@@ -70,7 +70,7 @@ class CheckDMExistsView(AuthenticatedAPIView):
         else:
             return Response(
                 {
-                    "dm_exists": True,
+                    "dm_exists": False,
                     "dm_id": None,
                     "exists": exists,
                     "error": "Duplicated DMs found",
