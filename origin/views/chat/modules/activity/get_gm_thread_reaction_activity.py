@@ -45,7 +45,8 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_gm_ids, n_days_
                     f"{row['chat_id']}/{row['thread_id']}/{row['message_id']}"
                     for row in gm_raw_reactions
                 }
-            )
+            ),
+            sender=user_id,
         )
     )
 

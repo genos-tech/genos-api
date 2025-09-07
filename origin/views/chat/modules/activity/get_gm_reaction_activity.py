@@ -29,7 +29,8 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_gm_ids, n_days_
         gm__owner_team=team_id,
         ts_sent_at__gte=n_days_ago,
     ).filter(
-        Q(gm__in=list(set([row["chat_id"] for row in gm_raw_reactions])))
+        Q(sender=user_id)
+        & Q(gm__in=list(set([row["chat_id"] for row in gm_raw_reactions])))
         & Q(message_id__in=list(set([row["message_id"] for row in gm_raw_reactions])))
     )
 

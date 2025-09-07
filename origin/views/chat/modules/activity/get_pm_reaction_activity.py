@@ -31,7 +31,8 @@ def get(
         project__team=team_id,
         ts_sent_at__gte=n_days_ago,
     ).filter(
-        Q(project__in=list(set([row["chat_id"] for row in pm_raw_reactions])))
+        Q(sender=user_id)
+        & Q(project__in=list(set([row["chat_id"] for row in pm_raw_reactions])))
         & Q(message_id__in=list(set([row["message_id"] for row in pm_raw_reactions])))
     )
 

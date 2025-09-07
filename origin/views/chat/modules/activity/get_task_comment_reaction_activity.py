@@ -30,7 +30,8 @@ def get(
         task__team=team_id,
         ts_sent_at__gte=n_days_ago,
     ).filter(
-        Q(
+        Q(sender=user_id)
+        & Q(
             task__project__in=list(
                 set([row["task__project"] for row in task_comment_raw_reactions])
             )
