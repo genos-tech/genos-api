@@ -70,6 +70,9 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 "email": data["user"]["email"],
                 "profile_image_url": data["user"]["profile_image_url"],
                 "ts_joined_at": data["user"]["ts_created_at"],
+                "is_offline_forced": data["user"]["is_offline_forced"],
+                "role": data["user"]["role"],
+                "base_country": data["user"]["base_country"],
                 "custom_status": data["user"]["custom_status"],
             }
         )
