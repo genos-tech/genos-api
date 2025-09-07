@@ -33,7 +33,10 @@ from .modules.activity import (
 # 1. Thread messages and Task comments
 # 2. User mentioned DM, GM, PM messages and task comments
 # 3. Reacted messages
-# activityType: {1: message or comment, 2: reaction}
+
+
+# chatType = {1: DM, 2: GM, 3: PM, 4: Task Comment}
+# activityType = {1: message or comment, 2: reaction, 3: mention}
 #############################
 class ActivityHistoryView(AuthenticatedAPIView):
     def get(self, request):
