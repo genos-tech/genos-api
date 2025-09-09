@@ -87,6 +87,7 @@ class TeamMembersView(AuthenticatedAPIView):
 class JoinTeamFromInboxView(AuthenticatedAPIView):
     def post(self, request):
         team_id = request.data["team_id"]
+        team_name = request.data["team_name"]
         inbox_item_id = int(request.data["item_id"])
 
         attendee_id = str(
@@ -98,12 +99,15 @@ class JoinTeamFromInboxView(AuthenticatedAPIView):
 
         data = {"team": team_id, "attendee": attendee_id}
         if exists:
+            data["teamName"] = team_name
             return Response(data, status=status.HTTP_201_CREATED)
         else:
             serializer = TeamMembersSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
+                res = serializer.data
+                res["teamName"] = team_name
+                return Response(res, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
