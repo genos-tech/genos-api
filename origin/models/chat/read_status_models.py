@@ -21,7 +21,7 @@ class ReadStatus(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["user", "chat_type", "chat_id", "thread_id", "last_read_message_id"],
+                fields=["user", "chat_type", "chat_id", "thread_id"],
                 name="unique_read_status",
             )
         ]
