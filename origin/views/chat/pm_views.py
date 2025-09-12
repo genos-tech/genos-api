@@ -1,6 +1,8 @@
 from django.db.models import Count, Q
+from django.shortcuts import get_object_or_404
 from rest_framework.response import Response
 from rest_framework import status
+
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.reaction_models import *
 from origin.models.project.prj_models import ProjectMembers, ProjectMaster
@@ -192,12 +194,12 @@ class PMSingleMessageView(AuthenticatedAPIView):
         pm = PMMessages.objects.filter(project=project_id, message_id=message_id)
         if len(pm) == 0:
             return Response(
-                {"error": "GM not found"},
+                {"error": "PM not found"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         elif len(pm) > 1:
             return Response(
-                {"error": "Duplicated GM found"},
+                {"error": "Duplicated PM found"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         else:
@@ -300,11 +302,11 @@ class PMSingleMessageView(AuthenticatedAPIView):
 
     def put(self, request):
         try:
-            if request.data["message_id"] == None:
+            if request.data.get("message_id") is None:
                 message = PMMessages.objects.get(
                     project=request.data["project_id"], task=request.data["task_id"]
                 )
-            elif request.data["task_id"] == None:
+            elif request.data.get("task_id") is None:
                 message = PMMessages.objects.get(
                     project=request.data["project_id"], message_id=request.data["message_id"]
                 )
@@ -367,12 +369,12 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
         )
         if len(pm) == 0:
             return Response(
-                {"error": "GM not found"},
+                {"error": "PM not found"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         elif len(pm) > 1:
             return Response(
-                {"error": "Duplicated GM found"},
+                {"error": "Duplicated PM found"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         else:
@@ -496,23 +498,30 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request):
-        project_id = int(request.data["project_id"])
-        thread_id = int(request.data["thread_id"])
-        message_id = int(request.data["message_id"])
+        project_id = request.data.get("project_id")
+        thread_id = request.data.get("thread_id")
+        message_id = request.data.get("message_id")
 
-        if not project_id or not thread_id or not message_id:
+        if project_id is None or message_id is None or thread_id is None:
             return Response(
-                {"error": "project_id, thread_id, and message_id are required."},
+                {"error": "project_id , thread_id, and message_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        message = PMThreadMessages.objects.get(
-            project=project_id, thread_id=thread_id, thread_message_id=message_id
+        message = get_object_or_404(
+            PMThreadMessages, project=project_id, thread_id=thread_id, thread_message_id=message_id
         )
 
-        data = {"thread_message_body": request.data.get("message_body", message.message_body)}
+        update_data = request.data.copy()
+        # Remove None values from the updated_data if it's None
+        if "message_body" in update_data and update_data["message_body"] is None:
+            update_data.pop("message_body")
 
-        serializer = PMThreadMessagesSerializer(message, data=data, partial=True)
+        # Change the field name
+        if "message_body" in update_data:
+            update_data["thread_message_body"] = update_data.pop("message_body")
+
+        serializer = PMThreadMessagesSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)

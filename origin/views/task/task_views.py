@@ -55,35 +55,24 @@ class TaskMasterView(AuthenticatedAPIView):
 
     def put(self, request):
         try:
-            print("request.data:", request.data)
-            task = TaskMaster.objects.get(task_id=request.data["task_id"])
+            task_id = request.data.get("task_id")
+            if task_id is None:
+                return Response(
+                    {"error": "task_id is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            task = TaskMaster.objects.get(task_id=task_id)
         except TaskMaster.DoesNotExist:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        data = {
-            "team": request.data.get("team", task.team),
-            "project": request.data.get("project", task.project),
-            "thread_id": request.data.get("thread_id", task.thread_id),
-            "parent_task_id": request.data.get("parent_task_id", task.parent_task_id),
-            "assignee": request.data.get("assignee", task.assignee),
-            "reporter": request.data.get("reporter", task.reporter),
-            "title": request.data.get("title", task.title),
-            "priority": request.data.get("priority", task.priority),
-            "priority_code": task.priority_code,
-            "effort_level": request.data.get("effort_level", task.effort_level),
-            "effort_level_code": task.effort_level_code,
-            "status": request.data.get("status", task.status),
-            "status_code": task.status_code,
-            "content": request.data.get("content", task.content),
-            "due_date": request.data.get("due_date", task.due_date),
-            "github_url": request.data.get("github_url", task.github_url),
-            "github_url_title": request.data.get("github_url_title", task.github_url_title),
-            "general_url": request.data.get("general_url", task.general_url),
-            "general_url_title": request.data.get("general_url_title", task.general_url_title),
-            "tags": request.data.get("tags", task.tags),
-        }
+        update_data = request.data.copy()
 
-        serializer = TaskMasterSerializer(task, data=data)
+        # Remove None values from the update_data
+        for key, val in update_data.items():
+            if val is None:
+                update_data.pop(key)
+
+        serializer = TaskMasterSerializer(task, data=update_data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -802,10 +791,10 @@ class TaskCommentsView(AuthenticatedAPIView):
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request):
-        task_id = request.data["task_id"]
-        comment_id = request.data["comment_id"]
+        task_id = request.data.get("task_id")
+        comment_id = request.data.get("comment_id")
 
-        if not task_id or not comment_id:
+        if task_id is None or comment_id is None:
             return Response(
                 {"error": "task_id and comment_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -813,11 +802,14 @@ class TaskCommentsView(AuthenticatedAPIView):
 
         message = TaskComments.objects.get(task=task_id, comment_id=comment_id)
 
-        data = {
-            "comment_body": request.data.get("comment_body", message.comment_body),
-        }
+        update_data = request.data.copy()
 
-        serializer = TaskCommentsSerializer(message, data=data, partial=True)
+        # Remove None values from the update_data
+        for key, val in update_data.items():
+            if val is None:
+                update_data.pop(key)
+
+        serializer = TaskCommentsSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)

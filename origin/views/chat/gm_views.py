@@ -1,6 +1,8 @@
 from django.db.models import Count, Q
+from django.shortcuts import get_object_or_404
 from rest_framework.response import Response
 from rest_framework import status
+
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.reaction_models import *
 from origin.models.chat.gm_models import GMMaster, GMMembers, GMMessages, GMThreadMessages
@@ -407,24 +409,29 @@ class GMSingleMessageView(AuthenticatedAPIView):
             )
 
     def put(self, request):
-        gm_id = int(request.data["gm_id"])
-        message_id = int(request.data["message_id"])
+        gm_id = request.data.get("gm_id")
+        message_id = request.data.get("message_id")
 
-        if not gm_id or not message_id:
+        if gm_id is None or message_id is None:
             return Response(
                 {"error": "gm_id and message_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        message = GMMessages.objects.get(gm=gm_id, message_id=message_id)
-        _tmp_task_id = message.task.task_id if message.task else None
+        message = get_object_or_404(GMMessages, gm=gm_id, message_id=message_id)
 
-        data = {
-            "message_body": request.data.get("message_body", message.message_body),
-            "task": request.data.get("task_id", _tmp_task_id),
-        }
+        update_data = request.data.copy()
+        # Remove None values from the updated_data
+        if "message_body" in update_data and update_data["message_body"] is None:
+            update_data.pop("message_body")
+        if "task_id" in update_data and update_data["task_id"] is None:
+            update_data.pop("task_id")
 
-        serializer = GMMessagesSerializer(message, data=data, partial=True)
+        # For the task_id, it needs to be changed to "task" if exists.
+        if "task_id" in update_data:
+            update_data["task"] = update_data.pop("task_id")
+
+        serializer = GMMessagesSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -578,23 +585,30 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request):
-        gm_id = int(request.data["gm_id"])
-        thread_id = int(request.data["thread_id"])
-        message_id = int(request.data["message_id"])
+        gm_id = request.data.get("gm_id")
+        thread_id = request.data.get("thread_id")
+        message_id = request.data.get("message_id")
 
-        if not gm_id or not thread_id or not message_id:
+        if gm_id is None or message_id is None or thread_id is None:
             return Response(
-                {"error": "gm_id, thread_id, and message_id are required."},
+                {"error": "gm_id , thread_id, and message_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        message = GMThreadMessages.objects.get(
-            gm=gm_id, thread_id=thread_id, thread_message_id=message_id
+        message = get_object_or_404(
+            GMThreadMessages, gm=gm_id, thread_id=thread_id, thread_message_id=message_id
         )
 
-        data = {"thread_message_body": (request.data.get("message_body", message.message_body))}
+        update_data = request.data.copy()
+        # Remove None values from the updated_data if it's None
+        if "message_body" in update_data and update_data["message_body"] is None:
+            update_data.pop("message_body")
 
-        serializer = GMThreadMessagesSerializer(message, data=data, partial=True)
+        # Change the field name
+        if "message_body" in update_data:
+            update_data["thread_message_body"] = update_data.pop("message_body")
+
+        serializer = GMThreadMessagesSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)

@@ -46,7 +46,7 @@ HTTP_451_UNAVAILABLE_FOR_LEGAL_REASONS
 
 def validate_request_data(params: list) -> None:
     for p in params:
-        if not p:
+        if p is None:
             return Response(
                 {"error": f"{p} is required."},
                 status=status.HTTP_400_BAD_REQUEST,
