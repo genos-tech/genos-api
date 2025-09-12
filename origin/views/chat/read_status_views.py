@@ -13,7 +13,7 @@ class ReadStatusView(AuthenticatedAPIView):
 
         request_user_id = request.user.id
 
-        user_id = request.data.get("user_id")
+        user = request.data.get("user")
         chat_type = request.data.get("chat_type")
         chat_id = request.data.get("chat_id")
         is_thread = request.data.get("is_thread")
@@ -21,13 +21,13 @@ class ReadStatusView(AuthenticatedAPIView):
         last_read_message_id = request.data.get("last_read_message_id")
 
         validate_request_data(
-            [user_id, chat_type, chat_id, is_thread, thread_id, last_read_message_id]
+            [user, chat_type, chat_id, is_thread, thread_id, last_read_message_id]
         )
-        validate_request_user(str(request_user_id), str(user_id))
+        validate_request_user(str(request_user_id), str(user))
 
         try:
             prev_status = ReadStatus.objects.get(
-                user=user_id,
+                user=user,
                 chat_type=chat_type,
                 chat_id=chat_id,
                 is_thread=is_thread,

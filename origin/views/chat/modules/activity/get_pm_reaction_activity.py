@@ -113,6 +113,9 @@ def get(
                 "userName": message.sender.username,
                 "userId": message.sender.id,
                 "avatarImgPath": message.sender.profile_image_url,
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
             },
             "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
             "tsSent": (

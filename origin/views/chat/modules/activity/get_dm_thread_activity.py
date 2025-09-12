@@ -11,7 +11,8 @@ IS_THREAD = 1
 
 def get(all_activities: dict, user_id: str, team_id: str, n_days_ago: datetime):
     my_all_dm_ids = UserDMMapping.objects.filter(user_id=user_id).values_list("dm_id", flat=True)
-    dm_thread_messages = DMThreadMessages.objects.filter(
+    # Exclude thread messages sent by myself.filter(
+    dm_thread_messages = DMThreadMessages.objects.filter(~Q(sender=user_id)).filter(
         Q(dm__team=team_id, dm__in=my_all_dm_ids), ts_sent_at__gte=n_days_ago
     )
     for message in dm_thread_messages:

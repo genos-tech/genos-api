@@ -40,6 +40,7 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_gm_ids, n_days_
                 output_field=CharField(),
             )
         )
+        .filter(~Q(sender=user_id))
         .filter(
             uid__in=list(
                 {
@@ -104,9 +105,9 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_gm_ids, n_days_
             "firstLineContent": content,
             "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
             "sender": {
-                "userName": "",
-                "userId": "",
-                "avatarImgPath": "",
+                "userName": message.sender.username,
+                "userId": message.sender.id,
+                "avatarImgPath": message.sender.profile_image_url,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",

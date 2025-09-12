@@ -21,16 +21,24 @@ def get(
         "ts_created_at",
     )
 
-    me_mentioned_task_comment = TaskComments.objects.filter(
-        task__team=team_id,
-        ts_sent_at__gte=n_days_ago,
-    ).filter(
-        Q(
-            task__project__in=list(
-                set([row["task__project"] for row in task_comment_raw_me_mentioned])
+    me_mentioned_task_comment = (
+        TaskComments.objects.filter(~Q(sender=user_id))
+        .filter(
+            task__team=team_id,
+            ts_sent_at__gte=n_days_ago,
+        )
+        .filter(
+            Q(
+                task__project__in=list(
+                    set([row["task__project"] for row in task_comment_raw_me_mentioned])
+                )
+            )
+            & Q(
+                comment_id__in=list(
+                    set([row["comment_id"] for row in task_comment_raw_me_mentioned])
+                )
             )
         )
-        & Q(comment_id__in=list(set([row["comment_id"] for row in task_comment_raw_me_mentioned])))
     )
 
     for comment in me_mentioned_task_comment:
@@ -71,9 +79,9 @@ def get(
             "firstLineContent": content,
             "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
             "sender": {
-                "userName": "",
-                "userId": "",
-                "avatarImgPath": "",
+                "userName": comment.sender.username,
+                "userId": comment.sender.id,
+                "avatarImgPath": comment.sender.profile_image_url,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",

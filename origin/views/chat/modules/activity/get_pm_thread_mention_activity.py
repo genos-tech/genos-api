@@ -29,7 +29,8 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_pm_ids, n_days_
     )
 
     pm_me_mentioned_thread_messages = (
-        PMThreadMessages.objects.filter(Q(project__team=team_id) & Q(ts_sent_at__gte=n_days_ago))
+        PMThreadMessages.objects.filter(~Q(sender=user_id))
+        .filter(Q(project__team=team_id) & Q(ts_sent_at__gte=n_days_ago))
         .annotate(
             uid=Concat(
                 "project",
@@ -109,9 +110,9 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_pm_ids, n_days_
             "firstLineContent": content,
             "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
             "sender": {
-                "userName": "",
-                "userId": "",
-                "avatarImgPath": "",
+                "userName": message.sender.username,
+                "userId": message.sender.id,
+                "avatarImgPath": message.sender.profile_image_url,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",

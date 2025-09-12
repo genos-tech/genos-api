@@ -28,12 +28,16 @@ def get(
         "ts_created_at",
     )
 
-    pm_me_mentioned_messages = PMMessages.objects.filter(
-        project__team=team_id,
-        ts_sent_at__gte=n_days_ago,
-    ).filter(
-        Q(project__in=list(set([row["chat_id"] for row in pm_raw_me_mentioned])))
-        & Q(message_id__in=list(set([row["message_id"] for row in pm_raw_me_mentioned])))
+    pm_me_mentioned_messages = (
+        PMMessages.objects.filter(
+            project__team=team_id,
+            ts_sent_at__gte=n_days_ago,
+        )
+        .filter(~Q(sender=user_id))
+        .filter(
+            Q(project__in=list(set([row["chat_id"] for row in pm_raw_me_mentioned])))
+            & Q(message_id__in=list(set([row["message_id"] for row in pm_raw_me_mentioned])))
+        )
     )
 
     for message in pm_me_mentioned_messages:
@@ -78,9 +82,9 @@ def get(
             "firstLineContent": content,
             "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
             "sender": {
-                "userName": "",
-                "userId": "",
-                "avatarImgPath": "",
+                "userName": message.sender.username,
+                "userId": message.sender.id,
+                "avatarImgPath": message.sender.profile_image_url,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
