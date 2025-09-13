@@ -55,7 +55,14 @@ def get(
             "firstLineContent": content,
             "latestReaction": {
                 "emoji": "",
-                "senderName": "",
+                "sender": {
+                    "userName": "",
+                    "userId": "",
+                    "avatarImgPath": "",
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": "",
+                },
                 "tsSent": "",
             },
             "sender": {

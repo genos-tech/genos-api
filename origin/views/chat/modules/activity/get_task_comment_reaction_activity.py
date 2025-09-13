@@ -75,7 +75,14 @@ def get(
             if latest_reaction == {} or latest_reaction["tsSent"] < reaction[5]:
                 latest_reaction = {
                     "emoji": reaction[1],
-                    "senderName": reaction[2],
+                    "sender": {
+                        "userName": reaction[2],
+                        "userId": reaction[3],
+                        "avatarImgPath": reaction[4],
+                        "tsLastSeen": "",
+                        "tsJoined": "",
+                        "customStatus": "",
+                    },
                     "tsSent": reaction[5],
                 }
 

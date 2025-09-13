@@ -104,7 +104,18 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_dm_ids, n_days_
                 ),
             },
             "firstLineContent": content,
-            "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
+            "latestReaction": {
+                "emoji": "",
+                "sender": {
+                    "userName": "",
+                    "userId": "",
+                    "avatarImgPath": "",
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": "",
+                },
+                "tsSent": "",
+            },
             "sender": {
                 "userName": message.sender.username,
                 "userId": message.sender.id,

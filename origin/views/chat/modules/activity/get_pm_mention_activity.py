@@ -80,7 +80,18 @@ def get(
                 ),
             },
             "firstLineContent": content,
-            "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
+            "latestReaction": {
+                "emoji": "",
+                "sender": {
+                    "userName": "",
+                    "userId": "",
+                    "avatarImgPath": "",
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": "",
+                },
+                "tsSent": "",
+            },
             "sender": {
                 "userName": message.sender.username,
                 "userId": message.sender.id,

@@ -85,7 +85,14 @@ def get(all_activities: dict, user_id: str, team_id: str, n_days_ago: datetime):
                 "firstLineContent": content,
                 "latestReaction": {
                     "emoji": "",
-                    "senderName": "",
+                    "sender": {
+                        "userName": "",
+                        "userId": "",
+                        "avatarImgPath": "",
+                        "tsLastSeen": "",
+                        "tsJoined": "",
+                        "customStatus": "",
+                    },
                     "tsSent": "",
                 },
                 "sender": {

@@ -77,7 +77,18 @@ def get(
                 "systemUserId": None,
             },
             "firstLineContent": content,
-            "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
+            "latestReaction": {
+                "emoji": "",
+                "sender": {
+                    "userName": "",
+                    "userId": "",
+                    "avatarImgPath": "",
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": "",
+                },
+                "tsSent": "",
+            },
             "sender": {
                 "userName": comment.sender.username,
                 "userId": comment.sender.id,
