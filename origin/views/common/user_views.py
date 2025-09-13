@@ -12,7 +12,8 @@ from origin.serializers.common.user_serializers import UserSerializer
 class UserProfileView(AuthenticatedAPIView):
     def put(self, request):
         request_user_id = request.user.id
-        user_id = request.data["user_id"]
+
+        user_id = request.data.get("user_id")
 
         if not user_id:
             return Response(
@@ -28,14 +29,13 @@ class UserProfileView(AuthenticatedAPIView):
 
         user = CustomUser.objects.get(id=user_id)
 
-        data = {
-            "custom_status": request.data.get("custom_status", user.custom_status),
-            "is_offline_forced": request.data.get("is_offline_forced", user.is_offline_forced),
-            "role": request.data.get("role", user.role),
-            "base_country": request.data.get("base_country", user.base_country),
-        }
+        update_data = request.data.copy()
+        # Remove None values from the update_data
+        for key, val in request.data.items():
+            if val is None:
+                update_data.pop(key)
 
-        serializer = UserSerializer(user, data=data, partial=True)
+        serializer = UserSerializer(user, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)

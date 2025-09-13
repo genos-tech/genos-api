@@ -13,7 +13,7 @@ def get(all_activities: dict, user_id: str, team_id: str, n_days_ago: datetime):
     my_all_gm_ids = GMMembers.objects.filter(gm__owner_team=team_id, attendee=user_id).values_list(
         "gm_id", flat=True
     )
-    _gm_thread_messages = GMThreadMessages.objects.filter(
+    _gm_thread_messages = GMThreadMessages.objects.filter(~Q(sender=user_id)).filter(
         Q(gm__owner_team=team_id, gm__in=my_all_gm_ids), ts_sent_at__gte=n_days_ago
     )
 
@@ -73,7 +73,14 @@ def get(all_activities: dict, user_id: str, team_id: str, n_days_ago: datetime):
                 "firstLineContent": content,
                 "latestReaction": {
                     "emoji": "",
-                    "senderName": "",
+                    "sender": {
+                        "userName": "",
+                        "userId": "",
+                        "avatarImgPath": "",
+                        "tsLastSeen": "",
+                        "tsJoined": "",
+                        "customStatus": "",
+                    },
                     "tsSent": "",
                 },
                 "sender": {

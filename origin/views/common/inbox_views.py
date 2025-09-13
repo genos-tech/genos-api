@@ -58,10 +58,10 @@ class InboxItemView(AuthenticatedAPIView):
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request):
-        team_id = request.data["team_id"]
-        item_id = request.data["item_id"]
+        team_id = request.data.get("team_id")
+        item_id = request.data.get("item_id")
 
-        if not team_id or not item_id:
+        if team_id is None or item_id is None:
             return Response(
                 {"error": "team_id and item_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -69,9 +69,13 @@ class InboxItemView(AuthenticatedAPIView):
 
         inbox_item = InboxItems.objects.get(team=team_id, item_id=item_id)
 
-        data = {"is_read": bool(request.data["is_read"])}
+        update_data = request.data.copy()
+        # Remove None values from the updated_data if it's None
+        if "is_read" in update_data:
+            if update_data["is_read"] is not None:
+                update_data["is_read"] = bool(update_data.pop("is_read"))
 
-        serializer = InboxItemsSerializer(inbox_item, data=data, partial=True)
+        serializer = InboxItemsSerializer(inbox_item, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)

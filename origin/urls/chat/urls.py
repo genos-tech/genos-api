@@ -6,6 +6,7 @@ from origin.views.chat.search_views import *
 from origin.views.chat.reaction_views import *
 from origin.views.chat.activity_views import *
 from origin.views.chat.mention_views import *
+from origin.views.chat.read_status_views import *
 
 urlpatterns = [
     # DM urls
@@ -83,4 +84,6 @@ urlpatterns = [
     path("api/v2/chat/activity/", ActivityHistoryView.as_view(), name="chat_activity"),
     # Mention
     path("api/v2/chat/mention/", ChatMentionView.as_view(), name="chat_mention"),
+    # Read status
+    path("api/v2/chat/read/", ReadStatusView.as_view(), name="read_status"),
 ]

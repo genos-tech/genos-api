@@ -75,8 +75,15 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
                     "type": "Group",
                     "id": int(member["gm_id"]),
                     "name": member["group_name"],
-                    "email": None,
-                    "dmPartnerUser": None,
+                    "email": "",
+                    "dmPartnerUser": {
+                        "userName": "",
+                        "userId": "",
+                        "avatarImgPath": "",
+                        "tsLastSeen": "",
+                        "tsJoined": "",
+                        "customStatus": "",
+                    },
                 }
             )
 

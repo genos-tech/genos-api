@@ -1,12 +1,17 @@
 from django.db.models import Count, Q
+from django.shortcuts import get_object_or_404
 from rest_framework.response import Response
 from rest_framework import status
+
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.reaction_models import *
 from origin.models.project.prj_models import ProjectMembers, ProjectMaster
 from origin.models.chat.pm_models import PMMessages, PMThreadMessages
+from origin.models.chat.read_status_models import *
 from origin.serializers.chat.pm_serializers import *
 from origin.views.chat.modules.common import generate_first_line
+
+CHAT_TYPE = 3
 
 
 #############################
@@ -51,7 +56,7 @@ class PMHistoryView(AuthenticatedAPIView):
 
         # Fetch reactions
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=3, chat_id__in=project_ids, is_thread=False
+            chat_type=CHAT_TYPE, chat_id__in=project_ids, is_thread=False
         )
 
         message_history_dict = {}
@@ -120,6 +125,16 @@ class PMHistoryView(AuthenticatedAPIView):
                     "customStatus": "",
                     "isSystemUser": is_system_user,
                 },
+                "receiver": {
+                    "userId": "",
+                    "userName": "",
+                    "userEmail": "",
+                    "avatarImgPath": "",
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": "",
+                    "isSystemUser": "",
+                },
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.project.project_id}-{message_id}", None
                 ),
@@ -172,6 +187,21 @@ class PMHistoryView(AuthenticatedAPIView):
                     },
                 }
 
+        # Add last_read_message_id for each chat.
+        last_read_message_id_for_chats = ReadStatus.objects.filter(
+            user=attendee_id, chat_type=CHAT_TYPE, chat_id__in=project_ids, is_thread=False
+        )
+        for chat_id in message_history_dict.keys():
+            raw_last_read_message_id = last_read_message_id_for_chats.filter(
+                chat_id=chat_id
+            ).values_list("last_read_message_id")
+            if len(raw_last_read_message_id) == 1:
+                last_read_message_id = raw_last_read_message_id[0][0]
+            else:
+                last_read_message_id = -1
+
+            message_history_dict[chat_id]["lastReadMessageId"] = last_read_message_id
+
         message_history = list(message_history_dict.values())
 
         return Response(message_history, status=status.HTTP_200_OK)
@@ -192,19 +222,19 @@ class PMSingleMessageView(AuthenticatedAPIView):
         pm = PMMessages.objects.filter(project=project_id, message_id=message_id)
         if len(pm) == 0:
             return Response(
-                {"error": "GM not found"},
+                {"error": "PM not found"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         elif len(pm) > 1:
             return Response(
-                {"error": "Duplicated GM found"},
+                {"error": "Duplicated PM found"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         else:
             pm = pm[0]
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=3, chat_id=project_id, message_id=message_id, is_thread=False
+            chat_type=CHAT_TYPE, chat_id=project_id, message_id=message_id, is_thread=False
         )
         all_reactions = []
         my_reactions = []
@@ -237,6 +267,14 @@ class PMSingleMessageView(AuthenticatedAPIView):
         elif len(thread_reply_counts) > 1:
             print("Error!!!! thread_reply_counts has multiple thread found")
 
+        raw_last_read_message_id = ReadStatus.objects.filter(
+            user=user_id, chat_type=CHAT_TYPE, chat_id=project_id, is_thread=False
+        ).values_list("last_read_message_id")
+        if len(raw_last_read_message_id) == 1:
+            last_read_message_id = raw_last_read_message_id[0][0]
+        else:
+            last_read_message_id = -1
+
         message = {
             "messageIdWithChatId": f"{project_id}-{message_id}",
             "chatId": int(project_id),
@@ -252,6 +290,16 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 "customStatus": "",
                 "isSystemUser": pm.sender.is_system_user,
             },
+            "receiver": {
+                "userId": "",
+                "userName": "",
+                "userEmail": "",
+                "avatarImgPath": "",
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
+                "isSystemUser": "",
+            },
             "numReplies": reply_count,
             "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
             "taskId": pm.task.task_id if pm.task else None,
@@ -264,6 +312,7 @@ class PMSingleMessageView(AuthenticatedAPIView):
             },
             "tsSent": pm.ts_sent_at,
             "tsUpdated": pm.ts_updated_at,
+            "lastReadMessageId": last_read_message_id,
         }
 
         return Response(message, status=status.HTTP_200_OK)
@@ -287,10 +336,23 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 "message_body": request.data["message_body"],
                 "task": request.data["task_id"],
             }
+
+            raw_last_read_message_id = ReadStatus.objects.filter(
+                user=request.user.id,
+                chat_type=CHAT_TYPE,
+                chat_id=request.data["project_id"],
+                is_thread=False,
+            ).values_list("last_read_message_id")
+            if len(raw_last_read_message_id) == 1:
+                last_read_message_id = raw_last_read_message_id[0][0]
+            else:
+                last_read_message_id = -1
+
             serializer = PMMessagesSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
+                res = {**serializer.data, "last_read_message_id": last_read_message_id}
+                return Response(res, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         else:
             return Response(
@@ -300,11 +362,11 @@ class PMSingleMessageView(AuthenticatedAPIView):
 
     def put(self, request):
         try:
-            if request.data["message_id"] == None:
+            if request.data.get("message_id") is None:
                 message = PMMessages.objects.get(
                     project=request.data["project_id"], task=request.data["task_id"]
                 )
-            elif request.data["task_id"] == None:
+            elif request.data.get("task_id") is None:
                 message = PMMessages.objects.get(
                     project=request.data["project_id"], message_id=request.data["message_id"]
                 )
@@ -319,10 +381,22 @@ class PMSingleMessageView(AuthenticatedAPIView):
             "message_body": request.data.get("message_body", message.message_body),
         }
 
+        raw_last_read_message_id = ReadStatus.objects.filter(
+            user=request.user.id,
+            chat_type=CHAT_TYPE,
+            chat_id=request.data["project_id"],
+            is_thread=False,
+        ).values_list("last_read_message_id")
+        if len(raw_last_read_message_id) == 1:
+            last_read_message_id = raw_last_read_message_id[0][0]
+        else:
+            last_read_message_id = -1
+
         serializer = PMMessagesSerializer(message, data=data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            res = {**serializer.data, "last_read_message_id": last_read_message_id}
+            return Response(res, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -367,19 +441,19 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
         )
         if len(pm) == 0:
             return Response(
-                {"error": "GM not found"},
+                {"error": "PM not found"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         elif len(pm) > 1:
             return Response(
-                {"error": "Duplicated GM found"},
+                {"error": "Duplicated PM found"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         else:
             pm = pm[0]
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=2, chat_id=project_id, message_id=message_id, is_thread=True
+            chat_type=CHAT_TYPE, chat_id=project_id, message_id=message_id, is_thread=True
         )
         all_reactions = []
         my_reactions = []
@@ -420,6 +494,16 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
                 "tsJoined": "",
                 "customStatus": "",
                 "isSystemUser": pm.sender.is_system_user,
+            },
+            "receiver": {
+                "userId": "",
+                "userName": "",
+                "userEmail": "",
+                "avatarImgPath": "",
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
+                "isSystemUser": "",
             },
             "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
             "taskId": task_id,
@@ -496,23 +580,30 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request):
-        project_id = int(request.data["project_id"])
-        thread_id = int(request.data["thread_id"])
-        message_id = int(request.data["message_id"])
+        project_id = request.data.get("project_id")
+        thread_id = request.data.get("thread_id")
+        message_id = request.data.get("message_id")
 
-        if not project_id or not thread_id or not message_id:
+        if project_id is None or message_id is None or thread_id is None:
             return Response(
-                {"error": "project_id, thread_id, and message_id are required."},
+                {"error": "project_id , thread_id, and message_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        message = PMThreadMessages.objects.get(
-            project=project_id, thread_id=thread_id, thread_message_id=message_id
+        message = get_object_or_404(
+            PMThreadMessages, project=project_id, thread_id=thread_id, thread_message_id=message_id
         )
 
-        data = {"thread_message_body": request.data.get("message_body", message.message_body)}
+        update_data = request.data.copy()
+        # Remove None values from the updated_data if it's None
+        if "message_body" in update_data and update_data["message_body"] is None:
+            update_data.pop("message_body")
 
-        serializer = PMThreadMessagesSerializer(message, data=data, partial=True)
+        # Change the field name
+        if "message_body" in update_data:
+            update_data["thread_message_body"] = update_data.pop("message_body")
+
+        serializer = PMThreadMessagesSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -540,7 +631,7 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
 
         # Fetch reactions
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=3, chat_id=project_id, is_thread=True
+            chat_type=CHAT_TYPE, chat_id=project_id, is_thread=True
         )
 
         thread_messages = []
@@ -620,6 +711,16 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                     "tsJoined": "",
                     "customStatus": "",
                     "isSystemUser": is_system_user,
+                },
+                "receiver": {
+                    "userId": "",
+                    "userName": "",
+                    "userEmail": "",
+                    "avatarImgPath": "",
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": "",
+                    "isSystemUser": "",
                 },
                 "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
                 "taskId": task_id,

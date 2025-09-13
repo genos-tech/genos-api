@@ -83,7 +83,7 @@ class ActivityHistoryView(AuthenticatedAPIView):
 
         # Task comments
         all_activities = get_task_comment_activity.get(
-            all_activities, team_id, my_all_project_ids, n_days_ago
+            all_activities, user_id, team_id, my_all_project_ids, n_days_ago
         )
 
         #######################

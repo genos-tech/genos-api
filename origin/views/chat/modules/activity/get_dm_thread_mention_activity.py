@@ -40,6 +40,7 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_dm_ids, n_days_
                 output_field=CharField(),
             )
         )
+        .filter(~Q(sender=user_id))
         .filter(
             uid__in=list(
                 {
@@ -53,27 +54,6 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_dm_ids, n_days_
     for message in dm_me_mentioned_thread_messages:
         content = generate_first_line.get(message.thread_message_body[0])
 
-        if str(user_id) == str(message.sender.id):
-            chat_name = message.receiver.username
-            dm_partner_user = {
-                "userName": message.receiver.username,
-                "userId": message.receiver.id,
-                "avatarImgPath": message.receiver.profile_image_url,
-                "tsLastSeen": "",
-                "tsJoined": "",
-                "customStatus": "",
-            }
-        else:
-            chat_name = message.sender.username
-            dm_partner_user = {
-                "userName": message.sender.username,
-                "userId": message.sender.id,
-                "avatarImgPath": message.sender.profile_image_url,
-                "tsLastSeen": "",
-                "tsJoined": "",
-                "customStatus": "",
-            }
-
         activity_id = "{activity_type}-{chat_type}-{chat_id}-{thread_id}-{message_id}".format(
             activity_type=ACTIVITY_TYPE,
             chat_type=CHAT_TYPE,
@@ -86,8 +66,15 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_dm_ids, n_days_
             "activityType": ACTIVITY_TYPE,
             "chatType": CHAT_TYPE,
             "chatId": int(message.dm.dm_id),
-            "chatName": chat_name,
-            "dmPartnerUser": dm_partner_user,
+            "chatName": message.sender.username,  # Always use sender name
+            "dmPartnerUser": {
+                "userName": message.sender.username,
+                "userId": message.sender.id,
+                "avatarImgPath": message.sender.profile_image_url,
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
+            },
             "isThread": IS_THREAD == 1,
             "threadId": int(message.thread_id),
             "messageId": int(message.thread_message_id),
@@ -117,11 +104,22 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_dm_ids, n_days_
                 ),
             },
             "firstLineContent": content,
-            "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
+            "latestReaction": {
+                "emoji": "",
+                "sender": {
+                    "userName": "",
+                    "userId": "",
+                    "avatarImgPath": "",
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": "",
+                },
+                "tsSent": "",
+            },
             "sender": {
-                "userName": "",
-                "userId": "",
-                "avatarImgPath": "",
+                "userName": message.sender.username,
+                "userId": message.sender.id,
+                "avatarImgPath": message.sender.profile_image_url,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",

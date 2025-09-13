@@ -57,6 +57,9 @@ def get(
                     "userName": reaction[2],
                     "userId": reaction[3],
                     "avatarImgPath": reaction[4],
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": "",
                 },
                 "tsSent": reaction[5],
             }
@@ -67,7 +70,14 @@ def get(
             if latest_reaction == {} or latest_reaction["tsSent"] < reaction[5]:
                 latest_reaction = {
                     "emoji": reaction[1],
-                    "senderName": reaction[2],
+                    "sender": {
+                        "userName": reaction[2],
+                        "userId": reaction[3],
+                        "avatarImgPath": reaction[4],
+                        "tsLastSeen": "",
+                        "tsJoined": "",
+                        "customStatus": "",
+                    },
                     "tsSent": reaction[5],
                 }
 
@@ -113,6 +123,9 @@ def get(
                 "userName": message.sender.username,
                 "userId": message.sender.id,
                 "avatarImgPath": message.sender.profile_image_url,
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
             },
             "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
             "tsSent": (

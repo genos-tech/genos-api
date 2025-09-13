@@ -14,7 +14,7 @@ def get(all_activities: dict, user_id: str, team_id: str, n_days_ago: datetime):
     my_all_project_ids = ProjectMembers.objects.filter(team=team_id, attendee=user_id).values_list(
         "project_id", flat=True
     )
-    _pm_thread_messages = PMThreadMessages.objects.filter(
+    _pm_thread_messages = PMThreadMessages.objects.filter(~Q(sender=user_id)).filter(
         Q(project__team=team_id, project__in=my_all_project_ids),
         ts_sent_at__gte=n_days_ago,
     )
@@ -71,13 +71,23 @@ def get(all_activities: dict, user_id: str, team_id: str, n_days_ago: datetime):
             "firstLineContent": content,
             "latestReaction": {
                 "emoji": "",
-                "senderName": "",
+                "sender": {
+                    "userName": "",
+                    "userId": "",
+                    "avatarImgPath": "",
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": "",
+                },
                 "tsSent": "",
             },
             "sender": {
                 "userName": message.sender.username,
                 "userId": message.sender.id,
                 "avatarImgPath": message.sender.profile_image_url,
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
             },
             "reactions": {"myReactions": [], "allReactions": []},
             "tsSent": message.ts_sent_at,

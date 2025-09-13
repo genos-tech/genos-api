@@ -26,12 +26,16 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_dm_ids, n_days_
         "ts_created_at",
     )
 
-    _dm_me_mentioned_messages = DMMessages.objects.filter(
-        dm__team=team_id,
-        ts_sent_at__gte=n_days_ago,
-    ).filter(
-        Q(dm__in=list(set([row["chat_id"] for row in dm_raw_me_mentioned])))
-        & Q(message_id__in=list(set([row["message_id"] for row in dm_raw_me_mentioned])))
+    _dm_me_mentioned_messages = (
+        DMMessages.objects.filter(
+            dm__team=team_id,
+            ts_sent_at__gte=n_days_ago,
+        )
+        .filter(~Q(sender=user_id))  # Exclude thread messages sent by myself
+        .filter(
+            Q(dm__in=list({row["chat_id"] for row in dm_raw_me_mentioned}))
+            & Q(message_id__in=list({row["message_id"] for row in dm_raw_me_mentioned}))
+        )
     )
 
     for message in _dm_me_mentioned_messages:
@@ -75,11 +79,22 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_dm_ids, n_days_
             "threadMessageUniqueKey": "",
             "taskId": int(message.task.task_id) if message.task else -1,
             "firstLineContent": content,
-            "latestReaction": {"emoji": "", "senderName": "", "tsSent": ""},
+            "latestReaction": {
+                "emoji": "",
+                "sender": {
+                    "userName": "",
+                    "userId": "",
+                    "avatarImgPath": "",
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": "",
+                },
+                "tsSent": "",
+            },
             "sender": {
-                "userName": "",
-                "userId": "",
-                "avatarImgPath": "",
+                "userName": message.sender.username,
+                "userId": message.sender.id,
+                "avatarImgPath": message.sender.profile_image_url,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",

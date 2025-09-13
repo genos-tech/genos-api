@@ -1,6 +1,5 @@
 from django.db import models
 from django.core.exceptions import ValidationError
-from django.utils import timezone
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser

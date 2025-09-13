@@ -1,11 +1,16 @@
 from django.db.models import Count, Q
+from django.shortcuts import get_object_or_404
 from rest_framework.response import Response
 from rest_framework import status
+
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.reaction_models import *
 from origin.models.chat.dm_models import *
+from origin.models.chat.read_status_models import *
 from origin.serializers.chat.dm_serializers import *
 from origin.views.chat.modules.common import generate_first_line
+
+CHAT_TYPE = 1
 
 
 #############################
@@ -158,7 +163,7 @@ class DMHistoryView(AuthenticatedAPIView):
 
         # Fetch reactions
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=1, chat_id__in=dm_ids, is_thread=False
+            chat_type=CHAT_TYPE, chat_id__in=dm_ids, is_thread=False
         )
 
         message_history_dict = {}
@@ -308,6 +313,21 @@ class DMHistoryView(AuthenticatedAPIView):
                     "TSLastMessage": ts_last_message_dict[chat_id],
                 }
 
+        # Add last_read_message_id for each chat.
+        last_read_message_id_for_chats = ReadStatus.objects.filter(
+            user=user_id, chat_type=CHAT_TYPE, chat_id__in=dm_ids, is_thread=False
+        )
+        for chat_id in message_history_dict.keys():
+            raw_last_read_message_id = last_read_message_id_for_chats.filter(
+                chat_id=chat_id
+            ).values_list("last_read_message_id")
+            if len(raw_last_read_message_id) == 1:
+                last_read_message_id = raw_last_read_message_id[0][0]
+            else:
+                last_read_message_id = -1
+
+            message_history_dict[chat_id]["lastReadMessageId"] = last_read_message_id
+
         message_history = list(message_history_dict.values())
 
         return Response(message_history, status=status.HTTP_200_OK)
@@ -340,7 +360,7 @@ class DMSingleMessageView(AuthenticatedAPIView):
             dm = dm[0]
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=1, chat_id=dm_id, message_id=message_id, is_thread=False
+            chat_type=CHAT_TYPE, chat_id=dm_id, message_id=message_id, is_thread=False
         )
         all_reactions = []
         my_reactions = []
@@ -372,6 +392,14 @@ class DMSingleMessageView(AuthenticatedAPIView):
             reply_count = int(thread_reply_counts[0]["num_of_replies"])
         elif len(thread_reply_counts) > 1:
             print("Error!!!! thread_reply_counts has multiple thread found")
+
+        raw_last_read_message_id = ReadStatus.objects.filter(
+            user=user_id, chat_type=CHAT_TYPE, chat_id=dm_id, is_thread=False
+        ).values_list("last_read_message_id")
+        if len(raw_last_read_message_id) == 1:
+            last_read_message_id = raw_last_read_message_id[0][0]
+        else:
+            last_read_message_id = -1
 
         message = {
             "messageIdWithChatId": f"{dm_id}-{message_id}",
@@ -410,6 +438,7 @@ class DMSingleMessageView(AuthenticatedAPIView):
             },
             "tsSent": dm.ts_sent_at,
             "tsUpdated": dm.ts_updated_at,
+            "lastReadMessageId": last_read_message_id,
         }
 
         return Response(message, status=status.HTTP_200_OK)
@@ -430,10 +459,23 @@ class DMSingleMessageView(AuthenticatedAPIView):
                 "message_id": current_message_count + 1,
                 "message_body": request.data["message_body"],
             }
+
+            raw_last_read_message_id = ReadStatus.objects.filter(
+                user=request.user.id,
+                chat_type=CHAT_TYPE,
+                chat_id=request.data["dm_id"],
+                is_thread=False,
+            ).values_list("last_read_message_id")
+            if len(raw_last_read_message_id) == 1:
+                last_read_message_id = raw_last_read_message_id[0][0]
+            else:
+                last_read_message_id = -1
+
             serializer = DMMessagesSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
+                res = {**serializer.data, "last_read_message_id": last_read_message_id}
+                return Response(res, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         else:
             return Response(
@@ -442,27 +484,44 @@ class DMSingleMessageView(AuthenticatedAPIView):
             )
 
     def put(self, request):
-        dm_id = int(request.data["dm_id"])
-        message_id = int(request.data["message_id"])
+        dm_id = request.data.get("dm_id")
+        message_id = request.data.get("message_id")
 
-        if not dm_id or not message_id:
+        if dm_id is None or message_id is None:
             return Response(
                 {"error": "dm_id and message_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        message = DMMessages.objects.get(dm=dm_id, message_id=message_id)
-        _tmp_task_id = message.task.task_id if message.task else None
+        message = get_object_or_404(DMMessages, dm=dm_id, message_id=message_id)
 
-        data = {
-            "message_body": request.data.get("message_body", message.message_body),
-            "task": request.data.get("task_id", _tmp_task_id),
-        }
+        update_data = request.data.copy()
+        # Remove None values from the updated_data
+        if "message_body" in update_data and update_data["message_body"] is None:
+            update_data.pop("message_body")
+        if "task_id" in update_data and update_data["task_id"] is None:
+            update_data.pop("task_id")
 
-        serializer = DMMessagesSerializer(message, data=data, partial=True)
+        # For the task_id, it needs to be changed to "task" if exists.
+        if "task_id" in update_data:
+            update_data["task"] = update_data.pop("task_id")
+
+        raw_last_read_message_id = ReadStatus.objects.filter(
+            user=request.user.id,
+            chat_type=CHAT_TYPE,
+            chat_id=request.data["dm_id"],
+            is_thread=False,
+        ).values_list("last_read_message_id")
+        if len(raw_last_read_message_id) == 1:
+            last_read_message_id = raw_last_read_message_id[0][0]
+        else:
+            last_read_message_id = -1
+
+        serializer = DMMessagesSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            res = {**serializer.data, "last_read_message_id": last_read_message_id}
+            return Response(res, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -517,7 +576,7 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
             dm = dm[0]
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=1, chat_id=dm_id, message_id=message_id, is_thread=True
+            chat_type=CHAT_TYPE, chat_id=dm_id, message_id=message_id, is_thread=True
         )
         all_reactions = []
         my_reactions = []
@@ -557,6 +616,16 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
                 "tsJoined": "",
                 "customStatus": "",
                 "isSystemUser": dm.sender.is_system_user,
+            },
+            "receiver": {
+                "userId": dm.receiver.id,
+                "userName": dm.receiver.username,
+                "userEmail": dm.receiver.email,
+                "avatarImgPath": dm.receiver.profile_image_url,
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
+                "isSystemUser": dm.receiver.is_system_user,
             },
             "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
             "taskId": dm.parent_message_uid.task.task_id if dm.parent_message_uid.task else None,
@@ -617,23 +686,30 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request):
-        dm_id = int(request.data["dm_id"])
-        thread_id = int(request.data["thread_id"])
-        message_id = int(request.data["message_id"])
+        dm_id = request.data.get("dm_id")
+        thread_id = request.data.get("thread_id")
+        message_id = request.data.get("message_id")
 
-        if not dm_id or not thread_id or not message_id:
+        if dm_id is None or message_id is None or thread_id is None:
             return Response(
-                {"error": "dm_id, thread_id, and message_id are required."},
+                {"error": "dm_id , thread_id, and message_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        message = DMThreadMessages.objects.get(
-            dm=dm_id, thread_id=thread_id, thread_message_id=message_id
+        message = get_object_or_404(
+            DMThreadMessages, dm=dm_id, thread_id=thread_id, thread_message_id=message_id
         )
 
-        data = {"thread_message_body": request.data.get("message_body", message.message_body)}
+        update_data = request.data.copy()
+        # Remove None values from the updated_data if it's None
+        if "message_body" in update_data and update_data["message_body"] is None:
+            update_data.pop("message_body")
 
-        serializer = DMThreadMessagesSerializer(message, data=data, partial=True)
+        # Change the field name
+        if "message_body" in update_data:
+            update_data["thread_message_body"] = update_data.pop("message_body")
+
+        serializer = DMThreadMessagesSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -660,7 +736,9 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
         )
 
         # Fetch reactions
-        raw_reactions = ReactionFact.objects.filter(chat_type=1, chat_id=dm_id, is_thread=True)
+        raw_reactions = ReactionFact.objects.filter(
+            chat_type=CHAT_TYPE, chat_id=dm_id, is_thread=True
+        )
 
         task_exist = False
         thread_messages = []
@@ -679,7 +757,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
             if message_id == 1:
                 # fetch the first thread message reactions -> the parent message reaction.
                 reactions = ReactionFact.objects.filter(
-                    chat_type=1, chat_id=dm_id, is_thread=False, message_id=thread_id
+                    chat_type=CHAT_TYPE, chat_id=dm_id, is_thread=False, message_id=thread_id
                 ).values_list(
                     "reaction_id",
                     "reaction_emoji",

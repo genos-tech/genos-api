@@ -87,30 +87,16 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_dm_ids, n_days_
                 if latest_reaction == {} or latest_reaction["tsSent"] < reaction[5]:
                     latest_reaction = {
                         "emoji": reaction[1],
-                        "senderName": reaction[2],
+                        "sender": {
+                            "userName": reaction[2],
+                            "userId": reaction[3],
+                            "avatarImgPath": reaction[4],
+                            "tsLastSeen": "",
+                            "tsJoined": "",
+                            "customStatus": "",
+                        },
                         "tsSent": reaction[5],
                     }
-
-            if str(user_id) == str(message.sender.id):
-                chat_name = message.receiver.username
-                dm_partner_user = {
-                    "userName": message.receiver.username,
-                    "userId": message.receiver.id,
-                    "avatarImgPath": message.receiver.profile_image_url,
-                    "tsLastSeen": "",
-                    "tsJoined": "",
-                    "customStatus": "",
-                }
-            else:
-                chat_name = message.sender.username
-                dm_partner_user = {
-                    "userName": message.sender.username,
-                    "userId": message.sender.id,
-                    "avatarImgPath": message.sender.profile_image_url,
-                    "tsLastSeen": "",
-                    "tsJoined": "",
-                    "customStatus": "",
-                }
 
             activity_id = "{activity_type}-{chat_type}-{chat_id}-{thread_id}-{message_id}".format(
                 activity_type=ACTIVITY_TYPE,
@@ -124,8 +110,15 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_dm_ids, n_days_
                 "activityType": ACTIVITY_TYPE,
                 "chatType": CHAT_TYPE,  # dm
                 "chatId": int(message.dm.dm_id),
-                "chatName": chat_name,
-                "dmPartnerUser": dm_partner_user,
+                "chatName": message.receiver.username,  # Always use receiver name
+                "dmPartnerUser": {
+                    "userName": message.receiver.username,
+                    "userId": message.receiver.id,
+                    "avatarImgPath": message.receiver.profile_image_url,
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": "",
+                },
                 "isThread": IS_THREAD == 1,
                 "threadId": int(message.thread_id),
                 "messageId": int(message.thread_message_id),

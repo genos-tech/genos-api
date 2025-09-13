@@ -1,3 +1,4 @@
+from django.db.models import Q
 from datetime import datetime
 
 from origin.models.task.task_models import *
@@ -8,8 +9,10 @@ ACTIVITY_TYPE = 1
 IS_THREAD = 0
 
 
-def get(all_activities: dict, team_id: str, my_all_project_ids, n_days_ago: datetime):
-    task_comments = TaskComments.objects.filter(
+def get(
+    all_activities: dict, user_id: str, team_id: str, my_all_project_ids, n_days_ago: datetime
+):
+    task_comments = TaskComments.objects.filter(~Q(sender=user_id)).filter(
         task__team=team_id,
         task__project__in=my_all_project_ids,
         ts_sent_at__gte=n_days_ago,
@@ -52,13 +55,23 @@ def get(all_activities: dict, team_id: str, my_all_project_ids, n_days_ago: date
             "firstLineContent": content,
             "latestReaction": {
                 "emoji": "",
-                "senderName": "",
+                "sender": {
+                    "userName": "",
+                    "userId": "",
+                    "avatarImgPath": "",
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": "",
+                },
                 "tsSent": "",
             },
             "sender": {
                 "userName": comment.sender.username,
                 "userId": comment.sender.id,
                 "avatarImgPath": comment.sender.profile_image_url,
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
             },
             "reactions": {"myReactions": [], "allReactions": []},
             "tsSent": comment.ts_sent_at,

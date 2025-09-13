@@ -96,8 +96,6 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
                 }
             )
 
-        print("_team_tasks:", _team_tasks)
-
         team_tasks = []
         for _status in STATUS_MAP.keys():
             if _status in _team_tasks:
