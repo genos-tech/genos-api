@@ -68,7 +68,7 @@ class TaskMasterView(AuthenticatedAPIView):
         update_data = request.data.copy()
 
         # Remove None values from the update_data
-        for key, val in update_data.items():
+        for key, val in request.data.items():
             if val is None:
                 update_data.pop(key)
 
@@ -805,7 +805,7 @@ class TaskCommentsView(AuthenticatedAPIView):
         update_data = request.data.copy()
 
         # Remove None values from the update_data
-        for key, val in update_data.items():
+        for key, val in request.data.items():
             if val is None:
                 update_data.pop(key)
 
