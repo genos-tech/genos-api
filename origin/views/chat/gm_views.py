@@ -6,8 +6,11 @@ from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.reaction_models import *
 from origin.models.chat.gm_models import GMMaster, GMMembers, GMMessages, GMThreadMessages
+from origin.models.chat.read_status_models import *
 from origin.serializers.chat.gm_serializers import *
 from origin.views.chat.modules.common import generate_first_line
+
+CHAT_TYPE = 2
 
 
 #############################
@@ -164,7 +167,7 @@ class GMHistoryView(AuthenticatedAPIView):
 
         # Fetch reactions
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=2, chat_id__in=gm_ids, is_thread=False
+            chat_type=CHAT_TYPE, chat_id__in=gm_ids, is_thread=False
         )
 
         message_history_dict = {}
@@ -286,6 +289,21 @@ class GMHistoryView(AuthenticatedAPIView):
                     "TSLastMessage": ts_last_message_dict[chat_id],
                 }
 
+        # Add last_read_message_id for each chat.
+        last_read_message_id_for_chats = ReadStatus.objects.filter(
+            user=attendee_id, chat_type=CHAT_TYPE, chat_id__in=gm_ids, is_thread=False
+        )
+        for chat_id in message_history_dict.keys():
+            raw_last_read_message_id = last_read_message_id_for_chats.filter(
+                chat_id=chat_id
+            ).values_list("last_read_message_id")
+            if len(raw_last_read_message_id) == 1:
+                last_read_message_id = raw_last_read_message_id[0][0]
+            else:
+                last_read_message_id = -1
+
+            message_history_dict[chat_id]["lastReadMessageId"] = last_read_message_id
+
         message_history = list(message_history_dict.values())
 
         return Response(message_history, status=status.HTTP_200_OK)
@@ -318,7 +336,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
             gm = gm[0]
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=2, chat_id=gm_id, message_id=message_id, is_thread=False
+            chat_type=CHAT_TYPE, chat_id=gm_id, message_id=message_id, is_thread=False
         )
         all_reactions = []
         my_reactions = []
@@ -350,6 +368,14 @@ class GMSingleMessageView(AuthenticatedAPIView):
             reply_count = int(thread_reply_counts[0]["num_of_replies"])
         elif len(thread_reply_counts) > 1:
             print("Error!!!! thread_reply_counts has multiple thread found")
+
+        raw_last_read_message_id = ReadStatus.objects.filter(
+            user=user_id, chat_type=CHAT_TYPE, chat_id=gm_id, is_thread=False
+        ).values_list("last_read_message_id")
+        if len(raw_last_read_message_id) == 1:
+            last_read_message_id = raw_last_read_message_id[0][0]
+        else:
+            last_read_message_id = -1
 
         message = {
             "messageIdWithChatId": f"{gm_id}-{message_id}",
@@ -388,6 +414,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
             },
             "tsSent": gm.ts_sent_at,
             "tsUpdated": gm.ts_updated_at,
+            "lastReadMessageId": last_read_message_id,
         }
 
         return Response(message, status=status.HTTP_200_OK)
@@ -407,10 +434,23 @@ class GMSingleMessageView(AuthenticatedAPIView):
                 "message_id": current_message_count + 1,
                 "message_body": request.data["message_body"],
             }
+
+            raw_last_read_message_id = ReadStatus.objects.filter(
+                user=request.user.id,
+                chat_type=CHAT_TYPE,
+                chat_id=request.data["gm_id"],
+                is_thread=False,
+            ).values_list("last_read_message_id")
+            if len(raw_last_read_message_id) == 1:
+                last_read_message_id = raw_last_read_message_id[0][0]
+            else:
+                last_read_message_id = -1
+
             serializer = GMMessagesSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
+                res = {**serializer.data, "last_read_message_id": last_read_message_id}
+                return Response(res, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         else:
             return Response(
@@ -441,10 +481,22 @@ class GMSingleMessageView(AuthenticatedAPIView):
         if "task_id" in update_data:
             update_data["task"] = update_data.pop("task_id")
 
+        raw_last_read_message_id = ReadStatus.objects.filter(
+            user=request.user.id,
+            chat_type=CHAT_TYPE,
+            chat_id=request.data["dm_id"],
+            is_thread=False,
+        ).values_list("last_read_message_id")
+        if len(raw_last_read_message_id) == 1:
+            last_read_message_id = raw_last_read_message_id[0][0]
+        else:
+            last_read_message_id = -1
+
         serializer = GMMessagesSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            res = {**serializer.data, "last_read_message_id": last_read_message_id}
+            return Response(res, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -499,7 +551,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
             gm = gm[0]
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=2, chat_id=gm_id, message_id=message_id, is_thread=True
+            chat_type=CHAT_TYPE, chat_id=gm_id, message_id=message_id, is_thread=True
         )
         all_reactions = []
         my_reactions = []
@@ -655,7 +707,9 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
         )
 
         # Fetch reactions
-        raw_reactions = ReactionFact.objects.filter(chat_type=2, chat_id=gm_id, is_thread=True)
+        raw_reactions = ReactionFact.objects.filter(
+            chat_type=CHAT_TYPE, chat_id=gm_id, is_thread=True
+        )
 
         thread_messages = []
         for raw_message in raw_messages:
@@ -673,7 +727,7 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
             if message_id == 1:
                 # fetch the first thread message reactions -> the parent message reaction.
                 reactions = ReactionFact.objects.filter(
-                    chat_type=2, chat_id=gm_id, is_thread=False, message_id=thread_id
+                    chat_type=CHAT_TYPE, chat_id=gm_id, is_thread=False, message_id=thread_id
                 ).values_list(
                     "reaction_id",
                     "reaction_emoji",

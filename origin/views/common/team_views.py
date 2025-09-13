@@ -220,9 +220,6 @@ class GetTeamMembersView(AuthenticatedAPIView):
                 }
             )
 
-        print("response_data:")
-        print(response_data)
-
         return Response(response_data, status=status.HTTP_200_OK)
 
 
