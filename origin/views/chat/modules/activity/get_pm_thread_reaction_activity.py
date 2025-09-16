@@ -60,7 +60,6 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_pm_ids, n_days_
             "sender__profile_image_url",
             "ts_created_at",
         )
-        my_reactions = []
         all_reactions = []
         latest_reaction = {}
         for reaction in reactions:
@@ -77,8 +76,6 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_pm_ids, n_days_
                 },
                 "tsSent": reaction[5],
             }
-            if str(reaction[3]) == user_id:
-                my_reactions.append(_reaction)
             all_reactions.append(_reaction)
 
             if latest_reaction == {} or latest_reaction["tsSent"] < reaction[5]:
@@ -151,7 +148,7 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_pm_ids, n_days_
                 "userId": message.sender.id,
                 "avatarImgPath": message.sender.profile_image_url,
             },
-            "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+            "reactions": all_reactions,
             "tsSent": message.ts_sent_at,
         }
 

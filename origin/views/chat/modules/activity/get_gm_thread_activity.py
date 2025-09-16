@@ -91,7 +91,7 @@ def get(all_activities: dict, user_id: str, team_id: str, n_days_ago: datetime):
                     "tsJoined": "",
                     "customStatus": "",
                 },
-                "reactions": {"myReactions": [], "allReactions": []},
+                "reactions": [],
                 "tsSent": message.ts_sent_at,
             }
     return all_activities, my_all_gm_ids

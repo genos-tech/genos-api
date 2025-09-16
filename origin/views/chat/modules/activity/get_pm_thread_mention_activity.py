@@ -128,7 +128,7 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_pm_ids, n_days_
                 "tsJoined": "",
                 "customStatus": "",
             },
-            "reactions": {"myReactions": [], "allReactions": []},
+            "reactions": [],
             "tsSent": message.ts_sent_at,
         }
 

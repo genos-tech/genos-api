@@ -193,7 +193,6 @@ class GMHistoryView(AuthenticatedAPIView):
                 "sender__profile_image_url",
                 "ts_created_at",
             )
-            my_reactions = []
             all_reactions = []
             for reaction in reactions:
                 _reaction = {
@@ -209,8 +208,6 @@ class GMHistoryView(AuthenticatedAPIView):
                     },
                     "tsSent": reaction[5],
                 }
-                if str(reaction[3]) == attendee_id:
-                    my_reactions.append(_reaction)
                 all_reactions.append(_reaction)
 
             messageIdWithChatId = f"{chat_id}-{message_id}"
@@ -233,7 +230,7 @@ class GMHistoryView(AuthenticatedAPIView):
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.gm.gm_id}-{message_id}", None
                 ),
-                "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+                "reactions": all_reactions,
                 "taskId": raw_message.task.task_id if raw_message.task else None,
                 "taskStatus": raw_message.task.status if raw_message.task else None,
                 "project": {
@@ -339,7 +336,6 @@ class GMSingleMessageView(AuthenticatedAPIView):
             chat_type=CHAT_TYPE, chat_id=gm_id, message_id=message_id, is_thread=False
         )
         all_reactions = []
-        my_reactions = []
         for raw_reaction in raw_reactions:
             reaction = {
                 "id": int(raw_reaction.reaction_id),
@@ -355,8 +351,6 @@ class GMSingleMessageView(AuthenticatedAPIView):
                 "tsSent": raw_reaction.ts_created_at,
             }
             all_reactions.append(reaction)
-            if raw_reaction.sender.id == user_id:
-                my_reactions.append(reaction)
 
         thread_reply_counts = (
             GMThreadMessages.objects.filter(gm=gm_id, thread_id=message_id)
@@ -403,7 +397,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
                 "isSystemUser": "",
             },
             "numReplies": reply_count,
-            "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+            "reactions": all_reactions,
             "taskId": gm.task.task_id if gm.task else None,
             "taskStatus": gm.task.status if gm.task else None,
             "project": {
@@ -554,7 +548,6 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
             chat_type=CHAT_TYPE, chat_id=gm_id, message_id=message_id, is_thread=True
         )
         all_reactions = []
-        my_reactions = []
         for raw_reaction in raw_reactions:
             reaction = {
                 "id": int(raw_reaction.reaction_id),
@@ -570,8 +563,6 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
                 "tsSent": raw_reaction.ts_created_at,
             }
             all_reactions.append(reaction)
-            if str(raw_reaction.sender.id) == user_id:
-                my_reactions.append(reaction)
 
         contentText = generate_first_line.get(gm.thread_message_body[0])
         messageIdWithChatIdAndThreadId = f"{gm_id}-{thread_id}-{message_id}"
@@ -602,7 +593,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
                 "customStatus": "",
                 "isSystemUser": "",
             },
-            "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+            "reactions": all_reactions,
             "taskId": gm.parent_message_uid.task.task_id if gm.parent_message_uid.task else None,
             "taskExist": True if gm.parent_message_uid.task else False,
             "project": {
@@ -747,7 +738,6 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                     "sender__profile_image_url",
                     "ts_created_at",
                 )
-            my_reactions = []
             all_reactions = []
             for reaction in reactions:
                 _reaction = {
@@ -763,8 +753,6 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                     },
                     "tsSent": reaction[5],
                 }
-                if str(reaction[3]) == user_id:
-                    my_reactions.append(_reaction)
                 all_reactions.append(_reaction)
 
             # Get the parent ts_sent/ts_updated_at for the first thread message.
@@ -805,7 +793,7 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                     "customStatus": "",
                     "isSystemUser": "",
                 },
-                "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+                "reactions": all_reactions,
                 "taskId": (
                     raw_message.parent_message_uid.task.task_id
                     if raw_message.parent_message_uid.task

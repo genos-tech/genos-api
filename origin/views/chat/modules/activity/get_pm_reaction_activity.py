@@ -46,7 +46,6 @@ def get(
             "sender__profile_image_url",
             "ts_created_at",
         )
-        my_reactions = []
         all_reactions = []
         latest_reaction = {}
         for reaction in reactions:
@@ -63,8 +62,6 @@ def get(
                 },
                 "tsSent": reaction[5],
             }
-            if str(reaction[3]) == user_id:
-                my_reactions.append(_reaction)
             all_reactions.append(_reaction)
 
             if latest_reaction == {} or latest_reaction["tsSent"] < reaction[5]:
@@ -127,7 +124,7 @@ def get(
                 "tsJoined": "",
                 "customStatus": "",
             },
-            "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+            "reactions": all_reactions,
             "tsSent": (
                 latest_reaction["tsSent"] if "tsSent" in latest_reaction else message.ts_sent_at
             ),
