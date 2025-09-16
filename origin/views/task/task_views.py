@@ -850,7 +850,6 @@ class TaskCommentsView(AuthenticatedAPIView):
                     "sender__profile_image_url",
                     "ts_created_at",
                 )
-                my_reactions = []
                 all_reactions = []
                 for reaction in reactions:
                     _reaction = {
@@ -866,8 +865,6 @@ class TaskCommentsView(AuthenticatedAPIView):
                         },
                         "tsSent": reaction[5],
                     }
-                    if str(reaction[3]) == user_id:
-                        my_reactions.append(_reaction)
                     all_reactions.append(_reaction)
 
                 response_data.append(
@@ -877,7 +874,7 @@ class TaskCommentsView(AuthenticatedAPIView):
                         "senderName": comment["sender__username"],
                         "commentId": comment["comment_id"],
                         "commentBody": comment["comment_body"],
-                        "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+                        "reactions": all_reactions,
                         "tsSent": str(comment["ts_sent_at"]),
                         "tsUpdated": str(comment["ts_updated_at"]),
                     }

@@ -84,7 +84,6 @@ class PMHistoryView(AuthenticatedAPIView):
                 "sender__profile_image_url",
                 "ts_created_at",
             )
-            my_reactions = []
             all_reactions = []
             for reaction in reactions:
                 _reaction = {
@@ -100,8 +99,6 @@ class PMHistoryView(AuthenticatedAPIView):
                     },
                     "tsSent": reaction[5],
                 }
-                if str(reaction[3]) == attendee_id:
-                    my_reactions.append(_reaction)
                 all_reactions.append(_reaction)
 
             messageIdWithChatId = (
@@ -138,7 +135,7 @@ class PMHistoryView(AuthenticatedAPIView):
                 "numReplies": thread_reply_count_map.get(
                     f"{raw_message.project.project_id}-{message_id}", None
                 ),
-                "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+                "reactions": all_reactions,
                 "taskId": raw_message.task.task_id if raw_message.task else None,
                 "taskStatus": raw_message.task.status if raw_message.task else None,
                 "tsSent": ts_sent,
@@ -237,7 +234,6 @@ class PMSingleMessageView(AuthenticatedAPIView):
             chat_type=CHAT_TYPE, chat_id=project_id, message_id=message_id, is_thread=False
         )
         all_reactions = []
-        my_reactions = []
         for raw_reaction in raw_reactions:
             reaction = {
                 "id": int(raw_reaction.reaction_id),
@@ -253,8 +249,6 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 "tsSent": raw_reaction.ts_created_at,
             }
             all_reactions.append(reaction)
-            if raw_reaction.sender.id == user_id:
-                my_reactions.append(reaction)
 
         thread_reply_counts = (
             PMThreadMessages.objects.filter(project=project_id, thread_id=message_id)
@@ -301,7 +295,7 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 "isSystemUser": "",
             },
             "numReplies": reply_count,
-            "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+            "reactions": all_reactions,
             "taskId": pm.task.task_id if pm.task else None,
             "taskStatus": pm.task.status if pm.task else None,
             "project": {
@@ -456,7 +450,6 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
             chat_type=CHAT_TYPE, chat_id=project_id, message_id=message_id, is_thread=True
         )
         all_reactions = []
-        my_reactions = []
         for raw_reaction in raw_reactions:
             reaction = {
                 "id": int(raw_reaction.reaction_id),
@@ -472,8 +465,6 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
                 "tsSent": raw_reaction.ts_created_at,
             }
             all_reactions.append(reaction)
-            if str(raw_reaction.sender.id) == user_id:
-                my_reactions.append(reaction)
 
         contentText = generate_first_line.get(pm.thread_message_body[0])
         task_id = pm.parent_message_uid.task.task_id if pm.parent_message_uid.task else -1
@@ -505,7 +496,7 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
                 "customStatus": "",
                 "isSystemUser": "",
             },
-            "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+            "reactions": all_reactions,
             "taskId": task_id,
             "taskExist": True if pm.parent_message_uid.task else False,
             "project": {
@@ -657,7 +648,6 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                 "sender__profile_image_url",
                 "ts_created_at",
             )
-            my_reactions = []
             all_reactions = []
             for reaction in reactions:
                 _reaction = {
@@ -673,8 +663,6 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                     },
                     "tsSent": reaction[5],
                 }
-                if str(reaction[3]) == user_id:
-                    my_reactions.append(_reaction)
                 all_reactions.append(_reaction)
 
             # Get the parent ts_sent/ts_updated_at for the first thread message.
@@ -722,7 +710,7 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                     "customStatus": "",
                     "isSystemUser": "",
                 },
-                "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+                "reactions": all_reactions,
                 "taskId": task_id,
                 "tsSent": ts_sent,
                 "tsUpdated": ts_updated_at,

@@ -81,7 +81,8 @@ urlpatterns = [
     # Reaction
     path("api/v2/chat/reaction/", ChatReactionView.as_view(), name="chat_reaction"),
     # Activity
-    path("api/v2/chat/activity/", ActivityHistoryView.as_view(), name="chat_activity"),
+    path("api/v2/chat/activity/history/", ActivityHistoryView.as_view(), name="chat_activity"),
+    path("api/v2/chat/activity/", ActivityView.as_view(), name="chat_activity"),
     # Mention
     path("api/v2/chat/mention/", ChatMentionView.as_view(), name="chat_mention"),
     # Read status

@@ -100,7 +100,7 @@ def get(
                 "tsJoined": "",
                 "customStatus": "",
             },
-            "reactions": {"myReactions": [], "allReactions": []},
+            "reactions": [],
             "tsSent": message.ts_sent_at,
         }
 
