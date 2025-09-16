@@ -90,9 +90,6 @@ class GetTeamTasksView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # tasks = TaskMaster.objects.filter(team=team_id)
-        # serializer = TaskMasterSerializer(tasks, many=True)
-
         task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(team=team_id)
         response_data = []
         for t in task_with_tags:
@@ -137,7 +134,6 @@ class GetTeamTasksByTagView(AuthenticatedAPIView):
             )
 
         task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(team=team_id)
-        response_data = []
 
         projects = {}
         for t in task_with_tags:
@@ -165,10 +161,7 @@ class GetTeamTasksByTagView(AuthenticatedAPIView):
                             }
                         )
 
-        for project_id, project_tasks in projects.items():
-            response_data.append(project_tasks)
-
-        return Response(response_data, status=status.HTTP_200_OK)
+        return Response(list(projects.values()), status=status.HTTP_200_OK)
 
 
 class ChildTaskView(AuthenticatedAPIView):
@@ -597,25 +590,22 @@ class GetTaskView(AuthenticatedAPIView):
 class GetProjectTasksView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
-        project_id = int(request.GET.get("project_id"))
+        project_id = request.GET.get("project_id")
 
-        if not team_id:
+        if team_id is None or project_id is None:
             return Response(
-                {"error": "team_id is required."},
+                {"error": "team_id and project_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # tasks = TaskMaster.objects.filter(team=team_id, project=project_id)
-        # serializer = TaskMasterSerializer(tasks, many=True)
-
         task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
-            team=team_id, project_id=project_id
+            team=team_id, project=project_id
         )
         response_data = []
         for t in task_with_tags:
             response_data.append(
                 {
-                    "id": t.task_id,
+                    "id": str(t.task_id),
                     "title": t.title,
                     "priority": t.priority,
                     "effortLevel": t.effort_level,
@@ -630,12 +620,12 @@ class GetProjectTasksView(AuthenticatedAPIView):
                     "assigneeEmail": t.assignee.email,
                     "assigneeName": t.assignee.username,
                     "assigneeImgPath": t.assignee.profile_image_url,
-                    "parentTaskId": t.parent_task_id,
-                    "rootTaskId": t.root_task_id,
+                    "parentTaskId": str(t.parent_task_id),
+                    "rootTaskId": str(t.root_task_id),
                     "threadId": t.thread_id,
                     "tags": t.tags,
                     "concatTags": "/" + "/".join([tag["tagName"] for tag in t.tags]) + "/",
-                    "teamId": t.team.team_id,
+                    "teamId": str(t.team.team_id),
                     "projectId": t.project.project_id,
                 },
             )

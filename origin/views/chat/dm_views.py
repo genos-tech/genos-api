@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from rest_framework.response import Response
@@ -132,59 +134,42 @@ class DMHistoryView(AuthenticatedAPIView):
         team_name = request.GET.get("team_name")
         user_id = request.GET.get("user_id")
 
-        if not user_id:
+        if not (team_id and team_name and user_id):
             return Response(
                 {"error": "team_id, team_name, and user_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Fetch all dm_ids linked to the user
+        # All DMs this user is part of
         dm_ids = list(
             UserDMMapping.objects.filter(user_id=user_id).values_list("dm_id", flat=True)
         )
-
         if not dm_ids:
             return Response({"messages": []}, status=status.HTTP_200_OK)
 
-        # Fetch all messages where the dm_id matches and the user is involved
-        raw_messages = DMMessages.objects.filter(dm__team=team_id, dm_id__in=dm_ids)
-
-        # Group by dm_id and parent_message_id, then count the replies in each group
-        thread_reply_counts = DMThreadMessages.objects.values(
-            "parent_message_uid__dm__dm_id", "parent_message_uid__message_id"
-        ).annotate(num_of_replies=Count("thread_message_id"))
-
-        thread_reply_count_map = {}
-        for reply_count_info in thread_reply_counts:
-            dm_id = reply_count_info["parent_message_uid__dm__dm_id"]
-            message_id = reply_count_info["parent_message_uid__message_id"]
-            reply_count = reply_count_info["num_of_replies"]
-            thread_reply_count_map[f"{dm_id}-{message_id}"] = reply_count
-
-        # Fetch reactions
-        raw_reactions = ReactionFact.objects.filter(
-            chat_type=CHAT_TYPE, chat_id__in=dm_ids, is_thread=False
+        # Fetch all messages (prefetch sender, receiver, task, project for efficiency)
+        raw_messages = (
+            DMMessages.objects.filter(dm__team=team_id, dm_id__in=dm_ids)
+            .select_related("dm", "sender", "receiver", "task", "task__project")
+            .order_by("ts_sent_at")
         )
 
-        message_history_dict = {}
-        last_message_dict = {}
-        ts_last_message_dict = {}
-        for raw_message in raw_messages:
-            chat_id = int(raw_message.dm.dm_id)
-            sender_id = str(raw_message.sender.id)
-            sender_name = str(raw_message.sender.username)
-            sender_email = str(raw_message.sender.email)
-            sender_avatar_img_path = raw_message.sender.profile_image_url
-            receiver_id = str(raw_message.receiver.id)
-            receiver_name = str(raw_message.receiver.username)
-            receiver_email = str(raw_message.receiver.email)
-            receiver_avatar_img_path = raw_message.receiver.profile_image_url
-            message_id = int(raw_message.message_id)
-            content = raw_message.message_body
-            ts_sent = str(raw_message.ts_sent_at)
-            ts_updated_at = str(raw_message.ts_updated_at)
+        # Thread reply counts
+        thread_reply_counts = {
+            f"{row['parent_message_uid__dm__dm_id']}-{row['parent_message_uid__message_id']}": row[
+                "num_of_replies"
+            ]
+            for row in DMThreadMessages.objects.values(
+                "parent_message_uid__dm__dm_id", "parent_message_uid__message_id"
+            ).annotate(num_of_replies=Count("thread_message_id"))
+        }
 
-            reactions = raw_reactions.filter(message_id=int(raw_message.message_id)).values_list(
+        # Reactions (grouped by message_id)
+        raw_reactions = (
+            ReactionFact.objects.filter(chat_type=CHAT_TYPE, chat_id__in=dm_ids, is_thread=False)
+            .select_related("sender")
+            .values(
+                "message_id",
                 "reaction_id",
                 "reaction_emoji",
                 "sender__username",
@@ -192,142 +177,144 @@ class DMHistoryView(AuthenticatedAPIView):
                 "sender__profile_image_url",
                 "ts_created_at",
             )
-            all_reactions = []
-            for reaction in reactions:
-                _reaction = {
-                    "id": int(reaction[0]),
-                    "emoji": reaction[1],
+        )
+        reactions_by_message = defaultdict(list)
+        for r in raw_reactions:
+            reactions_by_message[r["message_id"]].append(
+                {
+                    "id": r["reaction_id"],
+                    "emoji": r["reaction_emoji"],
                     "sender": {
-                        "userName": reaction[2],
-                        "userId": reaction[3],
-                        "avatarImgPath": reaction[4],
+                        "userName": r["sender__username"],
+                        "userId": r["sender__id"],
+                        "avatarImgPath": r["sender__profile_image_url"],
                         "tsLastSeen": "",
                         "tsJoined": "",
                         "customStatus": "",
                     },
-                    "tsSent": reaction[5],
+                    "tsSent": r["ts_created_at"],
                 }
-                all_reactions.append(_reaction)
+            )
 
-            if sender_id == user_id:
-                partner = {
-                    "teamId": team_id,
-                    "teamName": team_name,
-                    "userName": receiver_name,
-                    "userId": receiver_id,
-                    "userEmail": receiver_email,
-                    "avatarImgPath": receiver_avatar_img_path,
-                    "tsLastSeen": "",
-                    "tsJoined": "",
-                    "customStatus": "",
+        # Last read messages (dict by chat_id)
+        last_read_map = {
+            rs.chat_id: rs.last_read_message_id
+            for rs in ReadStatus.objects.filter(
+                user=user_id, chat_type=CHAT_TYPE, chat_id__in=dm_ids, is_thread=False
+            )
+        }
+
+        # Build DM histories
+        message_history_dict = {}
+        for msg in raw_messages:
+            chat_id = msg.dm.dm_id
+            msg_dict = self.serialize_message(
+                msg, team_id, team_name, user_id, thread_reply_counts, reactions_by_message
+            )
+
+            # Init or append messages
+            if chat_id not in message_history_dict:
+                message_history_dict[chat_id] = self.init_chat_dict(
+                    msg, msg_dict, team_id, team_name, user_id
+                )
+            else:
+                message_history_dict[chat_id]["messages"].append(msg_dict)
+                if msg.ts_sent_at > message_history_dict[chat_id]["TSLastMessage"]:
+                    message_history_dict[chat_id]["latestMessage"] = msg_dict
+                    message_history_dict[chat_id]["latestMessageText"] = generate_first_line.get(
+                        msg_dict["content"][0]
+                    )
+                    message_history_dict[chat_id]["TSLastMessage"] = msg.ts_sent_at
+
+        # Add last read info
+        for chat_id, chat in message_history_dict.items():
+            chat["lastReadMessageId"] = last_read_map.get(chat_id, -1)
+
+        return Response(list(message_history_dict.values()), status=status.HTTP_200_OK)
+
+    def serialize_message(
+        self, msg, team_id, team_name, current_user_id, reply_counts, reactions_by_message
+    ):
+        dm_id = msg.dm.dm_id
+        message_id = msg.message_id
+
+        return {
+            "messageIdWithChatId": f"{dm_id}-{message_id}",
+            "chatId": dm_id,
+            "messageId": message_id,
+            "content": msg.message_body,
+            "sender": {
+                "userName": msg.sender.username,
+                "userId": msg.sender.id,
+                "avatarImgPath": msg.sender.profile_image_url,
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
+            },
+            "receiver": {
+                "userName": msg.receiver.username,
+                "userId": msg.receiver.id,
+                "avatarImgPath": msg.receiver.profile_image_url,
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
+            },
+            "numReplies": reply_counts.get(f"{dm_id}-{message_id}", 0),
+            "reactions": reactions_by_message.get(message_id, []),
+            "taskId": msg.task.task_id if msg.task else None,
+            "taskStatus": msg.task.status if msg.task else None,
+            "project": (
+                {
+                    "projectId": msg.task.project.project_id,
+                    "projectName": msg.task.project.project_name,
+                    "isJoined": True,
+                    "systemUserId": msg.task.project.project_system_user.id,
                 }
-                chat_name = receiver_name
-            else:
-                partner = {
-                    "teamId": team_id,
-                    "teamName": team_name,
-                    "userName": sender_name,
-                    "userId": sender_id,
-                    "userEmail": sender_email,
-                    "avatarImgPath": sender_avatar_img_path,
-                    "tsLastSeen": "",
-                    "tsJoined": "",
-                    "customStatus": "",
+                if msg.task
+                else {
+                    "projectId": None,
+                    "projectName": None,
+                    "isJoined": False,
+                    "systemUserId": None,
                 }
-                chat_name = sender_name
+            ),
+            "tsSent": msg.ts_sent_at,
+            "tsUpdated": msg.ts_updated_at,
+        }
 
-            messageIdWithChatId = f"{chat_id}-{message_id}"
-            new_message = {
-                "messageIdWithChatId": messageIdWithChatId,
-                "chatId": chat_id,
-                "messageId": message_id,
-                "content": content,
-                "sender": {
-                    "userName": sender_name,
-                    "userId": sender_id,
-                    "avatarImgPath": sender_avatar_img_path,
-                    "tsLastSeen": "",
-                    "tsJoined": "",
-                    "customStatus": "",
-                },
-                "receiver": {
-                    "userName": receiver_name,
-                    "userId": receiver_id,
-                    "avatarImgPath": receiver_avatar_img_path,
-                    "tsLastSeen": "",
-                    "tsJoined": "",
-                    "customStatus": "",
-                },
-                "numReplies": thread_reply_count_map.get(
-                    f"{raw_message.dm.dm_id}-{message_id}", None
-                ),
-                "reactions": all_reactions,
-                "taskId": raw_message.task.task_id if raw_message.task else None,
-                "taskStatus": raw_message.task.status if raw_message.task else None,
-                "project": {
-                    "projectId": (
-                        raw_message.task.project.project_id if raw_message.task else None
-                    ),
-                    "projectName": (
-                        raw_message.task.project.project_name if raw_message.task else None
-                    ),
-                    "isJoined": True if raw_message.task else False,
-                    "systemUserId": (
-                        raw_message.task.project.project_system_user.id
-                        if raw_message.task
-                        else None
-                    ),
-                },
-                "tsSent": ts_sent,
-                "tsUpdated": ts_updated_at,
-            }
+    def init_chat_dict(self, msg, first_message, team_id, team_name, current_user_id):
+        chat_id = msg.dm.dm_id
+        sender = msg.sender
+        receiver = msg.receiver
 
-            if chat_id in ts_last_message_dict:
-                prev_ts_last_message = ts_last_message_dict[chat_id]
-                if ts_sent > prev_ts_last_message:
-                    last_message_dict[chat_id] = new_message
-                    ts_last_message_dict[chat_id] = ts_sent
-            else:
-                last_message_dict[chat_id] = new_message
-                ts_last_message_dict[chat_id] = ts_sent
+        # Pick the "partner" (the other user in the DM)
+        if str(sender.id) == str(current_user_id):
+            partner = receiver
+        else:
+            partner = sender
 
-            latest_message_text = generate_first_line.get(last_message_dict[chat_id]["content"][0])
+        partner_dict = {
+            "teamId": team_id,
+            "teamName": team_name,
+            "userName": partner.username,
+            "userId": partner.id,
+            "userEmail": partner.email,
+            "avatarImgPath": partner.profile_image_url,
+            "tsLastSeen": "",
+            "tsJoined": "",
+            "customStatus": "",
+        }
 
-            if chat_id in message_history_dict:
-                message_history_dict[chat_id]["messages"].append(new_message)
-                message_history_dict[chat_id]["latestMessage"] = last_message_dict[chat_id]
-                message_history_dict[chat_id]["latestMessageText"] = latest_message_text
-                message_history_dict[chat_id]["TSLastMessage"] = ts_last_message_dict[chat_id]
-            else:
-                message_history_dict[chat_id] = {
-                    "chatId": chat_id,
-                    "chatName": chat_name,
-                    "chatType": 1,
-                    "dmPartnerUser": partner,
-                    "messages": [new_message],
-                    "latestMessage": last_message_dict[chat_id],
-                    "latestMessageText": latest_message_text,
-                    "TSLastMessage": ts_last_message_dict[chat_id],
-                }
-
-        # Add last_read_message_id for each chat.
-        last_read_message_id_for_chats = ReadStatus.objects.filter(
-            user=user_id, chat_type=CHAT_TYPE, chat_id__in=dm_ids, is_thread=False
-        )
-        for chat_id in message_history_dict.keys():
-            raw_last_read_message_id = last_read_message_id_for_chats.filter(
-                chat_id=chat_id
-            ).values_list("last_read_message_id")
-            if len(raw_last_read_message_id) == 1:
-                last_read_message_id = raw_last_read_message_id[0][0]
-            else:
-                last_read_message_id = -1
-
-            message_history_dict[chat_id]["lastReadMessageId"] = last_read_message_id
-
-        message_history = list(message_history_dict.values())
-
-        return Response(message_history, status=status.HTTP_200_OK)
+        return {
+            "chatId": chat_id,
+            "chatName": partner.username,
+            "chatType": 1,
+            "dmPartnerUser": partner_dict,
+            "messages": [first_message],
+            "latestMessage": first_message,
+            "latestMessageText": generate_first_line.get(first_message["content"][0]),
+            "TSLastMessage": msg.ts_sent_at,
+        }
 
 
 class DMSingleMessageView(AuthenticatedAPIView):
