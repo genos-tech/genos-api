@@ -5,6 +5,7 @@ from origin.views.common.user_views import *
 from origin.views.common.team_views import *
 from origin.views.common.inbox_views import *
 from origin.views.chat.reaction_views import *
+from origin.views.utils.extract_page_title_view import get_page_title
 
 user_list = UserViewSet.as_view({"post": "create"})
 
@@ -43,4 +44,5 @@ urlpatterns = [
         InboxItemForJoinProjectRequestView.as_view(),
         name="inbox_join_project_request_item",
     ),
+    path("api/v2/getPageTitle/", get_page_title, name="get_page_title"),
 ]
