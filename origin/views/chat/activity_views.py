@@ -66,15 +66,16 @@ class ActivityHistoryView(AuthenticatedAPIView):
     def get(self, request):
         request_user_id = request.user.id
         team_id = request.GET.get("team_id")
+        period_days = int(request.GET.get("period_days"))
 
-        if team_id is None:
+        if team_id is None or period_days is None:
             return Response(
                 {"error": "team_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Filter messages of the last 30 days
-        n_days_ago = timezone.now() - timedelta(days=30)
+        # Filter messages of the last <period_days> days
+        n_days_ago = timezone.now() - timedelta(days=max(min(period_days, 30), 1))
 
         my_dm_ids = list(
             UserDMMapping.objects.filter(Q(team_id=team_id, user_id=request_user_id)).values_list(
