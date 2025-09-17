@@ -150,6 +150,12 @@ class PMHistoryView(AuthenticatedAPIView):
             "receiver": {},  # placeholder for future
             "numReplies": reply_counts.get(f"{project_id}-{message_id}", 0),
             "reactions": reactions_by_message.get(message_id, []),
+            "project": {
+                "projectId": msg.project.project_id,
+                "projectName": msg.project.project_name,
+                "isJoined": True,
+                "systemUserId": msg.project.project_system_user.id,
+            },
             "taskId": msg.task.task_id if msg.task else None,
             "taskStatus": msg.task.status if msg.task else None,
             "tsSent": msg.ts_sent_at,
