@@ -79,7 +79,7 @@ class TaskAttachments(models.Model):
         to_field="task_id",
     )
     attachment_id = models.IntegerField()
-    attached_file = models.FileField(upload_to="uploads/")
+    attached_file = models.FileField(upload_to="task_attachments/")
     attached_type = models.CharField()
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

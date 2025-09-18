@@ -199,7 +199,7 @@ class ChildTaskView(AuthenticatedAPIView):
                 ):
                     file_path = _file[0]
                     file_type = _file[1]
-                    with open(file_path, "rb") as f:
+                    with open("./uploads/" + file_path, "rb") as f:
                         encoded_file = base64.b64encode(f.read()).decode("utf-8")
                         attached_files.append(
                             {
@@ -349,7 +349,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
             for _file in t.task_attachments.all().values_list("attached_file", "attached_type"):
                 file_path = _file[0]
                 file_type = _file[1]
-                with open(file_path, "rb") as f:
+                with open("./uploads/" + file_path, "rb") as f:
                     encoded_file = base64.b64encode(f.read()).decode("utf-8")
                     attached_files.append(
                         {
@@ -480,7 +480,7 @@ class GetTaskView(AuthenticatedAPIView):
                 attachment_id = _file[0]
                 file_path = _file[1]
                 file_type = _file[2]
-                with open(file_path, "rb") as f:
+                with open("./uploads/" + file_path, "rb") as f:
                     encoded_file = base64.b64encode(f.read()).decode("utf-8")
                     attached_files.append(
                         {
@@ -708,14 +708,15 @@ class TaskAttachmentsView(AuthenticatedAPIView):
             if serializer.is_valid():
                 serializer.save()
 
-                with open("." + serializer.data["attached_file"], "rb") as f:
+                file_path = serializer.data["attached_file"].replace("/media/", "/uploads/")
+                with open("." + file_path, "rb") as f:
                     encoded_file = base64.b64encode(f.read()).decode("utf-8")
 
                 return Response(
                     {
                         **serializer.data,
                         "file_base64": encoded_file,
-                        "name": os.path.basename(serializer.data["attached_file"]),
+                        "name": os.path.basename(file_path),
                     },
                     status=status.HTTP_201_CREATED,
                 )
