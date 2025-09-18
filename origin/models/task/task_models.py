@@ -1,3 +1,5 @@
+import os
+
 from django.db import models
 from django.db.models.signals import post_save
 from django.dispatch import receiver
@@ -70,6 +72,16 @@ def set_root_task_id(sender, instance, created, **kwargs):
         instance.save(update_fields=["root_task_id"])
 
 
+def task_attachment_path(instance, filename):
+    # instance is the model object
+    # filename is the original uploaded file name
+    return os.path.join(
+        "task_attachments",
+        str(instance.task_id),
+        filename,
+    )
+
+
 class TaskAttachments(models.Model):
     task = models.ForeignKey(
         TaskMaster,
@@ -79,7 +91,7 @@ class TaskAttachments(models.Model):
         to_field="task_id",
     )
     attachment_id = models.IntegerField()
-    attached_file = models.FileField(upload_to="task_attachments/")
+    attached_file = models.FileField(upload_to=task_attachment_path)
     attached_type = models.CharField()
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

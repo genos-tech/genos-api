@@ -702,8 +702,6 @@ class TaskAttachmentsView(AuthenticatedAPIView):
                 "attached_type": attached_type,
             }
 
-            print("attached_data:", data)
-
             serializer = TaskAttachmentsSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
