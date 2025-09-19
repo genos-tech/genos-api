@@ -70,7 +70,7 @@ class PMHistoryView(AuthenticatedAPIView):
                 "reaction_emoji",
                 "sender__username",
                 "sender__id",
-                "sender__profile_image_url",
+                "sender__profile_image_file_name",
                 "ts_created_at",
             )
         )
@@ -83,7 +83,7 @@ class PMHistoryView(AuthenticatedAPIView):
                     "sender": {
                         "userName": r["sender__username"],
                         "userId": r["sender__id"],
-                        "avatarImgPath": r["sender__profile_image_url"],
+                        "avatarImgPath": r["sender__profile_image_file_name"],
                         "tsLastSeen": "",
                         "tsJoined": "",
                         "customStatus": "",
@@ -141,7 +141,7 @@ class PMHistoryView(AuthenticatedAPIView):
                 "userName": msg.sender.username,
                 "userEmail": msg.sender.email,
                 "userId": msg.sender.id,
-                "avatarImgPath": msg.sender.profile_image_url,
+                "avatarImgPath": msg.sender.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
@@ -219,7 +219,7 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 "sender": {
                     "userName": raw_reaction.sender.username,
                     "userId": raw_reaction.sender.id,
-                    "avatarImgPath": raw_reaction.sender.profile_image_url,
+                    "avatarImgPath": raw_reaction.sender.profile_image_file_name,
                     "tsLastSeen": "",
                     "tsJoined": "",
                     "customStatus": "",
@@ -256,7 +256,7 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 "userId": pm.sender.id,
                 "userName": pm.sender.username,
                 "userEmail": pm.sender.email,
-                "avatarImgPath": pm.sender.profile_image_url,
+                "avatarImgPath": pm.sender.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
@@ -435,7 +435,7 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
                 "sender": {
                     "userName": raw_reaction.sender.username,
                     "userId": raw_reaction.sender.id,
-                    "avatarImgPath": raw_reaction.sender.profile_image_url,
+                    "avatarImgPath": raw_reaction.sender.profile_image_file_name,
                     "tsLastSeen": "",
                     "tsJoined": "",
                     "customStatus": "",
@@ -458,7 +458,7 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
                 "userId": pm.sender.id,
                 "userName": pm.sender.username,
                 "userEmail": pm.sender.email,
-                "avatarImgPath": pm.sender.profile_image_url,
+                "avatarImgPath": pm.sender.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
@@ -611,7 +611,7 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
             sender_id = str(raw_message.sender.id)
             sender_name = str(raw_message.sender.username)
             sender_email = str(raw_message.sender.email)
-            sender_avatar_img_path = raw_message.sender.profile_image_url
+            sender_avatar_img_path = raw_message.sender.profile_image_file_name
             is_system_user = raw_message.sender.is_system_user
             ts_sent = str(raw_message.ts_sent_at)
             ts_updated_at = str(raw_message.ts_updated_at)
@@ -623,7 +623,7 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                 "reaction_emoji",
                 "sender__username",
                 "sender__id",
-                "sender__profile_image_url",
+                "sender__profile_image_file_name",
                 "ts_created_at",
             )
             all_reactions = []

@@ -179,7 +179,7 @@ class GetTeamMembersView(AuthenticatedAPIView):
                 "attendee__id",
                 "attendee__username",
                 "attendee__email",
-                "attendee__profile_image_url",
+                "attendee__profile_image_file_name",
                 "attendee__is_offline_forced",
                 "attendee__role",
                 "attendee__base_country",
@@ -198,7 +198,7 @@ class GetTeamMembersView(AuthenticatedAPIView):
                     "userId": attendee["attendee__id"],
                     "userName": attendee["attendee__username"],
                     "userEmail": attendee["attendee__email"],
-                    "avatarImgPath": attendee["attendee__profile_image_url"],
+                    "avatarImgPath": attendee["attendee__profile_image_file_name"],
                     "isOfflineForced": (
                         attendee["attendee__is_offline_forced"]
                         if attendee["attendee__is_offline_forced"]
@@ -242,7 +242,7 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
                 "attendee__id",
                 "attendee__username",
                 "attendee__email",
-                "attendee__profile_image_url",
+                "attendee__profile_image_file_name",
                 "attendee__is_offline_forced",
                 "attendee__role",
                 "attendee__base_country",
@@ -270,7 +270,7 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
             "userId": member_info.get("attendee__id", None),
             "userName": member_info.get("attendee__username", None),
             "userEmail": member_info.get("attendee__email", None),
-            "avatarImgPath": member_info.get("attendee__profile_image_url", None),
+            "avatarImgPath": member_info.get("attendee__profile_image_file_name", None),
             "tsLastSeen": "",
             "tsJoined": "",
             "isOfflineForced": member_info.get("attendee__is_offline_forced", ""),

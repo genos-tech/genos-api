@@ -174,7 +174,7 @@ class DMHistoryView(AuthenticatedAPIView):
                 "reaction_emoji",
                 "sender__username",
                 "sender__id",
-                "sender__profile_image_url",
+                "sender__profile_image_file_name",
                 "ts_created_at",
             )
         )
@@ -187,7 +187,7 @@ class DMHistoryView(AuthenticatedAPIView):
                     "sender": {
                         "userName": r["sender__username"],
                         "userId": r["sender__id"],
-                        "avatarImgPath": r["sender__profile_image_url"],
+                        "avatarImgPath": r["sender__profile_image_file_name"],
                         "tsLastSeen": "",
                         "tsJoined": "",
                         "customStatus": "",
@@ -246,7 +246,7 @@ class DMHistoryView(AuthenticatedAPIView):
             "sender": {
                 "userName": msg.sender.username,
                 "userId": msg.sender.id,
-                "avatarImgPath": msg.sender.profile_image_url,
+                "avatarImgPath": msg.sender.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
@@ -254,7 +254,7 @@ class DMHistoryView(AuthenticatedAPIView):
             "receiver": {
                 "userName": msg.receiver.username,
                 "userId": msg.receiver.id,
-                "avatarImgPath": msg.receiver.profile_image_url,
+                "avatarImgPath": msg.receiver.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
@@ -299,7 +299,7 @@ class DMHistoryView(AuthenticatedAPIView):
             "userName": partner.username,
             "userId": partner.id,
             "userEmail": partner.email,
-            "avatarImgPath": partner.profile_image_url,
+            "avatarImgPath": partner.profile_image_file_name,
             "tsLastSeen": "",
             "tsJoined": "",
             "customStatus": "",
@@ -354,7 +354,7 @@ class DMSingleMessageView(AuthenticatedAPIView):
                 "sender": {
                     "userName": raw_reaction.sender.username,
                     "userId": raw_reaction.sender.id,
-                    "avatarImgPath": raw_reaction.sender.profile_image_url,
+                    "avatarImgPath": raw_reaction.sender.profile_image_file_name,
                     "tsLastSeen": "",
                     "tsJoined": "",
                     "customStatus": "",
@@ -391,7 +391,7 @@ class DMSingleMessageView(AuthenticatedAPIView):
                 "userId": dm.sender.id,
                 "userName": dm.sender.username,
                 "userEmail": dm.sender.email,
-                "avatarImgPath": dm.sender.profile_image_url,
+                "avatarImgPath": dm.sender.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
@@ -401,7 +401,7 @@ class DMSingleMessageView(AuthenticatedAPIView):
                 "userId": dm.receiver.id,
                 "userName": dm.receiver.username,
                 "userEmail": dm.receiver.email,
-                "avatarImgPath": dm.receiver.profile_image_url,
+                "avatarImgPath": dm.receiver.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
@@ -567,7 +567,7 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
                 "sender": {
                     "userName": raw_reaction.sender.username,
                     "userId": raw_reaction.sender.id,
-                    "avatarImgPath": raw_reaction.sender.profile_image_url,
+                    "avatarImgPath": raw_reaction.sender.profile_image_file_name,
                     "tsLastSeen": "",
                     "tsJoined": "",
                     "customStatus": "",
@@ -589,7 +589,7 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
                 "userId": dm.sender.id,
                 "userName": dm.sender.username,
                 "userEmail": dm.sender.email,
-                "avatarImgPath": dm.sender.profile_image_url,
+                "avatarImgPath": dm.sender.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
@@ -599,7 +599,7 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
                 "userId": dm.receiver.id,
                 "userName": dm.receiver.username,
                 "userEmail": dm.receiver.email,
-                "avatarImgPath": dm.receiver.profile_image_url,
+                "avatarImgPath": dm.receiver.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
@@ -727,7 +727,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
             sender_id = str(raw_message.sender.id)
             sender_name = str(raw_message.sender.username)
             sender_email = str(raw_message.sender.email)
-            sender_avatar_img_path = raw_message.sender.profile_image_url
+            sender_avatar_img_path = raw_message.sender.profile_image_file_name
             is_system_user = raw_message.sender.is_system_user
             ts_sent = str(raw_message.ts_sent_at)
             ts_updated_at = str(raw_message.ts_updated_at)
@@ -741,7 +741,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
                     "reaction_emoji",
                     "sender__username",
                     "sender__id",
-                    "sender__profile_image_url",
+                    "sender__profile_image_file_name",
                     "ts_created_at",
                 )
             else:
@@ -752,7 +752,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
                     "reaction_emoji",
                     "sender__username",
                     "sender__id",
-                    "sender__profile_image_url",
+                    "sender__profile_image_file_name",
                     "ts_created_at",
                 )
             all_reactions = []

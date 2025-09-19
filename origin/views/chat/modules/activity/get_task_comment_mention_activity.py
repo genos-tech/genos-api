@@ -92,7 +92,7 @@ def get(
             "sender": {
                 "userName": comment.sender.username,
                 "userId": comment.sender.id,
-                "avatarImgPath": comment.sender.profile_image_url,
+                "avatarImgPath": comment.sender.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",

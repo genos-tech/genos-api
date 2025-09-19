@@ -23,7 +23,7 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_pm_ids, n_days_
         "reaction_emoji",
         "sender__username",
         "sender__id",
-        "sender__profile_image_url",
+        "sender__profile_image_file_name",
         "ts_created_at",
     )
 
@@ -57,7 +57,7 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_pm_ids, n_days_
             "reaction_emoji",
             "sender__username",
             "sender__id",
-            "sender__profile_image_url",
+            "sender__profile_image_file_name",
             "ts_created_at",
         )
         all_reactions = []
@@ -146,7 +146,7 @@ def get(all_activities: dict, user_id: str, team_id: str, my_all_pm_ids, n_days_
             "sender": {
                 "userName": message.sender.username,
                 "userId": message.sender.id,
-                "avatarImgPath": message.sender.profile_image_url,
+                "avatarImgPath": message.sender.profile_image_file_name,
             },
             "reactions": all_reactions,
             "tsSent": message.ts_sent_at,
