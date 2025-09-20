@@ -99,7 +99,56 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
             )
 
 
-class MyNoteView(AuthenticatedAPIView):
+class SingleNoteView(AuthenticatedAPIView):
+    def get(self, request):
+        request_user_id = request.user.id
+
+        data = {
+            "team_id": request.GET.get("team_id"),
+            "user_id": request.GET.get("user_id"),
+            "note_id": request.GET.get("note_id"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+            return res
+
+        personal_notes = (
+            PersonalNoteMaster.objects.filter(
+                team=data["team_id"], owner=data["user_id"], note_id=data["note_id"]
+            )
+            .annotate(
+                teamId=F("team"),
+                ownerId=F("owner"),
+                noteId=F("note_id"),
+                parentNoteId=F("parent_note_id"),
+                tsCreated=F("ts_created_at"),
+                tsUpdated=F("ts_updated_at"),
+            )
+            .values(
+                "teamId",
+                "ownerId",
+                "noteId",
+                "parentNoteId",
+                "title",
+                "body",
+                "tsCreated",
+                "tsUpdated",
+            )
+        )
+
+        if len(personal_notes) == 0:
+            return Response(
+                {"error": "Note not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response(personal_notes[0], status=status.HTTP_200_OK)
+
+
+class AllNotesView(AuthenticatedAPIView):
     def get(self, request):
         request_user_id = request.user.id
 
@@ -132,6 +181,44 @@ class MyNoteView(AuthenticatedAPIView):
                 "parentNoteId",
                 "title",
                 "body",
+                "tsCreated",
+                "tsUpdated",
+            )
+        )
+
+        my_notes.extend(list(personal_notes))
+
+        return Response(my_notes, status=status.HTTP_200_OK)
+
+
+class AllNoteMetaView(AuthenticatedAPIView):
+    def get(self, request):
+        request_user_id = request.user.id
+
+        data = {"team_id": request.GET.get("team_id"), "user_id": request.GET.get("user_id")}
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+            return res
+
+        my_notes = []
+
+        personal_notes = (
+            PersonalNoteMaster.objects.filter(team=data["team_id"], owner=data["user_id"])
+            .annotate(
+                noteId=F("note_id"),
+                parentNoteId=F("parent_note_id"),
+                tsCreated=F("ts_created_at"),
+                tsUpdated=F("ts_updated_at"),
+            )
+            .order_by("tsUpdated")
+            .reverse()
+            .values(
+                "noteId",
+                "parentNoteId",
+                "title",
                 "tsCreated",
                 "tsUpdated",
             )
