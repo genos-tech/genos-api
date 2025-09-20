@@ -16,7 +16,7 @@ class NotePermissionMaster(models.Model):
         to_field="id",
     )
     note_id = models.BigAutoField(primary_key=True, unique=True)
-    # 1: Personal, 2: Task, 3: Thread
+    # 1: Personal, 2: Task, 3: Chat
     note_type = models.IntegerField(blank=False, null=False)
     # 1: owner, 2: editor, 3: viewer
     role_id = models.IntegerField(blank=False, null=False)
