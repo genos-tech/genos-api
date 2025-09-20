@@ -44,13 +44,14 @@ HTTP_451_UNAVAILABLE_FOR_LEGAL_REASONS
 """
 
 
-def validate_request_data(params: list) -> None:
-    for p in params:
-        if p is None:
+def validate_request_data(params: dict) -> None:
+    for key, val in params.items():
+        if val is None:
             return Response(
-                {"error": f"{p} is required."},
+                {"error": f"{key} is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+    return None
 
 
 def validate_request_user(requested_user_id: str, target_user_id: str) -> None:
@@ -59,3 +60,4 @@ def validate_request_user(requested_user_id: str, target_user_id: str) -> None:
             {"message": f"Only the data owner can request."},
             status=status.HTTP_403_FORBIDDEN,
         )
+    return None

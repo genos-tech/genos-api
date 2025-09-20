@@ -21,6 +21,7 @@ from origin.urls.common import urls as common_urls
 from origin.urls.chat import urls as chat_urls
 from origin.urls.project import urls as prj_urls
 from origin.urls.task import urls as task_urls
+from origin.urls.note import urls as note_urls
 
 urlpatterns = [
     # path("admin/", admin.site.urls),
@@ -30,6 +31,7 @@ urlpatterns.extend(common_urls.urlpatterns)
 urlpatterns.extend(chat_urls.urlpatterns)
 urlpatterns.extend(prj_urls.urlpatterns)
 urlpatterns.extend(task_urls.urlpatterns)
+urlpatterns.extend(note_urls.urlpatterns)
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
