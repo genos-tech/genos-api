@@ -1,6 +1,8 @@
 from django.db.models import Count, Q
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.parsers import MultiPartParser
+
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.inbox_models import InboxItems
@@ -27,6 +29,8 @@ class TeamMasterView(AuthenticatedAPIView):
                     "teamId": serializer.data["team_id"],
                     "teamName": serializer.data["team_name"],
                     "teamEmail": serializer.data["team_email"],
+                    "teamOwnerId": serializer.data["owner"],
+                    "teamImgPath": serializer.data.get("profile_image_file_name"),
                 }
             }
             return Response(data, status=status.HTTP_201_CREATED)
@@ -34,6 +38,41 @@ class TeamMasterView(AuthenticatedAPIView):
         error = serializer.errors
         error["hint"] = "Try with different team_name"
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+
+class TeamProfileImageView(AuthenticatedAPIView):
+    parser_classes = [MultiPartParser]
+
+    def put(self, request):
+        team_id = request.POST.get("team_id")
+        team_profile_image = request.FILES.get("team_profile_image")
+
+        if team_profile_image is None:
+            return Response(
+                {"error": "team_profile_image is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        team_data = TeamMaster.objects.get(team_id=team_id)
+
+        # Only update the FileField
+        new_profile_image_data = {
+            "profile_image_file": team_profile_image,
+        }
+
+        serializer = TeamMasterSerializer(team_data, data=new_profile_image_data, partial=True)
+        if serializer.is_valid():
+            saved_team = serializer.save()
+
+            # At this point, Django has stored the file, possibly renamed
+            # Now get the actual stored filename
+            stored_file_name = saved_team.profile_image_file.name.split("/")[-1]
+            saved_team.profile_image_file_name = f"team_profiles/{team_id}/{stored_file_name}"
+            saved_team.save(update_fields=["profile_image_file_name"])
+
+            return Response(TeamMasterSerializer(saved_team).data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class CheckTeamExistsView(AuthenticatedAPIView):
@@ -49,16 +88,19 @@ class CheckTeamExistsView(AuthenticatedAPIView):
         # Check if a Team exists in any order
         team_info = TeamMaster.objects.filter(Q(team_id=team_id)).values()
         if len(team_info) == 1:
+            print("team_info[0]:", team_info[0])
             res = {
                 "exist": True,
                 "teamDetails": {
                     "teamId": team_info[0]["team_id"],
                     "teamName": team_info[0]["team_name"],
                     "teamEmail": team_info[0]["team_email"],
+                    "teamOwnerId": team_info[0]["owner_id"],
+                    "teamImgPath": team_info[0]["profile_image_file_name"],
                 },
             }
         else:
-            res = {"exist": False, "teamDetails": []}
+            res = {"exist": False, "teamDetails": {}}
 
         return Response(res, status=status.HTTP_200_OK)
 
@@ -124,7 +166,13 @@ class GetMyTeamsView(AuthenticatedAPIView):
 
         raw_my_teams = TeamMembers.objects.filter(
             Q(attendee=user_id, team__is_deleted=False)
-        ).values_list("team__team_id", "team__team_name", "team__team_email")
+        ).values_list(
+            "team__team_id",
+            "team__team_name",
+            "team__team_email",
+            "team__owner",
+            "team__profile_image_file_name",
+        )
 
         my_teams = []
         for team in raw_my_teams:
@@ -133,6 +181,8 @@ class GetMyTeamsView(AuthenticatedAPIView):
                     "teamId": team[0],
                     "teamName": team[1],
                     "teamEmail": team[2],
+                    "teamOwnerId": team[3],
+                    "teamImgPath": team[4],
                 }
             )
 

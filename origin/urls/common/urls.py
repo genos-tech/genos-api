@@ -30,6 +30,11 @@ urlpatterns = [
         JoinTeamFromInboxView.as_view(),
         name="join_team_from_inbox",
     ),
+    path(
+        "api/v2/team/profile/image/",
+        TeamProfileImageView.as_view(),
+        name="update_team_profile_image",
+    ),
     path("api/v2/team/getMyTeams/", GetMyTeamsView.as_view(), name="get_my_team"),
     path("api/v2/team/getTeamMembers/", GetTeamMembersView.as_view(), name="get_team_members"),
     path(
