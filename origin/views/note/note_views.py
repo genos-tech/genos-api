@@ -124,6 +124,7 @@ class MyNoteView(AuthenticatedAPIView):
                 tsUpdated=F("ts_updated_at"),
             )
             .order_by("tsUpdated")
+            .reverse()
             .values(
                 "teamId",
                 "ownerId",
