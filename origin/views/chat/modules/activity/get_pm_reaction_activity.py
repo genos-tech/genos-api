@@ -23,7 +23,7 @@ def get(
         "reaction_emoji",
         "sender__username",
         "sender__id",
-        "sender__profile_image_url",
+        "sender__profile_image_file_name",
         "ts_created_at",
     )
 
@@ -43,7 +43,7 @@ def get(
             "reaction_emoji",
             "sender__username",
             "sender__id",
-            "sender__profile_image_url",
+            "sender__profile_image_file_name",
             "ts_created_at",
         )
         all_reactions = []
@@ -119,7 +119,7 @@ def get(
             "sender": {
                 "userName": message.sender.username,
                 "userId": message.sender.id,
-                "avatarImgPath": message.sender.profile_image_url,
+                "avatarImgPath": message.sender.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",

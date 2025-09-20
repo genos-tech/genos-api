@@ -95,7 +95,7 @@ def get(
             "sender": {
                 "userName": message.sender.username,
                 "userId": message.sender.id,
-                "avatarImgPath": message.sender.profile_image_url,
+                "avatarImgPath": message.sender.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",

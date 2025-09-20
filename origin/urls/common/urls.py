@@ -16,6 +16,11 @@ urlpatterns = [
     path("api/v2/user/signin/refresh/", CookieTokenRefreshView.as_view(), name="token_refresh"),
     path("api/v2/user/signout/", LogoutView.as_view(), name="signout"),
     path("api/v2/user/profile/", UserProfileView.as_view(), name="update_status"),
+    path(
+        "api/v2/user/profile/image/",
+        UserProfileImageView.as_view(),
+        name="update_user_profile_image",
+    ),
     # Team
     path("api/v2/team/create/", TeamMasterView.as_view(), name="join_team"),
     path("api/v2/team/exist/", CheckTeamExistsView.as_view(), name="exist_team"),
@@ -24,6 +29,11 @@ urlpatterns = [
         "api/v2/team/join/fromInbox/",
         JoinTeamFromInboxView.as_view(),
         name="join_team_from_inbox",
+    ),
+    path(
+        "api/v2/team/profile/image/",
+        TeamProfileImageView.as_view(),
+        name="update_team_profile_image",
     ),
     path("api/v2/team/getMyTeams/", GetMyTeamsView.as_view(), name="get_my_team"),
     path("api/v2/team/getTeamMembers/", GetTeamMembersView.as_view(), name="get_team_members"),

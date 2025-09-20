@@ -203,7 +203,7 @@ class GMHistoryView(AuthenticatedAPIView):
             "reaction_emoji",
             "sender__username",
             "sender__id",
-            "sender__profile_image_url",
+            "sender__profile_image_file_name",
             "ts_created_at",
         )
         reaction_map = {}
@@ -215,7 +215,7 @@ class GMHistoryView(AuthenticatedAPIView):
                     "sender": {
                         "userName": r["sender__username"],
                         "userId": r["sender__id"],
-                        "avatarImgPath": r["sender__profile_image_url"],
+                        "avatarImgPath": r["sender__profile_image_file_name"],
                         "tsLastSeen": "",
                         "tsJoined": "",
                         "customStatus": "",
@@ -248,7 +248,7 @@ class GMHistoryView(AuthenticatedAPIView):
                     "userName": raw.sender.username,
                     "userEmail": raw.sender.email,
                     "userId": raw.sender.id,
-                    "avatarImgPath": raw.sender.profile_image_url,
+                    "avatarImgPath": raw.sender.profile_image_file_name,
                     "tsLastSeen": "",
                     "tsJoined": "",
                     "customStatus": "",
@@ -352,7 +352,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
                 "sender": {
                     "userName": raw_reaction.sender.username,
                     "userId": raw_reaction.sender.id,
-                    "avatarImgPath": raw_reaction.sender.profile_image_url,
+                    "avatarImgPath": raw_reaction.sender.profile_image_file_name,
                     "tsLastSeen": "",
                     "tsJoined": "",
                     "customStatus": "",
@@ -389,7 +389,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
                 "userId": gm.sender.id,
                 "userName": gm.sender.username,
                 "userEmail": gm.sender.email,
-                "avatarImgPath": gm.sender.profile_image_url,
+                "avatarImgPath": gm.sender.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
@@ -564,7 +564,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
                 "sender": {
                     "userName": raw_reaction.sender.username,
                     "userId": raw_reaction.sender.id,
-                    "avatarImgPath": raw_reaction.sender.profile_image_url,
+                    "avatarImgPath": raw_reaction.sender.profile_image_file_name,
                     "tsLastSeen": "",
                     "tsJoined": "",
                     "customStatus": "",
@@ -586,7 +586,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
                 "userId": gm.sender.id,
                 "userName": gm.sender.username,
                 "userEmail": gm.sender.email,
-                "avatarImgPath": gm.sender.profile_image_url,
+                "avatarImgPath": gm.sender.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
@@ -719,7 +719,7 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
             sender_id = str(raw_message.sender.id)
             sender_name = str(raw_message.sender.username)
             sender_email = str(raw_message.sender.email)
-            sender_avatar_img_path = raw_message.sender.profile_image_url
+            sender_avatar_img_path = raw_message.sender.profile_image_file_name
             is_system_user = raw_message.sender.is_system_user
             ts_sent = str(raw_message.ts_sent_at)
             ts_updated_at = str(raw_message.ts_updated_at)
@@ -733,7 +733,7 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                     "reaction_emoji",
                     "sender__username",
                     "sender__id",
-                    "sender__profile_image_url",
+                    "sender__profile_image_file_name",
                     "ts_created_at",
                 )
             else:
@@ -744,7 +744,7 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                     "reaction_emoji",
                     "sender__username",
                     "sender__id",
-                    "sender__profile_image_url",
+                    "sender__profile_image_file_name",
                     "ts_created_at",
                 )
             all_reactions = []

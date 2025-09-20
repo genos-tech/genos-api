@@ -13,6 +13,7 @@ class UserSerializer(serializers.ModelSerializer):
             "email",
             "phone_number",
             "profile_image_url",
+            "profile_image_file_name",
             "is_offline_forced",
             "custom_status",
             "role",
@@ -47,7 +48,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = user_models.CustomUser
-        fields = ["id", "username", "email", "password", "profile_image_url", "is_system_user"]
+        fields = ["id", "username", "email", "password", "is_system_user"]
 
     def create(self, validated_data):
         """Override create method to hash password"""
@@ -55,7 +56,6 @@ class UserCreateSerializer(serializers.ModelSerializer):
             email=validated_data["email"],
             username=validated_data["username"],
             password=validated_data["password"],
-            profile_image_url=validated_data.get("profile_image_url", ""),
             is_system_user=validated_data.get("is_system_user", False),
         )
         return user
@@ -69,7 +69,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         token = super().get_token(user)
         token["username"] = user.username  # Add username to JWT payload
         token["email"] = user.email  # Add email to JWT payload
-        token["profile_image_url"] = user.profile_image_url  # Add profile image URL
+        token["profile_image_file_name"] = (
+            user.profile_image_file_name
+        )  # Add profile image file name
         return token
 
     def validate(self, attrs):
