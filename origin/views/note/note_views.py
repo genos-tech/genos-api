@@ -50,7 +50,7 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
         request_user_id = request.user.id
 
         data = {
-            "user_id": request.data.get("user_id"),
+            "owner": request.data.get("user_id"),
             "note_id": request.data.get("note_id"),
             "title": request.data.get("title"),
             "body": request.data.get("body"),
@@ -59,7 +59,7 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
         if res := validate_request_data(data):
             return res
 
-        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+        if res := validate_request_user(str(request_user_id), str(data["owner"])):
             return res
 
         try:
@@ -85,7 +85,7 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
         request_user_id = request.user.id
 
         data = {
-            "team_id": request.GET.get("team_id"),
+            "team": request.GET.get("team_id"),
             "user_id": request.GET.get("user_id"),
             "note_id": request.GET.get("note_id"),
         }
@@ -97,7 +97,7 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
             return res
 
         try:
-            note = PersonalNoteMaster.objects.get(team=data["team_id"], note_id=data["note_id"])
+            note = PersonalNoteMaster.objects.get(team=data["team"], note_id=data["note_id"])
             note.delete()
             return Response(
                 {"message": f"Note deleted successfully."},
@@ -110,25 +110,25 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
             )
 
 
-class SingleNoteView(AuthenticatedAPIView):
+class SinglePersonalNoteView(AuthenticatedAPIView):
     def get(self, request):
         request_user_id = request.user.id
 
         data = {
-            "team_id": request.GET.get("team_id"),
-            "user_id": request.GET.get("user_id"),
+            "team": request.GET.get("team_id"),
+            "owner": request.GET.get("user_id"),
             "note_id": request.GET.get("note_id"),
         }
 
         if res := validate_request_data(data):
             return res
 
-        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+        if res := validate_request_user(str(request_user_id), str(data["owner"])):
             return res
 
         personal_notes = (
             PersonalNoteMaster.objects.filter(
-                team=data["team_id"], owner=data["user_id"], note_id=data["note_id"]
+                team=data["team"], owner=data["owner"], note_id=data["note_id"]
             )
             .annotate(
                 teamId=F("team"),
@@ -143,6 +143,328 @@ class SingleNoteView(AuthenticatedAPIView):
                 "ownerId",
                 "noteId",
                 "parentNoteId",
+                "title",
+                "body",
+                "tsCreated",
+                "tsUpdated",
+            )
+        )
+
+        if len(personal_notes) == 0:
+            return Response(
+                {"error": "Note not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response(personal_notes[0], status=status.HTTP_200_OK)
+
+
+class TaskNoteMasterView(AuthenticatedAPIView):
+    def post(self, request):
+        request_user_id = request.user.id
+
+        data = {
+            "team": request.data.get("team_id"),
+            "owner": request.data.get("user_id"),
+            "task": request.data.get("task_id"),
+            "title": request.data.get("title"),
+            "body": request.data.get("body"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["owner"])):
+            return res
+
+        data["parent_note_id"] = request.data.get("parent_note_id")
+
+        serializer = TaskNoteMasterSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+            res = {
+                "teamId": serializer.data["team"],
+                "ownerId": serializer.data["owner"],
+                "noteId": serializer.data["note_id"],
+                "parentNoteId": serializer.data["parent_note_id"],
+                "taskId": serializer.data["task"],
+                "title": serializer.data["title"],
+                "body": serializer.data["body"],
+                "tsCreated": serializer.data["ts_created_at"],
+                "tsUpdated": serializer.data["ts_updated_at"],
+            }
+            return Response(res, status=status.HTTP_201_CREATED)
+
+        error = serializer.errors
+        return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+    def put(self, request):
+        request_user_id = request.user.id
+
+        data = {
+            "user_id": request.data.get("user_id"),
+            "note_id": request.data.get("note_id"),
+            "title": request.data.get("title"),
+            "body": request.data.get("body"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+            return res
+
+        try:
+            note = TaskNoteMaster.objects.get(note_id=data["note_id"])
+        except TaskNoteMaster.DoesNotExist:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        update_data = request.data.copy()
+
+        # Remove None values from the update_data
+        for key, val in request.data.items():
+            if val is None:
+                update_data.pop(key)
+
+        serializer = TaskNoteMasterSerializer(note, data=update_data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request):
+        request_user_id = request.user.id
+
+        data = {
+            "team": request.GET.get("team_id"),
+            "user_id": request.GET.get("user_id"),
+            "note_id": request.GET.get("note_id"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+            return res
+
+        try:
+            note = TaskNoteMaster.objects.get(team=data["team"], note_id=data["note_id"])
+            note.delete()
+            return Response(
+                {"message": f"Note deleted successfully."},
+                status=status.HTTP_204_NO_CONTENT,
+            )
+        except TaskNoteMaster.DoesNotExist:
+            return Response(
+                {"error": "Note not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+
+class SingleTaskNoteView(AuthenticatedAPIView):
+    def get(self, request):
+        request_user_id = request.user.id
+
+        data = {
+            "team": request.GET.get("team_id"),
+            "owner": request.GET.get("user_id"),
+            "note_id": request.GET.get("note_id"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["owner"])):
+            return res
+
+        personal_notes = (
+            TaskNoteMaster.objects.filter(
+                team=data["team"], owner=data["owner"], note_id=data["note_id"]
+            )
+            .annotate(
+                teamId=F("team"),
+                ownerId=F("owner"),
+                noteId=F("note_id"),
+                taskId=F("task"),
+                parentNoteId=F("parent_note_id"),
+                tsCreated=F("ts_created_at"),
+                tsUpdated=F("ts_updated_at"),
+            )
+            .values(
+                "teamId",
+                "ownerId",
+                "noteId",
+                "parentNoteId",
+                "taskId",
+                "title",
+                "body",
+                "tsCreated",
+                "tsUpdated",
+            )
+        )
+
+        if len(personal_notes) == 0:
+            return Response(
+                {"error": "Note not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response(personal_notes[0], status=status.HTTP_200_OK)
+
+
+class ChatNoteMasterView(AuthenticatedAPIView):
+    def post(self, request):
+        request_user_id = request.user.id
+
+        data = {
+            "team": request.data.get("team_id"),
+            "owner": request.data.get("user_id"),
+            "chat_type": request.data.get("chat_type"),
+            "chat_id": request.data.get("chat_id"),
+            "is_thread": request.data.get("is_thread"),
+            "thread_id": request.data.get("thread_id"),
+            "title": request.data.get("title"),
+            "body": request.data.get("body"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["owner"])):
+            return res
+
+        data["parent_note_id"] = request.data.get("parent_note_id")
+
+        serializer = ChatNoteMasterSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+            res = {
+                "teamId": serializer.data["team"],
+                "ownerId": serializer.data["owner"],
+                "noteId": serializer.data["note_id"],
+                "parentNoteId": serializer.data["parent_note_id"],
+                "chatType": serializer.data["chat_type"],
+                "chatId": serializer.data["chat_id"],
+                "isThread": serializer.data["is_thread"],
+                "threadId": serializer.data["thread_id"],
+                "title": serializer.data["title"],
+                "body": serializer.data["body"],
+                "tsCreated": serializer.data["ts_created_at"],
+                "tsUpdated": serializer.data["ts_updated_at"],
+            }
+            return Response(res, status=status.HTTP_201_CREATED)
+
+        error = serializer.errors
+        return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+    def put(self, request):
+        request_user_id = request.user.id
+
+        data = {
+            "user_id": request.data.get("user_id"),
+            "note_id": request.data.get("note_id"),
+            "title": request.data.get("title"),
+            "body": request.data.get("body"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+            return res
+
+        try:
+            note = ChatNoteMaster.objects.get(note_id=data["note_id"])
+        except ChatNoteMaster.DoesNotExist:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        update_data = request.data.copy()
+
+        # Remove None values from the update_data
+        for key, val in request.data.items():
+            if val is None:
+                update_data.pop(key)
+
+        serializer = ChatNoteMasterSerializer(note, data=update_data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request):
+        request_user_id = request.user.id
+
+        data = {
+            "team": request.GET.get("team_id"),
+            "user_id": request.GET.get("user_id"),
+            "note_id": request.GET.get("note_id"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+            return res
+
+        try:
+            note = ChatNoteMaster.objects.get(team=data["team"], note_id=data["note_id"])
+            note.delete()
+            return Response(
+                {"message": f"Note deleted successfully."},
+                status=status.HTTP_204_NO_CONTENT,
+            )
+        except ChatNoteMaster.DoesNotExist:
+            return Response(
+                {"error": "Note not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+
+class SingleChatNoteView(AuthenticatedAPIView):
+    def get(self, request):
+        request_user_id = request.user.id
+
+        data = {
+            "team": request.GET.get("team_id"),
+            "owner": request.GET.get("user_id"),
+            "note_id": request.GET.get("note_id"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["owner"])):
+            return res
+
+        personal_notes = (
+            ChatNoteMaster.objects.filter(
+                team=data["team"],
+                owner=data["owner"],
+                note_id=data["note_id"],
+            )
+            .annotate(
+                teamId=F("team"),
+                ownerId=F("owner"),
+                noteId=F("note_id"),
+                chatType=F("chat_type"),
+                chatId=F("chat_id"),
+                isThread=F("is_thread"),
+                threadId=F("thread_id"),
+                parentNoteId=F("parent_note_id"),
+                tsCreated=F("ts_created_at"),
+                tsUpdated=F("ts_updated_at"),
+            )
+            .values(
+                "teamId",
+                "ownerId",
+                "noteId",
+                "parentNoteId",
+                "chatType",
+                "chatId",
+                "isThread",
+                "threadId",
                 "title",
                 "body",
                 "tsCreated",

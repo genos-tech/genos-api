@@ -17,7 +17,7 @@ class Migration(migrations.Migration):
             name='PersonalNoteAttachmentFact',
             fields=[
                 ('attachment_id', models.BigAutoField(primary_key=True, serialize=False, unique=True)),
-                ('note_attachment_url', models.FileField(upload_to=origin.models.note.note_models.note_attachment_path)),
+                ('note_attachment_url', models.FileField(upload_to=origin.models.note.note_models.personal_note_attachment_path)),
                 ('ts_created_at', models.DateTimeField(auto_now_add=True)),
                 ('ts_updated_at', models.DateTimeField(auto_now=True)),
                 ('note_id', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, to='origin.personalnotemaster')),
