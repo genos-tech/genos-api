@@ -31,7 +31,17 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
         serializer = PersonalNoteMasterSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            res = {
+                "teamId": serializer.data["team"],
+                "ownerId": serializer.data["owner"],
+                "noteId": serializer.data["note_id"],
+                "parentNoteId": serializer.data["parent_note_id"],
+                "title": serializer.data["title"],
+                "body": serializer.data["body"],
+                "tsCreated": serializer.data["ts_created_at"],
+                "tsUpdated": serializer.data["ts_updated_at"],
+            }
+            return Response(res, status=status.HTTP_201_CREATED)
 
         error = serializer.errors
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
@@ -75,6 +85,7 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
         request_user_id = request.user.id
 
         data = {
+            "team_id": request.GET.get("team_id"),
             "user_id": request.GET.get("user_id"),
             "note_id": request.GET.get("note_id"),
         }
@@ -86,7 +97,7 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
             return res
 
         try:
-            note = PersonalNoteMaster.objects.get(note_id=data["note_id"])
+            note = PersonalNoteMaster.objects.get(team=data["team_id"], note_id=data["note_id"])
             note.delete()
             return Response(
                 {"message": f"Note deleted successfully."},
