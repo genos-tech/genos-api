@@ -1,3 +1,5 @@
+import os
+
 from django.db import models
 from django.core.exceptions import ValidationError
 
@@ -156,3 +158,33 @@ class DMThreadMessages(models.Model):
                 fields=["dm_id", "thread_id", "thread_message_id"], name="unique_dm_thread_message"
             )
         ]
+
+
+def dm_message_attachment_path(instance, filename):
+    return os.path.join(
+        "chats",
+        "dm",
+        str(instance.dm_id),
+        filename,
+    )
+
+
+class DMAttachmentFact(models.Model):
+    dm = models.ForeignKey(
+        DMMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        to_field="dm_id",
+    )
+    uploader = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        to_field="id",
+    )
+    is_thread = models.BooleanField(blank=False, null=False)
+    thread_id = models.IntegerField(blank=False, null=False)
+    attachment_id = models.BigAutoField(primary_key=True, unique=True)
+    note_attachment_url = models.FileField(upload_to=dm_message_attachment_path)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)

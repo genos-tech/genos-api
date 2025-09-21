@@ -1,3 +1,5 @@
+import os
+
 from django.db import models
 
 from origin.models.common.user_models import CustomUser
@@ -84,3 +86,33 @@ class PMThreadMessages(models.Model):
                 name="unique_pm_thread_message",
             )
         ]
+
+
+def project_message_attachment_path(instance, filename):
+    return os.path.join(
+        "chats",
+        "project",
+        str(instance.project_id),
+        filename,
+    )
+
+
+class PMAttachmentFact(models.Model):
+    project = models.ForeignKey(
+        ProjectMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        to_field="project_id",
+    )
+    uploader = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        to_field="id",
+    )
+    is_thread = models.BooleanField(blank=False, null=False)
+    thread_id = models.IntegerField(blank=False, null=False)
+    attachment_id = models.BigAutoField(primary_key=True, unique=True)
+    note_attachment_url = models.FileField(upload_to=project_message_attachment_path)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)

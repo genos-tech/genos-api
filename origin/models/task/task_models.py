@@ -234,3 +234,30 @@ class TaskCommentMentionFact(models.Model):
     def save(self, *args, **kwargs):
         self.uid = f"{self.task.task_id}-{self.comment_id}-{self.mentioned_user}"
         super().save(*args, **kwargs)
+
+
+def task_body_attachment_path(instance, filename):
+    return os.path.join(
+        "tasks",
+        str(instance.task_id),
+        filename,
+    )
+
+
+class TaskBodyAttachmentFact(models.Model):
+    task = models.ForeignKey(
+        TaskMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        to_field="task_id",
+    )
+    uploader = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        to_field="id",
+    )
+    attachment_id = models.BigAutoField(primary_key=True, unique=True)
+    note_attachment_url = models.FileField(upload_to=task_body_attachment_path)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
