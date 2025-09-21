@@ -238,3 +238,35 @@ class AllNoteMetaView(AuthenticatedAPIView):
         my_notes.extend(list(personal_notes))
 
         return Response(my_notes, status=status.HTTP_200_OK)
+
+
+class PersonalNoteAttachmentView(AuthenticatedAPIView):
+    def post(self, request):
+        request_user_id = request.user.id
+
+        data = {
+            "note": request.data.get("note_id"),
+            "uploader": request.data.get("uploader"),
+            "note_attachment_url": request.FILES.get("note_attachment_file"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["uploader"])):
+            return res
+
+        serializer = PersonalNoteAttachmentViewSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+            res = {
+                "noteId": serializer.data["note"],
+                "uploader": serializer.data["uploader"],
+                "attachmentId": serializer.data["attachment_id"],
+                "noteAttachmentUrl": serializer.data["note_attachment_url"],
+                "tsCreated": serializer.data["ts_created_at"],
+                "tsUpdated": serializer.data["ts_updated_at"],
+            }
+            return Response(res, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

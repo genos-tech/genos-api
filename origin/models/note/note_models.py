@@ -1,3 +1,5 @@
+import os
+
 from django.db import models
 from django.db.models.signals import post_save
 from django.dispatch import receiver
@@ -43,5 +45,32 @@ class PersonalNoteMaster(models.Model):
     parent_note_id = models.BigIntegerField(blank=True, null=True)
     title = models.CharField(max_length=255)
     body = models.JSONField(blank=True, null=True)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+
+def note_attachment_path(instance, filename):
+    return os.path.join(
+        "notes",
+        str(instance.note_id),
+        filename,
+    )
+
+
+class PersonalNoteAttachmentFact(models.Model):
+    note = models.ForeignKey(
+        PersonalNoteMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        to_field="note_id",
+    )
+    uploader = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        to_field="id",
+    )
+    attachment_id = models.BigAutoField(primary_key=True, unique=True)
+    note_attachment_url = models.FileField(upload_to=note_attachment_path)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

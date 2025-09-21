@@ -8,6 +8,12 @@ class PersonalNoteMasterSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class PersonalNoteAttachmentViewSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PersonalNoteAttachmentFact
+        fields = "__all__"
+
+
 class NotePermissionMasterSerializer(serializers.ModelSerializer):
     class Meta:
         model = NotePermissionMaster
