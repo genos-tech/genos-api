@@ -170,7 +170,7 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
         update_data = request.data.copy()
 
         # Remove None values from the update_data
-        for key, val in request.data.notes():
+        for key, val in request.data.items():
             if val is None:
                 update_data.pop(key)
 
