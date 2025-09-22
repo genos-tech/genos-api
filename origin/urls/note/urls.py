@@ -40,6 +40,11 @@ urlpatterns = [
         SingleChatNoteView.as_view(),
         name="chat_single_note",
     ),
+    path(
+        "api/v2/note/chat/singleById/",
+        SingleChatNoteByIdView.as_view(),
+        name="chat_single_note_by_id",
+    ),
     path("api/v2/note/chat/all/", AllChatNotesView.as_view(), name="all_chat_notes"),
     path("api/v2/note/chat/meta/", AllChatNoteMetaView.as_view(), name="task_note_meta"),
     path(
