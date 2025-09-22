@@ -484,3 +484,56 @@ class ChatNoteAttachmentView(AuthenticatedAPIView):
             return Response(res, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ChatSubNotesView(AuthenticatedAPIView):
+    def get(self, request):
+        request_user_id = request.user.id
+
+        data = {
+            "team": request.GET.get("team_id"),
+            "owner": request.GET.get("user_id"),
+            "note_id": request.GET.get("note_id"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["owner"])):
+            return res
+
+        sub_notes = (
+            ChatNoteMaster.objects.filter(
+                team=data["team"],
+                owner=data["owner"],
+                parent_note_id=data["note_id"],
+            )
+            .annotate(
+                teamId=F("team"),
+                ownerId=F("owner"),
+                noteId=F("note_id"),
+                chatType=F("chat_type"),
+                chatId=F("chat_id"),
+                isThread=F("is_thread"),
+                threadId=F("thread_id"),
+                parentNoteId=F("parent_note_id"),
+                tsCreated=F("ts_created_at"),
+                tsUpdated=F("ts_updated_at"),
+            )
+            .values(
+                "teamId",
+                "ownerId",
+                "noteId",
+                "parentNoteId",
+                "chatType",
+                "chatId",
+                "isThread",
+                "threadId",
+                "title",
+                "body",
+                "tsCreated",
+                "tsUpdated",
+            )
+        )
+
+        return Response(list(sub_notes), status=status.HTTP_200_OK)

@@ -52,4 +52,9 @@ urlpatterns = [
         ChatNoteAttachmentView.as_view(),
         name="chat_attachment",
     ),
+    path(
+        "api/v2/note/chat/subs/",
+        ChatSubNotesView.as_view(),
+        name="chat_sub_notes",
+    ),
 ]
