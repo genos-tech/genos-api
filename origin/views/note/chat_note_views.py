@@ -195,6 +195,10 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 noteId=F("note_id"),
                 parentNoteId=F("parent_note_id"),
+                chatType=F("chat_type"),
+                chatId=F("chat_id"),
+                isThread=F("is_thread"),
+                threadId=F("thread_id"),
                 tsUpdated=F("ts_updated_at"),
             )
             .order_by("tsUpdated")
@@ -203,6 +207,10 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                 "noteType",
                 "noteId",
                 "parentNoteId",
+                "chatType",
+                "chatId",
+                "isThread",
+                "threadId",
                 "title",
                 "tsUpdated",
             )
