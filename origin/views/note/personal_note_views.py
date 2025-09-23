@@ -26,6 +26,7 @@ class AllPersonalNotesView(AuthenticatedAPIView):
         personal_notes = (
             PersonalNoteMaster.objects.filter(team=data["team_id"], owner=data["user_id"])
             .annotate(
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 roleId=Value(1, output_field=IntegerField()),
                 teamId=F("team"),
                 ownerId=F("owner"),
@@ -37,6 +38,7 @@ class AllPersonalNotesView(AuthenticatedAPIView):
             .order_by("tsUpdated")
             .reverse()
             .values(
+                "noteType",
                 "teamId",
                 "ownerId",
                 "roleId",
@@ -67,6 +69,7 @@ class AllPersonalNoteMetaView(AuthenticatedAPIView):
         personal_notes = (
             PersonalNoteMaster.objects.filter(team=data["team_id"], owner=data["user_id"])
             .annotate(
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 noteId=F("note_id"),
                 parentNoteId=F("parent_note_id"),
                 tsCreated=F("ts_created_at"),
@@ -75,6 +78,7 @@ class AllPersonalNoteMetaView(AuthenticatedAPIView):
             .order_by("tsUpdated")
             .reverse()
             .values(
+                "noteType",
                 "noteId",
                 "parentNoteId",
                 "title",
@@ -231,6 +235,7 @@ class SinglePersonalNoteView(AuthenticatedAPIView):
                 team=data["team"], owner=data["owner"], note_id=data["note_id"]
             )
             .annotate(
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 teamId=F("team"),
                 ownerId=F("owner"),
                 noteId=F("note_id"),
@@ -239,6 +244,7 @@ class SinglePersonalNoteView(AuthenticatedAPIView):
                 tsUpdated=F("ts_updated_at"),
             )
             .values(
+                "noteType",
                 "teamId",
                 "ownerId",
                 "noteId",

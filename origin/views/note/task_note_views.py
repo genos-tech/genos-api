@@ -37,6 +37,7 @@ class AllTaskNotesView(AuthenticatedAPIView):
             )
             .annotate(
                 # Add the static field here
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 roleId=Value(role_id, output_field=IntegerField()),
                 # Your existing annotations
                 teamId=F("team"),
@@ -50,6 +51,7 @@ class AllTaskNotesView(AuthenticatedAPIView):
             .order_by("tsUpdated")
             .reverse()
             .values(
+                "noteType",
                 "teamId",
                 "ownerId",
                 "roleId",
@@ -75,6 +77,7 @@ class AllTaskNotesView(AuthenticatedAPIView):
             )
             .annotate(
                 # Add the static field here
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 roleId=Value(role_id, output_field=IntegerField()),
                 # Your existing annotations
                 teamId=F("team"),
@@ -88,6 +91,7 @@ class AllTaskNotesView(AuthenticatedAPIView):
             .order_by("tsUpdated")
             .reverse()
             .values(
+                "noteType",
                 "teamId",
                 "ownerId",
                 "roleId",
@@ -113,6 +117,7 @@ class AllTaskNotesView(AuthenticatedAPIView):
             )
             .annotate(
                 # Add the static field here
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 roleId=Value(role_id, output_field=IntegerField()),
                 # Your existing annotations
                 teamId=F("team"),
@@ -126,6 +131,7 @@ class AllTaskNotesView(AuthenticatedAPIView):
             .order_by("tsUpdated")
             .reverse()
             .values(
+                "noteType",
                 "teamId",
                 "ownerId",
                 "roleId",
@@ -168,6 +174,7 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
                 team=data["team_id"], owner=data["user_id"], note_id__in=task_note_ids
             )
             .annotate(
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 noteId=F("note_id"),
                 parentNoteId=F("parent_note_id"),
                 taskId=F("task"),
@@ -176,6 +183,7 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
             .order_by("tsUpdated")
             .reverse()
             .values(
+                "noteType",
                 "noteId",
                 "parentNoteId",
                 "taskId",
@@ -336,6 +344,7 @@ class SingleTaskNoteView(AuthenticatedAPIView):
                 team=data["team"], owner=data["owner"], note_id=data["note_id"]
             )
             .annotate(
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 teamId=F("team"),
                 ownerId=F("owner"),
                 noteId=F("note_id"),
@@ -346,6 +355,7 @@ class SingleTaskNoteView(AuthenticatedAPIView):
                 tsUpdated=F("ts_updated_at"),
             )
             .values(
+                "noteType",
                 "teamId",
                 "ownerId",
                 "noteId",

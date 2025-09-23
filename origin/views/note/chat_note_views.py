@@ -37,6 +37,7 @@ class AllChatNotesView(AuthenticatedAPIView):
             )
             .annotate(
                 # Add the static field here
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 roleId=Value(role_id, output_field=IntegerField()),
                 # Your existing annotations
                 teamId=F("team"),
@@ -53,6 +54,7 @@ class AllChatNotesView(AuthenticatedAPIView):
             .order_by("tsUpdated")
             .reverse()
             .values(
+                "noteType",
                 "teamId",
                 "ownerId",
                 "roleId",
@@ -81,6 +83,7 @@ class AllChatNotesView(AuthenticatedAPIView):
             )
             .annotate(
                 # Add the static field here
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 roleId=Value(role_id, output_field=IntegerField()),
                 # Your existing annotations
                 teamId=F("team"),
@@ -97,6 +100,7 @@ class AllChatNotesView(AuthenticatedAPIView):
             .order_by("tsUpdated")
             .reverse()
             .values(
+                "noteType",
                 "teamId",
                 "ownerId",
                 "roleId",
@@ -125,6 +129,7 @@ class AllChatNotesView(AuthenticatedAPIView):
             )
             .annotate(
                 # Add the static field here
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 roleId=Value(role_id, output_field=IntegerField()),
                 # Your existing annotations
                 teamId=F("team"),
@@ -141,6 +146,7 @@ class AllChatNotesView(AuthenticatedAPIView):
             .order_by("tsUpdated")
             .reverse()
             .values(
+                "noteType",
                 "teamId",
                 "ownerId",
                 "roleId",
@@ -186,6 +192,7 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                 team=data["team_id"], owner=data["user_id"], note_id__in=chat_note_ids
             )
             .annotate(
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 noteId=F("note_id"),
                 parentNoteId=F("parent_note_id"),
                 tsUpdated=F("ts_updated_at"),
@@ -193,6 +200,7 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
             .order_by("tsUpdated")
             .reverse()
             .values(
+                "noteType",
                 "noteId",
                 "parentNoteId",
                 "title",
@@ -358,6 +366,7 @@ class SingleChatNoteView(AuthenticatedAPIView):
                 note_id=data["note_id"],
             )
             .annotate(
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 teamId=F("team"),
                 ownerId=F("owner"),
                 noteId=F("note_id"),
@@ -370,6 +379,7 @@ class SingleChatNoteView(AuthenticatedAPIView):
                 tsUpdated=F("ts_updated_at"),
             )
             .values(
+                "noteType",
                 "teamId",
                 "ownerId",
                 "noteId",
@@ -423,6 +433,7 @@ class SingleChatNoteByIdView(AuthenticatedAPIView):
                 thread_id=data["thread_id"],
             )
             .annotate(
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 teamId=F("team"),
                 ownerId=F("owner"),
                 noteId=F("note_id"),
@@ -436,6 +447,7 @@ class SingleChatNoteByIdView(AuthenticatedAPIView):
             )
             .order_by("tsCreated")  # ASC by created at
             .values(
+                "noteType",
                 "teamId",
                 "ownerId",
                 "noteId",
@@ -509,6 +521,7 @@ class ChatSubNotesView(AuthenticatedAPIView):
                 parent_note_id=data["note_id"],
             )
             .annotate(
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 teamId=F("team"),
                 ownerId=F("owner"),
                 noteId=F("note_id"),
@@ -521,6 +534,7 @@ class ChatSubNotesView(AuthenticatedAPIView):
                 tsUpdated=F("ts_updated_at"),
             )
             .values(
+                "noteType",
                 "teamId",
                 "ownerId",
                 "noteId",
