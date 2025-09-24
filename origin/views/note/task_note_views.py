@@ -204,6 +204,51 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
 
 
 class TaskNoteMasterView(AuthenticatedAPIView):
+    def get(self, request):
+        data = {
+            "team": request.GET.get("team_id"),
+            "project_id": request.GET.get("project_id"),
+            "task_id": request.GET.get("task_id"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        chat_notes = (
+            TaskNoteMaster.objects.filter(
+                team=data["team"],
+                project=data["project_id"],
+                task=data["task_id"],
+            )
+            .annotate(
+                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
+                teamId=F("team"),
+                ownerId=F("owner"),
+                noteId=F("note_id"),
+                taskId=F("task"),
+                projectId=F("project"),
+                parentNoteId=F("parent_note_id"),
+                tsCreated=F("ts_created_at"),
+                tsUpdated=F("ts_updated_at"),
+            )
+            .order_by("tsCreated")  # ASC by created at
+            .values(
+                "noteType",
+                "teamId",
+                "ownerId",
+                "noteId",
+                "parentNoteId",
+                "projectId",
+                "taskId",
+                "title",
+                "body",
+                "tsCreated",
+                "tsUpdated",
+            )
+        )
+
+        return Response(list(chat_notes), status=status.HTTP_200_OK)
+
     def post(self, request, *args, **kwargs):
         request_user_id = request.user.id
 
@@ -245,6 +290,16 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                         "tsCreated": serializer.data["ts_created_at"],
                         "tsUpdated": serializer.data["ts_updated_at"],
                     }
+
+                    print(
+                        "{team}, {user}, {note_id}, {note_type}, {role_id}".format(
+                            team=TeamMaster.objects.get(team_id=data["team"]),
+                            user=CustomUser.objects.get(id=request_user_id),
+                            note_id=note["noteId"],
+                            note_type=NOTE_TYPE,
+                            role_id=1,  # Assign the creator as the 'owner' (= 1))
+                        )
+                    )
 
                     # Second, create the associated role for that note
                     NotePermissionMaster.objects.create(
