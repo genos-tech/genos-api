@@ -1,8 +1,17 @@
+import os
 import uuid
 
 from django.db import models
 
 from origin.models.common.user_models import CustomUser
+
+
+def profile_image_path(instance, filename):
+    return os.path.join(
+        "team_profiles",
+        str(instance.team_id),
+        filename,
+    )
 
 
 class TeamMaster(models.Model):
@@ -11,10 +20,13 @@ class TeamMaster(models.Model):
     team_email = models.EmailField(unique=True)
     owner = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="own_teams",
         to_field="id",
     )
+    profile_image_file = models.FileField(upload_to=profile_image_path)
+    profile_image_file_name = models.CharField(blank=True, null=True)
     is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
@@ -23,13 +35,15 @@ class TeamMaster(models.Model):
 class TeamMembers(models.Model):
     team = models.ForeignKey(
         TeamMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="team_members",
         to_field="team_id",
     )
     attendee = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="team_attendees",
         to_field="id",
     )

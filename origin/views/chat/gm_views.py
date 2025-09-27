@@ -1,11 +1,16 @@
 from django.db.models import Count, Q
+from django.shortcuts import get_object_or_404
 from rest_framework.response import Response
 from rest_framework import status
+
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.reaction_models import *
 from origin.models.chat.gm_models import GMMaster, GMMembers, GMMessages, GMThreadMessages
+from origin.models.chat.read_status_models import *
 from origin.serializers.chat.gm_serializers import *
 from origin.views.chat.modules.common import generate_first_line
+
+CHAT_TYPE = 2
 
 
 #############################
@@ -135,7 +140,6 @@ class GMHistoryView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Fetch all gm_ids linked to the user
         gm_ids = list(
             GMMembers.objects.filter(Q(gm__owner_team=team_id, attendee=attendee_id)).values_list(
                 "gm_id", flat=True
@@ -145,118 +149,132 @@ class GMHistoryView(AuthenticatedAPIView):
         if not gm_ids:
             return Response({"messages": []}, status=status.HTTP_200_OK)
 
-        # Fetch all messages where the gm_id matches and the user is involved
-        raw_messages = GMMessages.objects.filter(gm_id__in=gm_ids)
+        # ----------------------------------------------------
+        # 1. Thread replies count map
+        # ----------------------------------------------------
+        thread_reply_count_map = self._get_thread_reply_count_map(gm_ids)
 
-        # Group by gm_id and parent_message_id, then count the replies in each group
-        thread_reply_counts = GMThreadMessages.objects.values(
-            "parent_message_uid__gm__gm_id", "parent_message_uid__message_id"
-        ).annotate(num_of_replies=Count("thread_message_id"))
+        # ----------------------------------------------------
+        # 2. Reactions map
+        # ----------------------------------------------------
+        reaction_map = self._get_reaction_map(gm_ids)
 
-        thread_reply_count_map = {}
-        for reply_count_info in thread_reply_counts:
-            gm_id = reply_count_info["parent_message_uid__gm__gm_id"]
-            message_id = reply_count_info["parent_message_uid__message_id"]
-            reply_count = reply_count_info["num_of_replies"]
-            thread_reply_count_map[f"{gm_id}-{message_id}"] = reply_count
-
-        # Fetch reactions
-        raw_reactions = ReactionFact.objects.filter(
-            chat_type=2, chat_id__in=gm_ids, is_thread=False
+        # ----------------------------------------------------
+        # 3. Messages (with sender, task, project prefetched)
+        # ----------------------------------------------------
+        raw_messages = GMMessages.objects.filter(gm_id__in=gm_ids).select_related(
+            "sender", "task__project", "gm"
         )
 
-        message_history_dict = {}
-        last_message_dict = {}
-        ts_last_message_dict = {}
-        for raw_message in raw_messages:
-            chat_id = int(raw_message.gm.gm_id)
-            chat_name = str(raw_message.gm.group_name)
-            message_id = int(raw_message.message_id)
-            content = raw_message.message_body
-            sender_id = str(raw_message.sender.id)
-            sender_name = str(raw_message.sender.username)
-            sender_email = str(raw_message.sender.email)
-            sender_avatar_img_path = raw_message.sender.profile_image_url
-            ts_updated_at = str(raw_message.ts_updated_at)
-            ts_sent = str(raw_message.ts_sent_at)
+        # ----------------------------------------------------
+        # 4. Serialize messages grouped by chat_id
+        # ----------------------------------------------------
+        message_history_dict = self._build_message_history(
+            raw_messages, team_id, team_name, reaction_map, thread_reply_count_map
+        )
 
-            reactions = raw_reactions.filter(message_id=int(raw_message.message_id)).values_list(
-                "reaction_id",
-                "reaction_emoji",
-                "sender__username",
-                "sender__id",
-                "sender__profile_image_url",
-                "ts_created_at",
-            )
-            my_reactions = []
-            all_reactions = []
-            for reaction in reactions:
-                _reaction = {
-                    "id": int(reaction[0]),
-                    "emoji": reaction[1],
+        # ----------------------------------------------------
+        # 5. Add last_read_message_id for each chat
+        # ----------------------------------------------------
+        self._attach_last_read_ids(message_history_dict, attendee_id, gm_ids)
+
+        return Response(list(message_history_dict.values()), status=status.HTTP_200_OK)
+
+    # -----------------------------------------------------------------
+    # Helpers
+    # -----------------------------------------------------------------
+    def _get_thread_reply_count_map(self, gm_ids):
+        counts = GMThreadMessages.objects.values(
+            "parent_message_uid__gm__gm_id", "parent_message_uid__message_id"
+        ).annotate(num_of_replies=Count("thread_message_id"))
+        return {
+            f"{c['parent_message_uid__gm__gm_id']}-{c['parent_message_uid__message_id']}": c[
+                "num_of_replies"
+            ]
+            for c in counts
+        }
+
+    def _get_reaction_map(self, gm_ids):
+        reactions = ReactionFact.objects.filter(
+            chat_type=CHAT_TYPE, chat_id__in=gm_ids, is_thread=False
+        ).values(
+            "message_id",
+            "reaction_id",
+            "reaction_emoji",
+            "sender__username",
+            "sender__id",
+            "sender__profile_image_file_name",
+            "ts_created_at",
+        )
+        reaction_map = {}
+        for r in reactions:
+            reaction_map.setdefault(r["message_id"], []).append(
+                {
+                    "id": int(r["reaction_id"]),
+                    "emoji": r["reaction_emoji"],
                     "sender": {
-                        "userName": reaction[2],
-                        "userId": reaction[3],
-                        "avatarImgPath": reaction[4],
+                        "userName": r["sender__username"],
+                        "userId": r["sender__id"],
+                        "avatarImgPath": r["sender__profile_image_file_name"],
                         "tsLastSeen": "",
                         "tsJoined": "",
                         "customStatus": "",
                     },
-                    "tsSent": reaction[5],
+                    "tsSent": r["ts_created_at"],
                 }
-                if str(reaction[3]) == attendee_id:
-                    my_reactions.append(_reaction)
-                all_reactions.append(_reaction)
+            )
+        return reaction_map
 
-            messageIdWithChatId = f"{chat_id}-{message_id}"
+    def _build_message_history(
+        self, raw_messages, team_id, team_name, reaction_map, thread_reply_count_map
+    ):
+        message_history_dict = {}
+        last_message_dict = {}
+        ts_last_message_dict = {}
+
+        for raw in raw_messages:
+            chat_id = raw.gm.gm_id
+            chat_name = raw.gm.group_name
+            message_id = raw.message_id
+
             new_message = {
-                "messageIdWithChatId": messageIdWithChatId,
+                "messageIdWithChatId": f"{chat_id}-{message_id}",
                 "chatId": chat_id,
                 "messageId": message_id,
-                "content": content,
+                "content": raw.message_body,
                 "sender": {
                     "teamId": team_id,
                     "teamName": team_name,
-                    "userName": sender_name,
-                    "userEmail": sender_email,
-                    "userId": sender_id,
-                    "avatarImgPath": sender_avatar_img_path,
+                    "userName": raw.sender.username,
+                    "userEmail": raw.sender.email,
+                    "userId": raw.sender.id,
+                    "avatarImgPath": raw.sender.profile_image_file_name,
                     "tsLastSeen": "",
                     "tsJoined": "",
                     "customStatus": "",
                 },
-                "numReplies": thread_reply_count_map.get(
-                    f"{raw_message.gm.gm_id}-{message_id}", None
-                ),
-                "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
-                "taskId": raw_message.task.task_id if raw_message.task else None,
-                "taskStatus": raw_message.task.status if raw_message.task else None,
+                "numReplies": thread_reply_count_map.get(f"{chat_id}-{message_id}", 0),
+                "reactions": reaction_map.get(message_id, []),
+                "taskId": raw.task.task_id if raw.task else None,
+                "taskStatus": raw.task.status if raw.task else None,
                 "project": {
-                    "projectId": (
-                        raw_message.task.project.project_id if raw_message.task else None
-                    ),
-                    "projectName": (
-                        raw_message.task.project.project_name if raw_message.task else None
-                    ),
-                    "isJoined": True if raw_message.task else False,
-                    "systemUserId": (
-                        raw_message.task.project.project_system_user.id
-                        if raw_message.task
-                        else None
-                    ),
+                    "projectId": raw.task.project.project_id if raw.task else None,
+                    "projectName": raw.task.project.project_name if raw.task else None,
+                    "isJoined": bool(raw.task),
+                    "systemUserId": raw.task.project.project_system_user.id if raw.task else None,
                 },
-                "tsSent": ts_sent,
-                "tsUpdated": ts_updated_at,
+                "tsSent": str(raw.ts_sent_at),
+                "tsUpdated": str(raw.ts_updated_at),
             }
 
+            # Track last message per chat
             if chat_id in ts_last_message_dict:
-                prev_ts_last_message = ts_last_message_dict[chat_id]
-                if ts_sent > prev_ts_last_message:
+                if str(raw.ts_sent_at) > ts_last_message_dict[chat_id]:
                     last_message_dict[chat_id] = new_message
-                    ts_last_message_dict[chat_id] = ts_sent
+                    ts_last_message_dict[chat_id] = str(raw.ts_sent_at)
             else:
                 last_message_dict[chat_id] = new_message
-                ts_last_message_dict[chat_id] = ts_sent
+                ts_last_message_dict[chat_id] = str(raw.ts_sent_at)
 
             latest_message_text = generate_first_line.get(last_message_dict[chat_id]["content"][0])
 
@@ -284,9 +302,17 @@ class GMHistoryView(AuthenticatedAPIView):
                     "TSLastMessage": ts_last_message_dict[chat_id],
                 }
 
-        message_history = list(message_history_dict.values())
+        return message_history_dict
 
-        return Response(message_history, status=status.HTTP_200_OK)
+    def _attach_last_read_ids(self, message_history_dict, attendee_id, gm_ids):
+        last_reads = ReadStatus.objects.filter(
+            user=attendee_id, chat_type=CHAT_TYPE, chat_id__in=gm_ids, is_thread=False
+        ).values("chat_id", "last_read_message_id")
+
+        last_read_map = {r["chat_id"]: r["last_read_message_id"] for r in last_reads}
+
+        for chat_id, chat_data in message_history_dict.items():
+            chat_data["lastReadMessageId"] = last_read_map.get(chat_id, -1)
 
 
 class GMSingleMessageView(AuthenticatedAPIView):
@@ -316,10 +342,9 @@ class GMSingleMessageView(AuthenticatedAPIView):
             gm = gm[0]
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=2, chat_id=gm_id, message_id=message_id, is_thread=False
+            chat_type=CHAT_TYPE, chat_id=gm_id, message_id=message_id, is_thread=False
         )
         all_reactions = []
-        my_reactions = []
         for raw_reaction in raw_reactions:
             reaction = {
                 "id": int(raw_reaction.reaction_id),
@@ -327,7 +352,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
                 "sender": {
                     "userName": raw_reaction.sender.username,
                     "userId": raw_reaction.sender.id,
-                    "avatarImgPath": raw_reaction.sender.profile_image_url,
+                    "avatarImgPath": raw_reaction.sender.profile_image_file_name,
                     "tsLastSeen": "",
                     "tsJoined": "",
                     "customStatus": "",
@@ -335,8 +360,6 @@ class GMSingleMessageView(AuthenticatedAPIView):
                 "tsSent": raw_reaction.ts_created_at,
             }
             all_reactions.append(reaction)
-            if raw_reaction.sender.id == user_id:
-                my_reactions.append(reaction)
 
         thread_reply_counts = (
             GMThreadMessages.objects.filter(gm=gm_id, thread_id=message_id)
@@ -349,6 +372,14 @@ class GMSingleMessageView(AuthenticatedAPIView):
         elif len(thread_reply_counts) > 1:
             print("Error!!!! thread_reply_counts has multiple thread found")
 
+        raw_last_read_message_id = ReadStatus.objects.filter(
+            user=user_id, chat_type=CHAT_TYPE, chat_id=gm_id, is_thread=False
+        ).values_list("last_read_message_id")
+        if len(raw_last_read_message_id) == 1:
+            last_read_message_id = raw_last_read_message_id[0][0]
+        else:
+            last_read_message_id = -1
+
         message = {
             "messageIdWithChatId": f"{gm_id}-{message_id}",
             "chatId": int(gm_id),
@@ -358,14 +389,24 @@ class GMSingleMessageView(AuthenticatedAPIView):
                 "userId": gm.sender.id,
                 "userName": gm.sender.username,
                 "userEmail": gm.sender.email,
-                "avatarImgPath": gm.sender.profile_image_url,
+                "avatarImgPath": gm.sender.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
                 "isSystemUser": gm.sender.is_system_user,
             },
+            "receiver": {
+                "userId": "",
+                "userName": "",
+                "userEmail": "",
+                "avatarImgPath": "",
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
+                "isSystemUser": "",
+            },
             "numReplies": reply_count,
-            "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+            "reactions": all_reactions,
             "taskId": gm.task.task_id if gm.task else None,
             "taskStatus": gm.task.status if gm.task else None,
             "project": {
@@ -376,6 +417,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
             },
             "tsSent": gm.ts_sent_at,
             "tsUpdated": gm.ts_updated_at,
+            "lastReadMessageId": last_read_message_id,
         }
 
         return Response(message, status=status.HTTP_200_OK)
@@ -395,10 +437,23 @@ class GMSingleMessageView(AuthenticatedAPIView):
                 "message_id": current_message_count + 1,
                 "message_body": request.data["message_body"],
             }
+
+            raw_last_read_message_id = ReadStatus.objects.filter(
+                user=request.user.id,
+                chat_type=CHAT_TYPE,
+                chat_id=request.data["gm_id"],
+                is_thread=False,
+            ).values_list("last_read_message_id")
+            if len(raw_last_read_message_id) == 1:
+                last_read_message_id = raw_last_read_message_id[0][0]
+            else:
+                last_read_message_id = -1
+
             serializer = GMMessagesSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
+                res = {**serializer.data, "last_read_message_id": last_read_message_id}
+                return Response(res, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         else:
             return Response(
@@ -407,27 +462,44 @@ class GMSingleMessageView(AuthenticatedAPIView):
             )
 
     def put(self, request):
-        gm_id = int(request.data["gm_id"])
-        message_id = int(request.data["message_id"])
+        gm_id = request.data.get("gm_id")
+        message_id = request.data.get("message_id")
 
-        if not gm_id or not message_id:
+        if gm_id is None or message_id is None:
             return Response(
                 {"error": "gm_id and message_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        message = GMMessages.objects.get(gm=gm_id, message_id=message_id)
-        _tmp_task_id = message.task.task_id if message.task else None
+        message = get_object_or_404(GMMessages, gm=gm_id, message_id=message_id)
 
-        data = {
-            "message_body": request.data.get("message_body", message.message_body),
-            "task": request.data.get("task_id", _tmp_task_id),
-        }
+        update_data = request.data.copy()
+        # Remove None values from the updated_data
+        if "message_body" in update_data and update_data["message_body"] is None:
+            update_data.pop("message_body")
+        if "task_id" in update_data and update_data["task_id"] is None:
+            update_data.pop("task_id")
 
-        serializer = GMMessagesSerializer(message, data=data, partial=True)
+        # For the task_id, it needs to be changed to "task" if exists.
+        if "task_id" in update_data:
+            update_data["task"] = update_data.pop("task_id")
+
+        raw_last_read_message_id = ReadStatus.objects.filter(
+            user=request.user.id,
+            chat_type=CHAT_TYPE,
+            chat_id=request.data["dm_id"],
+            is_thread=False,
+        ).values_list("last_read_message_id")
+        if len(raw_last_read_message_id) == 1:
+            last_read_message_id = raw_last_read_message_id[0][0]
+        else:
+            last_read_message_id = -1
+
+        serializer = GMMessagesSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            res = {**serializer.data, "last_read_message_id": last_read_message_id}
+            return Response(res, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -482,10 +554,9 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
             gm = gm[0]
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=2, chat_id=gm_id, message_id=message_id, is_thread=True
+            chat_type=CHAT_TYPE, chat_id=gm_id, message_id=message_id, is_thread=True
         )
         all_reactions = []
-        my_reactions = []
         for raw_reaction in raw_reactions:
             reaction = {
                 "id": int(raw_reaction.reaction_id),
@@ -493,7 +564,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
                 "sender": {
                     "userName": raw_reaction.sender.username,
                     "userId": raw_reaction.sender.id,
-                    "avatarImgPath": raw_reaction.sender.profile_image_url,
+                    "avatarImgPath": raw_reaction.sender.profile_image_file_name,
                     "tsLastSeen": "",
                     "tsJoined": "",
                     "customStatus": "",
@@ -501,8 +572,6 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
                 "tsSent": raw_reaction.ts_created_at,
             }
             all_reactions.append(reaction)
-            if str(raw_reaction.sender.id) == user_id:
-                my_reactions.append(reaction)
 
         contentText = generate_first_line.get(gm.thread_message_body[0])
         messageIdWithChatIdAndThreadId = f"{gm_id}-{thread_id}-{message_id}"
@@ -517,13 +586,23 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
                 "userId": gm.sender.id,
                 "userName": gm.sender.username,
                 "userEmail": gm.sender.email,
-                "avatarImgPath": gm.sender.profile_image_url,
+                "avatarImgPath": gm.sender.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
                 "isSystemUser": gm.sender.is_system_user,
             },
-            "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+            "receiver": {
+                "userId": "",
+                "userName": "",
+                "userEmail": "",
+                "avatarImgPath": "",
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
+                "isSystemUser": "",
+            },
+            "reactions": all_reactions,
             "taskId": gm.parent_message_uid.task.task_id if gm.parent_message_uid.task else None,
             "taskExist": True if gm.parent_message_uid.task else False,
             "project": {
@@ -578,23 +657,30 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request):
-        gm_id = int(request.data["gm_id"])
-        thread_id = int(request.data["thread_id"])
-        message_id = int(request.data["message_id"])
+        gm_id = request.data.get("gm_id")
+        thread_id = request.data.get("thread_id")
+        message_id = request.data.get("message_id")
 
-        if not gm_id or not thread_id or not message_id:
+        if gm_id is None or message_id is None or thread_id is None:
             return Response(
-                {"error": "gm_id, thread_id, and message_id are required."},
+                {"error": "gm_id , thread_id, and message_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        message = GMThreadMessages.objects.get(
-            gm=gm_id, thread_id=thread_id, thread_message_id=message_id
+        message = get_object_or_404(
+            GMThreadMessages, gm=gm_id, thread_id=thread_id, thread_message_id=message_id
         )
 
-        data = {"thread_message_body": (request.data.get("message_body", message.message_body))}
+        update_data = request.data.copy()
+        # Remove None values from the updated_data if it's None
+        if "message_body" in update_data and update_data["message_body"] is None:
+            update_data.pop("message_body")
 
-        serializer = GMThreadMessagesSerializer(message, data=data, partial=True)
+        # Change the field name
+        if "message_body" in update_data:
+            update_data["thread_message_body"] = update_data.pop("message_body")
+
+        serializer = GMThreadMessagesSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -621,7 +707,9 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
         )
 
         # Fetch reactions
-        raw_reactions = ReactionFact.objects.filter(chat_type=2, chat_id=gm_id, is_thread=True)
+        raw_reactions = ReactionFact.objects.filter(
+            chat_type=CHAT_TYPE, chat_id=gm_id, is_thread=True
+        )
 
         thread_messages = []
         for raw_message in raw_messages:
@@ -631,7 +719,7 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
             sender_id = str(raw_message.sender.id)
             sender_name = str(raw_message.sender.username)
             sender_email = str(raw_message.sender.email)
-            sender_avatar_img_path = raw_message.sender.profile_image_url
+            sender_avatar_img_path = raw_message.sender.profile_image_file_name
             is_system_user = raw_message.sender.is_system_user
             ts_sent = str(raw_message.ts_sent_at)
             ts_updated_at = str(raw_message.ts_updated_at)
@@ -639,13 +727,13 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
             if message_id == 1:
                 # fetch the first thread message reactions -> the parent message reaction.
                 reactions = ReactionFact.objects.filter(
-                    chat_type=2, chat_id=gm_id, is_thread=False, message_id=thread_id
+                    chat_type=CHAT_TYPE, chat_id=gm_id, is_thread=False, message_id=thread_id
                 ).values_list(
                     "reaction_id",
                     "reaction_emoji",
                     "sender__username",
                     "sender__id",
-                    "sender__profile_image_url",
+                    "sender__profile_image_file_name",
                     "ts_created_at",
                 )
             else:
@@ -656,10 +744,9 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                     "reaction_emoji",
                     "sender__username",
                     "sender__id",
-                    "sender__profile_image_url",
+                    "sender__profile_image_file_name",
                     "ts_created_at",
                 )
-            my_reactions = []
             all_reactions = []
             for reaction in reactions:
                 _reaction = {
@@ -675,8 +762,6 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                     },
                     "tsSent": reaction[5],
                 }
-                if str(reaction[3]) == user_id:
-                    my_reactions.append(_reaction)
                 all_reactions.append(_reaction)
 
             # Get the parent ts_sent/ts_updated_at for the first thread message.
@@ -707,7 +792,17 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                     "customStatus": "",
                     "isSystemUser": is_system_user,
                 },
-                "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+                "receiver": {
+                    "userId": "",
+                    "userName": "",
+                    "userEmail": "",
+                    "avatarImgPath": "",
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": "",
+                    "isSystemUser": "",
+                },
+                "reactions": all_reactions,
                 "taskId": (
                     raw_message.parent_message_uid.task.task_id
                     if raw_message.parent_message_uid.task

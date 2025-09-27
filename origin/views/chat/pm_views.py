@@ -1,12 +1,19 @@
+from collections import defaultdict
+
 from django.db.models import Count, Q
+from django.shortcuts import get_object_or_404
 from rest_framework.response import Response
 from rest_framework import status
+
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.reaction_models import *
 from origin.models.project.prj_models import ProjectMembers, ProjectMaster
 from origin.models.chat.pm_models import PMMessages, PMThreadMessages
+from origin.models.chat.read_status_models import *
 from origin.serializers.chat.pm_serializers import *
 from origin.views.chat.modules.common import generate_first_line
+
+CHAT_TYPE = 3
 
 
 #############################
@@ -18,163 +25,161 @@ class PMHistoryView(AuthenticatedAPIView):
         team_name = request.GET.get("team_name")
         attendee_id = request.GET.get("user_id")
 
-        if not attendee_id:
+        if not (team_id and team_name and attendee_id):
             return Response(
-                {"error": "team_id, team_name and attendee_id are required."},
+                {"error": "team_id, team_name and user_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Fetch all project_ids linked to the user
+        # Projects this user belongs to
         project_ids = list(
-            ProjectMembers.objects.filter(Q(team=team_id, attendee=attendee_id)).values_list(
+            ProjectMembers.objects.filter(team=team_id, attendee=attendee_id).values_list(
                 "project_id", flat=True
             )
         )
-
         if not project_ids:
             return Response({"messages": []}, status=status.HTTP_200_OK)
 
-        # Fetch all messages where the project_id matches and the user is involved
-        raw_messages = PMMessages.objects.filter(project__in=project_ids)
-
-        # Group by dm_id and parent_message_id, then count the replies in each group
-        thread_reply_counts = PMThreadMessages.objects.values(
-            "parent_message_uid__project__project_id", "parent_message_uid__message_id"
-        ).annotate(num_of_replies=Count("thread_message_id"))
-
-        thread_reply_count_map = {}
-        for reply_count_info in thread_reply_counts:
-            project_id = reply_count_info["parent_message_uid__project__project_id"]
-            message_id = reply_count_info["parent_message_uid__message_id"]
-            reply_count = reply_count_info["num_of_replies"]
-            thread_reply_count_map[f"{project_id}-{message_id}"] = reply_count
-
-        # Fetch reactions
-        raw_reactions = ReactionFact.objects.filter(
-            chat_type=3, chat_id__in=project_ids, is_thread=False
+        # Messages for these projects (prefetch related sender/project/task)
+        raw_messages = (
+            PMMessages.objects.filter(project__in=project_ids)
+            .select_related("project", "sender", "task")
+            .order_by("ts_sent_at")
         )
 
-        message_history_dict = {}
-        last_message_dict = {}
-        ts_last_message_dict = {}
-        for raw_message in raw_messages:
-            chat_id = int(raw_message.project.project_id)
-            chat_name = str(raw_message.project.project_name)
-            project_system_user_id = str(raw_message.project.project_system_user.id)
-            message_id = int(raw_message.message_id)
-            content = raw_message.message_body
-            sender_id = str(raw_message.sender.id)
-            sender_name = str(raw_message.sender.username)
-            sender_email = str(raw_message.sender.email)
-            sender_avatar_img_path = raw_message.sender.profile_image_url
-            is_system_user = raw_message.sender.is_system_user
-            ts_sent = str(raw_message.ts_sent_at)
-            ts_updated_at = str(raw_message.ts_updated_at)
+        # Reply counts (avoid recomputing in loop)
+        thread_reply_counts = {
+            f"{row['parent_message_uid__project__project_id']}-{row['parent_message_uid__message_id']}": row[
+                "num_of_replies"
+            ]
+            for row in PMThreadMessages.objects.values(
+                "parent_message_uid__project__project_id",
+                "parent_message_uid__message_id",
+            ).annotate(num_of_replies=Count("thread_message_id"))
+        }
 
-            reactions = raw_reactions.filter(message_id=int(raw_message.message_id)).values_list(
+        # Reactions (grouped by message_id)
+        raw_reactions = (
+            ReactionFact.objects.filter(
+                chat_type=CHAT_TYPE, chat_id__in=project_ids, is_thread=False
+            )
+            .select_related("sender")
+            .values(
+                "message_id",
                 "reaction_id",
                 "reaction_emoji",
                 "sender__username",
                 "sender__id",
-                "sender__profile_image_url",
+                "sender__profile_image_file_name",
                 "ts_created_at",
             )
-            my_reactions = []
-            all_reactions = []
-            for reaction in reactions:
-                _reaction = {
-                    "id": int(reaction[0]),
-                    "emoji": reaction[1],
+        )
+        reactions_by_message = defaultdict(list)
+        for r in raw_reactions:
+            reactions_by_message[r["message_id"]].append(
+                {
+                    "id": r["reaction_id"],
+                    "emoji": r["reaction_emoji"],
                     "sender": {
-                        "userName": reaction[2],
-                        "userId": reaction[3],
-                        "avatarImgPath": reaction[4],
+                        "userName": r["sender__username"],
+                        "userId": r["sender__id"],
+                        "avatarImgPath": r["sender__profile_image_file_name"],
                         "tsLastSeen": "",
                         "tsJoined": "",
                         "customStatus": "",
                     },
-                    "tsSent": reaction[5],
+                    "tsSent": r["ts_created_at"],
                 }
-                if str(reaction[3]) == attendee_id:
-                    my_reactions.append(_reaction)
-                all_reactions.append(_reaction)
-
-            messageIdWithChatId = (
-                f"{chat_id}-{raw_message.task.task_id if raw_message.task else 0}"
             )
-            new_message = {
-                "messageIdWithChatId": messageIdWithChatId,
-                "chatId": chat_id,
-                "systemUserId": project_system_user_id,
-                "messageId": message_id,
-                "content": content,
-                "sender": {
-                    "teamId": team_id,
-                    "teamName": team_name,
-                    "userName": sender_name,
-                    "userEmail": sender_email,
-                    "userId": sender_id,
-                    "avatarImgPath": sender_avatar_img_path,
-                    "tsLastSeen": "",
-                    "tsJoined": "",
-                    "customStatus": "",
-                    "isSystemUser": is_system_user,
-                },
-                "numReplies": thread_reply_count_map.get(
-                    f"{raw_message.project.project_id}-{message_id}", None
-                ),
-                "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
-                "taskId": raw_message.task.task_id if raw_message.task else None,
-                "taskStatus": raw_message.task.status if raw_message.task else None,
-                "tsSent": ts_sent,
-                "tsUpdated": ts_updated_at,
-            }
 
-            if chat_id in ts_last_message_dict:
-                prev_ts_last_message = ts_last_message_dict[chat_id]
-                if ts_sent > prev_ts_last_message:
-                    last_message_dict[chat_id] = new_message
-                    ts_last_message_dict[chat_id] = ts_sent
+        # Last read messages (dict by chat_id)
+        last_read_map = {
+            rs.chat_id: rs.last_read_message_id
+            for rs in ReadStatus.objects.filter(
+                user=attendee_id, chat_type=CHAT_TYPE, chat_id__in=project_ids, is_thread=False
+            )
+        }
+
+        # Build history
+        message_history_dict = {}
+        for msg in raw_messages:
+            chat_id = msg.project.project_id
+            msg_dict = self.serialize_message(
+                msg, team_id, team_name, thread_reply_counts, reactions_by_message
+            )
+
+            # Track latest message
+            if chat_id not in message_history_dict:
+                message_history_dict[chat_id] = self.init_chat_dict(msg, msg_dict)
             else:
-                last_message_dict[chat_id] = new_message
-                ts_last_message_dict[chat_id] = ts_sent
+                message_history_dict[chat_id]["messages"].append(msg_dict)
+                if msg.ts_sent_at > message_history_dict[chat_id]["TSLastMessage"]:
+                    message_history_dict[chat_id]["latestMessage"] = msg_dict
+                    message_history_dict[chat_id]["latestMessageText"] = generate_first_line.get(
+                        msg_dict["content"][0]
+                    )
+                    message_history_dict[chat_id]["TSLastMessage"] = msg.ts_sent_at
 
-            latest_message_text = generate_first_line.get(last_message_dict[chat_id]["content"][0])
+        # Add last read info
+        for chat_id, chat in message_history_dict.items():
+            chat["lastReadMessageId"] = last_read_map.get(chat_id, -1)
 
-            if chat_id in message_history_dict:
-                message_history_dict[chat_id]["messages"].append(new_message)
-                message_history_dict[chat_id]["latestMessage"] = last_message_dict[chat_id]
-                message_history_dict[chat_id]["latestMessageText"] = latest_message_text
-                message_history_dict[chat_id]["TSLastMessage"] = ts_last_message_dict[chat_id]
-            else:
-                message_history_dict[chat_id] = {
-                    "chatId": chat_id,
-                    "chatName": chat_name,
-                    "systemUserId": project_system_user_id,
-                    "chatType": 3,
-                    "dmPartnerUser": {
-                        "userName": "",
-                        "userId": "",
-                        "avatarImgPath": "",
-                        "tsLastSeen": "",
-                        "tsJoined": "",
-                        "customStatus": "",
-                    },
-                    "messages": [new_message],
-                    "latestMessage": last_message_dict[chat_id],
-                    "latestMessageText": latest_message_text,
-                    "TSLastMessage": ts_last_message_dict[chat_id],
-                    "project": {
-                        "projectId": int(raw_message.project.project_id),
-                        "projectName": raw_message.project.project_name,
-                        "isJoined": True,
-                        "systemUserId": project_system_user_id,
-                    },
-                }
+        return Response(list(message_history_dict.values()), status=status.HTTP_200_OK)
 
-        message_history = list(message_history_dict.values())
+    def serialize_message(self, msg, team_id, team_name, reply_counts, reactions_by_message):
+        project_id = msg.project.project_id
+        message_id = msg.message_id
+        return {
+            "messageIdWithChatId": f"{project_id}-{msg.task.task_id if msg.task else 0}",
+            "chatId": project_id,
+            "systemUserId": msg.project.project_system_user.id,
+            "messageId": message_id,
+            "content": msg.message_body,
+            "sender": {
+                "teamId": team_id,
+                "teamName": team_name,
+                "userName": msg.sender.username,
+                "userEmail": msg.sender.email,
+                "userId": msg.sender.id,
+                "avatarImgPath": msg.sender.profile_image_file_name,
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
+                "isSystemUser": msg.sender.is_system_user,
+            },
+            "receiver": {},  # placeholder for future
+            "numReplies": reply_counts.get(f"{project_id}-{message_id}", 0),
+            "reactions": reactions_by_message.get(message_id, []),
+            "project": {
+                "projectId": msg.project.project_id,
+                "projectName": msg.project.project_name,
+                "isJoined": True,
+                "systemUserId": msg.project.project_system_user.id,
+            },
+            "taskId": msg.task.task_id if msg.task else None,
+            "taskStatus": msg.task.status if msg.task else None,
+            "tsSent": msg.ts_sent_at,
+            "tsUpdated": msg.ts_updated_at,
+        }
 
-        return Response(message_history, status=status.HTTP_200_OK)
+    def init_chat_dict(self, msg, first_message):
+        return {
+            "chatId": msg.project.project_id,
+            "chatName": msg.project.project_name,
+            "systemUserId": msg.project.project_system_user.id,
+            "chatType": 3,
+            "dmPartnerUser": {},  # not used in PM
+            "messages": [first_message],
+            "latestMessage": first_message,
+            "latestMessageText": generate_first_line.get(first_message["content"][0]),
+            "TSLastMessage": msg.ts_sent_at,
+            "project": {
+                "projectId": msg.project.project_id,
+                "projectName": msg.project.project_name,
+                "isJoined": True,
+                "systemUserId": msg.project.project_system_user.id,
+            },
+        }
 
 
 class PMSingleMessageView(AuthenticatedAPIView):
@@ -192,22 +197,21 @@ class PMSingleMessageView(AuthenticatedAPIView):
         pm = PMMessages.objects.filter(project=project_id, message_id=message_id)
         if len(pm) == 0:
             return Response(
-                {"error": "GM not found"},
+                {"error": "PM not found"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         elif len(pm) > 1:
             return Response(
-                {"error": "Duplicated GM found"},
+                {"error": "Duplicated PM found"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         else:
             pm = pm[0]
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=3, chat_id=project_id, message_id=message_id, is_thread=False
+            chat_type=CHAT_TYPE, chat_id=project_id, message_id=message_id, is_thread=False
         )
         all_reactions = []
-        my_reactions = []
         for raw_reaction in raw_reactions:
             reaction = {
                 "id": int(raw_reaction.reaction_id),
@@ -215,7 +219,7 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 "sender": {
                     "userName": raw_reaction.sender.username,
                     "userId": raw_reaction.sender.id,
-                    "avatarImgPath": raw_reaction.sender.profile_image_url,
+                    "avatarImgPath": raw_reaction.sender.profile_image_file_name,
                     "tsLastSeen": "",
                     "tsJoined": "",
                     "customStatus": "",
@@ -223,8 +227,6 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 "tsSent": raw_reaction.ts_created_at,
             }
             all_reactions.append(reaction)
-            if raw_reaction.sender.id == user_id:
-                my_reactions.append(reaction)
 
         thread_reply_counts = (
             PMThreadMessages.objects.filter(project=project_id, thread_id=message_id)
@@ -237,6 +239,14 @@ class PMSingleMessageView(AuthenticatedAPIView):
         elif len(thread_reply_counts) > 1:
             print("Error!!!! thread_reply_counts has multiple thread found")
 
+        raw_last_read_message_id = ReadStatus.objects.filter(
+            user=user_id, chat_type=CHAT_TYPE, chat_id=project_id, is_thread=False
+        ).values_list("last_read_message_id")
+        if len(raw_last_read_message_id) == 1:
+            last_read_message_id = raw_last_read_message_id[0][0]
+        else:
+            last_read_message_id = -1
+
         message = {
             "messageIdWithChatId": f"{project_id}-{message_id}",
             "chatId": int(project_id),
@@ -246,14 +256,24 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 "userId": pm.sender.id,
                 "userName": pm.sender.username,
                 "userEmail": pm.sender.email,
-                "avatarImgPath": pm.sender.profile_image_url,
+                "avatarImgPath": pm.sender.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
                 "isSystemUser": pm.sender.is_system_user,
             },
+            "receiver": {
+                "userId": "",
+                "userName": "",
+                "userEmail": "",
+                "avatarImgPath": "",
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
+                "isSystemUser": "",
+            },
             "numReplies": reply_count,
-            "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+            "reactions": all_reactions,
             "taskId": pm.task.task_id if pm.task else None,
             "taskStatus": pm.task.status if pm.task else None,
             "project": {
@@ -264,6 +284,7 @@ class PMSingleMessageView(AuthenticatedAPIView):
             },
             "tsSent": pm.ts_sent_at,
             "tsUpdated": pm.ts_updated_at,
+            "lastReadMessageId": last_read_message_id,
         }
 
         return Response(message, status=status.HTTP_200_OK)
@@ -287,10 +308,23 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 "message_body": request.data["message_body"],
                 "task": request.data["task_id"],
             }
+
+            raw_last_read_message_id = ReadStatus.objects.filter(
+                user=request.user.id,
+                chat_type=CHAT_TYPE,
+                chat_id=request.data["project_id"],
+                is_thread=False,
+            ).values_list("last_read_message_id")
+            if len(raw_last_read_message_id) == 1:
+                last_read_message_id = raw_last_read_message_id[0][0]
+            else:
+                last_read_message_id = -1
+
             serializer = PMMessagesSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
+                res = {**serializer.data, "last_read_message_id": last_read_message_id}
+                return Response(res, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         else:
             return Response(
@@ -300,11 +334,11 @@ class PMSingleMessageView(AuthenticatedAPIView):
 
     def put(self, request):
         try:
-            if request.data["message_id"] == None:
+            if request.data.get("message_id") is None:
                 message = PMMessages.objects.get(
                     project=request.data["project_id"], task=request.data["task_id"]
                 )
-            elif request.data["task_id"] == None:
+            elif request.data.get("task_id") is None:
                 message = PMMessages.objects.get(
                     project=request.data["project_id"], message_id=request.data["message_id"]
                 )
@@ -319,10 +353,22 @@ class PMSingleMessageView(AuthenticatedAPIView):
             "message_body": request.data.get("message_body", message.message_body),
         }
 
+        raw_last_read_message_id = ReadStatus.objects.filter(
+            user=request.user.id,
+            chat_type=CHAT_TYPE,
+            chat_id=request.data["project_id"],
+            is_thread=False,
+        ).values_list("last_read_message_id")
+        if len(raw_last_read_message_id) == 1:
+            last_read_message_id = raw_last_read_message_id[0][0]
+        else:
+            last_read_message_id = -1
+
         serializer = PMMessagesSerializer(message, data=data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            res = {**serializer.data, "last_read_message_id": last_read_message_id}
+            return Response(res, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -367,22 +413,21 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
         )
         if len(pm) == 0:
             return Response(
-                {"error": "GM not found"},
+                {"error": "PM not found"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         elif len(pm) > 1:
             return Response(
-                {"error": "Duplicated GM found"},
+                {"error": "Duplicated PM found"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         else:
             pm = pm[0]
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=2, chat_id=project_id, message_id=message_id, is_thread=True
+            chat_type=CHAT_TYPE, chat_id=project_id, message_id=message_id, is_thread=True
         )
         all_reactions = []
-        my_reactions = []
         for raw_reaction in raw_reactions:
             reaction = {
                 "id": int(raw_reaction.reaction_id),
@@ -390,7 +435,7 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
                 "sender": {
                     "userName": raw_reaction.sender.username,
                     "userId": raw_reaction.sender.id,
-                    "avatarImgPath": raw_reaction.sender.profile_image_url,
+                    "avatarImgPath": raw_reaction.sender.profile_image_file_name,
                     "tsLastSeen": "",
                     "tsJoined": "",
                     "customStatus": "",
@@ -398,8 +443,6 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
                 "tsSent": raw_reaction.ts_created_at,
             }
             all_reactions.append(reaction)
-            if str(raw_reaction.sender.id) == user_id:
-                my_reactions.append(reaction)
 
         contentText = generate_first_line.get(pm.thread_message_body[0])
         task_id = pm.parent_message_uid.task.task_id if pm.parent_message_uid.task else -1
@@ -415,13 +458,23 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
                 "userId": pm.sender.id,
                 "userName": pm.sender.username,
                 "userEmail": pm.sender.email,
-                "avatarImgPath": pm.sender.profile_image_url,
+                "avatarImgPath": pm.sender.profile_image_file_name,
                 "tsLastSeen": "",
                 "tsJoined": "",
                 "customStatus": "",
                 "isSystemUser": pm.sender.is_system_user,
             },
-            "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+            "receiver": {
+                "userId": "",
+                "userName": "",
+                "userEmail": "",
+                "avatarImgPath": "",
+                "tsLastSeen": "",
+                "tsJoined": "",
+                "customStatus": "",
+                "isSystemUser": "",
+            },
+            "reactions": all_reactions,
             "taskId": task_id,
             "taskExist": True if pm.parent_message_uid.task else False,
             "project": {
@@ -496,23 +549,30 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request):
-        project_id = int(request.data["project_id"])
-        thread_id = int(request.data["thread_id"])
-        message_id = int(request.data["message_id"])
+        project_id = request.data.get("project_id")
+        thread_id = request.data.get("thread_id")
+        message_id = request.data.get("message_id")
 
-        if not project_id or not thread_id or not message_id:
+        if project_id is None or message_id is None or thread_id is None:
             return Response(
-                {"error": "project_id, thread_id, and message_id are required."},
+                {"error": "project_id , thread_id, and message_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        message = PMThreadMessages.objects.get(
-            project=project_id, thread_id=thread_id, thread_message_id=message_id
+        message = get_object_or_404(
+            PMThreadMessages, project=project_id, thread_id=thread_id, thread_message_id=message_id
         )
 
-        data = {"thread_message_body": request.data.get("message_body", message.message_body)}
+        update_data = request.data.copy()
+        # Remove None values from the updated_data if it's None
+        if "message_body" in update_data and update_data["message_body"] is None:
+            update_data.pop("message_body")
 
-        serializer = PMThreadMessagesSerializer(message, data=data, partial=True)
+        # Change the field name
+        if "message_body" in update_data:
+            update_data["thread_message_body"] = update_data.pop("message_body")
+
+        serializer = PMThreadMessagesSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -540,7 +600,7 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
 
         # Fetch reactions
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=3, chat_id=project_id, is_thread=True
+            chat_type=CHAT_TYPE, chat_id=project_id, is_thread=True
         )
 
         thread_messages = []
@@ -551,7 +611,7 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
             sender_id = str(raw_message.sender.id)
             sender_name = str(raw_message.sender.username)
             sender_email = str(raw_message.sender.email)
-            sender_avatar_img_path = raw_message.sender.profile_image_url
+            sender_avatar_img_path = raw_message.sender.profile_image_file_name
             is_system_user = raw_message.sender.is_system_user
             ts_sent = str(raw_message.ts_sent_at)
             ts_updated_at = str(raw_message.ts_updated_at)
@@ -563,10 +623,9 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                 "reaction_emoji",
                 "sender__username",
                 "sender__id",
-                "sender__profile_image_url",
+                "sender__profile_image_file_name",
                 "ts_created_at",
             )
-            my_reactions = []
             all_reactions = []
             for reaction in reactions:
                 _reaction = {
@@ -582,8 +641,6 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                     },
                     "tsSent": reaction[5],
                 }
-                if str(reaction[3]) == user_id:
-                    my_reactions.append(_reaction)
                 all_reactions.append(_reaction)
 
             # Get the parent ts_sent/ts_updated_at for the first thread message.
@@ -621,7 +678,17 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                     "customStatus": "",
                     "isSystemUser": is_system_user,
                 },
-                "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+                "receiver": {
+                    "userId": "",
+                    "userName": "",
+                    "userEmail": "",
+                    "avatarImgPath": "",
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": "",
+                    "isSystemUser": "",
+                },
+                "reactions": all_reactions,
                 "taskId": task_id,
                 "tsSent": ts_sent,
                 "tsUpdated": ts_updated_at,

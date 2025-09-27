@@ -21,19 +21,47 @@ class InboxItemView(AuthenticatedAPIView):
             "is_read": False,
         }
 
+        already_exist = (
+            len(
+                InboxItems.objects.filter(
+                    team=data["team"],
+                    sender=data["sender"],
+                    receiver=data["receiver"],
+                    item_body=data["item_body"],
+                    item_type=data["item_type"],
+                ).values()
+            )
+            > 0
+        )
+
         serializer = InboxItemsSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            if already_exist == False:
+                serializer.save()
+            return Response(
+                {
+                    "wsType": "inbox",
+                    "alreadyExist": already_exist,
+                    "data": {
+                        "itemId": serializer.data.get("item_id", None),
+                        "itemBody": serializer.data.get("item_body", None),
+                        "itemType": serializer.data.get("item_type", None),
+                        "isRead": serializer.data.get("is_read", None),
+                        "tsSent": serializer.data.get("ts_created_at", None),
+                    },
+                    "receiver": serializer.data.get("receiver", None),
+                },
+                status=status.HTTP_201_CREATED,
+            )
 
         error = serializer.errors
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request):
-        team_id = request.data["team_id"]
-        item_id = request.data["item_id"]
+        team_id = request.data.get("team_id")
+        item_id = request.data.get("item_id")
 
-        if not team_id or not item_id:
+        if team_id is None or item_id is None:
             return Response(
                 {"error": "team_id and item_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -41,9 +69,13 @@ class InboxItemView(AuthenticatedAPIView):
 
         inbox_item = InboxItems.objects.get(team=team_id, item_id=item_id)
 
-        data = {"is_read": bool(request.data["is_read"])}
+        update_data = request.data.copy()
+        # Remove None values from the updated_data if it's None
+        if "is_read" in update_data:
+            if update_data["is_read"] is not None:
+                update_data["is_read"] = bool(update_data.pop("is_read"))
 
-        serializer = InboxItemsSerializer(inbox_item, data=data, partial=True)
+        serializer = InboxItemsSerializer(inbox_item, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -89,6 +121,7 @@ class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
             "receiver": team_owner_id[0],  # Send to the team owner
             "item_body": request.data["item_body"],
             "item_type": request.data["item_type"],  # Must be '1'
+            "item_optionals": request.data["item_optionals"],
             "is_read": False,
         }
 
@@ -108,7 +141,21 @@ class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
         if serializer.is_valid():
             if is_already_requested == False:
                 serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(
+                {
+                    "wsType": "inbox",
+                    "alreadyExist": is_already_requested,
+                    "data": {
+                        "itemId": serializer.data.get("item_id", None),
+                        "itemBody": serializer.data.get("item_body", None),
+                        "itemType": serializer.data.get("item_type", None),
+                        "isRead": serializer.data.get("is_read", None),
+                        "tsSent": serializer.data.get("ts_created_at", None),
+                    },
+                    "receiver": serializer.data.get("receiver", None),
+                },
+                status=status.HTTP_201_CREATED,
+            )
 
         error = serializer.errors
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
@@ -138,6 +185,7 @@ class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
                     sender=data["sender"],
                     receiver=data["receiver"],
                     item_type=data["item_type"],
+                    item_optionals=data["item_optionals"],
                 ).values()
             )
             > 0
@@ -147,7 +195,21 @@ class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
         if serializer.is_valid():
             if is_already_requested == False:
                 serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(
+                {
+                    "wsType": "inbox",
+                    "alreadyExist": is_already_requested,
+                    "data": {
+                        "itemId": serializer.data.get("item_id", None),
+                        "itemBody": serializer.data.get("item_body", None),
+                        "itemType": serializer.data.get("item_type", None),
+                        "isRead": serializer.data.get("is_read", None),
+                        "tsSent": serializer.data.get("ts_created_at", None),
+                    },
+                    "receiver": serializer.data.get("receiver", None),
+                },
+                status=status.HTTP_201_CREATED,
+            )
 
         error = serializer.errors
         return Response(error, status=status.HTTP_400_BAD_REQUEST)

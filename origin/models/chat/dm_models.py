@@ -1,6 +1,7 @@
+import os
+
 from django.db import models
 from django.core.exceptions import ValidationError
-from django.utils import timezone
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
@@ -10,7 +11,8 @@ from origin.models.task.task_models import TaskMaster
 class DMMaster(models.Model):
     team = models.ForeignKey(
         TeamMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="team_dm_master",
         to_field="team_id",
     )
@@ -68,19 +70,22 @@ class UserDMMapping(models.Model):
 class DMMessages(models.Model):
     dm = models.ForeignKey(
         DMMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="dm_messages",
         to_field="dm_id",
     )
     sender = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="sent_dm_messages",
         to_field="id",
     )
     receiver = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="received_messages",
         to_field="id",
     )
@@ -89,10 +94,10 @@ class DMMessages(models.Model):
     thread_id = models.IntegerField(blank=True, null=True)
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="dm_thread_task",
         to_field="task_id",
-        null=True,
         blank=True,
     )
     is_deleted = models.BooleanField(default=False)
@@ -114,20 +119,23 @@ class DMMessages(models.Model):
 class DMThreadMessages(models.Model):
     dm = models.ForeignKey(
         DMMaster,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="dm_thread_messages",
         to_field="dm_id",
     )
     thread_id = models.IntegerField()
     sender = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="sent_dm_thread_messages",
         to_field="id",
     )
     receiver = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="received_thread_messages",
         to_field="id",
     )
@@ -135,7 +143,8 @@ class DMThreadMessages(models.Model):
     thread_message_body = models.JSONField(blank=False)
     parent_message_uid = models.ForeignKey(
         DMMessages,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="thread_messages",
         to_field="uid",
     )
@@ -149,3 +158,33 @@ class DMThreadMessages(models.Model):
                 fields=["dm_id", "thread_id", "thread_message_id"], name="unique_dm_thread_message"
             )
         ]
+
+
+def dm_message_attachment_path(instance, filename):
+    return os.path.join(
+        "chats",
+        "dm",
+        str(instance.dm_id),
+        filename,
+    )
+
+
+class DMAttachmentFact(models.Model):
+    dm = models.ForeignKey(
+        DMMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        to_field="dm_id",
+    )
+    uploader = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        to_field="id",
+    )
+    is_thread = models.BooleanField(blank=False, null=False)
+    thread_id = models.IntegerField(blank=False, null=False)
+    attachment_id = models.BigAutoField(primary_key=True, unique=True)
+    note_attachment_url = models.FileField(upload_to=dm_message_attachment_path)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)

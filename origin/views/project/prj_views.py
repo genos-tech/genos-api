@@ -137,6 +137,7 @@ class JoinProjectFromInboxView(AuthenticatedAPIView):
 
         attendee_id = inbox_item[0]
         project_id = inbox_item[1]["project_id"]
+        project_name = inbox_item[1]["project_name"]
 
         # Check if the attendee is not joined yet.
         is_joined = ProjectMembers.objects.filter(
@@ -145,6 +146,7 @@ class JoinProjectFromInboxView(AuthenticatedAPIView):
 
         data = {"team": team_id, "project": project_id, "attendee": attendee_id}
         if is_joined:
+            data["projectName"] = project_name
             return Response(data, status=status.HTTP_201_CREATED)
         else:
             project_exists = ProjectMaster.objects.filter(
@@ -154,8 +156,11 @@ class JoinProjectFromInboxView(AuthenticatedAPIView):
                 serializer = ProjectMembersSerializer(data=data)
                 if serializer.is_valid():
                     serializer.save()
-                    return Response(serializer.data, status=status.HTTP_201_CREATED)
+                    res = serializer.data
+                    res["projectName"] = project_name
+                    return Response(res, status=status.HTTP_201_CREATED)
             else:
+                data["projectName"] = project_name
                 return Response(data, status=status.HTTP_200_OK)
 
         error = serializer.errors

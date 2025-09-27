@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
+import os
 from datetime import timedelta
 from pathlib import Path
 
@@ -184,3 +185,7 @@ CSRF_COOKIE_HTTPONLY = (
     False  # CSRF cookie should be accessible by JavaScript (for CSRF protection)
 )
 CSRF_COOKIE_SAMESITE = "Lax"
+
+
+MEDIA_URL = "/media/"  # URL prefix
+MEDIA_ROOT = os.path.join(BASE_DIR, "uploads")  # Folder where uploaded files go

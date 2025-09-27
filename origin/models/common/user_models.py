@@ -1,3 +1,5 @@
+import os
+
 import uuid
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
@@ -21,12 +23,21 @@ class CustomUserManager(BaseUserManager):
         return self.create_user(email, username, password, **extra_fields)
 
 
+def user_profile_image_path(instance, filename):
+    return os.path.join(
+        "user_profiles",
+        str(instance.id),
+        filename,
+    )
+
+
 class CustomUser(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     username = models.CharField(max_length=50, unique=False)
     email = models.EmailField(unique=True)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
-    profile_image_url = models.URLField(blank=True, null=True)
+    profile_image_url = models.FileField(upload_to=user_profile_image_path)
+    profile_image_file_name = models.CharField(blank=True, null=True)
     is_offline_forced = models.BooleanField(default=False)
     custom_status = models.CharField(max_length=50, blank=True, null=True)
     role = models.CharField(max_length=50, blank=True, null=True)

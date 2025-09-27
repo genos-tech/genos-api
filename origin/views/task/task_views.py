@@ -55,35 +55,24 @@ class TaskMasterView(AuthenticatedAPIView):
 
     def put(self, request):
         try:
-            print("request.data:", request.data)
-            task = TaskMaster.objects.get(task_id=request.data["task_id"])
+            task_id = request.data.get("task_id")
+            if task_id is None:
+                return Response(
+                    {"error": "task_id is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            task = TaskMaster.objects.get(task_id=task_id)
         except TaskMaster.DoesNotExist:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        data = {
-            "team": request.data.get("team", task.team),
-            "project": request.data.get("project", task.project),
-            "thread_id": request.data.get("thread_id", task.thread_id),
-            "parent_task_id": request.data.get("parent_task_id", task.parent_task_id),
-            "assignee": request.data.get("assignee", task.assignee),
-            "reporter": request.data.get("reporter", task.reporter),
-            "title": request.data.get("title", task.title),
-            "priority": request.data.get("priority", task.priority),
-            "priority_code": task.priority_code,
-            "effort_level": request.data.get("effort_level", task.effort_level),
-            "effort_level_code": task.effort_level_code,
-            "status": request.data.get("status", task.status),
-            "status_code": task.status_code,
-            "content": request.data.get("content", task.content),
-            "due_date": request.data.get("due_date", task.due_date),
-            "github_url": request.data.get("github_url", task.github_url),
-            "github_url_title": request.data.get("github_url_title", task.github_url_title),
-            "general_url": request.data.get("general_url", task.general_url),
-            "general_url_title": request.data.get("general_url_title", task.general_url_title),
-            "tags": request.data.get("tags", task.tags),
-        }
+        update_data = request.data.copy()
 
-        serializer = TaskMasterSerializer(task, data=data)
+        # Remove None values from the update_data
+        for key, val in request.data.items():
+            if val is None:
+                update_data.pop(key)
+
+        serializer = TaskMasterSerializer(task, data=update_data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -100,9 +89,6 @@ class GetTeamTasksView(AuthenticatedAPIView):
                 {"error": "team_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        # tasks = TaskMaster.objects.filter(team=team_id)
-        # serializer = TaskMasterSerializer(tasks, many=True)
 
         task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(team=team_id)
         response_data = []
@@ -123,7 +109,7 @@ class GetTeamTasksView(AuthenticatedAPIView):
                     "assigneeId": t.assignee.id,
                     "assigneeEmail": t.assignee.email,
                     "assigneeName": t.assignee.username,
-                    "assigneeImgPath": t.assignee.profile_image_url,
+                    "assigneeImgPath": t.assignee.profile_image_file_name,
                     "parentTaskId": str(t.parent_task_id),
                     "rootTaskId": str(t.root_task_id),
                     "threadId": t.thread_id,
@@ -148,7 +134,6 @@ class GetTeamTasksByTagView(AuthenticatedAPIView):
             )
 
         task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(team=team_id)
-        response_data = []
 
         projects = {}
         for t in task_with_tags:
@@ -176,10 +161,7 @@ class GetTeamTasksByTagView(AuthenticatedAPIView):
                             }
                         )
 
-        for project_id, project_tasks in projects.items():
-            response_data.append(project_tasks)
-
-        return Response(response_data, status=status.HTTP_200_OK)
+        return Response(list(projects.values()), status=status.HTTP_200_OK)
 
 
 class ChildTaskView(AuthenticatedAPIView):
@@ -217,7 +199,7 @@ class ChildTaskView(AuthenticatedAPIView):
                 ):
                     file_path = _file[0]
                     file_type = _file[1]
-                    with open(file_path, "rb") as f:
+                    with open("./uploads/" + file_path, "rb") as f:
                         encoded_file = base64.b64encode(f.read()).decode("utf-8")
                         attached_files.append(
                             {
@@ -243,7 +225,7 @@ class ChildTaskView(AuthenticatedAPIView):
                             "userId": t.assignee.id,
                             "userName": t.assignee.username,
                             "userEmail": t.assignee.email,
-                            "avatarImgPath": t.assignee.profile_image_url,
+                            "avatarImgPath": t.assignee.profile_image_file_name,
                             "tsLastSeen": "",
                             "tsJoined": "",
                             "customStatus": "",
@@ -253,7 +235,7 @@ class ChildTaskView(AuthenticatedAPIView):
                             "userId": t.reporter.id,
                             "userName": t.reporter.username,
                             "userEmail": t.reporter.email,
-                            "avatarImgPath": t.reporter.profile_image_url,
+                            "avatarImgPath": t.reporter.profile_image_file_name,
                             "tsLastSeen": "",
                             "tsJoined": "",
                             "customStatus": "",
@@ -367,7 +349,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
             for _file in t.task_attachments.all().values_list("attached_file", "attached_type"):
                 file_path = _file[0]
                 file_type = _file[1]
-                with open(file_path, "rb") as f:
+                with open("./uploads/" + file_path, "rb") as f:
                     encoded_file = base64.b64encode(f.read()).decode("utf-8")
                     attached_files.append(
                         {
@@ -393,7 +375,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                         "userId": t.assignee.id,
                         "userName": t.assignee.username,
                         "userEmail": t.assignee.email,
-                        "avatarImgPath": t.assignee.profile_image_url,
+                        "avatarImgPath": t.assignee.profile_image_file_name,
                         "tsLastSeen": "",
                         "tsJoined": "",
                         "customStatus": "",
@@ -403,7 +385,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                         "userId": t.reporter.id,
                         "userName": t.reporter.username,
                         "userEmail": t.reporter.email,
-                        "avatarImgPath": t.reporter.profile_image_url,
+                        "avatarImgPath": t.reporter.profile_image_file_name,
                         "tsLastSeen": "",
                         "tsJoined": "",
                         "customStatus": "",
@@ -498,7 +480,7 @@ class GetTaskView(AuthenticatedAPIView):
                 attachment_id = _file[0]
                 file_path = _file[1]
                 file_type = _file[2]
-                with open(file_path, "rb") as f:
+                with open("./uploads/" + file_path, "rb") as f:
                     encoded_file = base64.b64encode(f.read()).decode("utf-8")
                     attached_files.append(
                         {
@@ -525,7 +507,7 @@ class GetTaskView(AuthenticatedAPIView):
                         "userId": t.assignee.id,
                         "userName": t.assignee.username,
                         "userEmail": t.assignee.email,
-                        "avatarImgPath": t.assignee.profile_image_url,
+                        "avatarImgPath": t.assignee.profile_image_file_name,
                         "tsLastSeen": "",
                         "tsJoined": "",
                         "customStatus": "",
@@ -535,7 +517,7 @@ class GetTaskView(AuthenticatedAPIView):
                         "userId": t.reporter.id,
                         "userName": t.reporter.username,
                         "userEmail": t.reporter.email,
-                        "avatarImgPath": t.reporter.profile_image_url,
+                        "avatarImgPath": t.reporter.profile_image_file_name,
                         "tsLastSeen": "",
                         "tsJoined": "",
                         "customStatus": "",
@@ -608,25 +590,22 @@ class GetTaskView(AuthenticatedAPIView):
 class GetProjectTasksView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
-        project_id = int(request.GET.get("project_id"))
+        project_id = request.GET.get("project_id")
 
-        if not team_id:
+        if team_id is None or project_id is None:
             return Response(
-                {"error": "team_id is required."},
+                {"error": "team_id and project_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # tasks = TaskMaster.objects.filter(team=team_id, project=project_id)
-        # serializer = TaskMasterSerializer(tasks, many=True)
-
         task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
-            team=team_id, project_id=project_id
+            team=team_id, project=project_id
         )
         response_data = []
         for t in task_with_tags:
             response_data.append(
                 {
-                    "id": t.task_id,
+                    "id": str(t.task_id),
                     "title": t.title,
                     "priority": t.priority,
                     "effortLevel": t.effort_level,
@@ -640,13 +619,13 @@ class GetProjectTasksView(AuthenticatedAPIView):
                     "assigneeId": t.assignee.id,
                     "assigneeEmail": t.assignee.email,
                     "assigneeName": t.assignee.username,
-                    "assigneeImgPath": t.assignee.profile_image_url,
-                    "parentTaskId": t.parent_task_id,
-                    "rootTaskId": t.root_task_id,
+                    "assigneeImgPath": t.assignee.profile_image_file_name,
+                    "parentTaskId": str(t.parent_task_id),
+                    "rootTaskId": str(t.root_task_id),
                     "threadId": t.thread_id,
                     "tags": t.tags,
                     "concatTags": "/" + "/".join([tag["tagName"] for tag in t.tags]) + "/",
-                    "teamId": t.team.team_id,
+                    "teamId": str(t.team.team_id),
                     "projectId": t.project.project_id,
                 },
             )
@@ -686,7 +665,7 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
                     "assigneeId": t.assignee.id,
                     "assigneeEmail": t.assignee.email,
                     "assigneeName": t.assignee.username,
-                    "assigneeImgPath": t.assignee.profile_image_url,
+                    "assigneeImgPath": t.assignee.profile_image_file_name,
                     "parentTaskId": t.parent_task_id,
                     "rootTaskId": t.root_task_id,
                     "threadId": t.thread_id,
@@ -723,20 +702,19 @@ class TaskAttachmentsView(AuthenticatedAPIView):
                 "attached_type": attached_type,
             }
 
-            print("attached_data:", data)
-
             serializer = TaskAttachmentsSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
 
-                with open("." + serializer.data["attached_file"], "rb") as f:
+                file_path = serializer.data["attached_file"].replace("/media/", "/uploads/")
+                with open("." + file_path, "rb") as f:
                     encoded_file = base64.b64encode(f.read()).decode("utf-8")
 
                 return Response(
                     {
                         **serializer.data,
                         "file_base64": encoded_file,
-                        "name": os.path.basename(serializer.data["attached_file"]),
+                        "name": os.path.basename(file_path),
                     },
                     status=status.HTTP_201_CREATED,
                 )
@@ -802,10 +780,10 @@ class TaskCommentsView(AuthenticatedAPIView):
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request):
-        task_id = request.data["task_id"]
-        comment_id = request.data["comment_id"]
+        task_id = request.data.get("task_id")
+        comment_id = request.data.get("comment_id")
 
-        if not task_id or not comment_id:
+        if task_id is None or comment_id is None:
             return Response(
                 {"error": "task_id and comment_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -813,11 +791,14 @@ class TaskCommentsView(AuthenticatedAPIView):
 
         message = TaskComments.objects.get(task=task_id, comment_id=comment_id)
 
-        data = {
-            "comment_body": request.data.get("comment_body", message.comment_body),
-        }
+        update_data = request.data.copy()
 
-        serializer = TaskCommentsSerializer(message, data=data, partial=True)
+        # Remove None values from the update_data
+        for key, val in request.data.items():
+            if val is None:
+                update_data.pop(key)
+
+        serializer = TaskCommentsSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -855,10 +836,9 @@ class TaskCommentsView(AuthenticatedAPIView):
                     "reaction_emoji",
                     "sender__username",
                     "sender__id",
-                    "sender__profile_image_url",
+                    "sender__profile_image_file_name",
                     "ts_created_at",
                 )
-                my_reactions = []
                 all_reactions = []
                 for reaction in reactions:
                     _reaction = {
@@ -874,8 +854,6 @@ class TaskCommentsView(AuthenticatedAPIView):
                         },
                         "tsSent": reaction[5],
                     }
-                    if str(reaction[3]) == user_id:
-                        my_reactions.append(_reaction)
                     all_reactions.append(_reaction)
 
                 response_data.append(
@@ -885,7 +863,7 @@ class TaskCommentsView(AuthenticatedAPIView):
                         "senderName": comment["sender__username"],
                         "commentId": comment["comment_id"],
                         "commentBody": comment["comment_body"],
-                        "reactions": {"myReactions": my_reactions, "allReactions": all_reactions},
+                        "reactions": all_reactions,
                         "tsSent": str(comment["ts_sent_at"]),
                         "tsUpdated": str(comment["ts_updated_at"]),
                     }
