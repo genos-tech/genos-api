@@ -1,6 +1,7 @@
 from django.db import models
 
 from origin.models.common.user_models import CustomUser
+from origin.models.chat.activity_models import ActivityFact
 
 
 class ReadStatus(models.Model):
@@ -23,5 +24,32 @@ class ReadStatus(models.Model):
             models.UniqueConstraint(
                 fields=["user", "chat_type", "chat_id", "thread_id"],
                 name="unique_read_status",
+            )
+        ]
+
+
+class ActivityReadStatus(models.Model):
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        to_field="id",
+    )
+    activity = models.ForeignKey(
+        ActivityFact,
+        on_delete=models.SET_NULL,
+        null=True,
+        to_field="activity_id",
+        related_name="activity_read_status",
+    )
+    is_read = models.BooleanField(blank=False, null=False)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "activity_id"],
+                name="unique_activity_read_status",
             )
         ]

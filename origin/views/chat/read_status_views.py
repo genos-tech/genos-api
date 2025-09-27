@@ -48,3 +48,37 @@ class ReadStatusView(AuthenticatedAPIView):
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ActivityReadStatusView(AuthenticatedAPIView):
+    def put(self, request):
+        """Upsert Operation, not a simple PUT"""
+
+        request_user_id = request.user.id
+
+        data = {
+            "user": request.data.get("user"),
+            "activity": request.data.get("activity_id"),
+            "is_read": request.data.get("is_read"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+        if res := validate_request_user(str(request_user_id), str(data["user"])):
+            return res
+
+        try:
+            prev_status = ActivityReadStatus.objects.get(
+                user=data["user"],
+                activity=data["activity"],
+            )
+            serializer = ActivityReadStatusSerializer(prev_status, data=data, partial=True)
+            if serializer.is_valid():
+                return Response(serializer.data, status=status.HTTP_200_OK)
+        except:
+            serializer = ActivityReadStatusSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

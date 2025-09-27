@@ -126,10 +126,7 @@ class ActivityHistoryView(AuthenticatedAPIView):
             #   chat_type: 1
             #   activity_type: 1
             get_message_activities(
-                payload=data,
-                chat_type=1,
-                chat_ids=my_dm_ids,
-                n_days_ago=n_days_ago,
+                payload=data, chat_type=1, chat_ids=my_dm_ids, n_days_ago=n_days_ago
             )
             # For DM reaction messages;
             #   chat_type: 1
