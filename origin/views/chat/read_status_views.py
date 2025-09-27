@@ -70,6 +70,15 @@ class ActivityReadStatusView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user"])):
             return res
 
+        # For mention messages, the activity_id is
+        # for non-thread messages: <activity_type>-<chat_type>-<chat_id>-<message_id>.
+        # for thread messages: <activity_type>-<chat_type>-<chat_id>-<thread_id>-<message_id>.
+        # But, the activity_type is always 1 in the database.
+        # When we response the activities, we'll change it to 3 if the request user is mentioned in the message.
+        # So, we need to change it to 1 if the activity_type is 3 to keep the activity_id consistent in the database.
+        if data["activity"][0] == "3":
+            data["activity"] = "1" + data["activity"][1:]
+
         try:
             prev_status = ActivityReadStatus.objects.get(
                 team=data["team"],
