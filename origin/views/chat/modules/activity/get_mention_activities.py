@@ -1,9 +1,9 @@
-from django.db.models import F, Q, Value, IntegerField, CharField
+from django.db.models import F, Q, Value, IntegerField, CharField, Exists, OuterRef
 from django.db.models.functions import Concat
-
 from datetime import datetime
 
 from origin.models.chat.activity_models import *
+from origin.models.chat.read_status_models import *
 
 
 # For mention messages, the activity_id has the following format:
@@ -17,7 +17,14 @@ ACTIVITY_TYPE_IN_DB = 1
 ACTIVITY_TYPE_IN_RESPONSE = 3
 
 
-def get(payload: dict, chat_type: int, chat_ids: list, n_days_ago: datetime):
+def get(
+    payload: dict,
+    chat_type: int,
+    chat_ids: list,
+    n_days_ago: datetime,
+    limit: int = 100,
+    offset: int = 0,
+):
     """
     For mention messages (DM, GM, PM, Task Comment);
     activity_type: 1
@@ -32,11 +39,9 @@ def get(payload: dict, chat_type: int, chat_ids: list, n_days_ago: datetime):
             chat_type=chat_type,
             chat_id__in=chat_ids,
             ts_created_at__gte=n_days_ago,
+            mentioned_user_ids__contains=[payload["user_id"]],
         )
         .filter(~Q(sender=payload["user_id"]))  # Exclude messages that the request user sent
-        .filter(
-            Q(mentioned_user_ids__contains=[payload["user_id"]])
-        )  # Only include messages that the request user is mentioned in
         .annotate(
             activityId=Concat(
                 Value(ACTIVITY_TYPE_IN_RESPONSE),
@@ -70,7 +75,11 @@ def get(payload: dict, chat_type: int, chat_ids: list, n_days_ago: datetime):
             latestReaction=F("latest_reaction"),
             latestReactionUser=F("latest_reaction_user"),
             mentionedUserIds=F("mentioned_user_ids"),
-            isRead=F("is_read"),
+            isRead=Exists(
+                ActivityReadStatus.objects.filter(
+                    activity=OuterRef("activity_id"), user=payload["user_id"], is_read=True
+                )
+            ),
             tsSent=F("ts_created_at"),
         )
         .values(
@@ -100,4 +109,5 @@ def get(payload: dict, chat_type: int, chat_ids: list, n_days_ago: datetime):
             "isRead",
             "tsSent",
         )
+        .order_by("-tsSent")[offset : offset + limit]  # Most recent first  # Pagination slice
     )

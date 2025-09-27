@@ -66,6 +66,5 @@ class ActivityFact(models.Model):
     )
     reactions = models.JSONField(blank=False, null=False)
     mentioned_user_ids = models.JSONField(blank=False, null=False)
-    is_read = models.BooleanField(blank=False, null=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
