@@ -13,17 +13,6 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.CreateModel(
-            name='NotePermissionMaster',
-            fields=[
-                ('note_id', models.BigAutoField(primary_key=True, serialize=False, unique=True)),
-                ('note_type', models.IntegerField()),
-                ('role_id', models.IntegerField()),
-                ('ts_created_at', models.DateTimeField(auto_now_add=True)),
-                ('ts_updated_at', models.DateTimeField(auto_now=True)),
-                ('user', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='user_note_permissions', to=settings.AUTH_USER_MODEL)),
-            ],
-        ),
-        migrations.CreateModel(
             name='PersonalNoteMaster',
             fields=[
                 ('note_id', models.BigAutoField(primary_key=True, serialize=False, unique=True)),

@@ -14,7 +14,8 @@ class ReadStatusView(AuthenticatedAPIView):
         request_user_id = request.user.id
 
         data = {
-            "user": request.data.get("user"),
+            "team": request.data.get("team_id"),
+            "user": request.data.get("user_id"),
             "chat_type": request.data.get("chat_type"),
             "chat_id": request.data.get("chat_id"),
             "is_thread": request.data.get("is_thread"),
@@ -29,20 +30,21 @@ class ReadStatusView(AuthenticatedAPIView):
 
         try:
             prev_status = ReadStatus.objects.get(
+                team=data["team"],
                 user=data["user"],
                 chat_type=data["chat_type"],
                 chat_id=data["chat_id"],
                 is_thread=data["is_thread"],
                 thread_id=data["thread_id"],
             )
-            serializer = ReadStatusSerializer(prev_status, data=request.data, partial=True)
+            serializer = ReadStatusSerializer(prev_status, data=data, partial=True)
             if serializer.is_valid():
                 # Update only when the message id is larger than the prev one.
                 if int(prev_status.last_read_message_id) < int(data["last_read_message_id"]):
                     serializer.save()
                 return Response(serializer.data, status=status.HTTP_200_OK)
         except:
-            serializer = ReadStatusSerializer(data=request.data)
+            serializer = ReadStatusSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -57,7 +59,8 @@ class ActivityReadStatusView(AuthenticatedAPIView):
         request_user_id = request.user.id
 
         data = {
-            "user": request.data.get("user"),
+            "team": request.data.get("team_id"),
+            "user": request.data.get("user_id"),
             "activity": request.data.get("activity_id"),
             "is_read": request.data.get("is_read"),
         }
@@ -69,6 +72,7 @@ class ActivityReadStatusView(AuthenticatedAPIView):
 
         try:
             prev_status = ActivityReadStatus.objects.get(
+                team=data["team"],
                 user=data["user"],
                 activity=data["activity"],
             )
@@ -82,3 +86,26 @@ class ActivityReadStatusView(AuthenticatedAPIView):
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class MarkAllActivityAsReadView(AuthenticatedAPIView):
+    def put(self, request):
+        """Mark all activity as read"""
+
+        request_user_id = request.user.id
+
+        data = {"team": request.data.get("team_id"), "user": request.data.get("user_id")}
+
+        if res := validate_request_data(data):
+            return res
+        if res := validate_request_user(str(request_user_id), str(data["user"])):
+            return res
+
+        try:
+            ActivityReadStatus.objects.filter(
+                team=data["team"], user=data["user"], is_read=False
+            ).update(is_read=True)
+        except:
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(status=status.HTTP_200_OK)

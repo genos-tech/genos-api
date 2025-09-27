@@ -12,11 +12,6 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.AddField(
-            model_name='notepermissionmaster',
-            name='team',
-            field=models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, to='origin.teammaster'),
-        ),
-        migrations.AddField(
             model_name='tasknotemaster',
             name='project',
             field=models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='project_task_notes', to='origin.projectmaster'),

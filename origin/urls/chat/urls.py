@@ -87,5 +87,12 @@ urlpatterns = [
     path("api/v2/chat/mention/", ChatMentionView.as_view(), name="chat_mention"),
     # Read status
     path("api/v2/chat/read/", ReadStatusView.as_view(), name="read_status"),
-    path("api/v2/chat/activity/read/", ActivityReadStatusView.as_view(), name="activity_read_status"),
+    path(
+        "api/v2/chat/activity/read/", ActivityReadStatusView.as_view(), name="activity_read_status"
+    ),
+    path(
+        "api/v2/chat/activity/read/all/",
+        MarkAllActivityAsReadView.as_view(),
+        name="mark_all_activity_as_read",
+    ),
 ]
