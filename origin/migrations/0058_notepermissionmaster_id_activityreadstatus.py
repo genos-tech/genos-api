@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("origin", "0057_notepermissionmaster_id_and_more"),
+        ("origin", "0056_notepermissionmaster_team_tasknotemaster_project"),
     ]
 
     operations = [

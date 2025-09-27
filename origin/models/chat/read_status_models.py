@@ -2,9 +2,16 @@ from django.db import models
 
 from origin.models.common.user_models import CustomUser
 from origin.models.chat.activity_models import ActivityFact
+from origin.models.common.team_models import TeamMaster
 
 
 class ReadStatus(models.Model):
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        to_field="team_id",
+    )
     user = models.ForeignKey(
         CustomUser,
         on_delete=models.SET_NULL,
@@ -29,6 +36,12 @@ class ReadStatus(models.Model):
 
 
 class ActivityReadStatus(models.Model):
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        to_field="team_id",
+    )
     user = models.ForeignKey(
         CustomUser,
         on_delete=models.SET_NULL,
