@@ -54,6 +54,35 @@ class GMMasterView(AuthenticatedAPIView):
         else:
             return Response({"gm_exists": True, "gm_id": exists[0]}, status=status.HTTP_200_OK)
 
+    def get(self, request):
+
+        data = {
+            "team_id": request.GET.get("team_id"),
+            "gm_id": request.GET.get("gm_id"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        dm_data = GMMaster.objects.filter(Q(gm_id=data["gm_id"])).values()
+
+        if len(dm_data) == 1:
+            dm_data = dm_data[0]
+            res = {
+                "gmId": dm_data["gm_id"],
+                "gmName": dm_data["group_name"],
+                "ownerUserId": dm_data["owner_user_id"],
+                "profileImagePath": dm_data["profile_image_file_name"],
+                "isPrivate": dm_data["is_private"],
+                "tsCreatedAt": dm_data["ts_created_at"],
+            }
+            return Response(res, status=status.HTTP_200_OK)
+        else:
+            return Response(
+                {"error": "GM not found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
 
 class CheckGMExistsView(AuthenticatedAPIView):
     def get(self, request):
@@ -339,6 +368,7 @@ class GMHistoryView(AuthenticatedAPIView):
                     "latestMessage": last_message_dict[chat_id],
                     "latestMessageText": latest_message_text,
                     "TSLastMessage": ts_last_message_dict[chat_id],
+                    "profileImagePath": raw.gm.profile_image_file_name,
                 }
 
         return message_history_dict
@@ -902,9 +932,7 @@ class GMProfileImageView(AuthenticatedAPIView):
             # At this point, Django has stored the file, possibly renamed
             # Now get the actual stored filename
             stored_file_name = saved_user.profile_image_url.name.split("/")[-1]
-            saved_user.profile_image_file_name = (
-                f"user_profiles/{gm_id}/{stored_file_name}"
-            )
+            saved_user.profile_image_file_name = f"gm_profiles/{gm_id}/{stored_file_name}"
             saved_user.save(update_fields=["profile_image_file_name"])
 
             return Response(GMMasterSerializer(saved_user).data, status=status.HTTP_200_OK)
