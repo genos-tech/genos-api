@@ -289,6 +289,7 @@ class GMHistoryView(AuthenticatedAPIView):
                     "chatId": chat_id,
                     "chatName": chat_name,
                     "chatType": 2,
+                    "isPrivate": raw.gm.is_private,
                     "dmPartnerUser": {
                         "userName": "",
                         "userId": "",

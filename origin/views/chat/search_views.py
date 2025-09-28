@@ -64,11 +64,14 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
                         "tsJoined": "",
                         "customStatus": "",
                     },
+                    "isPrivate": False,
                 }
             )
 
         # Get all groups
-        groups_in_team = GMMaster.objects.filter(owner_team=team_id).values("gm_id", "group_name")
+        groups_in_team = GMMaster.objects.filter(owner_team=team_id).values(
+            "gm_id", "group_name", "is_private"
+        )
         for member in list(groups_in_team):
             search_list.append(
                 {
@@ -84,6 +87,7 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
                         "tsJoined": "",
                         "customStatus": "",
                     },
+                    "isPrivate": member["is_private"],
                 }
             )
 
