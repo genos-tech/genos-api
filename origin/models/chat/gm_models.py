@@ -7,6 +7,14 @@ from origin.models.common.team_models import TeamMaster
 from origin.models.task.task_models import TaskMaster
 
 
+def profile_image_path(instance, filename):
+    return os.path.join(
+        "gm_profiles",
+        str(instance.gm_id),
+        filename,
+    )
+
+
 class GMMaster(models.Model):
     gm_id = models.BigAutoField(primary_key=True, unique=True)
     group_name = models.CharField(blank=False)
@@ -24,6 +32,8 @@ class GMMaster(models.Model):
         related_name="groups_in_team",
         to_field="team_id",
     )
+    profile_image_url = models.FileField(upload_to=profile_image_path, blank=True, null=True)
+    profile_image_file_name = models.CharField(blank=True, null=True)
     is_private = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)

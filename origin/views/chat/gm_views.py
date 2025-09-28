@@ -2,6 +2,7 @@ from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.parsers import MultiPartParser
 
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.reaction_models import *
@@ -10,6 +11,7 @@ from origin.models.chat.read_status_models import *
 from origin.serializers.chat.gm_serializers import *
 from origin.models.common.inbox_models import InboxItems
 from origin.views.chat.modules.common import generate_first_line
+from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 CHAT_TYPE = 2
 
@@ -869,3 +871,42 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
             thread_messages.append(new_message)
 
         return Response(thread_messages, status=status.HTTP_200_OK)
+
+
+class GMProfileImageView(AuthenticatedAPIView):
+    parser_classes = [MultiPartParser]
+
+    def put(self, request):
+        gm_id = request.POST.get("gm_id")
+        profile_image = request.FILES.get("profile_image")
+
+        data = {
+            "gm_id": gm_id,
+            "profile_image": profile_image,
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        gm_data = GMMaster.objects.get(gm_id=gm_id)
+
+        # Only update the FileField
+        new_profile_image_data = {
+            "profile_image_url": profile_image,
+        }
+
+        serializer = GMMasterSerializer(gm_data, data=new_profile_image_data, partial=True)
+        if serializer.is_valid():
+            saved_user = serializer.save()
+
+            # At this point, Django has stored the file, possibly renamed
+            # Now get the actual stored filename
+            stored_file_name = saved_user.profile_image_url.name.split("/")[-1]
+            saved_user.profile_image_file_name = (
+                f"user_profiles/{gm_id}/{stored_file_name}"
+            )
+            saved_user.save(update_fields=["profile_image_file_name"])
+
+            return Response(GMMasterSerializer(saved_user).data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

@@ -33,6 +33,7 @@ urlpatterns = [
     ),
     # GM urls
     path("api/v2/gm/create/", GMMasterView.as_view(), name="create_gm"),
+    path("api/v2/gm/profile/image/", GMProfileImageView.as_view(), name="update_gm_profile_image"),
     path("api/v2/gm/checkExistence/", CheckGMExistsView.as_view(), name="check_gm_existence"),
     path("api/v2/gm/id/", GMIdView.as_view(), name="get_gm_id"),
     path("api/v2/gm/ids/", AllGMIdsView.as_view(), name="get_all_my_gm_ids"),
