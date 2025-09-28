@@ -57,6 +57,8 @@ class ActivityReadStatusView(AuthenticatedAPIView):
         """Upsert Operation, not a simple PUT"""
 
         request_user_id = request.user.id
+        
+        print("request.data:", request.data)
 
         data = {
             "team": request.data.get("team_id"),
@@ -78,6 +80,7 @@ class ActivityReadStatusView(AuthenticatedAPIView):
         # So, we need to change it to 1 if the activity_type is 3 to keep the activity_id consistent in the database.
         if data["activity"][0] == "3":
             data["activity"] = "1" + data["activity"][1:]
+        print("data:", data)
 
         try:
             prev_status = ActivityReadStatus.objects.get(

@@ -50,6 +50,8 @@ def get(
                 Value("-"),
                 "chat_id",
                 Value("-"),
+                "thread_id",
+                Value("-"),
                 "message_id",
                 output_field=CharField(),
             ),

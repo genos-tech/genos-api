@@ -87,7 +87,6 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
                 }
             )
 
-        print("search_list:", search_list)
         return Response(
             search_list,
             status=status.HTTP_200_OK,
