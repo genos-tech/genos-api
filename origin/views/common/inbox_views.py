@@ -5,6 +5,7 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.serializers.common.inbox_serializers import *
 from origin.models.common.team_models import *
 from origin.models.project.prj_models import *
+from origin.models.chat.gm_models import *
 
 
 #############################
@@ -174,6 +175,60 @@ class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
             "receiver": project_owner_id[0],  # Send to the project owner
             "item_body": request.data["item_body"],
             "item_type": request.data["item_type"],  # Must be '2'
+            "item_optionals": request.data["item_optionals"],
+            "is_read": False,
+        }
+
+        is_already_requested = (
+            len(
+                InboxItems.objects.filter(
+                    team=data["team"],
+                    sender=data["sender"],
+                    receiver=data["receiver"],
+                    item_type=data["item_type"],
+                    item_optionals=data["item_optionals"],
+                ).values()
+            )
+            > 0
+        )
+
+        serializer = InboxItemsSerializer(data=data)
+        if serializer.is_valid():
+            if is_already_requested == False:
+                serializer.save()
+            return Response(
+                {
+                    "wsType": "inbox",
+                    "alreadyExist": is_already_requested,
+                    "data": {
+                        "itemId": serializer.data.get("item_id", None),
+                        "itemBody": serializer.data.get("item_body", None),
+                        "itemType": serializer.data.get("item_type", None),
+                        "isRead": serializer.data.get("is_read", None),
+                        "tsSent": serializer.data.get("ts_created_at", None),
+                    },
+                    "receiver": serializer.data.get("receiver", None),
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        error = serializer.errors
+        return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+
+class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
+    def post(self, request):
+        gm_owner_id = GMMaster.objects.filter(
+            owner_team=request.data["team_id"],
+            gm_id=request.data["item_optionals"]["gm_id"],
+        ).values_list("owner_user", flat=True)
+
+        data = {
+            "team": request.data["team_id"],
+            "sender": request.data["sender_id"],
+            "receiver": gm_owner_id[0],  # Send to the gm owner
+            "item_body": request.data["item_body"],
+            "item_type": request.data["item_type"],  # Must be '3'
             "item_optionals": request.data["item_optionals"],
             "is_read": False,
         }

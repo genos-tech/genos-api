@@ -8,6 +8,7 @@ from origin.models.chat.reaction_models import *
 from origin.models.chat.gm_models import GMMaster, GMMembers, GMMessages, GMThreadMessages
 from origin.models.chat.read_status_models import *
 from origin.serializers.chat.gm_serializers import *
+from origin.models.common.inbox_models import InboxItems
 from origin.views.chat.modules.common import generate_first_line
 
 CHAT_TYPE = 2
@@ -105,6 +106,40 @@ class GMMembersView(AuthenticatedAPIView):
                 serializer.save()
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class JoinGMFromInboxView(AuthenticatedAPIView):
+    def post(self, request):
+        inbox_item_id = int(request.data["item_id"])
+
+        inbox_item = InboxItems.objects.filter(item_id=inbox_item_id).values_list(
+            "sender", "item_optionals"
+        )[0]
+
+        attendee_id = inbox_item[0]
+        gm_id = inbox_item[1]["gm_id"]
+        gm_name = inbox_item[1]["gm_name"]
+
+        # Check if the attendee is not joined yet.
+        is_joined = GMMembers.objects.filter(Q(gm_id=gm_id, attendee_id=attendee_id)).exists()
+
+        data = {"gm": gm_id, "attendee": attendee_id}
+        if is_joined:
+            data["gmId"] = gm_id
+            data["gmName"] = gm_name
+            return Response(data, status=status.HTTP_201_CREATED)
+        else:
+            serializer = GMMembersSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                res = serializer.data
+                res["gmId"] = gm_id
+                res["gmName"] = gm_name
+                return Response(res, status=status.HTTP_201_CREATED)
+
+        error = serializer.errors
+        error["hint"] = f"Failed to join GM: {gm_id}"
+        return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
 
 class AllGMIdsView(AuthenticatedAPIView):

@@ -37,6 +37,7 @@ urlpatterns = [
     path("api/v2/gm/id/", GMIdView.as_view(), name="get_gm_id"),
     path("api/v2/gm/ids/", AllGMIdsView.as_view(), name="get_all_my_gm_ids"),
     path("api/v2/gm/join/", GMMembersView.as_view(), name="join_gm"),
+    path("api/v2/gm/join/fromInbox/", JoinGMFromInboxView.as_view(), name="join_gm_from_inbox"),
     path("api/v2/gm/history/", GMHistoryView.as_view(), name="get_all_my_gm_messages"),
     path("api/v2/gm/message/", GMSingleMessageView.as_view(), name="insert_gm_message"),
     path(

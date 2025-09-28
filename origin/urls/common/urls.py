@@ -54,5 +54,10 @@ urlpatterns = [
         InboxItemForJoinProjectRequestView.as_view(),
         name="inbox_join_project_request_item",
     ),
+    path(
+        "api/v2/inbox/joinGMRequest/",
+        InboxItemForJoinGMRequestView.as_view(),
+        name="inbox_join_gm_request_item",
+    ),
     path("api/v2/getPageTitle/", get_page_title, name="get_page_title"),
 ]

@@ -4,7 +4,7 @@ from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.common.team_models import TeamMembers
 from origin.models.chat.dm_models import DMMaster
-from origin.models.chat.gm_models import GMMaster
+from origin.models.chat.gm_models import GMMaster, GMMembers
 
 
 class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
@@ -65,6 +65,7 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
                         "customStatus": "",
                     },
                     "isPrivate": False,
+                    "isJoined": True,
                 }
             )
 
@@ -72,6 +73,7 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
         groups_in_team = GMMaster.objects.filter(owner_team=team_id).values(
             "gm_id", "group_name", "is_private"
         )
+        my_gm_ids = GMMembers.objects.filter(Q(attendee=user_id)).values_list("gm", flat=True)
         for member in list(groups_in_team):
             search_list.append(
                 {
@@ -88,6 +90,7 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
                         "customStatus": "",
                     },
                     "isPrivate": member["is_private"],
+                    "isJoined": int(member["gm_id"]) in my_gm_ids,
                 }
             )
 
