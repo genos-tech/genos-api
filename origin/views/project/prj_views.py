@@ -100,6 +100,7 @@ class ProjectsView(AuthenticatedAPIView):
                 "projectId": project.project_id,
                 "projectName": str(project.project_name),
                 "projectTags": project_tags[project.project_id],
+                "isPrivate": project.is_private,
                 "isJoined": project.is_joined,
                 "systemUserId": project.project_system_user.id,
             }

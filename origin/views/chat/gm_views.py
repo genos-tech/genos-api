@@ -39,6 +39,7 @@ class GMMasterView(AuthenticatedAPIView):
                 data = {
                     "chatName": serializer.data["group_name"],
                     "chatId": serializer.data["gm_id"],
+                    "isPrivate": serializer.data["is_private"],
                     "message": "Completed GM creation",
                 }
                 return Response(data, status=status.HTTP_201_CREATED)

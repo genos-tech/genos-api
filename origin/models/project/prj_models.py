@@ -28,6 +28,7 @@ class ProjectMaster(models.Model):
         related_name="own_team_master",
         to_field="id",
     )
+    is_private = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

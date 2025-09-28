@@ -8,7 +8,6 @@ from origin.models.task.task_models import TaskMaster
 
 
 class GMMaster(models.Model):
-    # TODO: add team id for authorization
     gm_id = models.BigAutoField(primary_key=True, unique=True)
     group_name = models.CharField(blank=False)
     owner_user = models.ForeignKey(
@@ -25,6 +24,7 @@ class GMMaster(models.Model):
         related_name="groups_in_team",
         to_field="team_id",
     )
+    is_private = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
 
