@@ -23,6 +23,35 @@ class ProjectMasterView(AuthenticatedAPIView):
         error["hint"] = "Try with different project_name"
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
+    def get(self, request):
+
+        data = {
+            "team_id": request.GET.get("team_id"),
+            "project_id": request.GET.get("project_id"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        project_data = ProjectMaster.objects.filter(Q(project_id=data["project_id"])).values()
+
+        if len(project_data) == 1:
+            project_data = project_data[0]
+            res = {
+                "projectId": project_data["project_id"],
+                "projectName": project_data["project_name"],
+                "ownerUserId": project_data["owner_id"],
+                "profileImagePath": project_data["profile_image_file_name"],
+                "isPrivate": project_data["is_private"],
+                "tsCreatedAt": project_data["ts_created_at"],
+            }
+            return Response(res, status=status.HTTP_200_OK)
+        else:
+            return Response(
+                {"error": "Project not found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
     def delete(self, request):
         request_user_id = request.user.id
         team_id = request.GET.get("team_id")
@@ -250,7 +279,7 @@ class ProjectTagsView(AuthenticatedAPIView):
         return Response(response_body, status=status.HTTP_200_OK)
 
 
-class GMProfileImageView(AuthenticatedAPIView):
+class ProjectProfileImageView(AuthenticatedAPIView):
     parser_classes = [MultiPartParser]
 
     def put(self, request):

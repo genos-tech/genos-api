@@ -8,7 +8,7 @@ from origin.models.common.team_models import TeamMaster
 def profile_image_path(instance, filename):
     return os.path.join(
         "project_profiles",
-        str(instance.gm_id),
+        str(instance.project_id),
         filename,
     )
 

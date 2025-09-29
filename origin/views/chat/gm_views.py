@@ -64,17 +64,17 @@ class GMMasterView(AuthenticatedAPIView):
         if res := validate_request_data(data):
             return res
 
-        dm_data = GMMaster.objects.filter(Q(gm_id=data["gm_id"])).values()
+        gm_data = GMMaster.objects.filter(Q(gm_id=data["gm_id"])).values()
 
-        if len(dm_data) == 1:
-            dm_data = dm_data[0]
+        if len(gm_data) == 1:
+            gm_data = gm_data[0]
             res = {
-                "gmId": dm_data["gm_id"],
-                "gmName": dm_data["group_name"],
-                "ownerUserId": dm_data["owner_user_id"],
-                "profileImagePath": dm_data["profile_image_file_name"],
-                "isPrivate": dm_data["is_private"],
-                "tsCreatedAt": dm_data["ts_created_at"],
+                "gmId": gm_data["gm_id"],
+                "gmName": gm_data["group_name"],
+                "ownerUserId": gm_data["owner_user_id"],
+                "profileImagePath": gm_data["profile_image_file_name"],
+                "isPrivate": gm_data["is_private"],
+                "tsCreatedAt": gm_data["ts_created_at"],
             }
             return Response(res, status=status.HTTP_200_OK)
         else:
