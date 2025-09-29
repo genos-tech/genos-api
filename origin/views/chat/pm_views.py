@@ -179,6 +179,7 @@ class PMHistoryView(AuthenticatedAPIView):
                 "isJoined": True,
                 "systemUserId": msg.project.project_system_user.id,
             },
+            "profileImagePath": msg.project.profile_image_file_name,
         }
 
 

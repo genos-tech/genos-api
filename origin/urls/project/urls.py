@@ -19,4 +19,14 @@ urlpatterns = [
         name="project_members",
     ),
     path("api/v2/project/tag/", ProjectTagsView.as_view(), name="project_tag"),
+    path(
+        "api/v2/project/profile/",
+        ProjectMasterView.as_view(),
+        name="project_profile",
+    ),
+    path(
+        "api/v2/project/profile/image/",
+        ProjectProfileImageView.as_view(),
+        name="project_profile_image",
+    ),
 ]

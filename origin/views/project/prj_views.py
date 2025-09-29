@@ -1,11 +1,15 @@
 from collections import defaultdict
+
 from django.db.models import Exists, OuterRef, Q
+
+from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.project.prj_models import *
 from origin.models.common.inbox_models import InboxItems
 from origin.serializers.project.prj_serializers import *
+from origin.views.utils.request_validators import validate_request_data
 
 
 class ProjectMasterView(AuthenticatedAPIView):
@@ -18,6 +22,35 @@ class ProjectMasterView(AuthenticatedAPIView):
         error = serializer.errors
         error["hint"] = "Try with different project_name"
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+    def get(self, request):
+
+        data = {
+            "team_id": request.GET.get("team_id"),
+            "project_id": request.GET.get("project_id"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        project_data = ProjectMaster.objects.filter(Q(project_id=data["project_id"])).values()
+
+        if len(project_data) == 1:
+            project_data = project_data[0]
+            res = {
+                "projectId": project_data["project_id"],
+                "projectName": project_data["project_name"],
+                "ownerUserId": project_data["owner_id"],
+                "profileImagePath": project_data["profile_image_file_name"],
+                "isPrivate": project_data["is_private"],
+                "tsCreatedAt": project_data["ts_created_at"],
+            }
+            return Response(res, status=status.HTTP_200_OK)
+        else:
+            return Response(
+                {"error": "Project not found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     def delete(self, request):
         request_user_id = request.user.id
@@ -244,3 +277,44 @@ class ProjectTagsView(AuthenticatedAPIView):
             )
 
         return Response(response_body, status=status.HTTP_200_OK)
+
+
+class ProjectProfileImageView(AuthenticatedAPIView):
+    parser_classes = [MultiPartParser]
+
+    def put(self, request):
+        project_id = request.POST.get("project_id")
+        profile_image = request.FILES.get("profile_image")
+
+        data = {
+            "project_id": project_id,
+            "profile_image": profile_image,
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        project_data = ProjectMaster.objects.get(project_id=project_id)
+
+        # Only update the FileField
+        new_profile_image_data = {
+            "profile_image_url": profile_image,
+        }
+
+        serializer = ProjectMasterSerializer(
+            project_data, data=new_profile_image_data, partial=True
+        )
+        if serializer.is_valid():
+            saved_user = serializer.save()
+
+            # At this point, Django has stored the file, possibly renamed
+            # Now get the actual stored filename
+            stored_file_name = saved_user.profile_image_url.name.split("/")[-1]
+            saved_user.profile_image_file_name = (
+                f"project_profiles/{project_id}/{stored_file_name}"
+            )
+            saved_user.save(update_fields=["profile_image_file_name"])
+
+            return Response(ProjectMasterSerializer(saved_user).data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
