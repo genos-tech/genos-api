@@ -1,7 +1,16 @@
+import os
 from django.db import models
 
 from origin.models.common.user_models import CustomUser
 from origin.models.common.team_models import TeamMaster
+
+
+def profile_image_path(instance, filename):
+    return os.path.join(
+        "project_profiles",
+        str(instance.gm_id),
+        filename,
+    )
 
 
 class ProjectMaster(models.Model):
@@ -14,6 +23,8 @@ class ProjectMaster(models.Model):
     )
     project_id = models.BigAutoField(primary_key=True, unique=True)
     project_name = models.CharField(unique=True, blank=False)
+    profile_image_url = models.FileField(upload_to=profile_image_path, blank=True, null=True)
+    profile_image_file_name = models.CharField(blank=True, null=True)
     project_system_user = models.ForeignKey(
         CustomUser,
         on_delete=models.SET_NULL,

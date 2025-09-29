@@ -11,7 +11,7 @@ from origin.models.chat.read_status_models import *
 from origin.serializers.chat.gm_serializers import *
 from origin.models.common.inbox_models import InboxItems
 from origin.views.chat.modules.common import generate_first_line
-from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.utils.request_validators import validate_request_data
 
 CHAT_TYPE = 2
 
