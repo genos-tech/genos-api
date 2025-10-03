@@ -157,6 +157,7 @@ class PMHistoryView(AuthenticatedAPIView):
                 "systemUserId": msg.project.project_system_user.id,
             },
             "taskId": msg.task.task_id if msg.task else None,
+            "taskExist": True if msg.task else False,
             "taskStatus": msg.task.status if msg.task else None,
             "tsSent": msg.ts_sent_at,
             "tsUpdated": msg.ts_updated_at,
@@ -276,6 +277,7 @@ class PMSingleMessageView(AuthenticatedAPIView):
             "numReplies": reply_count,
             "reactions": all_reactions,
             "taskId": pm.task.task_id if pm.task else None,
+            "taskExist": True if pm.task else False,
             "taskStatus": pm.task.status if pm.task else None,
             "project": {
                 "projectId": (pm.task.project.project_id if pm.task else None),
@@ -691,6 +693,25 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                 },
                 "reactions": all_reactions,
                 "taskId": task_id,
+                "taskExist": True if raw_message.parent_message_uid.task else False,
+                "project": {
+                    "projectId": (
+                        raw_message.parent_message_uid.task.project.project_id
+                        if raw_message.parent_message_uid.task
+                        else None
+                    ),
+                    "projectName": (
+                        raw_message.parent_message_uid.task.project.project_name
+                        if raw_message.parent_message_uid.task
+                        else None
+                    ),
+                    "isJoined": True if raw_message.parent_message_uid.task else False,
+                    "systemUserId": (
+                        raw_message.parent_message_uid.task.project.project_system_user.id
+                        if raw_message.parent_message_uid.task
+                        else None
+                    ),
+                },
                 "tsSent": ts_sent,
                 "tsUpdated": ts_updated_at,
             }

@@ -262,6 +262,7 @@ class DMHistoryView(AuthenticatedAPIView):
             "numReplies": reply_counts.get(f"{dm_id}-{message_id}", 0),
             "reactions": reactions_by_message.get(message_id, []),
             "taskId": msg.task.task_id if msg.task else None,
+            "taskExist": True if msg.task else False,
             "taskStatus": msg.task.status if msg.task else None,
             "project": (
                 {
@@ -410,6 +411,7 @@ class DMSingleMessageView(AuthenticatedAPIView):
             "numReplies": reply_count,
             "reactions": all_reactions,
             "taskId": dm.task.task_id if dm.task else None,
+            "taskExist": True if dm.task else False,
             "taskStatus": dm.task.status if dm.task else None,
             "project": {
                 "projectId": (dm.task.project.project_id if dm.task else None),
@@ -812,6 +814,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
                 },
                 "reactions": all_reactions,
                 "taskId": _task_id,
+                "taskExist": True if raw_message.parent_message_uid.task else False,
                 "project": {
                     "projectId": (
                         raw_message.parent_message_uid.task.project.project_id

@@ -323,6 +323,7 @@ class GMHistoryView(AuthenticatedAPIView):
                 "numReplies": thread_reply_count_map.get(f"{chat_id}-{message_id}", 0),
                 "reactions": reaction_map.get(message_id, []),
                 "taskId": raw.task.task_id if raw.task else None,
+                "taskExist": True if raw.task else False,
                 "taskStatus": raw.task.status if raw.task else None,
                 "project": {
                     "projectId": raw.task.project.project_id if raw.task else None,
@@ -477,6 +478,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
             "numReplies": reply_count,
             "reactions": all_reactions,
             "taskId": gm.task.task_id if gm.task else None,
+            "taskExist": True if gm.task else False,
             "taskStatus": gm.task.status if gm.task else None,
             "project": {
                 "projectId": (gm.task.project.project_id if gm.task else None),
@@ -877,6 +879,7 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                     if raw_message.parent_message_uid.task
                     else None
                 ),
+                "taskExist": True if raw_message.parent_message_uid.task else False,
                 "project": {
                     "projectId": (
                         raw_message.parent_message_uid.task.project.project_id
