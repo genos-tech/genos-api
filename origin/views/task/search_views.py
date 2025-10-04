@@ -49,7 +49,7 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
 
             tasks = (
                 TaskMaster.objects.filter(
-                    team=team_id, status__in=statuses, project__in=project_ids
+                    team=team_id, status__in=statuses, project__in=project_ids, is_init_table=False
                 )
                 .values_list(
                     "project__project_id",
@@ -67,13 +67,17 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
 
             if statuses != ["Closed"] and statuses != ["Deleted"] and include_all == False:
                 finished_task_ids = set(
-                    TaskMaster.objects.filter(team=team_id, project__in=project_ids)
+                    TaskMaster.objects.filter(
+                        team=team_id, project__in=project_ids, is_init_table=False
+                    )
                     .filter(Q(status__in=["Deleted", "Closed"]))
                     .values_list("task_id", flat=True)
                 )
         else:
             tasks = (
-                TaskMaster.objects.filter(team=team_id, status__in=statuses, project=project_id)
+                TaskMaster.objects.filter(
+                    team=team_id, status__in=statuses, project=project_id, is_init_table=False
+                )
                 .values_list(
                     "project__project_id",
                     "project__project_name",
@@ -90,7 +94,9 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
 
             if statuses != ["Closed"] and statuses != ["Deleted"] and include_all == False:
                 finished_task_ids = set(
-                    TaskMaster.objects.filter(team=team_id, project=project_id)
+                    TaskMaster.objects.filter(
+                        team=team_id, project=project_id, is_init_table=False
+                    )
                     .filter(Q(status__in=["Deleted", "Closed"]))
                     .values_list("task_id", flat=True)
                 )

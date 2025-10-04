@@ -61,6 +61,7 @@ class TaskMaster(models.Model):
     due_date = models.DateField(blank=True, null=True)
     tags = models.JSONField(blank=True, null=True)
     is_deleted = models.BooleanField(default=False)
+    is_init_table = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
@@ -258,6 +259,6 @@ class TaskBodyAttachmentFact(models.Model):
         to_field="id",
     )
     attachment_id = models.BigAutoField(primary_key=True, unique=True)
-    note_attachment_url = models.FileField(upload_to=task_body_attachment_path)
+    body_attachment_url = models.FileField(upload_to=task_body_attachment_path)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

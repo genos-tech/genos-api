@@ -23,19 +23,19 @@ class ChatNoteMasterSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-class PersonalNoteAttachmentViewSerializer(serializers.ModelSerializer):
+class PersonalNoteAttachmentFactSerializer(serializers.ModelSerializer):
     class Meta:
         model = PersonalNoteAttachmentFact
         fields = "__all__"
 
 
-class TaskNoteAttachmentViewSerializer(serializers.ModelSerializer):
+class TaskNoteAttachmentFactSerializer(serializers.ModelSerializer):
     class Meta:
         model = TaskNoteAttachmentFact
         fields = "__all__"
 
 
-class ChatNoteAttachmentViewSerializer(serializers.ModelSerializer):
+class ChatNoteAttachmentFactSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChatNoteAttachmentFact
         fields = "__all__"

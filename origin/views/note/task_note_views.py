@@ -457,7 +457,7 @@ class TaskNoteAttachmentView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["uploader"])):
             return res
 
-        serializer = TaskNoteAttachmentViewSerializer(data=data)
+        serializer = TaskNoteAttachmentFactSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
             res = {

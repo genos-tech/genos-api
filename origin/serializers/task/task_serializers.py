@@ -30,3 +30,9 @@ class TaskCommentMentionFactSerializer(serializers.ModelSerializer):
     class Meta:
         model = TaskCommentMentionFact
         fields = "__all__"
+
+
+class TaskBodyAttachmentFactSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TaskBodyAttachmentFact
+        fields = "__all__"

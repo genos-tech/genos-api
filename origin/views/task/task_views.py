@@ -45,8 +45,8 @@ class TaskMasterView(AuthenticatedAPIView):
             "general_url": request.data["general_url"],
             "general_url_title": request.data["general_url_title"],
             "tags": request.data["tags"],
+            "is_init_table": request.data["is_init_table"] == True,
         }
-        print("create task data:", data)
         serializer = TaskMasterSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
@@ -65,7 +65,9 @@ class TaskMasterView(AuthenticatedAPIView):
                 )
             task = TaskMaster.objects.get(task_id=task_id)
         except TaskMaster.DoesNotExist:
-            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "Task not found to delete."}, status=status.HTTP_404_NOT_FOUND
+            )
 
         update_data = request.data.copy()
 
@@ -80,6 +82,32 @@ class TaskMasterView(AuthenticatedAPIView):
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request):
+        data = {
+            "team": request.GET.get("team_id"),
+            "task_id": request.GET.get("task_id"),
+            "is_init_table_boolean": request.GET.get("is_init_table_boolean"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        try:
+            task = TaskMaster.objects.get(
+                team=data["team"],
+                task_id=data["task_id"],
+                is_init_table=int(data["is_init_table_boolean"]) == 1,
+            )
+            task.delete()
+            return Response(
+                {"message": "Task deleted successfully."}, status=status.HTTP_204_NO_CONTENT
+            )
+        except TaskMaster.DoesNotExist:
+            return Response(
+                {"error": "Task not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
 
 class TaskMetaView(AuthenticatedAPIView):
@@ -101,7 +129,9 @@ class TaskMetaView(AuthenticatedAPIView):
         )
 
         raw_personal_notes = (
-            TaskMaster.objects.filter(team=data["team_id"], project__in=project_ids)
+            TaskMaster.objects.filter(
+                team=data["team_id"], project__in=project_ids, is_init_table=False
+            )
             .filter(~Q(status="Deleted"))
             .annotate(
                 taskId=F("task_id"),
@@ -125,7 +155,9 @@ class TaskMetaView(AuthenticatedAPIView):
         )
 
         finished_task_ids = set(
-            TaskMaster.objects.filter(team=data["team_id"], project__in=project_ids)
+            TaskMaster.objects.filter(
+                team=data["team_id"], project__in=project_ids, is_init_table=False
+            )
             .filter(Q(status__in=["Deleted", "Closed"]))
             .values_list("task_id", flat=True)
         )
@@ -173,7 +205,9 @@ class GetTeamTasksView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(team=team_id)
+        task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
+            team=team_id, is_init_table=False
+        )
         response_data = []
         for t in task_with_tags:
             response_data.append(
@@ -216,7 +250,9 @@ class GetTeamTasksByTagView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(team=team_id)
+        task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
+            team=team_id, is_init_table=False
+        )
 
         projects = {}
         for t in task_with_tags:
@@ -260,6 +296,7 @@ class ChildTaskView(AuthenticatedAPIView):
             )
 
         target_tasks = TaskMaster.objects.filter(
+            is_init_table=False,
             team=team_id,
             project=project_id,
             parent_task_id=current_task_id,
@@ -272,7 +309,10 @@ class ChildTaskView(AuthenticatedAPIView):
 
         for target_task in target_tasks:
             task_attachments = TaskMaster.objects.prefetch_related("task_attachments").filter(
-                team=team_id, project_id=target_task[0], task_id=target_task[1]
+                team=team_id,
+                project_id=target_task[0],
+                task_id=target_task[1],
+                is_init_table=False,
             )
 
             for t in task_attachments:
@@ -407,6 +447,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
             )
 
         target_task = TaskMaster.objects.filter(
+            is_init_table=False,
             team=team_id,
             chat_type=chat_type,
             chat_id=chat_id,
@@ -423,7 +464,10 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
             return Response({}, status=status.HTTP_200_OK)
 
         task_attachments = TaskMaster.objects.prefetch_related("task_attachments").filter(
-            team=team_id, project_id=target_task[0][0], task_id=target_task[0][1]
+            team=team_id,
+            project_id=target_task[0][0],
+            task_id=target_task[0][1],
+            is_init_table=False,
         )
 
         response_data = []
@@ -551,7 +595,7 @@ class GetTaskView(AuthenticatedAPIView):
             )
 
         task_attachments = TaskMaster.objects.prefetch_related("task_attachments").filter(
-            team=team_id, project_id=project_id, task_id=task_id
+            team=team_id, project_id=project_id, task_id=task_id, is_init_table=False
         )
 
         response_data = []
@@ -682,7 +726,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
             )
 
         task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
-            team=team_id, project=project_id
+            team=team_id, project=project_id, is_init_table=False
         )
         response_data = []
         for t in task_with_tags:
@@ -728,7 +772,7 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
             )
 
         task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
-            team=team_id, assignee=user_id
+            team=team_id, assignee=user_id, is_init_table=False
         )
         response_data = []
         for t in task_with_tags:
@@ -816,7 +860,7 @@ class TaskAttachmentsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        attachments = TaskMaster.objects.filter(task=task)
+        attachments = TaskMaster.objects.filter(task=task, is_init_table=False)
         serializer = TaskMasterSerializer(attachments, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -1095,3 +1139,35 @@ class TaskCommentMentionView(AuthenticatedAPIView):
                 {"error": "Mention not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+
+class TaskBodyAttachmentView(AuthenticatedAPIView):
+    def post(self, request):
+        request_user_id = request.user.id
+
+        data = {
+            "task": request.data.get("task_id"),
+            "uploader": request.data.get("uploader"),
+            "body_attachment_url": request.FILES.get("body_attachment_file"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["uploader"])):
+            return res
+
+        serializer = TaskBodyAttachmentFactSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+            res = {
+                "taskId": serializer.data["task"],
+                "uploader": serializer.data["uploader"],
+                "attachmentId": serializer.data["attachment_id"],
+                "taskBodyAttachmentUrl": serializer.data["body_attachment_url"],
+                "tsCreated": serializer.data["ts_created_at"],
+                "tsUpdated": serializer.data["ts_updated_at"],
+            }
+            return Response(res, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
