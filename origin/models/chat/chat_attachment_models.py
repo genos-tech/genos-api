@@ -35,6 +35,6 @@ class ChatAttachmentFact(models.Model):
         to_field="id",
     )
     attachment_id = models.BigAutoField(primary_key=True, unique=True)
-    body_attachment_url = models.FileField(upload_to=chat_attachment_path)
+    chat_attachment_url = models.FileField(upload_to=chat_attachment_path)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
