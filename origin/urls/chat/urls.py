@@ -7,6 +7,7 @@ from origin.views.chat.reaction_views import *
 from origin.views.chat.activity_views import *
 from origin.views.chat.mention_views import *
 from origin.views.chat.read_status_views import *
+from origin.views.chat.chat_attachment_views import *
 
 urlpatterns = [
     # DM urls
@@ -98,4 +99,6 @@ urlpatterns = [
         MarkAllActivityAsReadView.as_view(),
         name="mark_all_activity_as_read",
     ),
+    # Chat attachment
+    path("api/v2/chat/attachment/", ChatAttachmentView.as_view(), name="chat_attachment"),
 ]
