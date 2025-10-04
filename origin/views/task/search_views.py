@@ -37,7 +37,7 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
 
         team_tasks = []
 
-        # Get all tasks in all  project
+        # Get all tasks in all project
         if project_id == -1:
             project_ids = list(
                 ProjectMembers.objects.filter(
@@ -57,9 +57,16 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
                     "title",
                     "status",
                     "ts_updated_at",
+                    "root_task_id",
                 )
                 .order_by("project__project_id", "ts_updated_at")
                 .reverse()
+            )
+
+            finished_task_ids = set(
+                TaskMaster.objects.filter(team=team_id, project__in=project_ids)
+                .filter(Q(status__in=["Deleted", "Closed"]))
+                .values_list("task_id", flat=True)
             )
         else:
             tasks = (
@@ -72,13 +79,24 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
                     "title",
                     "status",
                     "ts_updated_at",
+                    "root_task_id",
                 )
                 .order_by("ts_updated_at")
                 .reverse()
             )
 
+            finished_task_ids = set(
+                TaskMaster.objects.filter(team=team_id, project=project_id)
+                .filter(Q(status__in=["Deleted", "Closed"]))
+                .values_list("task_id", flat=True)
+            )
+
         _team_tasks = defaultdict(list)
         for task in list(tasks)[: top_n if top_n != -1 else 100000]:
+            # If the task is closed or deleted, skip the task
+            if task[7] in finished_task_ids:
+                continue
+
             _team_tasks[str(task[5]).lower()].append(
                 {
                     "projectId": task[0],
