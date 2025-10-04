@@ -28,6 +28,7 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
         statuses = request.GET.get("statuses")
         statuses = [STATUS_MAP.get(status.lower(), "N/A") for status in str(statuses).split(",")]
         top_n = int(request.GET.get("top_n"))
+        include_all = request.GET.get("include_all", "false") == "true"
 
         if not team_id:
             return Response(
@@ -36,6 +37,7 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
             )
 
         team_tasks = []
+        finished_task_ids = set()
 
         # Get all tasks in all project
         if project_id == -1:
@@ -63,11 +65,12 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
                 .reverse()
             )
 
-            finished_task_ids = set(
-                TaskMaster.objects.filter(team=team_id, project__in=project_ids)
-                .filter(Q(status__in=["Deleted", "Closed"]))
-                .values_list("task_id", flat=True)
-            )
+            if statuses != ["Closed"] and statuses != ["Deleted"] and include_all == False:
+                finished_task_ids = set(
+                    TaskMaster.objects.filter(team=team_id, project__in=project_ids)
+                    .filter(Q(status__in=["Deleted", "Closed"]))
+                    .values_list("task_id", flat=True)
+                )
         else:
             tasks = (
                 TaskMaster.objects.filter(team=team_id, status__in=statuses, project=project_id)
@@ -85,11 +88,12 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
                 .reverse()
             )
 
-            finished_task_ids = set(
-                TaskMaster.objects.filter(team=team_id, project=project_id)
-                .filter(Q(status__in=["Deleted", "Closed"]))
-                .values_list("task_id", flat=True)
-            )
+            if statuses != ["Closed"] and statuses != ["Deleted"] and include_all == False:
+                finished_task_ids = set(
+                    TaskMaster.objects.filter(team=team_id, project=project_id)
+                    .filter(Q(status__in=["Deleted", "Closed"]))
+                    .values_list("task_id", flat=True)
+                )
 
         _team_tasks = defaultdict(list)
         for task in list(tasks)[: top_n if top_n != -1 else 100000]:
