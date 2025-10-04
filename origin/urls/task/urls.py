@@ -6,6 +6,7 @@ from origin.views.task.search_views import *
 
 urlpatterns = [
     path("api/v2/task/create/", TaskMasterView.as_view(), name="create_task"),
+    path("api/v2/task/meta/", TaskMetaView.as_view(), name="task_meta"),
     path("api/v2/task/getTeamTasks/", GetTeamTasksView.as_view(), name="get_team_tasks"),
     path("api/v2/task/getTeamTasksByTag/", GetTeamTasksByTagView.as_view(), name="get_team_tasks"),
     path("api/v2/task/getProjectTasks/", GetProjectTasksView.as_view(), name="get_project_tasks"),

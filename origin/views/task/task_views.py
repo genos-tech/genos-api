@@ -1,7 +1,7 @@
 import os
 import base64
 from datetime import datetime
-from django.db.models import Max
+from django.db.models import F, Max
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
@@ -13,6 +13,8 @@ from origin.models.project.prj_models import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.reaction_models import *
 from origin.serializers.chat.reaction_serializers import *
+
+from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 from .common_color import STATUS_COLOR_MAP, PRIORITY_EFFORT_LEVEL_COLOR_MAP
 
@@ -78,6 +80,74 @@ class TaskMasterView(AuthenticatedAPIView):
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class TaskMetaView(AuthenticatedAPIView):
+    def get(self, request):
+        request_user_id = request.user.id
+
+        data = {"team_id": request.GET.get("team_id"), "user_id": request.GET.get("user_id")}
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+            return res
+
+        project_ids = list(
+            ProjectMembers.objects.filter(
+                team=data["team_id"], attendee=request_user_id
+            ).values_list("project_id", flat=True)
+        )
+
+        raw_personal_notes = (
+            TaskMaster.objects.filter(team=data["team_id"], project__in=project_ids)
+            .annotate(
+                taskId=F("task_id"),
+                parentTaskId=F("parent_task_id"),
+                tsUpdated=F("ts_updated_at"),
+            )
+            .order_by("tsUpdated")
+            .reverse()
+            .values(
+                "taskId",
+                "parentTaskId",
+                "project__project_id",
+                "project__project_name",
+                "project__project_system_user",
+                "title",
+                "status",
+                "tsUpdated",
+            )
+        )
+
+        personal_notes = []
+        for raw_personal_note in raw_personal_notes:
+            personal_notes.append(
+                {
+                    "taskId": raw_personal_note["taskId"],
+                    "parentTaskId": raw_personal_note["parentTaskId"],
+                    "project": {
+                        "projectId": raw_personal_note["project__project_id"],
+                        "projectName": raw_personal_note["project__project_name"],
+                        "systemUserId": raw_personal_note["project__project_system_user"],
+                    },
+                    "title": raw_personal_note["title"],
+                    "status": {
+                        "code": 0,
+                        "status": raw_personal_note["status"],
+                        "color": STATUS_COLOR_MAP[raw_personal_note["status"].lower()][
+                            "chipColor"
+                        ],
+                        "textColor": STATUS_COLOR_MAP[raw_personal_note["status"].lower()][
+                            "textColor"
+                        ],
+                    },
+                    "tsUpdated": raw_personal_note["tsUpdated"],
+                }
+            )
+
+        return Response(personal_notes, status=status.HTTP_200_OK)
 
 
 class GetTeamTasksView(AuthenticatedAPIView):
