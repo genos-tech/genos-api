@@ -1,7 +1,7 @@
 import os
 import base64
 from datetime import datetime
-from django.db.models import F, Max
+from django.db.models import F, Max, Q
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
@@ -102,15 +102,18 @@ class TaskMetaView(AuthenticatedAPIView):
 
         raw_personal_notes = (
             TaskMaster.objects.filter(team=data["team_id"], project__in=project_ids)
+            .filter(~Q(status="Deleted"))
             .annotate(
                 taskId=F("task_id"),
                 parentTaskId=F("parent_task_id"),
+                rootTaskId=F("root_task_id"),
                 tsUpdated=F("ts_updated_at"),
             )
             .order_by("tsUpdated")
             .reverse()
             .values(
                 "taskId",
+                "rootTaskId",
                 "parentTaskId",
                 "project__project_id",
                 "project__project_name",
@@ -121,8 +124,18 @@ class TaskMetaView(AuthenticatedAPIView):
             )
         )
 
+        deleted_task_ids = set(
+            TaskMaster.objects.filter(team=data["team_id"], project__in=project_ids)
+            .filter(Q(status="Deleted"))
+            .values_list("task_id", flat=True)
+        )
+
         personal_notes = []
         for raw_personal_note in raw_personal_notes:
+            # If the root task is deleted, skip the task
+            if raw_personal_note["rootTaskId"] in deleted_task_ids:
+                continue
+
             personal_notes.append(
                 {
                     "taskId": raw_personal_note["taskId"],

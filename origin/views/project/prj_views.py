@@ -115,8 +115,11 @@ class ProjectsView(AuthenticatedAPIView):
             project=OuterRef("project_id"), team=team_id, attendee=attendee_id
         )
 
-        projects = ProjectMaster.objects.filter(team=team_id).annotate(
-            is_joined=Exists(member_exists_subquery)
+        projects = (
+            ProjectMaster.objects.filter(team=team_id)
+            .annotate(is_joined=Exists(member_exists_subquery))
+            .order_by("ts_updated_at")
+            .reverse()
         )
         project_tags = defaultdict(list)
         for project_tag in ProjectTags.objects.filter(team=team_id):
