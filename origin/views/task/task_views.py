@@ -576,7 +576,6 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
         if len(response_data) == 1:
             return Response(response_data, status=status.HTTP_200_OK)
         else:
-            print(response_data)
             return Response(
                 {"error": "Failed to fetch expected task data"}, status=status.HTTP_400_BAD_REQUEST
             )
@@ -708,7 +707,6 @@ class GetTaskView(AuthenticatedAPIView):
         if len(response_data) == 1:
             return Response(response_data, status=status.HTTP_200_OK)
         else:
-            print(response_data)
             return Response(
                 {"error": "Failed to fetch expected task data"}, status=status.HTTP_400_BAD_REQUEST
             )
