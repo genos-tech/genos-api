@@ -139,7 +139,7 @@ class TaskMetaView(AuthenticatedAPIView):
                 rootTaskId=F("root_task_id"),
                 tsUpdated=F("ts_updated_at"),
             )
-            .order_by("tsUpdated")
+            .order_by("taskId")
             .reverse()
             .values(
                 "taskId",
