@@ -25,4 +25,5 @@ def get_page_title(request):
 
         return JsonResponse({"url": url, "title": title})
     except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
+        print(f"ERROR in get_page_title: {e}")
+        return JsonResponse({"url": url, "title": url})
