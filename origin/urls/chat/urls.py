@@ -8,6 +8,7 @@ from origin.views.chat.activity_views import *
 from origin.views.chat.mention_views import *
 from origin.views.chat.read_status_views import *
 from origin.views.chat.chat_attachment_views import *
+from origin.views.chat.todo_views import *
 
 urlpatterns = [
     # DM urls
@@ -101,4 +102,6 @@ urlpatterns = [
     ),
     # Chat attachment
     path("api/v2/chat/attachment/", ChatAttachmentView.as_view(), name="chat_attachment"),
+    # To-Do
+    path("api/v2/todo/", ToDoFactView.as_view(), name="chat_todo"),
 ]
