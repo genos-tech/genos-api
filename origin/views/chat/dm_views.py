@@ -11,6 +11,7 @@ from origin.models.chat.dm_models import *
 from origin.models.chat.read_status_models import *
 from origin.serializers.chat.dm_serializers import *
 from origin.views.chat.modules.common import generate_first_line
+from origin.models.chat.chat_master_models import UserChatMaster
 
 CHAT_TYPE = 1
 
@@ -140,6 +141,14 @@ class DMHistoryView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Get chat master for this user
+        pinned_chats = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
+            "pinned_chats", flat=True
+        )
+        pinned_dm_ids = (
+            set((c["chat_type"], c["chat_id"]) for c in pinned_chats[0]) if pinned_chats else set()
+        )
+
         # All DMs this user is part of
         dm_ids = list(
             UserDMMapping.objects.filter(user_id=user_id).values_list("dm_id", flat=True)
@@ -229,6 +238,10 @@ class DMHistoryView(AuthenticatedAPIView):
         # Add last read info
         for chat_id, chat in message_history_dict.items():
             chat["lastReadMessageId"] = last_read_map.get(chat_id, -1)
+            if (CHAT_TYPE, chat_id) in pinned_dm_ids:
+                chat["isPinned"] = True
+            else:
+                chat["isPinned"] = False
 
         return Response(list(message_history_dict.values()), status=status.HTTP_200_OK)
 
