@@ -12,6 +12,7 @@ from origin.serializers.chat.gm_serializers import *
 from origin.models.common.inbox_models import InboxItems
 from origin.views.chat.modules.common import generate_first_line
 from origin.views.utils.request_validators import validate_request_data
+from origin.models.chat.chat_master_models import UserChatMaster
 
 CHAT_TYPE = 2
 
@@ -207,6 +208,14 @@ class GMHistoryView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Get chat master for this user
+        pinned_chats = UserChatMaster.objects.filter(user=attendee_id, team=team_id).values_list(
+            "pinned_chats", flat=True
+        )
+        pinned_gm_ids = (
+            set((c["chat_type"], c["chat_id"]) for c in pinned_chats[0]) if pinned_chats else set()
+        )
+
         gm_ids = list(
             GMMembers.objects.filter(Q(gm__owner_team=team_id, attendee=attendee_id)).values_list(
                 "gm_id", flat=True
@@ -237,7 +246,7 @@ class GMHistoryView(AuthenticatedAPIView):
         # 4. Serialize messages grouped by chat_id
         # ----------------------------------------------------
         message_history_dict = self._build_message_history(
-            raw_messages, team_id, team_name, reaction_map, thread_reply_count_map
+            raw_messages, team_id, team_name, reaction_map, thread_reply_count_map, pinned_gm_ids
         )
 
         # ----------------------------------------------------
@@ -293,7 +302,7 @@ class GMHistoryView(AuthenticatedAPIView):
         return reaction_map
 
     def _build_message_history(
-        self, raw_messages, team_id, team_name, reaction_map, thread_reply_count_map
+        self, raw_messages, team_id, team_name, reaction_map, thread_reply_count_map, pinned_gm_ids
     ):
         message_history_dict = {}
         last_message_dict = {}
@@ -370,6 +379,7 @@ class GMHistoryView(AuthenticatedAPIView):
                     "latestMessageText": latest_message_text,
                     "TSLastMessage": ts_last_message_dict[chat_id],
                     "profileImagePath": raw.gm.profile_image_file_name,
+                    "isPinned": (CHAT_TYPE, chat_id) in pinned_gm_ids,
                 }
 
         return message_history_dict

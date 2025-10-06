@@ -11,8 +11,8 @@ from origin.views.utils.request_validators import validate_request_data, validat
 class UserChatMasterView(AuthenticatedAPIView):
     def put(self, request):
         data = {
-            "team": request.data.get("team_id"),
-            "user": request.data.get("user_id"),
+            "team": request.data.get("team"),
+            "user": request.data.get("user"),
         }
 
         if res := validate_request_data(data):
@@ -38,8 +38,8 @@ class UserChatMasterView(AuthenticatedAPIView):
 
     def get(self, request):
         data = {
-            "team": request.GET.get("team_id"),
-            "user": request.GET.get("user_id"),
+            "team": request.GET.get("team"),
+            "user": request.GET.get("user"),
         }
 
         if res := validate_request_data(data):

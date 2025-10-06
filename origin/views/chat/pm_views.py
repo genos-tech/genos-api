@@ -12,6 +12,7 @@ from origin.models.chat.pm_models import PMMessages, PMThreadMessages
 from origin.models.chat.read_status_models import *
 from origin.serializers.chat.pm_serializers import *
 from origin.views.chat.modules.common import generate_first_line
+from origin.models.chat.chat_master_models import UserChatMaster
 
 CHAT_TYPE = 3
 
@@ -30,6 +31,14 @@ class PMHistoryView(AuthenticatedAPIView):
                 {"error": "team_id, team_name and user_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # Get chat master for this user
+        pinned_chats = UserChatMaster.objects.filter(user=attendee_id, team=team_id).values_list(
+            "pinned_chats", flat=True
+        )
+        pinned_pm_ids = (
+            set((c["chat_type"], c["chat_id"]) for c in pinned_chats[0]) if pinned_chats else set()
+        )
 
         # Projects this user belongs to
         project_ids = list(
@@ -123,6 +132,10 @@ class PMHistoryView(AuthenticatedAPIView):
         # Add last read info
         for chat_id, chat in message_history_dict.items():
             chat["lastReadMessageId"] = last_read_map.get(chat_id, -1)
+            if (CHAT_TYPE, chat_id) in pinned_pm_ids:
+                chat["isPinned"] = True
+            else:
+                chat["isPinned"] = False
 
         return Response(list(message_history_dict.values()), status=status.HTTP_200_OK)
 
