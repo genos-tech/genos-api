@@ -145,9 +145,13 @@ class DMHistoryView(AuthenticatedAPIView):
         pinned_chats = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
             "pinned_chats", flat=True
         )
-        pinned_dm_ids = (
-            set((c["chat_type"], c["chat_id"]) for c in pinned_chats[0]) if pinned_chats else set()
-        )
+        pinned_dm_ids = set()
+        if len(pinned_chats) > 0:
+            pinned_dm_ids = (
+                set((c["chat_type"], c["chat_id"]) for c in pinned_chats[0])
+                if pinned_chats
+                else set()
+            )
 
         # All DMs this user is part of
         dm_ids = list(
