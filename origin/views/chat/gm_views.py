@@ -212,13 +212,11 @@ class GMHistoryView(AuthenticatedAPIView):
         pinned_chats = UserChatMaster.objects.filter(user=attendee_id, team=team_id).values_list(
             "pinned_chats", flat=True
         )
-        pinned_gm_ids = set()
-        if len(pinned_chats) > 0:
-            pinned_gm_ids = (
-                set((c["chat_type"], c["chat_id"]) for c in pinned_chats[0])
-                if pinned_chats
-                else set()
-            )
+        pinned_gm_ids = (
+            set((c["chat_type"], c["chat_id"]) for c in pinned_chats[0])
+            if pinned_chats[0]
+            else set()
+        )
 
         gm_ids = list(
             GMMembers.objects.filter(Q(gm__owner_team=team_id, attendee=attendee_id)).values_list(

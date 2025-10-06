@@ -36,13 +36,11 @@ class PMHistoryView(AuthenticatedAPIView):
         pinned_chats = UserChatMaster.objects.filter(user=attendee_id, team=team_id).values_list(
             "pinned_chats", flat=True
         )
-        pinned_pm_ids = set()
-        if len(pinned_chats) > 0:
-            pinned_pm_ids = (
-                set((c["chat_type"], c["chat_id"]) for c in pinned_chats[0])
-                if pinned_chats
-                else set()
-            )
+        pinned_pm_ids = (
+            set((c["chat_type"], c["chat_id"]) for c in pinned_chats[0])
+            if pinned_chats[0]
+            else set()
+        )
 
         # Projects this user belongs to
         project_ids = list(
