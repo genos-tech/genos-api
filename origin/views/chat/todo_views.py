@@ -21,6 +21,9 @@ def check_if_completed(todo_content):
         if content["type"] == "checkListItem":
             if content["content"] and content["props"].get("checked", False) == False:
                 return False
+        # Check if the content has children
+        if len(content["children"]) > 0:
+            return check_if_completed(content["children"])
     return True
 
 
