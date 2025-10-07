@@ -214,7 +214,7 @@ class GMHistoryView(AuthenticatedAPIView):
         )
         pinned_gm_ids = (
             set((c["chat_type"], c["chat_id"]) for c in pinned_chats[0])
-            if pinned_chats[0]
+            if len(pinned_chats) > 0 and pinned_chats[0]
             else set()
         )
 

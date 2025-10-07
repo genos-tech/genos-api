@@ -21,9 +21,11 @@ class ToDoFact(models.Model):
     todo_id = models.BigAutoField(primary_key=True, unique=True)
     todo_content = models.JSONField(blank=False, null=False)
     is_completed = models.BooleanField(default=False)
-    dt_created_on = models.DateField(auto_now_add=True, blank=False, null=False)
+    local_dt_created_on = models.DateField(auto_now_add=True, blank=False, null=False)
     ts_created_at = models.DateTimeField(auto_now_add=True, blank=False, null=False)
     ts_updated_at = models.DateTimeField(auto_now=True, blank=False, null=False)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["user", "todo_id"], name="unique_todo")]
+        constraints = [
+            models.UniqueConstraint(fields=["team", "user", "todo_id"], name="unique_todo")
+        ]

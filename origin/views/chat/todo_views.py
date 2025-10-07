@@ -35,6 +35,7 @@ class ToDoFactView(AuthenticatedAPIView):
             "team": request.data.get("team_id"),
             "user": request.data.get("user_id"),
             "todo_content": request.data.get("todo_content"),
+            "dt_local_date": request.data.get("dt_local_date"),
         }
 
         if res := validate_request_data(data):
@@ -46,9 +47,8 @@ class ToDoFactView(AuthenticatedAPIView):
         data["is_completed"] = check_if_completed(data["todo_content"])
 
         # Check if a ToDoFact for today already exists for this user and team
-        today = date.today()
         exists = ToDoFact.objects.filter(
-            team=data["team"], user=data["user"], dt_created_on=today
+            team=data["team"], user=data["user"], local_dt_created_on=data["dt_local_date"]
         ).exists()
 
         if exists:
@@ -63,7 +63,7 @@ class ToDoFactView(AuthenticatedAPIView):
                 "todoId": serializer.data["todo_id"],
                 "todoContent": serializer.data["todo_content"],
                 "isCompleted": serializer.data["is_completed"],
-                "dtCreatedOn": serializer.data["dt_created_on"],
+                "dtCreatedOn": serializer.data["local_dt_created_on"],
                 "tsCreatedAt": serializer.data["ts_created_at"],
                 "tsUpdatedAt": serializer.data["ts_updated_at"],
             }
@@ -100,7 +100,7 @@ class ToDoFactView(AuthenticatedAPIView):
                 "todoId": serializer.data["todo_id"],
                 "todoContent": serializer.data["todo_content"],
                 "isCompleted": serializer.data["is_completed"],
-                "dtCreatedOn": serializer.data["dt_created_on"],
+                "dtCreatedOn": serializer.data["local_dt_created_on"],
                 "tsCreatedAt": serializer.data["ts_created_at"],
                 "tsUpdatedAt": serializer.data["ts_updated_at"],
             }
@@ -130,7 +130,7 @@ class ToDoFactView(AuthenticatedAPIView):
                 todoId=F("todo_id"),
                 todoContent=F("todo_content"),
                 isCompleted=F("is_completed"),
-                dtCreatedOn=F("dt_created_on"),
+                dtCreatedOn=F("local_dt_created_on"),
                 tsCreatedAt=F("ts_created_at"),
                 tsUpdatedAt=F("ts_updated_at"),
             )
