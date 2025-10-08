@@ -626,6 +626,9 @@ class GetTaskView(AuthenticatedAPIView):
                             "type": file_type,
                         }
                     )
+                except FileNotFoundError:
+                    print(f"File not found: {file_path}")
+                    continue
         
             response_data.append(
                 {
