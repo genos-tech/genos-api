@@ -23,7 +23,8 @@ def check_if_completed(todo_content):
                 return False
         # Check if the content has children
         if len(content["children"]) > 0:
-            return check_if_completed(content["children"])
+            if check_if_completed(content["children"]) == False:
+                return False
     return True
 
 
