@@ -322,16 +322,20 @@ class ChildTaskView(AuthenticatedAPIView):
                 ):
                     file_path = _file[0]
                     file_type = _file[1]
-                    with open("./uploads/" + file_path, "rb") as f:
-                        encoded_file = base64.b64encode(f.read()).decode("utf-8")
-                        attached_files.append(
-                            {
-                                "file": file_path,
-                                "file_base64": encoded_file,
-                                "name": os.path.basename(file_path),
-                                "type": file_type,
-                            }
-                        )
+                    try:
+                        with open("./uploads/" + file_path, "rb") as f:
+                            encoded_file = base64.b64encode(f.read()).decode("utf-8")
+                            attached_files.append(
+                                {
+                                    "file": file_path,
+                                    "file_base64": encoded_file,
+                                    "name": os.path.basename(file_path),
+                                    "type": file_type,
+                                }
+                            )
+                    except FileNotFoundError:
+                        print(f"File not found: {file_path}")
+                        continue
 
                 response_data.append(
                     {
@@ -476,9 +480,10 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
             for _file in t.task_attachments.all().values_list("attached_file", "attached_type"):
                 file_path = _file[0]
                 file_type = _file[1]
-                with open("./uploads/" + file_path, "rb") as f:
-                    encoded_file = base64.b64encode(f.read()).decode("utf-8")
-                    attached_files.append(
+                try:
+                    with open("./uploads/" + file_path, "rb") as f:
+                        encoded_file = base64.b64encode(f.read()).decode("utf-8")
+                        attached_files.append(
                         {
                             "file": file_path,
                             "file_base64": encoded_file,
@@ -486,6 +491,9 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                             "type": file_type,
                         }
                     )
+                except FileNotFoundError:
+                    print(f"File not found: {file_path}")
+                    continue
 
             response_data.append(
                 {
@@ -606,9 +614,10 @@ class GetTaskView(AuthenticatedAPIView):
                 attachment_id = _file[0]
                 file_path = _file[1]
                 file_type = _file[2]
-                with open("./uploads/" + file_path, "rb") as f:
-                    encoded_file = base64.b64encode(f.read()).decode("utf-8")
-                    attached_files.append(
+                try:
+                    with open("./uploads/" + file_path, "rb") as f:
+                        encoded_file = base64.b64encode(f.read()).decode("utf-8")
+                        attached_files.append(
                         {
                             "attachment_id": attachment_id,
                             "file": file_path,
@@ -617,7 +626,7 @@ class GetTaskView(AuthenticatedAPIView):
                             "type": file_type,
                         }
                     )
-
+        
             response_data.append(
                 {
                     "id": t.task_id,
