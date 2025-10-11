@@ -440,7 +440,7 @@ class ChildTaskView(AuthenticatedAPIView):
 class GetTaskByThreadIdView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
-        chat_type = request.GET.get("chat_type")  # "dm" or "gm"
+        chat_type = request.GET.get("chat_type")
         chat_id = int(request.GET.get("chat_id"))
         thread_id = int(request.GET.get("thread_id"))
 

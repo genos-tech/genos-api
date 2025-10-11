@@ -12,6 +12,7 @@ from origin.models.chat.read_status_models import *
 from origin.serializers.chat.dm_serializers import *
 from origin.views.chat.modules.common import generate_first_line
 from origin.models.chat.chat_master_models import UserChatMaster
+from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 CHAT_TYPE = 1
 
@@ -135,19 +136,33 @@ class DMHistoryView(AuthenticatedAPIView):
         team_name = request.GET.get("team_name")
         user_id = request.GET.get("user_id")
 
-        if not (team_id and team_name and user_id):
-            return Response(
-                {"error": "team_id, team_name, and user_id are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        data = {
+            "team_id": team_id,
+            "team_name": team_name,
+            "user_id": user_id,
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request.user.id), str(data["user_id"])):
+            return res
 
         # Get chat master for this user
-        pinned_chats = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
-            "pinned_chats", flat=True
+        chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
+            "pinned_chats", "flagged_messages"
         )
         pinned_dm_ids = (
-            set((c["chat_type"], c["chat_id"]) for c in pinned_chats[0])
-            if len(pinned_chats) > 0 and pinned_chats[0]
+            set((c["chat_type"], c["chat_id"]) for c in chat_master[0][0])
+            if len(chat_master) > 0 and chat_master[0] and chat_master[0][0]
+            else set()
+        )
+        flagged_messages = (
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in chat_master[0][1]
+            )
+            if len(chat_master) > 0 and chat_master[0] and chat_master[0][1]
             else set()
         )
 
@@ -220,7 +235,13 @@ class DMHistoryView(AuthenticatedAPIView):
         for msg in raw_messages:
             chat_id = msg.dm.dm_id
             msg_dict = self.serialize_message(
-                msg, team_id, team_name, user_id, thread_reply_counts, reactions_by_message
+                msg,
+                team_id,
+                team_name,
+                user_id,
+                thread_reply_counts,
+                reactions_by_message,
+                flagged_messages,
             )
 
             # Init or append messages
@@ -248,7 +269,14 @@ class DMHistoryView(AuthenticatedAPIView):
         return Response(list(message_history_dict.values()), status=status.HTTP_200_OK)
 
     def serialize_message(
-        self, msg, team_id, team_name, current_user_id, reply_counts, reactions_by_message
+        self,
+        msg,
+        team_id,
+        team_name,
+        current_user_id,
+        reply_counts,
+        reactions_by_message,
+        flagged_messages,
     ):
         dm_id = msg.dm.dm_id
         message_id = msg.message_id
@@ -294,6 +322,7 @@ class DMHistoryView(AuthenticatedAPIView):
                     "systemUserId": None,
                 }
             ),
+            "isFlagged": True if (CHAT_TYPE, dm_id, 0, message_id) in flagged_messages else False,
             "tsSent": msg.ts_sent_at,
             "tsUpdated": msg.ts_updated_at,
         }
@@ -335,15 +364,23 @@ class DMHistoryView(AuthenticatedAPIView):
 
 class DMSingleMessageView(AuthenticatedAPIView):
     def get(self, request):
+        team_id = request.GET.get("team_id")
         user_id = request.GET.get("user_id")
         dm_id = int(request.GET.get("dm_id"))
         message_id = int(request.GET.get("message_id"))
 
-        if not user_id or not dm_id or not message_id:
-            return Response(
-                {"error": "user_id, dm_id and message_id are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        data = {
+            "team_id": team_id,
+            "user_id": user_id,
+            "dm_id": dm_id,
+            "message_id": message_id,
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request.user.id), str(data["user_id"])):
+            return res
 
         dm = DMMessages.objects.filter(dm=dm_id, message_id=message_id)
         if len(dm) == 0:
@@ -358,6 +395,18 @@ class DMSingleMessageView(AuthenticatedAPIView):
             )
         else:
             dm = dm[0]
+
+        chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
+            "flagged_messages", flat=True
+        )
+        flagged_messages = (
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in chat_master[0]
+            )
+            if len(chat_master) > 0 and chat_master[0]
+            else set()
+        )
 
         raw_reactions = ReactionFact.objects.filter(
             chat_type=CHAT_TYPE, chat_id=dm_id, message_id=message_id, is_thread=False
@@ -435,6 +484,7 @@ class DMSingleMessageView(AuthenticatedAPIView):
                 "systemUserId": (dm.task.project.project_system_user.id if dm.task else None),
             },
             "tsSent": dm.ts_sent_at,
+            "isFlagged": True if (CHAT_TYPE, dm_id, 0, message_id) in flagged_messages else False,
             "tsUpdated": dm.ts_updated_at,
             "lastReadMessageId": last_read_message_id,
         }
@@ -546,6 +596,7 @@ class CheckDMThreadExistsView(AuthenticatedAPIView):
 
 class DMSingleThreadMessageView(AuthenticatedAPIView):
     def get(self, request):
+        team_id = request.GET.get("team_id")
         user_id = request.GET.get("user_id")
         dm_id = int(request.GET.get("dm_id"))
         thread_id = int(request.GET.get("thread_id"))
@@ -572,6 +623,19 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
             )
         else:
             dm = dm[0]
+
+        # Get chat master for this user
+        chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
+            "flagged_messages", flat=True
+        )
+        flagged_messages = (
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in chat_master[0]
+            )
+            if len(chat_master) > 0 and chat_master[0]
+            else set()
+        )
 
         raw_reactions = ReactionFact.objects.filter(
             chat_type=CHAT_TYPE, chat_id=dm_id, message_id=message_id, is_thread=True
@@ -643,6 +707,9 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
                     else None
                 ),
             },
+            "isFlagged": (
+                True if (CHAT_TYPE, dm_id, thread_id, message_id) in flagged_messages else False
+            ),
             "tsSent": dm.ts_sent_at,
             "tsUpdated": dm.ts_updated_at,
         }
@@ -728,6 +795,19 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
         # Fetch all messages where the dm_id matches and the user is involved
         raw_messages = DMThreadMessages.objects.filter(dm=dm_id, thread_id=thread_id).order_by(
             "ts_sent_at"
+        )
+
+        # Get chat master for this user
+        chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
+            "flagged_messages", flat=True
+        )
+        flagged_messages = (
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in chat_master[0]
+            )
+            if len(chat_master) > 0 and chat_master[0]
+            else set()
         )
 
         # Fetch reactions
@@ -848,6 +928,11 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
                         else None
                     ),
                 },
+                "isFlagged": (
+                    True
+                    if (CHAT_TYPE, chat_id, thread_id, message_id) in flagged_messages
+                    else False
+                ),
                 "tsSent": ts_sent,
                 "tsUpdated": ts_updated_at,
             }

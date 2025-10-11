@@ -21,6 +21,14 @@ class UserChatMaster(models.Model):
         null=True,
         to_field="id",
     )
+    # The list of flagged messages.
+    # {
+    #     "chat_type": <1: DM, 2: GM, 3: PM>,
+    #     "chat_id": <chat_id>,
+    #     "thread_id": <thread_id>,
+    #     "message_id": <message_id>,
+    # }
+    flagged_messages = models.JSONField(blank=True, null=True)
     # The list of pinned chats.
     # {
     #     "chat_type": <1: DM, 2: GM, 3: PM>,

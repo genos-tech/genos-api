@@ -216,11 +216,19 @@ class GMHistoryView(AuthenticatedAPIView):
 
         # Get chat master for this user
         pinned_chats = UserChatMaster.objects.filter(user=attendee_id, team=team_id).values_list(
-            "pinned_chats", flat=True
+            "pinned_chats", "flagged_messages"
         )
         pinned_gm_ids = (
-            set((c["chat_type"], c["chat_id"]) for c in pinned_chats[0])
-            if len(pinned_chats) > 0 and pinned_chats[0]
+            set((c["chat_type"], c["chat_id"]) for c in pinned_chats[0][0])
+            if len(pinned_chats) > 0 and pinned_chats[0] and pinned_chats[0][0]
+            else set()
+        )
+        flagged_messages = (
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in pinned_chats[0][1]
+            )
+            if len(pinned_chats) > 0 and pinned_chats[0] and pinned_chats[0][1]
             else set()
         )
 
@@ -258,7 +266,13 @@ class GMHistoryView(AuthenticatedAPIView):
         # 4. Serialize messages grouped by chat_id
         # ----------------------------------------------------
         message_history_dict = self._build_message_history(
-            raw_messages, team_id, team_name, reaction_map, thread_reply_count_map, pinned_gm_ids
+            raw_messages,
+            team_id,
+            team_name,
+            reaction_map,
+            thread_reply_count_map,
+            pinned_gm_ids,
+            flagged_messages,
         )
 
         # ----------------------------------------------------
@@ -314,7 +328,14 @@ class GMHistoryView(AuthenticatedAPIView):
         return reaction_map
 
     def _build_message_history(
-        self, raw_messages, team_id, team_name, reaction_map, thread_reply_count_map, pinned_gm_ids
+        self,
+        raw_messages,
+        team_id,
+        team_name,
+        reaction_map,
+        thread_reply_count_map,
+        pinned_gm_ids,
+        flagged_messages,
     ):
         message_history_dict = {}
         last_message_dict = {}
@@ -352,6 +373,9 @@ class GMHistoryView(AuthenticatedAPIView):
                     "isJoined": bool(raw.task),
                     "systemUserId": raw.task.project.project_system_user.id if raw.task else None,
                 },
+                "isFlagged": (
+                    True if (CHAT_TYPE, chat_id, 0, message_id) in flagged_messages else False
+                ),
                 "tsSent": str(raw.ts_sent_at),
                 "tsUpdated": str(raw.ts_updated_at),
             }
@@ -392,6 +416,9 @@ class GMHistoryView(AuthenticatedAPIView):
                     "TSLastMessage": ts_last_message_dict[chat_id],
                     "profileImagePath": raw.gm.profile_image_file_name,
                     "isPinned": (CHAT_TYPE, chat_id) in pinned_gm_ids,
+                    "isFlagged": (
+                        True if (CHAT_TYPE, chat_id, 0, message_id) in flagged_messages else False
+                    ),
                 }
 
         return message_history_dict
@@ -409,15 +436,23 @@ class GMHistoryView(AuthenticatedAPIView):
 
 class GMSingleMessageView(AuthenticatedAPIView):
     def get(self, request):
+        team_id = request.GET.get("team_id")
         user_id = request.GET.get("user_id")
         gm_id = int(request.GET.get("gm_id"))
         message_id = int(request.GET.get("message_id"))
 
-        if not user_id or not gm_id or not message_id:
-            return Response(
-                {"error": "user_id, gm_id and message_id are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        data = {
+            "team_id": team_id,
+            "user_id": user_id,
+            "gm_id": gm_id,
+            "message_id": message_id,
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request.user.id), str(data["user_id"])):
+            return res
 
         gm = GMMessages.objects.filter(gm=gm_id, message_id=message_id)
         if len(gm) == 0:
@@ -432,6 +467,18 @@ class GMSingleMessageView(AuthenticatedAPIView):
             )
         else:
             gm = gm[0]
+
+        chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
+            "flagged_messages", flat=True
+        )
+        flagged_messages = (
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in chat_master[0]
+            )
+            if len(chat_master) > 0 and chat_master[0]
+            else set()
+        )
 
         raw_reactions = ReactionFact.objects.filter(
             chat_type=CHAT_TYPE, chat_id=gm_id, message_id=message_id, is_thread=False
@@ -508,6 +555,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
                 "isJoined": True,
                 "systemUserId": (gm.task.project.project_system_user.id if gm.task else None),
             },
+            "isFlagged": True if (CHAT_TYPE, gm_id, 0, message_id) in flagged_messages else False,
             "tsSent": gm.ts_sent_at,
             "tsUpdated": gm.ts_updated_at,
             "lastReadMessageId": last_read_message_id,
@@ -619,16 +667,25 @@ class CheckGMThreadExistsView(AuthenticatedAPIView):
 
 class GMSingleThreadMessageView(AuthenticatedAPIView):
     def get(self, request):
+        team_id = request.GET.get("team_id")
         user_id = request.GET.get("user_id")
         gm_id = int(request.GET.get("gm_id"))
         thread_id = int(request.GET.get("thread_id"))
         message_id = int(request.GET.get("message_id"))
 
-        if not user_id or not gm_id or not thread_id or not message_id:
-            return Response(
-                {"error": "user_id, gm_id, thread_id and message_id are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        data = {
+            "team_id": team_id,
+            "user_id": user_id,
+            "gm_id": gm_id,
+            "thread_id": thread_id,
+            "message_id": message_id,
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request.user.id), str(data["user_id"])):
+            return res
 
         gm = GMThreadMessages.objects.filter(
             gm=gm_id, thread_id=thread_id, thread_message_id=message_id
@@ -645,6 +702,18 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
             )
         else:
             gm = gm[0]
+
+        chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
+            "flagged_messages", flat=True
+        )
+        flagged_messages = (
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in chat_master[0]
+            )
+            if len(chat_master) > 0 and chat_master[0]
+            else set()
+        )
 
         raw_reactions = ReactionFact.objects.filter(
             chat_type=CHAT_TYPE, chat_id=gm_id, message_id=message_id, is_thread=True
@@ -716,6 +785,9 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
                     else None
                 ),
             },
+            "isFlagged": (
+                True if (CHAT_TYPE, gm_id, thread_id, message_id) in flagged_messages else False
+            ),
             "tsSent": gm.ts_sent_at,
             "tsUpdated": gm.ts_updated_at,
         }
@@ -789,14 +861,35 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
         gm_id = int(request.GET.get("gm_id"))
         thread_id = int(request.GET.get("thread_id"))
 
-        if not team_id or not team_name or not user_id or not gm_id or not thread_id:
-            return Response(
-                "gm_id and/or thread_id is not found", status=status.HTTP_400_BAD_REQUEST
-            )
+        data = {
+            "team_id": team_id,
+            "team_name": team_name,
+            "user_id": user_id,
+            "gm_id": gm_id,
+            "thread_id": thread_id,
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request.user.id), str(data["user_id"])):
+            return res
 
         # Fetch all messages where the gm_id matches and the user is involved
         raw_messages = GMThreadMessages.objects.filter(gm=gm_id, thread_id=thread_id).order_by(
             "ts_sent_at"
+        )
+
+        chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
+            "flagged_messages", flat=True
+        )
+        flagged_messages = (
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in chat_master[0]
+            )
+            if len(chat_master) > 0 and chat_master[0]
+            else set()
         )
 
         # Fetch reactions
@@ -920,6 +1013,11 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                         else None
                     ),
                 },
+                "isFlagged": (
+                    True
+                    if (CHAT_TYPE, chat_id, thread_id, message_id) in flagged_messages
+                    else False
+                ),
                 "tsSent": ts_sent,
                 "tsUpdated": ts_updated_at,
             }

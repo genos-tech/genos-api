@@ -41,11 +41,19 @@ class PMHistoryView(AuthenticatedAPIView):
 
         # Get chat master for this user
         pinned_chats = UserChatMaster.objects.filter(user=attendee_id, team=team_id).values_list(
-            "pinned_chats", flat=True
+            "pinned_chats", "flagged_messages"
         )
         pinned_pm_ids = (
-            set((c["chat_type"], c["chat_id"]) for c in pinned_chats[0])
-            if len(pinned_chats) > 0 and pinned_chats[0]
+            set((c["chat_type"], c["chat_id"]) for c in pinned_chats[0][0])
+            if len(pinned_chats) > 0 and pinned_chats[0] and pinned_chats[0][0]
+            else set()
+        )
+        flagged_messages = (
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in pinned_chats[0][1]
+            )
+            if len(pinned_chats) > 0 and pinned_chats[0] and pinned_chats[0][1]
             else set()
         )
 
@@ -127,7 +135,12 @@ class PMHistoryView(AuthenticatedAPIView):
         for msg in raw_messages:
             chat_id = msg.project.project_id
             msg_dict = self.serialize_message(
-                msg, team_id, team_name, thread_reply_counts, reactions_by_message
+                msg,
+                team_id,
+                team_name,
+                thread_reply_counts,
+                reactions_by_message,
+                flagged_messages,
             )
 
             # Track latest message
@@ -152,7 +165,9 @@ class PMHistoryView(AuthenticatedAPIView):
 
         return Response(list(message_history_dict.values()), status=status.HTTP_200_OK)
 
-    def serialize_message(self, msg, team_id, team_name, reply_counts, reactions_by_message):
+    def serialize_message(
+        self, msg, team_id, team_name, reply_counts, reactions_by_message, flagged_messages
+    ):
         project_id = msg.project.project_id
         message_id = msg.message_id
         return {
@@ -185,6 +200,9 @@ class PMHistoryView(AuthenticatedAPIView):
             "taskId": msg.task.task_id if msg.task else None,
             "taskExist": True if msg.task else False,
             "taskStatus": msg.task.status if msg.task else None,
+            "isFlagged": (
+                True if (CHAT_TYPE, project_id, 0, message_id) in flagged_messages else False
+            ),
             "tsSent": msg.ts_sent_at,
             "tsUpdated": msg.ts_updated_at,
         }
@@ -212,15 +230,23 @@ class PMHistoryView(AuthenticatedAPIView):
 
 class PMSingleMessageView(AuthenticatedAPIView):
     def get(self, request):
+        team_id = request.GET.get("team_id")
         user_id = request.GET.get("user_id")
         project_id = int(request.GET.get("project_id"))
         message_id = int(request.GET.get("message_id"))
 
-        if not user_id or not project_id or not message_id:
-            return Response(
-                {"error": "user_id, project_id and message_id are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        data = {
+            "team_id": team_id,
+            "user_id": user_id,
+            "project_id": project_id,
+            "message_id": message_id,
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request.user.id), str(data["user_id"])):
+            return res
 
         pm = PMMessages.objects.filter(project=project_id, message_id=message_id)
         if len(pm) == 0:
@@ -235,6 +261,18 @@ class PMSingleMessageView(AuthenticatedAPIView):
             )
         else:
             pm = pm[0]
+
+        chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
+            "flagged_messages", flat=True
+        )
+        flagged_messages = (
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in chat_master[0]
+            )
+            if len(chat_master) > 0 and chat_master[0]
+            else set()
+        )
 
         raw_reactions = ReactionFact.objects.filter(
             chat_type=CHAT_TYPE, chat_id=project_id, message_id=message_id, is_thread=False
@@ -311,6 +349,9 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 "isJoined": True,
                 "systemUserId": (pm.task.project.project_system_user.id if pm.task else None),
             },
+            "isFlagged": (
+                True if (CHAT_TYPE, project_id, 0, message_id) in flagged_messages else False
+            ),
             "tsSent": pm.ts_sent_at,
             "tsUpdated": pm.ts_updated_at,
             "lastReadMessageId": last_read_message_id,
@@ -426,16 +467,25 @@ class CheckPMThreadExistsView(AuthenticatedAPIView):
 
 class PMSingleThreadMessageView(AuthenticatedAPIView):
     def get(self, request):
+        team_id = request.GET.get("team_id")
         user_id = request.GET.get("user_id")
         project_id = int(request.GET.get("project_id"))
         thread_id = int(request.GET.get("thread_id"))
         message_id = int(request.GET.get("message_id"))
 
-        if not user_id or not project_id or not thread_id or not message_id:
-            return Response(
-                {"error": "user_id, project_id, thread_id and message_id are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        data = {
+            "team_id": team_id,
+            "user_id": user_id,
+            "project_id": project_id,
+            "thread_id": thread_id,
+            "message_id": message_id,
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request.user.id), str(data["user_id"])):
+            return res
 
         pm = PMThreadMessages.objects.filter(
             project=project_id, thread_id=thread_id, thread_message_id=message_id
@@ -452,6 +502,18 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
             )
         else:
             pm = pm[0]
+
+        chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
+            "flagged_messages", flat=True
+        )
+        flagged_messages = (
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in chat_master[0]
+            )
+            if len(chat_master) > 0 and chat_master[0]
+            else set()
+        )
 
         raw_reactions = ReactionFact.objects.filter(
             chat_type=CHAT_TYPE, chat_id=project_id, message_id=message_id, is_thread=True
@@ -524,6 +586,11 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
                     else None
                 ),
             },
+            "isFlagged": (
+                True
+                if (CHAT_TYPE, project_id, thread_id, message_id) in flagged_messages
+                else False
+            ),
             "tsSent": pm.ts_sent_at,
             "tsUpdated": pm.ts_updated_at,
         }
@@ -617,15 +684,36 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
         project_id = int(request.GET.get("pm_id"))
         thread_id = int(request.GET.get("thread_id"))
 
-        if not team_id or not team_name or not project_id or not thread_id:
-            return Response(
-                "project_id and/or thread_id is not found", status=status.HTTP_400_BAD_REQUEST
-            )
+        data = {
+            "team_id": team_id,
+            "team_name": team_name,
+            "user_id": user_id,
+            "project_id": project_id,
+            "thread_id": thread_id,
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request.user.id), str(data["user_id"])):
+            return res
 
         # Fetch all messages where the project_id matches and the user is involved
         raw_messages = PMThreadMessages.objects.filter(
             project=project_id, thread_id=thread_id
         ).order_by("ts_sent_at")
+
+        chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
+            "flagged_messages", flat=True
+        )
+        flagged_messages = (
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in chat_master[0]
+            )
+            if len(chat_master) > 0 and chat_master[0]
+            else set()
+        )
 
         # Fetch reactions
         raw_reactions = ReactionFact.objects.filter(
@@ -738,6 +826,11 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                         else None
                     ),
                 },
+                "isFlagged": (
+                    True
+                    if (CHAT_TYPE, chat_id, thread_id, message_id) in flagged_messages
+                    else False
+                ),
                 "tsSent": ts_sent,
                 "tsUpdated": ts_updated_at,
             }
