@@ -223,7 +223,7 @@ class GMHistoryView(AuthenticatedAPIView):
             if len(pinned_chats) > 0 and pinned_chats[0] and pinned_chats[0][0]
             else set()
         )
-        flagged_messages = (
+        flagged_message_ids = (
             set(
                 (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
                 for c in pinned_chats[0][1]
@@ -265,14 +265,14 @@ class GMHistoryView(AuthenticatedAPIView):
         # ----------------------------------------------------
         # 4. Serialize messages grouped by chat_id
         # ----------------------------------------------------
-        message_history_dict = self._build_message_history(
+        message_history_dict, flagged_messages = self._build_message_history(
             raw_messages,
             team_id,
             team_name,
             reaction_map,
             thread_reply_count_map,
             pinned_gm_ids,
-            flagged_messages,
+            flagged_message_ids,
         )
 
         # ----------------------------------------------------
@@ -280,7 +280,13 @@ class GMHistoryView(AuthenticatedAPIView):
         # ----------------------------------------------------
         self._attach_last_read_ids(message_history_dict, attendee_id, gm_ids)
 
-        return Response(list(message_history_dict.values()), status=status.HTTP_200_OK)
+        return Response(
+            {
+                "chat_history": list(message_history_dict.values()),
+                "flagged_messages": flagged_messages,
+            },
+            status=status.HTTP_200_OK,
+        )
 
     # -----------------------------------------------------------------
     # Helpers
@@ -335,9 +341,10 @@ class GMHistoryView(AuthenticatedAPIView):
         reaction_map,
         thread_reply_count_map,
         pinned_gm_ids,
-        flagged_messages,
+        flagged_message_ids,
     ):
         message_history_dict = {}
+        flagged_messages = []
         last_message_dict = {}
         ts_last_message_dict = {}
 
@@ -374,11 +381,41 @@ class GMHistoryView(AuthenticatedAPIView):
                     "systemUserId": raw.task.project.project_system_user.id if raw.task else None,
                 },
                 "isFlagged": (
-                    True if (CHAT_TYPE, chat_id, 0, message_id) in flagged_messages else False
+                    True if (CHAT_TYPE, chat_id, 0, message_id) in flagged_message_ids else False
                 ),
                 "tsSent": str(raw.ts_sent_at),
                 "tsUpdated": str(raw.ts_updated_at),
             }
+
+            if new_message["isFlagged"]:
+                flagged_messages.append(
+                    {
+                        "flaggedMessageId": "{chat_type}-{chat_id}-{thread_id}-{message_id}".format(
+                            chat_type=CHAT_TYPE,
+                            chat_id=chat_id,
+                            thread_id=0,
+                            message_id=new_message["messageId"],
+                        ),
+                        "chatName": chat_name,
+                        "chatType": CHAT_TYPE,
+                        "chatId": chat_id,
+                        "threadId": 0,
+                        "messageId": new_message["messageId"],
+                        "contentText": generate_first_line.get(new_message["content"][0]),
+                        "sender": new_message["sender"],
+                        "dmPartnerUser": {
+                            "userName": "",
+                            "userId": "",
+                            "avatarImgPath": "",
+                            "tsLastSeen": "",
+                            "tsJoined": "",
+                            "customStatus": "",
+                        },
+                        "project": new_message["project"],
+                        "taskId": new_message["taskId"],
+                        "tsSent": new_message["tsSent"],
+                    }
+                )
 
             # Track last message per chat
             if chat_id in ts_last_message_dict:
@@ -417,11 +454,13 @@ class GMHistoryView(AuthenticatedAPIView):
                     "profileImagePath": raw.gm.profile_image_file_name,
                     "isPinned": (CHAT_TYPE, chat_id) in pinned_gm_ids,
                     "isFlagged": (
-                        True if (CHAT_TYPE, chat_id, 0, message_id) in flagged_messages else False
+                        True
+                        if (CHAT_TYPE, chat_id, 0, message_id) in flagged_message_ids
+                        else False
                     ),
                 }
 
-        return message_history_dict
+        return message_history_dict, flagged_messages
 
     def _attach_last_read_ids(self, message_history_dict, attendee_id, gm_ids):
         last_reads = ReadStatus.objects.filter(
@@ -471,7 +510,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
         chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
             "flagged_messages", flat=True
         )
-        flagged_messages = (
+        flagged_message_ids = (
             set(
                 (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
                 for c in chat_master[0]
@@ -555,7 +594,9 @@ class GMSingleMessageView(AuthenticatedAPIView):
                 "isJoined": True,
                 "systemUserId": (gm.task.project.project_system_user.id if gm.task else None),
             },
-            "isFlagged": True if (CHAT_TYPE, gm_id, 0, message_id) in flagged_messages else False,
+            "isFlagged": (
+                True if (CHAT_TYPE, gm_id, 0, message_id) in flagged_message_ids else False
+            ),
             "tsSent": gm.ts_sent_at,
             "tsUpdated": gm.ts_updated_at,
             "lastReadMessageId": last_read_message_id,
@@ -706,7 +747,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
         chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
             "flagged_messages", flat=True
         )
-        flagged_messages = (
+        flagged_message_ids = (
             set(
                 (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
                 for c in chat_master[0]
@@ -786,7 +827,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
                 ),
             },
             "isFlagged": (
-                True if (CHAT_TYPE, gm_id, thread_id, message_id) in flagged_messages else False
+                True if (CHAT_TYPE, gm_id, thread_id, message_id) in flagged_message_ids else False
             ),
             "tsSent": gm.ts_sent_at,
             "tsUpdated": gm.ts_updated_at,
@@ -883,7 +924,7 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
         chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
             "flagged_messages", flat=True
         )
-        flagged_messages = (
+        flagged_message_ids = (
             set(
                 (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
                 for c in chat_master[0]
@@ -1015,7 +1056,7 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
                 },
                 "isFlagged": (
                     True
-                    if (CHAT_TYPE, chat_id, thread_id, message_id) in flagged_messages
+                    if (CHAT_TYPE, chat_id, thread_id, message_id) in flagged_message_ids
                     else False
                 ),
                 "tsSent": ts_sent,

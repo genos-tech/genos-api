@@ -1,6 +1,7 @@
 from rest_framework.response import Response
 from rest_framework import status
 from django.db.models import F
+import json
 
 from origin.models.chat.chat_master_models import UserChatMaster
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -9,6 +10,14 @@ from origin.views.utils.request_validators import validate_request_data, validat
 
 
 class UserChatMasterView(AuthenticatedAPIView):
+    def _dict_to_sorted_str(self, obj):
+        """
+        Convert dictionary to sorted string representation for consistent comparison.
+        """
+        if isinstance(obj, dict):
+            return json.dumps(obj, sort_keys=True, separators=(",", ":"))
+        return str(obj)
+
     def _toggle_list_item(self, current_list, item):
         """
         Helper method to toggle an item in a list.
@@ -18,11 +27,12 @@ class UserChatMasterView(AuthenticatedAPIView):
             current_list = []
 
         # Use set for O(1) lookup instead of O(n) list lookup for large lists
-        current_set = set(str(i) if isinstance(i, dict) else i for i in current_list)
-        item_str = str(item) if isinstance(item, dict) else item
+        # Ensure consistent string representation for dictionaries by sorting keys
+        current_set = set(self._dict_to_sorted_str(i) for i in current_list)
+        item_str = self._dict_to_sorted_str(item)
 
         if item_str in current_set:
-            return [i for i in current_list if (str(i) if isinstance(i, dict) else i) != item_str]
+            return [i for i in current_list if self._dict_to_sorted_str(i) != item_str]
         else:
             return current_list + [item]
 
@@ -43,7 +53,7 @@ class UserChatMasterView(AuthenticatedAPIView):
 
         # Use get_or_create for better performance instead of try/except
         chat_master, created = UserChatMaster.objects.get_or_create(
-            team=team, user=user, defaults={"flagged_messages": [], "pinned_chats": []}
+            team_id=team, user_id=user, defaults={"flagged_messages": [], "pinned_chats": []}
         )
 
         # Prepare update data - don't modify request.data directly
@@ -106,3 +116,26 @@ class UserChatMasterView(AuthenticatedAPIView):
         )
 
         return Response(chat_master, status=status.HTTP_200_OK)
+
+
+class FlagMessageView(AuthenticatedAPIView):
+    def get(self, request):
+        data = {
+            "team": request.GET.get("team"),
+            "user": request.GET.get("user"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request.user.id), str(data["user"])):
+            return res
+
+        flagged_messages = UserChatMaster.objects.filter(
+            team_id=data["team"], user_id=data["user"]
+        ).values_list("flagged_messages", flat=True)
+
+        if len(flagged_messages) == 0:
+            return Response([], status=status.HTTP_200_OK)
+
+        return Response(flagged_messages[0], status=status.HTTP_200_OK)
