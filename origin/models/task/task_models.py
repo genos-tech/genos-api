@@ -24,9 +24,7 @@ class TaskMaster(models.Model):
         related_name="project_tasks_master",
         to_field="project_id",
     )
-    chat_type = models.CharField(
-        max_length=5, null=True, blank=True
-    )  # "dm" or "gm" TODO: Must use int (0=dm, 1=gm, 2=pm)
+    chat_type = models.IntegerField(null=True, blank=True)
     chat_id = models.IntegerField(null=True, blank=True)
     thread_id = models.IntegerField(null=True, blank=True)
     task_id = models.BigAutoField(primary_key=True, unique=True)
@@ -61,7 +59,9 @@ class TaskMaster(models.Model):
     due_date = models.DateField(blank=True, null=True)
     tags = models.JSONField(blank=True, null=True)
     is_deleted = models.BooleanField(default=False)
-    is_init_table = models.BooleanField(default=False)
+    # True: An empty initial task before saved by the user.
+    # False: A task that is saved by the user.
+    is_init_task = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 

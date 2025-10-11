@@ -45,7 +45,7 @@ class TaskMasterView(AuthenticatedAPIView):
             "general_url": request.data["general_url"],
             "general_url_title": request.data["general_url_title"],
             "tags": request.data["tags"],
-            "is_init_table": request.data["is_init_table"] == True,
+            "is_init_task": request.data["is_init_task"] == True,
         }
         serializer = TaskMasterSerializer(data=data)
         if serializer.is_valid():
@@ -87,7 +87,7 @@ class TaskMasterView(AuthenticatedAPIView):
         data = {
             "team": request.GET.get("team_id"),
             "task_id": request.GET.get("task_id"),
-            "is_init_table_boolean": request.GET.get("is_init_table_boolean"),
+            "is_init_task_boolean": request.GET.get("is_init_task_boolean"),
         }
 
         if res := validate_request_data(data):
@@ -97,7 +97,7 @@ class TaskMasterView(AuthenticatedAPIView):
             task = TaskMaster.objects.get(
                 team=data["team"],
                 task_id=data["task_id"],
-                is_init_table=int(data["is_init_table_boolean"]) == 1,
+                is_init_task=int(data["is_init_task_boolean"]) == 1,
             )
             task.delete()
             return Response(
@@ -130,7 +130,7 @@ class TaskMetaView(AuthenticatedAPIView):
 
         raw_personal_notes = (
             TaskMaster.objects.filter(
-                team=data["team_id"], project__in=project_ids, is_init_table=False
+                team=data["team_id"], project__in=project_ids, is_init_task=False
             )
             .filter(~Q(status="Deleted"))
             .annotate(
@@ -156,7 +156,7 @@ class TaskMetaView(AuthenticatedAPIView):
 
         finished_task_ids = set(
             TaskMaster.objects.filter(
-                team=data["team_id"], project__in=project_ids, is_init_table=False
+                team=data["team_id"], project__in=project_ids, is_init_task=False
             )
             .filter(Q(status__in=["Deleted", "Closed"]))
             .values_list("task_id", flat=True)
@@ -206,7 +206,7 @@ class GetTeamTasksView(AuthenticatedAPIView):
             )
 
         task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
-            team=team_id, is_init_table=False
+            team=team_id, is_init_task=False
         )
         response_data = []
         for t in task_with_tags:
@@ -251,7 +251,7 @@ class GetTeamTasksByTagView(AuthenticatedAPIView):
             )
 
         task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
-            team=team_id, is_init_table=False
+            team=team_id, is_init_task=False
         )
 
         projects = {}
@@ -296,7 +296,7 @@ class ChildTaskView(AuthenticatedAPIView):
             )
 
         target_tasks = TaskMaster.objects.filter(
-            is_init_table=False,
+            is_init_task=False,
             team=team_id,
             project=project_id,
             parent_task_id=current_task_id,
@@ -312,7 +312,7 @@ class ChildTaskView(AuthenticatedAPIView):
                 team=team_id,
                 project_id=target_task[0],
                 task_id=target_task[1],
-                is_init_table=False,
+                is_init_task=False,
             )
 
             for t in task_attachments:
@@ -451,7 +451,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
             )
 
         target_task = TaskMaster.objects.filter(
-            is_init_table=False,
+            is_init_task=False,
             team=team_id,
             chat_type=chat_type,
             chat_id=chat_id,
@@ -471,7 +471,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
             team=team_id,
             project_id=target_task[0][0],
             task_id=target_task[0][1],
-            is_init_table=False,
+            is_init_task=False,
         )
 
         response_data = []
@@ -484,13 +484,13 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                     with open("./uploads/" + file_path, "rb") as f:
                         encoded_file = base64.b64encode(f.read()).decode("utf-8")
                         attached_files.append(
-                        {
-                            "file": file_path,
-                            "file_base64": encoded_file,
-                            "name": os.path.basename(file_path),
-                            "type": file_type,
-                        }
-                    )
+                            {
+                                "file": file_path,
+                                "file_base64": encoded_file,
+                                "name": os.path.basename(file_path),
+                                "type": file_type,
+                            }
+                        )
                 except FileNotFoundError:
                     print(f"File not found: {file_path}")
                     continue
@@ -601,12 +601,13 @@ class GetTaskView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        task_attachments = TaskMaster.objects.prefetch_related("task_attachments").filter(
-            team=team_id, project_id=project_id, task_id=task_id, is_init_table=False
+        # Get the specific task with its attachments.
+        task = TaskMaster.objects.prefetch_related("task_attachments").filter(
+            team=team_id, project_id=project_id, task_id=task_id, is_init_task=False
         )
 
         response_data = []
-        for t in task_attachments:
+        for t in task:
             attached_files = []
             for _file in t.task_attachments.all().values_list(
                 "attachment_id", "attached_file", "attached_type"
@@ -618,18 +619,18 @@ class GetTaskView(AuthenticatedAPIView):
                     with open("./uploads/" + file_path, "rb") as f:
                         encoded_file = base64.b64encode(f.read()).decode("utf-8")
                         attached_files.append(
-                        {
-                            "attachment_id": attachment_id,
-                            "file": file_path,
-                            "file_base64": encoded_file,
-                            "name": os.path.basename(file_path),
-                            "type": file_type,
-                        }
-                    )
+                            {
+                                "attachment_id": attachment_id,
+                                "file": file_path,
+                                "file_base64": encoded_file,
+                                "name": os.path.basename(file_path),
+                                "type": file_type,
+                            }
+                        )
                 except FileNotFoundError:
                     print(f"File not found: {file_path}")
                     continue
-        
+
             response_data.append(
                 {
                     "id": t.task_id,
@@ -712,7 +713,9 @@ class GetTaskView(AuthenticatedAPIView):
                     "attachments": attached_files,
                     "parentTaskId": t.parent_task_id,
                     "rootTaskId": t.root_task_id,
-                    "threadId": t.thread_id,
+                    "chatType": t.chat_type if t.chat_type and t.chat_type != -1 else None,
+                    "chatId": t.chat_id if t.chat_id and t.chat_id != -1 else None,
+                    "threadId": t.thread_id if t.thread_id and t.thread_id != -1 else None,
                 },
             )
 
@@ -736,7 +739,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
             )
 
         task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
-            team=team_id, project=project_id, is_init_table=False
+            team=team_id, project=project_id, is_init_task=False
         )
         response_data = []
         for t in task_with_tags:
@@ -782,7 +785,7 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
             )
 
         task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
-            team=team_id, assignee=user_id, is_init_table=False
+            team=team_id, assignee=user_id, is_init_task=False
         )
         response_data = []
         for t in task_with_tags:
@@ -870,7 +873,7 @@ class TaskAttachmentsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        attachments = TaskMaster.objects.filter(task=task, is_init_table=False)
+        attachments = TaskMaster.objects.filter(task=task, is_init_task=False)
         serializer = TaskMasterSerializer(attachments, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
