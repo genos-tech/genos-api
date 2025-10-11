@@ -11,7 +11,7 @@ from origin.models.chat.read_status_models import *
 from origin.serializers.chat.gm_serializers import *
 from origin.models.common.inbox_models import InboxItems
 from origin.views.chat.modules.common import generate_first_line
-from origin.views.utils.request_validators import validate_request_data
+from origin.views.utils.request_validators import validate_request_data, validate_request_user
 from origin.models.chat.chat_master_models import UserChatMaster
 
 CHAT_TYPE = 2
@@ -202,11 +202,17 @@ class GMHistoryView(AuthenticatedAPIView):
         team_name = request.GET.get("team_name")
         attendee_id = request.GET.get("user_id")
 
-        if not team_id or not team_name or not attendee_id:
-            return Response(
-                {"error": "team_id, team_name and attendee_id are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        data = {
+            "team_id": team_id,
+            "team_name": team_name,
+            "attendee_id": attendee_id,
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request.user.id), str(data["attendee_id"])):
+            return res
 
         # Get chat master for this user
         pinned_chats = UserChatMaster.objects.filter(user=attendee_id, team=team_id).values_list(
@@ -218,11 +224,16 @@ class GMHistoryView(AuthenticatedAPIView):
             else set()
         )
 
-        gm_ids = list(
-            GMMembers.objects.filter(Q(gm__owner_team=team_id, attendee=attendee_id)).values_list(
-                "gm_id", flat=True
+        # If the user is viewing a specific GM, then only get messages for that GM.
+        print("specific GM id:", request.GET.get("gm_id"))
+        if request.GET.get("gm_id"):
+            gm_ids = [request.GET.get("gm_id")]
+        else:
+            gm_ids = list(
+                GMMembers.objects.filter(
+                    Q(gm__owner_team=team_id, attendee=attendee_id)
+                ).values_list("gm_id", flat=True)
             )
-        )
 
         if not gm_ids:
             return Response({"messages": []}, status=status.HTTP_200_OK)
@@ -570,7 +581,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
         raw_last_read_message_id = ReadStatus.objects.filter(
             user=request.user.id,
             chat_type=CHAT_TYPE,
-            chat_id=request.data["dm_id"],
+            chat_id=request.data["gm_id"],
             is_thread=False,
         ).values_list("last_read_message_id")
         if len(raw_last_read_message_id) == 1:
