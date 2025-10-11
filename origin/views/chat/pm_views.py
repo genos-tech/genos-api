@@ -48,7 +48,7 @@ class PMHistoryView(AuthenticatedAPIView):
             if len(pinned_chats) > 0 and pinned_chats[0] and pinned_chats[0][0]
             else set()
         )
-        flagged_messages = (
+        flagged_message_ids = (
             set(
                 (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
                 for c in pinned_chats[0][1]
@@ -132,6 +132,7 @@ class PMHistoryView(AuthenticatedAPIView):
 
         # Build history
         message_history_dict = {}
+        flagged_messages = []
         for msg in raw_messages:
             chat_id = msg.project.project_id
             msg_dict = self.serialize_message(
@@ -140,7 +141,7 @@ class PMHistoryView(AuthenticatedAPIView):
                 team_name,
                 thread_reply_counts,
                 reactions_by_message,
-                flagged_messages,
+                flagged_message_ids,
             )
 
             # Track latest message
@@ -155,6 +156,36 @@ class PMHistoryView(AuthenticatedAPIView):
                     )
                     message_history_dict[chat_id]["TSLastMessage"] = msg.ts_sent_at
 
+            if msg_dict["isFlagged"]:
+                flagged_messages.append(
+                    {
+                        "flaggedMessageId": "{chat_type}-{chat_id}-{thread_id}-{message_id}".format(
+                            chat_type=CHAT_TYPE,
+                            chat_id=chat_id,
+                            thread_id=0,
+                            message_id=msg_dict["messageId"],
+                        ),
+                        "chatType": CHAT_TYPE,
+                        "chatName": message_history_dict[chat_id]["chatName"],
+                        "chatId": chat_id,
+                        "threadId": 0,
+                        "messageId": msg_dict["messageId"],
+                        "contentText": generate_first_line.get(msg_dict["content"][0]),
+                        "sender": msg_dict["sender"],
+                        "dmPartnerUser": {
+                            "userName": "",
+                            "userId": "",
+                            "avatarImgPath": "",
+                            "tsLastSeen": "",
+                            "tsJoined": "",
+                            "customStatus": "",
+                        },
+                        "project": msg_dict["project"],
+                        "taskId": msg_dict["taskId"],
+                        "tsSent": msg_dict["tsSent"],
+                    }
+                )
+
         # Add last read info
         for chat_id, chat in message_history_dict.items():
             chat["lastReadMessageId"] = last_read_map.get(chat_id, -1)
@@ -163,10 +194,16 @@ class PMHistoryView(AuthenticatedAPIView):
             else:
                 chat["isPinned"] = False
 
-        return Response(list(message_history_dict.values()), status=status.HTTP_200_OK)
+        return Response(
+            {
+                "chat_history": list(message_history_dict.values()),
+                "flagged_messages": flagged_messages,
+            },
+            status=status.HTTP_200_OK,
+        )
 
     def serialize_message(
-        self, msg, team_id, team_name, reply_counts, reactions_by_message, flagged_messages
+        self, msg, team_id, team_name, reply_counts, reactions_by_message, flagged_message_ids
     ):
         project_id = msg.project.project_id
         message_id = msg.message_id
@@ -201,7 +238,7 @@ class PMHistoryView(AuthenticatedAPIView):
             "taskExist": True if msg.task else False,
             "taskStatus": msg.task.status if msg.task else None,
             "isFlagged": (
-                True if (CHAT_TYPE, project_id, 0, message_id) in flagged_messages else False
+                True if (CHAT_TYPE, project_id, 0, message_id) in flagged_message_ids else False
             ),
             "tsSent": msg.ts_sent_at,
             "tsUpdated": msg.ts_updated_at,
@@ -265,7 +302,7 @@ class PMSingleMessageView(AuthenticatedAPIView):
         chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
             "flagged_messages", flat=True
         )
-        flagged_messages = (
+        flagged_message_ids = (
             set(
                 (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
                 for c in chat_master[0]
@@ -350,7 +387,7 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 "systemUserId": (pm.task.project.project_system_user.id if pm.task else None),
             },
             "isFlagged": (
-                True if (CHAT_TYPE, project_id, 0, message_id) in flagged_messages else False
+                True if (CHAT_TYPE, project_id, 0, message_id) in flagged_message_ids else False
             ),
             "tsSent": pm.ts_sent_at,
             "tsUpdated": pm.ts_updated_at,
@@ -506,7 +543,7 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
         chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
             "flagged_messages", flat=True
         )
-        flagged_messages = (
+        flagged_message_ids = (
             set(
                 (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
                 for c in chat_master[0]
@@ -588,7 +625,7 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
             },
             "isFlagged": (
                 True
-                if (CHAT_TYPE, project_id, thread_id, message_id) in flagged_messages
+                if (CHAT_TYPE, project_id, thread_id, message_id) in flagged_message_ids
                 else False
             ),
             "tsSent": pm.ts_sent_at,
@@ -706,7 +743,7 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
         chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
             "flagged_messages", flat=True
         )
-        flagged_messages = (
+        flagged_message_ids = (
             set(
                 (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
                 for c in chat_master[0]
@@ -828,7 +865,7 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                 },
                 "isFlagged": (
                     True
-                    if (CHAT_TYPE, chat_id, thread_id, message_id) in flagged_messages
+                    if (CHAT_TYPE, chat_id, thread_id, message_id) in flagged_message_ids
                     else False
                 ),
                 "tsSent": ts_sent,

@@ -107,4 +107,6 @@ urlpatterns = [
     path("api/v2/todo/", ToDoFactView.as_view(), name="chat_todo"),
     # Chat master
     path("api/v2/chat/master/", UserChatMasterView.as_view(), name="chat_master"),
+    # Flag message
+    path("api/v2/chat/flaggedMessages/", FlagMessageView.as_view(), name="flagged_messages"),
 ]
