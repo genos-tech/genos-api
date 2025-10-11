@@ -13,6 +13,7 @@ from origin.models.chat.read_status_models import *
 from origin.serializers.chat.pm_serializers import *
 from origin.views.chat.modules.common import generate_first_line
 from origin.models.chat.chat_master_models import UserChatMaster
+from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 CHAT_TYPE = 3
 
@@ -26,11 +27,17 @@ class PMHistoryView(AuthenticatedAPIView):
         team_name = request.GET.get("team_name")
         attendee_id = request.GET.get("user_id")
 
-        if not (team_id and team_name and attendee_id):
-            return Response(
-                {"error": "team_id, team_name and user_id are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        data = {
+            "team_id": team_id,
+            "team_name": team_name,
+            "attendee_id": attendee_id,
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request.user.id), str(data["attendee_id"])):
+            return res
 
         # Get chat master for this user
         pinned_chats = UserChatMaster.objects.filter(user=attendee_id, team=team_id).values_list(
@@ -42,12 +49,16 @@ class PMHistoryView(AuthenticatedAPIView):
             else set()
         )
 
-        # Projects this user belongs to
-        project_ids = list(
-            ProjectMembers.objects.filter(team=team_id, attendee=attendee_id).values_list(
-                "project_id", flat=True
+        # If the user is viewing a specific PM, then only get messages for that PM.
+        if request.GET.get("project_id"):
+            project_ids = [request.GET.get("project_id")]
+        else:
+            project_ids = list(
+                ProjectMembers.objects.filter(team=team_id, attendee=attendee_id).values_list(
+                    "project_id", flat=True
+                )
             )
-        )
+
         if not project_ids:
             return Response({"messages": []}, status=status.HTTP_200_OK)
 

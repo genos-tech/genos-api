@@ -225,7 +225,6 @@ class GMHistoryView(AuthenticatedAPIView):
         )
 
         # If the user is viewing a specific GM, then only get messages for that GM.
-        print("specific GM id:", request.GET.get("gm_id"))
         if request.GET.get("gm_id"):
             gm_ids = [request.GET.get("gm_id")]
         else:
