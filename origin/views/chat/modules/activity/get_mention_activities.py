@@ -26,7 +26,7 @@ def get(
     offset: int = 0,
 ):
     """
-    For mention messages (DM, GM, PM, Task Comment);
+    For mention messages (DM, GM, PM, Task);
     activity_type: 1
     sender: not <payload["user_id"]>
     mentioned_user_ids: <payload["user_id"]>

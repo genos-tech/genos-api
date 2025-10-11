@@ -17,7 +17,7 @@ def get(
     offset: int = 0,
 ):
     """
-    For reactions in DM, GM, PM, Task Comment;
+    For reactions in DM, GM, PM, Task;
     activity_type: 2
     sender: <payload["user_id"]>
     latest_reaction_user: not <payload["user_id"]>

@@ -15,6 +15,7 @@ from origin.models.chat.reaction_models import *
 from origin.serializers.chat.reaction_serializers import *
 
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.utils.mention_handler import extractMentionedUsers
 
 from .common_color import STATUS_COLOR_MAP, PRIORITY_EFFORT_LEVEL_COLOR_MAP
 
@@ -47,10 +48,23 @@ class TaskMasterView(AuthenticatedAPIView):
             "tags": request.data["tags"],
             "is_init_task": request.data["is_init_task"] == True,
         }
+
+        if "content" in request.data:
+            extract_user_handler = extractMentionedUsers()
+            extract_user_handler.extract(request.data["content"])
+            newly_mentioned_user_ids = list(extract_user_handler.mentioned_user_ids)
+            data["mentioned_user_ids"] = newly_mentioned_user_ids
+
         serializer = TaskMasterSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(
+                {
+                    "task": serializer.data,
+                    "newly_mentioned_user_ids": newly_mentioned_user_ids,
+                },
+                status=status.HTTP_201_CREATED,
+            )
 
         error = serializer.errors
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
@@ -76,10 +90,27 @@ class TaskMasterView(AuthenticatedAPIView):
             if val is None:
                 update_data.pop(key)
 
+        newly_mentioned_user_ids = []
+        if "content" in update_data:
+            extract_user_handler = extractMentionedUsers()
+            extract_user_handler.extract(update_data["content"])
+            update_data["mentioned_user_ids"] = list(set(extract_user_handler.mentioned_user_ids))
+
+            current_mentioned_user_ids = task.mentioned_user_ids if task.mentioned_user_ids else []
+            newly_mentioned_user_ids = list(
+                set(extract_user_handler.mentioned_user_ids) - set(current_mentioned_user_ids)
+            )
+
         serializer = TaskMasterSerializer(task, data=update_data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(
+                {
+                    "task": serializer.data,
+                    "newly_mentioned_user_ids": newly_mentioned_user_ids,
+                },
+                status=status.HTTP_200_OK,
+            )
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

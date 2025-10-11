@@ -58,6 +58,7 @@ class TaskMaster(models.Model):
     general_url_title = models.CharField(blank=True, null=True)
     due_date = models.DateField(blank=True, null=True)
     tags = models.JSONField(blank=True, null=True)
+    mentioned_user_ids = models.JSONField(blank=True, null=True)
     is_deleted = models.BooleanField(default=False)
     # True: An empty initial task before saved by the user.
     # False: A task that is saved by the user.

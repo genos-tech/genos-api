@@ -25,7 +25,7 @@ from origin.views.chat.modules.activity.get_reaction_activities import (
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 """
-chatType = {1: DM, 2: GM, 3: PM, 4: Task Comment}
+chatType = {1: DM, 2: GM, 3: PM, 4: Task}
 activityType = {1: message or comment, 2: reaction, 3: mention}
 """
 
