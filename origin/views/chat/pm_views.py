@@ -68,7 +68,13 @@ class PMHistoryView(AuthenticatedAPIView):
             )
 
         if not project_ids:
-            return Response({"messages": []}, status=status.HTTP_200_OK)
+            return Response(
+                {
+                    "chat_history": [],
+                    "flagged_messages": [],
+                },
+                status=status.HTTP_200_OK,
+            )
 
         # Messages for these projects (prefetch related sender/project/task)
         raw_messages = (
@@ -198,7 +204,9 @@ class PMHistoryView(AuthenticatedAPIView):
 
         return Response(
             {
-                "chat_history": list(message_history_dict.values()),
+                "chat_history": (
+                    list(message_history_dict.values()) if message_history_dict.values() else []
+                ),
                 "flagged_messages": flagged_messages,
             },
             status=status.HTTP_200_OK,
