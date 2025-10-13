@@ -37,6 +37,55 @@ class ProjectMasterView(AuthenticatedAPIView):
 
         if len(project_data) == 1:
             project_data = project_data[0]
+
+            raw_project_members = ProjectMembers.objects.filter(
+                Q(project_id=data["project_id"])
+            ).values(
+                "team__team_id",
+                "team__team_name",
+                "attendee__id",
+                "attendee__username",
+                "attendee__email",
+                "attendee__profile_image_file_name",
+                "attendee__is_offline_forced",
+                "attendee__role",
+                "attendee__base_country",
+                "attendee__custom_status",
+                "attendee__ts_created_at",
+                "attendee__is_system_user",
+            )
+
+            project_members = []
+            for attendee in raw_project_members:
+                project_members.append(
+                    {
+                        "teamId": attendee["team__team_id"],
+                        "teamName": attendee["team__team_name"],
+                        "userId": attendee["attendee__id"],
+                        "userName": attendee["attendee__username"],
+                        "userEmail": attendee["attendee__email"],
+                        "avatarImgPath": attendee["attendee__profile_image_file_name"],
+                        "isOfflineForced": (
+                            attendee["attendee__is_offline_forced"]
+                            if attendee["attendee__is_offline_forced"]
+                            else ""
+                        ),
+                        "role": (attendee["attendee__role"] if attendee["attendee__role"] else ""),
+                        "baseCountry": (
+                            attendee["attendee__base_country"]
+                            if attendee["attendee__base_country"]
+                            else ""
+                        ),
+                        "customStatus": (
+                            attendee["attendee__custom_status"]
+                            if attendee["attendee__custom_status"]
+                            else ""
+                        ),
+                        "tsLastSeen": "",
+                        "tsJoined": attendee["attendee__ts_created_at"],
+                    }
+                )
+
             res = {
                 "projectId": project_data["project_id"],
                 "projectName": project_data["project_name"],
@@ -44,7 +93,9 @@ class ProjectMasterView(AuthenticatedAPIView):
                 "profileImagePath": project_data["profile_image_file_name"],
                 "isPrivate": project_data["is_private"],
                 "tsCreatedAt": project_data["ts_created_at"],
+                "projectMembers": project_members,
             }
+
             return Response(res, status=status.HTTP_200_OK)
         else:
             return Response(

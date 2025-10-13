@@ -69,6 +69,52 @@ class GMMasterView(AuthenticatedAPIView):
 
         if len(gm_data) == 1:
             gm_data = gm_data[0]
+
+            raw_gm_members = GMMembers.objects.filter(Q(gm_id=data["gm_id"])).values(
+                "gm__owner_team__team_id",
+                "gm__owner_team__team_name",
+                "attendee__id",
+                "attendee__username",
+                "attendee__email",
+                "attendee__profile_image_file_name",
+                "attendee__is_offline_forced",
+                "attendee__role",
+                "attendee__base_country",
+                "attendee__custom_status",
+                "attendee__ts_created_at",
+                "attendee__is_system_user",
+            )
+            gm_members = []
+            for attendee in raw_gm_members:
+                gm_members.append(
+                    {
+                        "teamId": attendee["gm__owner_team__team_id"],
+                        "teamName": attendee["gm__owner_team__team_name"],
+                        "userId": attendee["attendee__id"],
+                        "userName": attendee["attendee__username"],
+                        "userEmail": attendee["attendee__email"],
+                        "avatarImgPath": attendee["attendee__profile_image_file_name"],
+                        "isOfflineForced": (
+                            attendee["attendee__is_offline_forced"]
+                            if attendee["attendee__is_offline_forced"]
+                            else ""
+                        ),
+                        "role": (attendee["attendee__role"] if attendee["attendee__role"] else ""),
+                        "baseCountry": (
+                            attendee["attendee__base_country"]
+                            if attendee["attendee__base_country"]
+                            else ""
+                        ),
+                        "customStatus": (
+                            attendee["attendee__custom_status"]
+                            if attendee["attendee__custom_status"]
+                            else ""
+                        ),
+                        "tsLastSeen": "",
+                        "tsJoined": attendee["attendee__ts_created_at"],
+                    }
+                )
+
             res = {
                 "gmId": gm_data["gm_id"],
                 "gmName": gm_data["group_name"],
@@ -76,6 +122,7 @@ class GMMasterView(AuthenticatedAPIView):
                 "profileImagePath": gm_data["profile_image_file_name"],
                 "isPrivate": gm_data["is_private"],
                 "tsCreatedAt": gm_data["ts_created_at"],
+                "gmMembers": gm_members,
             }
             return Response(res, status=status.HTTP_200_OK)
         else:
