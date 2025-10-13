@@ -72,7 +72,7 @@ class PMHistoryView(AuthenticatedAPIView):
 
         # Messages for these projects (prefetch related sender/project/task)
         raw_messages = (
-            PMMessages.objects.filter(project__in=project_ids)
+            PMMessages.objects.filter(project__in=project_ids, is_deleted=False)
             .select_related("project", "sender", "task")
             .order_by("ts_sent_at")
         )
@@ -82,10 +82,12 @@ class PMHistoryView(AuthenticatedAPIView):
             f"{row['parent_message_uid__project__project_id']}-{row['parent_message_uid__message_id']}": row[
                 "num_of_replies"
             ]
-            for row in PMThreadMessages.objects.values(
+            for row in PMThreadMessages.objects.filter(is_deleted=False)
+            .values(
                 "parent_message_uid__project__project_id",
                 "parent_message_uid__message_id",
-            ).annotate(num_of_replies=Count("thread_message_id"))
+            )
+            .annotate(num_of_replies=Count("thread_message_id"))
         }
 
         # Reactions (grouped by message_id)
@@ -209,6 +211,7 @@ class PMHistoryView(AuthenticatedAPIView):
         message_id = msg.message_id
         return {
             "messageIdWithChatId": f"{project_id}-{msg.task.task_id if msg.task else 0}",
+            "chatType": CHAT_TYPE,
             "chatId": project_id,
             "systemUserId": msg.project.project_system_user.id,
             "messageId": message_id,
@@ -332,7 +335,9 @@ class PMSingleMessageView(AuthenticatedAPIView):
             all_reactions.append(reaction)
 
         thread_reply_counts = (
-            PMThreadMessages.objects.filter(project=project_id, thread_id=message_id)
+            PMThreadMessages.objects.filter(
+                project=project_id, thread_id=message_id, is_deleted=False
+            )
             .values("parent_message_uid__project__project_id", "parent_message_uid__message_id")
             .annotate(num_of_replies=Count("thread_message_id"))
         )
@@ -352,6 +357,7 @@ class PMSingleMessageView(AuthenticatedAPIView):
 
         message = {
             "messageIdWithChatId": f"{project_id}-{message_id}",
+            "chatType": CHAT_TYPE,
             "chatId": int(project_id),
             "messageId": int(message_id),
             "content": pm.message_body,
@@ -525,7 +531,7 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
             return res
 
         pm = PMThreadMessages.objects.filter(
-            project=project_id, thread_id=thread_id, thread_message_id=message_id
+            project=project_id, thread_id=thread_id, thread_message_id=message_id, is_deleted=False
         )
         if len(pm) == 0:
             return Response(
@@ -577,6 +583,7 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
         messageIdWithChatIdAndThreadId = f"{project_id}-{task_id}-{message_id}"
         message = {
             "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
+            "chatType": CHAT_TYPE,
             "chatId": project_id,
             "threadId": pm.thread_id,
             "messageId": pm.thread_message_id,
@@ -737,7 +744,7 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
 
         # Fetch all messages where the project_id matches and the user is involved
         raw_messages = PMThreadMessages.objects.filter(
-            project=project_id, thread_id=thread_id
+            project=project_id, thread_id=thread_id, is_deleted=False
         ).order_by("ts_sent_at")
 
         chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
@@ -813,8 +820,8 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
             )
             messageIdWithChatIdAndThreadId = f"{chat_id}-{task_id}-{message_id}"
             new_message = {
-                "chatType": 3,
                 "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
+                "chatType": CHAT_TYPE,
                 "chatId": chat_id,
                 "threadId": thread_id,
                 "messageId": message_id,

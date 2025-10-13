@@ -175,7 +175,7 @@ class DMHistoryView(AuthenticatedAPIView):
 
         # Fetch all messages (prefetch sender, receiver, task, project for efficiency)
         raw_messages = (
-            DMMessages.objects.filter(dm__team=team_id, dm_id__in=dm_ids)
+            DMMessages.objects.filter(dm__team=team_id, dm_id__in=dm_ids, is_deleted=False)
             .select_related("dm", "sender", "receiver", "task", "task__project")
             .order_by("ts_sent_at")
         )
@@ -185,9 +185,9 @@ class DMHistoryView(AuthenticatedAPIView):
             f"{row['parent_message_uid__dm__dm_id']}-{row['parent_message_uid__message_id']}": row[
                 "num_of_replies"
             ]
-            for row in DMThreadMessages.objects.values(
-                "parent_message_uid__dm__dm_id", "parent_message_uid__message_id"
-            ).annotate(num_of_replies=Count("thread_message_id"))
+            for row in DMThreadMessages.objects.filter(is_deleted=False)
+            .values("parent_message_uid__dm__dm_id", "parent_message_uid__message_id")
+            .annotate(num_of_replies=Count("thread_message_id"))
         }
 
         # Reactions (grouped by message_id)
@@ -313,6 +313,7 @@ class DMHistoryView(AuthenticatedAPIView):
 
         return {
             "messageIdWithChatId": f"{dm_id}-{message_id}",
+            "chatType": CHAT_TYPE,
             "chatId": dm_id,
             "messageId": message_id,
             "content": msg.message_body,
@@ -414,7 +415,7 @@ class DMSingleMessageView(AuthenticatedAPIView):
         if res := validate_request_user(str(request.user.id), str(data["user_id"])):
             return res
 
-        dm = DMMessages.objects.filter(dm=dm_id, message_id=message_id)
+        dm = DMMessages.objects.filter(dm=dm_id, message_id=message_id, is_deleted=False)
         if len(dm) == 0:
             return Response(
                 {"error": "DM not found"},
@@ -461,7 +462,7 @@ class DMSingleMessageView(AuthenticatedAPIView):
             all_reactions.append(reaction)
 
         thread_reply_counts = (
-            DMThreadMessages.objects.filter(dm=dm_id, thread_id=message_id)
+            DMThreadMessages.objects.filter(dm=dm_id, thread_id=message_id, is_deleted=False)
             .values("parent_message_uid__dm__dm_id", "parent_message_uid__message_id")
             .annotate(num_of_replies=Count("thread_message_id"))
         )
@@ -481,6 +482,7 @@ class DMSingleMessageView(AuthenticatedAPIView):
 
         message = {
             "messageIdWithChatId": f"{dm_id}-{message_id}",
+            "chatType": CHAT_TYPE,
             "chatId": int(dm_id),
             "messageId": int(message_id),
             "content": dm.message_body,
@@ -569,20 +571,21 @@ class DMSingleMessageView(AuthenticatedAPIView):
         dm_id = request.data.get("dm_id")
         message_id = request.data.get("message_id")
 
-        if dm_id is None or message_id is None:
-            return Response(
-                {"error": "dm_id and message_id are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        data = {
+            "dm_id": dm_id,
+            "message_id": message_id,
+        }
+
+        if res := validate_request_data(data):
+            return res
 
         message = get_object_or_404(DMMessages, dm=dm_id, message_id=message_id)
 
         update_data = request.data.copy()
         # Remove None values from the updated_data
-        if "message_body" in update_data and update_data["message_body"] is None:
-            update_data.pop("message_body")
-        if "task_id" in update_data and update_data["task_id"] is None:
-            update_data.pop("task_id")
+        for key, val in request.data.items():
+            if val is None:
+                update_data.pop(key)
 
         # For the task_id, it needs to be changed to "task" if exists.
         if "task_id" in update_data:
@@ -643,7 +646,7 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
             )
 
         dm = DMThreadMessages.objects.filter(
-            dm=dm_id, thread_id=thread_id, thread_message_id=message_id
+            dm=dm_id, thread_id=thread_id, thread_message_id=message_id, is_deleted=False
         )
         if len(dm) == 0:
             return Response(
@@ -695,6 +698,7 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
         messageIdWithChatIdAndThreadId = f"{dm_id}-{thread_id}-{message_id}"
         message = {
             "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
+            "chatType": CHAT_TYPE,
             "chatId": int(dm_id),
             "threadId": dm.thread_id,
             "messageId": dm.thread_message_id,
@@ -827,9 +831,9 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
             )
 
         # Fetch all messages where the dm_id matches and the user is involved
-        raw_messages = DMThreadMessages.objects.filter(dm=dm_id, thread_id=thread_id).order_by(
-            "ts_sent_at"
-        )
+        raw_messages = DMThreadMessages.objects.filter(
+            dm=dm_id, thread_id=thread_id, is_deleted=False
+        ).order_by("ts_sent_at")
 
         # Get chat master for this user
         chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
@@ -922,8 +926,8 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
 
             messageIdWithChatIdAndThreadId = f"{chat_id}-{thread_id}-{message_id}"
             new_message = {
-                "chatType": 1,
                 "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
+                "chatType": CHAT_TYPE,
                 "chatId": chat_id,
                 "threadId": thread_id,
                 "messageId": message_id,
