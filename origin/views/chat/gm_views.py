@@ -258,9 +258,9 @@ class GMHistoryView(AuthenticatedAPIView):
         # ----------------------------------------------------
         # 3. Messages (with sender, task, project prefetched)
         # ----------------------------------------------------
-        raw_messages = GMMessages.objects.filter(gm_id__in=gm_ids).select_related(
-            "sender", "task__project", "gm"
-        )
+        raw_messages = GMMessages.objects.filter(
+            gm_id__in=gm_ids, is_deleted=False
+        ).select_related("sender", "task__project", "gm")
 
         # ----------------------------------------------------
         # 4. Serialize messages grouped by chat_id
@@ -292,9 +292,11 @@ class GMHistoryView(AuthenticatedAPIView):
     # Helpers
     # -----------------------------------------------------------------
     def _get_thread_reply_count_map(self, gm_ids):
-        counts = GMThreadMessages.objects.values(
-            "parent_message_uid__gm__gm_id", "parent_message_uid__message_id"
-        ).annotate(num_of_replies=Count("thread_message_id"))
+        counts = (
+            GMThreadMessages.objects.filter(is_deleted=False)
+            .values("parent_message_uid__gm__gm_id", "parent_message_uid__message_id")
+            .annotate(num_of_replies=Count("thread_message_id"))
+        )
         return {
             f"{c['parent_message_uid__gm__gm_id']}-{c['parent_message_uid__message_id']}": c[
                 "num_of_replies"
@@ -355,6 +357,7 @@ class GMHistoryView(AuthenticatedAPIView):
 
             new_message = {
                 "messageIdWithChatId": f"{chat_id}-{message_id}",
+                "chatType": CHAT_TYPE,
                 "chatId": chat_id,
                 "messageId": message_id,
                 "content": raw.message_body,
@@ -493,7 +496,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
         if res := validate_request_user(str(request.user.id), str(data["user_id"])):
             return res
 
-        gm = GMMessages.objects.filter(gm=gm_id, message_id=message_id)
+        gm = GMMessages.objects.filter(gm=gm_id, message_id=message_id, is_deleted=False)
         if len(gm) == 0:
             return Response(
                 {"error": "GM not found"},
@@ -540,7 +543,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
             all_reactions.append(reaction)
 
         thread_reply_counts = (
-            GMThreadMessages.objects.filter(gm=gm_id, thread_id=message_id)
+            GMThreadMessages.objects.filter(gm=gm_id, thread_id=message_id, is_deleted=False)
             .values("parent_message_uid__gm__gm_id", "parent_message_uid__message_id")
             .annotate(num_of_replies=Count("thread_message_id"))
         )
@@ -560,6 +563,7 @@ class GMSingleMessageView(AuthenticatedAPIView):
 
         message = {
             "messageIdWithChatId": f"{gm_id}-{message_id}",
+            "chatType": CHAT_TYPE,
             "chatId": int(gm_id),
             "messageId": int(message_id),
             "content": gm.message_body,
@@ -729,7 +733,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
             return res
 
         gm = GMThreadMessages.objects.filter(
-            gm=gm_id, thread_id=thread_id, thread_message_id=message_id
+            gm=gm_id, thread_id=thread_id, thread_message_id=message_id, is_deleted=False
         )
         if len(gm) == 0:
             return Response(
@@ -780,6 +784,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
         messageIdWithChatIdAndThreadId = f"{gm_id}-{thread_id}-{message_id}"
         message = {
             "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
+            "chatType": CHAT_TYPE,
             "chatId": int(gm_id),
             "threadId": gm.thread_id,
             "messageId": gm.thread_message_id,
@@ -917,9 +922,9 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
             return res
 
         # Fetch all messages where the gm_id matches and the user is involved
-        raw_messages = GMThreadMessages.objects.filter(gm=gm_id, thread_id=thread_id).order_by(
-            "ts_sent_at"
-        )
+        raw_messages = GMThreadMessages.objects.filter(
+            gm=gm_id, thread_id=thread_id, is_deleted=False
+        ).order_by("ts_sent_at")
 
         chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
             "flagged_messages", flat=True
@@ -1000,8 +1005,8 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
             contentText = generate_first_line.get(content[0])
             messageIdWithChatIdAndThreadId = f"{chat_id}-{thread_id}-{message_id}"
             new_message = {
-                "chatType": 2,
                 "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
+                "chatType": CHAT_TYPE,
                 "chatId": chat_id,
                 "threadId": thread_id,
                 "messageId": message_id,
