@@ -38,21 +38,23 @@ class ProjectMasterView(AuthenticatedAPIView):
         if len(project_data) == 1:
             project_data = project_data[0]
 
-            raw_project_members = ProjectMembers.objects.filter(
-                Q(project_id=data["project_id"])
-            ).values(
-                "team__team_id",
-                "team__team_name",
-                "attendee__id",
-                "attendee__username",
-                "attendee__email",
-                "attendee__profile_image_file_name",
-                "attendee__is_offline_forced",
-                "attendee__role",
-                "attendee__base_country",
-                "attendee__custom_status",
-                "attendee__ts_created_at",
-                "attendee__is_system_user",
+            raw_project_members = (
+                ProjectMembers.objects.filter(Q(project_id=data["project_id"]))
+                .values(
+                    "team__team_id",
+                    "team__team_name",
+                    "attendee__id",
+                    "attendee__username",
+                    "attendee__email",
+                    "attendee__profile_image_file_name",
+                    "attendee__is_offline_forced",
+                    "attendee__role",
+                    "attendee__base_country",
+                    "attendee__custom_status",
+                    "attendee__ts_created_at",
+                    "attendee__is_system_user",
+                )
+                .order_by("attendee__email")
             )
 
             project_members = []

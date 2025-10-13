@@ -225,6 +225,7 @@ class GetTeamMembersView(AuthenticatedAPIView):
         attendees = (
             TeamMembers.objects.filter(Q(team_id=team_id, attendee__is_system_user=False))
             .select_related("attendee")
+            .order_by("attendee__email")
             .values(
                 "attendee__id",
                 "attendee__username",
@@ -287,6 +288,7 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
         member_info = (
             TeamMembers.objects.filter(Q(team=team_id, attendee=user_id))
             .select_related("attendee")
+            .order_by("attendee__email")
             .values(
                 "team__team_name",
                 "attendee__id",

@@ -38,9 +38,13 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
             )
         )
 
-        dm_ids_of_team_members = DMMaster.objects.filter(
-            Q(team=team_id, user_1_id=user_id) | Q(team=team_id, user_2_id=user_id)
-        ).values_list("dm_id", "user_1_id", "user_2_id")
+        dm_ids_of_team_members = (
+            DMMaster.objects.filter(
+                Q(team=team_id, user_1_id=user_id) | Q(team=team_id, user_2_id=user_id)
+            )
+            .order_by("attendee__email")
+            .values_list("dm_id", "user_1_id", "user_2_id")
+        )
 
         team_member_id_to_dm_id = {}
         for data in dm_ids_of_team_members:
@@ -73,7 +77,11 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
         groups_in_team = GMMaster.objects.filter(owner_team=team_id).values(
             "gm_id", "group_name", "is_private"
         )
-        my_gm_ids = GMMembers.objects.filter(Q(attendee=user_id)).values_list("gm", flat=True)
+        my_gm_ids = (
+            GMMembers.objects.filter(Q(attendee=user_id))
+            .order_by("gm__group_name")
+            .values_list("gm", flat=True)
+        )
         for member in list(groups_in_team):
             search_list.append(
                 {

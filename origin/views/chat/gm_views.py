@@ -70,19 +70,23 @@ class GMMasterView(AuthenticatedAPIView):
         if len(gm_data) == 1:
             gm_data = gm_data[0]
 
-            raw_gm_members = GMMembers.objects.filter(Q(gm_id=data["gm_id"])).values(
-                "gm__owner_team__team_id",
-                "gm__owner_team__team_name",
-                "attendee__id",
-                "attendee__username",
-                "attendee__email",
-                "attendee__profile_image_file_name",
-                "attendee__is_offline_forced",
-                "attendee__role",
-                "attendee__base_country",
-                "attendee__custom_status",
-                "attendee__ts_created_at",
-                "attendee__is_system_user",
+            raw_gm_members = (
+                GMMembers.objects.filter(Q(gm_id=data["gm_id"]))
+                .values(
+                    "gm__owner_team__team_id",
+                    "gm__owner_team__team_name",
+                    "attendee__id",
+                    "attendee__username",
+                    "attendee__email",
+                    "attendee__profile_image_file_name",
+                    "attendee__is_offline_forced",
+                    "attendee__role",
+                    "attendee__base_country",
+                    "attendee__custom_status",
+                    "attendee__ts_created_at",
+                    "attendee__is_system_user",
+                )
+                .order_by("attendee__email")
             )
             gm_members = []
             for attendee in raw_gm_members:
