@@ -42,7 +42,6 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
             DMMaster.objects.filter(
                 Q(team=team_id, user_1_id=user_id) | Q(team=team_id, user_2_id=user_id)
             )
-            .order_by("attendee__email")
             .values_list("dm_id", "user_1_id", "user_2_id")
         )
 
