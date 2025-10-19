@@ -34,6 +34,7 @@ class NotePermissionView(AuthenticatedAPIView):
             res = {
                 "teamId": serializer.data["team"],
                 "ownerId": serializer.data["owner"],
+                "noteType": 3,  # Chat Notes
                 "noteId": serializer.data["note_id"],
                 "parentNoteId": serializer.data["parent_note_id"],
                 "chatType": serializer.data["chat_type"],

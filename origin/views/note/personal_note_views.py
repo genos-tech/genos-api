@@ -121,6 +121,7 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
                     note = {
                         "teamId": serializer.data["team"],
                         "ownerId": serializer.data["owner"],
+                        "noteType": NOTE_TYPE,
                         "noteId": serializer.data["note_id"],
                         "parentNoteId": serializer.data["parent_note_id"],
                         "title": serializer.data["title"],
@@ -285,6 +286,7 @@ class PersonalNoteAttachmentView(AuthenticatedAPIView):
         if serializer.is_valid():
             serializer.save()
             res = {
+                "noteType": NOTE_TYPE,
                 "noteId": serializer.data["note"],
                 "uploader": serializer.data["uploader"],
                 "attachmentId": serializer.data["attachment_id"],
