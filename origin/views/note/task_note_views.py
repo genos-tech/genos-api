@@ -5,7 +5,7 @@ from rest_framework import status
 
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.serializers.note.note_serializers import *
-
+from origin.models.project.prj_models import ProjectMembers
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 NOTE_TYPE = 2  # Task Notes
@@ -23,22 +23,20 @@ class AllTaskNotesView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
-        notes = []
-
-        role_id = 1  # owner
-        owner_task_note_ids = list(
-            NotePermissionMaster.objects.filter(
-                team=data["team_id"], user=request_user_id, note_type=NOTE_TYPE, role_id=role_id
-            ).values_list("note_id", flat=True)
+        project_ids = list(
+            ProjectMembers.objects.filter(
+                team=data["team_id"], attendee=request_user_id
+            ).values_list("project_id", flat=True)
         )
-        owner_task_notes = (
-            TaskNoteMaster.objects.filter(
-                team=data["team_id"], owner=data["user_id"], note_id__in=owner_task_note_ids
-            )
+
+        notes = (
+            TaskNoteMaster.objects.filter(team=data["team_id"], project__in=project_ids)
             .annotate(
                 # Add the static field here
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
-                roleId=Value(role_id, output_field=IntegerField()),
+                roleId=Value(
+                    3, output_field=IntegerField()
+                ),  # TODO: use the correct role id (default: viewer)
                 # Your existing annotations
                 teamId=F("team"),
                 ownerId=F("owner"),
@@ -66,94 +64,6 @@ class AllTaskNotesView(AuthenticatedAPIView):
                 "tsUpdated",
             )
         )
-
-        role_id = 2  # editor
-        editor_task_note_ids = list(
-            NotePermissionMaster.objects.filter(
-                team=data["team_id"], user=request_user_id, note_type=NOTE_TYPE, role_id=role_id
-            ).values_list("note_id", flat=True)
-        )
-        editor_task_notes = (
-            TaskNoteMaster.objects.filter(
-                team=data["team_id"], owner=data["user_id"], note_id__in=editor_task_note_ids
-            )
-            .annotate(
-                # Add the static field here
-                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
-                roleId=Value(role_id, output_field=IntegerField()),
-                # Your existing annotations
-                teamId=F("team"),
-                ownerId=F("owner"),
-                noteId=F("note_id"),
-                parentNoteId=F("parent_note_id"),
-                taskId=F("task"),
-                projectId=F("project"),
-                tsCreated=F("ts_created_at"),
-                tsUpdated=F("ts_updated_at"),
-            )
-            .order_by("tsUpdated")
-            .reverse()
-            .values(
-                "noteType",
-                "teamId",
-                "ownerId",
-                "roleId",
-                "noteId",
-                "parentNoteId",
-                "projectId",
-                "taskId",
-                "title",
-                "body",
-                "tsCreated",
-                "tsUpdated",
-            )
-        )
-
-        role_id = 3  # viewer
-        viewer_task_note_ids = list(
-            NotePermissionMaster.objects.filter(
-                team=data["team_id"], user=request_user_id, note_type=NOTE_TYPE, role_id=role_id
-            ).values_list("note_id", flat=True)
-        )
-        viewer_task_notes = (
-            TaskNoteMaster.objects.filter(
-                team=data["team_id"], owner=data["user_id"], note_id__in=viewer_task_note_ids
-            )
-            .annotate(
-                # Add the static field here
-                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
-                roleId=Value(role_id, output_field=IntegerField()),
-                # Your existing annotations
-                teamId=F("team"),
-                ownerId=F("owner"),
-                noteId=F("note_id"),
-                parentNoteId=F("parent_note_id"),
-                projectId=F("project"),
-                taskId=F("task"),
-                tsCreated=F("ts_created_at"),
-                tsUpdated=F("ts_updated_at"),
-            )
-            .order_by("tsUpdated")
-            .reverse()
-            .values(
-                "noteType",
-                "teamId",
-                "ownerId",
-                "roleId",
-                "noteId",
-                "parentNoteId",
-                "projectId",
-                "taskId",
-                "title",
-                "body",
-                "tsCreated",
-                "tsUpdated",
-            )
-        )
-
-        notes.extend(list(owner_task_notes))
-        notes.extend(list(editor_task_notes))
-        notes.extend(list(viewer_task_notes))
 
         return Response(notes, status=status.HTTP_200_OK)
 
@@ -170,15 +80,14 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
-        task_note_ids = list(
-            NotePermissionMaster.objects.filter(
-                team=data["team_id"], user=request_user_id, note_type=NOTE_TYPE
-            ).values_list("note_id", flat=True)
+        project_ids = list(
+            ProjectMembers.objects.filter(
+                team=data["team_id"], attendee=request_user_id
+            ).values_list("project_id", flat=True)
         )
-        task_notes = (
-            TaskNoteMaster.objects.filter(
-                team=data["team_id"], owner=data["user_id"], note_id__in=task_note_ids
-            )
+
+        notes = (
+            TaskNoteMaster.objects.filter(team=data["team_id"], project__in=project_ids)
             .annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 noteId=F("note_id"),
@@ -200,7 +109,7 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
             )
         )
 
-        return Response(list(task_notes), status=status.HTTP_200_OK)
+        return Response(list(notes), status=status.HTTP_200_OK)
 
 
 class TaskNoteMasterView(AuthenticatedAPIView):
@@ -392,20 +301,18 @@ class SingleTaskNoteView(AuthenticatedAPIView):
 
         data = {
             "team": request.GET.get("team_id"),
-            "owner": request.GET.get("user_id"),
+            "user_id": request.GET.get("user_id"),
             "note_id": request.GET.get("note_id"),
         }
 
         if res := validate_request_data(data):
             return res
 
-        if res := validate_request_user(str(request_user_id), str(data["owner"])):
+        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
         personal_notes = (
-            TaskNoteMaster.objects.filter(
-                team=data["team"], owner=data["owner"], note_id=data["note_id"]
-            )
+            TaskNoteMaster.objects.filter(team=data["team"], note_id=data["note_id"])
             .annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 teamId=F("team"),
