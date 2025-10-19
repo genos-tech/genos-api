@@ -123,7 +123,7 @@ class TaskNoteMasterView(AuthenticatedAPIView):
         if res := validate_request_data(data):
             return res
 
-        chat_notes = (
+        task_notes = (
             TaskNoteMaster.objects.filter(
                 team=data["team"],
                 project=data["project_id"],
@@ -156,7 +156,7 @@ class TaskNoteMasterView(AuthenticatedAPIView):
             )
         )
 
-        return Response(list(chat_notes), status=status.HTTP_200_OK)
+        return Response(list(task_notes), status=status.HTTP_200_OK)
 
     def post(self, request, *args, **kwargs):
         request_user_id = request.user.id
