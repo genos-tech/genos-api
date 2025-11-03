@@ -6,8 +6,18 @@ STATUS_COLOR_MAP = {
     "deleted": {"chipColor": "#ff2323", "textColor": "white"},
 }
 
-PRIORITY_EFFORT_LEVEL_COLOR_MAP = {
-    "low": {"chipColor": "#0044c2", "textColor": "white"},
-    "medium": {"chipColor": "#1dc200", "textColor": "white"},
-    "high": {"chipColor": "#ff2323", "textColor": "white"},
+PRIORITY_COLOR_MAP = {
+    "minimal": {"chipColor": "#9CA3AF", "textColor": "white"},
+    "low": {"chipColor": "#34D399", "textColor": "white"},
+    "normal": {"chipColor": "#3B82F6", "textColor": "white"},
+    "high": {"chipColor": "#F59E0B", "textColor": "white"},
+    "critical": {"chipColor": "#EF4444", "textColor": "white"},
+}
+
+EFFORT_LEVEL_COLOR_MAP = {
+    "minimal": {"chipColor": "#9CA3AF", "textColor": "white"},
+    "low": {"chipColor": "#34D399", "textColor": "white"},
+    "moderate": {"chipColor": "#3B82F6", "textColor": "white"},
+    "high": {"chipColor": "#F59E0B", "textColor": "white"},
+    "extensive": {"chipColor": "#EF4444", "textColor": "white"},
 }
