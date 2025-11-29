@@ -171,7 +171,13 @@ class DMHistoryView(AuthenticatedAPIView):
             UserDMMapping.objects.filter(user_id=user_id).values_list("dm_id", flat=True)
         )
         if not dm_ids:
-            return Response({"messages": []}, status=status.HTTP_200_OK)
+            return Response(
+                {
+                    "chat_history": [],
+                    "flagged_messages": [],
+                },
+                status=status.HTTP_200_OK,
+            )
 
         # Fetch all messages (prefetch sender, receiver, task, project for efficiency)
         raw_messages = (
@@ -292,7 +298,9 @@ class DMHistoryView(AuthenticatedAPIView):
 
         return Response(
             {
-                "chat_history": list(message_history_dict.values()),
+                "chat_history": (
+                    list(message_history_dict.values()) if message_history_dict.values() else []
+                ),
                 "flagged_messages": flagged_messages,
             },
             status=status.HTTP_200_OK,

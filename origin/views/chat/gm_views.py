@@ -72,6 +72,7 @@ class GMMasterView(AuthenticatedAPIView):
 
             raw_gm_members = (
                 GMMembers.objects.filter(Q(gm_id=data["gm_id"]))
+                .order_by("attendee__email")
                 .values(
                     "gm__owner_team__team_id",
                     "gm__owner_team__team_name",
@@ -86,7 +87,6 @@ class GMMasterView(AuthenticatedAPIView):
                     "attendee__ts_created_at",
                     "attendee__is_system_user",
                 )
-                .order_by("attendee__email")
             )
             gm_members = []
             for attendee in raw_gm_members:
@@ -294,7 +294,13 @@ class GMHistoryView(AuthenticatedAPIView):
             )
 
         if not gm_ids:
-            return Response({"messages": []}, status=status.HTTP_200_OK)
+            return Response(
+                {
+                    "chat_history": [],
+                    "flagged_messages": [],
+                },
+                status=status.HTTP_200_OK,
+            )
 
         # ----------------------------------------------------
         # 1. Thread replies count map
@@ -333,7 +339,9 @@ class GMHistoryView(AuthenticatedAPIView):
 
         return Response(
             {
-                "chat_history": list(message_history_dict.values()),
+                "chat_history": (
+                    list(message_history_dict.values()) if message_history_dict.values() else []
+                ),
                 "flagged_messages": flagged_messages,
             },
             status=status.HTTP_200_OK,

@@ -17,7 +17,7 @@ from origin.serializers.chat.reaction_serializers import *
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 from origin.views.utils.mention_handler import extractMentionedUsers
 
-from .common_color import STATUS_COLOR_MAP, PRIORITY_EFFORT_LEVEL_COLOR_MAP
+from .common_color import STATUS_COLOR_MAP, PRIORITY_COLOR_MAP, EFFORT_LEVEL_COLOR_MAP
 
 
 class TaskMasterView(AuthenticatedAPIView):
@@ -41,10 +41,7 @@ class TaskMasterView(AuthenticatedAPIView):
             "status_code": 0,
             "content": request.data["content"],
             "due_date": request.data["due_date"],
-            "github_url": request.data["github_url"],
-            "github_url_title": request.data["github_url_title"],
-            "general_url": request.data["general_url"],
-            "general_url_title": request.data["general_url_title"],
+            "links": request.data["links"],
             "tags": request.data["tags"],
             "is_init_task": request.data["is_init_task"] == True,
         }
@@ -416,12 +413,12 @@ class ChildTaskView(AuthenticatedAPIView):
                             "code": 0,
                             "priority": t.priority,
                             "color": (
-                                PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["chipColor"]
+                                PRIORITY_COLOR_MAP[t.priority.lower()]["chipColor"]
                                 if t.priority
                                 else None
                             ),
                             "textColor": (
-                                PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["textColor"]
+                                PRIORITY_COLOR_MAP[t.priority.lower()]["textColor"]
                                 if t.priority
                                 else None
                             ),
@@ -430,29 +427,18 @@ class ChildTaskView(AuthenticatedAPIView):
                             "code": 0,
                             "level": t.effort_level,
                             "color": (
-                                PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()][
-                                    "chipColor"
-                                ]
+                                EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["chipColor"]
                                 if t.effort_level
                                 else None
                             ),
                             "textColor": (
-                                PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()][
-                                    "textColor"
-                                ]
+                                EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["textColor"]
                                 if t.effort_level
                                 else None
                             ),
                         },
                         "tags": t.tags,
-                        "githubLink": {
-                            "url": t.github_url,
-                            "title": t.github_url_title,
-                        },
-                        "generalLink": {
-                            "url": t.general_url,
-                            "title": t.general_url_title,
-                        },
+                        "links": t.links,
                         "attachments": attached_files,
                         "parentTaskId": t.parent_task_id,
                         "rootTaskId": t.root_task_id,
@@ -572,12 +558,12 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                         "code": 0,
                         "priority": t.priority,
                         "color": (
-                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["chipColor"]
+                            PRIORITY_COLOR_MAP[t.priority.lower()]["chipColor"]
                             if t.priority
                             else None
                         ),
                         "textColor": (
-                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["textColor"]
+                            PRIORITY_COLOR_MAP[t.priority.lower()]["textColor"]
                             if t.priority
                             else None
                         ),
@@ -586,25 +572,18 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                         "code": 0,
                         "level": t.effort_level,
                         "color": (
-                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["chipColor"]
+                            EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["chipColor"]
                             if t.effort_level
                             else None
                         ),
                         "textColor": (
-                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["textColor"]
+                            EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["textColor"]
                             if t.effort_level
                             else None
                         ),
                     },
                     "tags": t.tags,
-                    "githubLink": {
-                        "url": t.github_url,
-                        "title": t.github_url_title,
-                    },
-                    "generalLink": {
-                        "url": t.general_url,
-                        "title": t.general_url_title,
-                    },
+                    "links": t.links,
                     "attachments": attached_files,
                     "parentTaskId": t.parent_task_id,
                     "rootTaskId": t.root_task_id,
@@ -708,12 +687,12 @@ class GetTaskView(AuthenticatedAPIView):
                         "code": 0,
                         "priority": t.priority,
                         "color": (
-                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["chipColor"]
+                            PRIORITY_COLOR_MAP[t.priority.lower()]["chipColor"]
                             if t.priority
                             else None
                         ),
                         "textColor": (
-                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.priority.lower()]["textColor"]
+                            PRIORITY_COLOR_MAP[t.priority.lower()]["textColor"]
                             if t.priority
                             else None
                         ),
@@ -722,25 +701,18 @@ class GetTaskView(AuthenticatedAPIView):
                         "code": 0,
                         "level": t.effort_level,
                         "color": (
-                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["chipColor"]
+                            EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["chipColor"]
                             if t.effort_level
                             else None
                         ),
                         "textColor": (
-                            PRIORITY_EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["textColor"]
+                            EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["textColor"]
                             if t.effort_level
                             else None
                         ),
                     },
                     "tags": t.tags,
-                    "githubLink": {
-                        "url": t.github_url,
-                        "title": t.github_url_title,
-                    },
-                    "generalLink": {
-                        "url": t.general_url,
-                        "title": t.general_url_title,
-                    },
+                    "links": t.links,
                     "attachments": attached_files,
                     "parentTaskId": t.parent_task_id,
                     "rootTaskId": t.root_task_id,
