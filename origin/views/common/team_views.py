@@ -1,4 +1,4 @@
-from django.db.models import Count, Q
+from django.db.models import F, Q
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
@@ -172,10 +172,47 @@ class GetMyTeamsView(AuthenticatedAPIView):
             "team__team_email",
             "team__owner",
             "team__profile_image_file_name",
+            "team__ts_created_at",
         )
 
         my_teams = []
         for team in raw_my_teams:
+            team_members = (
+                TeamMembers.objects.filter(Q(team=team[0], attendee__is_system_user=False))
+                .select_related("attendee")
+                .order_by("attendee__email")
+                .annotate(
+                    teamId=F("team"),
+                    teamName=F("team__team_name"),
+                    userId=F("attendee__id"),
+                    userName=F("attendee__username"),
+                    userEmail=F("attendee__email"),
+                    avatarImgPath=F("attendee__profile_image_file_name"),
+                    tsLastSeen=F("attendee__last_seen"),
+                    tsJoined=F("attendee__ts_created_at"),
+                    customStatus=F("attendee__custom_status"),
+                    isOfflineForced=F("attendee__is_offline_forced"),
+                    role=F("attendee__role"),
+                    baseCountry=F("attendee__base_country"),
+                    isSystemUser=F("attendee__is_system_user"),
+                )
+                .values(
+                    "teamId",
+                    "teamName",
+                    "userId",
+                    "userName",
+                    "userEmail",
+                    "avatarImgPath",
+                    "tsLastSeen",
+                    "tsJoined",
+                    "customStatus",
+                    "isOfflineForced",
+                    "role",
+                    "baseCountry",
+                    "isSystemUser",
+                )
+            )
+            team_members = list(team_members)
             my_teams.append(
                 {
                     "teamId": team[0],
@@ -183,6 +220,8 @@ class GetMyTeamsView(AuthenticatedAPIView):
                     "teamEmail": team[2],
                     "teamOwnerId": team[3],
                     "teamImgPath": team[4],
+                    "teamMembers": team_members,
+                    "tsCreatedAt": team[5],
                 }
             )
 
