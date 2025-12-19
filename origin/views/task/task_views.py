@@ -447,6 +447,19 @@ class ChildTaskView(AuthenticatedAPIView):
                 )
 
         if len(response_data) > 0:
+            # Sort by Open -> WIP -> Pending -> Closed -> Deleted order
+            # And then sort by updated_at for each status in descending order.
+            status_order = {
+                "Open": 0,
+                "WIP": 1,
+                "Pending": 2,
+                "Closed": 3,
+                "Deleted": 4,
+            }
+            # Step 1: Sort by updatedAt descending (secondary key)
+            response_data.sort(key=lambda x: x["updatedAt"], reverse=True)
+            # Step 2: Sort by status ascending (primary key)
+            response_data.sort(key=lambda x: status_order[x["status"]["status"]])
             return Response(response_data, status=status.HTTP_200_OK)
         else:
             return Response(
