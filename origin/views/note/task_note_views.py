@@ -88,12 +88,15 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
 
         notes = (
             TaskNoteMaster.objects.filter(team=data["team_id"], project__in=project_ids)
+            .select_related("project", "task")
             .annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 noteId=F("note_id"),
                 parentNoteId=F("parent_note_id"),
                 taskId=F("task"),
                 projectId=F("project"),
+                projectName=F("project__project_name"),
+                taskTitle=F("task__title"),
                 tsUpdated=F("ts_updated_at"),
             )
             .order_by("tsUpdated")
@@ -104,6 +107,8 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
                 "parentNoteId",
                 "projectId",
                 "taskId",
+                "projectName",
+                "taskTitle",
                 "title",
                 "tsUpdated",
             )

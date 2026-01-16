@@ -1,10 +1,15 @@
 from django.db import transaction
-from django.db.models import F, Value, IntegerField
+from django.db.models import F, Value, IntegerField, CharField, Case, When
 from rest_framework.response import Response
 from rest_framework import status
 
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.serializers.note.note_serializers import *
+from origin.models.chat.dm_models import DMMaster
+from origin.models.chat.pm_models import PMMessages
+from origin.models.chat.gm_models import GMMaster
+from origin.models.project.prj_models import ProjectMaster
+from origin.models.common.user_models import CustomUser
 
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
@@ -200,6 +205,13 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                 isThread=F("is_thread"),
                 threadId=F("thread_id"),
                 tsUpdated=F("ts_updated_at"),
+                chatTypeName=Case(
+                    When(chat_type=1, then=Value("DM")),
+                    When(chat_type=2, then=Value("PM")),
+                    When(chat_type=3, then=Value("GM")),
+                    default=Value("Unknown"),
+                    output_field=CharField(),
+                ),
             )
             .order_by("tsUpdated")
             .reverse()
@@ -208,6 +220,7 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                 "noteId",
                 "parentNoteId",
                 "chatType",
+                "chatTypeName",
                 "chatId",
                 "isThread",
                 "threadId",
@@ -216,7 +229,69 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
             )
         )
 
-        return Response(list(chat_notes), status=status.HTTP_200_OK)
+        # Convert to list and add chat names based on chat type
+        notes_list = list(chat_notes)
+
+        # Build lookup dictionaries for chat names
+        dm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 1]
+        pm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 2]
+        gm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 3]
+
+        # Get DM partner names
+        dm_partner_names = {}
+        if dm_ids:
+            # Get all DM records for the DM IDs
+            dm_records = DMMaster.objects.filter(dm_id__in=dm_ids).values(
+                "dm_id", "user_1_id", "user_2_id"
+            )
+
+            # Find partner user IDs (the user that is NOT the current user)
+            partner_user_ids = set()
+            dm_to_partner = {}  # Maps dm_id to partner_user_id
+            for dm in dm_records:
+                if str(dm["user_1_id"]) == str(request_user_id):
+                    partner_id = dm["user_2_id"]
+                else:
+                    partner_id = dm["user_1_id"]
+                partner_user_ids.add(partner_id)
+                dm_to_partner[dm["dm_id"]] = partner_id
+
+            # Get partner usernames
+            partner_users = CustomUser.objects.filter(id__in=partner_user_ids).values(
+                "id", "username"
+            )
+            user_id_to_name = {str(u["id"]): u["username"] for u in partner_users}
+
+            # Build dm_id to partner name mapping
+            for dm_id, partner_id in dm_to_partner.items():
+                dm_partner_names[dm_id] = user_id_to_name.get(str(partner_id), "Direct Message")
+
+        # Get project names for PM
+        project_names = {}
+        if pm_ids:
+            projects = ProjectMaster.objects.filter(project_id__in=pm_ids).values(
+                "project_id", "project_name"
+            )
+            project_names = {p["project_id"]: p["project_name"] for p in projects}
+
+        # Get group names for GM
+        gm_names = {}
+        if gm_ids:
+            groups = GMMaster.objects.filter(gm_id__in=gm_ids).values("gm_id", "group_name")
+            gm_names = {g["gm_id"]: g["group_name"] for g in groups}
+
+        # Add chat names to notes
+        for note in notes_list:
+            if note["chatType"] == 1:
+                note["chatName"] = dm_partner_names.get(note["chatId"], "Direct Message")
+            elif note["chatType"] == 2:
+                note["chatName"] = project_names.get(note["chatId"], f"Project {note['chatId']}")
+            elif note["chatType"] == 3:
+                note["chatName"] = gm_names.get(note["chatId"], f"Group {note['chatId']}")
+            else:
+                note["chatName"] = "Unknown Chat"
+
+        return Response(notes_list, status=status.HTTP_200_OK)
 
 
 class ChatNoteMasterView(AuthenticatedAPIView):
