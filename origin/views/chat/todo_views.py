@@ -13,7 +13,7 @@ from origin.serializers.chat.todo_serializers import *
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 # Get to-do items of the last <LAST_N_DAYS> days
-LAST_N_DAYS = 30
+LAST_N_DAYS = 365
 
 
 def check_if_completed(todo_content):

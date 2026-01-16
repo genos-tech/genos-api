@@ -207,8 +207,8 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                 tsUpdated=F("ts_updated_at"),
                 chatTypeName=Case(
                     When(chat_type=1, then=Value("DM")),
-                    When(chat_type=2, then=Value("PM")),
-                    When(chat_type=3, then=Value("GM")),
+                    When(chat_type=2, then=Value("GM")),
+                    When(chat_type=3, then=Value("PM")),
                     default=Value("Unknown"),
                     output_field=CharField(),
                 ),
@@ -234,8 +234,8 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
 
         # Build lookup dictionaries for chat names
         dm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 1]
-        pm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 2]
-        gm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 3]
+        gm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 2]
+        pm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 3]
 
         # Get DM partner names
         dm_partner_names = {}
@@ -285,9 +285,9 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
             if note["chatType"] == 1:
                 note["chatName"] = dm_partner_names.get(note["chatId"], "Direct Message")
             elif note["chatType"] == 2:
-                note["chatName"] = project_names.get(note["chatId"], f"Project {note['chatId']}")
-            elif note["chatType"] == 3:
                 note["chatName"] = gm_names.get(note["chatId"], f"Group {note['chatId']}")
+            elif note["chatType"] == 3:
+                note["chatName"] = project_names.get(note["chatId"], f"Project {note['chatId']}")
             else:
                 note["chatName"] = "Unknown Chat"
 
