@@ -3,6 +3,7 @@ from django.urls import path
 from origin.views.note.personal_note_views import *
 from origin.views.note.chat_note_views import *
 from origin.views.note.task_note_views import *
+from origin.views.note.favorite_note_views import *
 
 
 urlpatterns = [
@@ -51,5 +52,21 @@ urlpatterns = [
         "api/v2/note/chat/subs/",
         ChatSubNotesView.as_view(),
         name="chat_sub_notes",
+    ),
+    # Favorite note endpoints
+    path(
+        "api/v2/note/favorite/",
+        NoteFavoriteView.as_view(),
+        name="note_favorite",
+    ),
+    path(
+        "api/v2/note/favorite/meta/",
+        AllFavoriteNotesMetaView.as_view(),
+        name="all_favorite_notes_meta",
+    ),
+    path(
+        "api/v2/note/favorite/check/",
+        CheckNoteFavoriteView.as_view(),
+        name="check_note_favorite",
     ),
 ]
