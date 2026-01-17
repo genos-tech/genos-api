@@ -994,3 +994,178 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
             _thread_messages = thread_messages
 
         return Response(_thread_messages, status=status.HTTP_200_OK)
+
+
+class DMThreadMessagesByTaskIdView(AuthenticatedAPIView):
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        team_name = request.GET.get("team_name")
+        user_id = request.GET.get("user_id")
+        dm_id = int(request.GET.get("dm_id"))
+        task_id = int(request.GET.get("task_id"))
+
+        if not team_id or not team_name or not dm_id or not task_id:
+            return Response(
+                "dm_id and/or task_id is not found", status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Fetch all messages where the dm_id matches and the task_id matches and the user is involved
+        raw_messages = DMThreadMessages.objects.filter(
+            dm=dm_id, parent_message_uid__task=task_id, is_deleted=False
+        ).order_by("ts_sent_at")
+
+        thread_id = raw_messages[0].thread_id
+        if not thread_id:
+            return Response("thread_id is not found", status=status.HTTP_400_BAD_REQUEST)
+
+        # Get chat master for this user
+        chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
+            "flagged_messages", flat=True
+        )
+        flagged_message_ids = (
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in chat_master[0]
+            )
+            if len(chat_master) > 0 and chat_master[0]
+            else set()
+        )
+
+        # Fetch reactions
+        raw_reactions = ReactionFact.objects.filter(
+            chat_type=CHAT_TYPE, chat_id=dm_id, is_thread=True
+        )
+
+        task_exist = False
+        thread_messages = []
+        for raw_message in raw_messages:
+            chat_id = int(raw_message.dm.dm_id)
+            message_id = int(raw_message.thread_message_id)
+            content = raw_message.thread_message_body
+            sender_id = str(raw_message.sender.id)
+            sender_name = str(raw_message.sender.username)
+            sender_email = str(raw_message.sender.email)
+            sender_avatar_img_path = raw_message.sender.profile_image_file_name
+            is_system_user = raw_message.sender.is_system_user
+            ts_sent = str(raw_message.ts_sent_at)
+            ts_updated_at = str(raw_message.ts_updated_at)
+
+            if message_id == 1:
+                # fetch the first thread message reactions -> the parent message reaction.
+                reactions = ReactionFact.objects.filter(
+                    chat_type=CHAT_TYPE, chat_id=dm_id, is_thread=False, message_id=thread_id
+                ).values_list(
+                    "reaction_id",
+                    "reaction_emoji",
+                    "sender__username",
+                    "sender__id",
+                    "sender__profile_image_file_name",
+                    "ts_created_at",
+                )
+            else:
+                reactions = raw_reactions.filter(
+                    message_id=int(raw_message.thread_message_id)
+                ).values_list(
+                    "reaction_id",
+                    "reaction_emoji",
+                    "sender__username",
+                    "sender__id",
+                    "sender__profile_image_file_name",
+                    "ts_created_at",
+                )
+            all_reactions = []
+            for reaction in reactions:
+                _reaction = {
+                    "id": int(reaction[0]),
+                    "emoji": reaction[1],
+                    "sender": {
+                        "userName": reaction[2],
+                        "userId": reaction[3],
+                        "avatarImgPath": reaction[4],
+                        "tsLastSeen": "",
+                        "tsJoined": "",
+                        "customStatus": "",
+                    },
+                    "tsSent": reaction[5],
+                }
+                all_reactions.append(_reaction)
+
+            # Get the parent ts_sent/ts_updated_at for the first thread message.
+            if raw_message.thread_message_id == 1:
+                parent_message = DMMessages.objects.filter(dm=dm_id, message_id=thread_id)[0]
+                ts_sent = parent_message.ts_sent_at
+                ts_updated_at = parent_message.ts_updated_at
+
+            contentText = generate_first_line.get(content[0])
+
+            _task_id = (
+                raw_message.parent_message_uid.task.task_id
+                if raw_message.parent_message_uid.task
+                else None
+            )
+            if _task_id:
+                task_id = _task_id
+                task_exist = True
+
+            messageIdWithChatIdAndThreadId = f"{chat_id}-{thread_id}-{message_id}"
+            new_message = {
+                "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
+                "chatType": CHAT_TYPE,
+                "chatId": chat_id,
+                "threadId": thread_id,
+                "messageId": message_id,
+                "content": content,
+                "contentText": contentText,
+                "sender": {
+                    "teamId": team_id,
+                    "teamName": team_name,
+                    "userName": sender_name,
+                    "userEmail": sender_email,
+                    "userId": sender_id,
+                    "avatarImgPath": sender_avatar_img_path,
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": "",
+                    "isSystemUser": is_system_user,
+                },
+                "reactions": all_reactions,
+                "taskId": _task_id,
+                "taskExist": True if raw_message.parent_message_uid.task else False,
+                "project": {
+                    "projectId": (
+                        raw_message.parent_message_uid.task.project.project_id
+                        if raw_message.parent_message_uid.task
+                        else None
+                    ),
+                    "projectName": (
+                        raw_message.parent_message_uid.task.project.project_name
+                        if raw_message.parent_message_uid.task
+                        else None
+                    ),
+                    "isJoined": True if raw_message.parent_message_uid.task else False,
+                    "systemUserId": (
+                        raw_message.parent_message_uid.task.project.project_system_user.id
+                        if raw_message.parent_message_uid.task
+                        else None
+                    ),
+                },
+                "isFlagged": (
+                    True
+                    if (CHAT_TYPE, chat_id, thread_id, message_id) in flagged_message_ids
+                    else False
+                ),
+                "tsSent": ts_sent,
+                "tsUpdated": ts_updated_at,
+            }
+            thread_messages.append(new_message)
+
+        _thread_messages = []
+        if task_exist:
+            for m in thread_messages:
+                m["taskExist"] = True
+                m["taskId"] = task_id
+                _thread_messages.append(m)
+        else:
+            _thread_messages = thread_messages
+
+        return Response(_thread_messages, status=status.HTTP_200_OK)

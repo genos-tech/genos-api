@@ -34,6 +34,11 @@ urlpatterns = [
         DMThreadMessagesByIdView.as_view(),
         name="get_dm_thread_messages_by_id",
     ),
+    path(
+        "api/v2/dm/threadMessagesByTaskId/",
+        DMThreadMessagesByTaskIdView.as_view(),
+        name="get_dm_thread_messages_by_task_id",
+    ),
     # GM urls
     path("api/v2/gm/create/", GMMasterView.as_view(), name="create_gm"),
     path("api/v2/gm/profile/", GMMasterView.as_view(), name="get_gm_profile"),
@@ -60,6 +65,11 @@ urlpatterns = [
         GMThreadMessagesByIdView.as_view(),
         name="get_gm_thread_messages_by_id",
     ),
+    path(
+        "api/v2/gm/threadMessagesByTaskId/",
+        GMThreadMessagesByTaskIdView.as_view(),
+        name="get_gm_thread_messages_by_task_id",
+    ),
     # PM urls
     path("api/v2/pm/history/", PMHistoryView.as_view(), name="pm_history"),
     path("api/v2/pm/message/", PMSingleMessageView.as_view(), name="pm_message"),
@@ -77,6 +87,11 @@ urlpatterns = [
         "api/v2/pm/threadMessagesById/",
         PMThreadMessagesByIdView.as_view(),
         name="get_pm_thread_messages_by_id",
+    ),
+    path(
+        "api/v2/pm/threadMessagesByTaskId/",
+        PMThreadMessagesByTaskIdView.as_view(),
+        name="get_pm_thread_messages_by_task_id",
     ),
     # Search
     path(
