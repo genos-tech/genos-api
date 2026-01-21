@@ -61,7 +61,7 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
                     "ts_updated_at",
                     "root_task_id",
                 )
-                .order_by("project__project_id", "ts_updated_at")
+                .order_by("ts_updated_at")
                 .reverse()
             )
 
