@@ -25,7 +25,7 @@ class TeamMaster(models.Model):
         related_name="own_teams",
         to_field="id",
     )
-    profile_image_file = models.FileField(upload_to=profile_image_path)
+    profile_image_file = models.FileField(upload_to=profile_image_path, blank=True, null=True)
     profile_image_file_name = models.CharField(blank=True, null=True)
     is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
