@@ -455,13 +455,13 @@ class PMSingleMessageView(AuthenticatedAPIView):
 
     def put(self, request):
         try:
-            if request.data.get("message_id") is None:
-                message = PMMessages.objects.get(
-                    project=request.data["project_id"], task=request.data["task_id"]
-                )
-            elif request.data.get("task_id") is None:
+            if request.data.get("message_id") is not None:
                 message = PMMessages.objects.get(
                     project=request.data["project_id"], message_id=request.data["message_id"]
+                )
+            elif request.data.get("task_id") is not None:
+                message = PMMessages.objects.get(
+                    project=request.data["project_id"], task=request.data["task_id"]
                 )
             else:
                 return Response(

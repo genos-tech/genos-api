@@ -367,7 +367,7 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
             "isOfflineForced": member_info.get("attendee__is_offline_forced", ""),
             "role": member_info.get("attendee__role", ""),
             "baseCountry": member_info.get("attendee__base_country", ""),
-            "customStatus": member_info.get("member_info__custom_status", ""),
+            "customStatus": member_info.get("attendee__custom_status", ""),
             "isSystemUser": member_info.get("attendee__is_system_user", None),
         }
 

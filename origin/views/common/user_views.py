@@ -26,8 +26,8 @@ class UserProfileView(AuthenticatedAPIView):
         else:
             if str(request_user_id) != str(user_id):
                 return Response(
-                    {"message": f"Only owner can update user info."},
-                    status=status.HTTP_200_OK,
+                    {"error": "Only owner can update user info."},
+                    status=status.HTTP_403_FORBIDDEN,
                 )
 
         user = CustomUser.objects.get(id=user_id)

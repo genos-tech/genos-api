@@ -24,17 +24,20 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
         """
         request_user_id = request.user.id
         team_id = request.GET.get("team_id")
-        project_id = int(request.GET.get("project_id"))
-        statuses = request.GET.get("statuses")
-        statuses = [STATUS_MAP.get(status.lower(), "N/A") for status in str(statuses).split(",")]
-        top_n = int(request.GET.get("top_n"))
-        include_all = request.GET.get("include_all", "false") == "true"
+        raw_project_id = request.GET.get("project_id")
+        raw_statuses = request.GET.get("statuses")
+        raw_top_n = request.GET.get("top_n")
 
-        if not team_id:
+        if not team_id or not raw_project_id or not raw_statuses or not raw_top_n:
             return Response(
-                {"error": "team_id is required."},
+                {"error": "team_id, project_id, statuses, and top_n are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        project_id = int(raw_project_id)
+        statuses = [STATUS_MAP.get(s.lower(), "N/A") for s in str(raw_statuses).split(",")]
+        top_n = int(raw_top_n)
+        include_all = request.GET.get("include_all", "false") == "true"
 
         team_tasks = []
         finished_task_ids = set()

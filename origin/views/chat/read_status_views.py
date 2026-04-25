@@ -43,7 +43,7 @@ class ReadStatusView(AuthenticatedAPIView):
                 if int(prev_status.last_read_message_id) < int(data["last_read_message_id"]):
                     serializer.save()
                 return Response(serializer.data, status=status.HTTP_200_OK)
-        except:
+        except ReadStatus.DoesNotExist:
             serializer = ReadStatusSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
@@ -78,7 +78,7 @@ class ActivityReadStatusView(AuthenticatedAPIView):
         # But, the activity_type is always 1 in the database.
         # When we response the activities, we'll change it to 3 if the request user is mentioned in the message.
         # So, we need to change it to 1 if the activity_type is 3 to keep the activity_id consistent in the database.
-        if data["activity"][0] == "3":
+        if data["activity"] and data["activity"][0] == "3":
             data["activity"] = "1" + data["activity"][1:]
 
         try:
@@ -90,7 +90,7 @@ class ActivityReadStatusView(AuthenticatedAPIView):
             serializer = ActivityReadStatusSerializer(prev_status, data=data, partial=True)
             if serializer.is_valid():
                 return Response(serializer.data, status=status.HTTP_200_OK)
-        except:
+        except ActivityReadStatus.DoesNotExist:
             serializer = ActivityReadStatusSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
@@ -116,7 +116,7 @@ class MarkAllActivityAsReadView(AuthenticatedAPIView):
             ActivityReadStatus.objects.filter(
                 team=data["team"], user=data["user"], is_read=False
             ).update(is_read=True)
-        except:
+        except Exception:
             return Response(status=status.HTTP_400_BAD_REQUEST)
 
         return Response(status=status.HTTP_200_OK)
