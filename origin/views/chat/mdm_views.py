@@ -1,5 +1,6 @@
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework import status
 
@@ -49,11 +50,12 @@ class MDMMasterView(AuthenticatedAPIView):
 
         # Check if any existing MDM has exactly the same members
         for existing in existing_mdms:
-            mdm_members = set(MDMMembers.objects.filter(
-                mdm_id=existing['mdm_id']
-            ).values_list('attendee_id', flat=True))
-            
-            expected_members = set([owner_user] + member_ids)
+            mdm_members = set(
+                str(uid) for uid in MDMMembers.objects.filter(
+                    mdm_id=existing['mdm_id']
+                ).values_list('attendee_id', flat=True)
+            )
+            expected_members = set(str(u) for u in [owner_user] + member_ids)
             if mdm_members == expected_members:
                 return Response(
                     {"mdm_exists": True, "mdm_id": existing['mdm_id']},
@@ -198,6 +200,21 @@ class AllMDMIdsView(AuthenticatedAPIView):
 
 
 class MDMMembersView(AuthenticatedAPIView):
+    def get(self, request):
+        mdm_id = request.GET.get("mdm_id")
+        if not mdm_id:
+            return Response(
+                {"error": "mdm_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        members = MDMMembers.objects.filter(mdm_id=mdm_id).values(
+            "attendee_id"
+        )
+        return Response(
+            {"members": list(members)},
+            status=status.HTTP_200_OK,
+        )
+
     def post(self, request):
         data = {"mdm": request.data["mdm_id"], "attendee": request.data["attendee_id"]}
 
@@ -295,8 +312,39 @@ class MDMHistoryView(AuthenticatedAPIView):
             flagged_message_ids,
         )
 
+        # Ensure all MDMs appear even if they have no messages yet
+        mdm_masters = MDMMaster.objects.filter(
+            mdm_id__in=mdm_ids, is_deleted=False
+        ).values("mdm_id", "display_name", "ts_created_at")
+        for mdm_info in mdm_masters:
+            mid = mdm_info["mdm_id"]
+            if mid not in message_history_dict:
+                ts_created = str(mdm_info.get("ts_created_at") or timezone.now())
+                message_history_dict[mid] = {
+                    "chatId": mid,
+                    "chatName": mdm_info["display_name"] or f"MDM-{mid}",
+                    "chatType": CHAT_TYPE,
+                    "dmPartnerUser": {
+                        "userName": "",
+                        "userId": "",
+                        "avatarImgPath": "",
+                        "tsLastSeen": "",
+                        "tsJoined": "",
+                        "customStatus": "",
+                    },
+                    "messages": [],
+                    "latestMessage": None,
+                    "latestMessageText": "",
+                    "TSLastMessage": ts_created,
+                    "isPinned": (CHAT_TYPE, mid) in pinned_mdm_ids,
+                    "isFlagged": False,
+                }
+
         # Add last read message IDs
         self._attach_last_read_ids(message_history_dict, attendee_id, mdm_ids)
+
+        # Attach member info for each MDM
+        self._attach_members(message_history_dict, mdm_ids, team_id, team_name)
 
         return Response(
             {
@@ -471,6 +519,30 @@ class MDMHistoryView(AuthenticatedAPIView):
 
         for chat_id, chat_data in message_history_dict.items():
             chat_data["lastReadMessageId"] = last_read_map.get(chat_id, -1)
+
+    def _attach_members(self, message_history_dict, mdm_ids, team_id, team_name):
+        members_qs = MDMMembers.objects.filter(
+            mdm_id__in=mdm_ids
+        ).select_related("attendee").values(
+            "mdm_id",
+            "attendee__id",
+            "attendee__username",
+            "attendee__email",
+            "attendee__profile_image_file_name",
+        )
+        members_map = {}
+        for m in members_qs:
+            members_map.setdefault(m["mdm_id"], []).append({
+                "userId": str(m["attendee__id"]),
+                "userName": m["attendee__username"],
+                "userEmail": m["attendee__email"] or "",
+                "avatarImgPath": m["attendee__profile_image_file_name"] or "",
+                "teamId": team_id,
+                "teamName": team_name,
+            })
+
+        for chat_id, chat_data in message_history_dict.items():
+            chat_data["mdmMembers"] = members_map.get(chat_id, [])
 
 
 class MDMSingleMessageView(AuthenticatedAPIView):
