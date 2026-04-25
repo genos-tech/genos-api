@@ -892,7 +892,8 @@ class MDMSingleThreadMessageView(AuthenticatedAPIView):
         )
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=CHAT_TYPE, chat_id=mdm_id, message_id=message_id, is_thread=True
+            chat_type=CHAT_TYPE, chat_id=mdm_id, message_id=message_id, is_thread=True,
+            thread_id=thread_id
         )
         all_reactions = []
         for raw_reaction in raw_reactions:
@@ -1064,7 +1065,7 @@ class MDMThreadMessagesByIdView(AuthenticatedAPIView):
         )
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=CHAT_TYPE, chat_id=mdm_id, is_thread=True
+            chat_type=CHAT_TYPE, chat_id=mdm_id, is_thread=True, thread_id=thread_id
         )
 
         thread_messages = []

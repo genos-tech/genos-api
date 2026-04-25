@@ -686,7 +686,8 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
         )
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=CHAT_TYPE, chat_id=dm_id, message_id=message_id, is_thread=True
+            chat_type=CHAT_TYPE, chat_id=dm_id, message_id=message_id, is_thread=True,
+            thread_id=thread_id
         )
         all_reactions = []
         for raw_reaction in raw_reactions:
@@ -861,7 +862,7 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
 
         # Fetch reactions
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=CHAT_TYPE, chat_id=dm_id, is_thread=True
+            chat_type=CHAT_TYPE, chat_id=dm_id, is_thread=True, thread_id=thread_id
         )
 
         task_exist = False
@@ -1036,7 +1037,7 @@ class DMThreadMessagesByTaskIdView(AuthenticatedAPIView):
 
         # Fetch reactions
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=CHAT_TYPE, chat_id=dm_id, is_thread=True
+            chat_type=CHAT_TYPE, chat_id=dm_id, is_thread=True, thread_id=thread_id
         )
 
         task_exist = False

@@ -568,7 +568,8 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
         )
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=CHAT_TYPE, chat_id=project_id, message_id=message_id, is_thread=True
+            chat_type=CHAT_TYPE, chat_id=project_id, message_id=message_id, is_thread=True,
+            thread_id=thread_id
         )
         all_reactions = []
         for raw_reaction in raw_reactions:
@@ -770,7 +771,7 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
 
         # Fetch reactions
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=CHAT_TYPE, chat_id=project_id, is_thread=True
+            chat_type=CHAT_TYPE, chat_id=project_id, is_thread=True, thread_id=thread_id
         )
 
         thread_messages = []
@@ -937,7 +938,7 @@ class PMThreadMessagesByTaskIdView(AuthenticatedAPIView):
 
         # Fetch reactions
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=CHAT_TYPE, chat_id=project_id, is_thread=True
+            chat_type=CHAT_TYPE, chat_id=project_id, is_thread=True, thread_id=thread_id
         )
 
         thread_messages = []
