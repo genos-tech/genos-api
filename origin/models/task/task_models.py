@@ -231,7 +231,7 @@ class TaskCommentMentionFact(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        self.uid = f"{self.task.task_id}-{self.comment_id}-{self.mentioned_user}"
+        self.uid = f"{self.task_id}-{self.comment_id}-{self.mentioned_user_id}"
         super().save(*args, **kwargs)
 
 

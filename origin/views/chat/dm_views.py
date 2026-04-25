@@ -51,8 +51,6 @@ class DMMasterView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 class CheckDMExistsView(AuthenticatedAPIView):
     def get(self, request):
@@ -60,7 +58,7 @@ class CheckDMExistsView(AuthenticatedAPIView):
         user_1_id = request.GET.get("user_1_id", None)
         user_2_id = request.GET.get("user_2_id", None)
 
-        if not team_id and not user_1_id or not user_2_id:
+        if not team_id or not user_1_id or not user_2_id:
             return Response(
                 {"error": "team_id, user_1_id and user_2_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -94,7 +92,7 @@ class DMIdView(AuthenticatedAPIView):
         user_1_id = request.GET.get("user_1_id", None)
         user_2_id = request.GET.get("user_2_id", None)
 
-        if not team_id and not user_1_id or not user_2_id:
+        if not team_id or not user_1_id or not user_2_id:
             return Response(
                 {"error": "team_id, user_1_id and user_2_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -769,7 +767,7 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
                 dm=dm[0], thread_id=request.data["thread_id"]
             ).count()
         else:
-            Response("dm is not found", status=status.HTTP_400_BAD_REQUEST)
+            return Response("dm is not found", status=status.HTTP_400_BAD_REQUEST)
 
         data = {
             "dm": request.data["dm_id"],

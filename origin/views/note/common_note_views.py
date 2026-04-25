@@ -23,7 +23,7 @@ class NotePermissionView(AuthenticatedAPIView):
         if res := validate_request_data(data):
             return res
 
-        if res := validate_request_user(str(request_user_id), str(data["owner"])):
+        if res := validate_request_user(str(request_user_id), str(data["user"])):
             return res
 
         data["parent_note_id"] = request.data.get("parent_note_id")
