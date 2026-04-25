@@ -38,5 +38,12 @@ class InboxItems(models.Model):
     item_type = models.IntegerField(blank=False)
     item_optionals = models.JSONField(blank=True, null=True)
     is_read = models.BooleanField(default=False)
+    #########################################################
+    # request_status: only relevant for request items (item_type 1-3)
+    #   "pending"  = waiting for action
+    #   "approved" = approved by owner
+    #   "rejected" = rejected by owner
+    #########################################################
+    request_status = models.CharField(max_length=10, default="pending", blank=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
