@@ -96,13 +96,14 @@ class PMHistoryView(AuthenticatedAPIView):
             .annotate(num_of_replies=Count("thread_message_id"))
         }
 
-        # Reactions (grouped by message_id)
+        # Reactions (grouped by chat_id + message_id)
         raw_reactions = (
             ReactionFact.objects.filter(
                 chat_type=CHAT_TYPE, chat_id__in=project_ids, is_thread=False
             )
             .select_related("sender")
             .values(
+                "chat_id",
                 "message_id",
                 "reaction_id",
                 "reaction_emoji",
@@ -114,7 +115,7 @@ class PMHistoryView(AuthenticatedAPIView):
         )
         reactions_by_message = defaultdict(list)
         for r in raw_reactions:
-            reactions_by_message[r["message_id"]].append(
+            reactions_by_message[(r["chat_id"], r["message_id"])].append(
                 {
                     "id": r["reaction_id"],
                     "emoji": r["reaction_emoji"],
@@ -238,7 +239,7 @@ class PMHistoryView(AuthenticatedAPIView):
             },
             "receiver": {},  # placeholder for future
             "numReplies": reply_counts.get(f"{project_id}-{message_id}", 0),
-            "reactions": reactions_by_message.get(message_id, []),
+            "reactions": reactions_by_message.get((project_id, message_id), []),
             "project": {
                 "projectId": msg.project.project_id,
                 "projectName": msg.project.project_name,

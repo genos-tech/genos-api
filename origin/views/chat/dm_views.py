@@ -194,11 +194,12 @@ class DMHistoryView(AuthenticatedAPIView):
             .annotate(num_of_replies=Count("thread_message_id"))
         }
 
-        # Reactions (grouped by message_id)
+        # Reactions (grouped by chat_id + message_id)
         raw_reactions = (
             ReactionFact.objects.filter(chat_type=CHAT_TYPE, chat_id__in=dm_ids, is_thread=False)
             .select_related("sender")
             .values(
+                "chat_id",
                 "message_id",
                 "reaction_id",
                 "reaction_emoji",
@@ -210,7 +211,7 @@ class DMHistoryView(AuthenticatedAPIView):
         )
         reactions_by_message = defaultdict(list)
         for r in raw_reactions:
-            reactions_by_message[r["message_id"]].append(
+            reactions_by_message[(r["chat_id"], r["message_id"])].append(
                 {
                     "id": r["reaction_id"],
                     "emoji": r["reaction_emoji"],
@@ -340,7 +341,7 @@ class DMHistoryView(AuthenticatedAPIView):
                 "customStatus": "",
             },
             "numReplies": reply_counts.get(f"{dm_id}-{message_id}", 0),
-            "reactions": reactions_by_message.get(message_id, []),
+            "reactions": reactions_by_message.get((dm_id, message_id), []),
             "taskId": msg.task.task_id if msg.task else None,
             "taskExist": True if msg.task else False,
             "taskStatus": msg.task.status if msg.task else None,

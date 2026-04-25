@@ -367,6 +367,7 @@ class GMHistoryView(AuthenticatedAPIView):
         reactions = ReactionFact.objects.filter(
             chat_type=CHAT_TYPE, chat_id__in=gm_ids, is_thread=False
         ).values(
+            "chat_id",
             "message_id",
             "reaction_id",
             "reaction_emoji",
@@ -377,7 +378,7 @@ class GMHistoryView(AuthenticatedAPIView):
         )
         reaction_map = {}
         for r in reactions:
-            reaction_map.setdefault(r["message_id"], []).append(
+            reaction_map.setdefault((r["chat_id"], r["message_id"]), []).append(
                 {
                     "id": int(r["reaction_id"]),
                     "emoji": r["reaction_emoji"],
@@ -432,7 +433,7 @@ class GMHistoryView(AuthenticatedAPIView):
                     "customStatus": "",
                 },
                 "numReplies": thread_reply_count_map.get(f"{chat_id}-{message_id}", 0),
-                "reactions": reaction_map.get(message_id, []),
+                "reactions": reaction_map.get((chat_id, message_id), []),
                 "taskId": raw.task.task_id if raw.task else None,
                 "taskExist": True if raw.task else False,
                 "taskStatus": raw.task.status if raw.task else None,
