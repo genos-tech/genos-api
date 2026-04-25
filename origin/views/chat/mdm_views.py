@@ -987,7 +987,7 @@ class MDMSingleThreadMessageView(AuthenticatedAPIView):
             "thread_message_id": current_thread_message_count + 1,
             "thread_message_body": request.data["message_body"],
             "parent_message_uid": f"{request.data['mdm_id']}-{request.data['parent_message_id']}",
-            "task": request.data["task"],
+            "task": request.data.get("task"),
         }
 
         serializer = MDMThreadMessagesSerializer(data=data)

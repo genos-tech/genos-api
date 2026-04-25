@@ -918,7 +918,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
             "parent_message_uid": "{gm_id}-{parent_message_id}".format(
                 gm_id=request.data["gm_id"], parent_message_id=request.data["parent_message_id"]
             ),
-            "task": request.data["task"],
+            "task": request.data.get("task"),
         }
 
         serializer = GMThreadMessagesSerializer(data=data)
