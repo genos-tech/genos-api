@@ -40,62 +40,73 @@ class MDMMasterView(AuthenticatedAPIView):
 
         # Check if an MDM with exact same members already exists
         # This is a simplified check - for exact matching, we'd need more complex logic
-        existing_mdms = MDMMembers.objects.filter(
-            attendee_id__in=member_ids + [owner_user],
-            mdm__owner_team=owner_team,
-            mdm__is_deleted=False,
-        ).values('mdm_id').annotate(
-            member_count=Count('attendee_id')
-        ).filter(member_count=len(member_ids) + 1)
+        existing_mdms = (
+            MDMMembers.objects.filter(
+                attendee_id__in=member_ids + [owner_user],
+                mdm__owner_team=owner_team,
+                mdm__is_deleted=False,
+            )
+            .values("mdm_id")
+            .annotate(member_count=Count("attendee_id"))
+            .filter(member_count=len(member_ids) + 1)
+        )
 
         # Check if any existing MDM has exactly the same members
         for existing in existing_mdms:
             mdm_members = set(
-                str(uid) for uid in MDMMembers.objects.filter(
-                    mdm_id=existing['mdm_id']
-                ).values_list('attendee_id', flat=True)
+                str(uid)
+                for uid in MDMMembers.objects.filter(mdm_id=existing["mdm_id"]).values_list(
+                    "attendee_id", flat=True
+                )
             )
             expected_members = set(str(u) for u in [owner_user] + member_ids)
             if mdm_members == expected_members:
                 return Response(
-                    {"mdm_exists": True, "mdm_id": existing['mdm_id']},
+                    {"mdm_exists": True, "mdm_id": existing["mdm_id"]},
                     status=status.HTTP_200_OK,
                 )
 
         # Create new MDM
-        serializer = MDMMasterSerializer(data={
-            "owner_user": owner_user,
-            "owner_team": owner_team,
-            "display_name": display_name,
-        })
-        
+        serializer = MDMMasterSerializer(
+            data={
+                "owner_user": owner_user,
+                "owner_team": owner_team,
+                "display_name": display_name,
+            }
+        )
+
         if serializer.is_valid():
             mdm = serializer.save()
-            
+
             # Add owner as a member
             MDMMembers.objects.create(mdm=mdm, attendee_id=owner_user)
-            
+
             # Add other members
             for member_id in member_ids:
                 MDMMembers.objects.create(mdm=mdm, attendee_id=member_id)
-            
+
             # Fetch member names to generate display name if not provided
             if not display_name:
-                members = MDMMembers.objects.filter(mdm=mdm).select_related('attendee').values_list(
-                    'attendee__username', flat=True
+                members = (
+                    MDMMembers.objects.filter(mdm=mdm)
+                    .select_related("attendee")
+                    .values_list("attendee__username", flat=True)
                 )
                 generated_name = ", ".join(list(members)[:3])
                 if len(members) > 3:
                     generated_name += f" +{len(members) - 3}"
                 mdm.display_name = generated_name
-                mdm.save(update_fields=['display_name'])
-            
-            return Response({
-                "chatName": mdm.display_name,
-                "chatId": mdm.mdm_id,
-                "message": "Multi-user DM created successfully",
-            }, status=status.HTTP_201_CREATED)
-        
+                mdm.save(update_fields=["display_name"])
+
+            return Response(
+                {
+                    "chatName": mdm.display_name,
+                    "chatId": mdm.mdm_id,
+                    "message": "Multi-user DM created successfully",
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
         error_messages = " ".join(
             [f"{field}: {' '.join(errors)}" for field, errors in serializer.errors.items()]
         )
@@ -207,16 +218,18 @@ class MDMMembersView(AuthenticatedAPIView):
                 {"error": "mdm_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        members = MDMMembers.objects.filter(mdm_id=mdm_id).values(
-            "attendee_id"
-        )
+        members = MDMMembers.objects.filter(mdm_id=mdm_id).values("attendee_id")
         return Response(
             {"members": list(members)},
             status=status.HTTP_200_OK,
         )
 
     def post(self, request):
-        data = {"mdm": request.data["mdm_id"], "attendee": request.data["attendee_id"]}
+        from origin.models.common.user_models import CustomUser
+
+        mdm_id = request.data["mdm_id"]
+        attendee_id = request.data["attendee_id"]
+        data = {"mdm": mdm_id, "attendee": attendee_id}
 
         already_joined = MDMMembers.objects.filter(
             Q(mdm_id=data["mdm"], attendee_id=data["attendee"])
@@ -224,12 +237,66 @@ class MDMMembersView(AuthenticatedAPIView):
 
         if already_joined:
             return Response(data, status=status.HTTP_201_CREATED)
-        else:
-            serializer = MDMMembersSerializer(data=data)
-            if serializer.is_valid():
-                serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = MDMMembersSerializer(data=data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer.save()
+
+        join_message_data = None
+        try:
+            mdm_obj = MDMMaster.objects.get(mdm_id=mdm_id)
+            current_count = MDMMessages.objects.filter(mdm=mdm_obj).count()
+            joined_body = [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": "Has joined", "styles": {}}],
+                },
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": "", "styles": {}}],
+                },
+            ]
+            msg = MDMMessages.objects.create(
+                mdm=mdm_obj,
+                sender_id=attendee_id,
+                message_id=current_count + 1,
+                message_body=joined_body,
+            )
+            user = CustomUser.objects.get(id=attendee_id)
+            team_id = request.data.get("team_id", "")
+            team_name = request.data.get("team_name", "")
+            join_message_data = {
+                "chatId": int(mdm_id),
+                "chatName": mdm_obj.display_name or f"MDM-{mdm_id}",
+                "chatType": CHAT_TYPE,
+                "messageId": msg.message_id,
+                "content": joined_body,
+                "contentText": "Has joined",
+                "sender": {
+                    "userId": str(user.id),
+                    "userName": user.username,
+                    "userEmail": user.email or "",
+                    "avatarImgPath": user.profile_image_file_name or "",
+                    "teamId": team_id,
+                    "teamName": team_name,
+                    "tsLastSeen": "",
+                    "tsJoined": "",
+                    "customStatus": user.custom_status or "",
+                },
+                "tsSent": str(msg.ts_sent_at),
+                "tsUpdated": str(msg.ts_updated_at),
+            }
+        except Exception as e:
+            import logging
+
+            logging.getLogger(__name__).error(f"Failed to create join message: {e}")
+
+        response_data = {**serializer.data}
+        if join_message_data:
+            response_data["join_message"] = join_message_data
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
 
 #############################
@@ -313,9 +380,9 @@ class MDMHistoryView(AuthenticatedAPIView):
         )
 
         # Ensure all MDMs appear even if they have no messages yet
-        mdm_masters = MDMMaster.objects.filter(
-            mdm_id__in=mdm_ids, is_deleted=False
-        ).values("mdm_id", "display_name", "ts_created_at")
+        mdm_masters = MDMMaster.objects.filter(mdm_id__in=mdm_ids, is_deleted=False).values(
+            "mdm_id", "display_name", "ts_created_at"
+        )
         for mdm_info in mdm_masters:
             mid = mdm_info["mdm_id"]
             if mid not in message_history_dict:
@@ -348,7 +415,9 @@ class MDMHistoryView(AuthenticatedAPIView):
 
         return Response(
             {
-                "chat_history": list(message_history_dict.values()) if message_history_dict else [],
+                "chat_history": (
+                    list(message_history_dict.values()) if message_history_dict else []
+                ),
                 "flagged_messages": flagged_messages,
             },
             status=status.HTTP_200_OK,
@@ -361,7 +430,9 @@ class MDMHistoryView(AuthenticatedAPIView):
             .annotate(num_of_replies=Count("thread_message_id"))
         )
         return {
-            f"{c['parent_message_uid__mdm__mdm_id']}-{c['parent_message_uid__message_id']}": c["num_of_replies"]
+            f"{c['parent_message_uid__mdm__mdm_id']}-{c['parent_message_uid__message_id']}": c[
+                "num_of_replies"
+            ]
             for c in counts
         }
 
@@ -380,19 +451,21 @@ class MDMHistoryView(AuthenticatedAPIView):
         )
         reaction_map = {}
         for r in reactions:
-            reaction_map.setdefault((r["chat_id"], r["message_id"]), []).append({
-                "id": int(r["reaction_id"]),
-                "emoji": r["reaction_emoji"],
-                "sender": {
-                    "userName": r["sender__username"],
-                    "userId": r["sender__id"],
-                    "avatarImgPath": r["sender__profile_image_file_name"],
-                    "tsLastSeen": "",
-                    "tsJoined": "",
-                    "customStatus": "",
-                },
-                "tsSent": r["ts_created_at"],
-            })
+            reaction_map.setdefault((r["chat_id"], r["message_id"]), []).append(
+                {
+                    "id": int(r["reaction_id"]),
+                    "emoji": r["reaction_emoji"],
+                    "sender": {
+                        "userName": r["sender__username"],
+                        "userId": r["sender__id"],
+                        "avatarImgPath": r["sender__profile_image_file_name"],
+                        "tsLastSeen": "",
+                        "tsJoined": "",
+                        "customStatus": "",
+                    },
+                    "tsSent": r["ts_created_at"],
+                }
+            )
         return reaction_map
 
     def _build_message_history(
@@ -449,27 +522,29 @@ class MDMHistoryView(AuthenticatedAPIView):
             }
 
             if new_message["isFlagged"]:
-                flagged_messages.append({
-                    "flaggedMessageId": f"{CHAT_TYPE}-{chat_id}-0-{message_id}",
-                    "chatName": chat_name,
-                    "chatType": CHAT_TYPE,
-                    "chatId": chat_id,
-                    "threadId": 0,
-                    "messageId": new_message["messageId"],
-                    "contentText": generate_first_line.get(new_message["content"][0]),
-                    "sender": new_message["sender"],
-                    "dmPartnerUser": {
-                        "userName": "",
-                        "userId": "",
-                        "avatarImgPath": "",
-                        "tsLastSeen": "",
-                        "tsJoined": "",
-                        "customStatus": "",
-                    },
-                    "project": new_message["project"],
-                    "taskId": new_message["taskId"],
-                    "tsSent": new_message["tsSent"],
-                })
+                flagged_messages.append(
+                    {
+                        "flaggedMessageId": f"{CHAT_TYPE}-{chat_id}-0-{message_id}",
+                        "chatName": chat_name,
+                        "chatType": CHAT_TYPE,
+                        "chatId": chat_id,
+                        "threadId": 0,
+                        "messageId": new_message["messageId"],
+                        "contentText": generate_first_line.get(new_message["content"][0]),
+                        "sender": new_message["sender"],
+                        "dmPartnerUser": {
+                            "userName": "",
+                            "userId": "",
+                            "avatarImgPath": "",
+                            "tsLastSeen": "",
+                            "tsJoined": "",
+                            "customStatus": "",
+                        },
+                        "project": new_message["project"],
+                        "taskId": new_message["taskId"],
+                        "tsSent": new_message["tsSent"],
+                    }
+                )
 
             # Track last message per chat
             if chat_id in ts_last_message_dict:
@@ -521,25 +596,29 @@ class MDMHistoryView(AuthenticatedAPIView):
             chat_data["lastReadMessageId"] = last_read_map.get(chat_id, -1)
 
     def _attach_members(self, message_history_dict, mdm_ids, team_id, team_name):
-        members_qs = MDMMembers.objects.filter(
-            mdm_id__in=mdm_ids
-        ).select_related("attendee").values(
-            "mdm_id",
-            "attendee__id",
-            "attendee__username",
-            "attendee__email",
-            "attendee__profile_image_file_name",
+        members_qs = (
+            MDMMembers.objects.filter(mdm_id__in=mdm_ids)
+            .select_related("attendee")
+            .values(
+                "mdm_id",
+                "attendee__id",
+                "attendee__username",
+                "attendee__email",
+                "attendee__profile_image_file_name",
+            )
         )
         members_map = {}
         for m in members_qs:
-            members_map.setdefault(m["mdm_id"], []).append({
-                "userId": str(m["attendee__id"]),
-                "userName": m["attendee__username"],
-                "userEmail": m["attendee__email"] or "",
-                "avatarImgPath": m["attendee__profile_image_file_name"] or "",
-                "teamId": team_id,
-                "teamName": team_name,
-            })
+            members_map.setdefault(m["mdm_id"], []).append(
+                {
+                    "userId": str(m["attendee__id"]),
+                    "userName": m["attendee__username"],
+                    "userEmail": m["attendee__email"] or "",
+                    "avatarImgPath": m["attendee__profile_image_file_name"] or "",
+                    "teamId": team_id,
+                    "teamName": team_name,
+                }
+            )
 
         for chat_id, chat_data in message_history_dict.items():
             chat_data["mdmMembers"] = members_map.get(chat_id, [])
@@ -569,7 +648,9 @@ class MDMSingleMessageView(AuthenticatedAPIView):
         if len(mdm) == 0:
             return Response({"error": "MDM message not found"}, status=status.HTTP_400_BAD_REQUEST)
         elif len(mdm) > 1:
-            return Response({"error": "Duplicate MDM message found"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Duplicate MDM message found"}, status=status.HTTP_400_BAD_REQUEST
+            )
         else:
             mdm = mdm[0]
 
@@ -577,7 +658,10 @@ class MDMSingleMessageView(AuthenticatedAPIView):
             "flagged_messages", flat=True
         )
         flagged_message_ids = (
-            set((c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"]) for c in chat_master[0])
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in chat_master[0]
+            )
             if len(chat_master) > 0 and chat_master[0]
             else set()
         )
@@ -587,31 +671,37 @@ class MDMSingleMessageView(AuthenticatedAPIView):
         )
         all_reactions = []
         for raw_reaction in raw_reactions:
-            all_reactions.append({
-                "id": int(raw_reaction.reaction_id),
-                "emoji": raw_reaction.reaction_emoji,
-                "sender": {
-                    "userName": raw_reaction.sender.username,
-                    "userId": raw_reaction.sender.id,
-                    "avatarImgPath": raw_reaction.sender.profile_image_file_name,
-                    "tsLastSeen": "",
-                    "tsJoined": "",
-                    "customStatus": "",
-                },
-                "tsSent": raw_reaction.ts_created_at,
-            })
+            all_reactions.append(
+                {
+                    "id": int(raw_reaction.reaction_id),
+                    "emoji": raw_reaction.reaction_emoji,
+                    "sender": {
+                        "userName": raw_reaction.sender.username,
+                        "userId": raw_reaction.sender.id,
+                        "avatarImgPath": raw_reaction.sender.profile_image_file_name,
+                        "tsLastSeen": "",
+                        "tsJoined": "",
+                        "customStatus": "",
+                    },
+                    "tsSent": raw_reaction.ts_created_at,
+                }
+            )
 
         thread_reply_counts = (
             MDMThreadMessages.objects.filter(mdm=mdm_id, thread_id=message_id, is_deleted=False)
             .values("parent_message_uid__mdm__mdm_id", "parent_message_uid__message_id")
             .annotate(num_of_replies=Count("thread_message_id"))
         )
-        reply_count = int(thread_reply_counts[0]["num_of_replies"]) if len(thread_reply_counts) == 1 else 0
+        reply_count = (
+            int(thread_reply_counts[0]["num_of_replies"]) if len(thread_reply_counts) == 1 else 0
+        )
 
         raw_last_read_message_id = ReadStatus.objects.filter(
             user=user_id, chat_type=CHAT_TYPE, chat_id=mdm_id, is_thread=False
         ).values_list("last_read_message_id")
-        last_read_message_id = raw_last_read_message_id[0][0] if len(raw_last_read_message_id) == 1 else -1
+        last_read_message_id = (
+            raw_last_read_message_id[0][0] if len(raw_last_read_message_id) == 1 else -1
+        )
 
         message = {
             "messageIdWithChatId": f"{mdm_id}-{message_id}",
@@ -660,7 +750,9 @@ class MDMSingleMessageView(AuthenticatedAPIView):
 
     def post(self, request):
         mdm = MDMMaster.objects.filter(mdm_id=request.data["mdm_id"])
-        current_message_count = MDMMessages.objects.filter(mdm=mdm[0]).count() if len(mdm) > 0 else 0
+        current_message_count = (
+            MDMMessages.objects.filter(mdm=mdm[0]).count() if len(mdm) > 0 else 0
+        )
 
         is_init = request.data.get("is_init")
         if (is_init in [None, False]) or (is_init == True and current_message_count == 0):
@@ -677,7 +769,9 @@ class MDMSingleMessageView(AuthenticatedAPIView):
                 chat_id=request.data["mdm_id"],
                 is_thread=False,
             ).values_list("last_read_message_id")
-            last_read_message_id = raw_last_read_message_id[0][0] if len(raw_last_read_message_id) == 1 else -1
+            last_read_message_id = (
+                raw_last_read_message_id[0][0] if len(raw_last_read_message_id) == 1 else -1
+            )
 
             serializer = MDMMessagesSerializer(data=data)
             if serializer.is_valid():
@@ -717,7 +811,9 @@ class MDMSingleMessageView(AuthenticatedAPIView):
             chat_id=request.data["mdm_id"],
             is_thread=False,
         ).values_list("last_read_message_id")
-        last_read_message_id = raw_last_read_message_id[0][0] if len(raw_last_read_message_id) == 1 else -1
+        last_read_message_id = (
+            raw_last_read_message_id[0][0] if len(raw_last_read_message_id) == 1 else -1
+        )
 
         serializer = MDMMessagesSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
@@ -773,9 +869,13 @@ class MDMSingleThreadMessageView(AuthenticatedAPIView):
             mdm=mdm_id, thread_id=thread_id, thread_message_id=message_id, is_deleted=False
         )
         if len(mdm) == 0:
-            return Response({"error": "MDM thread message not found"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "MDM thread message not found"}, status=status.HTTP_400_BAD_REQUEST
+            )
         elif len(mdm) > 1:
-            return Response({"error": "Duplicate MDM thread message found"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Duplicate MDM thread message found"}, status=status.HTTP_400_BAD_REQUEST
+            )
         else:
             mdm = mdm[0]
 
@@ -783,7 +883,10 @@ class MDMSingleThreadMessageView(AuthenticatedAPIView):
             "flagged_messages", flat=True
         )
         flagged_message_ids = (
-            set((c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"]) for c in chat_master[0])
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in chat_master[0]
+            )
             if len(chat_master) > 0 and chat_master[0]
             else set()
         )
@@ -793,23 +896,25 @@ class MDMSingleThreadMessageView(AuthenticatedAPIView):
         )
         all_reactions = []
         for raw_reaction in raw_reactions:
-            all_reactions.append({
-                "id": int(raw_reaction.reaction_id),
-                "emoji": raw_reaction.reaction_emoji,
-                "sender": {
-                    "userName": raw_reaction.sender.username,
-                    "userId": raw_reaction.sender.id,
-                    "avatarImgPath": raw_reaction.sender.profile_image_file_name,
-                    "tsLastSeen": "",
-                    "tsJoined": "",
-                    "customStatus": "",
-                },
-                "tsSent": raw_reaction.ts_created_at,
-            })
+            all_reactions.append(
+                {
+                    "id": int(raw_reaction.reaction_id),
+                    "emoji": raw_reaction.reaction_emoji,
+                    "sender": {
+                        "userName": raw_reaction.sender.username,
+                        "userId": raw_reaction.sender.id,
+                        "avatarImgPath": raw_reaction.sender.profile_image_file_name,
+                        "tsLastSeen": "",
+                        "tsJoined": "",
+                        "customStatus": "",
+                    },
+                    "tsSent": raw_reaction.ts_created_at,
+                }
+            )
 
         contentText = generate_first_line.get(mdm.thread_message_body[0])
         messageIdWithChatIdAndThreadId = f"{mdm_id}-{thread_id}-{message_id}"
-        
+
         message = {
             "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
             "chatType": CHAT_TYPE,
@@ -842,10 +947,22 @@ class MDMSingleThreadMessageView(AuthenticatedAPIView):
             "taskId": mdm.parent_message_uid.task.task_id if mdm.parent_message_uid.task else None,
             "taskExist": True if mdm.parent_message_uid.task else False,
             "project": {
-                "projectId": mdm.parent_message_uid.task.project.project_id if mdm.parent_message_uid.task else None,
-                "projectName": mdm.parent_message_uid.task.project.project_name if mdm.parent_message_uid.task else None,
+                "projectId": (
+                    mdm.parent_message_uid.task.project.project_id
+                    if mdm.parent_message_uid.task
+                    else None
+                ),
+                "projectName": (
+                    mdm.parent_message_uid.task.project.project_name
+                    if mdm.parent_message_uid.task
+                    else None
+                ),
                 "isJoined": True,
-                "systemUserId": mdm.parent_message_uid.task.project.project_system_user.id if mdm.parent_message_uid.task else None,
+                "systemUserId": (
+                    mdm.parent_message_uid.task.project.project_system_user.id
+                    if mdm.parent_message_uid.task
+                    else None
+                ),
             },
             "isFlagged": (CHAT_TYPE, mdm_id, thread_id, message_id) in flagged_message_ids,
             "tsSent": mdm.ts_sent_at,
@@ -938,7 +1055,10 @@ class MDMThreadMessagesByIdView(AuthenticatedAPIView):
             "flagged_messages", flat=True
         )
         flagged_message_ids = (
-            set((c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"]) for c in chat_master[0])
+            set(
+                (c["chat_type"], c["chat_id"], c["thread_id"], c["message_id"])
+                for c in chat_master[0]
+            )
             if len(chat_master) > 0 and chat_master[0]
             else set()
         )
@@ -964,30 +1084,42 @@ class MDMThreadMessagesByIdView(AuthenticatedAPIView):
                 reactions = ReactionFact.objects.filter(
                     chat_type=CHAT_TYPE, chat_id=mdm_id, is_thread=False, message_id=thread_id
                 ).values_list(
-                    "reaction_id", "reaction_emoji", "sender__username", "sender__id",
-                    "sender__profile_image_file_name", "ts_created_at",
+                    "reaction_id",
+                    "reaction_emoji",
+                    "sender__username",
+                    "sender__id",
+                    "sender__profile_image_file_name",
+                    "ts_created_at",
                 )
             else:
-                reactions = raw_reactions.filter(message_id=int(raw_message.thread_message_id)).values_list(
-                    "reaction_id", "reaction_emoji", "sender__username", "sender__id",
-                    "sender__profile_image_file_name", "ts_created_at",
+                reactions = raw_reactions.filter(
+                    message_id=int(raw_message.thread_message_id)
+                ).values_list(
+                    "reaction_id",
+                    "reaction_emoji",
+                    "sender__username",
+                    "sender__id",
+                    "sender__profile_image_file_name",
+                    "ts_created_at",
                 )
-            
+
             all_reactions = []
             for reaction in reactions:
-                all_reactions.append({
-                    "id": int(reaction[0]),
-                    "emoji": reaction[1],
-                    "sender": {
-                        "userName": reaction[2],
-                        "userId": reaction[3],
-                        "avatarImgPath": reaction[4],
-                        "tsLastSeen": "",
-                        "tsJoined": "",
-                        "customStatus": "",
-                    },
-                    "tsSent": reaction[5],
-                })
+                all_reactions.append(
+                    {
+                        "id": int(reaction[0]),
+                        "emoji": reaction[1],
+                        "sender": {
+                            "userName": reaction[2],
+                            "userId": reaction[3],
+                            "avatarImgPath": reaction[4],
+                            "tsLastSeen": "",
+                            "tsJoined": "",
+                            "customStatus": "",
+                        },
+                        "tsSent": reaction[5],
+                    }
+                )
 
             if raw_message.thread_message_id == 1:
                 parent_message = MDMMessages.objects.filter(mdm=mdm_id, message_id=thread_id)[0]
@@ -996,7 +1128,7 @@ class MDMThreadMessagesByIdView(AuthenticatedAPIView):
 
             contentText = generate_first_line.get(content[0])
             messageIdWithChatIdAndThreadId = f"{chat_id}-{thread_id}-{message_id}"
-            
+
             new_message = {
                 "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
                 "chatType": CHAT_TYPE,
@@ -1028,13 +1160,29 @@ class MDMThreadMessagesByIdView(AuthenticatedAPIView):
                     "isSystemUser": "",
                 },
                 "reactions": all_reactions,
-                "taskId": raw_message.parent_message_uid.task.task_id if raw_message.parent_message_uid.task else None,
+                "taskId": (
+                    raw_message.parent_message_uid.task.task_id
+                    if raw_message.parent_message_uid.task
+                    else None
+                ),
                 "taskExist": True if raw_message.parent_message_uid.task else False,
                 "project": {
-                    "projectId": raw_message.parent_message_uid.task.project.project_id if raw_message.parent_message_uid.task else None,
-                    "projectName": raw_message.parent_message_uid.task.project.project_name if raw_message.parent_message_uid.task else None,
+                    "projectId": (
+                        raw_message.parent_message_uid.task.project.project_id
+                        if raw_message.parent_message_uid.task
+                        else None
+                    ),
+                    "projectName": (
+                        raw_message.parent_message_uid.task.project.project_name
+                        if raw_message.parent_message_uid.task
+                        else None
+                    ),
                     "isJoined": True if raw_message.parent_message_uid.task else False,
-                    "systemUserId": raw_message.parent_message_uid.task.project.project_system_user.id if raw_message.parent_message_uid.task else None,
+                    "systemUserId": (
+                        raw_message.parent_message_uid.task.project.project_system_user.id
+                        if raw_message.parent_message_uid.task
+                        else None
+                    ),
                 },
                 "isFlagged": (CHAT_TYPE, chat_id, thread_id, message_id) in flagged_message_ids,
                 "tsSent": ts_sent,
