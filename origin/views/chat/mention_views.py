@@ -26,8 +26,10 @@ class ChatMentionView(AuthenticatedAPIView):
                 if serializer.is_valid():
                     serializer.save()
                     res.append(serializer.data)
-        except:
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                else:
+                    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            return Response({"error": "Failed to create mentions."}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(res, status=status.HTTP_201_CREATED)
 

@@ -46,7 +46,8 @@ class TaskMasterView(AuthenticatedAPIView):
             "is_init_task": request.data["is_init_task"] == True,
         }
 
-        if "content" in request.data:
+        newly_mentioned_user_ids = []
+        if "content" in request.data and request.data["content"] is not None:
             extract_user_handler = extractMentionedUsers()
             extract_user_handler.extract(request.data["content"])
             newly_mentioned_user_ids = list(extract_user_handler.mentioned_user_ids)
@@ -314,14 +315,17 @@ class GetTeamTasksByTagView(AuthenticatedAPIView):
 class ChildTaskView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
-        project_id = int(request.GET.get("project_id"))
-        current_task_id = int(request.GET.get("current_task_id"))
+        raw_project_id = request.GET.get("project_id")
+        raw_current_task_id = request.GET.get("current_task_id")
 
-        if not team_id or not project_id or not current_task_id:
+        if not team_id or not raw_project_id or not raw_current_task_id:
             return Response(
                 {"error": "Wrong parameters."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        project_id = int(raw_project_id)
+        current_task_id = int(raw_current_task_id)
 
         target_tasks = TaskMaster.objects.filter(
             is_init_task=False,
@@ -471,14 +475,17 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
         chat_type = request.GET.get("chat_type")
-        chat_id = int(request.GET.get("chat_id"))
-        thread_id = int(request.GET.get("thread_id"))
+        raw_chat_id = request.GET.get("chat_id")
+        raw_thread_id = request.GET.get("thread_id")
 
-        if not team_id or not chat_type or not chat_id or not thread_id:
+        if not team_id or not chat_type or not raw_chat_id or not raw_thread_id:
             return Response(
                 {"error": "Wrong parameters."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        chat_id = int(raw_chat_id)
+        thread_id = int(raw_thread_id)
 
         target_task = TaskMaster.objects.filter(
             is_init_task=False,
@@ -615,14 +622,17 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
 class GetTaskView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
-        project_id = int(request.GET.get("project_id"))
-        task_id = int(request.GET.get("task_id"))
+        raw_project_id = request.GET.get("project_id")
+        raw_task_id = request.GET.get("task_id")
 
-        if not team_id or not project_id or not task_id:
+        if not team_id or not raw_project_id or not raw_task_id:
             return Response(
                 {"error": "team_id/project_id/task_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        project_id = int(raw_project_id)
+        task_id = int(raw_task_id)
 
         # Get the specific task with its attachments.
         task = TaskMaster.objects.prefetch_related("task_attachments").filter(
@@ -881,14 +891,15 @@ class TaskAttachmentsView(AuthenticatedAPIView):
             return Response({}, status=status.HTTP_201_CREATED)
 
     def get(self, request):
-        task = int(request.GET.get("task_id"))
+        raw_task_id = request.GET.get("task_id")
 
-        if not task:
+        if not raw_task_id:
             return Response(
-                {"error": "task_id are required."},
+                {"error": "task_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        task = int(raw_task_id)
         attachments = TaskMaster.objects.filter(task=task, is_init_task=False)
         serializer = TaskMasterSerializer(attachments, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -963,7 +974,10 @@ class TaskCommentsView(AuthenticatedAPIView):
 
     def get(self, request):
         user_id = request.GET.get("user_id")
-        task_id = int(request.GET.get("task_id"))
+        raw_task_id = request.GET.get("task_id")
+        if not raw_task_id:
+            return Response("task_id is not found", status=status.HTTP_400_BAD_REQUEST)
+        task_id = int(raw_task_id)
         if task_id:
 
             # Fetch reactions
@@ -1027,7 +1041,7 @@ class TaskCommentsView(AuthenticatedAPIView):
 
             return Response(
                 sorted(response_data, key=lambda x: x["tsSent"], reverse=False),
-                status=status.HTTP_201_CREATED,
+                status=status.HTTP_200_OK,
             )
         else:
             return Response("task_id is not found", status=status.HTTP_400_BAD_REQUEST)
@@ -1061,10 +1075,10 @@ class TaskCommentReactionView(AuthenticatedAPIView):
         team_id = request.GET.get("team_id")
         sender_id = request.GET.get("sender_id")
         task_id = request.GET.get("task_id")
-        comment_id = int(request.GET.get("comment_id"))
+        raw_comment_id = request.GET.get("comment_id")
         reaction_emoji = request.GET.get("reaction_emoji")
 
-        if not team_id or not sender_id or not task_id or not comment_id or not reaction_emoji:
+        if not team_id or not sender_id or not task_id or not raw_comment_id or not reaction_emoji:
             return Response(
                 {
                     "error": "`team_id`, `sender_id`, `task_id`, `comment_id`, and `reaction_emoji` are required."
@@ -1072,12 +1086,14 @@ class TaskCommentReactionView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        comment_id = int(raw_comment_id)
+
         try:
             reaction = TaskCommentReactionFact.objects.get(
                 team=team_id,
                 sender=sender_id,
                 task_id=int(task_id),
-                comment_id=int(comment_id),
+                comment_id=comment_id,
                 reaction_emoji=reaction_emoji,
             )
             reaction.delete()
@@ -1108,8 +1124,10 @@ class TaskCommentMentionView(AuthenticatedAPIView):
                 if serializer.is_valid():
                     serializer.save()
                     res.append(serializer.data)
-        except:
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                else:
+                    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            return Response({"error": "Failed to create mentions."}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(res, status=status.HTTP_201_CREATED)
 

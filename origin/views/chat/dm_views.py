@@ -51,8 +51,6 @@ class DMMasterView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 class CheckDMExistsView(AuthenticatedAPIView):
     def get(self, request):
@@ -60,7 +58,7 @@ class CheckDMExistsView(AuthenticatedAPIView):
         user_1_id = request.GET.get("user_1_id", None)
         user_2_id = request.GET.get("user_2_id", None)
 
-        if not team_id and not user_1_id or not user_2_id:
+        if not team_id or not user_1_id or not user_2_id:
             return Response(
                 {"error": "team_id, user_1_id and user_2_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -94,7 +92,7 @@ class DMIdView(AuthenticatedAPIView):
         user_1_id = request.GET.get("user_1_id", None)
         user_2_id = request.GET.get("user_2_id", None)
 
-        if not team_id and not user_1_id or not user_2_id:
+        if not team_id or not user_1_id or not user_2_id:
             return Response(
                 {"error": "team_id, user_1_id and user_2_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -643,15 +641,19 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
         user_id = request.GET.get("user_id")
-        dm_id = int(request.GET.get("dm_id"))
-        thread_id = int(request.GET.get("thread_id"))
-        message_id = int(request.GET.get("message_id"))
+        raw_dm_id = request.GET.get("dm_id")
+        raw_thread_id = request.GET.get("thread_id")
+        raw_message_id = request.GET.get("message_id")
 
-        if not user_id or not dm_id or not thread_id or not message_id:
+        if not user_id or not raw_dm_id or not raw_thread_id or not raw_message_id:
             return Response(
                 {"error": "user_id, dm_id, thread_id and message_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        dm_id = int(raw_dm_id)
+        thread_id = int(raw_thread_id)
+        message_id = int(raw_message_id)
 
         dm = DMThreadMessages.objects.filter(
             dm=dm_id, thread_id=thread_id, thread_message_id=message_id, is_deleted=False
@@ -769,7 +771,7 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
                 dm=dm[0], thread_id=request.data["thread_id"]
             ).count()
         else:
-            Response("dm is not found", status=status.HTTP_400_BAD_REQUEST)
+            return Response("dm is not found", status=status.HTTP_400_BAD_REQUEST)
 
         data = {
             "dm": request.data["dm_id"],
@@ -781,7 +783,7 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
             "parent_message_uid": "{dm_id}-{parent_message_id}".format(
                 dm_id=request.data["dm_id"], parent_message_id=request.data["parent_message_id"]
             ),
-            "task": request.data["task"],
+            "task": request.data.get("task"),
         }
 
         if "ts_sent" in request.data:

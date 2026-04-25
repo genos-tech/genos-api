@@ -1,6 +1,7 @@
 from django.urls import path
 from origin.views.chat.dm_views import *
 from origin.views.chat.gm_views import *
+from origin.views.chat.mdm_views import *
 from origin.views.chat.pm_views import *
 from origin.views.chat.search_views import *
 from origin.views.chat.reaction_views import *
@@ -38,6 +39,29 @@ urlpatterns = [
         "api/v2/dm/threadMessagesByTaskId/",
         DMThreadMessagesByTaskIdView.as_view(),
         name="get_dm_thread_messages_by_task_id",
+    ),
+    # MDM urls (Multi-user Direct Message)
+    path("api/v2/mdm/create/", MDMMasterView.as_view(), name="create_mdm"),
+    path("api/v2/mdm/profile/", MDMMasterView.as_view(), name="get_mdm_profile"),
+    path("api/v2/mdm/checkExistence/", CheckMDMExistsView.as_view(), name="check_mdm_existence"),
+    path("api/v2/mdm/ids/", AllMDMIdsView.as_view(), name="get_all_my_mdm_ids"),
+    path("api/v2/mdm/join/", MDMMembersView.as_view(), name="join_mdm"),
+    path("api/v2/mdm/history/", MDMHistoryView.as_view(), name="get_all_my_mdm_messages"),
+    path("api/v2/mdm/message/", MDMSingleMessageView.as_view(), name="insert_mdm_message"),
+    path(
+        "api/v2/mdm/checkThreadExistence/",
+        CheckMDMThreadExistsView.as_view(),
+        name="check_mdm_thread_existence",
+    ),
+    path(
+        "api/v2/mdm/threadMessage/",
+        MDMSingleThreadMessageView.as_view(),
+        name="insert_mdm_thread_message",
+    ),
+    path(
+        "api/v2/mdm/threadMessagesById/",
+        MDMThreadMessagesByIdView.as_view(),
+        name="get_mdm_thread_messages_by_id",
     ),
     # GM urls
     path("api/v2/gm/create/", GMMasterView.as_view(), name="create_gm"),

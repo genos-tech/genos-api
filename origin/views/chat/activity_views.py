@@ -40,7 +40,7 @@ class ActivityView(AuthenticatedAPIView):
         # But, the activity_type is always 1 in the database.
         # When we response the activities, we'll change it to 3 if the request user is mentioned in the message.
         # So, we need to change it to 1 if the activity_type is 3 to keep the activity_id consistent in the database.
-        if request_data["activity_id"][0] == "3":
+        if request_data.get("activity_id") and request_data["activity_id"][0] == "3":
             request_data["activity_id"] = "1" + request_data["activity_id"][1:]
 
         try:
@@ -49,8 +49,7 @@ class ActivityView(AuthenticatedAPIView):
             if serializer.is_valid():
                 serializer.save()
                 return Response(serializer.data, status=status.HTTP_200_OK)
-        except:
-            # Insert if not exists
+        except ActivityFact.DoesNotExist:
             serializer = ActivityFactSerializer(data=request_data)
             if serializer.is_valid():
                 serializer.save()
@@ -60,8 +59,8 @@ class ActivityView(AuthenticatedAPIView):
 
     def delete(self, request):
         data = {
-            "team": request.data["team_id"],
-            "activity_id": request.data["activity_id"],
+            "team": request.data.get("team_id"),
+            "activity_id": request.data.get("activity_id"),
         }
 
         if res := validate_request_data(data):
@@ -73,7 +72,7 @@ class ActivityView(AuthenticatedAPIView):
         # But, the activity_type is always 1 in the database.
         # When we response the activities, we'll change it to 3 if the request user is mentioned in the message.
         # So, we need to change it to 1 if the activity_type is 3 to keep the activity_id consistent in the database.
-        if data["activity_id"][0] == "3":
+        if data["activity_id"] and data["activity_id"][0] == "3":
             data["activity_id"] = "1" + data["activity_id"][1:]
 
         try:

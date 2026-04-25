@@ -455,16 +455,16 @@ class PMSingleMessageView(AuthenticatedAPIView):
 
     def put(self, request):
         try:
-            if request.data.get("message_id") is None:
-                message = PMMessages.objects.get(
-                    project=request.data["project_id"], task=request.data["task_id"]
-                )
-            elif request.data.get("task_id") is None:
+            if request.data.get("message_id") is not None:
                 message = PMMessages.objects.get(
                     project=request.data["project_id"], message_id=request.data["message_id"]
                 )
+            elif request.data.get("task_id") is not None:
+                message = PMMessages.objects.get(
+                    project=request.data["project_id"], task=request.data["task_id"]
+                )
             else:
-                Response(
+                return Response(
                     "Either message_id or task_id is required.", status=status.HTTP_400_BAD_REQUEST
                 )
         except PMMessages.DoesNotExist:
@@ -659,11 +659,11 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
                 )
                 thread_id = message.message_id
                 if not isinstance(thread_id, int):
-                    Response(
+                    return Response(
                         "Failed to get thread_id from task_id.", status=status.HTTP_400_BAD_REQUEST
                     )
             else:
-                Response(
+                return Response(
                     "Either thread_id or task_id is required.", status=status.HTTP_400_BAD_REQUEST
                 )
         except PMMessages.DoesNotExist:
@@ -675,7 +675,7 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
                 project=project[0].project_id, thread_id=thread_id
             ).count()
         else:
-            Response("project is not found", status=status.HTTP_400_BAD_REQUEST)
+            return Response("project is not found", status=status.HTTP_400_BAD_REQUEST)
 
         data = {
             "project": request.data["project_id"],

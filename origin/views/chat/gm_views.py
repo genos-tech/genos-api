@@ -906,7 +906,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
                 gm=gm[0], thread_id=request.data["thread_id"]
             ).count()
         else:
-            Response("gm is not found", status=status.HTTP_400_BAD_REQUEST)
+            return Response("gm is not found", status=status.HTTP_400_BAD_REQUEST)
 
         data = {
             "gm": request.data["gm_id"],
