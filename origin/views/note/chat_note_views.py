@@ -210,7 +210,7 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                     When(chat_type=1, then=Value("DM")),
                     When(chat_type=2, then=Value("GM")),
                     When(chat_type=3, then=Value("PM")),
-                    When(chat_type=4, then=Value("MDM")),
+                    When(chat_type=4, then=Value("DM")),
                     default=Value("Chat"),
                     output_field=CharField(),
                 ),
@@ -239,6 +239,7 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
         gm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 2]
         pm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 3]
         mdm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 4]
+
 
         # Get DM partner names
         dm_partner_names = {}
@@ -303,7 +304,7 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                     member_map.setdefault(m["mdm_id"], []).append(m["attendee__username"])
                 for mid in mdm_ids_needing_members:
                     names = member_map.get(mid, [])
-                    mdm_display[mid] = ", ".join(names) if names else f"MDM {mid}"
+                    mdm_display[mid] = ", ".join(names) if names else f"DM {mid}"
 
             mdm_names = mdm_display
 
@@ -316,7 +317,7 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
             elif note["chatType"] == 3:
                 note["chatName"] = project_names.get(note["chatId"], f"Project {note['chatId']}")
             elif note["chatType"] == 4:
-                note["chatName"] = mdm_names.get(note["chatId"], f"MDM {note['chatId']}")
+                note["chatName"] = mdm_names.get(note["chatId"], f"DM {note['chatId']}")
             else:
                 note["chatName"] = f"Chat {note['chatId']}"
 
