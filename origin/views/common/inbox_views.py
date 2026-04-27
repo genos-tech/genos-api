@@ -103,6 +103,7 @@ class InboxItemView(AuthenticatedAPIView):
                     "itemBody": item.item_body,
                     "itemType": item.item_type,
                     "isRead": item.is_read,
+                    "requestStatus": item.request_status,
                     "tsSent": item.ts_created_at,
                 }
             )

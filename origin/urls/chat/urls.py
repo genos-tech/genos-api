@@ -46,6 +46,7 @@ urlpatterns = [
     path("api/v2/mdm/checkExistence/", CheckMDMExistsView.as_view(), name="check_mdm_existence"),
     path("api/v2/mdm/ids/", AllMDMIdsView.as_view(), name="get_all_my_mdm_ids"),
     path("api/v2/mdm/join/", MDMMembersView.as_view(), name="join_mdm"),
+    path("api/v2/mdm/members/", MDMMembersView.as_view(), name="get_mdm_members"),
     path("api/v2/mdm/history/", MDMHistoryView.as_view(), name="get_all_my_mdm_messages"),
     path("api/v2/mdm/message/", MDMSingleMessageView.as_view(), name="insert_mdm_message"),
     path(

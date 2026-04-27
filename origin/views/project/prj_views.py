@@ -175,7 +175,9 @@ class ProjectsView(AuthenticatedAPIView):
             .reverse()
         )
         project_tags = defaultdict(list)
-        for project_tag in ProjectTags.objects.filter(team=team_id):
+        for project_tag in (
+            ProjectTags.objects.filter(team=team_id).order_by("ts_updated_at").reverse()
+        ):
             project_tags[project_tag.project.project_id].append(
                 {
                     "tagName": project_tag.tag_name,
@@ -318,8 +320,11 @@ class ProjectTagsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        tags = ProjectTags.objects.filter(team=team_id, project=project_id).values(
-            "tag_name", "tag_color", "tag_text_color"
+        tags = (
+            ProjectTags.objects.filter(team=team_id, project=project_id)
+            .order_by("ts_updated_at")
+            .reverse()
+            .values("tag_name", "tag_color", "tag_text_color")
         )
 
         response_body = []
@@ -333,6 +338,119 @@ class ProjectTagsView(AuthenticatedAPIView):
             )
 
         return Response(response_body, status=status.HTTP_200_OK)
+
+    def put(self, request):
+        project_id = request.data.get("project_id")
+        old_tag_name = request.data.get("old_tag_name")
+
+        if not project_id or not old_tag_name:
+            return Response(
+                {"error": "project_id and old_tag_name are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        tag = ProjectTags.objects.filter(project=project_id, tag_name=old_tag_name).first()
+
+        if not tag:
+            return Response(
+                {"error": "Tag not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if "tag_name" in request.data:
+            tag.tag_name = request.data["tag_name"]
+        if "tag_color" in request.data:
+            tag.tag_color = request.data["tag_color"]
+        if "tag_text_color" in request.data:
+            tag.tag_text_color = request.data["tag_text_color"]
+        tag.save()
+
+        # Also update all tasks that reference this tag by old name
+        if "tag_name" in request.data and request.data["tag_name"] != old_tag_name:
+            from origin.models.task.task_models import TaskMaster
+
+            tasks = TaskMaster.objects.filter(
+                project=project_id, tags__contains=[{"tagName": old_tag_name}]
+            )
+            for task in tasks:
+                updated_tags = []
+                for t in task.tags:
+                    if t.get("tagName") == old_tag_name:
+                        updated_tags.append(
+                            {
+                                "tagName": request.data["tag_name"],
+                                "tagColor": request.data.get("tag_color", tag.tag_color),
+                                "tagTextColor": request.data.get(
+                                    "tag_text_color", tag.tag_text_color
+                                ),
+                            }
+                        )
+                    else:
+                        updated_tags.append(t)
+                task.tags = updated_tags
+                task.save(update_fields=["tags"])
+        elif "tag_color" in request.data or "tag_text_color" in request.data:
+            from origin.models.task.task_models import TaskMaster
+
+            tasks = TaskMaster.objects.filter(
+                project=project_id, tags__contains=[{"tagName": tag.tag_name}]
+            )
+            for task in tasks:
+                updated_tags = []
+                for t in task.tags:
+                    if t.get("tagName") == tag.tag_name:
+                        updated_tags.append(
+                            {
+                                "tagName": tag.tag_name,
+                                "tagColor": tag.tag_color,
+                                "tagTextColor": tag.tag_text_color,
+                            }
+                        )
+                    else:
+                        updated_tags.append(t)
+                task.tags = updated_tags
+                task.save(update_fields=["tags"])
+
+        return Response(
+            {
+                "tagName": tag.tag_name,
+                "tagColor": tag.tag_color,
+                "tagTextColor": tag.tag_text_color,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def delete(self, request):
+        project_id = request.data.get("project_id")
+        tag_name = request.data.get("tag_name")
+
+        if not project_id or not tag_name:
+            return Response(
+                {"error": "project_id and tag_name are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        tag = ProjectTags.objects.filter(project=project_id, tag_name=tag_name).first()
+
+        if not tag:
+            return Response(
+                {"error": "Tag not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        tag.delete()
+
+        # Remove the tag from all tasks that reference it
+        from origin.models.task.task_models import TaskMaster
+
+        tasks = TaskMaster.objects.filter(
+            project=project_id, tags__contains=[{"tagName": tag_name}]
+        )
+        for task in tasks:
+            task.tags = [t for t in task.tags if t.get("tagName") != tag_name]
+            task.save(update_fields=["tags"])
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ProjectProfileImageView(AuthenticatedAPIView):

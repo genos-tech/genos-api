@@ -8,6 +8,7 @@ from origin.serializers.note.note_serializers import *
 from origin.models.chat.dm_models import DMMaster
 from origin.models.chat.pm_models import PMMessages
 from origin.models.chat.gm_models import GMMaster
+from origin.models.chat.mdm_models import MDMMaster, MDMMembers
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.common.user_models import CustomUser
 
@@ -209,7 +210,8 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                     When(chat_type=1, then=Value("DM")),
                     When(chat_type=2, then=Value("GM")),
                     When(chat_type=3, then=Value("PM")),
-                    default=Value("Unknown"),
+                    When(chat_type=4, then=Value("DM")),
+                    default=Value("Chat"),
                     output_field=CharField(),
                 ),
             )
@@ -236,6 +238,8 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
         dm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 1]
         gm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 2]
         pm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 3]
+        mdm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 4]
+
 
         # Get DM partner names
         dm_partner_names = {}
@@ -280,6 +284,30 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
             groups = GMMaster.objects.filter(gm_id__in=gm_ids).values("gm_id", "group_name")
             gm_names = {g["gm_id"]: g["group_name"] for g in groups}
 
+        # Get MDM names (display_name or auto-generated from member names)
+        mdm_names = {}
+        if mdm_ids:
+            mdm_records = MDMMaster.objects.filter(mdm_id__in=mdm_ids).values(
+                "mdm_id", "display_name"
+            )
+            mdm_display = {m["mdm_id"]: m["display_name"] for m in mdm_records}
+
+            mdm_ids_needing_members = [mid for mid in mdm_ids if not mdm_display.get(mid)]
+            if mdm_ids_needing_members:
+                members = (
+                    MDMMembers.objects.filter(mdm_id__in=mdm_ids_needing_members)
+                    .select_related("attendee")
+                    .values("mdm_id", "attendee__username")
+                )
+                member_map = {}
+                for m in members:
+                    member_map.setdefault(m["mdm_id"], []).append(m["attendee__username"])
+                for mid in mdm_ids_needing_members:
+                    names = member_map.get(mid, [])
+                    mdm_display[mid] = ", ".join(names) if names else f"DM {mid}"
+
+            mdm_names = mdm_display
+
         # Add chat names to notes
         for note in notes_list:
             if note["chatType"] == 1:
@@ -288,8 +316,10 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                 note["chatName"] = gm_names.get(note["chatId"], f"Group {note['chatId']}")
             elif note["chatType"] == 3:
                 note["chatName"] = project_names.get(note["chatId"], f"Project {note['chatId']}")
+            elif note["chatType"] == 4:
+                note["chatName"] = mdm_names.get(note["chatId"], f"DM {note['chatId']}")
             else:
-                note["chatName"] = "Unknown Chat"
+                note["chatName"] = f"Chat {note['chatId']}"
 
         return Response(notes_list, status=status.HTTP_200_OK)
 

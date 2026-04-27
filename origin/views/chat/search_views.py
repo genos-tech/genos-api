@@ -74,7 +74,7 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
 
         # Get all groups
         groups_in_team = GMMaster.objects.filter(owner_team=team_id).values(
-            "gm_id", "group_name", "is_private"
+            "gm_id", "group_name", "is_private", "profile_image_file_name"
         )
         my_gm_ids = (
             GMMembers.objects.filter(Q(attendee=user_id))
@@ -98,6 +98,7 @@ class GetTeamMembersAndGroupsView(AuthenticatedAPIView):
                     },
                     "isPrivate": member["is_private"],
                     "isJoined": int(member["gm_id"]) in my_gm_ids,
+                    "profileImagePath": member["profile_image_file_name"] or "",
                 }
             )
 
