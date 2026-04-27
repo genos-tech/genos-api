@@ -130,4 +130,6 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
             if _status in _team_tasks:
                 team_tasks.extend(_team_tasks[_status.lower()])
 
+        team_tasks.sort(key=lambda t: t["projectId"])
+
         return Response(team_tasks, status=status.HTTP_200_OK)
