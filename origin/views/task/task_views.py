@@ -350,10 +350,11 @@ class ChildTaskView(AuthenticatedAPIView):
             for t in task_attachments:
                 attached_files = []
                 for _file in t.task_attachments.all().values_list(
-                    "attached_file", "attached_type"
+                    "attached_file", "attached_type", "original_filename"
                 ):
                     file_path = _file[0]
                     file_type = _file[1]
+                    orig_name = _file[2]
                     try:
                         with open("./uploads/" + file_path, "rb") as f:
                             encoded_file = base64.b64encode(f.read()).decode("utf-8")
@@ -361,7 +362,7 @@ class ChildTaskView(AuthenticatedAPIView):
                                 {
                                     "file": file_path,
                                     "file_base64": encoded_file,
-                                    "name": os.path.basename(file_path),
+                                    "name": orig_name or os.path.basename(file_path),
                                     "type": file_type,
                                 }
                             )
@@ -514,9 +515,12 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
         response_data = []
         for t in task_attachments:
             attached_files = []
-            for _file in t.task_attachments.all().values_list("attached_file", "attached_type"):
+            for _file in t.task_attachments.all().values_list(
+                "attached_file", "attached_type", "original_filename"
+            ):
                 file_path = _file[0]
                 file_type = _file[1]
+                orig_name = _file[2]
                 try:
                     with open("./uploads/" + file_path, "rb") as f:
                         encoded_file = base64.b64encode(f.read()).decode("utf-8")
@@ -524,7 +528,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                             {
                                 "file": file_path,
                                 "file_base64": encoded_file,
-                                "name": os.path.basename(file_path),
+                                "name": orig_name or os.path.basename(file_path),
                                 "type": file_type,
                             }
                         )
@@ -643,11 +647,12 @@ class GetTaskView(AuthenticatedAPIView):
         for t in task:
             attached_files = []
             for _file in t.task_attachments.all().values_list(
-                "attachment_id", "attached_file", "attached_type"
+                "attachment_id", "attached_file", "attached_type", "original_filename"
             ):
                 attachment_id = _file[0]
                 file_path = _file[1]
                 file_type = _file[2]
+                orig_name = _file[3]
                 try:
                     with open("./uploads/" + file_path, "rb") as f:
                         encoded_file = base64.b64encode(f.read()).decode("utf-8")
@@ -656,7 +661,7 @@ class GetTaskView(AuthenticatedAPIView):
                                 "attachment_id": attachment_id,
                                 "file": file_path,
                                 "file_base64": encoded_file,
-                                "name": os.path.basename(file_path),
+                                "name": orig_name or os.path.basename(file_path),
                                 "type": file_type,
                             }
                         )
@@ -861,11 +866,13 @@ class TaskAttachmentsView(AuthenticatedAPIView):
                 Max("attachment_id")
             )["attachment_id__max"]
 
+            original_name = attached_file.name if attached_file else ""
             data = {
                 "task": task,
                 "attachment_id": (int(curr_attachments_id) if curr_attachments_id else 0) + 1,
                 "attached_file": attached_file,
                 "attached_type": attached_type,
+                "original_filename": original_name,
             }
 
             serializer = TaskAttachmentsSerializer(data=data)
@@ -880,7 +887,7 @@ class TaskAttachmentsView(AuthenticatedAPIView):
                     {
                         **serializer.data,
                         "file_base64": encoded_file,
-                        "name": os.path.basename(file_path),
+                        "name": original_name or os.path.basename(file_path),
                     },
                     status=status.HTTP_201_CREATED,
                 )
