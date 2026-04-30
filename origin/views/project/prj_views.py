@@ -178,13 +178,14 @@ class ProjectsView(AuthenticatedAPIView):
         for project_tag in (
             ProjectTags.objects.filter(team=team_id).order_by("ts_updated_at").reverse()
         ):
-            project_tags[project_tag.project.project_id].append(
-                {
-                    "tagName": project_tag.tag_name,
-                    "tagColor": project_tag.tag_color,
-                    "tagTextColor": project_tag.tag_text_color,
-                }
-            )
+            if project_tag.project:
+                project_tags[project_tag.project.project_id].append(
+                    {
+                        "tagName": project_tag.tag_name,
+                        "tagColor": project_tag.tag_color,
+                        "tagTextColor": project_tag.tag_text_color,
+                    }
+                )
 
         team_projects = [
             {
