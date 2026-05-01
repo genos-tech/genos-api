@@ -19,3 +19,4 @@ from .note.personal_note_models import *
 from .note.task_note_models import *
 from .note.chat_note_models import *
 from .note.favorite_note_models import *
+from .note.recent_note_models import *

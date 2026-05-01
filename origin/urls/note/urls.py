@@ -4,6 +4,7 @@ from origin.views.note.personal_note_views import *
 from origin.views.note.chat_note_views import *
 from origin.views.note.task_note_views import *
 from origin.views.note.favorite_note_views import *
+from origin.views.note.recent_note_views import *
 
 
 urlpatterns = [
@@ -68,5 +69,16 @@ urlpatterns = [
         "api/v2/note/favorite/check/",
         CheckNoteFavoriteView.as_view(),
         name="check_note_favorite",
+    ),
+    # Recent note endpoints
+    path(
+        "api/v2/note/recent/",
+        RecordNoteOpenView.as_view(),
+        name="record_note_open",
+    ),
+    path(
+        "api/v2/note/recent/meta/",
+        AllRecentNotesMetaView.as_view(),
+        name="all_recent_notes_meta",
     ),
 ]
