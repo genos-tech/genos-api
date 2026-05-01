@@ -4,6 +4,7 @@ from origin.models.note.personal_note_models import *
 from origin.models.note.task_note_models import *
 from origin.models.note.chat_note_models import *
 from origin.models.note.favorite_note_models import *
+from origin.models.note.recent_note_models import *
 
 
 class PersonalNoteMasterSerializer(serializers.ModelSerializer):
@@ -51,4 +52,10 @@ class NotePermissionMasterSerializer(serializers.ModelSerializer):
 class NoteFavoriteMasterSerializer(serializers.ModelSerializer):
     class Meta:
         model = NoteFavoriteMaster
+        fields = "__all__"
+
+
+class NoteRecentMasterSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NoteRecentMaster
         fields = "__all__"
