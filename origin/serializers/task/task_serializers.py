@@ -1,10 +1,36 @@
 from rest_framework import serializers
 from origin.models.task.task_models import *
+from origin.models.task.sprint_models import SprintConfig, Sprint
+from origin.models.task.milestone_models import MilestoneMaster, MilestoneAssignees
 
 
 class TaskMasterSerializer(serializers.ModelSerializer):
     class Meta:
         model = TaskMaster
+        fields = "__all__"
+
+
+class SprintConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SprintConfig
+        fields = "__all__"
+
+
+class SprintSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Sprint
+        fields = "__all__"
+
+
+class MilestoneMasterSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MilestoneMaster
+        fields = "__all__"
+
+
+class MilestoneAssigneesSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MilestoneAssignees
         fields = "__all__"
 
 

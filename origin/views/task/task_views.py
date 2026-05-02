@@ -22,13 +22,64 @@ from .common_color import STATUS_COLOR_MAP, PRIORITY_COLOR_MAP, EFFORT_LEVEL_COL
 
 class TaskMasterView(AuthenticatedAPIView):
     def post(self, request):
+        # Two-way bridge between `milestone` and `parent_task_id`:
+        #   1. If the client passes a `milestone` id and no
+        #      `parent_task_id`, promote the milestone's backing task
+        #      to be the parent (so the table nests the new task
+        #      beneath the milestone row).
+        #   2. If the client passes a `parent_task_id` that points at a
+        #      milestone's backing task, derive `milestone` from that
+        #      parent so the new task carries its own milestone link
+        #      (used by aggregations / sprint analytics that key off
+        #      `milestone_id`). This is the path the milestone preview
+        #      "+ Task" button takes.
+        from origin.models.task.milestone_models import MilestoneMaster
+
+        milestone_id = request.data.get("milestone")
+        parent_task_id = request.data.get("parent_task_id", None)
+        if milestone_id and parent_task_id in (None, "", "null"):
+            try:
+                m = MilestoneMaster.objects.select_related("task").get(
+                    milestone_id=milestone_id, is_deleted=False
+                )
+                if m.task_id is not None:
+                    parent_task_id = m.task_id
+            except Exception:
+                pass
+        elif parent_task_id not in (None, "", "null") and not milestone_id:
+            try:
+                parent = MilestoneMaster.objects.filter(
+                    task_id=parent_task_id, is_deleted=False
+                ).first()
+                if parent is not None:
+                    milestone_id = parent.milestone_id
+                else:
+                    # Deeper inference: the parent task isn't a
+                    # milestone backing task, but it might itself live
+                    # inside a milestone (e.g. Milestone -> Task A ->
+                    # Sub-task B). Inherit the milestone link so the
+                    # new sub-task still belongs to the milestone for
+                    # filtering / aggregates.
+                    from origin.models.task.task_models import TaskMaster
+
+                    parent_task = (
+                        TaskMaster.objects.filter(task_id=parent_task_id)
+                        .only("milestone_id")
+                        .first()
+                    )
+                    if parent_task is not None and parent_task.milestone_id is not None:
+                        milestone_id = parent_task.milestone_id
+            except Exception:
+                pass
+
         data = {
             "team": request.data["team"],
             "project": request.data["project"],
             "chat_type": request.data.get("chat_type", None),
             "chat_id": request.data.get("chat_id", None),
             "thread_id": request.data.get("thread_id", None),
-            "parent_task_id": request.data.get("parent_task_id", None),
+            "milestone": milestone_id,
+            "parent_task_id": parent_task_id,
             "root_task_id": request.data.get("root_task_id", None),
             "assignee": request.data["assignee"],
             "reporter": request.data["reporter"],
@@ -263,6 +314,9 @@ class GetTeamTasksView(AuthenticatedAPIView):
                     "concatTags": "/" + "/".join([tag["tagName"] for tag in t.tags]) + "/",
                     "teamId": str(t.team.team_id),
                     "projectId": t.project.project_id,
+                    "isMilestone": t.is_milestone,
+                    "milestoneId": t.milestone_id,
+                    "sprintId": t.sprint_id,
                 },
             )
 
@@ -612,6 +666,17 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                     "parentTaskId": t.parent_task_id,
                     "rootTaskId": t.root_task_id,
                     "threadId": t.thread_id,
+                    # Milestone hooks: TaskPreview's reroute branch
+                    # relies on `currentPreviewTask.isMilestone` to
+                    # detect milestone backing rows and route to
+                    # MilestonePreview. When this endpoint feeds the
+                    # preview (e.g. opening a thread that's tied to a
+                    # milestone-backing task), omitting these would
+                    # leave the user staring at a regular TaskPreview
+                    # for what is actually a milestone.
+                    "isMilestone": t.is_milestone,
+                    "milestoneId": t.milestone_id,
+                    "sprintId": t.sprint_id,
                 },
             )
 
@@ -747,6 +812,13 @@ class GetTaskView(AuthenticatedAPIView):
                     "chatType": t.chat_type if t.chat_type and t.chat_type != -1 else None,
                     "chatId": t.chat_id if t.chat_id and t.chat_id != -1 else None,
                     "threadId": t.thread_id if t.thread_id and t.thread_id != -1 else None,
+                    # Milestone hooks: callers (e.g. the note->open-task
+                    # routing in TaskPreview) need to know whether this
+                    # task is the backing row of a milestone so they can
+                    # route to MilestonePreview instead of TaskPreview.
+                    "isMilestone": t.is_milestone,
+                    "milestoneId": t.milestone_id,
+                    "sprintId": t.sprint_id,
                 },
             )
 
@@ -798,6 +870,14 @@ class GetProjectTasksView(AuthenticatedAPIView):
                     "concatTags": "/" + "/".join([tag["tagName"] for tag in t.tags]) + "/",
                     "teamId": str(t.team.team_id),
                     "projectId": t.project.project_id,
+                    # Milestone hooks: TaskFilterMenu's milestone-scope
+                    # filter and DraggableTaskTable's auto-expand effect
+                    # rely on these to find the milestone's backing task
+                    # and gather its children. Without them the milestone
+                    # sidebar entry would render an empty table.
+                    "isMilestone": t.is_milestone,
+                    "milestoneId": t.milestone_id,
+                    "sprintId": t.sprint_id,
                 },
             )
 
@@ -1134,7 +1214,9 @@ class TaskCommentMentionView(AuthenticatedAPIView):
                 else:
                     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Exception:
-            return Response({"error": "Failed to create mentions."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Failed to create mentions."}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         return Response(res, status=status.HTTP_201_CREATED)
 

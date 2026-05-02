@@ -7,6 +7,8 @@ from django.dispatch import receiver
 from origin.models.common.user_models import CustomUser
 from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import ProjectMaster
+from origin.models.task.milestone_models import MilestoneMaster
+from origin.models.task.sprint_models import Sprint
 
 
 class TaskMaster(models.Model):
@@ -23,6 +25,22 @@ class TaskMaster(models.Model):
         null=True,
         related_name="project_tasks_master",
         to_field="project_id",
+    )
+    milestone = models.ForeignKey(
+        MilestoneMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="milestone_tasks",
+        to_field="milestone_id",
+    )
+    sprint = models.ForeignKey(
+        Sprint,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sprint_tasks",
+        to_field="sprint_id",
     )
     chat_type = models.IntegerField(null=True, blank=True)
     chat_id = models.IntegerField(null=True, blank=True)
@@ -60,6 +78,11 @@ class TaskMaster(models.Model):
     # True: An empty initial task before saved by the user.
     # False: A task that is saved by the user.
     is_init_task = models.BooleanField(default=False)
+    # When true, this task is the "backing task" for a MilestoneMaster
+    # row of the same project. Children of a milestone-task (i.e. tasks
+    # that belong to the milestone) reference it through
+    # `parent_task_id`, so the table renders them as sub-tasks.
+    is_milestone = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
