@@ -1064,7 +1064,13 @@ class TaskCommentsView(AuthenticatedAPIView):
         raw_task_id = request.GET.get("task_id")
         if not raw_task_id:
             return Response("task_id is not found", status=status.HTTP_400_BAD_REQUEST)
-        task_id = int(raw_task_id)
+        try:
+            task_id = int(raw_task_id)
+        except (TypeError, ValueError):
+            return Response(
+                "task_id must be an integer",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if task_id:
 
             # Fetch reactions
