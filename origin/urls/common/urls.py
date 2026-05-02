@@ -4,6 +4,7 @@ from origin.views.common.auth_views import *
 from origin.views.common.user_views import *
 from origin.views.common.team_views import *
 from origin.views.common.inbox_views import *
+from origin.views.common.notification_views import NotificationPreferenceView
 from origin.views.chat.reaction_views import *
 from origin.views.utils.extract_page_title_view import get_page_title
 
@@ -20,6 +21,11 @@ urlpatterns = [
         "api/v2/user/profile/image/",
         UserProfileImageView.as_view(),
         name="update_user_profile_image",
+    ),
+    path(
+        "api/v2/user/notification-preferences/",
+        NotificationPreferenceView.as_view(),
+        name="user_notification_preferences",
     ),
     # Team
     path("api/v2/team/create/", TeamMasterView.as_view(), name="join_team"),
