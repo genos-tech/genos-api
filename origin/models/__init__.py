@@ -13,6 +13,8 @@ from .chat.read_status_models import *
 from .chat.chat_master_models import *
 from .chat.chat_attachment_models import *
 from .project.prj_models import *
+from .task.sprint_models import *
+from .task.milestone_models import *
 from .task.task_models import *
 from .note.common_note_models import *
 from .note.personal_note_models import *
