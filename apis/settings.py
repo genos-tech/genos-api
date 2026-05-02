@@ -53,6 +53,11 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # Stashes request.user in a thread-local so post_save / post_delete
+    # signals on tasks/comments/attachments can attribute activity rows
+    # to the acting user. Must run AFTER AuthenticationMiddleware so
+    # `request.user` is already resolved.
+    "origin.middleware.current_user.CurrentUserMiddleware",
 ]
 
 CORS_ALLOW_ALL_ORIGINS = True

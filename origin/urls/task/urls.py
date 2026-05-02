@@ -12,6 +12,7 @@ from origin.views.task.milestone_views import (
     MilestoneView,
     ProjectMilestonesView,
 )
+from origin.views.task.task_activity_views import TaskActivityListView
 
 
 urlpatterns = [
@@ -39,6 +40,7 @@ urlpatterns = [
         name="get_task_by_thread_id",
     ),
     path("api/v2/task/comment/", TaskCommentsView.as_view(), name="add_task_comment"),
+    path("api/v2/task/activity/", TaskActivityListView.as_view(), name="task_activity_list"),
     # Search
     path(
         "api/v2/search/teamTasks/",

@@ -16,6 +16,7 @@ from .project.prj_models import *
 from .task.sprint_models import *
 from .task.milestone_models import *
 from .task.task_models import *
+from .task.task_activity_models import *
 from .note.common_note_models import *
 from .note.personal_note_models import *
 from .note.task_note_models import *
