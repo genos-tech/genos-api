@@ -20,6 +20,7 @@ Adding a new field to track:
 
 from __future__ import annotations
 
+import uuid
 from typing import Any, Optional
 
 from django.db.models.signals import post_delete, post_save, pre_save
@@ -69,17 +70,29 @@ _FIELD_TO_ACTION = {
 def _to_jsonable(value: Any) -> Any:
     """Coerce `value` to something JSONField will accept.
 
-    Date / datetime → ISO string. Model instances → primary key.
-    Everything else passes through. Centralised so the diff and the
-    individual emitters can share the conversion.
+    UUID → str. Date / datetime → ISO string. Dicts / lists / tuples
+    are walked recursively so values nested inside `metadata` (e.g.
+    a `senderId` that's actually a `uuid.UUID`) get the same
+    treatment. Model instances unwrap to their primary key, which is
+    re-fed through the helper so a UUID-typed pk is also stringified.
+
+    Centralised so the diff and the individual emitters can share
+    the conversion — and so adding a new "this type isn't JSON
+    serializable" hotfix only needs to touch one place.
     """
 
     if value is None:
         return None
+    if isinstance(value, uuid.UUID):
+        return str(value)
     if hasattr(value, "isoformat"):
         return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _to_jsonable(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_jsonable(item) for item in value]
     if hasattr(value, "pk"):
-        return value.pk
+        return _to_jsonable(value.pk)
     return value
 
 
@@ -124,7 +137,7 @@ def _record(
         field_name=field_name,
         old_value=_to_jsonable(old_value),
         new_value=_to_jsonable(new_value),
-        metadata=metadata or {},
+        metadata=_to_jsonable(metadata or {}),
     )
 
 
