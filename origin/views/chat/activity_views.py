@@ -9,6 +9,7 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.dm_models import *
 from origin.models.chat.gm_models import *
 from origin.models.chat.pm_models import *
+from origin.models.chat.mdm_models import MDMMembers
 from origin.models.project.prj_models import *
 from origin.serializers.chat.activity_serializers import *
 
@@ -25,7 +26,15 @@ from origin.views.chat.modules.activity.get_reaction_activities import (
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 """
-chatType = {1: DM, 2: GM, 3: PM, 4: Task}
+chatType:
+    1 = DM
+    2 = GM
+    3 = PM
+    4 = Task comment OR MDM (multi-user direct message).
+        - Task comments store `chat_id = project_id` (and `task = task_id`).
+        - MDM messages store `chat_id = mdm_id`         (and `task = None`).
+        Both share `chat_type = 4` for historical reasons; we discriminate
+        downstream via `task`.
 activityType = {1: message or comment, 2: reaction, 3: mention}
 """
 
@@ -125,6 +134,16 @@ class ActivityHistoryView(AuthenticatedAPIView):
                 Q(team=data["team_id"], attendee=request_user_id)
             ).values_list("project_id", flat=True)
         )
+        # MDMs share `chat_type = 4` with task-comment activities (see module
+        # docstring), so we have to query them separately and union the
+        # results — a single `chat_id__in=project_ids+mdm_ids` query would
+        # silently match the wrong rows whenever a project_id and an mdm_id
+        # happen to collide as integers.
+        mdm_ids = list(
+            MDMMembers.objects.filter(
+                Q(mdm__owner_team=data["team_id"], attendee=request_user_id)
+            ).values_list("mdm", flat=True)
+        )
 
         all_activities = (
             # For DM thread messages except mention messages;
@@ -185,7 +204,7 @@ class ActivityHistoryView(AuthenticatedAPIView):
                 payload=data, chat_type=3, chat_ids=project_ids, n_days_ago=n_days_ago
             )
             # For task comments except mention messages;
-            #   chat_type: 4
+            #   chat_type: 4 (task-comment side, chat_id = project_id)
             #   activity_type: 1
             + get_message_activities(
                 payload=data, chat_type=4, chat_ids=project_ids, n_days_ago=n_days_ago
@@ -202,6 +221,24 @@ class ActivityHistoryView(AuthenticatedAPIView):
             #                   when the request user is mentioned in the message.)
             + get_mention_activities(
                 payload=data, chat_type=4, chat_ids=project_ids, n_days_ago=n_days_ago
+            )
+            # For MDM messages (thread + GM-style "everyone gets it");
+            #   chat_type: 4 (MDM side, chat_id = mdm_id, task IS NULL)
+            #   activity_type: 1
+            + get_message_activities(
+                payload=data, chat_type=4, chat_ids=mdm_ids, n_days_ago=n_days_ago
+            )
+            # For MDM reactions;
+            #   chat_type: 4
+            #   activity_type: 2
+            + get_reaction_activities(
+                payload=data, chat_type=4, chat_ids=mdm_ids, n_days_ago=n_days_ago
+            )
+            # For MDM mentions;
+            #   chat_type: 4
+            #   activity_type: 3 (rewritten from 1 when the user is mentioned).
+            + get_mention_activities(
+                payload=data, chat_type=4, chat_ids=mdm_ids, n_days_ago=n_days_ago
             )
         )
 
