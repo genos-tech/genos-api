@@ -30,6 +30,7 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
 
             chat_type = entry.get("chat_type")
             chat_id = entry.get("chat_id")
+            chat_name = entry.get("chat_name")
 
             if not isinstance(chat_type, int):
                 raise serializers.ValidationError("muted_chats[].chat_type must be an integer.")
@@ -37,11 +38,20 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     "muted_chats[].chat_id must be a non-empty string."
                 )
+            # chat_name is optional display metadata used by the settings
+            # panel. Accept None / missing; reject non-string values.
+            if chat_name is not None and not isinstance(chat_name, str):
+                raise serializers.ValidationError(
+                    "muted_chats[].chat_name must be a string when provided."
+                )
 
             key = (chat_type, chat_id)
             if key in seen:
                 continue
             seen.add(key)
-            normalized.append({"chat_type": chat_type, "chat_id": chat_id})
+            item = {"chat_type": chat_type, "chat_id": chat_id}
+            if chat_name:
+                item["chat_name"] = chat_name
+            normalized.append(item)
 
         return normalized
