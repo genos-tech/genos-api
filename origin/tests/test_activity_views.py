@@ -297,6 +297,45 @@ class ActivityReadStatusViewTests(BaseAPITestCase):
         response = self.client.put(self.URL, payload, format="json")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
+    def test_existing_row_value_change_persists(self):
+        """Regression: the update branch used to validate but never call
+        `.save()`, so PUT-ing a different `is_read` against an existing row
+        returned 200 yet left the DB untouched. Pre-seed an `is_read=False`
+        row, PUT with `is_read=True`, and verify the row is actually flipped.
+        """
+        self.authenticate()
+        activity = self._create_activity()
+        ActivityReadStatus.objects.create(
+            team=self.team,
+            user=self.user,
+            activity=activity,
+            is_read=False,
+        )
+
+        response = self.client.put(
+            self.URL,
+            {
+                "team_id": str(self.team.team_id),
+                "user_id": str(self.user.id),
+                "activity_id": activity.activity_id,
+                "is_read": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        row = ActivityReadStatus.objects.get(user=self.user, activity=activity)
+        self.assertTrue(
+            row.is_read,
+            "Expected the existing row to be flipped to is_read=True; "
+            "the update branch was missing serializer.save().",
+        )
+        # And no duplicate row got created.
+        self.assertEqual(
+            ActivityReadStatus.objects.filter(user=self.user, activity=activity).count(),
+            1,
+        )
+
     def test_mention_prefix_rewrite(self):
         """activity_id starting with '3' is rewritten to '1' before lookup."""
         self.authenticate()
@@ -329,11 +368,18 @@ class MarkAllActivityAsReadViewTests(BaseAPITestCase):
         is_thread=False,
         thread_id=0,
         id_prefix="a",
+        with_read_status=True,
     ):
-        """Seed `count` unread ActivityReadStatus rows for the given chat.
+        """Seed `count` ActivityFact rows for the given chat, optionally with
+        matching unread `ActivityReadStatus` rows.
 
         `id_prefix` keeps activity_id unique across multiple calls so callers
         can seed several distinct chats / threads in the same test.
+
+        `with_read_status=False` skips creating the `ActivityReadStatus` rows
+        — that mirrors the real-world case where a user has never opened any
+        of the activities, so `ActivityReadStatusView.put` was never called
+        and no rows exist yet.
         """
         activities = []
         for i in range(count):
@@ -354,12 +400,13 @@ class MarkAllActivityAsReadViewTests(BaseAPITestCase):
                 mentioned_user_ids=[],
             )
             activities.append(act)
-            ActivityReadStatus.objects.create(
-                team=self.team,
-                user=self.user,
-                activity=act,
-                is_read=False,
-            )
+            if with_read_status:
+                ActivityReadStatus.objects.create(
+                    team=self.team,
+                    user=self.user,
+                    activity=act,
+                    is_read=False,
+                )
         return activities
 
     def test_mark_all_as_read(self):
@@ -396,6 +443,103 @@ class MarkAllActivityAsReadViewTests(BaseAPITestCase):
             is_read=False,
         ).count()
         self.assertEqual(unread_other, 2)
+
+    def test_mark_all_creates_read_statuses_when_none_exist(self):
+        """Regression: clicking "Mark all as read" before the user has ever
+        opened any activity in the chat must still persist as read.
+
+        Reproduces the production bug where the bulk endpoint relied on a
+        plain `.update()` that only flipped existing rows. With no
+        `ActivityReadStatus` rows seeded, `.update()` matched zero rows and
+        the next history fetch reported every activity as unread again.
+        After the fix, `bulk_create(..., ignore_conflicts=True)` materialises
+        the rows so `EXISTS(... is_read=True)` returns True on next read.
+        """
+        self.authenticate()
+        activities = self._seed_unread_statuses(
+            3, chat_type=1, chat_id=100, with_read_status=False
+        )
+
+        # Sanity: nothing yet.
+        self.assertEqual(
+            ActivityReadStatus.objects.filter(user=self.user).count(),
+            0,
+            "Precondition: no ActivityReadStatus rows should exist yet.",
+        )
+
+        response = self.client.put(
+            self.URL,
+            {
+                "team_id": str(self.team.team_id),
+                "user_id": str(self.user.id),
+                "chat_type": 1,
+                "chat_id": 100,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # One row per activity, all is_read=True.
+        rows = ActivityReadStatus.objects.filter(
+            user=self.user,
+            activity__activity_id__in=[a.activity_id for a in activities],
+        )
+        self.assertEqual(rows.count(), 3)
+        self.assertEqual(rows.filter(is_read=True).count(), 3)
+
+    def test_mark_all_mixed_existing_and_missing(self):
+        """Some activities have a False row, some have no row at all.
+        Both paths should end up is_read=True with exactly one row each.
+        """
+        self.authenticate()
+        with_status = self._seed_unread_statuses(2, chat_type=3, chat_id=300, id_prefix="with")
+        without_status = self._seed_unread_statuses(
+            2, chat_type=3, chat_id=300, id_prefix="without", with_read_status=False
+        )
+
+        response = self.client.put(
+            self.URL,
+            {
+                "team_id": str(self.team.team_id),
+                "user_id": str(self.user.id),
+                "chat_type": 3,
+                "chat_id": 300,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        all_ids = [a.activity_id for a in (*with_status, *without_status)]
+        rows = ActivityReadStatus.objects.filter(user=self.user, activity__activity_id__in=all_ids)
+        self.assertEqual(rows.count(), 4, "Expected exactly one row per activity.")
+        self.assertEqual(rows.filter(is_read=False).count(), 0)
+
+    def test_mark_all_is_idempotent(self):
+        """Calling the endpoint twice should not duplicate rows (the
+        unique `(user, activity_id)` constraint plus `ignore_conflicts`
+        should make the second call a no-op)."""
+        self.authenticate()
+        activities = self._seed_unread_statuses(
+            2, chat_type=1, chat_id=100, with_read_status=False
+        )
+        body = {
+            "team_id": str(self.team.team_id),
+            "user_id": str(self.user.id),
+            "chat_type": 1,
+            "chat_id": 100,
+        }
+
+        first = self.client.put(self.URL, body, format="json")
+        second = self.client.put(self.URL, body, format="json")
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+
+        rows = ActivityReadStatus.objects.filter(
+            user=self.user,
+            activity__activity_id__in=[a.activity_id for a in activities],
+        )
+        self.assertEqual(rows.count(), 2)
+        self.assertEqual(rows.filter(is_read=True).count(), 2)
 
     def test_mark_all_includes_thread_activities(self):
         """Thread-message activities for the same chat are included in the bulk update."""
