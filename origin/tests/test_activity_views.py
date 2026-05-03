@@ -312,29 +312,41 @@ class ActivityReadStatusViewTests(BaseAPITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertTrue(
-            ActivityReadStatus.objects.filter(activity_id="1-2-200-600").exists()
-        )
+        self.assertTrue(ActivityReadStatus.objects.filter(activity_id="1-2-200-600").exists())
 
 
 class MarkAllActivityAsReadViewTests(BaseAPITestCase):
-    """PUT /api/v2/chat/activity/read/all/ — mark all activities as read."""
+    """PUT /api/v2/chat/activity/read/all/ — mark all activities for a single
+    chat (DM/GM/PM/MDM) as read, including thread-message activities."""
 
     URL = "/api/v2/chat/activity/read/all/"
 
-    def _seed_unread_statuses(self, count=3):
+    def _seed_unread_statuses(
+        self,
+        count=3,
+        chat_type=1,
+        chat_id=100,
+        is_thread=False,
+        thread_id=0,
+        id_prefix="a",
+    ):
+        """Seed `count` unread ActivityReadStatus rows for the given chat.
+
+        `id_prefix` keeps activity_id unique across multiple calls so callers
+        can seed several distinct chats / threads in the same test.
+        """
         activities = []
         for i in range(count):
             act = ActivityFact.objects.create(
                 team=self.team,
-                activity_id=f"1-1-100-{500 + i}",
+                activity_id=f"1-{chat_type}-{chat_id}-{id_prefix}-{500 + i}",
                 activity_type=1,
-                chat_type=1,
-                chat_id=100,
-                is_thread=False,
-                thread_id=0,
+                chat_type=chat_type,
+                chat_id=chat_id,
+                is_thread=is_thread,
+                thread_id=thread_id,
                 message_id=500 + i,
-                message_unique_key=f"msg-unique-{i}",
+                message_unique_key=f"msg-unique-{id_prefix}-{i}",
                 first_line_content=f"msg {i}",
                 sender=self.user,
                 latest_reaction={},
@@ -352,16 +364,67 @@ class MarkAllActivityAsReadViewTests(BaseAPITestCase):
 
     def test_mark_all_as_read(self):
         self.authenticate()
-        self._seed_unread_statuses(3)
+        self._seed_unread_statuses(3, chat_type=1, chat_id=100)
+        # Different chat — should NOT be flipped by the targeted call.
+        other = self._seed_unread_statuses(2, chat_type=2, chat_id=200, id_prefix="other")
 
         response = self.client.put(
             self.URL,
-            {"team_id": str(self.team.team_id), "user_id": str(self.user.id)},
+            {
+                "team_id": str(self.team.team_id),
+                "user_id": str(self.user.id),
+                "chat_type": 1,
+                "chat_id": 100,
+            },
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # Targeted chat: every entry now read.
+        unread_target = ActivityReadStatus.objects.filter(
+            team=self.team,
+            user=self.user,
+            is_read=False,
+            activity__chat_type=1,
+            activity__chat_id=100,
+        ).count()
+        self.assertEqual(unread_target, 0)
+
+        # Other chat: untouched.
+        unread_other = ActivityReadStatus.objects.filter(
+            activity__activity_id__in=[a.activity_id for a in other],
+            is_read=False,
+        ).count()
+        self.assertEqual(unread_other, 2)
+
+    def test_mark_all_includes_thread_activities(self):
+        """Thread-message activities for the same chat are included in the bulk update."""
+        self.authenticate()
+        inline = self._seed_unread_statuses(2, chat_type=1, chat_id=100, id_prefix="inline")
+        threaded = self._seed_unread_statuses(
+            2,
+            chat_type=1,
+            chat_id=100,
+            is_thread=True,
+            thread_id=42,
+            id_prefix="thread",
+        )
+
+        response = self.client.put(
+            self.URL,
+            {
+                "team_id": str(self.team.team_id),
+                "user_id": str(self.user.id),
+                "chat_type": 1,
+                "chat_id": 100,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        all_ids = [a.activity_id for a in (*inline, *threaded)]
         unread = ActivityReadStatus.objects.filter(
-            team=self.team, user=self.user, is_read=False
+            activity__activity_id__in=all_ids, is_read=False
         ).count()
         self.assertEqual(unread, 0)
 
@@ -369,7 +432,12 @@ class MarkAllActivityAsReadViewTests(BaseAPITestCase):
         self.authenticate()
         response = self.client.put(
             self.URL,
-            {"team_id": str(self.team.team_id), "user_id": str(self.user.id)},
+            {
+                "team_id": str(self.team.team_id),
+                "user_id": str(self.user.id),
+                "chat_type": 1,
+                "chat_id": 100,
+            },
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -460,7 +528,7 @@ class ValidationFailureTests(BaseAPITestCase):
         self.authenticate()
         response = self.client.put(
             "/api/v2/chat/activity/read/all/",
-            {"user_id": str(self.user.id)},
+            {"user_id": str(self.user.id), "chat_type": 1, "chat_id": 100},
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -469,7 +537,33 @@ class ValidationFailureTests(BaseAPITestCase):
         self.authenticate()
         response = self.client.put(
             "/api/v2/chat/activity/read/all/",
-            {"team_id": str(self.team.team_id)},
+            {"team_id": str(self.team.team_id), "chat_type": 1, "chat_id": 100},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_mark_all_read_missing_chat_type(self):
+        self.authenticate()
+        response = self.client.put(
+            "/api/v2/chat/activity/read/all/",
+            {
+                "team_id": str(self.team.team_id),
+                "user_id": str(self.user.id),
+                "chat_id": 100,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_mark_all_read_missing_chat_id(self):
+        self.authenticate()
+        response = self.client.put(
+            "/api/v2/chat/activity/read/all/",
+            {
+                "team_id": str(self.team.team_id),
+                "user_id": str(self.user.id),
+                "chat_type": 1,
+            },
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

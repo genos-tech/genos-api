@@ -57,8 +57,6 @@ class ActivityReadStatusView(AuthenticatedAPIView):
         """Upsert Operation, not a simple PUT"""
 
         request_user_id = request.user.id
-        
-        print("request.data:", request.data)
 
         data = {
             "team": request.data.get("team_id"),
@@ -101,11 +99,22 @@ class ActivityReadStatusView(AuthenticatedAPIView):
 
 class MarkAllActivityAsReadView(AuthenticatedAPIView):
     def put(self, request):
-        """Mark all activity as read"""
+        """Mark every unread activity for the given chat (DM/GM/PM/MDM) as read.
+
+        Thread-message activities are included automatically: `is_thread` and
+        `thread_id` live on `ActivityFact` and we deliberately do NOT filter
+        on them, so a single call clears both inline and threaded activity
+        badges for the chat.
+        """
 
         request_user_id = request.user.id
 
-        data = {"team": request.data.get("team_id"), "user": request.data.get("user_id")}
+        data = {
+            "team": request.data.get("team_id"),
+            "user": request.data.get("user_id"),
+            "chat_type": request.data.get("chat_type"),
+            "chat_id": request.data.get("chat_id"),
+        }
 
         if res := validate_request_data(data):
             return res
@@ -114,7 +123,11 @@ class MarkAllActivityAsReadView(AuthenticatedAPIView):
 
         try:
             ActivityReadStatus.objects.filter(
-                team=data["team"], user=data["user"], is_read=False
+                team=data["team"],
+                user=data["user"],
+                is_read=False,
+                activity__chat_type=data["chat_type"],
+                activity__chat_id=data["chat_id"],
             ).update(is_read=True)
         except Exception:
             return Response(status=status.HTTP_400_BAD_REQUEST)
