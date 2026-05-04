@@ -1,6 +1,6 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "pipenv install --deploy --ignore-pipfile && pipenv run python backend_django/manage.py collectstatic --noinput"
+buildCommand = "pipenv install --skip-lock && pipenv run python backend_django/manage.py collectstatic --noinput"
 
 [deploy]
 startCommand = "pipenv run python backend_django/manage.py migrate --noinput && pipenv run gunicorn apis.wsgi:application --chdir backend_django --bind 0.0.0.0:$PORT --workers 3"
