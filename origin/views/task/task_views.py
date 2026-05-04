@@ -241,6 +241,16 @@ class TaskMasterView(AuthenticatedAPIView):
         milestone_in_request = "milestone" in request.data
         requested_milestone_id = request.data.get("milestone") if milestone_in_request else None
 
+        # Same "key absent vs explicit null" trap for `due_date`: the
+        # frontend sends `due_date: null` when the user picks TBD, but
+        # the None-strip below would silently drop the key and the
+        # serializer would never clear the column. Capture the intent
+        # here, then re-write the field directly after `serializer.save()`
+        # so the rest of the request can keep flowing through the
+        # existing strip-then-save path. We treat the empty string the
+        # same as null because some legacy callers ship `""` instead.
+        clear_due_date = "due_date" in request.data and request.data.get("due_date") in (None, "")
+
         # Remove None values from the update_data
         for key, val in request.data.items():
             if val is None:
@@ -260,6 +270,18 @@ class TaskMasterView(AuthenticatedAPIView):
         serializer = TaskMasterSerializer(task, data=update_data)
         if serializer.is_valid():
             serializer.save()
+
+            # Apply the explicit-clear intent captured above. The
+            # serializer never saw `due_date` (the None-strip removed
+            # it), so we have to write it ourselves; otherwise the
+            # column would still hold the previous value and a refresh
+            # would resurrect the old date that the user thought they
+            # cleared.
+            if clear_due_date:
+                task.refresh_from_db()
+                if task.due_date is not None:
+                    task.due_date = None
+                    task.save(update_fields=["due_date", "ts_updated_at"])
 
             # Bridge milestone <-> parent_task_id / root_task_id and
             # cascade the new milestone_id to descendant sub-tasks so
