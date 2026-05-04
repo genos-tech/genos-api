@@ -20,6 +20,103 @@ from origin.views.utils.mention_handler import extractMentionedUsers
 from .common_color import STATUS_COLOR_MAP, PRIORITY_COLOR_MAP, EFFORT_LEVEL_COLOR_MAP
 
 
+def _bridge_milestone_to_parent(task, requested_milestone_id):
+    """Keep `parent_task_id` / `root_task_id` in sync with a milestone change.
+
+    Mirrors the bridge logic in `TaskMasterView.post` so PUT updates
+    behave the same way as creation. The contract (see
+    `MilestoneMaster.task` doc) is that tasks "living in a milestone"
+    have `parent_task_id == milestone.task_id` so the project task
+    table nests them as sub-tasks of the milestone row.
+
+    `requested_milestone_id` is the value pulled from `request.data`:
+        - a milestone id  -> SET / CHANGE the link
+        - `None`          -> CLEAR the link (caller must distinguish
+                             "key absent" from "key present + null"
+                             before invoking this helper)
+
+    Writes are scoped via `save(update_fields=[...])` so the broader
+    `serializer.save()` upstream can run independently without us
+    stepping on its updates.
+    """
+    from origin.models.task.milestone_models import MilestoneMaster
+
+    if requested_milestone_id is not None:
+        try:
+            m = MilestoneMaster.objects.select_related("task").get(
+                milestone_id=requested_milestone_id, is_deleted=False
+            )
+        except MilestoneMaster.DoesNotExist:
+            return
+        # Don't let a task become its own parent (defensive: would only
+        # happen if a milestone's backing task hit this endpoint, which
+        # shouldn't be possible via the picker but might via direct
+        # API calls).
+        if m.task_id is None or m.task_id == task.task_id:
+            return
+        task.milestone_id = requested_milestone_id
+        task.parent_task_id = m.task_id
+        task.root_task_id = m.task_id
+        task.save(
+            update_fields=[
+                "milestone_id",
+                "parent_task_id",
+                "root_task_id",
+                "ts_updated_at",
+            ]
+        )
+    else:
+        if task.milestone_id is None:
+            return
+        # Only break the parent link when the current parent IS the old
+        # milestone's backing task. A genuine sub-task chain that
+        # happened to share a milestone (e.g. Milestone -> Task A ->
+        # Sub-task B; user clears milestone on B) must keep its A->B
+        # parent edge intact.
+        try:
+            old_m = MilestoneMaster.objects.get(milestone_id=task.milestone_id)
+            cleared_parent = old_m.task_id is not None and task.parent_task_id == old_m.task_id
+        except MilestoneMaster.DoesNotExist:
+            cleared_parent = False
+        task.milestone_id = None
+        update_fields = ["milestone_id", "ts_updated_at"]
+        if cleared_parent:
+            task.parent_task_id = None
+            task.root_task_id = task.task_id
+            update_fields += ["parent_task_id", "root_task_id"]
+        task.save(update_fields=update_fields)
+
+
+def _cascade_milestone_to_subtasks(parent_task_id, milestone_id, depth_limit=10):
+    """Push `milestone_id` down the `parent_task_id` chain.
+
+    When a task is moved between milestones, its descendant sub-tasks
+    transitively move with it — `milestone_views.py` aggregations and
+    the sprint board both filter by `milestone_id`, so failing to
+    cascade silently under-counts.
+
+    BFS down the chain with a depth cap to defang any cyclic / corrupt
+    parent_task_id loops that might exist in the wild. The cap is
+    generous (10) because real task hierarchies are shallow.
+    """
+    collected = set()
+    frontier = {parent_task_id}
+    for _ in range(depth_limit):
+        if not frontier:
+            break
+        children = set(
+            TaskMaster.objects.filter(parent_task_id__in=frontier)
+            .exclude(task_id__in=collected | {parent_task_id})
+            .values_list("task_id", flat=True)
+        )
+        if not children:
+            break
+        collected |= children
+        frontier = children
+    if collected:
+        TaskMaster.objects.filter(task_id__in=collected).update(milestone_id=milestone_id)
+
+
 class TaskMasterView(AuthenticatedAPIView):
     def post(self, request):
         # Two-way bridge between `milestone` and `parent_task_id`:
@@ -134,6 +231,16 @@ class TaskMasterView(AuthenticatedAPIView):
 
         update_data = request.data.copy()
 
+        # Capture the milestone change intent BEFORE the None-strip
+        # below: an explicit `milestone: null` in the payload means
+        # "clear the link", which we must distinguish from "key
+        # absent" (no change). The bridge below runs after
+        # serializer.save() and writes parent_task_id / root_task_id /
+        # milestone_id directly so the None-strip can keep its current
+        # behavior for every other field.
+        milestone_in_request = "milestone" in request.data
+        requested_milestone_id = request.data.get("milestone") if milestone_in_request else None
+
         # Remove None values from the update_data
         for key, val in request.data.items():
             if val is None:
@@ -153,6 +260,16 @@ class TaskMasterView(AuthenticatedAPIView):
         serializer = TaskMasterSerializer(task, data=update_data)
         if serializer.is_valid():
             serializer.save()
+
+            # Bridge milestone <-> parent_task_id / root_task_id and
+            # cascade the new milestone_id to descendant sub-tasks so
+            # aggregations (sprint board, milestone rollups) stay
+            # consistent. Mirrors `TaskMasterView.post`'s bridge.
+            if milestone_in_request:
+                task.refresh_from_db()
+                _bridge_milestone_to_parent(task, requested_milestone_id)
+                _cascade_milestone_to_subtasks(task.task_id, requested_milestone_id)
+
             return Response(
                 {
                     "task": serializer.data,
