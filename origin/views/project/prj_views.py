@@ -215,7 +215,7 @@ class JoinProjectView(AuthenticatedAPIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         error = serializer.errors
-        error["hint"] = f"Failed to join project: {request.data["project_id"]}"
+        error["hint"] = f"Failed to join project: {request.data['project_id']}"
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
 
