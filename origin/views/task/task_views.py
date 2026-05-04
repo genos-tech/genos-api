@@ -57,11 +57,18 @@ def _bridge_milestone_to_parent(task, requested_milestone_id):
         task.milestone_id = requested_milestone_id
         task.parent_task_id = m.task_id
         task.root_task_id = m.task_id
+        # The frontend doesn't expose a direct sprint picker on tasks
+        # — sprint is always inherited from the task's milestone. Sync
+        # it here so a task moved into / between milestones lands in
+        # the right sprint bucket without the client having to send
+        # `sprint` explicitly.
+        task.sprint_id = m.sprint_id
         task.save(
             update_fields=[
                 "milestone_id",
                 "parent_task_id",
                 "root_task_id",
+                "sprint_id",
                 "ts_updated_at",
             ]
         )
@@ -79,7 +86,12 @@ def _bridge_milestone_to_parent(task, requested_milestone_id):
         except MilestoneMaster.DoesNotExist:
             cleared_parent = False
         task.milestone_id = None
-        update_fields = ["milestone_id", "ts_updated_at"]
+        # Mirror the milestone clear on the sprint so a row that used
+        # to inherit a sprint via its milestone doesn't keep the now-
+        # orphaned chip lingering on the table. Tasks without a
+        # milestone are unscheduled by definition in the current UX.
+        task.sprint_id = None
+        update_fields = ["milestone_id", "sprint_id", "ts_updated_at"]
         if cleared_parent:
             task.parent_task_id = None
             task.root_task_id = task.task_id
@@ -114,7 +126,25 @@ def _cascade_milestone_to_subtasks(parent_task_id, milestone_id, depth_limit=10)
         collected |= children
         frontier = children
     if collected:
-        TaskMaster.objects.filter(task_id__in=collected).update(milestone_id=milestone_id)
+        # Mirror the milestone's sprint onto the cascade so descendants
+        # follow the same milestone → sprint mapping as their root. A
+        # cleared milestone (`milestone_id is None`) cascades a cleared
+        # sprint to keep the invariant "task without milestone has no
+        # auto-derived sprint".
+        sprint_id = None
+        if milestone_id is not None:
+            from origin.models.task.milestone_models import MilestoneMaster
+
+            try:
+                m_for_sprint = MilestoneMaster.objects.only("sprint_id").get(
+                    milestone_id=milestone_id
+                )
+                sprint_id = m_for_sprint.sprint_id
+            except MilestoneMaster.DoesNotExist:
+                pass
+        TaskMaster.objects.filter(task_id__in=collected).update(
+            milestone_id=milestone_id, sprint_id=sprint_id
+        )
 
 
 class TaskMasterView(AuthenticatedAPIView):
@@ -169,6 +199,24 @@ class TaskMasterView(AuthenticatedAPIView):
             except Exception:
                 pass
 
+        # Derive the sprint from the (possibly inferred) milestone so a
+        # newly created task always lands in the same sprint bucket as
+        # its milestone. The frontend doesn't expose a direct sprint
+        # picker on tasks today; sprint is purely a milestone roll-up
+        # in the current UX, so we ignore any explicit `sprint` in the
+        # payload when a milestone is in scope. When no milestone is
+        # in scope we fall back to whatever the client sent (kept for
+        # any legacy callers), defaulting to None.
+        sprint_id = request.data.get("sprint")
+        if milestone_id:
+            try:
+                m_for_sprint = MilestoneMaster.objects.only("sprint_id").get(
+                    milestone_id=milestone_id, is_deleted=False
+                )
+                sprint_id = m_for_sprint.sprint_id
+            except MilestoneMaster.DoesNotExist:
+                sprint_id = None
+
         data = {
             "team": request.data["team"],
             "project": request.data["project"],
@@ -176,6 +224,7 @@ class TaskMasterView(AuthenticatedAPIView):
             "chat_id": request.data.get("chat_id", None),
             "thread_id": request.data.get("thread_id", None),
             "milestone": milestone_id,
+            "sprint": sprint_id,
             "parent_task_id": parent_task_id,
             "root_task_id": request.data.get("root_task_id", None),
             "assignee": request.data["assignee"],

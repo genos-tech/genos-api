@@ -332,7 +332,9 @@ class MilestoneView(AuthenticatedAPIView):
         with transaction.atomic():
             # Sprint move support: explicit `sprint_id` key (including
             # `None`) is honored; absent key leaves the sprint as-is.
+            sprint_changed = False
             if "sprint_id" in request.data:
+                sprint_changed = True
                 new_sprint_id = request.data.get("sprint_id")
                 if new_sprint_id in (None, "null", ""):
                     milestone.sprint = None
@@ -370,6 +372,19 @@ class MilestoneView(AuthenticatedAPIView):
 
             milestone.save()
             _sync_backing_task(milestone)
+
+            # Tasks linked to this milestone inherit the milestone's
+            # sprint by convention (the frontend doesn't expose a
+            # direct sprint picker on tasks). When the milestone moves
+            # between sprints, push the new sprint to every task that
+            # cites it so sprint board / sprint analytics stay in sync.
+            # `_sync_backing_task` already handles the backing row;
+            # this catches the rest. Scoped to the sprint-changed path
+            # so a no-op patch (e.g. status flip) doesn't churn rows.
+            if sprint_changed:
+                TaskMaster.objects.filter(milestone=milestone).exclude(
+                    sprint_id=milestone.sprint_id
+                ).update(sprint_id=milestone.sprint_id)
 
             if "assignee_ids" in request.data:
                 self._sync_assignees(milestone, request.data.get("assignee_ids") or [])
