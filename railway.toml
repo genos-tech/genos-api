@@ -1,7 +1,6 @@
 [build]
-builder = "NIXPACKS"
-buildCommand = "pipenv sync"
+builder = "DOCKERFILE"
+dockerfilePath = "backend_django/Dockerfile"
 
 [deploy]
-startCommand = "pipenv run python backend_django/manage.py collectstatic --noinput && pipenv run python backend_django/manage.py migrate --noinput && pipenv run gunicorn apis.wsgi:application --chdir backend_django --bind 0.0.0.0:$PORT --workers 3"
 restartPolicyType = "ON_FAILURE"
