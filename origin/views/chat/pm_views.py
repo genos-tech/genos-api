@@ -10,6 +10,7 @@ from origin.models.chat.reaction_models import *
 from origin.models.project.prj_models import ProjectMembers, ProjectMaster
 from origin.models.chat.pm_models import PMMessages, PMThreadMessages
 from origin.models.chat.read_status_models import *
+from origin.models.task.task_models import TaskComments
 from origin.serializers.chat.pm_serializers import *
 from origin.views.chat.modules.common import generate_first_line
 from origin.models.chat.chat_master_models import UserChatMaster
@@ -96,6 +97,26 @@ class PMHistoryView(AuthenticatedAPIView):
             .annotate(num_of_replies=Count("thread_message_id"))
         }
 
+        # Task-comment counts. PM bubbles surface this instead of
+        # `numReplies` (which counts auto-generated activity bubbles
+        # like "Task created/updated by ..."). Comments are the
+        # human-actionable signal for project messages, so the
+        # under-bar chip should reflect them.
+        # Single GROUP BY against `TaskComments`, scoped to the task
+        # ids that actually appear on this view's messages — avoids
+        # counting comments for tasks that aren't surfaced here.
+        pm_task_ids = [m.task.task_id for m in raw_messages if m.task]
+        task_comment_counts = (
+            {
+                row["task"]: row["num_of_comments"]
+                for row in TaskComments.objects.filter(task_id__in=pm_task_ids, is_deleted=False)
+                .values("task")
+                .annotate(num_of_comments=Count("comment_id"))
+            }
+            if pm_task_ids
+            else {}
+        )
+
         # Reactions (grouped by chat_id + message_id)
         raw_reactions = (
             ReactionFact.objects.filter(
@@ -149,6 +170,7 @@ class PMHistoryView(AuthenticatedAPIView):
                 team_id,
                 team_name,
                 thread_reply_counts,
+                task_comment_counts,
                 reactions_by_message,
                 flagged_message_ids,
             )
@@ -214,7 +236,14 @@ class PMHistoryView(AuthenticatedAPIView):
         )
 
     def serialize_message(
-        self, msg, team_id, team_name, reply_counts, reactions_by_message, flagged_message_ids
+        self,
+        msg,
+        team_id,
+        team_name,
+        reply_counts,
+        task_comment_counts,
+        reactions_by_message,
+        flagged_message_ids,
     ):
         project_id = msg.project.project_id
         message_id = msg.message_id
@@ -239,6 +268,11 @@ class PMHistoryView(AuthenticatedAPIView):
             },
             "receiver": {},  # placeholder for future
             "numReplies": reply_counts.get(f"{project_id}-{message_id}", 0),
+            # Task-comment count for the bubble's linked task (0 when
+            # the PM message has no task). Powers the under-bar
+            # "X comment(s)" chip on PM bubbles in lieu of the
+            # PMThreadMessages-driven "X replies".
+            "taskCommentCount": (task_comment_counts.get(msg.task.task_id, 0) if msg.task else 0),
             "reactions": reactions_by_message.get((project_id, message_id), []),
             "project": {
                 "projectId": msg.project.project_id,
@@ -391,6 +425,14 @@ class PMSingleMessageView(AuthenticatedAPIView):
                 "isSystemUser": "",
             },
             "numReplies": reply_count,
+            # See PMHistoryView.serialize_message — PM bubbles render a
+            # task-comment chip instead of a reply chip. Single-message
+            # endpoint, so a direct count() is fine.
+            "taskCommentCount": (
+                TaskComments.objects.filter(task=pm.task, is_deleted=False).count()
+                if pm.task
+                else 0
+            ),
             "reactions": all_reactions,
             "taskId": pm.task.task_id if pm.task else None,
             "taskExist": True if pm.task else False,
@@ -568,8 +610,11 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
         )
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=CHAT_TYPE, chat_id=project_id, message_id=message_id, is_thread=True,
-            thread_id=thread_id
+            chat_type=CHAT_TYPE,
+            chat_id=project_id,
+            message_id=message_id,
+            is_thread=True,
+            thread_id=thread_id,
         )
         all_reactions = []
         for raw_reaction in raw_reactions:
