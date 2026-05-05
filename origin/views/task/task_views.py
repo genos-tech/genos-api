@@ -1,7 +1,7 @@
 import os
 import base64
 from datetime import datetime
-from django.db.models import F, Max, Q
+from django.db.models import Case, F, IntegerField, Max, Q, Value, When
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
@@ -555,6 +555,17 @@ class GetTeamTasksByTagView(AuthenticatedAPIView):
 
 
 class ChildTaskView(AuthenticatedAPIView):
+    # Status precedence used by the sub-task list. Mirrors the previous
+    # two-pass Python sort but pushed into SQL so we don't have to
+    # materialize/order rows in memory.
+    _STATUS_ORDER = (
+        ("Open", 0),
+        ("WIP", 1),
+        ("Pending", 2),
+        ("Closed", 3),
+        ("Deleted", 4),
+    )
+
     def get(self, request):
         team_id = request.GET.get("team_id")
         raw_project_id = request.GET.get("project_id")
@@ -566,152 +577,97 @@ class ChildTaskView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        project_id = int(raw_project_id)
-        current_task_id = int(raw_current_task_id)
+        try:
+            project_id = int(raw_project_id)
+            current_task_id = int(raw_current_task_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "Wrong parameters."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        target_tasks = TaskMaster.objects.filter(
-            is_init_task=False,
-            team=team_id,
-            project=project_id,
-            parent_task_id=current_task_id,
-        ).values_list("project", "task_id")
+        # The only consumer (`TaskSubTasksBlock`) renders just id, title,
+        # status, assignee.userId, project (id/name/systemUserId) and
+        # tags (tagName/tagColor). The previous implementation:
+        #   1. Ran an N+1 query per child task.
+        #   2. Read every attachment file from disk and base64-encoded it
+        #      inline, ballooning responses to ~9 MB even though
+        #      attachments/body/reporter/dates/etc. are never read.
+        #   3. Sorted the result twice in Python.
+        # All three are collapsed into a single annotated query that
+        # selects the FK rows we touch and orders rows in SQL.
+        status_order_expr = Case(
+            *[When(status=label, then=Value(rank)) for label, rank in self._STATUS_ORDER],
+            default=Value(len(self._STATUS_ORDER)),
+            output_field=IntegerField(),
+        )
 
-        if len(target_tasks) == 0:
-            return Response({}, status=status.HTTP_200_OK)
+        child_tasks = (
+            TaskMaster.objects.filter(
+                is_init_task=False,
+                team=team_id,
+                project_id=project_id,
+                parent_task_id=current_task_id,
+            )
+            .annotate(_status_rank=status_order_expr)
+            .order_by("_status_rank", "-ts_updated_at")
+            .values(
+                "task_id",
+                "title",
+                "status",
+                "tags",
+                "root_task_id",
+                "parent_task_id",
+                "thread_id",
+                "assignee__id",
+                "assignee__username",
+                "assignee__email",
+                "assignee__profile_image_file_name",
+                "team__team_id",
+                "project__project_id",
+                "project__project_name",
+                "project__project_system_user__id",
+            )
+        )
 
         response_data = []
+        for t in child_tasks:
+            status_label = t["status"] or ""
+            status_color = STATUS_COLOR_MAP.get(status_label.lower(), {})
 
-        for target_task in target_tasks:
-            task_attachments = TaskMaster.objects.prefetch_related("task_attachments").filter(
-                team=team_id,
-                project_id=target_task[0],
-                task_id=target_task[1],
-                is_init_task=False,
-            )
-
-            for t in task_attachments:
-                attached_files = []
-                for _file in t.task_attachments.all().values_list(
-                    "attached_file", "attached_type", "original_filename"
-                ):
-                    file_path = _file[0]
-                    file_type = _file[1]
-                    orig_name = _file[2]
-                    try:
-                        with open("./uploads/" + file_path, "rb") as f:
-                            encoded_file = base64.b64encode(f.read()).decode("utf-8")
-                            attached_files.append(
-                                {
-                                    "file": file_path,
-                                    "file_base64": encoded_file,
-                                    "name": orig_name or os.path.basename(file_path),
-                                    "type": file_type,
-                                }
-                            )
-                    except FileNotFoundError:
-                        print(f"File not found: {file_path}")
-                        continue
-
-                response_data.append(
-                    {
-                        "id": t.task_id,
-                        "project": {
-                            "projectId": t.project.project_id,
-                            "projectName": t.project.project_name,
-                            "systemUserId": t.project.project_system_user.id,
-                        },
-                        "title": t.title,
-                        "body": t.content,
-                        "assignee": {
-                            "teamId": t.team.team_id,
-                            "userId": t.assignee.id,
-                            "userName": t.assignee.username,
-                            "userEmail": t.assignee.email,
-                            "avatarImgPath": t.assignee.profile_image_file_name,
-                            "tsLastSeen": "",
-                            "tsJoined": "",
-                            "customStatus": "",
-                        },
-                        "reporter": {
-                            "teamId": t.team.team_id,
-                            "userId": t.reporter.id,
-                            "userName": t.reporter.username,
-                            "userEmail": t.reporter.email,
-                            "avatarImgPath": t.reporter.profile_image_file_name,
-                            "tsLastSeen": "",
-                            "tsJoined": "",
-                            "customStatus": "",
-                        },
-                        "createdDate": str(t.ts_created_at.date()),
-                        "updatedAt": str(t.ts_updated_at),
-                        "dueDate": str(t.due_date) if t.due_date else None,
-                        "daysLeft": (
-                            max(-1, (t.due_date - datetime.now().date()).days)
-                            if t.due_date
-                            else None
-                        ),
-                        "status": {
-                            "code": 0,
-                            "status": t.status,
-                            "color": STATUS_COLOR_MAP[t.status.lower()]["chipColor"],
-                            "textColor": STATUS_COLOR_MAP[t.status.lower()]["textColor"],
-                        },
-                        "priority": {
-                            "code": 0,
-                            "priority": t.priority,
-                            "color": (
-                                PRIORITY_COLOR_MAP[t.priority.lower()]["chipColor"]
-                                if t.priority
-                                else None
-                            ),
-                            "textColor": (
-                                PRIORITY_COLOR_MAP[t.priority.lower()]["textColor"]
-                                if t.priority
-                                else None
-                            ),
-                        },
-                        "effortLevel": {
-                            "code": 0,
-                            "level": t.effort_level,
-                            "color": (
-                                EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["chipColor"]
-                                if t.effort_level
-                                else None
-                            ),
-                            "textColor": (
-                                EFFORT_LEVEL_COLOR_MAP[t.effort_level.lower()]["textColor"]
-                                if t.effort_level
-                                else None
-                            ),
-                        },
-                        "tags": t.tags,
-                        "links": t.links,
-                        "attachments": attached_files,
-                        "parentTaskId": t.parent_task_id,
-                        "rootTaskId": t.root_task_id,
-                        "threadId": t.thread_id,
+            response_data.append(
+                {
+                    "id": t["task_id"],
+                    "project": {
+                        "projectId": t["project__project_id"],
+                        "projectName": t["project__project_name"],
+                        "systemUserId": t["project__project_system_user__id"],
                     },
-                )
-
-        if len(response_data) > 0:
-            # Sort by Open -> WIP -> Pending -> Closed -> Deleted order
-            # And then sort by updated_at for each status in descending order.
-            status_order = {
-                "Open": 0,
-                "WIP": 1,
-                "Pending": 2,
-                "Closed": 3,
-                "Deleted": 4,
-            }
-            # Step 1: Sort by updatedAt descending (secondary key)
-            response_data.sort(key=lambda x: x["updatedAt"], reverse=True)
-            # Step 2: Sort by status ascending (primary key)
-            response_data.sort(key=lambda x: status_order[x["status"]["status"]])
-            return Response(response_data, status=status.HTTP_200_OK)
-        else:
-            return Response(
-                {"error": "Failed to fetch expected task data"}, status=status.HTTP_400_BAD_REQUEST
+                    "title": t["title"],
+                    "assignee": {
+                        "teamId": t["team__team_id"],
+                        "userId": t["assignee__id"],
+                        "userName": t["assignee__username"],
+                        "userEmail": t["assignee__email"],
+                        "avatarImgPath": t["assignee__profile_image_file_name"],
+                        "tsLastSeen": "",
+                        "tsJoined": "",
+                        "customStatus": "",
+                    },
+                    "status": {
+                        "code": 0,
+                        "status": status_label,
+                        "color": status_color.get("chipColor"),
+                        "textColor": status_color.get("textColor"),
+                    },
+                    "tags": t["tags"] or [],
+                    "parentTaskId": t["parent_task_id"],
+                    "rootTaskId": t["root_task_id"],
+                    "threadId": t["thread_id"],
+                },
             )
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 class GetTaskByThreadIdView(AuthenticatedAPIView):
