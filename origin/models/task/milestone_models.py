@@ -73,6 +73,14 @@ class MilestoneMaster(models.Model):
     effort_level_code = models.BigIntegerField(blank=True, null=True)
     due_date = models.DateField(blank=True, null=True)
     tags = models.JSONField(blank=True, null=True)
+    # External links (e.g. design docs, GitHub PRs). Mirrors
+    # `TaskMaster.links` shape: a list of `{ id, url, title, isGitHub }`.
+    # The frontend's `DynamicURLManager` writes/reads this field via the
+    # milestone PATCH endpoint, exactly like it does for tasks. The
+    # backing TaskMaster row is kept in sync by `_sync_backing_task` so
+    # the table view (which reads from the backing row) stays
+    # consistent.
+    links = models.JSONField(blank=True, null=True)
     is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
