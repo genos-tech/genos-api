@@ -27,7 +27,8 @@ from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
 from origin.middleware.current_user import get_current_user
-from origin.models.task.milestone_models import MilestoneAssignees
+from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
+from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskAttachments, TaskComments, TaskMaster
 
@@ -94,6 +95,50 @@ def _to_jsonable(value: Any) -> Any:
     if hasattr(value, "pk"):
         return _to_jsonable(value.pk)
     return value
+
+
+def _resolve_relation_label(field: str, value: Any) -> Optional[str]:
+    """Return a human-readable label for a relation-id value, or None.
+
+    Backs the Activity feed: a row recording a `parent_task_id` /
+    `milestone_id` / `sprint_id` flip stores the raw id in
+    `old_value` / `new_value` (so the diff is faithful) and the
+    corresponding title / name in `metadata.oldLabel` / `newLabel`
+    so the frontend can render `Title (#id)` instead of a bare id —
+    the latter is meaningless to humans skimming the feed.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        if field == "parent_task_id":
+            row = TaskMaster.objects.only("title").filter(pk=value).first()
+            return row.title if row else None
+        if field == "milestone_id":
+            row = MilestoneMaster.objects.only("title").filter(pk=value).first()
+            return row.title if row else None
+        if field == "sprint_id":
+            row = Sprint.objects.only("name").filter(pk=value).first()
+            return row.name if row else None
+    except (ValueError, TypeError):
+        # `value` was not a valid pk shape — fall through to None so
+        # the audit row still gets created with just the id.
+        return None
+    return None
+
+
+def _metadata_for_change(field: str, old: Any, new: Any) -> Optional[dict]:
+    """Build the optional metadata payload for a tracked-field diff.
+
+    Currently only relation-id fields participate (so the feed can
+    show `Old title (#oldId) → New title (#newId)`). Returns None
+    for fields that don't need extra context.
+    """
+    if field in ("parent_task_id", "milestone_id", "sprint_id"):
+        return {
+            "oldLabel": _resolve_relation_label(field, old),
+            "newLabel": _resolve_relation_label(field, new),
+        }
+    return None
 
 
 def _resolve_actor() -> Optional[Any]:
@@ -231,6 +276,7 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
             field_name=field,
             old_value=old,
             new_value=new,
+            metadata=_metadata_for_change(field, old, new),
         )
 
 
