@@ -15,8 +15,11 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
+import re
+
 from django.conf import settings
-from django.conf.urls.static import static
+from django.urls import re_path
+from django.views.static import serve
 from origin.urls.common import urls as common_urls
 from origin.urls.chat import urls as chat_urls
 from origin.urls.project import urls as prj_urls
@@ -33,12 +36,25 @@ urlpatterns.extend(prj_urls.urlpatterns)
 urlpatterns.extend(task_urls.urlpatterns)
 urlpatterns.extend(note_urls.urlpatterns)
 
-# Serve user-uploaded media in *both* dev and prod. Until the app
-# moves to django-storages + S3/R2, a Railway Volume mounted at
-# `MEDIA_ROOT` is what makes this durable; this URL pattern is what
-# makes the files reachable. Django's `static()` helper is documented
-# as "development-only" because it's not optimized for high traffic,
-# but for an MVP behind Railway's edge it is fine. When you migrate
-# uploads to object storage, delete this line — the bucket's own
+# Serve user-uploaded media in *both* dev and prod.
+#
+# We register the route directly via `re_path` + `serve` instead of
+# `django.conf.urls.static.static(...)` because that helper short-
+# circuits to `return []` when `DEBUG=False` (see Django source). In
+# production every `/media/...` request would otherwise miss the URL
+# resolver entirely and 404, leaving the avatar / attachment images
+# perma-broken even when the file is sitting right there on the
+# Railway Volume mounted at `MEDIA_ROOT`.
+#
+# `django.views.static.serve` is the same view `static()` would have
+# wired up; it's marked "not optimized for high traffic" in the docs,
+# which is fine for our MVP volume. When the app migrates uploads to
+# django-storages + S3 / R2, delete this block — the bucket's own
 # domain (or a CDN in front of it) will serve `/media/` instead.
-urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+urlpatterns += [
+    re_path(
+        r"^%s(?P<path>.*)$" % re.escape(settings.MEDIA_URL.lstrip("/")),
+        serve,
+        {"document_root": settings.MEDIA_ROOT},
+    ),
+]

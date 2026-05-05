@@ -61,6 +61,22 @@ class UserProfileImageView(AuthenticatedAPIView):
 
         user_data = CustomUser.objects.get(id=request_user_id)
 
+        # Best-effort cleanup of the previous profile image file. Django's
+        # default `FileSystemStorage.get_available_name` never overwrites
+        # — every re-upload of "profile.jpg" lands as
+        # `profile_<random>.jpg`, leaving the old file behind forever. On
+        # Railway's media volume that's an unbounded disk-bloat leak per
+        # user. Deleting first means the new save lands at the canonical
+        # path (no random suffix), which also keeps the URL stable across
+        # uploads. Wrapped in a try so a missing-on-disk file doesn't
+        # block the legitimate upload from succeeding.
+        previous_file = user_data.profile_image_url
+        if previous_file and previous_file.name:
+            try:
+                previous_file.delete(save=False)
+            except Exception as err:  # pragma: no cover - best-effort cleanup
+                print(f"Failed to delete previous profile image: {err}")
+
         # Only update the FileField
         new_profile_image_data = {
             "profile_image_url": user_profile_image,
@@ -70,12 +86,15 @@ class UserProfileImageView(AuthenticatedAPIView):
         if serializer.is_valid():
             saved_user = serializer.save()
 
-            # At this point, Django has stored the file, possibly renamed
-            # Now get the actual stored filename
-            stored_file_name = saved_user.profile_image_url.name.split("/")[-1]
-            saved_user.profile_image_file_name = (
-                f"user_profiles/{request_user_id}/{stored_file_name}"
-            )
+            # `profile_image_url.name` is already the storage path that
+            # Django actually wrote (relative to MEDIA_ROOT and reflecting
+            # any `get_available_name` rename). Mirror it onto
+            # `profile_image_file_name` directly instead of rebuilding the
+            # path from `request_user_id` + last segment — the rebuild was
+            # equivalent today but coupled to `user_profile_image_path`'s
+            # exact `user_profiles/<uuid>/<file>` shape, so any future
+            # tweak to that helper would silently drift the served URL.
+            saved_user.profile_image_file_name = saved_user.profile_image_url.name
             saved_user.save(update_fields=["profile_image_file_name"])
 
             return Response(UserSerializer(saved_user).data, status=status.HTTP_200_OK)
