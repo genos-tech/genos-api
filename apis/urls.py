@@ -33,5 +33,12 @@ urlpatterns.extend(prj_urls.urlpatterns)
 urlpatterns.extend(task_urls.urlpatterns)
 urlpatterns.extend(note_urls.urlpatterns)
 
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+# Serve user-uploaded media in *both* dev and prod. Until the app
+# moves to django-storages + S3/R2, a Railway Volume mounted at
+# `MEDIA_ROOT` is what makes this durable; this URL pattern is what
+# makes the files reachable. Django's `static()` helper is documented
+# as "development-only" because it's not optimized for high traffic,
+# but for an MVP behind Railway's edge it is fine. When you migrate
+# uploads to object storage, delete this line — the bucket's own
+# domain (or a CDN in front of it) will serve `/media/` instead.
+urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

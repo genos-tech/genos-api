@@ -80,6 +80,7 @@ def _ensure_backing_task(milestone: MilestoneMaster) -> TaskMaster:
         effort_level_code=milestone.effort_level_code,
         due_date=milestone.due_date,
         tags=milestone.tags,
+        links=milestone.links,
         reporter_id=milestone.reporter_id,
         assignee_id=milestone.reporter_id,
         is_milestone=True,
@@ -106,6 +107,10 @@ def _sync_backing_task(milestone: MilestoneMaster) -> None:
     backing.effort_level_code = milestone.effort_level_code
     backing.due_date = milestone.due_date
     backing.tags = milestone.tags
+    # Mirror the milestone's external links onto the backing task so
+    # callers that read the task row directly (table view, sprint
+    # board, dashboards) stay consistent with the milestone preview.
+    backing.links = milestone.links
     backing.sprint = milestone.sprint
     backing.milestone = milestone
     backing.is_milestone = True
@@ -171,6 +176,7 @@ def _serialize_milestone(m: MilestoneMaster, *, with_aggregates: bool = True) ->
         "effortLevelCode": m.effort_level_code,
         "dueDate": _format_due_date(m.due_date),
         "tags": m.tags,
+        "links": m.links,
         "isDeleted": m.is_deleted,
         "tsCreatedAt": m.ts_created_at,
         "tsUpdatedAt": m.ts_updated_at,
@@ -312,6 +318,7 @@ class MilestoneView(AuthenticatedAPIView):
                 effort_level_code=request.data.get("effort_level_code"),
                 due_date=_parse_iso_date(request.data.get("due_date")),
                 tags=request.data.get("tags"),
+                links=request.data.get("links"),
             )
             _ensure_backing_task(milestone)
 
@@ -363,6 +370,7 @@ class MilestoneView(AuthenticatedAPIView):
                 "effort_level_code",
                 "reporter_id",
                 "tags",
+                "links",
             ):
                 if field in request.data:
                     setattr(milestone, field, request.data.get(field))

@@ -24,12 +24,19 @@ SECRET_KEY = os.environ.get(
     "django-insecure-1=c=z%cqhlgi$@+w8x3ees)q*q!hosc2lvv^=_dpln(%wipz08",
 )
 
-DEBUG = os.environ.get("DJANGO_DEBUG", "false").lower() == "true"
+# Default to True so local dev (where the env var isn't set) gets
+# Django's normal development behavior: relaxed cookie attrs, open
+# CORS, served `/media/`, full tracebacks. Production must
+# *explicitly* opt out by setting `DJANGO_DEBUG=false` (the Railway
+# config already does — see docs/RAILWAY_DEPLOY.md).
+#
+# This matches Django's own `django-admin startproject` default and
+# is what every dependent setting below assumes when it derives from
+# DEBUG (AUTH_COOKIE_SECURE, CORS_ALLOW_ALL_ORIGINS, etc.).
+DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() == "true"
 
 ALLOWED_HOSTS = [
-    h.strip()
-    for h in os.environ.get("ALLOWED_HOSTS", "localhost").split(",")
-    if h.strip()
+    h.strip() for h in os.environ.get("ALLOWED_HOSTS", "localhost").split(",") if h.strip()
 ]
 
 
@@ -43,6 +50,13 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    # Required for `BLACKLIST_AFTER_ROTATION` in SIMPLE_JWT to actually
+    # do anything: this app provides the OutstandingToken /
+    # BlacklistedToken tables that simplejwt writes to when a refresh
+    # token is rotated or a user signs out. Without it, every
+    # "blacklist" call is a silent no-op and old refresh tokens stay
+    # valid until natural expiration.
+    "rest_framework_simplejwt.token_blacklist",
     "origin",
     "corsheaders",
 ]
@@ -64,10 +78,22 @@ MIDDLEWARE = [
     "origin.middleware.current_user.CurrentUserMiddleware",
 ]
 
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS policy.
+#
+# `CORS_ALLOW_ALL_ORIGINS=True` combined with `CORS_ALLOW_CREDENTIALS=True`
+# would let any site on the internet trigger credentialed requests
+# against this API and have the browser attach our refresh cookie. We
+# only want that during local development; in production we restrict
+# to the explicit list in `CORS_ALLOWED_ORIGINS` (env-driven) so only
+# our actual frontend host can talk to the API with credentials.
+CORS_ALLOW_ALL_ORIGINS = DEBUG
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",  # React frontend URL
-    "http://localhost:8890",  # Add backend server if necessary
+    o.strip()
+    for o in os.environ.get(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:3000,http://localhost:8890",
+    ).split(",")
+    if o.strip()
 ]
 
 # Allow credentials (cookies, authentication)
@@ -209,6 +235,31 @@ CSRF_COOKIE_HTTPONLY = (
 )
 CSRF_COOKIE_SAMESITE = "Lax"
 
+# Refresh-token cookie attributes.
+#
+# The frontend and backend are deployed to *different* hostnames in
+# production (e.g. on Railway), so every API call is a cross-site
+# request from the browser's point of view. For the browser to accept
+# `Set-Cookie` on those responses *and* replay the cookie on the next
+# `/user/signin/refresh/` fetch, the cookie must be sent with
+# `SameSite=None; Secure`. In local dev we keep `SameSite=Lax` and
+# `Secure=False` because Chrome won't set a `Secure` cookie over plain
+# HTTP localhost.
+AUTH_COOKIE_SECURE = not DEBUG
+AUTH_COOKIE_SAMESITE = "None" if not DEBUG else "Lax"
+
 
 MEDIA_URL = "/media/"  # URL prefix
-MEDIA_ROOT = os.path.join(BASE_DIR, "uploads")  # Folder where uploaded files go
+# Folder where uploaded files go. Made env-driven so the production
+# container can point this at a Railway Volume mount path (e.g.
+# `/app/backend_django/uploads` backed by a persistent disk) without
+# touching code. The default keeps local dev working unchanged.
+#
+# This is the MVP setup: Django serves the files directly from this
+# directory (see `apis/urls.py`). When the app outgrows a single
+# replica or needs CDN-quality delivery, swap the storage backend to
+# `django-storages` + Cloudflare R2 / AWS S3 and drop the volume.
+MEDIA_ROOT = os.environ.get(
+    "DJANGO_MEDIA_ROOT",
+    os.path.join(BASE_DIR, "uploads"),
+)
