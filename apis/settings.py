@@ -24,7 +24,16 @@ SECRET_KEY = os.environ.get(
     "django-insecure-1=c=z%cqhlgi$@+w8x3ees)q*q!hosc2lvv^=_dpln(%wipz08",
 )
 
-DEBUG = os.environ.get("DJANGO_DEBUG", "false").lower() == "true"
+# Default to True so local dev (where the env var isn't set) gets
+# Django's normal development behavior: relaxed cookie attrs, open
+# CORS, served `/media/`, full tracebacks. Production must
+# *explicitly* opt out by setting `DJANGO_DEBUG=false` (the Railway
+# config already does — see docs/RAILWAY_DEPLOY.md).
+#
+# This matches Django's own `django-admin startproject` default and
+# is what every dependent setting below assumes when it derives from
+# DEBUG (AUTH_COOKIE_SECURE, CORS_ALLOW_ALL_ORIGINS, etc.).
+DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() == "true"
 
 ALLOWED_HOSTS = [
     h.strip() for h in os.environ.get("ALLOWED_HOSTS", "localhost").split(",") if h.strip()
@@ -241,4 +250,16 @@ AUTH_COOKIE_SAMESITE = "None" if not DEBUG else "Lax"
 
 
 MEDIA_URL = "/media/"  # URL prefix
-MEDIA_ROOT = os.path.join(BASE_DIR, "uploads")  # Folder where uploaded files go
+# Folder where uploaded files go. Made env-driven so the production
+# container can point this at a Railway Volume mount path (e.g.
+# `/app/backend_django/uploads` backed by a persistent disk) without
+# touching code. The default keeps local dev working unchanged.
+#
+# This is the MVP setup: Django serves the files directly from this
+# directory (see `apis/urls.py`). When the app outgrows a single
+# replica or needs CDN-quality delivery, swap the storage backend to
+# `django-storages` + Cloudflare R2 / AWS S3 and drop the volume.
+MEDIA_ROOT = os.environ.get(
+    "DJANGO_MEDIA_ROOT",
+    os.path.join(BASE_DIR, "uploads"),
+)
