@@ -240,7 +240,6 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
         pm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 3]
         mdm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 4]
 
-
         # Get DM partner names
         dm_partner_names = {}
         if dm_ids:
@@ -582,10 +581,22 @@ class ChatNoteAttachmentView(AuthenticatedAPIView):
     def post(self, request):
         request_user_id = request.user.id
 
+        # ChatNoteAttachmentFact stores the chat-routing tuple
+        # (chat_type / chat_id / is_thread / thread_id) as NOT NULL
+        # columns alongside the FK to the note, so the serializer
+        # rejects payloads that omit them. The frontend now sends
+        # these from `currentChatNote`; we forward them through here
+        # rather than re-derive from the chat note row to keep the
+        # write path symmetrical with how chat notes themselves are
+        # created.
         data = {
             "note": request.data.get("note_id"),
             "uploader": request.data.get("uploader"),
             "note_attachment_url": request.FILES.get("note_attachment_file"),
+            "chat_type": request.data.get("chat_type"),
+            "chat_id": request.data.get("chat_id"),
+            "is_thread": request.data.get("is_thread"),
+            "thread_id": request.data.get("thread_id"),
         }
 
         if res := validate_request_data(data):
