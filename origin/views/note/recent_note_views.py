@@ -13,7 +13,7 @@ from origin.views.utils.request_validators import validate_request_data, validat
 # Maximum number of recent-note rows kept per (user, team). Older rows are
 # trimmed on every record-open so the table stays small and the meta
 # endpoint never has to consider more than this many candidates.
-RECENT_NOTES_CAP = 30
+RECENT_NOTES_CAP = 10
 
 
 class RecordNoteOpenView(AuthenticatedAPIView):
