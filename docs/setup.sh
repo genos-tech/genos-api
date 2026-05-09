@@ -70,3 +70,19 @@ curl -H "Content-Type: application/json" \
   --data '{"st_chat_group_name":"Chat Group1"}' \
   http://192.168.10.13:8890/api/v2/chatGroup/join/
 
+
+# Generate DB schema
+cd backend_django && pwd
+docker run --rm \
+  -v "$PWD/docs/db-schema:/output" \
+  --network shared-network \
+  schemaspy/schemaspy:latest \
+  -t pgsql \
+  -host 172.29.30.3 \
+  -port 5432 \
+  -db origin \
+  -s public \
+  -u postgres \
+  -p 'postgres' \
+  -vizjs \
+  -imageformat svg
