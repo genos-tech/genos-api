@@ -20,7 +20,7 @@ from origin.views.utils.mention_handler import extractMentionedUsers
 from .common_color import STATUS_COLOR_MAP, PRIORITY_COLOR_MAP, EFFORT_LEVEL_COLOR_MAP
 
 
-def _bridge_milestone_to_parent(task, requested_milestone_id):
+def _bridge_milestone_to_parent(task, requested_milestone_id, parent_task_id):
     """Keep `parent_task_id` / `root_task_id` in sync with a milestone change.
 
     Mirrors the bridge logic in `TaskMasterView.post` so PUT updates
@@ -55,7 +55,9 @@ def _bridge_milestone_to_parent(task, requested_milestone_id):
         if m.task_id is None or m.task_id == task.task_id:
             return
         task.milestone_id = requested_milestone_id
-        task.parent_task_id = m.task_id
+        # Set parent task id to the requested parent task id if it exists, otherwise set it to the milestone's backing task id
+        task.parent_task_id = parent_task_id if parent_task_id else m.task_id
+        # Root task id is always the milestone's backing task id
         task.root_task_id = m.task_id
         # The frontend doesn't expose a direct sprint picker on tasks
         # — sprint is always inherited from the task's milestone. Sync
@@ -289,6 +291,9 @@ class TaskMasterView(AuthenticatedAPIView):
         # behavior for every other field.
         milestone_in_request = "milestone" in request.data
         requested_milestone_id = request.data.get("milestone") if milestone_in_request else None
+        
+        # Get parent task id from request data
+        parent_task_id = request.data.get("parent_task_id") if "parent_task_id" in request.data else None
 
         # Same "key absent vs explicit null" trap for `due_date`: the
         # frontend sends `due_date: null` when the user picks TBD, but
@@ -338,7 +343,7 @@ class TaskMasterView(AuthenticatedAPIView):
             # consistent. Mirrors `TaskMasterView.post`'s bridge.
             if milestone_in_request:
                 task.refresh_from_db()
-                _bridge_milestone_to_parent(task, requested_milestone_id)
+                _bridge_milestone_to_parent(task, requested_milestone_id, parent_task_id)
                 _cascade_milestone_to_subtasks(task.task_id, requested_milestone_id)
 
             return Response(
