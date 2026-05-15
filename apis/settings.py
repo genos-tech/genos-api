@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     # valid until natural expiration.
     "rest_framework_simplejwt.token_blacklist",
     "origin",
+    "origin.search_engine",
     "corsheaders",
 ]
 
@@ -263,3 +264,32 @@ MEDIA_ROOT = os.environ.get(
     "DJANGO_MEDIA_ROOT",
     os.path.join(BASE_DIR, "uploads"),
 )
+
+
+# Search engine (OpenSearch + OpenAI embeddings).
+#
+# Used by `origin.search_engine` for chunk-based hybrid search across
+# chats, tasks, and notes. The OpenSearch index is created by
+# `python manage.py opensearch_setup` and (re)populated by
+# `python manage.py opensearch_reindex`.
+SEARCH_ENGINE = {
+    "OPENSEARCH_HOST": os.environ.get("OPENSEARCH_HOST", "opensearch"),
+    "OPENSEARCH_PORT": int(os.environ.get("OPENSEARCH_PORT", "9200")),
+    "OPENSEARCH_USE_SSL": os.environ.get("OPENSEARCH_USE_SSL", "false").lower() == "true",
+    # Physical index name. Increment the suffix when changing the
+    # mapping or embedding model and reindexing.
+    "OPENSEARCH_INDEX": os.environ.get("OPENSEARCH_INDEX", "knowledge_chunks_v1"),
+    # Stable alias the app queries. Repointed at a new physical index
+    # during zero-downtime migrations.
+    "OPENSEARCH_ALIAS": os.environ.get("OPENSEARCH_ALIAS", "knowledge_chunks_current"),
+    # OpenAI embedding configuration. `text-embedding-3-small` is the
+    # MVP default: 1536-dim, cheap, multilingual-decent. If you change
+    # the model or dimension, bump the index suffix and reindex.
+    "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
+    "OPENAI_EMBEDDING_MODEL": os.environ.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+    "OPENAI_EMBEDDING_DIMENSIONS": int(os.environ.get("OPENAI_EMBEDDING_DIMENSIONS", "1536")),
+    # Bulk-indexing batch size for OpenSearch _bulk requests.
+    "BULK_BATCH_SIZE": int(os.environ.get("SEARCH_BULK_BATCH_SIZE", "200")),
+    # OpenAI embedding batch size (max items per /v1/embeddings request).
+    "EMBEDDING_BATCH_SIZE": int(os.environ.get("SEARCH_EMBEDDING_BATCH_SIZE", "100")),
+}
