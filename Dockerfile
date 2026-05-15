@@ -19,9 +19,16 @@ WORKDIR /app
 
 COPY Pipfile Pipfile.lock ./
 RUN pipenv sync
-# Extra packages not yet tracked in the root Pipfile.lock.
-# Add them here until the lock file is regenerated.
-RUN pip install tavily-python
+# AI / search packages that are not yet in the root Pipfile.lock.
+# These mirror docs/requirements.txt — install them directly until
+# the lock file is regenerated to include them.
+RUN pip install \
+    opensearch-py==3.0.0 \
+    openai==2.5.0 \
+    google-genai==2.3.0 \
+    anthropic==0.102.0 \
+    PyYAML==6.0.2 \
+    tavily-python
 
 COPY backend_django ./backend_django
 
