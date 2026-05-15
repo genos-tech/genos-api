@@ -26,4 +26,13 @@ WORKDIR /app/backend_django
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "python manage.py collectstatic --noinput && python manage.py migrate --noinput && gunicorn apis.wsgi:application --bind 0.0.0.0:$PORT --workers 3"]
+# Vertex AI service-account decoding.
+#
+# Railway has no host-volume mounts, so we can't reuse the
+# docker-compose pattern of mounting a JSON key at /run/secrets/.
+# Instead the operator base64-encodes the SA JSON, sets it as
+# `GEMINI_SA_BASE64`, and we decode it on container start. The
+# `GEMINI_SERVICE_ACCOUNT_FILE` env var should then point at the same
+# path (see docs/RAILWAY_DEPLOY.md). Missing var = no-op (the
+# AI-Studio-API-key code path runs instead).
+CMD ["sh", "-c", "if [ -n \"$GEMINI_SA_BASE64\" ]; then mkdir -p /tmp && echo \"$GEMINI_SA_BASE64\" | base64 -d > /tmp/gemini-sa.json && chmod 600 /tmp/gemini-sa.json; fi && python manage.py collectstatic --noinput && python manage.py migrate --noinput && gunicorn apis.wsgi:application --bind 0.0.0.0:$PORT --workers 3"]
