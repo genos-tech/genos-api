@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 
 
@@ -28,4 +30,58 @@ class RagChunk(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["entity_type", "entity_id"]),
+        ]
+
+
+class AgentRun(models.Model):
+    """One row per `/api/v2/agent/ask/` invocation.
+
+    Phase 4 observability: lets us post-mortem any agent run after the
+    stream closes. The final answer + status are filled in by the view
+    layer once the controller's emit loop terminates. Status values:
+        running    — row created, loop not yet finished
+        done       — clean exit, model produced a final answer
+        error      — fatal mid-stream (Gemini failure, etc.)
+        step_cap   — hit MAX_STEPS without a final answer
+    """
+
+    run_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    team_id = models.CharField(max_length=64, db_index=True)
+    user_id = models.CharField(max_length=64, db_index=True)
+    query = models.TextField()
+    status = models.CharField(max_length=20, default="running")
+    final_answer_text = models.TextField(blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+    started_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["team_id", "user_id", "-started_at"]),
+        ]
+
+
+class AgentStep(models.Model):
+    """One row per step within an `AgentRun`.
+
+    A step is either a tool-call (tool_name + arguments_json + result_json
+    populated) or a text-only model turn (answer_text populated). The
+    `result_json` field holds the full tool output and is intentionally
+    server-side only — only `summary` ever reaches the client.
+    """
+
+    step_id = models.AutoField(primary_key=True)
+    run = models.ForeignKey(AgentRun, on_delete=models.CASCADE, related_name="steps")
+    step_index = models.IntegerField()
+    tool_name = models.CharField(max_length=64, blank=True, default="")
+    arguments_json = models.JSONField(blank=True, null=True)
+    summary = models.TextField(blank=True, default="")
+    result_json = models.JSONField(blank=True, null=True)
+    answer_text = models.TextField(blank=True, default="")
+    error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["run", "step_index"]),
         ]

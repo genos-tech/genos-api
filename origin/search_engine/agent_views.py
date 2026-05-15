@@ -32,11 +32,13 @@ import logging
 from typing import Iterator
 
 from django.http import StreamingHttpResponse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
 from origin.search_engine.agent.controller import run_agent
 from origin.search_engine.agent.tools import ToolContext
+from origin.search_engine.models import AgentRun
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 log = logging.getLogger(__name__)
@@ -69,14 +71,34 @@ class AgentAskView(AuthenticatedAPIView):
 
         ctx = ToolContext(team_id=str(team_id), user_id=user_id)
 
-        stream = _stream_ndjson(query, ctx)
+        # Phase 4: persist one AgentRun row per /ask/ call so we can
+        # post-mortem any answer after the stream closes. Per-step rows
+        # are written by the controller as events fire. Failure to
+        # persist must never break the user-facing response — caught and
+        # logged here; the request still streams as normal.
+        run = None
+        try:
+            run = AgentRun.objects.create(
+                team_id=str(team_id),
+                user_id=user_id,
+                query=query,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to create AgentRun row; continuing without persistence")
+
+        stream = _stream_ndjson(query, ctx, run=run)
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
         response["X-Accel-Buffering"] = "no"  # disable nginx buffering if present
         return response
 
 
-def _stream_ndjson(query: str, ctx: ToolContext) -> Iterator[bytes]:
+def _stream_ndjson(
+    query: str,
+    ctx: ToolContext,
+    *,
+    run: AgentRun | None = None,
+) -> Iterator[bytes]:
     """Adapter: bridge `run_agent`'s `emit(dict)` callback to NDJSON bytes.
 
     The controller wants a synchronous `emit(event)` callback. We
@@ -85,6 +107,9 @@ def _stream_ndjson(query: str, ctx: ToolContext) -> Iterator[bytes]:
     HTTP-response generator drains. This way each event hits the
     client as soon as the controller produces it — no batching at the
     Django layer.
+
+    When `run` is provided, the final `AgentRun` status / final answer
+    text / error message are written once the controller exits.
     """
     import queue  # noqa: PLC0415
     import threading  # noqa: PLC0415
@@ -97,9 +122,11 @@ def _stream_ndjson(query: str, ctx: ToolContext) -> Iterator[bytes]:
     def emit(event: dict) -> None:
         event_q.put(event)
 
+    run_id = run.run_id if run is not None else None
+
     def worker():
         try:
-            run_agent(query, ctx, emit)
+            run_agent(query, ctx, emit, run_id=run_id)
         except Exception as e:  # noqa: BLE001
             log.exception("Agent run crashed")
             event_q.put({"type": "error", "message": f"Agent crashed: {e}"})
@@ -108,8 +135,49 @@ def _stream_ndjson(query: str, ctx: ToolContext) -> Iterator[bytes]:
 
     threading.Thread(target=worker, daemon=True).start()
 
+    # Collect terminal state by peeking at events as they pass through.
+    # The model's `answer_delta` chunks are concatenated into the final
+    # answer; the outcome (done / error / step_cap) is inferred from
+    # the last terminal event.
+    answer_parts: list[str] = []
+    final_status = "error"
+    final_error = ""
+
     while True:
         event = event_q.get()
         if event is None:
-            return
+            break
+        event_type = event.get("type")
+        if event_type == "answer_delta":
+            text = event.get("text") or ""
+            if text:
+                answer_parts.append(text)
+        elif event_type == "done":
+            final_status = "done"
+        elif event_type == "error":
+            msg = event.get("message") or ""
+            final_error = msg
+            if "did not reach a final answer" in msg:
+                final_status = "step_cap"
+            else:
+                final_status = "error"
         yield line(event)
+
+    # Close the AgentRun row. Best-effort: a DB failure here is logged
+    # but doesn't affect the already-finished response.
+    if run is not None:
+        try:
+            run.status = final_status
+            run.final_answer_text = "".join(answer_parts)
+            run.error_message = final_error
+            run.finished_at = timezone.now()
+            run.save(
+                update_fields=[
+                    "status",
+                    "final_answer_text",
+                    "error_message",
+                    "finished_at",
+                ]
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to close AgentRun %s", run.run_id)

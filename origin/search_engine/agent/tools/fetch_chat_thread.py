@@ -24,7 +24,12 @@ from origin.models.chat.gm_models import GMMessages, GMThreadMessages
 from origin.models.chat.mdm_models import MDMMessages, MDMThreadMessages
 from origin.models.chat.pm_models import PMMessages, PMThreadMessages
 from origin.search_engine.agent.acl import chat_acl_user_ids
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import (
+    Tool,
+    ToolContext,
+    ToolError,
+    wrap_workspace_content,
+)
 from origin.search_engine.chunkers.base import (
     CHAT_TYPE_DM,
     CHAT_TYPE_GM,
@@ -133,7 +138,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 {
                     "message_id": m.message_id,
                     "sender_id": str(getattr(m, "sender_id", "") or ""),
-                    "text": text,
+                    "text": wrap_workspace_content(text),
                     "ts": m.ts_sent_at.isoformat() if m.ts_sent_at else None,
                 }
             )
@@ -150,7 +155,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 {
                     "message_id": m.message_id,
                     "sender_id": str(getattr(m, "sender_id", "") or ""),
-                    "text": text,
+                    "text": wrap_workspace_content(text),
                     "ts": m.ts_sent_at.isoformat() if m.ts_sent_at else None,
                     "is_thread_anchor": True,
                 }
@@ -167,7 +172,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 {
                     "thread_message_id": r.thread_message_id,
                     "sender_id": str(getattr(r, "sender_id", "") or ""),
-                    "text": text,
+                    "text": wrap_workspace_content(text),
                     "ts": r.ts_sent_at.isoformat() if r.ts_sent_at else None,
                 }
             )

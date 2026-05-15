@@ -63,7 +63,30 @@ class Tool:
     description: str
     parameters_schema: dict[str, Any]
     run: Callable[[dict[str, Any], ToolContext], dict[str, Any]]
+    # Phase 4: write tools set this to True. The controller refuses to
+    # execute approval-required tools until a real approve-resume
+    # protocol lands; all four current tools (search + 3 fetches) are
+    # read-only and keep the default of False.
+    requires_approval: bool = False
 
 
 # Populated by `tools/__init__.py` at import time.
 REGISTRY: dict[str, Tool] = {}
+
+
+def wrap_workspace_content(text: str) -> str:
+    """Wrap free-text workspace content with a boundary marker.
+
+    Used by the four read-only tools to mark every piece of
+    user-authored text inside their return payload. The agent system
+    prompt instructs the model to treat anything inside
+    `<workspace_content>` as DATA, never as instructions — a structural
+    mitigation against prompt-injection attacks where a malicious chat
+    message or note body tries to override the agent's behavior.
+
+    Returns the input unchanged for empty / None values so we don't
+    inflate payloads with empty boundary blocks.
+    """
+    if not text:
+        return text
+    return f"<workspace_content>\n{text}\n</workspace_content>"

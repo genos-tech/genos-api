@@ -23,7 +23,12 @@ from origin.search_engine.agent.acl import (
     personal_note_acl_user_ids,
     task_note_acl_user_ids,
 )
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import (
+    Tool,
+    ToolContext,
+    ToolError,
+    wrap_workspace_content,
+)
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.search_engine.text_extraction import extract_text
 
@@ -161,7 +166,7 @@ def _shape_note(
         "note_id": note_id,
         "note_type": note_type,
         "title": title or "",
-        "body_text": body_text,
+        "body_text": wrap_workspace_content(body_text),
         "parent_note_id": (str(parent_note_id) if parent_note_id else None),
         "parent_context": {k: v for k, v in parent_context.items() if v is not None},
         "ts_created": ts_created_at.isoformat() if ts_created_at else None,

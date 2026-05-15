@@ -29,14 +29,31 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Callable
+from uuid import UUID
 
 from django.conf import settings
 
 from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError
 from origin.search_engine.llm.gemini_client import generate_step
+from origin.search_engine.models import AgentStep
 
 log = logging.getLogger(__name__)
+
+
+def _persist_step(run_id: UUID | None, **fields: Any) -> None:
+    """Best-effort write of one `AgentStep` row.
+
+    Observability must NEVER break the user-facing path — if the DB
+    insert fails for any reason, log it and move on. The agent stream
+    completes regardless.
+    """
+    if run_id is None:
+        return
+    try:
+        AgentStep.objects.create(run_id=run_id, **fields)
+    except Exception:  # noqa: BLE001 — must not fail the response stream
+        log.exception("Failed to persist AgentStep for run %s", run_id)
 
 
 def _build_tool_declarations():
@@ -77,6 +94,25 @@ def _function_response_turn(name: str, response: dict[str, Any]):
     )
 
 
+_WORKSPACE_OPEN = "<workspace_content>\n"
+_WORKSPACE_CLOSE = "\n</workspace_content>"
+
+
+def _strip_workspace_marker(s: str | None) -> str | None:
+    """Reverse of `wrap_workspace_content` for UI-bound snippet text.
+
+    The search tool wraps snippets so the LLM treats them as data, but
+    the same snippet is also forwarded to the frontend as a citation
+    chip. Strip the boundary markers here so the UI doesn't render the
+    XML-like tags literally.
+    """
+    if not s:
+        return s
+    if s.startswith(_WORKSPACE_OPEN) and s.endswith(_WORKSPACE_CLOSE):
+        return s[len(_WORKSPACE_OPEN) : -len(_WORKSPACE_CLOSE)]
+    return s
+
+
 def _ui_source_for_match(match: dict[str, Any]) -> dict[str, Any]:
     """Shape a search-tool match into the UI's `sources` event payload.
 
@@ -87,7 +123,7 @@ def _ui_source_for_match(match: dict[str, Any]) -> dict[str, Any]:
         "entity_type": match.get("entity_type"),
         "entity_id": match.get("entity_id"),
         "title": match.get("title"),
-        "snippet": match.get("snippet"),
+        "snippet": _strip_workspace_marker(match.get("snippet")),
         "chat_type": match.get("chat_type"),
         "chat_id": match.get("chat_id"),
         "thread_id": match.get("thread_id"),
@@ -109,6 +145,8 @@ def run_agent(
     query: str,
     ctx: ToolContext,
     emit: Callable[[dict[str, Any]], None],
+    *,
+    run_id: UUID | None = None,
 ) -> None:
     """Drive the agent loop. `emit(event_dict)` pushes NDJSON events out.
 
@@ -121,6 +159,10 @@ def run_agent(
       * answer_delta     — incremental text from the final answer
       * done             — stream finished cleanly
       * error            — fatal (e.g. step cap reached)
+
+    `run_id`: if provided, per-step `AgentStep` rows are persisted under
+    that run. Pass `None` (default) from tests / eval harness to skip
+    persistence entirely.
     """
     max_steps = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
     tools = _build_tool_declarations()
@@ -132,7 +174,7 @@ def run_agent(
 
     for step in range(max_steps):
         accumulated_function_calls = []
-        any_text_emitted = False
+        accumulated_text_parts: list[str] = []
 
         try:
             stream = generate_step(
@@ -149,12 +191,28 @@ def run_agent(
                     # "Let me search…" preface, the user sees it. If
                     # it's annoying in practice, suppress text when a
                     # function_call accompanies it in the same step.
-                    any_text_emitted = True
+                    accumulated_text_parts.append(text_chunk)
                     emit({"type": "answer_delta", "text": text_chunk})
         except Exception as e:  # noqa: BLE001 — surface as stream error
             log.exception("Agent step %d Gemini call failed", step)
             emit({"type": "error", "message": f"Gemini call failed: {e}"})
+            _persist_step(
+                run_id,
+                step_index=step,
+                error=f"Gemini call failed: {e}",
+            )
             return
+
+        any_text_emitted = bool(accumulated_text_parts)
+
+        # If any text was streamed this step, persist it as its own row
+        # so post-mortems can reconstruct the final answer.
+        if any_text_emitted:
+            _persist_step(
+                run_id,
+                step_index=step,
+                answer_text="".join(accumulated_text_parts),
+            )
 
         if not accumulated_function_calls:
             # Pure text turn → final answer was streamed above.
@@ -166,6 +224,11 @@ def run_agent(
                         "type": "error",
                         "message": "Model returned an empty response.",
                     }
+                )
+                _persist_step(
+                    run_id,
+                    step_index=step,
+                    error="empty_response",
                 )
                 return
             emit({"type": "done"})
@@ -197,8 +260,40 @@ def run_agent(
                         "error": err,
                     }
                 )
+                _persist_step(
+                    run_id,
+                    step_index=step,
+                    tool_name=call_name,
+                    arguments_json=call_args,
+                    error=err,
+                )
                 messages.append(_assistant_function_call_turn(call))
                 messages.append(_function_response_turn(call_name, {"error": err}))
+                continue
+
+            # Phase 4 approval shell: write tools (requires_approval=True)
+            # are refused server-side until the full approve-resume
+            # protocol lands. The model sees the refusal and can either
+            # try a different tool or explain to the user.
+            if getattr(tool, "requires_approval", False):
+                err = "This tool requires user approval, which is not implemented yet."
+                emit(
+                    {
+                        "type": "tool_call_error",
+                        "step": step,
+                        "tool_name": call_name,
+                        "error": err,
+                    }
+                )
+                _persist_step(
+                    run_id,
+                    step_index=step,
+                    tool_name=call_name,
+                    arguments_json=call_args,
+                    error="approval_required",
+                )
+                messages.append(_assistant_function_call_turn(call))
+                messages.append(_function_response_turn(call_name, {"error": "approval_required"}))
                 continue
 
             try:
@@ -211,6 +306,13 @@ def run_agent(
                         "tool_name": call_name,
                         "error": str(e),
                     }
+                )
+                _persist_step(
+                    run_id,
+                    step_index=step,
+                    tool_name=call_name,
+                    arguments_json=call_args,
+                    error=str(e),
                 )
                 messages.append(_assistant_function_call_turn(call))
                 messages.append(_function_response_turn(call_name, {"error": str(e)}))
@@ -226,6 +328,13 @@ def run_agent(
                         "error": err,
                     }
                 )
+                _persist_step(
+                    run_id,
+                    step_index=step,
+                    tool_name=call_name,
+                    arguments_json=call_args,
+                    error=err,
+                )
                 messages.append(_assistant_function_call_turn(call))
                 messages.append(_function_response_turn(call_name, {"error": err}))
                 continue
@@ -240,6 +349,14 @@ def run_agent(
                     "tool_name": call_name,
                     "summary": summary,
                 }
+            )
+            _persist_step(
+                run_id,
+                step_index=step,
+                tool_name=call_name,
+                arguments_json=call_args,
+                summary=summary,
+                result_json=result,
             )
 
             # If this was a search, promote results to citation chips.
@@ -265,4 +382,9 @@ def run_agent(
             "type": "error",
             "message": f"Agent did not reach a final answer in {max_steps} steps.",
         }
+    )
+    _persist_step(
+        run_id,
+        step_index=max_steps,
+        error="step_cap_reached",
     )

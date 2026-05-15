@@ -16,7 +16,12 @@ from typing import Any
 
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import (
+    Tool,
+    ToolContext,
+    ToolError,
+    wrap_workspace_content,
+)
 from origin.search_engine.text_extraction import extract_text
 
 _COMMENTS_CAP = 20
@@ -66,7 +71,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             {
                 "comment_id": c.comment_id,
                 "sender_id": str(getattr(c, "sender_id", "") or ""),
-                "text": text,
+                "text": wrap_workspace_content(text),
                 "ts": c.ts_sent_at.isoformat() if c.ts_sent_at else None,
             }
         )
@@ -81,7 +86,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "project_id": str(task.project_id) if task.project_id else None,
         "assignee_id": str(task.assignee_id) if task.assignee_id else None,
         "reporter_id": str(task.reporter_id) if task.reporter_id else None,
-        "content_text": content_text,
+        "content_text": wrap_workspace_content(content_text),
         "comments": comments,
         "__summary__": (
             f"Loaded task #{task_id}" + (f" + {len(comments)} comments" if comments else "")

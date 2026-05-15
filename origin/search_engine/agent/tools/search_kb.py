@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from origin.search_engine.agent.tools.base import Tool, ToolContext
+from origin.search_engine.agent.tools.base import Tool, ToolContext, wrap_workspace_content
 from origin.search_engine.search import search
 
 _MAX_LIMIT = 20
@@ -51,8 +51,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # related_entity_ids, etc.) bloats the prompt for no benefit.
     matches: list[dict[str, Any]] = []
     for entity in result.get("results", []):
+        # Wrap each chunk's body + the entity snippet in the
+        # <workspace_content> boundary marker so the model is steered
+        # to treat them as data, not instructions. See
+        # `wrap_workspace_content` for the rationale.
         chunks = [
-            {"chunk_id": c.get("chunk_id"), "text": c.get("text", "")}
+            {
+                "chunk_id": c.get("chunk_id"),
+                "text": wrap_workspace_content(c.get("text", "")),
+            }
             for c in (entity.get("chunks") or [])
         ]
         matches.append(
@@ -60,7 +67,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "entity_type": entity.get("entity_type"),
                 "entity_id": entity.get("entity_id"),
                 "title": entity.get("title"),
-                "snippet": entity.get("snippet"),
+                "snippet": wrap_workspace_content(entity.get("snippet") or ""),
                 "chunks": chunks,
                 # Surface ids the model might want to pass to fetch_*:
                 "chat_type": entity.get("chat_type"),
