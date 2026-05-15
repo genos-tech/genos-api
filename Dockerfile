@@ -45,4 +45,11 @@ EXPOSE 8000
 # `GEMINI_SERVICE_ACCOUNT_FILE` env var should then point at the same
 # path (see docs/RAILWAY_DEPLOY.md). Missing var = no-op (the
 # AI-Studio-API-key code path runs instead).
-CMD ["sh", "-c", "if [ -n \"$GEMINI_SA_BASE64\" ]; then mkdir -p /tmp && echo \"$GEMINI_SA_BASE64\" | base64 -d > /tmp/gemini-sa.json && chmod 600 /tmp/gemini-sa.json; fi && python manage.py collectstatic --noinput && python manage.py migrate --noinput && gunicorn apis.wsgi:application --bind 0.0.0.0:$PORT --workers 3"]
+CMD ["sh", "-c", "\
+  if [ -n \"$GEMINI_SA_BASE64\" ]; then \
+    mkdir -p /tmp && echo \"$GEMINI_SA_BASE64\" | base64 -d > /tmp/gemini-sa.json && chmod 600 /tmp/gemini-sa.json; \
+  fi && \
+  python manage.py collectstatic --noinput && \
+  python manage.py migrate --noinput && \
+  python manage.py opensearch_setup && \
+  gunicorn apis.wsgi:application --bind 0.0.0.0:$PORT --workers 3"]
