@@ -1,33 +1,37 @@
-"""Multi-step agent loop driven by Gemini function-calling.
+"""Multi-step agent loop, with Phase 7 pause/resume for write tools.
 
-Architecture (matches the plan):
+Two entry points share the same per-step loop body:
 
-    POST /api/v2/agent/ask/
-      ↓
-    AgentController.run(query, ctx, emit)
-      ↓
-      for step in 0..MAX_STEPS:
-        gemini.generate_step(messages, tools)
-          → may emit (text, None) or (None, function_call)
-        if final answer (text only):
-          stream answer_delta events → emit done; return
-        else:
-          for each function_call:
-            REGISTRY[name].run(args, ctx)
-              → emit tool_call_start / tool_call_result / tool_call_error
-              → append assistant function-call + function-response turns
-        loop continues
-      ↓
-      if step cap hit: emit error
+  * `run_agent(query, ctx, emit, run_id=...)` — fresh run from a user
+    query. Returns `None` on a clean finish, or a dict
+    `{"paused": True, "approval_token": UUID, ...}` when the loop hit
+    a `requires_approval` tool. The caller (view layer) is expected
+    to write the token back onto `AgentRun.pending_approval_token`
+    and flip `AgentRun.status` to `"awaiting_approval"`.
 
-The controller is intentionally I/O-callback-driven (the caller passes
-in `emit(dict)`) so the view layer can wrap each emitted event in
-NDJSON. Same interface works for tests (capture into a list).
+  * `resume_agent(run, decision, ctx, emit)` — resume a paused run.
+    `decision` is `"approve"` or `"reject"`. Reconstructs the
+    `messages` list from persisted `AgentStep` rows, executes (or
+    rejects) the pending tool, and continues the loop. Same return
+    shape as `run_agent` (could pause again on a subsequent write
+    tool, though current tools don't chain that way).
+
+Event types emitted (full NDJSON protocol):
+
+  tool_call_start              read-only tool dispatch
+  tool_call_result             read-only tool success
+  tool_call_error              tool error (incl. user-rejected writes)
+  tool_call_pending_approval   write tool — paused, awaiting user
+  sources                      citation chips (after search calls)
+  answer_delta                 streaming text from the final answer
+  done                         final answer delivered
+  error                        fatal mid-stream
 """
 
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any, Callable
 from uuid import UUID
 
@@ -41,24 +45,34 @@ from origin.search_engine.llm import (
     ToolDeclaration,
     get_model_client,
 )
-from origin.search_engine.models import AgentStep
+from origin.search_engine.models import AgentRun, AgentStep
 
 log = logging.getLogger(__name__)
 
+# Marker stored in AgentStep.summary while a write tool is awaiting the
+# user's decision. The resume path uses it to locate the pending row.
+PENDING_APPROVAL_MARKER = "awaiting_approval"
 
-def _persist_step(run_id: UUID | None, **fields: Any) -> None:
+# Decision strings accepted by `resume_agent`.
+DECISION_APPROVE = "approve"
+DECISION_REJECT = "reject"
+
+
+def _persist_step(run_id: UUID | None, **fields: Any) -> AgentStep | None:
     """Best-effort write of one `AgentStep` row.
 
     Observability must NEVER break the user-facing path — if the DB
     insert fails for any reason, log it and move on. The agent stream
-    completes regardless.
+    completes regardless. Returns the saved row (or None if persistence
+    is disabled / failed) so the pause path can update it later.
     """
     if run_id is None:
-        return
+        return None
     try:
-        AgentStep.objects.create(run_id=run_id, **fields)
+        return AgentStep.objects.create(run_id=run_id, **fields)
     except Exception:  # noqa: BLE001 — must not fail the response stream
         log.exception("Failed to persist AgentStep for run %s", run_id)
+        return None
 
 
 def _build_tool_declarations() -> list[ToolDeclaration]:
@@ -94,13 +108,7 @@ _WORKSPACE_CLOSE = "\n</workspace_content>"
 
 
 def _strip_workspace_marker(s: str | None) -> str | None:
-    """Reverse of `wrap_workspace_content` for UI-bound snippet text.
-
-    The search tool wraps snippets so the LLM treats them as data, but
-    the same snippet is also forwarded to the frontend as a citation
-    chip. Strip the boundary markers here so the UI doesn't render the
-    XML-like tags literally.
-    """
+    """Reverse of `wrap_workspace_content` for UI-bound snippet text."""
     if not s:
         return s
     if s.startswith(_WORKSPACE_OPEN) and s.endswith(_WORKSPACE_CLOSE):
@@ -109,11 +117,7 @@ def _strip_workspace_marker(s: str | None) -> str | None:
 
 
 def _ui_source_for_match(match: dict[str, Any]) -> dict[str, Any]:
-    """Shape a search-tool match into the UI's `sources` event payload.
-
-    Mirrors the snippet-only entity shape `/api/v2/search/` returns so
-    the frontend's existing citation-chip code works unchanged.
-    """
+    """Shape a search-tool match into the UI's `sources` event payload."""
     return {
         "entity_type": match.get("entity_type"),
         "entity_id": match.get("entity_id"),
@@ -126,7 +130,6 @@ def _ui_source_for_match(match: dict[str, Any]) -> dict[str, Any]:
         "note_id": match.get("note_id"),
         "note_type": match.get("note_type"),
         "project_id": match.get("project_id"),
-        # The UI also expects these fields from the Phase 2 shape:
         "matched_chunk_types": [],
         "score": 0.0,
         "related_entity_ids": [],
@@ -136,39 +139,235 @@ def _ui_source_for_match(match: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Public entry points                                                         #
+# --------------------------------------------------------------------------- #
+
+
 def run_agent(
     query: str,
     ctx: ToolContext,
     emit: Callable[[dict[str, Any]], None],
     *,
     run_id: UUID | None = None,
-) -> None:
-    """Drive the agent loop. `emit(event_dict)` pushes NDJSON events out.
+) -> dict[str, Any] | None:
+    """Drive the agent loop from a fresh user query.
 
-    Event types this function emits (see the plan / docs for the full
-    NDJSON protocol):
-      * tool_call_start  — step, tool_name, arguments
-      * tool_call_result — step, tool_name, summary
-      * tool_call_error  — step, tool_name, error
-      * sources          — citation chips (after each search call)
-      * answer_delta     — incremental text from the final answer
-      * done             — stream finished cleanly
-      * error            — fatal (e.g. step cap reached)
+    Returns:
+        None on clean completion (text answer, error, or step cap).
+        A pause descriptor when the loop hits a write tool:
+            {
+                "paused": True,
+                "approval_token": UUID,
+                "step": int,
+                "tool_name": str,
+                "arguments": dict,
+            }
+        The view layer reflects the pause back onto the `AgentRun` row.
+    """
+    messages: list[AgentMessage] = [_user_turn(query)]
+    return _drive_loop(
+        messages=messages,
+        ctx=ctx,
+        emit=emit,
+        run_id=run_id,
+        starting_step=0,
+        seen_sources_by_id={},
+    )
 
-    `run_id`: if provided, per-step `AgentStep` rows are persisted under
-    that run. Pass `None` (default) from tests / eval harness to skip
-    persistence entirely.
+
+def resume_agent(
+    run: AgentRun,
+    decision: str,
+    ctx: ToolContext,
+    emit: Callable[[dict[str, Any]], None],
+) -> dict[str, Any] | None:
+    """Resume a paused agent run after the user has approved or rejected.
+
+    Reconstructs the conversation up to the pending tool call from
+    `AgentStep` rows, executes (approve) or synthesizes a rejection
+    (reject) for that one tool, then continues the loop. Returns
+    `None` on completion or another pause descriptor if the resumed
+    run hits a second write tool.
+    """
+    if decision not in (DECISION_APPROVE, DECISION_REJECT):
+        emit(
+            {
+                "type": "error",
+                "message": f"Invalid decision {decision!r} (expected 'approve' or 'reject').",
+            }
+        )
+        return None
+
+    messages, pending_step = _rebuild_messages(run)
+    if pending_step is None:
+        emit(
+            {
+                "type": "error",
+                "message": "No pending tool call found on this run.",
+            }
+        )
+        return None
+
+    step_index = pending_step.step_index
+    call_name = pending_step.tool_name
+    call_args = dict(pending_step.arguments_json or {})
+    function_call = FunctionCall(name=call_name, args=call_args)
+
+    # Emit the start event the original run skipped. Same step index so
+    # the frontend can correlate the approve/reject card with the row
+    # that's now actually executing.
+    emit(
+        {
+            "type": "tool_call_start",
+            "step": step_index,
+            "tool_name": call_name,
+            "arguments": call_args,
+        }
+    )
+
+    if decision == DECISION_REJECT:
+        err = "User rejected this action."
+        emit(
+            {
+                "type": "tool_call_error",
+                "step": step_index,
+                "tool_name": call_name,
+                "error": err,
+            }
+        )
+        try:
+            pending_step.error = "user_rejected"
+            pending_step.summary = ""
+            pending_step.save(update_fields=["error", "summary"])
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to update pending step %s on reject", pending_step.step_id)
+        messages.append(_assistant_function_call_turn(function_call))
+        messages.append(_function_response_turn(call_name, {"error": "user_rejected"}))
+    else:
+        # APPROVE — actually run the tool now.
+        tool = REGISTRY.get(call_name)
+        if tool is None:
+            err = f"Unknown tool: {call_name}"
+            emit(
+                {
+                    "type": "tool_call_error",
+                    "step": step_index,
+                    "tool_name": call_name,
+                    "error": err,
+                }
+            )
+            try:
+                pending_step.error = err
+                pending_step.summary = ""
+                pending_step.save(update_fields=["error", "summary"])
+            except Exception:  # noqa: BLE001
+                log.exception(
+                    "Failed to update pending step %s on unknown tool", pending_step.step_id
+                )
+            messages.append(_assistant_function_call_turn(function_call))
+            messages.append(_function_response_turn(call_name, {"error": err}))
+        else:
+            try:
+                result = tool.run(call_args, ctx)
+            except ToolError as e:
+                emit(
+                    {
+                        "type": "tool_call_error",
+                        "step": step_index,
+                        "tool_name": call_name,
+                        "error": str(e),
+                    }
+                )
+                try:
+                    pending_step.error = str(e)
+                    pending_step.summary = ""
+                    pending_step.save(update_fields=["error", "summary"])
+                except Exception:  # noqa: BLE001
+                    log.exception(
+                        "Failed to update pending step %s after ToolError", pending_step.step_id
+                    )
+                messages.append(_assistant_function_call_turn(function_call))
+                messages.append(_function_response_turn(call_name, {"error": str(e)}))
+            except Exception as e:  # noqa: BLE001
+                log.exception("Tool %s crashed on args %r", call_name, call_args)
+                err = f"Internal error in tool '{call_name}'."
+                emit(
+                    {
+                        "type": "tool_call_error",
+                        "step": step_index,
+                        "tool_name": call_name,
+                        "error": err,
+                    }
+                )
+                try:
+                    pending_step.error = err
+                    pending_step.summary = ""
+                    pending_step.save(update_fields=["error", "summary"])
+                except Exception:  # noqa: BLE001
+                    log.exception(
+                        "Failed to update pending step %s after exception", pending_step.step_id
+                    )
+                messages.append(_assistant_function_call_turn(function_call))
+                messages.append(_function_response_turn(call_name, {"error": err}))
+            else:
+                summary = result.pop("__summary__", "ok")
+                emit(
+                    {
+                        "type": "tool_call_result",
+                        "step": step_index,
+                        "tool_name": call_name,
+                        "summary": summary,
+                    }
+                )
+                try:
+                    pending_step.summary = summary
+                    pending_step.result_json = result
+                    pending_step.save(update_fields=["summary", "result_json"])
+                except Exception:  # noqa: BLE001
+                    log.exception(
+                        "Failed to update pending step %s after approve",
+                        pending_step.step_id,
+                    )
+                messages.append(_assistant_function_call_turn(function_call))
+                messages.append(_function_response_turn(call_name, result))
+
+    # Continue the loop from the next step. The original run wrote
+    # steps 0..step_index inclusive, so we resume at step_index + 1.
+    return _drive_loop(
+        messages=messages,
+        ctx=ctx,
+        emit=emit,
+        run_id=run.run_id,
+        starting_step=step_index + 1,
+        seen_sources_by_id={},  # `sources` events were sent in the original stream; don't double-emit.
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Shared loop body                                                            #
+# --------------------------------------------------------------------------- #
+
+
+def _drive_loop(
+    *,
+    messages: list[AgentMessage],
+    ctx: ToolContext,
+    emit: Callable[[dict[str, Any]], None],
+    run_id: UUID | None,
+    starting_step: int,
+    seen_sources_by_id: dict[tuple, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """The core agent loop, shared by `run_agent` and `resume_agent`.
+
+    Returns `None` on completion, or a pause descriptor on hitting a
+    write tool. See `run_agent` for the descriptor shape.
     """
     max_steps = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
     client = get_model_client()
     tools = _build_tool_declarations()
 
-    messages: list[AgentMessage] = [_user_turn(query)]
-    # entity_id (per type) → ui_source dict. De-dups across multiple
-    # searches in one run so the UI only ever sees a given entity once.
-    seen_sources_by_id: dict[tuple, dict[str, Any]] = {}
-
-    for step in range(max_steps):
+    for step in range(starting_step, max_steps):
         accumulated_function_calls: list[FunctionCall] = []
         accumulated_text_parts: list[str] = []
 
@@ -182,27 +381,16 @@ def run_agent(
                 if function_call is not None:
                     accumulated_function_calls.append(function_call)
                 elif text_chunk:
-                    # Note: per the plan, we keep text deltas even on
-                    # tool-calling steps. If the model emits a stray
-                    # "Let me search…" preface, the user sees it. If
-                    # it's annoying in practice, suppress text when a
-                    # function_call accompanies it in the same step.
                     accumulated_text_parts.append(text_chunk)
                     emit({"type": "answer_delta", "text": text_chunk})
         except Exception as e:  # noqa: BLE001 — surface as stream error
             log.exception("Agent step %d Gemini call failed", step)
             emit({"type": "error", "message": f"Gemini call failed: {e}"})
-            _persist_step(
-                run_id,
-                step_index=step,
-                error=f"Gemini call failed: {e}",
-            )
-            return
+            _persist_step(run_id, step_index=step, error=f"Gemini call failed: {e}")
+            return None
 
         any_text_emitted = bool(accumulated_text_parts)
 
-        # If any text was streamed this step, persist it as its own row
-        # so post-mortems can reconstruct the final answer.
         if any_text_emitted:
             _persist_step(
                 run_id,
@@ -211,42 +399,32 @@ def run_agent(
             )
 
         if not accumulated_function_calls:
-            # Pure text turn → final answer was streamed above.
             if not any_text_emitted:
-                # No text and no tool call: model gave us nothing.
-                # Avoid hanging the UI on "thinking…" forever.
                 emit(
                     {
                         "type": "error",
                         "message": "Model returned an empty response.",
                     }
                 )
-                _persist_step(
-                    run_id,
-                    step_index=step,
-                    error="empty_response",
-                )
-                return
+                _persist_step(run_id, step_index=step, error="empty_response")
+                return None
             emit({"type": "done"})
-            return
+            return None
 
-        # Execute every requested call. Gemini may batch multiple per
-        # step; we run them in order and append all responses before
-        # looping.
         for call in accumulated_function_calls:
             call_args = dict(call.args)
             call_name = call.name
-            emit(
-                {
-                    "type": "tool_call_start",
-                    "step": step,
-                    "tool_name": call_name,
-                    "arguments": call_args,
-                }
-            )
 
             tool = REGISTRY.get(call_name)
             if tool is None:
+                emit(
+                    {
+                        "type": "tool_call_start",
+                        "step": step,
+                        "tool_name": call_name,
+                        "arguments": call_args,
+                    }
+                )
                 err = f"Unknown tool: {call_name}"
                 emit(
                     {
@@ -267,30 +445,47 @@ def run_agent(
                 messages.append(_function_response_turn(call_name, {"error": err}))
                 continue
 
-            # Phase 4 approval shell: write tools (requires_approval=True)
-            # are refused server-side until the full approve-resume
-            # protocol lands. The model sees the refusal and can either
-            # try a different tool or explain to the user.
+            # ---- Phase 7: write tools pause the loop ----
             if getattr(tool, "requires_approval", False):
-                err = "This tool requires user approval, which is not implemented yet."
-                emit(
-                    {
-                        "type": "tool_call_error",
-                        "step": step,
-                        "tool_name": call_name,
-                        "error": err,
-                    }
-                )
+                approval_token = uuid.uuid4()
                 _persist_step(
                     run_id,
                     step_index=step,
                     tool_name=call_name,
                     arguments_json=call_args,
-                    error="approval_required",
+                    summary=PENDING_APPROVAL_MARKER,
                 )
-                messages.append(_assistant_function_call_turn(call))
-                messages.append(_function_response_turn(call_name, {"error": "approval_required"}))
-                continue
+                # `run_id` is included so the frontend has everything it
+                # needs to POST `/decide/`. When `run_id` is None (eval
+                # / test paths) we omit the field rather than serialize
+                # a `null` that the wire schema doesn't expect.
+                event: dict[str, Any] = {
+                    "type": "tool_call_pending_approval",
+                    "step": step,
+                    "tool_name": call_name,
+                    "arguments": call_args,
+                    "approval_token": str(approval_token),
+                }
+                if run_id is not None:
+                    event["run_id"] = str(run_id)
+                emit(event)
+                return {
+                    "paused": True,
+                    "approval_token": approval_token,
+                    "step": step,
+                    "tool_name": call_name,
+                    "arguments": call_args,
+                }
+
+            # ---- Read-only tool: run it inline ----
+            emit(
+                {
+                    "type": "tool_call_start",
+                    "step": step,
+                    "tool_name": call_name,
+                    "arguments": call_args,
+                }
+            )
 
             try:
                 result = tool.run(call_args, ctx)
@@ -313,7 +508,7 @@ def run_agent(
                 messages.append(_assistant_function_call_turn(call))
                 messages.append(_function_response_turn(call_name, {"error": str(e)}))
                 continue
-            except Exception as e:  # noqa: BLE001 — unexpected, log full trace
+            except Exception as e:  # noqa: BLE001
                 log.exception("Tool %s crashed on args %r", call_name, call_args)
                 err = f"Internal error in tool '{call_name}'."
                 emit(
@@ -335,8 +530,6 @@ def run_agent(
                 messages.append(_function_response_turn(call_name, {"error": err}))
                 continue
 
-            # Pop the human-readable summary before handing the result
-            # to the LLM (the model doesn't need our UI label).
             summary = result.pop("__summary__", "ok")
             emit(
                 {
@@ -355,7 +548,6 @@ def run_agent(
                 result_json=result,
             )
 
-            # If this was a search, promote results to citation chips.
             if call_name == "search_knowledge_base":
                 for match in result.get("matches", []):
                     key = (match.get("entity_type"), match.get("entity_id"))
@@ -372,15 +564,64 @@ def run_agent(
             messages.append(_assistant_function_call_turn(call))
             messages.append(_function_response_turn(call_name, result))
 
-    # Step cap hit without a final answer.
+    # Step cap.
     emit(
         {
             "type": "error",
             "message": f"Agent did not reach a final answer in {max_steps} steps.",
         }
     )
-    _persist_step(
-        run_id,
-        step_index=max_steps,
-        error="step_cap_reached",
-    )
+    _persist_step(run_id, step_index=max_steps, error="step_cap_reached")
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Resume helpers                                                              #
+# --------------------------------------------------------------------------- #
+
+
+def _rebuild_messages(run: AgentRun) -> tuple[list[AgentMessage], AgentStep | None]:
+    """Reconstruct the conversation up to (but not including) the pending step.
+
+    The pending step is the one whose `summary == PENDING_APPROVAL_MARKER`
+    and which has neither `result_json` nor `error` filled in yet.
+    Returns (messages, pending_step). `pending_step` is None if there's
+    no row matching the pending shape — the caller should treat that
+    as an error.
+    """
+    messages: list[AgentMessage] = [_user_turn(run.query)]
+    pending: AgentStep | None = None
+
+    for step in run.steps.order_by("step_index", "step_id"):
+        # Pending-write rows are skipped here — we hand them back to
+        # the caller to resolve.
+        if (
+            step.tool_name
+            and step.summary == PENDING_APPROVAL_MARKER
+            and not step.result_json
+            and not step.error
+        ):
+            pending = step
+            continue
+
+        # Text-only assistant turns.
+        if step.answer_text and not step.tool_name:
+            messages.append(AgentMessage(role="assistant", text=step.answer_text))
+            continue
+
+        # Completed tool calls (success OR error). Skip rows that have
+        # no tool_name — they're error markers like "empty_response".
+        if not step.tool_name:
+            continue
+
+        fc = FunctionCall(
+            name=step.tool_name,
+            args=dict(step.arguments_json or {}),
+        )
+        messages.append(_assistant_function_call_turn(fc))
+        if step.error:
+            messages.append(_function_response_turn(step.tool_name, {"error": step.error}))
+        else:
+            messages.append(_function_response_turn(step.tool_name, step.result_json or {}))
+
+    return messages, pending

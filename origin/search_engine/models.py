@@ -36,13 +36,22 @@ class RagChunk(models.Model):
 class AgentRun(models.Model):
     """One row per `/api/v2/agent/ask/` invocation.
 
-    Phase 4 observability: lets us post-mortem any agent run after the
-    stream closes. The final answer + status are filled in by the view
-    layer once the controller's emit loop terminates. Status values:
-        running    — row created, loop not yet finished
-        done       — clean exit, model produced a final answer
-        error      — fatal mid-stream (Gemini failure, etc.)
-        step_cap   — hit MAX_STEPS without a final answer
+    Status values:
+        running             — loop is still in flight
+        done                — clean exit, model produced a final answer
+        error               — fatal mid-stream (Gemini failure, etc.)
+        step_cap            — hit MAX_STEPS without a final answer
+        awaiting_approval   — Phase 7: paused on a requires_approval
+                              tool; resume via POST /api/v2/agent/decide/
+        rejected            — Phase 7: user rejected the pending tool
+                              call; loop resumed and produced a final
+                              answer (terminal state, not a separate
+                              flavor of `done`)
+
+    `pending_approval_token` is a one-shot UUID emitted with the
+    `tool_call_pending_approval` event and required (along with run_id)
+    on the decide endpoint. The server clears it the moment the run
+    leaves `awaiting_approval`, so a stale token can't be replayed.
     """
 
     run_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -52,6 +61,8 @@ class AgentRun(models.Model):
     status = models.CharField(max_length=20, default="running")
     final_answer_text = models.TextField(blank=True, default="")
     error_message = models.TextField(blank=True, default="")
+    # Phase 7 — write-tool approval flow.
+    pending_approval_token = models.UUIDField(blank=True, null=True)
     started_at = models.DateTimeField(auto_now_add=True)
     finished_at = models.DateTimeField(blank=True, null=True)
 

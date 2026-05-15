@@ -1,47 +1,53 @@
-"""Streaming agent endpoint: POST /api/v2/agent/ask.
+"""Streaming agent endpoints.
 
-Phase 3: this endpoint now drives a multi-step Gemini function-calling
-loop instead of a fixed RAG pipeline. The model decides when to
-search and when to fetch detail. See `agent.controller.run_agent` for
-the loop body.
+Two endpoints, both streaming NDJSON over POST:
 
-NDJSON event types emitted (see `agent/controller.py` for full list):
+    POST /api/v2/agent/ask/      — start a fresh agent run
+    POST /api/v2/agent/decide/   — resume a run paused on a write tool
 
-    {"type": "tool_call_start", "step": N, "tool_name": "...", "arguments": {...}}
-    {"type": "tool_call_result", "step": N, "tool_name": "...", "summary": "..."}
-    {"type": "tool_call_error",  "step": N, "tool_name": "...", "error": "..."}
-    {"type": "sources", "sources": [...]}        // after each search_knowledge_base call
-    {"type": "answer_delta", "text": "..."}      // tokens of the final answer
+Phase 3 introduced the multi-step Gemini/Claude function-calling loop;
+Phase 7 adds the pause/resume protocol for tools with
+`requires_approval=True`. See `agent.controller` for the loop body.
+
+NDJSON event types emitted:
+
+    {"type": "tool_call_start",            "step": N, "tool_name": "...", "arguments": {...}}
+    {"type": "tool_call_result",           "step": N, "tool_name": "...", "summary": "..."}
+    {"type": "tool_call_error",            "step": N, "tool_name": "...", "error": "..."}
+    {"type": "tool_call_pending_approval", "step": N, "tool_name": "...", "arguments": {...},
+                                           "approval_token": "<uuid>"}   ← Phase 7
+    {"type": "sources",                    "sources": [...]}
+    {"type": "answer_delta",               "text": "..."}
     {"type": "done"}
-    {"type": "error", "message": "..."}
+    {"type": "error",                      "message": "..."}
 
-Wire format is identical to Phase 2 plus the three new tool events,
-so the existing frontend NDJSON parser still works (older event types
-are still emitted) — only the AnswerPanel UI needs to grow a
-tool-progress strip to render the new events.
-
-POST instead of SSE so the query payload isn't logged in access logs,
-and `StreamingHttpResponse` over `application/x-ndjson` so each event
-hits the client incrementally.
+POST instead of SSE so query payloads aren't logged in access logs.
+`StreamingHttpResponse(application/x-ndjson)` flushes each event
+incrementally; nginx buffering disabled via header.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Iterator
+from typing import Callable, Iterator
 
 from django.http import StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
-from origin.search_engine.agent.controller import run_agent
+from origin.search_engine.agent.controller import resume_agent, run_agent
 from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.models import AgentRun
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 log = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# /ask/ — start a fresh run                                                   #
+# --------------------------------------------------------------------------- #
 
 
 class AgentAskView(AuthenticatedAPIView):
@@ -71,12 +77,9 @@ class AgentAskView(AuthenticatedAPIView):
 
         ctx = ToolContext(team_id=str(team_id), user_id=user_id)
 
-        # Phase 4: persist one AgentRun row per /ask/ call so we can
-        # post-mortem any answer after the stream closes. Per-step rows
-        # are written by the controller as events fire. Failure to
-        # persist must never break the user-facing response — caught and
-        # logged here; the request still streams as normal.
-        run = None
+        # Persist one AgentRun row per /ask/ call. Failures here are
+        # logged but never break the user-facing response.
+        run: AgentRun | None = None
         try:
             run = AgentRun.objects.create(
                 team_id=str(team_id),
@@ -86,30 +89,125 @@ class AgentAskView(AuthenticatedAPIView):
         except Exception:  # noqa: BLE001
             log.exception("Failed to create AgentRun row; continuing without persistence")
 
-        stream = _stream_ndjson(query, ctx, run=run)
+        def worker(emit):
+            return run_agent(query, ctx, emit, run_id=run.run_id if run else None)
+
+        stream = _stream_ndjson(worker, run=run)
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
-        response["X-Accel-Buffering"] = "no"  # disable nginx buffering if present
+        response["X-Accel-Buffering"] = "no"
         return response
 
 
+# --------------------------------------------------------------------------- #
+# /decide/ — resume a paused run                                              #
+# --------------------------------------------------------------------------- #
+
+
+class AgentDecideView(AuthenticatedAPIView):
+    def post(self, request):
+        data = request.data or {}
+
+        run_id = (data.get("run_id") or "").strip()
+        approval_token = (data.get("approval_token") or "").strip()
+        decision = (data.get("decision") or "").strip().lower()
+
+        if not run_id:
+            return Response({"error": "run_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not approval_token:
+            return Response(
+                {"error": "approval_token is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if decision not in ("approve", "reject"):
+            return Response(
+                {"error": "decision must be 'approve' or 'reject'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            run = AgentRun.objects.get(run_id=run_id)
+        except AgentRun.DoesNotExist:
+            return Response({"error": "run not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # AuthZ: the user resuming the run must be the one who started
+        # it. Also enforces tenant isolation (token alone isn't enough).
+        request_user_id = str(getattr(request.user, "id", "")) or data.get("user_id")
+        if not request_user_id or request_user_id != run.user_id:
+            return Response(
+                {"error": "Not authorized to resume this run."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if run.status != "awaiting_approval":
+            return Response(
+                {"error": f"run is not awaiting approval (status={run.status})."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if str(run.pending_approval_token) != approval_token:
+            return Response(
+                {"error": "approval_token does not match."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Consume the token immediately — single-shot. From now on this
+        # run is "running" again; if we crash mid-resume the status
+        # reflects that rather than leaving the row half-stuck.
+        try:
+            run.pending_approval_token = None
+            run.status = "running"
+            run.save(update_fields=["pending_approval_token", "status"])
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to consume approval token for run %s", run.run_id)
+
+        ctx = ToolContext(team_id=run.team_id, user_id=run.user_id)
+
+        def worker(emit):
+            return resume_agent(run, decision, ctx, emit)
+
+        stream = _stream_ndjson(
+            worker,
+            run=run,
+            rejected=(decision == "reject"),
+            append_to_existing_answer=True,
+        )
+        response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
+        response["Cache-Control"] = "no-cache"
+        response["X-Accel-Buffering"] = "no"
+        return response
+
+
+# --------------------------------------------------------------------------- #
+# Shared streaming adapter                                                    #
+# --------------------------------------------------------------------------- #
+
+
 def _stream_ndjson(
-    query: str,
-    ctx: ToolContext,
+    worker_target: Callable[[Callable[[dict], None]], dict | None],
     *,
     run: AgentRun | None = None,
+    rejected: bool = False,
+    append_to_existing_answer: bool = False,
 ) -> Iterator[bytes]:
-    """Adapter: bridge `run_agent`'s `emit(dict)` callback to NDJSON bytes.
+    """Bridge a controller callback into chunked NDJSON.
 
-    The controller wants a synchronous `emit(event)` callback. We
-    can't `yield` from inside a callback, so we run the controller on
-    a background thread and have it push events into a queue that the
-    HTTP-response generator drains. This way each event hits the
-    client as soon as the controller produces it — no batching at the
-    Django layer.
+    `worker_target(emit)` is the controller function to run on a
+    background thread. It must call `emit(event_dict)` for each
+    NDJSON line it wants to send and return either `None` (clean
+    finish) or a `{"paused": True, "approval_token": UUID, ...}`
+    descriptor when the loop is paused on a write tool.
 
-    When `run` is provided, the final `AgentRun` status / final answer
-    text / error message are written once the controller exits.
+    `run`, when present, is closed at end-of-stream:
+        * `paused=True`     → status="awaiting_approval", token stored
+        * `rejected=True`   → status="rejected" (only if pause didn't fire)
+        * clean text done   → status="done", final_answer_text saved
+        * fatal error       → status="error"
+        * step cap          → status="step_cap"
+
+    `append_to_existing_answer=True` makes the resume path concatenate
+    its `answer_delta` events onto the run's existing `final_answer_text`
+    rather than overwriting (the first `/ask/` call already wrote some
+    text for the paused step).
     """
     import queue  # noqa: PLC0415
     import threading  # noqa: PLC0415
@@ -118,29 +216,25 @@ def _stream_ndjson(
         return (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
 
     event_q: "queue.Queue[dict | None]" = queue.Queue()
+    pause_descriptor: dict | None = None
 
     def emit(event: dict) -> None:
         event_q.put(event)
 
-    run_id = run.run_id if run is not None else None
-
     def worker():
+        nonlocal pause_descriptor
         try:
-            run_agent(query, ctx, emit, run_id=run_id)
+            pause_descriptor = worker_target(emit)
         except Exception as e:  # noqa: BLE001
-            log.exception("Agent run crashed")
+            log.exception("Agent worker crashed")
             event_q.put({"type": "error", "message": f"Agent crashed: {e}"})
         finally:
-            event_q.put(None)  # sentinel: stream is done
+            event_q.put(None)
 
     threading.Thread(target=worker, daemon=True).start()
 
-    # Collect terminal state by peeking at events as they pass through.
-    # The model's `answer_delta` chunks are concatenated into the final
-    # answer; the outcome (done / error / step_cap) is inferred from
-    # the last terminal event.
     answer_parts: list[str] = []
-    final_status = "error"
+    final_status: str | None = None
     final_error = ""
 
     while True:
@@ -157,27 +251,51 @@ def _stream_ndjson(
         elif event_type == "error":
             msg = event.get("message") or ""
             final_error = msg
-            if "did not reach a final answer" in msg:
-                final_status = "step_cap"
-            else:
-                final_status = "error"
+            final_status = "step_cap" if "did not reach a final answer" in msg else "error"
         yield line(event)
 
-    # Close the AgentRun row. Best-effort: a DB failure here is logged
-    # but doesn't affect the already-finished response.
-    if run is not None:
-        try:
-            run.status = final_status
-            run.final_answer_text = "".join(answer_parts)
-            run.error_message = final_error
-            run.finished_at = timezone.now()
+    # Decide the row's final state. Pause beats every other outcome —
+    # if the controller paused, we don't care if it also emitted some
+    # text first; the run is "awaiting_approval" until /decide/ fires.
+    if run is None:
+        return
+
+    try:
+        if pause_descriptor and pause_descriptor.get("paused"):
+            run.status = "awaiting_approval"
+            run.pending_approval_token = pause_descriptor["approval_token"]
+            if answer_parts:
+                if append_to_existing_answer:
+                    run.final_answer_text = (run.final_answer_text or "") + "".join(answer_parts)
+                else:
+                    run.final_answer_text = "".join(answer_parts)
             run.save(
                 update_fields=[
                     "status",
+                    "pending_approval_token",
                     "final_answer_text",
-                    "error_message",
-                    "finished_at",
                 ]
             )
-        except Exception:  # noqa: BLE001
-            log.exception("Failed to close AgentRun %s", run.run_id)
+            return
+
+        # Terminal close.
+        if final_status is None:
+            final_status = "rejected" if rejected else "error"
+        run.status = final_status
+        new_text = "".join(answer_parts)
+        if append_to_existing_answer and new_text:
+            run.final_answer_text = (run.final_answer_text or "") + new_text
+        elif new_text:
+            run.final_answer_text = new_text
+        run.error_message = final_error
+        run.finished_at = timezone.now()
+        run.save(
+            update_fields=[
+                "status",
+                "final_answer_text",
+                "error_message",
+                "finished_at",
+            ]
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("Failed to close AgentRun %s", run.run_id)
