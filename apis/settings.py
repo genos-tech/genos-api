@@ -357,4 +357,11 @@ SEARCH_ENGINE = {
     # Minutes of inactivity before a session is considered expired.
     # An expired session ID silently creates a fresh session.
     "SESSION_TTL_MINUTES": int(os.environ.get("SESSION_TTL_MINUTES", "30")),
+    # Phase 9 — chunking refinement.
+    # How many preceding messages to fold into each chat_message
+    # chunk's `search_text` for embedding context. Set to 0 to
+    # disable (back to Phase-3 behavior). Requires an
+    # `opensearch_reindex` after change to take effect on existing
+    # chunks.
+    "RAG_CHAT_CONTEXT_WINDOW": int(os.environ.get("RAG_CHAT_CONTEXT_WINDOW", "2")),
 }

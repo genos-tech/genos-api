@@ -1,10 +1,12 @@
 """Note chunker for ChatNote / TaskNote / PersonalNote.
 
-Each note becomes one chunk (`note_title_body`) for MVP. Section
-splitting is deliberately deferred — note bodies are stored as
-BlockNote JSON without strong heading metadata, and one-chunk-per-note
-is good enough for first-pass retrieval. Future work can split by
-heading and add per-section chunks without changing the index.
+Phase 9 — heading-aware sections. A note's BlockNote body is split
+into sections at each `type: "heading"` block; each section becomes
+one chunk (`note_section`). Notes with no headings still produce a
+single section chunk, equivalent to the old `note_title_body`
+behavior. The note title is repeated in every section's
+`search_text` so a query that mentions the note's overall topic can
+still find the right section.
 
 ACL is the union of:
   * the note owner,
@@ -45,7 +47,7 @@ from origin.search_engine.chunkers.base import (
     iso,
     make_snippet,
 )
-from origin.search_engine.text_extraction import extract_text
+from origin.search_engine.text_extraction import extract_sections
 
 # ----------------------------- ChatNote -----------------------------
 
@@ -83,7 +85,7 @@ def iter_chat_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
         if note.parent_note_id:
             related.append(f"note:chat:{note.parent_note_id}")
 
-        chunk = _note_to_chunk(
+        chunks = _note_to_section_chunks(
             note_type_label="chat",
             note_id=note.note_id,
             team_id=team_id,
@@ -94,11 +96,11 @@ def iter_chat_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
             created_at=note.ts_created_at,
             updated_at=note.ts_updated_at,
         )
-        if chunk is not None:
+        if chunks:
             yield EntityChunks(
                 entity_type="note",
                 entity_id=f"note:chat:{note.note_id}",
-                chunks=[chunk],
+                chunks=chunks,
             )
 
 
@@ -193,7 +195,7 @@ def iter_task_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
         if note.parent_note_id:
             related.append(f"note:task:{note.parent_note_id}")
 
-        chunk = _note_to_chunk(
+        chunks = _note_to_section_chunks(
             note_type_label="task",
             note_id=note.note_id,
             team_id=team_id,
@@ -205,11 +207,11 @@ def iter_task_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
             updated_at=note.ts_updated_at,
             project_id=str(note.project_id) if note.project_id else None,
         )
-        if chunk is not None:
+        if chunks:
             yield EntityChunks(
                 entity_type="note",
                 entity_id=f"note:task:{note.note_id}",
-                chunks=[chunk],
+                chunks=chunks,
             )
 
 
@@ -239,7 +241,7 @@ def iter_personal_note_chunks(since: Optional[datetime] = None) -> Iterator[Enti
         if note.parent_note_id:
             related.append(f"note:personal:{note.parent_note_id}")
 
-        chunk = _note_to_chunk(
+        chunks = _note_to_section_chunks(
             note_type_label="personal",
             note_id=note.note_id,
             team_id=team_id,
@@ -250,11 +252,11 @@ def iter_personal_note_chunks(since: Optional[datetime] = None) -> Iterator[Enti
             created_at=note.ts_created_at,
             updated_at=note.ts_updated_at,
         )
-        if chunk is not None:
+        if chunks:
             yield EntityChunks(
                 entity_type="note",
                 entity_id=f"note:personal:{note.note_id}",
-                chunks=[chunk],
+                chunks=chunks,
             )
 
 
@@ -274,7 +276,7 @@ def _load_grants(note_type_code: int, note_ids: list[int]) -> dict[int, list[str
     return grants
 
 
-def _note_to_chunk(
+def _note_to_section_chunks(
     *,
     note_type_label: str,
     note_id: int,
@@ -286,34 +288,69 @@ def _note_to_chunk(
     created_at,
     updated_at,
     project_id: Optional[str] = None,
-) -> Optional[Chunk]:
-    body_text = extract_text(body)
-    parts = []
-    if title:
-        parts.append(title.strip())
-    if body_text:
-        parts.append(body_text)
-    combined = "\n".join(p for p in parts if p).strip()
-    if not combined:
-        return None
+) -> list[Chunk]:
+    """Split the body into heading-bounded sections; one Chunk per section.
 
-    return Chunk(
-        chunk_id=f"note:{note_type_label}:{note_id}:body",
-        entity_type="note",
-        entity_id=f"note:{note_type_label}:{note_id}",
-        chunk_type="note_title_body",
-        team_id=team_id,
-        acl_user_ids=acl_user_ids,
-        title=title,
-        search_text=combined,
-        snippet_text=make_snippet(combined),
-        note_id=str(note_id),
-        note_type=note_type_label,
-        project_id=project_id,
-        related_entity_ids=related,
-        created_at=iso(created_at),
-        updated_at=iso(updated_at),
-    )
+    The note title is included in each section's `search_text` so a
+    query matching the note's overall topic surfaces the right
+    section. The snippet stays section-local (heading + body start)
+    so the UI shows what was actually matched.
+    """
+    sections = extract_sections(body)
+    title_clean = (title or "").strip()
+
+    # No body and no title → nothing to index.
+    if not sections and not title_clean:
+        return []
+
+    # Title-only note: index just the title as one degenerate section.
+    if not sections:
+        sections = [("", "")]
+
+    entity_id = f"note:{note_type_label}:{note_id}"
+    out: list[Chunk] = []
+    for idx, (heading, section_body) in enumerate(sections):
+        # `search_text` includes the note title in every section so a
+        # heading-only query like "Risks" still pulls the right note
+        # by topical context.
+        parts: list[str] = []
+        if title_clean:
+            parts.append(title_clean)
+        if heading:
+            parts.append(heading)
+        if section_body:
+            parts.append(section_body)
+        combined = "\n".join(parts).strip()
+        if not combined:
+            continue
+
+        # The snippet shows the section the user actually matched:
+        # `Heading — body...`. Falls back to body or heading alone.
+        if heading and section_body:
+            snippet_source = f"{heading} — {section_body}"
+        else:
+            snippet_source = section_body or heading
+
+        out.append(
+            Chunk(
+                chunk_id=f"{entity_id}:section:{idx}",
+                entity_type="note",
+                entity_id=entity_id,
+                chunk_type="note_section",
+                team_id=team_id,
+                acl_user_ids=acl_user_ids,
+                title=title,
+                search_text=combined,
+                snippet_text=make_snippet(snippet_source),
+                note_id=str(note_id),
+                note_type=note_type_label,
+                project_id=project_id,
+                related_entity_ids=related,
+                created_at=iso(created_at),
+                updated_at=iso(updated_at),
+            )
+        )
+    return out
 
 
 # ----------------------------- entry point -----------------------------

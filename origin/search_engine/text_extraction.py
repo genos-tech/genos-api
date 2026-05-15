@@ -49,6 +49,62 @@ def extract_text(body: Any) -> str:
     return ""
 
 
+def extract_sections(body: Any) -> list[tuple[str, str]]:
+    """Split a BlockNote body into (heading, section_text) sections.
+
+    A new section begins at each `type: "heading"` block. Content
+    before the first heading is returned as a section with an empty
+    heading. Sections whose body AND heading are both empty are
+    dropped — they index nothing useful.
+
+    Returns a list of `(heading, body_text)` tuples in document
+    order. For bodies without any headings, returns a single section
+    `[("", full_text)]` (equivalent to `extract_text` flattened).
+
+    Used by Phase 9 note chunking so each section becomes its own
+    indexed chunk — improves retrieval precision when a note has
+    multiple distinct topics under headings.
+    """
+    blocks = _top_level_blocks(body)
+    if not blocks:
+        text = extract_text(body)
+        return [("", text)] if text else []
+
+    sections: list[tuple[str, list[str]]] = [("", [])]
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "heading":
+            heading = _join(_walk_block(block))
+            sections.append((heading, []))
+            continue
+        block_text = _join(_walk_block(block))
+        if block_text:
+            sections[-1][1].append(block_text)
+
+    out: list[tuple[str, str]] = []
+    for heading, parts in sections:
+        body_text = "\n".join(parts).strip()
+        if not heading and not body_text:
+            continue
+        out.append((heading, body_text))
+    return out
+
+
+def _top_level_blocks(body: Any) -> list:
+    """Return the list of top-level blocks in `body`, or [] if shape is unknown."""
+    if isinstance(body, list):
+        return body
+    if isinstance(body, dict):
+        if "content" in body and isinstance(body.get("content"), list):
+            return [body]
+        for key in ("blocks", "body", "doc"):
+            inner = body.get(key)
+            if isinstance(inner, list):
+                return inner
+    return []
+
+
 def _walk_blocks(blocks):
     parts = []
     for block in blocks:

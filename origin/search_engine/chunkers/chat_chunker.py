@@ -9,6 +9,15 @@ thread_id=None), we produce:
     thread, in order (good for semantic / natural-language search and
     to give future RAG enough context).
 
+Phase 9 — preceding-message context. Each `chat_message` chunk's
+`search_text` is prefixed with the previous N messages from the
+same channel/thread (default N=2, via `RAG_CHAT_CONTEXT_WINDOW`).
+This gives the embedding lane real conversational context so terse
+replies like "yes, ship it" embed near related preceding messages
+instead of in their own desert. The `snippet_text` stays focused
+on the focal message so the UI doesn't show prior text as the
+"matched" content.
+
 ACL is denormalized per chunk: we copy the chat's allowed user list
 into `acl_user_ids` so retrieval-time filtering is a single
 `terms` clause without any joins.
@@ -17,6 +26,8 @@ into `acl_user_ids` so retrieval-time filtering is a single
 from collections import defaultdict
 from datetime import datetime
 from typing import Iterator, Optional
+
+from django.conf import settings
 
 from origin.models.chat.dm_models import DMMaster, DMMessages, DMThreadMessages
 from origin.models.chat.gm_models import GMMaster, GMMembers, GMMessages, GMThreadMessages
@@ -326,6 +337,29 @@ def _emit_chat_chunks(
             yield EntityChunks(entity_type="chat", entity_id=thread_entity_id, chunks=chunks)
 
 
+def _context_window_size() -> int:
+    """How many preceding messages to fold into each chat_message chunk."""
+    try:
+        return max(0, int(settings.SEARCH_ENGINE.get("RAG_CHAT_CONTEXT_WINDOW", 2)))
+    except (ValueError, TypeError):
+        return 2
+
+
+def _search_text_with_context(focal_text: str, prior_texts: list[str]) -> str:
+    """Build the `search_text` for a chat_message chunk.
+
+    With context disabled (`RAG_CHAT_CONTEXT_WINDOW=0`) or no prior
+    messages available (first message in a channel/thread), returns
+    the focal text unchanged — embeddings of older chunks already in
+    the index stay byte-identical, which keeps the hash-diff in
+    `ingestion.py` from re-embedding them on the post-Phase-9 reindex.
+    """
+    if not prior_texts:
+        return focal_text
+    prior = "\n".join(prior_texts)
+    return f"Previously:\n{prior}\n\nMessage:\n{focal_text}"
+
+
 def _build_message_chunks(
     *,
     chat_label,
@@ -340,6 +374,8 @@ def _build_message_chunks(
     project_id,
 ) -> list[Chunk]:
     out = []
+    context_size = _context_window_size()
+    recent_texts: list[str] = []
     for m in messages:
         text = extract_text(getattr(m, body_attr, None))
         if not text:
@@ -348,6 +384,7 @@ def _build_message_chunks(
         if getattr(m, "task_id", None):
             related.append(f"task:{m.task_id}")
         chunk_id = f"chat:{chat_label}:{chat_id}:msg:{m.message_id}"
+        prior = recent_texts[-context_size:] if context_size else []
         out.append(
             Chunk(
                 chunk_id=chunk_id,
@@ -357,7 +394,7 @@ def _build_message_chunks(
                 team_id=team_id,
                 acl_user_ids=acl_user_ids,
                 title=chat_title,
-                search_text=text,
+                search_text=_search_text_with_context(text, prior),
                 snippet_text=make_snippet(text),
                 related_entity_ids=related,
                 chat_type=chat_label,
@@ -368,6 +405,7 @@ def _build_message_chunks(
                 updated_at=iso(getattr(m, "ts_updated_at", None)),
             )
         )
+        recent_texts.append(text)
     return out
 
 
@@ -390,11 +428,14 @@ def _build_thread_chunks(
     window_parts = []
     related = set()
     latest_ts = None
+    context_size = _context_window_size()
+    recent_texts: list[str] = []
 
     if anchor_msg is not None:
         text = extract_text(getattr(anchor_msg, anchor_body_attr, None))
         if text:
             window_parts.append(text)
+            # Anchor has no preceding messages in the thread by definition.
             out.append(
                 Chunk(
                     chunk_id=(
@@ -423,12 +464,14 @@ def _build_thread_chunks(
             if anchor_msg.task_id:
                 related.add(f"task:{anchor_msg.task_id}")
             latest_ts = getattr(anchor_msg, "ts_updated_at", None)
+            recent_texts.append(text)
 
     for tm in thread_msgs:
         text = extract_text(getattr(tm, thread_body_attr, None))
         if not text:
             continue
         window_parts.append(text)
+        prior = recent_texts[-context_size:] if context_size else []
         out.append(
             Chunk(
                 chunk_id=(
@@ -441,7 +484,7 @@ def _build_thread_chunks(
                 team_id=team_id,
                 acl_user_ids=acl_user_ids,
                 title=chat_title,
-                search_text=text,
+                search_text=_search_text_with_context(text, prior),
                 snippet_text=make_snippet(text),
                 related_entity_ids=[],
                 chat_type=chat_label,
@@ -452,6 +495,7 @@ def _build_thread_chunks(
                 updated_at=iso(getattr(tm, "ts_updated_at", None)),
             )
         )
+        recent_texts.append(text)
         tm_updated = getattr(tm, "ts_updated_at", None)
         if tm_updated and (latest_ts is None or tm_updated > latest_ts):
             latest_ts = tm_updated
