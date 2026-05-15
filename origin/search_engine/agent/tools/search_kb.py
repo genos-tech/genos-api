@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.conf import settings
+
 from origin.search_engine.agent.tools.base import Tool, ToolContext, wrap_workspace_content
 from origin.search_engine.search import search
 
@@ -37,6 +39,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         limit = 10
     limit = max(1, min(limit, _MAX_LIMIT))
 
+    # Phase 10 — query rewriting is opt-in for the agent path only.
+    # The Spotlight typeahead never passes through here, so toggling
+    # `RAG_USE_QUERY_REWRITE` can't accidentally fire an LLM call per
+    # keystroke. Off by default during rollout.
+    use_rewrite = bool(settings.SEARCH_ENGINE.get("RAG_USE_QUERY_REWRITE", False))
+
     result = search(
         query=query,
         team_id=ctx.team_id,
@@ -44,6 +52,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         entity_types=entity_types,
         limit=limit,
         for_agent=True,
+        rewrite=use_rewrite,
     )
 
     # Trim the per-entity payload to what the LLM actually needs:

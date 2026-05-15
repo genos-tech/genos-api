@@ -364,4 +364,13 @@ SEARCH_ENGINE = {
     # `opensearch_reindex` after change to take effect on existing
     # chunks.
     "RAG_CHAT_CONTEXT_WINDOW": int(os.environ.get("RAG_CHAT_CONTEXT_WINDOW", "2")),
+    # Phase 10 — LLM query rewriting (opt-in, agent path only).
+    # When on, the agent's `search_knowledge_base` tool expands the
+    # query into N variants via the active ModelClient before hitting
+    # OpenSearch, then RRF-fuses results across all variants. Adds one
+    # LLM call + N embedding calls per agent search. Off by default
+    # during rollout. Does NOT affect the Spotlight typeahead
+    # endpoint — it never passes `rewrite=True`.
+    "RAG_USE_QUERY_REWRITE": (os.environ.get("RAG_USE_QUERY_REWRITE", "false").lower() == "true"),
+    "RAG_REWRITE_NUM_VARIANTS": int(os.environ.get("RAG_REWRITE_NUM_VARIANTS", "3")),
 }

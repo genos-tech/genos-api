@@ -78,6 +78,7 @@ def search(
     min_score: float = DEFAULT_MIN_SCORE,
     for_agent: bool = False,
     max_chunks_per_entity: int = 3,
+    rewrite: bool = False,
 ) -> dict:
     """Run a hybrid search and return entity-grouped results.
 
@@ -106,6 +107,14 @@ def search(
         max_chunks_per_entity: when `for_agent=True`, cap on how many
             chunks per entity are returned. Default 3 — keeps prompt
             size bounded but gives the LLM more than just the snippet.
+        rewrite: Phase 10 — expand the query into multiple variants via
+            the configured `ModelClient` before retrieval, then fuse
+            results across all variants. Default `False` so callers
+            don't accidentally pay the LLM round-trip. The agent's
+            `search_knowledge_base` tool reads
+            `SEARCH_ENGINE["RAG_USE_QUERY_REWRITE"]` and passes it
+            through; the Spotlight typeahead endpoint never opts in
+            (would cost an LLM call per keystroke).
     """
     if not query or not query.strip():
         return {"query": query, "results": []}
@@ -115,22 +124,33 @@ def search(
 
     base_filter = _build_filter(team_id, user_id, entity_types, date_from, date_to)
 
-    # --- Keyword lane ---
-    keyword_hits = _run_keyword(client, index, query, base_filter, pool_size, for_agent=for_agent)
+    # --- Phase 10: query rewriting (optional) ---
+    # `variants` always starts with the original query; the rewriter
+    # adds N alternative phrasings. With rewriting off we get a one-
+    # element list and the loop below collapses to the pre-Phase-10
+    # behavior exactly.
+    if rewrite:
+        from origin.search_engine.query_rewriter import rewrite_query  # noqa: PLC0415
 
-    # --- Vector lane ---
-    vector_hits: list[dict] = []
-    if use_vector:
-        try:
-            qvec = embed_one(query)
-            vector_hits = _run_vector(
-                client, index, qvec, base_filter, pool_size, for_agent=for_agent
-            )
-        except Exception as e:  # noqa: BLE001 — degrade to keyword-only
-            log.warning("Vector search failed, falling back to keyword-only: %s", e)
+        num_variants = int(settings.SEARCH_ENGINE.get("RAG_REWRITE_NUM_VARIANTS", 3))
+        variants = rewrite_query(query, num_variants=num_variants)
+    else:
+        variants = [query]
 
-    # --- RRF fuse ---
-    fused = _rrf_fuse(keyword_hits, vector_hits)
+    # --- Run keyword + vector for each variant, then merge ---
+    # We RRF-fuse each variant independently (so two-lane scoring stays
+    # well-calibrated per variant) and SUM the per-variant scores at
+    # the chunk level. Chunks that surface for multiple variants get
+    # extra weight, which is exactly the boost rewriting should give.
+    fused = _multi_variant_fuse(
+        variants=variants,
+        client=client,
+        index=index,
+        base_filter=base_filter,
+        pool_size=pool_size,
+        use_vector=use_vector,
+        for_agent=for_agent,
+    )
 
     # --- Phase 6: freshness multiplier + text-hash dedup ---
     # Both are no-ops when their settings are at the disable values
@@ -172,6 +192,74 @@ def search(
         )
 
     return {"query": query, "results": grouped[:limit]}
+
+
+def _multi_variant_fuse(
+    *,
+    variants: list[str],
+    client,
+    index: str,
+    base_filter: list[dict],
+    pool_size: int,
+    use_vector: bool,
+    for_agent: bool,
+) -> list[dict]:
+    """Run keyword + vector for each variant and merge into one ranked list.
+
+    Per-variant: `_run_keyword` + `_run_vector` (if enabled) → `_rrf_fuse`.
+    Across variants: chunk-level score summation. A chunk that appears
+    in K of N variants accumulates K RRF scores — so multi-variant
+    matches naturally outrank single-variant ones without any
+    per-variant weighting heuristics.
+
+    Single-variant case (`len(variants) == 1`) is byte-identical to the
+    pre-Phase-10 path.
+    """
+    chunks_by_id: dict[str, dict] = {}
+    for variant in variants:
+        keyword_hits = _run_keyword(
+            client, index, variant, base_filter, pool_size, for_agent=for_agent
+        )
+        vector_hits: list[dict] = []
+        if use_vector:
+            try:
+                qvec = embed_one(variant)
+                vector_hits = _run_vector(
+                    client, index, qvec, base_filter, pool_size, for_agent=for_agent
+                )
+            except Exception as e:  # noqa: BLE001 — degrade to keyword-only for this variant
+                log.warning(
+                    "Vector search failed for variant %r, keyword-only: %s", variant[:80], e
+                )
+
+        variant_fused = _rrf_fuse(keyword_hits, vector_hits)
+        for hit in variant_fused:
+            cid = hit["chunk_id"]
+            existing = chunks_by_id.get(cid)
+            if existing is None:
+                # First time we see this chunk — keep the dict as-is.
+                chunks_by_id[cid] = dict(hit)
+                continue
+            # Same chunk surfaced for a previous variant. Sum the RRF
+            # scores and keep the best (lowest) lane ranks for the UI's
+            # debug fields.
+            existing["score"] += hit["score"]
+            existing["keyword_rank"] = _min_rank(
+                existing.get("keyword_rank"), hit.get("keyword_rank")
+            )
+            existing["vector_rank"] = _min_rank(
+                existing.get("vector_rank"), hit.get("vector_rank")
+            )
+    return sorted(chunks_by_id.values(), key=lambda x: x["score"], reverse=True)
+
+
+def _min_rank(a, b):
+    """Lower rank is better; pick the smaller of two values, ignoring None."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return min(a, b)
 
 
 def _apply_freshness(hits: list[dict], *, half_life_days: float) -> list[dict]:
