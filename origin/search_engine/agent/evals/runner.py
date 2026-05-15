@@ -1,21 +1,26 @@
-"""Eval-harness runner for the agent loop.
+"""Eval-harness runner.
 
-Loads test cases from `cases.yaml`, runs each through `run_agent`, and
-checks declarative assertions against the emitted event stream. The
-result of a run is a list of `CaseResult` records the CLI prints.
+Two modes, sharing the same `CaseResult` dataclass and CLI:
+
+  1. **Behavior mode** — case file `cases.yaml`. Each case runs the
+     full agent loop (`run_agent`) and asserts on the emitted NDJSON
+     event stream (which tools were called, what the answer says,
+     etc.). Used to catch regressions in agent decision-making.
+
+  2. **Retrieval mode** — case file `retrieval_cases.yaml`. Each case
+     calls `search(...)` directly and asserts on the ranked entity
+     list (gold-standard recall checks: "query X must return entity Y
+     in top N"). No LLM calls; fast and free.
 
 Design notes:
 
-  * Each case is a real Gemini call. Cases are run sequentially so a
-    parallel run doesn't fan out 17× the LLM quota at once.
-  * `setup.inject_note` lets a case seed an adversarial note into the
-    OpenSearch index for the duration of the run and remove it after.
-    Used by prompt-injection cases; not used by happy-path cases.
-  * Assertions are declarative (in YAML) rather than imperative Python
-    so case authors don't have to read agent internals. Each `expect`
-    key maps to one assertion function below.
-  * The runner deliberately catches and reports per-case failures
-    instead of raising — one bad case shouldn't abort the rest.
+  * Both modes return the same `CaseResult` shape so the CLI prints
+    them identically.
+  * Behavior cases may seed an adversarial note via
+    `setup.inject_note`; retrieval cases don't currently need a
+    `setup` block (gold data is already in the index).
+  * Assertions are declarative (in YAML) rather than imperative
+    Python so case authors don't have to read the runner internals.
 """
 
 from __future__ import annotations
@@ -32,10 +37,16 @@ import yaml
 
 from origin.search_engine.agent.controller import run_agent
 from origin.search_engine.agent.tools import ToolContext
+from origin.search_engine.search import search
 
 log = logging.getLogger(__name__)
 
-CASES_PATH = Path(__file__).parent / "cases.yaml"
+BEHAVIOR_CASES_PATH = Path(__file__).parent / "cases.yaml"
+RETRIEVAL_CASES_PATH = Path(__file__).parent / "retrieval_cases.yaml"
+
+# Kept for backwards compatibility — callers that import `CASES_PATH`
+# get the behavior path (the original meaning).
+CASES_PATH = BEHAVIOR_CASES_PATH
 
 
 @dataclass
@@ -44,12 +55,13 @@ class CaseResult:
     passed: bool
     duration_ms: int
     failure_reasons: list[str] = field(default_factory=list)
+    # Populated for behavior cases; meaningless for retrieval cases.
     step_count: int = 0
     tool_call_count: int = 0
 
 
-def load_cases(path: Path = CASES_PATH) -> list[dict[str, Any]]:
-    """Read and parse cases.yaml. Raises if the file is missing/invalid."""
+def load_cases(path: Path = BEHAVIOR_CASES_PATH) -> list[dict[str, Any]]:
+    """Read and parse a YAML cases file. Raises on missing/invalid."""
     with path.open() as f:
         data = yaml.safe_load(f)
     if not isinstance(data, list):
@@ -59,13 +71,13 @@ def load_cases(path: Path = CASES_PATH) -> list[dict[str, Any]]:
     return data
 
 
-def run_case(case: dict[str, Any]) -> CaseResult:
-    """Execute one case and check its expectations.
+# --------------------------------------------------------------------------- #
+# Behavior mode (Phase 4 — agent-loop assertions)                             #
+# --------------------------------------------------------------------------- #
 
-    Returns a `CaseResult` with pass/fail + reasons. Does NOT raise on
-    a failing case — the CLI collects every result and prints a summary
-    at the end so authors can see all failures at once.
-    """
+
+def run_behavior_case(case: dict[str, Any]) -> CaseResult:
+    """Execute one behavior case through the full agent loop."""
     case_id = case.get("id") or "(unnamed)"
     query = case.get("query") or ""
     team_id = case.get("team_id") or ""
@@ -101,7 +113,7 @@ def run_case(case: dict[str, Any]) -> CaseResult:
                 failure_reasons=[f"run_agent crashed: {e!r}"],
             )
 
-        reasons = _check_expectations(events, expect)
+        reasons = _check_behavior_expectations(events, expect)
         duration_ms = int((time.monotonic() - started) * 1000)
 
         tool_calls = [e for e in events if e.get("type") == "tool_call_start"]
@@ -123,9 +135,10 @@ def run_case(case: dict[str, Any]) -> CaseResult:
                 log.exception("Cleanup handle failed for case %s", case_id)
 
 
-# --------------------------------------------------------------------------- #
-# Expectation checks                                                          #
-# --------------------------------------------------------------------------- #
+# Backwards-compatible alias. The Phase-4 management command imported
+# this name; keep it so existing call sites don't break.
+run_case = run_behavior_case
+
 
 # `_CITATION_RE` finds `[entity_id]` references in answer text. The
 # entity_id pattern matches what the agent uses: `chat:pm:1:thread:3`,
@@ -133,7 +146,9 @@ def run_case(case: dict[str, Any]) -> CaseResult:
 _CITATION_RE = re.compile(r"\[([a-z][a-z0-9_:\-]+)\]")
 
 
-def _check_expectations(events: list[dict[str, Any]], expect: dict[str, Any]) -> list[str]:
+def _check_behavior_expectations(
+    events: list[dict[str, Any]], expect: dict[str, Any]
+) -> list[str]:
     """Run each declared assertion. Returns the list of failure reasons."""
     reasons: list[str] = []
 
@@ -231,6 +246,129 @@ def _check_expectations(events: list[dict[str, Any]], expect: dict[str, Any]) ->
         n = int(expect["step_count_at_most"])
         if step_count > n:
             _add(f"step_count_at_most: got {step_count}, expected <= {n}")
+
+    return reasons
+
+
+# --------------------------------------------------------------------------- #
+# Retrieval mode (Phase 6 — direct search() assertions)                       #
+# --------------------------------------------------------------------------- #
+
+
+def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
+    """Execute one retrieval case by calling `search(...)` directly.
+
+    No agent loop, no LLM calls. The case YAML specifies a query +
+    optional filters and a set of gold-standard assertions about
+    which entities should appear (and at what rank) in the result.
+    """
+    case_id = case.get("id") or "(unnamed)"
+    query = case.get("query") or ""
+    team_id = case.get("team_id") or ""
+    user_id = case.get("user_id") or ""
+    expect = case.get("expect") or {}
+
+    if not query or not team_id or not user_id:
+        return CaseResult(
+            case_id=case_id,
+            passed=False,
+            duration_ms=0,
+            failure_reasons=["case is missing query/team_id/user_id"],
+        )
+
+    started = time.monotonic()
+    try:
+        result = search(
+            query=query,
+            team_id=team_id,
+            user_id=user_id,
+            entity_types=case.get("entity_types"),
+            date_from=case.get("date_from"),
+            date_to=case.get("date_to"),
+            limit=int(case.get("limit", 10)),
+            use_vector=bool(case.get("use_vector", True)),
+        )
+    except Exception as e:  # noqa: BLE001
+        duration_ms = int((time.monotonic() - started) * 1000)
+        return CaseResult(
+            case_id=case_id,
+            passed=False,
+            duration_ms=duration_ms,
+            failure_reasons=[f"search() crashed: {e!r}"],
+        )
+
+    duration_ms = int((time.monotonic() - started) * 1000)
+    entities = result.get("results", []) or []
+    reasons = _check_retrieval_expectations(entities, expect)
+
+    return CaseResult(
+        case_id=case_id,
+        passed=not reasons,
+        duration_ms=duration_ms,
+        failure_reasons=reasons,
+    )
+
+
+def _check_retrieval_expectations(
+    entities: list[dict[str, Any]], expect: dict[str, Any]
+) -> list[str]:
+    """Assertions for retrieval-quality cases.
+
+    Operates on the entity list returned by `search(...)`, where each
+    entity has at least `entity_type` and `entity_id`. Rank is 1-indexed
+    in the failure messages so they read naturally.
+    """
+    reasons: list[str] = []
+    ranked_ids = [e.get("entity_id") for e in entities]
+    ranked_types = [e.get("entity_type") for e in entities]
+
+    def _add(reason: str) -> None:
+        reasons.append(reason)
+
+    if "must_contain_in_top_n" in expect:
+        spec = expect["must_contain_in_top_n"] or {}
+        n = int(spec.get("n", 0))
+        required = [eid for eid in (spec.get("entity_ids") or [])]
+        top = set(ranked_ids[:n])
+        missing = [eid for eid in required if eid not in top]
+        if missing:
+            _add(
+                f"must_contain_in_top_n: missing {missing} from top {n} "
+                f"(top {n} was {ranked_ids[:n]})"
+            )
+
+    if "must_contain_entity_type_in_top_n" in expect:
+        spec = expect["must_contain_entity_type_in_top_n"] or {}
+        n = int(spec.get("n", 0))
+        wanted = set(spec.get("entity_types") or [])
+        top_types = set(ranked_types[:n])
+        if not (wanted & top_types):
+            _add(
+                f"must_contain_entity_type_in_top_n: none of {sorted(wanted)} in top {n} "
+                f"(saw types {sorted(top_types)})"
+            )
+
+    if "must_not_contain" in expect:
+        forbidden = set(expect["must_not_contain"] or [])
+        leaked = forbidden & set(ranked_ids)
+        if leaked:
+            _add(f"must_not_contain: forbidden entities present in results: {sorted(leaked)}")
+
+    if "top_result_entity_type" in expect:
+        want = expect["top_result_entity_type"]
+        got = ranked_types[0] if ranked_types else None
+        if got != want:
+            _add(f"top_result_entity_type: top hit is {got!r}, expected {want!r}")
+
+    if "result_count_at_least" in expect:
+        n = int(expect["result_count_at_least"])
+        if len(entities) < n:
+            _add(f"result_count_at_least: got {len(entities)} results, expected >= {n}")
+
+    if "result_count_at_most" in expect:
+        n = int(expect["result_count_at_most"])
+        if len(entities) > n:
+            _add(f"result_count_at_most: got {len(entities)} results, expected <= {n}")
 
     return reasons
 

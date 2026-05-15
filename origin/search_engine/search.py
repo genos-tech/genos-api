@@ -25,6 +25,8 @@ each (default 60). The wider pool gives RRF more material to fuse.
 from __future__ import annotations
 
 import logging
+import math
+from datetime import datetime, timezone
 from typing import Optional
 
 from django.conf import settings
@@ -130,6 +132,20 @@ def search(
     # --- RRF fuse ---
     fused = _rrf_fuse(keyword_hits, vector_hits)
 
+    # --- Phase 6: freshness multiplier + text-hash dedup ---
+    # Both are no-ops when their settings are at the disable values
+    # (half_life=0, dedup_by_hash=false), so the default path matches
+    # the pre-Phase-6 behavior exactly.
+    half_life = float(settings.SEARCH_ENGINE.get("RAG_FRESHNESS_HALF_LIFE_DAYS", 0) or 0)
+    if half_life > 0:
+        fused = _apply_freshness(fused, half_life_days=half_life)
+    if settings.SEARCH_ENGINE.get("RAG_DEDUP_BY_HASH"):
+        fused = _dedup_by_text_hash(fused)
+    # Freshness can re-order; re-sort once before grouping so the
+    # "first occurrence wins" rule in `_group_by_entity` still picks
+    # the best chunk per entity by the new score.
+    fused.sort(key=lambda x: x["score"], reverse=True)
+
     # --- Group by entity ---
     grouped = _group_by_entity(
         fused, for_agent=for_agent, max_chunks_per_entity=max_chunks_per_entity
@@ -138,7 +154,77 @@ def search(
     # --- Sort, apply relevance threshold, truncate to limit. ---
     grouped.sort(key=lambda x: x["score"], reverse=True)
     grouped = _apply_relevance_threshold(grouped, min_score_ratio, min_score)
+
+    # --- Phase 6: optional LLM-as-judge reranker (flag-gated) ---
+    # Off by default. When on, we hand the top INPUT_K entities to the
+    # active ModelClient and use its reordering. The reranker is
+    # responsible for falling back to pre-rerank order on any error.
+    if settings.SEARCH_ENGINE.get("RAG_USE_RERANKER") and grouped:
+        from origin.search_engine.reranker import rerank  # noqa: PLC0415
+
+        input_k = int(settings.SEARCH_ENGINE.get("RAG_RERANK_INPUT_K", 20))
+        output_k = int(settings.SEARCH_ENGINE.get("RAG_RERANK_OUTPUT_K", 10))
+        grouped = rerank(
+            query=query,
+            entities=grouped,
+            input_k=input_k,
+            output_k=min(output_k, limit),
+        )
+
     return {"query": query, "results": grouped[:limit]}
+
+
+def _apply_freshness(hits: list[dict], *, half_life_days: float) -> list[dict]:
+    """Multiply each hit's score by an exponential decay on `updated_at`.
+
+    Formula: `score *= exp(-age_days / half_life_days)`. Result: a
+    same-day update keeps its score; one half-life old loses half its
+    score; chunks with no `updated_at` are left alone.
+
+    Operates in place on the fused-chunk list and returns it for
+    convenience.
+    """
+    now = datetime.now(timezone.utc)
+    for hit in hits:
+        ts_str = (hit.get("source") or {}).get("updated_at")
+        if not ts_str:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+        except ValueError:
+            # Unparseable timestamp → don't penalize.
+            continue
+        age_days = max(0.0, (now - ts).total_seconds() / 86400.0)
+        hit["score"] *= math.exp(-age_days / half_life_days)
+    return hits
+
+
+def _dedup_by_text_hash(hits: list[dict]) -> list[dict]:
+    """Drop duplicate chunks by `text_hash`, keeping the highest score.
+
+    Catches the case where identical content is indexed under multiple
+    chunks — e.g. a note that quotes a chat message verbatim. Hits
+    without a `text_hash` are passed through unchanged (we never merge
+    two distinct chunks just because they happen to lack a hash).
+    """
+    seen: dict[str, dict] = {}
+    out: list[dict] = []
+    for hit in hits:
+        text_hash = (hit.get("source") or {}).get("text_hash")
+        if not text_hash:
+            out.append(hit)
+            continue
+        existing = seen.get(text_hash)
+        if existing is None:
+            seen[text_hash] = hit
+            out.append(hit)
+        elif hit["score"] > existing["score"]:
+            # Replace in-place: bump the score onto the kept hit so we
+            # don't have to re-walk `out`.
+            existing["score"] = hit["score"]
+            existing["keyword_rank"] = hit.get("keyword_rank") or existing.get("keyword_rank")
+            existing["vector_rank"] = hit.get("vector_rank") or existing.get("vector_rank")
+    return out
 
 
 def _apply_relevance_threshold(
@@ -267,6 +353,10 @@ def _source_fields(*, for_agent: bool = False) -> list[str]:
         "related_entity_ids",
         "updated_at",
         "created_at",
+        # Phase 6 — pulled into projection so `_dedup_by_text_hash` can
+        # collapse near-duplicates. SHA-256 of the chunk's search_text
+        # written by the chunker; identical text → identical hash.
+        "text_hash",
     ]
     if for_agent:
         # The full chunk text — used as LLM grounding context. Excluded

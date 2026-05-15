@@ -336,4 +336,18 @@ SEARCH_ENGINE = {
     # Anthropic requires max_tokens to be set explicitly on every
     # call (unlike Gemini, which has a sensible server-side default).
     "CLAUDE_MAX_TOKENS": int(os.environ.get("CLAUDE_MAX_TOKENS", "4096")),
+    # Phase 6 — RAG quality knobs.
+    # Exponential decay half-life (in days) for freshness scoring.
+    # Each hit's RRF score is multiplied by exp(-age_days / half_life).
+    # Set to 0 to disable freshness boosting entirely.
+    "RAG_FRESHNESS_HALF_LIFE_DAYS": float(os.environ.get("RAG_FRESHNESS_HALF_LIFE_DAYS", "90")),
+    # Drop duplicate chunks (same text_hash) before entity grouping.
+    "RAG_DEDUP_BY_HASH": (os.environ.get("RAG_DEDUP_BY_HASH", "true").lower() == "true"),
+    # LLM-as-judge reranker. OFF by default during rollout; enable per
+    # request via the env var. When on, after hybrid retrieval the top
+    # INPUT_K entities are sent to the active ModelClient for reranking
+    # and only the reranked OUTPUT_K are returned.
+    "RAG_USE_RERANKER": (os.environ.get("RAG_USE_RERANKER", "false").lower() == "true"),
+    "RAG_RERANK_INPUT_K": int(os.environ.get("RAG_RERANK_INPUT_K", "20")),
+    "RAG_RERANK_OUTPUT_K": int(os.environ.get("RAG_RERANK_OUTPUT_K", "10")),
 }

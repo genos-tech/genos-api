@@ -1,0 +1,167 @@
+# Retrieval-quality eval cases. Run with:
+#
+#   python manage.py agent_eval --retrieval
+#
+# Each case calls `search(...)` DIRECTLY — no agent loop, no LLM
+# calls — and asserts on the ranked entity list. The point is to
+# catch retrieval regressions (precision / recall) without spending
+# Gemini/Claude tokens.
+#
+# Case schema:
+#   id, query, team_id, user_id            (required)
+#   entity_types, date_from, date_to,
+#   limit, use_vector                       (optional; passed to search())
+#   expect:
+#     must_contain_in_top_n:               { n, entity_ids: [...] }
+#     must_contain_entity_type_in_top_n:   { n, entity_types: [...] }
+#     must_not_contain:                    [entity_ids]
+#     top_result_entity_type:              <"chat"|"task"|"note">
+#     result_count_at_least:               N
+#     result_count_at_most:                N
+#
+# Seed data: team 6f9de2de... has indexed entities
+#   task:1 "asdf" (WIP)              task:7 "kjkl" (Open, in Sprint 1)
+#   task:2 "asdfasdf" (Open)         task:8 "jhiuhi"
+#   task:4 "lkjklj" (WIP)            task:9 "Opensearch improvement"
+#   note:task:1 "asdf"               pm:1 "genos-test" + 6 threads
+
+# --------------------------------------------------------------------- #
+# A. Distinctive-content recall (vector lane strong)                     #
+# --------------------------------------------------------------------- #
+
+- id: opensearch_finds_task_9
+  query: "OpenSearch implementation"
+  team_id: "6f9de2de-faac-4eff-9034-e5a8e1764da2"
+  user_id: "a153988d-7221-4acb-b1ca-9e778ceedec5"
+  expect:
+    must_contain_in_top_n:
+      n: 3
+      entity_ids: ["task:9"]
+
+- id: paraphrase_finds_opensearch_task
+  query: "I want to add search to the user interface"
+  team_id: "6f9de2de-faac-4eff-9034-e5a8e1764da2"
+  user_id: "a153988d-7221-4acb-b1ca-9e778ceedec5"
+  expect:
+    must_contain_in_top_n:
+      n: 5
+      entity_ids: ["task:9"]
+
+# --------------------------------------------------------------------- #
+# B. Exact-title recall (keyword lane strong)                            #
+# --------------------------------------------------------------------- #
+
+- id: exact_title_lkjklj
+  query: "lkjklj"
+  team_id: "6f9de2de-faac-4eff-9034-e5a8e1764da2"
+  user_id: "a153988d-7221-4acb-b1ca-9e778ceedec5"
+  expect:
+    must_contain_in_top_n:
+      n: 3
+      entity_ids: ["task:4"]
+
+- id: exact_title_jhiuhi
+  query: "jhiuhi"
+  team_id: "6f9de2de-faac-4eff-9034-e5a8e1764da2"
+  user_id: "a153988d-7221-4acb-b1ca-9e778ceedec5"
+  expect:
+    must_contain_in_top_n:
+      n: 3
+      entity_ids: ["task:8"]
+
+# --------------------------------------------------------------------- #
+# C. Cross-entity recall (same query hits multiple entity types)         #
+# --------------------------------------------------------------------- #
+
+- id: asdf_returns_task_and_note
+  query: "asdf"
+  team_id: "6f9de2de-faac-4eff-9034-e5a8e1764da2"
+  user_id: "a153988d-7221-4acb-b1ca-9e778ceedec5"
+  expect:
+    must_contain_in_top_n:
+      n: 10
+      entity_ids: ["task:1", "note:task:1"]
+
+# --------------------------------------------------------------------- #
+# D. Status / metadata keyword recall                                    #
+# --------------------------------------------------------------------- #
+
+- id: wip_query_returns_wip_entities
+  query: "WIP tasks"
+  team_id: "6f9de2de-faac-4eff-9034-e5a8e1764da2"
+  user_id: "a153988d-7221-4acb-b1ca-9e778ceedec5"
+  expect:
+    must_contain_entity_type_in_top_n:
+      n: 5
+      entity_types: ["task", "chat"]
+
+- id: in_progress_paraphrase_returns_something
+  query: "what's in progress right now"
+  team_id: "6f9de2de-faac-4eff-9034-e5a8e1764da2"
+  user_id: "a153988d-7221-4acb-b1ca-9e778ceedec5"
+  expect:
+    result_count_at_least: 1
+
+# --------------------------------------------------------------------- #
+# E. Entity-type filtering (the API param actually works)                #
+# --------------------------------------------------------------------- #
+
+- id: filter_tasks_only_for_asdf
+  query: "asdf"
+  team_id: "6f9de2de-faac-4eff-9034-e5a8e1764da2"
+  user_id: "a153988d-7221-4acb-b1ca-9e778ceedec5"
+  entity_types: ["task"]
+  expect:
+    must_contain_in_top_n:
+      n: 5
+      entity_ids: ["task:1"]
+    must_not_contain: ["note:task:1"]
+
+- id: filter_notes_only_for_asdf
+  query: "asdf"
+  team_id: "6f9de2de-faac-4eff-9034-e5a8e1764da2"
+  user_id: "a153988d-7221-4acb-b1ca-9e778ceedec5"
+  entity_types: ["note"]
+  expect:
+    top_result_entity_type: "note"
+    must_not_contain: ["task:1"]
+
+# --------------------------------------------------------------------- #
+# F. Chat / thread recall                                                #
+# --------------------------------------------------------------------- #
+
+- id: milestone_event_returns_chat
+  query: "milestone"
+  team_id: "6f9de2de-faac-4eff-9034-e5a8e1764da2"
+  user_id: "a153988d-7221-4acb-b1ca-9e778ceedec5"
+  expect:
+    must_contain_entity_type_in_top_n:
+      n: 5
+      entity_types: ["chat"]
+
+# --------------------------------------------------------------------- #
+# G. Negative / robustness                                               #
+# --------------------------------------------------------------------- #
+
+- id: gibberish_returns_nothing_relevant
+  query: "quantum photosynthesis xylophone marauder"
+  team_id: "6f9de2de-faac-4eff-9034-e5a8e1764da2"
+  user_id: "a153988d-7221-4acb-b1ca-9e778ceedec5"
+  expect:
+    result_count_at_most: 3   # threshold should trim aggressively
+
+- id: limit_is_respected
+  query: "task"
+  team_id: "6f9de2de-faac-4eff-9034-e5a8e1764da2"
+  user_id: "a153988d-7221-4acb-b1ca-9e778ceedec5"
+  limit: 3
+  expect:
+    result_count_at_most: 3
+
+- id: future_date_filter_returns_empty
+  query: "task"
+  team_id: "6f9de2de-faac-4eff-9034-e5a8e1764da2"
+  user_id: "a153988d-7221-4acb-b1ca-9e778ceedec5"
+  date_from: "2099-01-01T00:00:00+00:00"
+  expect:
+    result_count_at_most: 0
