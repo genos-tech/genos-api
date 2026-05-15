@@ -1,0 +1,206 @@
+"""Gemini adapter for the `ModelClient` interface.
+
+Translates between provider-neutral types (`AgentMessage`,
+`FunctionCall`, `ToolDeclaration`) and Google's `google-genai` SDK
+wire types (`types.Content`, `types.Part`, `types.Tool`).
+
+Supports two authentication modes (chosen via Django settings):
+
+  Mode A — Gemini AI Studio API key (`GEMINI_USE_VERTEX=false`,
+    default): set `GEMINI_API_KEY` from https://aistudio.google.com/apikey.
+
+  Mode B — Vertex AI service account (`GEMINI_USE_VERTEX=true`):
+    provide a GCP service-account JSON via either
+    `GEMINI_SERVICE_ACCOUNT_FILE` or `GOOGLE_APPLICATION_CREDENTIALS`.
+    Also requires `GEMINI_PROJECT` (and optionally `GEMINI_LOCATION`,
+    default "us-central1"). The service account needs the
+    `roles/aiplatform.user` role.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Iterator
+
+from django.conf import settings
+from google import genai
+
+from origin.search_engine.llm.types import AgentMessage, FunctionCall, ToolDeclaration
+
+log = logging.getLogger(__name__)
+
+_client: genai.Client | None = None
+
+
+def _build_client() -> genai.Client:
+    """Construct the underlying Gemini SDK client from settings."""
+    cfg = settings.SEARCH_ENGINE
+
+    if cfg.get("GEMINI_USE_VERTEX"):
+        project = cfg.get("GEMINI_PROJECT") or ""
+        location = cfg.get("GEMINI_LOCATION") or "us-central1"
+        sa_file = cfg.get("GEMINI_SERVICE_ACCOUNT_FILE") or ""
+        if not project:
+            raise RuntimeError(
+                "GEMINI_USE_VERTEX=true but GEMINI_PROJECT is not set. "
+                "Set it to your GCP project id."
+            )
+        if sa_file:
+            # Explicit service-account file → load credentials directly
+            # rather than relying on the GOOGLE_APPLICATION_CREDENTIALS
+            # convention, so the JSON doesn't have to live at a fixed
+            # path.
+            from google.oauth2 import service_account  # noqa: PLC0415
+
+            credentials = service_account.Credentials.from_service_account_file(
+                sa_file,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+            return genai.Client(
+                vertexai=True,
+                project=project,
+                location=location,
+                credentials=credentials,
+            )
+        # No explicit file → fall through to Application Default
+        # Credentials (reads GOOGLE_APPLICATION_CREDENTIALS automatically).
+        return genai.Client(vertexai=True, project=project, location=location)
+
+    # Mode A: plain API key.
+    api_key = cfg.get("GEMINI_API_KEY") or ""
+    if not api_key:
+        raise RuntimeError(
+            "Neither GEMINI_API_KEY nor GEMINI_USE_VERTEX is configured. "
+            "For Gemini AI Studio, set GEMINI_API_KEY. For Vertex AI, "
+            "set GEMINI_USE_VERTEX=true plus GEMINI_PROJECT and "
+            "GEMINI_SERVICE_ACCOUNT_FILE (or GOOGLE_APPLICATION_CREDENTIALS)."
+        )
+    return genai.Client(api_key=api_key)
+
+
+def _get_client() -> genai.Client:
+    """Singleton accessor — builds the SDK client on first call."""
+    global _client
+    if _client is None:
+        _client = _build_client()
+    return _client
+
+
+class GeminiClient:
+    """`ModelClient` adapter backed by Google's `google-genai` SDK."""
+
+    def generate_step(
+        self,
+        messages: list[AgentMessage],
+        tools: list[ToolDeclaration],
+        system_instruction: str,
+    ) -> Iterator[tuple[str | None, FunctionCall | None]]:
+        """Stream one model turn against the given history.
+
+        Yields `(text_chunk, None)` for incremental text and
+        `(None, FunctionCall)` for each function call the model
+        requests. The controller assembles these into the agent loop.
+        """
+        from google.genai import types  # noqa: PLC0415
+
+        sdk_messages = [_message_to_sdk(m, types) for m in messages]
+        sdk_tools = _tools_to_sdk(tools, types) if tools else None
+        model = settings.SEARCH_ENGINE["GEMINI_MODEL"]
+
+        config = types.GenerateContentConfig(
+            tools=sdk_tools,
+            system_instruction=system_instruction,
+            temperature=0.2,
+        )
+
+        try:
+            stream = _get_client().models.generate_content_stream(
+                model=model,
+                contents=sdk_messages,
+                config=config,
+            )
+            for chunk in stream:
+                # A streaming chunk's candidates carry content.parts —
+                # each part is either a text fragment or a function
+                # call. Yield them in order so the controller sees the
+                # same interleaving the model emitted.
+                candidates = getattr(chunk, "candidates", None) or []
+                for cand in candidates:
+                    content = getattr(cand, "content", None)
+                    if content is None:
+                        continue
+                    parts = getattr(content, "parts", None) or []
+                    for part in parts:
+                        fcall = getattr(part, "function_call", None)
+                        if fcall is not None:
+                            yield (None, _sdk_function_call_to_neutral(fcall))
+                            continue
+                        text = getattr(part, "text", None)
+                        if text:
+                            yield (text, None)
+        except Exception:
+            log.exception("Gemini generate_step failed")
+            raise
+
+
+# --------------------------------------------------------------------------- #
+# Translation helpers — neutral types <-> google-genai SDK types              #
+# --------------------------------------------------------------------------- #
+
+
+def _message_to_sdk(msg: AgentMessage, types: Any):
+    """Translate one `AgentMessage` into a `types.Content` turn."""
+    if msg.role == "user":
+        return types.Content(
+            role="user",
+            parts=[types.Part(text=msg.text or "")],
+        )
+    if msg.role == "assistant":
+        if msg.function_call is not None:
+            return types.Content(
+                role="model",
+                parts=[
+                    types.Part(
+                        function_call=types.FunctionCall(
+                            name=msg.function_call.name,
+                            args=dict(msg.function_call.args),
+                        )
+                    )
+                ],
+            )
+        return types.Content(
+            role="model",
+            parts=[types.Part(text=msg.text or "")],
+        )
+    if msg.role == "tool_response":
+        return types.Content(
+            role="user",
+            parts=[
+                types.Part.from_function_response(
+                    name=msg.function_response_name or "",
+                    response=msg.function_response or {},
+                )
+            ],
+        )
+    raise ValueError(f"Unknown AgentMessage role: {msg.role!r}")
+
+
+def _tools_to_sdk(tools: list[ToolDeclaration], types: Any) -> list:
+    """Translate neutral tool declarations into the SDK's `types.Tool`."""
+    declarations = [
+        types.FunctionDeclaration(
+            name=t.name,
+            description=t.description,
+            parameters=t.parameters_schema,
+        )
+        for t in tools
+    ]
+    return [types.Tool(function_declarations=declarations)]
+
+
+def _sdk_function_call_to_neutral(fcall: Any) -> FunctionCall:
+    """Convert a Gemini SDK function-call object to neutral `FunctionCall`."""
+    return FunctionCall(
+        name=getattr(fcall, "name", "") or "",
+        args=dict(getattr(fcall, "args", {}) or {}),
+    )

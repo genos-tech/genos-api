@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     # valid until natural expiration.
     "rest_framework_simplejwt.token_blacklist",
     "origin",
+    "origin.search_engine",
     "corsheaders",
 ]
 
@@ -263,3 +264,123 @@ MEDIA_ROOT = os.environ.get(
     "DJANGO_MEDIA_ROOT",
     os.path.join(BASE_DIR, "uploads"),
 )
+
+
+# Search engine (OpenSearch + OpenAI embeddings).
+#
+# Used by `origin.search_engine` for chunk-based hybrid search across
+# chats, tasks, and notes. The OpenSearch index is created by
+# `python manage.py opensearch_setup` and (re)populated by
+# `python manage.py opensearch_reindex`.
+SEARCH_ENGINE = {
+    "OPENSEARCH_HOST": os.environ.get("OPENSEARCH_HOST", "opensearch"),
+    "OPENSEARCH_PORT": int(os.environ.get("OPENSEARCH_PORT", "9200")),
+    "OPENSEARCH_USE_SSL": os.environ.get("OPENSEARCH_USE_SSL", "false").lower() == "true",
+    # Physical index name. Increment the suffix when changing the
+    # mapping or embedding model and reindexing.
+    "OPENSEARCH_INDEX": os.environ.get("OPENSEARCH_INDEX", "knowledge_chunks_v1"),
+    # Stable alias the app queries. Repointed at a new physical index
+    # during zero-downtime migrations.
+    "OPENSEARCH_ALIAS": os.environ.get("OPENSEARCH_ALIAS", "knowledge_chunks_current"),
+    # OpenAI embedding configuration. `text-embedding-3-small` is the
+    # MVP default: 1536-dim, cheap, multilingual-decent. If you change
+    # the model or dimension, bump the index suffix and reindex.
+    "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
+    "OPENAI_EMBEDDING_MODEL": os.environ.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+    "OPENAI_EMBEDDING_DIMENSIONS": int(os.environ.get("OPENAI_EMBEDDING_DIMENSIONS", "1536")),
+    # Bulk-indexing batch size for OpenSearch _bulk requests.
+    "BULK_BATCH_SIZE": int(os.environ.get("SEARCH_BULK_BATCH_SIZE", "200")),
+    # OpenAI embedding batch size (max items per /v1/embeddings request).
+    "EMBEDDING_BATCH_SIZE": int(os.environ.get("SEARCH_EMBEDDING_BATCH_SIZE", "100")),
+    # Gemini configuration for the RAG-answer endpoint
+    # (POST /api/v2/agent/ask). `gemini-2.5-flash` is the MVP default
+    # — fast, cheap, supports streaming + function calling for Phase 3.
+    #
+    # TWO authentication modes (pick exactly one):
+    #
+    # Mode A — Gemini AI Studio API key (simplest):
+    #   GEMINI_API_KEY=AIza...  (from https://aistudio.google.com/apikey)
+    #   Leave GEMINI_USE_VERTEX unset / false.
+    #
+    # Mode B — Google Cloud service account (Vertex AI):
+    #   GEMINI_USE_VERTEX=true
+    #   GEMINI_PROJECT=your-gcp-project-id
+    #   GEMINI_LOCATION=us-central1  (or another region)
+    #   GEMINI_SERVICE_ACCOUNT_FILE=/path/to/service-account.json
+    #     OR set GOOGLE_APPLICATION_CREDENTIALS instead of the file path.
+    #
+    # Mode B is for enterprise / GCP billing. The service account must
+    # have the `roles/aiplatform.user` IAM role.
+    "GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY", ""),
+    "GEMINI_USE_VERTEX": os.environ.get("GEMINI_USE_VERTEX", "false").lower() == "true",
+    "GEMINI_PROJECT": os.environ.get("GEMINI_PROJECT", ""),
+    "GEMINI_LOCATION": os.environ.get("GEMINI_LOCATION", "us-central1"),
+    "GEMINI_SERVICE_ACCOUNT_FILE": os.environ.get("GEMINI_SERVICE_ACCOUNT_FILE", ""),
+    "GEMINI_MODEL": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+    # How many retrieved chunks to stuff into the Gemini prompt as
+    # grounding. Larger = better recall, more cost / latency.
+    "AGENT_CONTEXT_CHUNKS": int(os.environ.get("AGENT_CONTEXT_CHUNKS", "12")),
+    # Phase 3 agent loop — hard cap on tool calls per request. The
+    # roadmap recommends 5–8; we default to the conservative end.
+    # The controller stops + emits an error if the model hasn't
+    # produced a final answer by then.
+    "AGENT_MAX_STEPS": int(os.environ.get("AGENT_MAX_STEPS", "5")),
+    # Phase 5 — provider selection. "gemini" (default) or "claude".
+    # `get_model_client()` in origin.search_engine.llm reads this at
+    # request time; an unknown value raises rather than silently
+    # falling back.
+    "LLM_PROVIDER": (os.environ.get("LLM_PROVIDER", "gemini") or "gemini").lower(),
+    # Anthropic Claude config (only used when LLM_PROVIDER=claude).
+    "CLAUDE_API_KEY": os.environ.get("CLAUDE_API_KEY", ""),
+    "CLAUDE_MODEL": os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"),
+    # Anthropic requires max_tokens to be set explicitly on every
+    # call (unlike Gemini, which has a sensible server-side default).
+    "CLAUDE_MAX_TOKENS": int(os.environ.get("CLAUDE_MAX_TOKENS", "4096")),
+    # Phase 6 — RAG quality knobs.
+    # Exponential decay half-life (in days) for freshness scoring.
+    # Each hit's RRF score is multiplied by exp(-age_days / half_life).
+    # Set to 0 to disable freshness boosting entirely.
+    "RAG_FRESHNESS_HALF_LIFE_DAYS": float(os.environ.get("RAG_FRESHNESS_HALF_LIFE_DAYS", "90")),
+    # Drop duplicate chunks (same text_hash) before entity grouping.
+    "RAG_DEDUP_BY_HASH": (os.environ.get("RAG_DEDUP_BY_HASH", "true").lower() == "true"),
+    # LLM-as-judge reranker. OFF by default during rollout; enable per
+    # request via the env var. When on, after hybrid retrieval the top
+    # INPUT_K entities are sent to the active ModelClient for reranking
+    # and only the reranked OUTPUT_K are returned.
+    "RAG_USE_RERANKER": (os.environ.get("RAG_USE_RERANKER", "false").lower() == "true"),
+    "RAG_RERANK_INPUT_K": int(os.environ.get("RAG_RERANK_INPUT_K", "20")),
+    "RAG_RERANK_OUTPUT_K": int(os.environ.get("RAG_RERANK_OUTPUT_K", "10")),
+    # Phase 8 — conversation session memory.
+    # How many prior (query, answer) pairs to prepend into the model
+    # context on follow-up /ask/ calls within the same session.
+    "SESSION_MAX_PRIOR_TURNS": int(os.environ.get("SESSION_MAX_PRIOR_TURNS", "3")),
+    # Minutes of inactivity before a session is considered expired.
+    # An expired session ID silently creates a fresh session.
+    "SESSION_TTL_MINUTES": int(os.environ.get("SESSION_TTL_MINUTES", "30")),
+    # Phase 9 — chunking refinement.
+    # How many preceding messages to fold into each chat_message
+    # chunk's `search_text` for embedding context. Set to 0 to
+    # disable (back to Phase-3 behavior). Requires an
+    # `opensearch_reindex` after change to take effect on existing
+    # chunks.
+    "RAG_CHAT_CONTEXT_WINDOW": int(os.environ.get("RAG_CHAT_CONTEXT_WINDOW", "2")),
+    # Phase 10 — LLM query rewriting (opt-in, agent path only).
+    # When on, the agent's `search_knowledge_base` tool expands the
+    # query into N variants via the active ModelClient before hitting
+    # OpenSearch, then RRF-fuses results across all variants. Adds one
+    # LLM call + N embedding calls per agent search. Off by default
+    # during rollout. Does NOT affect the Spotlight typeahead
+    # endpoint — it never passes `rewrite=True`.
+    "RAG_USE_QUERY_REWRITE": (os.environ.get("RAG_USE_QUERY_REWRITE", "false").lower() == "true"),
+    "RAG_REWRITE_NUM_VARIANTS": int(os.environ.get("RAG_REWRITE_NUM_VARIANTS", "3")),
+    # Phase 14 — AI agent daily usage limit for free users.
+    # Users with the "unlimited_agent" UserFeatureAccess grant bypass
+    # this cap entirely. Set to 0 to disable the limit for everyone.
+    "AGENT_FREE_DAILY_LIMIT": int(os.environ.get("AGENT_FREE_DAILY_LIMIT", "5")),
+    # Phase 14 — live web search via Tavily.
+    # Sign up at https://tavily.com to get a free API key (1 000 req/month).
+    # Set TAVILY_API_KEY in .env (local) and Railway env vars (production).
+    # Leave empty to disable web search — the agent will surface a clean
+    # error rather than crashing when the key is absent.
+    "TAVILY_API_KEY": os.environ.get("TAVILY_API_KEY", ""),
+}

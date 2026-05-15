@@ -7,3 +7,12 @@ django==5.1.5
 djangorestframework==3.15.2
 djangorestframework-simplejwt==5.4.0
 django-cors-headers==4.7.0
+
+# Search engine (OpenSearch + OpenAI embeddings + Gemini RAG answers)
+opensearch-py==3.0.0
+openai==2.5.0
+google-genai==2.3.0
+# Anthropic Claude (Phase 5 — provider abstraction)
+anthropic==0.102.0
+# YAML loader for agent eval harness (Phase 4)
+PyYAML==6.0.2

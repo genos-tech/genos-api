@@ -1,0 +1,34 @@
+# Railway config for the `opensearch-reindexer` cron service.
+#
+# Same Docker image as the `backend-django` service (built from the
+# same Dockerfile), but Railway runs it as a cron job: the container
+# starts on each tick, runs the start command to completion, and
+# exits. No gunicorn, no long-running process.
+#
+# What this does:
+#   Every 10 minutes, re-emits all chats/tasks/notes whose
+#   `ts_updated_at` is within the last 11 minutes (1-minute overlap
+#   covers the gap between cron ticks) and upserts the affected
+#   chunks into OpenSearch. The `RagChunk` tracking table keeps the
+#   pass idempotent — unchanged chunks consume zero OpenAI / OpenSearch
+#   cost.
+#
+# To run a full reindex instead (e.g. after a chunker change like
+# Phase 9 introduced), trigger it manually:
+#   railway run --service opensearch-reindexer \
+#     -- pipenv run python backend_django/manage.py opensearch_reindex
+#
+# All env vars from `backend-django` (OPENSEARCH_HOST, OPENAI_API_KEY,
+# DATABASE_URL, etc.) must also be set on this service — they read
+# from the same `SEARCH_ENGINE` settings.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "backend_django/Dockerfile"
+
+[deploy]
+# 10-minute cadence matches the `--since-minutes` value below; bump
+# both together if you want a different incremental window.
+cronSchedule = "*/10 * * * *"
+startCommand = "python backend_django/manage.py opensearch_reindex --since-minutes 11"
+restartPolicyType = "NEVER"
