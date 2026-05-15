@@ -1015,8 +1015,8 @@ class GetProjectTasksView(AuthenticatedAPIView):
                     "parentTaskId": t.parent_task_id,
                     "rootTaskId": t.root_task_id,
                     "threadId": t.thread_id,
-                    "tags": t.tags,
-                    "concatTags": "/" + "/".join([tag["tagName"] for tag in t.tags]) + "/",
+                    "tags": t.tags or [],
+                    "concatTags": "/" + "/".join([tag["tagName"] for tag in (t.tags or [])]) + "/",
                     "teamId": str(t.team.team_id),
                     "projectId": t.project.project_id,
                     # Milestone hooks: TaskFilterMenu's milestone-scope
