@@ -68,6 +68,29 @@ class SearchView(AuthenticatedAPIView):
 
         use_vector = bool(data.get("use_vector", True))
 
+        # Optional relevance filters. Frontend can override the
+        # backend defaults per call (e.g. set min_score_ratio=0 to
+        # disable when an admin debug UI wants to see the long tail).
+        min_score_ratio = data.get("min_score_ratio")
+        min_score = data.get("min_score")
+        extra_kwargs: dict = {}
+        if min_score_ratio is not None:
+            try:
+                extra_kwargs["min_score_ratio"] = float(min_score_ratio)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": "min_score_ratio must be a number."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        if min_score is not None:
+            try:
+                extra_kwargs["min_score"] = float(min_score)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": "min_score must be a number."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         result = search(
             query=query,
             team_id=str(team_id),
@@ -77,5 +100,6 @@ class SearchView(AuthenticatedAPIView):
             date_to=data.get("date_to"),
             limit=limit,
             use_vector=use_vector,
+            **extra_kwargs,
         )
         return Response(result, status=status.HTTP_200_OK)

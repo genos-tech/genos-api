@@ -292,4 +292,32 @@ SEARCH_ENGINE = {
     "BULK_BATCH_SIZE": int(os.environ.get("SEARCH_BULK_BATCH_SIZE", "200")),
     # OpenAI embedding batch size (max items per /v1/embeddings request).
     "EMBEDDING_BATCH_SIZE": int(os.environ.get("SEARCH_EMBEDDING_BATCH_SIZE", "100")),
+    # Gemini configuration for the RAG-answer endpoint
+    # (POST /api/v2/agent/ask). `gemini-2.5-flash` is the MVP default
+    # — fast, cheap, supports streaming + function calling for Phase 3.
+    #
+    # TWO authentication modes (pick exactly one):
+    #
+    # Mode A — Gemini AI Studio API key (simplest):
+    #   GEMINI_API_KEY=AIza...  (from https://aistudio.google.com/apikey)
+    #   Leave GEMINI_USE_VERTEX unset / false.
+    #
+    # Mode B — Google Cloud service account (Vertex AI):
+    #   GEMINI_USE_VERTEX=true
+    #   GEMINI_PROJECT=your-gcp-project-id
+    #   GEMINI_LOCATION=us-central1  (or another region)
+    #   GEMINI_SERVICE_ACCOUNT_FILE=/path/to/service-account.json
+    #     OR set GOOGLE_APPLICATION_CREDENTIALS instead of the file path.
+    #
+    # Mode B is for enterprise / GCP billing. The service account must
+    # have the `roles/aiplatform.user` IAM role.
+    "GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY", ""),
+    "GEMINI_USE_VERTEX": os.environ.get("GEMINI_USE_VERTEX", "false").lower() == "true",
+    "GEMINI_PROJECT": os.environ.get("GEMINI_PROJECT", ""),
+    "GEMINI_LOCATION": os.environ.get("GEMINI_LOCATION", "us-central1"),
+    "GEMINI_SERVICE_ACCOUNT_FILE": os.environ.get("GEMINI_SERVICE_ACCOUNT_FILE", ""),
+    "GEMINI_MODEL": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+    # How many retrieved chunks to stuff into the Gemini prompt as
+    # grounding. Larger = better recall, more cost / latency.
+    "AGENT_CONTEXT_CHUNKS": int(os.environ.get("AGENT_CONTEXT_CHUNKS", "12")),
 }
