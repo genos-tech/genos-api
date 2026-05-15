@@ -325,4 +325,15 @@ SEARCH_ENGINE = {
     # The controller stops + emits an error if the model hasn't
     # produced a final answer by then.
     "AGENT_MAX_STEPS": int(os.environ.get("AGENT_MAX_STEPS", "5")),
+    # Phase 5 — provider selection. "gemini" (default) or "claude".
+    # `get_model_client()` in origin.search_engine.llm reads this at
+    # request time; an unknown value raises rather than silently
+    # falling back.
+    "LLM_PROVIDER": (os.environ.get("LLM_PROVIDER", "gemini") or "gemini").lower(),
+    # Anthropic Claude config (only used when LLM_PROVIDER=claude).
+    "CLAUDE_API_KEY": os.environ.get("CLAUDE_API_KEY", ""),
+    "CLAUDE_MODEL": os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"),
+    # Anthropic requires max_tokens to be set explicitly on every
+    # call (unlike Gemini, which has a sensible server-side default).
+    "CLAUDE_MAX_TOKENS": int(os.environ.get("CLAUDE_MAX_TOKENS", "4096")),
 }

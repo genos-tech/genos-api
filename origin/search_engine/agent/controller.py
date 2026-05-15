@@ -35,7 +35,12 @@ from django.conf import settings
 
 from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError
-from origin.search_engine.llm.gemini_client import generate_step
+from origin.search_engine.llm import (
+    AgentMessage,
+    FunctionCall,
+    ToolDeclaration,
+    get_model_client,
+)
 from origin.search_engine.models import AgentStep
 
 log = logging.getLogger(__name__)
@@ -56,41 +61,31 @@ def _persist_step(run_id: UUID | None, **fields: Any) -> None:
         log.exception("Failed to persist AgentStep for run %s", run_id)
 
 
-def _build_tool_declarations():
-    """Translate each registered Tool into a `genai.types.Tool`."""
-    from google.genai import types  # noqa: PLC0415
-
-    declarations = [
-        types.FunctionDeclaration(
+def _build_tool_declarations() -> list[ToolDeclaration]:
+    """Translate each registered Tool into a provider-neutral declaration."""
+    return [
+        ToolDeclaration(
             name=t.name,
             description=t.description,
-            parameters=t.parameters_schema,
+            parameters_schema=t.parameters_schema,
         )
         for t in REGISTRY.values()
     ]
-    return [types.Tool(function_declarations=declarations)]
 
 
-def _user_turn(query: str):
-    from google.genai import types  # noqa: PLC0415
-
-    return types.Content(role="user", parts=[types.Part(text=query)])
+def _user_turn(query: str) -> AgentMessage:
+    return AgentMessage(role="user", text=query)
 
 
-def _assistant_function_call_turn(function_call):
-    from google.genai import types  # noqa: PLC0415
-
-    return types.Content(role="model", parts=[types.Part(function_call=function_call)])
+def _assistant_function_call_turn(function_call: FunctionCall) -> AgentMessage:
+    return AgentMessage(role="assistant", function_call=function_call)
 
 
-def _function_response_turn(name: str, response: dict[str, Any]):
-    from google.genai import types  # noqa: PLC0415
-
-    return types.Content(
-        role="user",
-        parts=[
-            types.Part.from_function_response(name=name, response=response),
-        ],
+def _function_response_turn(name: str, response: dict[str, Any]) -> AgentMessage:
+    return AgentMessage(
+        role="tool_response",
+        function_response_name=name,
+        function_response=response,
     )
 
 
@@ -165,19 +160,20 @@ def run_agent(
     persistence entirely.
     """
     max_steps = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
+    client = get_model_client()
     tools = _build_tool_declarations()
 
-    messages = [_user_turn(query)]
+    messages: list[AgentMessage] = [_user_turn(query)]
     # entity_id (per type) → ui_source dict. De-dups across multiple
     # searches in one run so the UI only ever sees a given entity once.
     seen_sources_by_id: dict[tuple, dict[str, Any]] = {}
 
     for step in range(max_steps):
-        accumulated_function_calls = []
+        accumulated_function_calls: list[FunctionCall] = []
         accumulated_text_parts: list[str] = []
 
         try:
-            stream = generate_step(
+            stream = client.generate_step(
                 messages=messages,
                 tools=tools,
                 system_instruction=AGENT_SYSTEM_PROMPT,
@@ -238,8 +234,8 @@ def run_agent(
         # step; we run them in order and append all responses before
         # looping.
         for call in accumulated_function_calls:
-            call_args = dict(getattr(call, "args", {}) or {})
-            call_name = getattr(call, "name", "")
+            call_args = dict(call.args)
+            call_name = call.name
             emit(
                 {
                     "type": "tool_call_start",

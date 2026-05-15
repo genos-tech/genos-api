@@ -204,6 +204,14 @@ def _check_expectations(events: list[dict[str, Any]], expect: dict[str, Any]) ->
         if not citations_seen:
             _add("has_citations: answer contains no [entity_id] citations")
 
+    if "answer_length_at_least" in expect:
+        n = int(expect["answer_length_at_least"])
+        if len(answer) < n:
+            _add(
+                f"answer_length_at_least: got {len(answer)} chars, expected >= {n} "
+                f"(answer was: {answer!r})"
+            )
+
     if "tool_call_errors_contain" in expect:
         substrs = [s.lower() for s in expect["tool_call_errors_contain"]]
         error_msgs = [(e.get("error") or "").lower() for e in tool_errors]
