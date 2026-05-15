@@ -185,3 +185,72 @@ def generate_answer_stream(query: str, agent_results: list[dict]) -> Iterator[st
 def generate_answer(query: str, agent_results: list[dict]) -> str:
     """Non-streaming convenience wrapper. Useful for tests / debugging."""
     return "".join(generate_answer_stream(query, agent_results))
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3 — streaming with tool-calling                                       #
+# --------------------------------------------------------------------------- #
+
+# `generate_step` powers the agent controller's loop. Unlike
+# `generate_answer_stream` (which only produces text), this yields BOTH
+# text deltas AND function-call objects as the SDK surfaces them. The
+# controller separates the two streams and decides whether to run a
+# tool or treat the chunks as the final answer.
+
+
+def generate_step(
+    messages,
+    tools,
+    system_instruction: str,
+):
+    """Yield `(text_chunk, function_call)` pairs from a streaming call.
+
+    Exactly one of the pair is non-None per yield:
+      * `(text, None)` — incremental text from the model.
+      * `(None, function_call)` — the model wants to invoke a tool.
+
+    Caller is responsible for assembling messages (system instruction
+    is passed via `config.system_instruction`, not as a message turn).
+    """
+    client = get_client()
+    model = settings.SEARCH_ENGINE["GEMINI_MODEL"]
+
+    # Import here so the rest of this module stays importable when
+    # `google-genai` isn't installed (e.g. in a stripped test env).
+    from google.genai import types  # noqa: PLC0415
+
+    config = types.GenerateContentConfig(
+        tools=tools,
+        system_instruction=system_instruction,
+        temperature=0.2,
+    )
+
+    try:
+        stream = client.models.generate_content_stream(
+            model=model,
+            contents=messages,
+            config=config,
+        )
+        for chunk in stream:
+            # The SDK surfaces function calls on the candidate's
+            # content parts. A single chunk may contain several parts —
+            # text fragments and/or function calls — depending on how
+            # the model interleaves them. Yield each part separately
+            # so the controller can react in order.
+            candidates = getattr(chunk, "candidates", None) or []
+            for cand in candidates:
+                content = getattr(cand, "content", None)
+                if content is None:
+                    continue
+                parts = getattr(content, "parts", None) or []
+                for part in parts:
+                    fcall = getattr(part, "function_call", None)
+                    if fcall is not None:
+                        yield (None, fcall)
+                        continue
+                    text = getattr(part, "text", None)
+                    if text:
+                        yield (text, None)
+    except Exception:
+        log.exception("Gemini generate_step failed")
+        raise

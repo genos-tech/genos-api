@@ -1,25 +1,28 @@
-"""Streaming RAG-answer endpoint: POST /api/v2/agent/ask.
+"""Streaming agent endpoint: POST /api/v2/agent/ask.
 
-Flow per request:
+Phase 3: this endpoint now drives a multi-step Gemini function-calling
+loop instead of a fixed RAG pipeline. The model decides when to
+search and when to fetch detail. See `agent.controller.run_agent` for
+the loop body.
 
-    1. Run hybrid search with `for_agent=True` to get entity-grouped
-       results plus the full chunk text for each match.
-    2. Stream Gemini's answer as NDJSON over a chunked HTTP response.
-       Each line is a JSON object with a `type` field:
+NDJSON event types emitted (see `agent/controller.py` for full list):
 
-         {"type": "sources", "sources": [...entity rows...]}
-         {"type": "answer_delta", "text": "..."}
-         {"type": "answer_delta", "text": "..."}
-         ...
-         {"type": "done"}
+    {"type": "tool_call_start", "step": N, "tool_name": "...", "arguments": {...}}
+    {"type": "tool_call_result", "step": N, "tool_name": "...", "summary": "..."}
+    {"type": "tool_call_error",  "step": N, "tool_name": "...", "error": "..."}
+    {"type": "sources", "sources": [...]}        // after each search_knowledge_base call
+    {"type": "answer_delta", "text": "..."}      // tokens of the final answer
+    {"type": "done"}
+    {"type": "error", "message": "..."}
 
-       On error mid-stream:
-         {"type": "error", "message": "..."}
+Wire format is identical to Phase 2 plus the three new tool events,
+so the existing frontend NDJSON parser still works (older event types
+are still emitted) — only the AnswerPanel UI needs to grow a
+tool-progress strip to render the new events.
 
-NDJSON over a regular POST (rather than SSE / EventSource) is
-deliberate: EventSource doesn't support POST, and we want POST so the
-query payload isn't logged in URL access logs. The frontend reads the
-body with a ReadableStream reader and splits on newlines.
+POST instead of SSE so the query payload isn't logged in access logs,
+and `StreamingHttpResponse` over `application/x-ndjson` so each event
+hits the client incrementally.
 """
 
 from __future__ import annotations
@@ -28,13 +31,12 @@ import json
 import logging
 from typing import Iterator
 
-from django.conf import settings
 from django.http import StreamingHttpResponse
 from rest_framework import status
 from rest_framework.response import Response
 
-from origin.search_engine.llm.gemini_client import generate_answer_stream
-from origin.search_engine.search import search
+from origin.search_engine.agent.controller import run_agent
+from origin.search_engine.agent.tools import ToolContext
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 log = logging.getLogger(__name__)
@@ -65,75 +67,49 @@ class AgentAskView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        entity_types = data.get("entity_types") or None
-        if entity_types is not None and not isinstance(entity_types, list):
-            return Response(
-                {"error": "entity_types must be a list of strings."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        ctx = ToolContext(team_id=str(team_id), user_id=user_id)
 
-        # Run the search synchronously up front so we can ship the
-        # source list to the UI as the first NDJSON line, before the
-        # (slower) LLM call kicks off.
-        try:
-            context_chunks = int(
-                data.get("context_chunks", settings.SEARCH_ENGINE["AGENT_CONTEXT_CHUNKS"])
-            )
-        except (TypeError, ValueError):
-            return Response(
-                {"error": "context_chunks must be an integer."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            search_result = search(
-                query=query,
-                team_id=str(team_id),
-                user_id=user_id,
-                entity_types=entity_types,
-                limit=context_chunks,
-                for_agent=True,
-            )
-        except Exception as e:  # noqa: BLE001
-            log.exception("Search failed for agent ask")
-            return Response(
-                {"error": f"Search failed: {e}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        # Hand both `agent_results` (with full chunk text — for the LLM
-        # prompt) and `ui_results` (snippet-only — for the frontend's
-        # source citations) to the generator. We strip `chunks` out of
-        # the UI payload so the user-facing JSON stays small and
-        # matches the shape of /api/v2/search/.
-        agent_results = search_result["results"]
-        ui_results = [{k: v for k, v in r.items() if k != "chunks"} for r in agent_results]
-
-        stream = _stream_ndjson(query, agent_results, ui_results)
-        # text/event-stream-ish; NDJSON is content-type
-        # `application/x-ndjson`. We keep `Cache-Control: no-cache` so
-        # an intermediate proxy doesn't buffer.
+        stream = _stream_ndjson(query, ctx)
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
         response["X-Accel-Buffering"] = "no"  # disable nginx buffering if present
         return response
 
 
-def _stream_ndjson(
-    query: str, agent_results: list[dict], ui_results: list[dict]
-) -> Iterator[bytes]:
-    """Yield NDJSON lines: sources first, then answer deltas, then done."""
+def _stream_ndjson(query: str, ctx: ToolContext) -> Iterator[bytes]:
+    """Adapter: bridge `run_agent`'s `emit(dict)` callback to NDJSON bytes.
+
+    The controller wants a synchronous `emit(event)` callback. We
+    can't `yield` from inside a callback, so we run the controller on
+    a background thread and have it push events into a queue that the
+    HTTP-response generator drains. This way each event hits the
+    client as soon as the controller produces it — no batching at the
+    Django layer.
+    """
+    import queue  # noqa: PLC0415
+    import threading  # noqa: PLC0415
 
     def line(obj: dict) -> bytes:
         return (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
 
-    yield line({"type": "sources", "sources": ui_results})
+    event_q: "queue.Queue[dict | None]" = queue.Queue()
 
-    try:
-        for delta in generate_answer_stream(query, agent_results):
-            if delta:
-                yield line({"type": "answer_delta", "text": delta})
-        yield line({"type": "done"})
-    except Exception as e:  # noqa: BLE001 — surface to client, don't 500
-        log.exception("Gemini stream failed mid-flight")
-        yield line({"type": "error", "message": str(e)})
+    def emit(event: dict) -> None:
+        event_q.put(event)
+
+    def worker():
+        try:
+            run_agent(query, ctx, emit)
+        except Exception as e:  # noqa: BLE001
+            log.exception("Agent run crashed")
+            event_q.put({"type": "error", "message": f"Agent crashed: {e}"})
+        finally:
+            event_q.put(None)  # sentinel: stream is done
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    while True:
+        event = event_q.get()
+        if event is None:
+            return
+        yield line(event)

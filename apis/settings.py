@@ -320,4 +320,9 @@ SEARCH_ENGINE = {
     # How many retrieved chunks to stuff into the Gemini prompt as
     # grounding. Larger = better recall, more cost / latency.
     "AGENT_CONTEXT_CHUNKS": int(os.environ.get("AGENT_CONTEXT_CHUNKS", "12")),
+    # Phase 3 agent loop — hard cap on tool calls per request. The
+    # roadmap recommends 5–8; we default to the conservative end.
+    # The controller stops + emits an error if the model hasn't
+    # produced a final answer by then.
+    "AGENT_MAX_STEPS": int(os.environ.get("AGENT_MAX_STEPS", "5")),
 }
