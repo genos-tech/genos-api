@@ -1,0 +1,1432 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PostgreSQL Table Relation Network - Freeze Layout v2</title>
+  <link rel="preconnect" href="https://unpkg.com" />
+  <link rel="stylesheet" href="https://unpkg.com/vis-network@9.1.9/styles/vis-network.min.css" />
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --panel-2: #0b1220;
+      --card: #ffffff;
+      --muted: #64748b;
+      --text: #0f172a;
+      --soft: #f8fafc;
+      --border: #e2e8f0;
+      --brand: #2563eb;
+      --brand-dark: #1d4ed8;
+      --good: #059669;
+      --warn: #d97706;
+      --danger: #dc2626;
+      --shadow: 0 18px 45px rgba(15, 23, 42, 0.12);
+      --radius: 18px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(37, 99, 235, 0.18), transparent 30rem),
+        radial-gradient(circle at bottom right, rgba(14, 165, 233, 0.14), transparent 30rem),
+        #f1f5f9;
+      min-height: 100vh;
+    }
+
+    header {
+      height: 76px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 16px 22px;
+      color: #fff;
+      background: linear-gradient(135deg, #0f172a, #1e293b);
+      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.22);
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+      letter-spacing: -0.02em;
+    }
+
+    header .sub {
+      margin-top: 4px;
+      color: #cbd5e1;
+      font-size: 12px;
+    }
+
+    .header-stats {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .stat-pill {
+      background: rgba(255,255,255,0.09);
+      border: 1px solid rgba(255,255,255,0.14);
+      color: #e2e8f0;
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 360px minmax(360px, 1fr) 390px;
+      gap: 16px;
+      padding: 16px;
+      height: calc(100vh - 76px);
+    }
+
+    .panel {
+      background: rgba(255,255,255,0.92);
+      border: 1px solid rgba(226, 232, 240, 0.92);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .sidebar, .inspector {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .panel-title {
+      padding: 15px 16px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(248, 250, 252, 0.78);
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .panel-body {
+      padding: 14px 16px 18px;
+      overflow: auto;
+    }
+
+    .field { margin-bottom: 14px; }
+
+    label.field-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 700;
+      color: #334155;
+      margin-bottom: 6px;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    textarea,
+    select {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 11px;
+      font: inherit;
+      font-size: 13px;
+      background: #fff;
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    textarea {
+      min-height: 68px;
+      resize: vertical;
+      font-family: var(--mono);
+      line-height: 1.45;
+    }
+
+    input:focus,
+    textarea:focus,
+    select:focus {
+      border-color: #93c5fd;
+      box-shadow: 0 0 0 4px rgba(147,197,253,0.25);
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .check {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 13px;
+      color: #334155;
+      line-height: 1.35;
+      margin: 8px 0;
+    }
+
+    .check input { margin-top: 2px; }
+
+    .hint {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 5px;
+      line-height: 1.35;
+    }
+
+    .schema-toolbar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 12px;
+      background: #e2e8f0;
+      color: #0f172a;
+      padding: 9px 11px;
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+      transition: transform 0.1s, background 0.15s, box-shadow 0.15s;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 18px rgba(15,23,42,0.12);
+    }
+
+    button.primary {
+      background: var(--brand);
+      color: #fff;
+    }
+
+    button.primary:hover { background: var(--brand-dark); }
+
+    button.ghost {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      color: #334155;
+      box-shadow: none;
+    }
+
+    .button-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 9px;
+      margin-top: 12px;
+    }
+
+    .schema-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      max-height: 140px;
+      overflow: auto;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: #f8fafc;
+    }
+
+    .schema-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      background: #fff;
+      border: 1px solid var(--border);
+      padding: 6px 9px;
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .schema-pill input { margin: 0; }
+
+    .graph-panel {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      position: relative;
+    }
+
+    .graph-topbar {
+      min-height: 54px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(248,250,252,0.86);
+    }
+
+    .status {
+      font-size: 13px;
+      color: #334155;
+      font-weight: 700;
+    }
+
+    .status small {
+      display: block;
+      font-weight: 500;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .graph-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    #network {
+      flex: 1;
+      min-height: 0;
+      background:
+        linear-gradient(rgba(15,23,42,0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(15,23,42,0.025) 1px, transparent 1px),
+        #ffffff;
+      background-size: 28px 28px;
+    }
+
+    .warning {
+      display: none;
+      margin: 0 14px 12px;
+      border: 1px solid #fed7aa;
+      background: #fffbeb;
+      color: #92400e;
+      padding: 10px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .warning.show { display: block; }
+
+    .empty {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+      background: #f8fafc;
+      border: 1px dashed #cbd5e1;
+      padding: 14px;
+      border-radius: 14px;
+    }
+
+    .detail-section {
+      margin-bottom: 16px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .detail-section:last-child {
+      border-bottom: 0;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .detail-section h3 {
+      font-size: 14px;
+      margin: 0 0 8px;
+      letter-spacing: -0.01em;
+    }
+
+    .mono {
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 4px 7px;
+      background: #eff6ff;
+      color: #1d4ed8;
+      font-size: 11px;
+      font-weight: 800;
+      margin: 2px 4px 2px 0;
+    }
+
+    .badge.green {
+      background: #ecfdf5;
+      color: #047857;
+    }
+
+    .badge.gray {
+      background: #f1f5f9;
+      color: #475569;
+    }
+
+    .badge.orange {
+      background: #fff7ed;
+      color: #c2410c;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      overflow: hidden;
+      border-radius: 12px;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 8px 7px;
+      border-bottom: 1px solid #e2e8f0;
+      vertical-align: top;
+    }
+
+    th {
+      color: #475569;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      background: #f8fafc;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .fk-card {
+      border: 1px solid var(--border);
+      background: #fff;
+      border-radius: 13px;
+      padding: 10px;
+      margin: 8px 0;
+    }
+
+    .fk-card .name {
+      font-weight: 800;
+      font-size: 12px;
+      margin-bottom: 5px;
+    }
+
+    .fk-card .line {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: #334155;
+      overflow-wrap: anywhere;
+    }
+
+    .visible-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      max-height: 120px;
+      overflow: auto;
+      padding: 8px;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 13px;
+    }
+
+    .table-chip {
+      border-radius: 999px;
+      background: #fff;
+      border: 1px solid var(--border);
+      color: #334155;
+      padding: 5px 8px;
+      font-size: 11px;
+      font-family: var(--mono);
+      cursor: pointer;
+    }
+
+    .table-chip:hover {
+      border-color: #93c5fd;
+      background: #eff6ff;
+    }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 20;
+      background: #0f172a;
+      color: #fff;
+      padding: 11px 13px;
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      font-size: 13px;
+      opacity: 0;
+      transform: translateY(10px);
+      pointer-events: none;
+      transition: 0.18s ease;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 1180px) {
+      .layout {
+        grid-template-columns: 330px minmax(320px, 1fr);
+      }
+      .inspector {
+        display: none;
+      }
+    }
+
+    @media (max-width: 820px) {
+      header {
+        height: auto;
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .layout {
+        height: auto;
+        grid-template-columns: 1fr;
+      }
+      #network {
+        height: 65vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>PostgreSQL Table Relation Network <span style="font-size:12px;color:#93c5fd;">Freeze Layout v2</span></h1>
+      <div class="sub" id="subtitle">Generated 2026-05-11T11:10:05+00:00</div>
+    </div>
+    <div class="header-stats" id="headerStats"></div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel sidebar">
+      <div class="panel-title">
+        <span>Filters</span>
+        <button class="ghost" id="resetFilters" type="button">Reset</button>
+      </div>
+      <div class="panel-body">
+        <div class="field">
+          <label class="field-label" for="tableSearch">Table search</label>
+          <input id="tableSearch" type="text" placeholder="orders, customer, ^fact_.*" />
+          <label class="check">
+            <input id="regexMode" type="checkbox" />
+            Treat table search as JavaScript regex
+          </label>
+          <div class="hint">Matches schema.table and table name.</div>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="includePatterns">Explicit include patterns</label>
+          <textarea id="includePatterns" placeholder="public.orders&#10;analytics.fact_*"></textarea>
+          <div class="hint">Optional. One per line or comma-separated. Supports <span class="mono">*</span>, <span class="mono">?</span>, and <span class="mono">/regex/</span>.</div>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="excludePatterns">Exclude patterns</label>
+          <textarea id="excludePatterns" placeholder="tmp_*&#10;archive.*"></textarea>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="columnSearch">Column / type search</label>
+          <input id="columnSearch" type="text" placeholder="customer_id, uuid, timestamp" />
+          <div class="hint">Used only for the starting table set; neighbor expansion can still bring related tables in.</div>
+        </div>
+
+        <div class="two-col">
+          <div class="field">
+            <label class="field-label" for="relationDepth">Relation depth</label>
+            <select id="relationDepth">
+              <option value="0">0 - matched tables only</option>
+              <option value="1" selected>1 - direct neighbors</option>
+              <option value="2">2 - second-degree neighbors</option>
+              <option value="3">3 - third-degree neighbors</option>
+              <option value="all">All connected</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="relationDirection">Direction</label>
+            <select id="relationDirection">
+              <option value="both" selected>Incoming + outgoing</option>
+              <option value="outgoing">Outgoing FKs only</option>
+              <option value="incoming">Incoming references only</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="two-col">
+          <div class="field">
+            <label class="field-label" for="pkFilter">Primary key</label>
+            <select id="pkFilter">
+              <option value="all" selected>All</option>
+              <option value="with">With PK</option>
+              <option value="without">Without PK</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="relationKind">Relation kind</label>
+            <select id="relationKind">
+              <option value="all" selected>All</option>
+              <option value="any">Has any FK relation</option>
+              <option value="outgoing">Has outgoing FK</option>
+              <option value="incoming">Is referenced</option>
+              <option value="isolated">No FK relation</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="check">
+            <input id="hideIsolated" type="checkbox" />
+            Hide isolated visible tables
+          </label>
+          <label class="check">
+            <input id="showEdgeLabels" type="checkbox" checked />
+            Show FK labels on graph
+          </label>
+          <label class="check">
+            <input id="strictSchemaNeighbors" type="checkbox" />
+            Apply schema filter to expanded neighbors
+          </label>
+          <label class="check">
+            <input id="freezeAfterLayout" type="checkbox" checked />
+            Freeze node positions after layout
+          </label>
+          <label class="check">
+            <input id="requireFilterFirst" type="checkbox" />
+            Require a table/column/relation filter before drawing
+          </label>
+        </div>
+
+        <div class="field">
+          <label class="field-label">Schemas</label>
+          <div class="schema-toolbar">
+            <button class="ghost" id="selectAllSchemas" type="button">All</button>
+            <button class="ghost" id="selectNoSchemas" type="button">None</button>
+          </div>
+          <div class="schema-list" id="schemaFilters"></div>
+        </div>
+
+        <div class="button-row">
+          <button class="primary" id="applyFilters" type="button">Apply + fit</button>
+          <button class="ghost" id="copyTables" type="button">Copy visible tables</button>
+        </div>
+
+        <div class="field" style="margin-top: 16px;">
+          <label class="field-label">Visible tables</label>
+          <div class="visible-list" id="visibleList"></div>
+          <div class="hint">Click a table chip to focus that table exactly.</div>
+        </div>
+      </div>
+    </aside>
+
+    <section class="panel graph-panel">
+      <div class="graph-topbar">
+        <div class="status" id="status">Loading graph...</div>
+        <div class="graph-actions">
+          <button class="ghost" id="fitGraph" type="button">Fit</button>
+          <button class="ghost" id="freezeGraph" type="button">Freeze</button>
+          <button class="ghost" id="unfreezeGraph" type="button">Unfreeze</button>
+          <button class="ghost" id="stabilizeGraph" type="button">Stabilize</button>
+        </div>
+      </div>
+      <div class="warning" id="warning"></div>
+      <div id="network"></div>
+    </section>
+
+    <aside class="panel inspector">
+      <div class="panel-title">Inspector</div>
+      <div class="panel-body" id="inspector">
+        <div class="empty">Click a table or FK edge to inspect PK/FK details.</div>
+      </div>
+    </aside>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <script id="graph-data" type="application/json">{"nodes":[{"id":"public.auth_group","schema":"public","table":"auth_group","qualified_name":"public.auth_group","type":"table","comment":null,"columns":[{"name":"id","type":"integer","not_null":true,"comment":null,"is_pk":true},{"name":"name","type":"character varying(150)","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"auth_group_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.auth_group_permissions","schema":"public","table":"auth_group_permissions","qualified_name":"public.auth_group_permissions","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"group_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"permission_id","type":"integer","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"auth_group_permissions_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.auth_permission","schema":"public","table":"auth_permission","qualified_name":"public.auth_permission","type":"table","comment":null,"columns":[{"name":"id","type":"integer","not_null":true,"comment":null,"is_pk":true},{"name":"name","type":"character varying(255)","not_null":true,"comment":null,"is_pk":false},{"name":"content_type_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"codename","type":"character varying(100)","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"auth_permission_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.django_content_type","schema":"public","table":"django_content_type","qualified_name":"public.django_content_type","type":"table","comment":null,"columns":[{"name":"id","type":"integer","not_null":true,"comment":null,"is_pk":true},{"name":"app_label","type":"character varying(100)","not_null":true,"comment":null,"is_pk":false},{"name":"model","type":"character varying(100)","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"django_content_type_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.django_migrations","schema":"public","table":"django_migrations","qualified_name":"public.django_migrations","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"app","type":"character varying(255)","not_null":true,"comment":null,"is_pk":false},{"name":"name","type":"character varying(255)","not_null":true,"comment":null,"is_pk":false},{"name":"applied","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"django_migrations_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.django_session","schema":"public","table":"django_session","qualified_name":"public.django_session","type":"table","comment":null,"columns":[{"name":"session_key","type":"character varying(40)","not_null":true,"comment":null,"is_pk":true},{"name":"session_data","type":"text","not_null":true,"comment":null,"is_pk":false},{"name":"expire_date","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"django_session_pkey","columns":["session_key"],"definition":"PRIMARY KEY (session_key)"}},{"id":"public.origin_activityfact","schema":"public","table":"origin_activityfact","qualified_name":"public.origin_activityfact","type":"table","comment":null,"columns":[{"name":"activity_id","type":"character varying","not_null":true,"comment":null,"is_pk":true},{"name":"activity_type","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"chat_type","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"chat_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"chat_name","type":"character varying","not_null":false,"comment":null,"is_pk":false},{"name":"is_thread","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"message_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"message_unique_key","type":"character varying","not_null":true,"comment":null,"is_pk":false},{"name":"thread_message_unique_key","type":"character varying","not_null":false,"comment":null,"is_pk":false},{"name":"first_line_content","type":"character varying","not_null":true,"comment":null,"is_pk":false},{"name":"latest_reaction","type":"jsonb","not_null":true,"comment":null,"is_pk":false},{"name":"reactions","type":"jsonb","not_null":true,"comment":null,"is_pk":false},{"name":"mentioned_user_ids","type":"jsonb","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"dm_partner_user_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"sender_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"project_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"latest_reaction_user_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_activityfact_pkey","columns":["activity_id"],"definition":"PRIMARY KEY (activity_id)"}},{"id":"public.origin_activityreadstatus","schema":"public","table":"origin_activityreadstatus","qualified_name":"public.origin_activityreadstatus","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"is_read","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"user_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"activity_id","type":"character varying","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_activityreadstatus_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_chatattachmentfact","schema":"public","table":"origin_chatattachmentfact","qualified_name":"public.origin_chatattachmentfact","type":"table","comment":null,"columns":[{"name":"chat_type","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"chat_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"message_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"attachment_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"chat_attachment_url","type":"character varying(100)","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"uploader_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_chatattachmentfact_pkey","columns":["attachment_id"],"definition":"PRIMARY KEY (attachment_id)"}},{"id":"public.origin_chatnoteattachmentfact","schema":"public","table":"origin_chatnoteattachmentfact","qualified_name":"public.origin_chatnoteattachmentfact","type":"table","comment":null,"columns":[{"name":"chat_type","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"chat_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"is_thread","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"attachment_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"note_attachment_url","type":"character varying(100)","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"uploader_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"note_id","type":"bigint","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_chatnoteattachmentfact_pkey","columns":["attachment_id"],"definition":"PRIMARY KEY (attachment_id)"}},{"id":"public.origin_chatnotemaster","schema":"public","table":"origin_chatnotemaster","qualified_name":"public.origin_chatnotemaster","type":"table","comment":null,"columns":[{"name":"chat_type","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"chat_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"is_thread","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"note_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"parent_note_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"title","type":"character varying(255)","not_null":true,"comment":null,"is_pk":false},{"name":"body","type":"jsonb","not_null":false,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"owner_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_chatnotemaster_pkey","columns":["note_id"],"definition":"PRIMARY KEY (note_id)"}},{"id":"public.origin_customuser","schema":"public","table":"origin_customuser","qualified_name":"public.origin_customuser","type":"table","comment":null,"columns":[{"name":"password","type":"character varying(128)","not_null":true,"comment":null,"is_pk":false},{"name":"last_login","type":"timestamp with time zone","not_null":false,"comment":null,"is_pk":false},{"name":"is_superuser","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"id","type":"uuid","not_null":true,"comment":null,"is_pk":true},{"name":"username","type":"character varying(50)","not_null":true,"comment":null,"is_pk":false},{"name":"email","type":"character varying(254)","not_null":true,"comment":null,"is_pk":false},{"name":"profile_image_url","type":"character varying(100)","not_null":false,"comment":null,"is_pk":false},{"name":"last_seen","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"token","type":"character varying(100)","not_null":false,"comment":null,"is_pk":false},{"name":"token_expiration","type":"timestamp with time zone","not_null":false,"comment":null,"is_pk":false},{"name":"ts_last_login_at","type":"timestamp with time zone","not_null":false,"comment":null,"is_pk":false},{"name":"is_active","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"is_staff","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"is_system_user","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"custom_status","type":"character varying(50)","not_null":false,"comment":null,"is_pk":false},{"name":"base_country","type":"character varying(50)","not_null":false,"comment":null,"is_pk":false},{"name":"is_offline_forced","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"role","type":"character varying(50)","not_null":false,"comment":null,"is_pk":false},{"name":"phone_number","type":"character varying(20)","not_null":false,"comment":null,"is_pk":false},{"name":"profile_image_file_name","type":"character varying","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_customuser_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_customuser_groups","schema":"public","table":"origin_customuser_groups","qualified_name":"public.origin_customuser_groups","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"customuser_id","type":"uuid","not_null":true,"comment":null,"is_pk":false},{"name":"group_id","type":"integer","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_customuser_groups_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_customuser_user_permissions","schema":"public","table":"origin_customuser_user_permissions","qualified_name":"public.origin_customuser_user_permissions","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"customuser_id","type":"uuid","not_null":true,"comment":null,"is_pk":false},{"name":"permission_id","type":"integer","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_customuser_user_permissions_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_dmattachmentfact","schema":"public","table":"origin_dmattachmentfact","qualified_name":"public.origin_dmattachmentfact","type":"table","comment":null,"columns":[{"name":"is_thread","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"attachment_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"note_attachment_url","type":"character varying(100)","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"dm_id","type":"integer","not_null":false,"comment":null,"is_pk":false},{"name":"uploader_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_dmattachmentfact_pkey","columns":["attachment_id"],"definition":"PRIMARY KEY (attachment_id)"}},{"id":"public.origin_dmmaster","schema":"public","table":"origin_dmmaster","qualified_name":"public.origin_dmmaster","type":"table","comment":null,"columns":[{"name":"dm_id","type":"integer","not_null":true,"comment":null,"is_pk":true},{"name":"user_1_id","type":"uuid","not_null":true,"comment":null,"is_pk":false},{"name":"user_2_id","type":"uuid","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_dmmaster_pkey","columns":["dm_id"],"definition":"PRIMARY KEY (dm_id)"}},{"id":"public.origin_dmmessages","schema":"public","table":"origin_dmmessages","qualified_name":"public.origin_dmmessages","type":"table","comment":null,"columns":[{"name":"message_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"message_body","type":"jsonb","not_null":true,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":false,"comment":null,"is_pk":false},{"name":"ts_sent_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_thread_created_at","type":"timestamp with time zone","not_null":false,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"uid","type":"character varying(255)","not_null":true,"comment":null,"is_pk":true},{"name":"dm_id","type":"integer","not_null":false,"comment":null,"is_pk":false},{"name":"receiver_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"sender_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_dmmessages_pkey","columns":["uid"],"definition":"PRIMARY KEY (uid)"}},{"id":"public.origin_dmthreadmessages","schema":"public","table":"origin_dmthreadmessages","qualified_name":"public.origin_dmthreadmessages","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"thread_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"thread_message_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"thread_message_body","type":"jsonb","not_null":true,"comment":null,"is_pk":false},{"name":"ts_sent_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"dm_id","type":"integer","not_null":false,"comment":null,"is_pk":false},{"name":"parent_message_uid_id","type":"character varying(255)","not_null":false,"comment":null,"is_pk":false},{"name":"receiver_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"sender_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_dmthreadmessages_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_gmattachmentfact","schema":"public","table":"origin_gmattachmentfact","qualified_name":"public.origin_gmattachmentfact","type":"table","comment":null,"columns":[{"name":"is_thread","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"attachment_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"note_attachment_url","type":"character varying(100)","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"gm_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"uploader_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_gmattachmentfact_pkey","columns":["attachment_id"],"definition":"PRIMARY KEY (attachment_id)"}},{"id":"public.origin_gmmaster","schema":"public","table":"origin_gmmaster","qualified_name":"public.origin_gmmaster","type":"table","comment":null,"columns":[{"name":"gm_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"group_name","type":"character varying","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"owner_user_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"owner_team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"is_private","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"profile_image_file_name","type":"character varying","not_null":false,"comment":null,"is_pk":false},{"name":"profile_image_url","type":"character varying(100)","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_gmmaster_pkey","columns":["gm_id"],"definition":"PRIMARY KEY (gm_id)"}},{"id":"public.origin_gmmembers","schema":"public","table":"origin_gmmembers","qualified_name":"public.origin_gmmembers","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"ts_joined_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"attendee_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"gm_id","type":"bigint","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_gmmembers_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_gmmessages","schema":"public","table":"origin_gmmessages","qualified_name":"public.origin_gmmessages","type":"table","comment":null,"columns":[{"name":"message_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"message_body","type":"jsonb","not_null":true,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":false,"comment":null,"is_pk":false},{"name":"ts_sent_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_thread_created_at","type":"timestamp with time zone","not_null":false,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"uid","type":"character varying(255)","not_null":true,"comment":null,"is_pk":true},{"name":"gm_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"sender_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_gmmessages_pkey","columns":["uid"],"definition":"PRIMARY KEY (uid)"}},{"id":"public.origin_gmthreadmessages","schema":"public","table":"origin_gmthreadmessages","qualified_name":"public.origin_gmthreadmessages","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"thread_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"thread_message_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"thread_message_body","type":"jsonb","not_null":true,"comment":null,"is_pk":false},{"name":"ts_sent_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"gm_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"parent_message_uid_id","type":"character varying(255)","not_null":false,"comment":null,"is_pk":false},{"name":"sender_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_gmthreadmessages_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_inboxitems","schema":"public","table":"origin_inboxitems","qualified_name":"public.origin_inboxitems","type":"table","comment":null,"columns":[{"name":"item_id","type":"integer","not_null":true,"comment":null,"is_pk":true},{"name":"item_body","type":"jsonb","not_null":false,"comment":null,"is_pk":false},{"name":"item_type","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"is_read","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"receiver_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"sender_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"item_optionals","type":"jsonb","not_null":false,"comment":null,"is_pk":false},{"name":"request_status","type":"character varying(10)","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_inboxitems_pkey","columns":["item_id"],"definition":"PRIMARY KEY (item_id)"}},{"id":"public.origin_mdmattachmentfact","schema":"public","table":"origin_mdmattachmentfact","qualified_name":"public.origin_mdmattachmentfact","type":"table","comment":null,"columns":[{"name":"is_thread","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"attachment_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"note_attachment_url","type":"character varying(100)","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"uploader_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"mdm_id","type":"bigint","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_mdmattachmentfact_pkey","columns":["attachment_id"],"definition":"PRIMARY KEY (attachment_id)"}},{"id":"public.origin_mdmmaster","schema":"public","table":"origin_mdmmaster","qualified_name":"public.origin_mdmmaster","type":"table","comment":null,"columns":[{"name":"mdm_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"display_name","type":"character varying(255)","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"owner_team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"owner_user_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_mdmmaster_pkey","columns":["mdm_id"],"definition":"PRIMARY KEY (mdm_id)"}},{"id":"public.origin_mdmmembers","schema":"public","table":"origin_mdmmembers","qualified_name":"public.origin_mdmmembers","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"ts_joined_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"attendee_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"mdm_id","type":"bigint","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_mdmmembers_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_mdmmessages","schema":"public","table":"origin_mdmmessages","qualified_name":"public.origin_mdmmessages","type":"table","comment":null,"columns":[{"name":"message_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"message_body","type":"jsonb","not_null":true,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"ts_sent_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_thread_created_at","type":"timestamp with time zone","not_null":false,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"uid","type":"character varying(255)","not_null":true,"comment":null,"is_pk":true},{"name":"mdm_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"sender_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_mdmmessages_pkey","columns":["uid"],"definition":"PRIMARY KEY (uid)"}},{"id":"public.origin_mdmthreadmessages","schema":"public","table":"origin_mdmthreadmessages","qualified_name":"public.origin_mdmthreadmessages","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"thread_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"thread_message_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"thread_message_body","type":"jsonb","not_null":true,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"ts_sent_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"mdm_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"parent_message_uid_id","type":"character varying(255)","not_null":false,"comment":null,"is_pk":false},{"name":"sender_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_mdmthreadmessages_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_mentionfact","schema":"public","table":"origin_mentionfact","qualified_name":"public.origin_mentionfact","type":"table","comment":null,"columns":[{"name":"chat_type","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"chat_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"message_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"is_thread","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"uid","type":"character varying(255)","not_null":true,"comment":null,"is_pk":true},{"name":"mentioned_user_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_mentionfact_pkey","columns":["uid"],"definition":"PRIMARY KEY (uid)"}},{"id":"public.origin_milestoneassignees","schema":"public","table":"origin_milestoneassignees","qualified_name":"public.origin_milestoneassignees","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"user_id","type":"uuid","not_null":true,"comment":null,"is_pk":false},{"name":"milestone_id","type":"bigint","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_milestoneassignees_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_milestonemaster","schema":"public","table":"origin_milestonemaster","qualified_name":"public.origin_milestonemaster","type":"table","comment":null,"columns":[{"name":"milestone_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"title","type":"character varying(255)","not_null":true,"comment":null,"is_pk":false},{"name":"description","type":"jsonb","not_null":false,"comment":null,"is_pk":false},{"name":"status","type":"character varying","not_null":true,"comment":null,"is_pk":false},{"name":"status_code","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"priority","type":"character varying","not_null":false,"comment":null,"is_pk":false},{"name":"priority_code","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"due_date","type":"date","not_null":false,"comment":null,"is_pk":false},{"name":"tags","type":"jsonb","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"project_id","type":"bigint","not_null":true,"comment":null,"is_pk":false},{"name":"reporter_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"sprint_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"effort_level","type":"character varying","not_null":false,"comment":null,"is_pk":false},{"name":"effort_level_code","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"links","type":"jsonb","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_milestonemaster_pkey","columns":["milestone_id"],"definition":"PRIMARY KEY (milestone_id)"}},{"id":"public.origin_notefavoritemaster","schema":"public","table":"origin_notefavoritemaster","qualified_name":"public.origin_notefavoritemaster","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"note_id","type":"bigint","not_null":true,"comment":null,"is_pk":false},{"name":"note_type","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"user_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_notefavoritemaster_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_notepermissionmaster","schema":"public","table":"origin_notepermissionmaster","qualified_name":"public.origin_notepermissionmaster","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"note_id","type":"bigint","not_null":true,"comment":null,"is_pk":false},{"name":"note_type","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"role_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"user_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_notepermissionmaster_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_noterecentmaster","schema":"public","table":"origin_noterecentmaster","qualified_name":"public.origin_noterecentmaster","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"note_id","type":"bigint","not_null":true,"comment":null,"is_pk":false},{"name":"note_type","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_opened_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"user_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_noterecentmaster_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_notificationpreference","schema":"public","table":"origin_notificationpreference","qualified_name":"public.origin_notificationpreference","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"master_enabled","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"enable_chats","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"enable_thread_replies","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"enable_mentions","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"enable_task_comments","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"enable_inbox","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"muted_chats","type":"jsonb","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"user_id","type":"uuid","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_notificationpreference_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_personalnoteattachmentfact","schema":"public","table":"origin_personalnoteattachmentfact","qualified_name":"public.origin_personalnoteattachmentfact","type":"table","comment":null,"columns":[{"name":"attachment_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"note_attachment_url","type":"character varying(100)","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"note_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"uploader_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_personalnoteattachmentfact_pkey","columns":["attachment_id"],"definition":"PRIMARY KEY (attachment_id)"}},{"id":"public.origin_personalnotemaster","schema":"public","table":"origin_personalnotemaster","qualified_name":"public.origin_personalnotemaster","type":"table","comment":null,"columns":[{"name":"note_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"parent_note_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"title","type":"character varying(255)","not_null":true,"comment":null,"is_pk":false},{"name":"body","type":"jsonb","not_null":false,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"owner_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_personalnotemaster_pkey","columns":["note_id"],"definition":"PRIMARY KEY (note_id)"}},{"id":"public.origin_pmattachmentfact","schema":"public","table":"origin_pmattachmentfact","qualified_name":"public.origin_pmattachmentfact","type":"table","comment":null,"columns":[{"name":"is_thread","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"attachment_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"note_attachment_url","type":"character varying(100)","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"project_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"uploader_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_pmattachmentfact_pkey","columns":["attachment_id"],"definition":"PRIMARY KEY (attachment_id)"}},{"id":"public.origin_pmmessages","schema":"public","table":"origin_pmmessages","qualified_name":"public.origin_pmmessages","type":"table","comment":null,"columns":[{"name":"message_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"message_body","type":"jsonb","not_null":true,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":false,"comment":null,"is_pk":false},{"name":"ts_sent_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_thread_created_at","type":"timestamp with time zone","not_null":false,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"uid","type":"character varying(255)","not_null":true,"comment":null,"is_pk":true},{"name":"project_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"sender_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_pmmessages_pkey","columns":["uid"],"definition":"PRIMARY KEY (uid)"}},{"id":"public.origin_pmthreadmessages","schema":"public","table":"origin_pmthreadmessages","qualified_name":"public.origin_pmthreadmessages","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"thread_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"thread_message_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"thread_message_body","type":"jsonb","not_null":true,"comment":null,"is_pk":false},{"name":"ts_sent_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"parent_message_uid_id","type":"character varying(255)","not_null":false,"comment":null,"is_pk":false},{"name":"project_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"sender_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_pmthreadmessages_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_projectmaster","schema":"public","table":"origin_projectmaster","qualified_name":"public.origin_projectmaster","type":"table","comment":null,"columns":[{"name":"project_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"project_name","type":"character varying","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"owner_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"project_system_user_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"is_private","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"profile_image_file_name","type":"character varying","not_null":false,"comment":null,"is_pk":false},{"name":"profile_image_url","type":"character varying(100)","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_projectmaster_pkey","columns":["project_id"],"definition":"PRIMARY KEY (project_id)"}},{"id":"public.origin_projectmembers","schema":"public","table":"origin_projectmembers","qualified_name":"public.origin_projectmembers","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"ts_joined_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"attendee_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"project_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_projectmembers_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_projecttags","schema":"public","table":"origin_projecttags","qualified_name":"public.origin_projecttags","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"tag_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"tag_name","type":"character varying(20)","not_null":true,"comment":null,"is_pk":false},{"name":"tag_color","type":"character varying(10)","not_null":true,"comment":null,"is_pk":false},{"name":"tag_text_color","type":"character varying(10)","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"project_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_projecttags_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_reactionfact","schema":"public","table":"origin_reactionfact","qualified_name":"public.origin_reactionfact","type":"table","comment":null,"columns":[{"name":"chat_type","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"chat_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"message_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"is_thread","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"reaction_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"reaction_emoji","type":"character varying","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"uid","type":"character varying(255)","not_null":true,"comment":null,"is_pk":true},{"name":"sender_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_reactionfact_pkey","columns":["uid"],"definition":"PRIMARY KEY (uid)"}},{"id":"public.origin_readstatus","schema":"public","table":"origin_readstatus","qualified_name":"public.origin_readstatus","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"chat_type","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"chat_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"is_thread","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"last_read_message_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"user_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_readstatus_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_sprint","schema":"public","table":"origin_sprint","qualified_name":"public.origin_sprint","type":"table","comment":null,"columns":[{"name":"sprint_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"name","type":"character varying(120)","not_null":true,"comment":null,"is_pk":false},{"name":"sequence_number","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"start_date","type":"date","not_null":true,"comment":null,"is_pk":false},{"name":"end_date","type":"date","not_null":true,"comment":null,"is_pk":false},{"name":"status","type":"character varying(16)","not_null":true,"comment":null,"is_pk":false},{"name":"is_auto_generated","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"project_id","type":"bigint","not_null":true,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_sprint_pkey","columns":["sprint_id"],"definition":"PRIMARY KEY (sprint_id)"}},{"id":"public.origin_sprintconfig","schema":"public","table":"origin_sprintconfig","qualified_name":"public.origin_sprintconfig","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"duration_days","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"anchor_date","type":"date","not_null":true,"comment":null,"is_pk":false},{"name":"auto_roll","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"upcoming_horizon","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"project_id","type":"bigint","not_null":true,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_sprintconfig_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_taskactivity","schema":"public","table":"origin_taskactivity","qualified_name":"public.origin_taskactivity","type":"table","comment":null,"columns":[{"name":"activity_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"action_type","type":"character varying(48)","not_null":true,"comment":null,"is_pk":false},{"name":"field_name","type":"character varying(64)","not_null":false,"comment":null,"is_pk":false},{"name":"old_value","type":"jsonb","not_null":false,"comment":null,"is_pk":false},{"name":"new_value","type":"jsonb","not_null":false,"comment":null,"is_pk":false},{"name":"metadata","type":"jsonb","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"actor_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"project_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":true,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_taskactivity_pkey","columns":["activity_id"],"definition":"PRIMARY KEY (activity_id)"}},{"id":"public.origin_taskattachments","schema":"public","table":"origin_taskattachments","qualified_name":"public.origin_taskattachments","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"attachment_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"attached_file","type":"character varying(100)","not_null":true,"comment":null,"is_pk":false},{"name":"attached_type","type":"character varying","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"original_filename","type":"character varying(512)","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_taskattachments_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_taskbodyattachmentfact","schema":"public","table":"origin_taskbodyattachmentfact","qualified_name":"public.origin_taskbodyattachmentfact","type":"table","comment":null,"columns":[{"name":"attachment_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"body_attachment_url","type":"character varying(100)","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"uploader_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_taskbodyattachmentfact_pkey","columns":["attachment_id"],"definition":"PRIMARY KEY (attachment_id)"}},{"id":"public.origin_taskcommentmentionfact","schema":"public","table":"origin_taskcommentmentionfact","qualified_name":"public.origin_taskcommentmentionfact","type":"table","comment":null,"columns":[{"name":"comment_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"uid","type":"character varying(255)","not_null":true,"comment":null,"is_pk":true},{"name":"mentioned_user_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_taskcommentmentionfact_pkey","columns":["uid"],"definition":"PRIMARY KEY (uid)"}},{"id":"public.origin_taskcommentreactionfact","schema":"public","table":"origin_taskcommentreactionfact","qualified_name":"public.origin_taskcommentreactionfact","type":"table","comment":null,"columns":[{"name":"comment_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"reaction_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"reaction_emoji","type":"character varying","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"uid","type":"character varying(255)","not_null":true,"comment":null,"is_pk":true},{"name":"sender_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_taskcommentreactionfact_pkey","columns":["uid"],"definition":"PRIMARY KEY (uid)"}},{"id":"public.origin_taskcomments","schema":"public","table":"origin_taskcomments","qualified_name":"public.origin_taskcomments","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"comment_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"comment_body","type":"jsonb","not_null":true,"comment":null,"is_pk":false},{"name":"ts_sent_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"sender_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_taskcomments_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_taskmaster","schema":"public","table":"origin_taskmaster","qualified_name":"public.origin_taskmaster","type":"table","comment":null,"columns":[{"name":"chat_type","type":"integer","not_null":false,"comment":null,"is_pk":false},{"name":"chat_id","type":"integer","not_null":false,"comment":null,"is_pk":false},{"name":"thread_id","type":"integer","not_null":false,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"parent_task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"title","type":"character varying(255)","not_null":true,"comment":null,"is_pk":false},{"name":"priority","type":"character varying","not_null":false,"comment":null,"is_pk":false},{"name":"effort_level","type":"character varying","not_null":false,"comment":null,"is_pk":false},{"name":"status","type":"character varying","not_null":true,"comment":null,"is_pk":false},{"name":"priority_code","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"effort_level_code","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"status_code","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"content","type":"jsonb","not_null":false,"comment":null,"is_pk":false},{"name":"due_date","type":"date","not_null":false,"comment":null,"is_pk":false},{"name":"tags","type":"jsonb","not_null":false,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"assignee_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"project_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"reporter_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"root_task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"is_init_task","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"mentioned_user_ids","type":"jsonb","not_null":false,"comment":null,"is_pk":false},{"name":"links","type":"jsonb","not_null":false,"comment":null,"is_pk":false},{"name":"milestone_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"sprint_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"is_milestone","type":"boolean","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_taskmaster_pkey","columns":["task_id"],"definition":"PRIMARY KEY (task_id)"}},{"id":"public.origin_tasknoteattachmentfact","schema":"public","table":"origin_tasknoteattachmentfact","qualified_name":"public.origin_tasknoteattachmentfact","type":"table","comment":null,"columns":[{"name":"attachment_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"note_attachment_url","type":"character varying(100)","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"uploader_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"note_id","type":"bigint","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_tasknoteattachmentfact_pkey","columns":["attachment_id"],"definition":"PRIMARY KEY (attachment_id)"}},{"id":"public.origin_tasknotemaster","schema":"public","table":"origin_tasknotemaster","qualified_name":"public.origin_tasknotemaster","type":"table","comment":null,"columns":[{"name":"note_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"parent_note_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"title","type":"character varying(255)","not_null":true,"comment":null,"is_pk":false},{"name":"body","type":"jsonb","not_null":false,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"owner_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"project_id","type":"bigint","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_tasknotemaster_pkey","columns":["note_id"],"definition":"PRIMARY KEY (note_id)"}},{"id":"public.origin_tasktags","schema":"public","table":"origin_tasktags","qualified_name":"public.origin_tasktags","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"tag_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"tag_name","type":"character varying(20)","not_null":true,"comment":null,"is_pk":false},{"name":"tag_color","type":"character varying(10)","not_null":true,"comment":null,"is_pk":false},{"name":"tag_text_color","type":"character varying(10)","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"project_id","type":"bigint","not_null":false,"comment":null,"is_pk":false},{"name":"task_id","type":"bigint","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_tasktags_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_teammaster","schema":"public","table":"origin_teammaster","qualified_name":"public.origin_teammaster","type":"table","comment":null,"columns":[{"name":"team_id","type":"uuid","not_null":true,"comment":null,"is_pk":true},{"name":"team_name","type":"character varying","not_null":true,"comment":null,"is_pk":false},{"name":"team_email","type":"character varying(254)","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"owner_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"profile_image_file","type":"character varying(100)","not_null":false,"comment":null,"is_pk":false},{"name":"profile_image_file_name","type":"character varying","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_teammaster_pkey","columns":["team_id"],"definition":"PRIMARY KEY (team_id)"}},{"id":"public.origin_teammembers","schema":"public","table":"origin_teammembers","qualified_name":"public.origin_teammembers","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"ts_joined_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"attendee_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"is_deleted","type":"boolean","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_teammembers_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_todofact","schema":"public","table":"origin_todofact","qualified_name":"public.origin_todofact","type":"table","comment":null,"columns":[{"name":"todo_id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"todo_content","type":"jsonb","not_null":true,"comment":null,"is_pk":false},{"name":"is_completed","type":"boolean","not_null":true,"comment":null,"is_pk":false},{"name":"local_dt_created_on","type":"date","not_null":true,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"user_id","type":"uuid","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_todofact_pkey","columns":["todo_id"],"definition":"PRIMARY KEY (todo_id)"}},{"id":"public.origin_userchatmaster","schema":"public","table":"origin_userchatmaster","qualified_name":"public.origin_userchatmaster","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"pinned_chats","type":"jsonb","not_null":false,"comment":null,"is_pk":false},{"name":"ts_last_all_read_activity","type":"timestamp with time zone","not_null":false,"comment":null,"is_pk":false},{"name":"ts_created_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"ts_updated_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"user_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"flagged_messages","type":"jsonb","not_null":false,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_userchatmaster_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.origin_userdmmapping","schema":"public","table":"origin_userdmmapping","qualified_name":"public.origin_userdmmapping","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"user_id","type":"uuid","not_null":true,"comment":null,"is_pk":false},{"name":"dm_id","type":"integer","not_null":true,"comment":null,"is_pk":false},{"name":"team_id","type":"uuid","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"origin_userdmmapping_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.token_blacklist_blacklistedtoken","schema":"public","table":"token_blacklist_blacklistedtoken","qualified_name":"public.token_blacklist_blacklistedtoken","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"blacklisted_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"token_id","type":"bigint","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"token_blacklist_blacklistedtoken_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}},{"id":"public.token_blacklist_outstandingtoken","schema":"public","table":"token_blacklist_outstandingtoken","qualified_name":"public.token_blacklist_outstandingtoken","type":"table","comment":null,"columns":[{"name":"id","type":"bigint","not_null":true,"comment":null,"is_pk":true},{"name":"token","type":"text","not_null":true,"comment":null,"is_pk":false},{"name":"created_at","type":"timestamp with time zone","not_null":false,"comment":null,"is_pk":false},{"name":"expires_at","type":"timestamp with time zone","not_null":true,"comment":null,"is_pk":false},{"name":"user_id","type":"uuid","not_null":false,"comment":null,"is_pk":false},{"name":"jti","type":"character varying(255)","not_null":true,"comment":null,"is_pk":false}],"primary_key":{"name":"token_blacklist_outstandingtoken_pkey","columns":["id"],"definition":"PRIMARY KEY (id)"}}],"edges":[{"id":"16680","constraint_name":"auth_group_permissions_group_id_b120cbf9_fk_auth_group_id","from":"public.auth_group_permissions","to":"public.auth_group","source_schema":"public","source_table":"auth_group_permissions","target_schema":"public","target_table":"auth_group","source_columns":["group_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (group_id) REFERENCES auth_group(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"16675","constraint_name":"auth_group_permissio_permission_id_84c5c92e_fk_auth_perm","from":"public.auth_group_permissions","to":"public.auth_permission","source_schema":"public","source_table":"auth_group_permissions","target_schema":"public","target_table":"auth_permission","source_columns":["permission_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (permission_id) REFERENCES auth_permission(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"16685","constraint_name":"auth_permission_content_type_id_2f476e4b_fk_django_co","from":"public.auth_permission","to":"public.django_content_type","source_schema":"public","source_table":"auth_permission","target_schema":"public","target_table":"django_content_type","source_columns":["content_type_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (content_type_id) REFERENCES django_content_type(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43278","constraint_name":"origin_activityfact_dm_partner_user_id_83641822_fk_origin_cu","from":"public.origin_activityfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_activityfact","target_schema":"public","target_table":"origin_customuser","source_columns":["dm_partner_user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (dm_partner_user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43309","constraint_name":"origin_activityfact_latest_reaction_user_a6f6ac6a_fk_origin_cu","from":"public.origin_activityfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_activityfact","target_schema":"public","target_table":"origin_customuser","source_columns":["latest_reaction_user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (latest_reaction_user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43283","constraint_name":"origin_activityfact_sender_id_d6fc46a1_fk_origin_customuser_id","from":"public.origin_activityfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_activityfact","target_schema":"public","target_table":"origin_customuser","source_columns":["sender_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (sender_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43303","constraint_name":"origin_activityfact_project_id_296e10d2_fk_origin_pr","from":"public.origin_activityfact","to":"public.origin_projectmaster","source_schema":"public","source_table":"origin_activityfact","target_schema":"public","target_table":"origin_projectmaster","source_columns":["project_id"],"target_columns":["project_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (project_id) REFERENCES origin_projectmaster(project_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43288","constraint_name":"origin_activityfact_task_id_0d9b5d32_fk_origin_ta","from":"public.origin_activityfact","to":"public.origin_taskmaster","source_schema":"public","source_table":"origin_activityfact","target_schema":"public","target_table":"origin_taskmaster","source_columns":["task_id"],"target_columns":["task_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (task_id) REFERENCES origin_taskmaster(task_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43293","constraint_name":"origin_activityfact_team_id_edb3eeee_fk_origin_te","from":"public.origin_activityfact","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_activityfact","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43604","constraint_name":"origin_activityreads_activity_id_1bda088b_fk_origin_ac","from":"public.origin_activityreadstatus","to":"public.origin_activityfact","source_schema":"public","source_table":"origin_activityreadstatus","target_schema":"public","target_table":"origin_activityfact","source_columns":["activity_id"],"target_columns":["activity_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (activity_id) REFERENCES origin_activityfact(activity_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43593","constraint_name":"origin_activityreads_user_id_61bfe59b_fk_origin_cu","from":"public.origin_activityreadstatus","to":"public.origin_customuser","source_schema":"public","source_table":"origin_activityreadstatus","target_schema":"public","target_table":"origin_customuser","source_columns":["user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43626","constraint_name":"origin_activityreads_team_id_a7ab8f01_fk_origin_te","from":"public.origin_activityreadstatus","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_activityreadstatus","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43672","constraint_name":"origin_chatattachmen_uploader_id_8ba8e926_fk_origin_cu","from":"public.origin_chatattachmentfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_chatattachmentfact","target_schema":"public","target_table":"origin_customuser","source_columns":["uploader_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (uploader_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43667","constraint_name":"origin_chatattachmen_team_id_81b0ca89_fk_origin_te","from":"public.origin_chatattachmentfact","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_chatattachmentfact","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43436","constraint_name":"origin_chatnoteattac_note_id_60e25f36_fk_origin_ch","from":"public.origin_chatnoteattachmentfact","to":"public.origin_chatnotemaster","source_schema":"public","source_table":"origin_chatnoteattachmentfact","target_schema":"public","target_table":"origin_chatnotemaster","source_columns":["note_id"],"target_columns":["note_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (note_id) REFERENCES origin_chatnotemaster(note_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43431","constraint_name":"origin_chatnoteattac_uploader_id_7e0e29ef_fk_origin_cu","from":"public.origin_chatnoteattachmentfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_chatnoteattachmentfact","target_schema":"public","target_table":"origin_customuser","source_columns":["uploader_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (uploader_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43419","constraint_name":"origin_chatnotemaster_owner_id_747651ee_fk_origin_customuser_id","from":"public.origin_chatnotemaster","to":"public.origin_customuser","source_schema":"public","source_table":"origin_chatnotemaster","target_schema":"public","target_table":"origin_customuser","source_columns":["owner_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (owner_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43424","constraint_name":"origin_chatnotemaste_team_id_e3c34308_fk_origin_te","from":"public.origin_chatnotemaster","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_chatnotemaster","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"16695","constraint_name":"origin_customuser_groups_group_id_9792794a_fk_auth_group_id","from":"public.origin_customuser_groups","to":"public.auth_group","source_schema":"public","source_table":"origin_customuser_groups","target_schema":"public","target_table":"auth_group","source_columns":["group_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (group_id) REFERENCES auth_group(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"16690","constraint_name":"origin_customuser_gr_customuser_id_dfa1a5ac_fk_origin_cu","from":"public.origin_customuser_groups","to":"public.origin_customuser","source_schema":"public","source_table":"origin_customuser_groups","target_schema":"public","target_table":"origin_customuser","source_columns":["customuser_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (customuser_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"16705","constraint_name":"origin_customuser_us_permission_id_0b4a0144_fk_auth_perm","from":"public.origin_customuser_user_permissions","to":"public.auth_permission","source_schema":"public","source_table":"origin_customuser_user_permissions","target_schema":"public","target_table":"auth_permission","source_columns":["permission_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (permission_id) REFERENCES auth_permission(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"16700","constraint_name":"origin_customuser_us_customuser_id_422fdba3_fk_origin_cu","from":"public.origin_customuser_user_permissions","to":"public.origin_customuser","source_schema":"public","source_table":"origin_customuser_user_permissions","target_schema":"public","target_table":"origin_customuser","source_columns":["customuser_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (customuser_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43508","constraint_name":"origin_dmattachmentf_uploader_id_6af19a88_fk_origin_cu","from":"public.origin_dmattachmentfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_dmattachmentfact","target_schema":"public","target_table":"origin_customuser","source_columns":["uploader_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (uploader_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43503","constraint_name":"origin_dmattachmentfact_dm_id_30b5db4a_fk_origin_dmmaster_dm_id","from":"public.origin_dmattachmentfact","to":"public.origin_dmmaster","source_schema":"public","source_table":"origin_dmattachmentfact","target_schema":"public","target_table":"origin_dmmaster","source_columns":["dm_id"],"target_columns":["dm_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (dm_id) REFERENCES origin_dmmaster(dm_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42920","constraint_name":"origin_dmmaster_team_id_d62e2dac_fk_origin_teammaster_team_id","from":"public.origin_dmmaster","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_dmmaster","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42930","constraint_name":"origin_dmmessages_receiver_id_25c231be_fk_origin_customuser_id","from":"public.origin_dmmessages","to":"public.origin_customuser","source_schema":"public","source_table":"origin_dmmessages","target_schema":"public","target_table":"origin_customuser","source_columns":["receiver_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (receiver_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42935","constraint_name":"origin_dmmessages_sender_id_8ca1594b_fk_origin_customuser_id","from":"public.origin_dmmessages","to":"public.origin_customuser","source_schema":"public","source_table":"origin_dmmessages","target_schema":"public","target_table":"origin_customuser","source_columns":["sender_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (sender_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42925","constraint_name":"origin_dmmessages_dm_id_90aec225_fk_origin_dmmaster_dm_id","from":"public.origin_dmmessages","to":"public.origin_dmmaster","source_schema":"public","source_table":"origin_dmmessages","target_schema":"public","target_table":"origin_dmmaster","source_columns":["dm_id"],"target_columns":["dm_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (dm_id) REFERENCES origin_dmmaster(dm_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"16725","constraint_name":"origin_dmmessages_task_id_2ad46f54_fk_origin_taskmaster_task_id","from":"public.origin_dmmessages","to":"public.origin_taskmaster","source_schema":"public","source_table":"origin_dmmessages","target_schema":"public","target_table":"origin_taskmaster","source_columns":["task_id"],"target_columns":["task_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (task_id) REFERENCES origin_taskmaster(task_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42950","constraint_name":"origin_dmthreadmessa_receiver_id_abc5b7c3_fk_origin_cu","from":"public.origin_dmthreadmessages","to":"public.origin_customuser","source_schema":"public","source_table":"origin_dmthreadmessages","target_schema":"public","target_table":"origin_customuser","source_columns":["receiver_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (receiver_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42955","constraint_name":"origin_dmthreadmessa_sender_id_78b33c58_fk_origin_cu","from":"public.origin_dmthreadmessages","to":"public.origin_customuser","source_schema":"public","source_table":"origin_dmthreadmessages","target_schema":"public","target_table":"origin_customuser","source_columns":["sender_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (sender_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42940","constraint_name":"origin_dmthreadmessages_dm_id_11e00e83_fk_origin_dmmaster_dm_id","from":"public.origin_dmthreadmessages","to":"public.origin_dmmaster","source_schema":"public","source_table":"origin_dmthreadmessages","target_schema":"public","target_table":"origin_dmmaster","source_columns":["dm_id"],"target_columns":["dm_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (dm_id) REFERENCES origin_dmmaster(dm_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42945","constraint_name":"origin_dmthreadmessa_parent_message_uid_i_5e0db489_fk_origin_dm","from":"public.origin_dmthreadmessages","to":"public.origin_dmmessages","source_schema":"public","source_table":"origin_dmthreadmessages","target_schema":"public","target_table":"origin_dmmessages","source_columns":["parent_message_uid_id"],"target_columns":["uid"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (parent_message_uid_id) REFERENCES origin_dmmessages(uid) DEFERRABLE INITIALLY DEFERRED"},{"id":"43520","constraint_name":"origin_gmattachmentf_uploader_id_86985909_fk_origin_cu","from":"public.origin_gmattachmentfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_gmattachmentfact","target_schema":"public","target_table":"origin_customuser","source_columns":["uploader_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (uploader_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43515","constraint_name":"origin_gmattachmentfact_gm_id_d36e1f0d_fk_origin_gmmaster_gm_id","from":"public.origin_gmattachmentfact","to":"public.origin_gmmaster","source_schema":"public","source_table":"origin_gmattachmentfact","target_schema":"public","target_table":"origin_gmmaster","source_columns":["gm_id"],"target_columns":["gm_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (gm_id) REFERENCES origin_gmmaster(gm_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42965","constraint_name":"origin_gmmaster_owner_user_id_7b0eb9af_fk_origin_customuser_id","from":"public.origin_gmmaster","to":"public.origin_customuser","source_schema":"public","source_table":"origin_gmmaster","target_schema":"public","target_table":"origin_customuser","source_columns":["owner_user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (owner_user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42960","constraint_name":"origin_gmmaster_owner_team_id_d0cc5c0f_fk_origin_te","from":"public.origin_gmmaster","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_gmmaster","target_schema":"public","target_table":"origin_teammaster","source_columns":["owner_team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (owner_team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42970","constraint_name":"origin_gmmembers_attendee_id_1fc699dc_fk_origin_customuser_id","from":"public.origin_gmmembers","to":"public.origin_customuser","source_schema":"public","source_table":"origin_gmmembers","target_schema":"public","target_table":"origin_customuser","source_columns":["attendee_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (attendee_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42975","constraint_name":"origin_gmmembers_gm_id_8f0bcc15_fk_origin_gmmaster_gm_id","from":"public.origin_gmmembers","to":"public.origin_gmmaster","source_schema":"public","source_table":"origin_gmmembers","target_schema":"public","target_table":"origin_gmmaster","source_columns":["gm_id"],"target_columns":["gm_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (gm_id) REFERENCES origin_gmmaster(gm_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42985","constraint_name":"origin_gmmessages_sender_id_3bdb35dd_fk_origin_customuser_id","from":"public.origin_gmmessages","to":"public.origin_customuser","source_schema":"public","source_table":"origin_gmmessages","target_schema":"public","target_table":"origin_customuser","source_columns":["sender_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (sender_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42980","constraint_name":"origin_gmmessages_gm_id_1c50d07a_fk_origin_gmmaster_gm_id","from":"public.origin_gmmessages","to":"public.origin_gmmaster","source_schema":"public","source_table":"origin_gmmessages","target_schema":"public","target_table":"origin_gmmaster","source_columns":["gm_id"],"target_columns":["gm_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (gm_id) REFERENCES origin_gmmaster(gm_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"16780","constraint_name":"origin_gmmessages_task_id_28ea7b3d_fk_origin_taskmaster_task_id","from":"public.origin_gmmessages","to":"public.origin_taskmaster","source_schema":"public","source_table":"origin_gmmessages","target_schema":"public","target_table":"origin_taskmaster","source_columns":["task_id"],"target_columns":["task_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (task_id) REFERENCES origin_taskmaster(task_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43000","constraint_name":"origin_gmthreadmessa_sender_id_a0df9da2_fk_origin_cu","from":"public.origin_gmthreadmessages","to":"public.origin_customuser","source_schema":"public","source_table":"origin_gmthreadmessages","target_schema":"public","target_table":"origin_customuser","source_columns":["sender_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (sender_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42990","constraint_name":"origin_gmthreadmessages_gm_id_67f089cf_fk_origin_gmmaster_gm_id","from":"public.origin_gmthreadmessages","to":"public.origin_gmmaster","source_schema":"public","source_table":"origin_gmthreadmessages","target_schema":"public","target_table":"origin_gmmaster","source_columns":["gm_id"],"target_columns":["gm_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (gm_id) REFERENCES origin_gmmaster(gm_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"42995","constraint_name":"origin_gmthreadmessa_parent_message_uid_i_d0c7cc00_fk_origin_gm","from":"public.origin_gmthreadmessages","to":"public.origin_gmmessages","source_schema":"public","source_table":"origin_gmthreadmessages","target_schema":"public","target_table":"origin_gmmessages","source_columns":["parent_message_uid_id"],"target_columns":["uid"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (parent_message_uid_id) REFERENCES origin_gmmessages(uid) DEFERRABLE INITIALLY DEFERRED"},{"id":"43005","constraint_name":"origin_inboxitems_receiver_id_558ee6b2_fk_origin_customuser_id","from":"public.origin_inboxitems","to":"public.origin_customuser","source_schema":"public","source_table":"origin_inboxitems","target_schema":"public","target_table":"origin_customuser","source_columns":["receiver_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (receiver_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43010","constraint_name":"origin_inboxitems_sender_id_23d33832_fk_origin_customuser_id","from":"public.origin_inboxitems","to":"public.origin_customuser","source_schema":"public","source_table":"origin_inboxitems","target_schema":"public","target_table":"origin_customuser","source_columns":["sender_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (sender_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43015","constraint_name":"origin_inboxitems_team_id_db9fe70b_fk_origin_teammaster_team_id","from":"public.origin_inboxitems","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_inboxitems","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"51993","constraint_name":"origin_mdmattachment_uploader_id_b29b7c99_fk_origin_cu","from":"public.origin_mdmattachmentfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_mdmattachmentfact","target_schema":"public","target_table":"origin_customuser","source_columns":["uploader_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (uploader_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"51998","constraint_name":"origin_mdmattachment_mdm_id_51a89109_fk_origin_md","from":"public.origin_mdmattachmentfact","to":"public.origin_mdmmaster","source_schema":"public","source_table":"origin_mdmattachmentfact","target_schema":"public","target_table":"origin_mdmmaster","source_columns":["mdm_id"],"target_columns":["mdm_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (mdm_id) REFERENCES origin_mdmmaster(mdm_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"51986","constraint_name":"origin_mdmmaster_owner_user_id_15714b1d_fk_origin_customuser_id","from":"public.origin_mdmmaster","to":"public.origin_customuser","source_schema":"public","source_table":"origin_mdmmaster","target_schema":"public","target_table":"origin_customuser","source_columns":["owner_user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (owner_user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"51981","constraint_name":"origin_mdmmaster_owner_team_id_0fff99b0_fk_origin_te","from":"public.origin_mdmmaster","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_mdmmaster","target_schema":"public","target_table":"origin_teammaster","source_columns":["owner_team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (owner_team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"52044","constraint_name":"origin_mdmmembers_attendee_id_54560bd0_fk_origin_customuser_id","from":"public.origin_mdmmembers","to":"public.origin_customuser","source_schema":"public","source_table":"origin_mdmmembers","target_schema":"public","target_table":"origin_customuser","source_columns":["attendee_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (attendee_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"52049","constraint_name":"origin_mdmmembers_mdm_id_02b1dbbe_fk_origin_mdmmaster_mdm_id","from":"public.origin_mdmmembers","to":"public.origin_mdmmaster","source_schema":"public","source_table":"origin_mdmmembers","target_schema":"public","target_table":"origin_mdmmaster","source_columns":["mdm_id"],"target_columns":["mdm_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (mdm_id) REFERENCES origin_mdmmaster(mdm_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"52010","constraint_name":"origin_mdmmessages_sender_id_e6e77edd_fk_origin_customuser_id","from":"public.origin_mdmmessages","to":"public.origin_customuser","source_schema":"public","source_table":"origin_mdmmessages","target_schema":"public","target_table":"origin_customuser","source_columns":["sender_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (sender_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"52005","constraint_name":"origin_mdmmessages_mdm_id_3b4fc243_fk_origin_mdmmaster_mdm_id","from":"public.origin_mdmmessages","to":"public.origin_mdmmaster","source_schema":"public","source_table":"origin_mdmmessages","target_schema":"public","target_table":"origin_mdmmaster","source_columns":["mdm_id"],"target_columns":["mdm_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (mdm_id) REFERENCES origin_mdmmaster(mdm_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"52015","constraint_name":"origin_mdmmessages_task_id_6bc44096_fk_origin_ta","from":"public.origin_mdmmessages","to":"public.origin_taskmaster","source_schema":"public","source_table":"origin_mdmmessages","target_schema":"public","target_table":"origin_taskmaster","source_columns":["task_id"],"target_columns":["task_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (task_id) REFERENCES origin_taskmaster(task_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"52035","constraint_name":"origin_mdmthreadmess_sender_id_27f43e78_fk_origin_cu","from":"public.origin_mdmthreadmessages","to":"public.origin_customuser","source_schema":"public","source_table":"origin_mdmthreadmessages","target_schema":"public","target_table":"origin_customuser","source_columns":["sender_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (sender_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"52025","constraint_name":"origin_mdmthreadmess_mdm_id_cd942b47_fk_origin_md","from":"public.origin_mdmthreadmessages","to":"public.origin_mdmmaster","source_schema":"public","source_table":"origin_mdmthreadmessages","target_schema":"public","target_table":"origin_mdmmaster","source_columns":["mdm_id"],"target_columns":["mdm_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (mdm_id) REFERENCES origin_mdmmaster(mdm_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"52030","constraint_name":"origin_mdmthreadmess_parent_message_uid_i_ccf2ac50_fk_origin_md","from":"public.origin_mdmthreadmessages","to":"public.origin_mdmmessages","source_schema":"public","source_table":"origin_mdmthreadmessages","target_schema":"public","target_table":"origin_mdmmessages","source_columns":["parent_message_uid_id"],"target_columns":["uid"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (parent_message_uid_id) REFERENCES origin_mdmmessages(uid) DEFERRABLE INITIALLY DEFERRED"},{"id":"43020","constraint_name":"origin_mentionfact_mentioned_user_id_0147842a_fk_origin_cu","from":"public.origin_mentionfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_mentionfact","target_schema":"public","target_table":"origin_customuser","source_columns":["mentioned_user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (mentioned_user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43025","constraint_name":"origin_mentionfact_team_id_20104f6c_fk_origin_te","from":"public.origin_mentionfact","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_mentionfact","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62054","constraint_name":"origin_milestoneassi_user_id_2fd20c9d_fk_origin_cu","from":"public.origin_milestoneassignees","to":"public.origin_customuser","source_schema":"public","source_table":"origin_milestoneassignees","target_schema":"public","target_table":"origin_customuser","source_columns":["user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62059","constraint_name":"origin_milestoneassi_milestone_id_8123e836_fk_origin_mi","from":"public.origin_milestoneassignees","to":"public.origin_milestonemaster","source_schema":"public","source_table":"origin_milestoneassignees","target_schema":"public","target_table":"origin_milestonemaster","source_columns":["milestone_id"],"target_columns":["milestone_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (milestone_id) REFERENCES origin_milestonemaster(milestone_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62049","constraint_name":"origin_milestoneassi_team_id_2f82d31f_fk_origin_te","from":"public.origin_milestoneassignees","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_milestoneassignees","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62010","constraint_name":"origin_milestonemast_reporter_id_ca5677ca_fk_origin_cu","from":"public.origin_milestonemaster","to":"public.origin_customuser","source_schema":"public","source_table":"origin_milestonemaster","target_schema":"public","target_table":"origin_customuser","source_columns":["reporter_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (reporter_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62005","constraint_name":"origin_milestonemast_project_id_8bed5aeb_fk_origin_pr","from":"public.origin_milestonemaster","to":"public.origin_projectmaster","source_schema":"public","source_table":"origin_milestonemaster","target_schema":"public","target_table":"origin_projectmaster","source_columns":["project_id"],"target_columns":["project_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (project_id) REFERENCES origin_projectmaster(project_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"61977","constraint_name":"origin_milestonemast_sprint_id_86fc8138_fk_origin_sp","from":"public.origin_milestonemaster","to":"public.origin_sprint","source_schema":"public","source_table":"origin_milestonemaster","target_schema":"public","target_table":"origin_sprint","source_columns":["sprint_id"],"target_columns":["sprint_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (sprint_id) REFERENCES origin_sprint(sprint_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62067","constraint_name":"origin_milestonemast_task_id_f8548f41_fk_origin_ta","from":"public.origin_milestonemaster","to":"public.origin_taskmaster","source_schema":"public","source_table":"origin_milestonemaster","target_schema":"public","target_table":"origin_taskmaster","source_columns":["task_id"],"target_columns":["task_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (task_id) REFERENCES origin_taskmaster(task_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62015","constraint_name":"origin_milestonemast_team_id_ed6de321_fk_origin_te","from":"public.origin_milestonemaster","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_milestonemaster","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"51935","constraint_name":"origin_notefavoritem_user_id_a241f507_fk_origin_cu","from":"public.origin_notefavoritemaster","to":"public.origin_customuser","source_schema":"public","source_table":"origin_notefavoritemaster","target_schema":"public","target_table":"origin_customuser","source_columns":["user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"51930","constraint_name":"origin_notefavoritem_team_id_e583e365_fk_origin_te","from":"public.origin_notefavoritemaster","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_notefavoritemaster","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43645","constraint_name":"origin_notepermissio_user_id_2079f714_fk_origin_cu","from":"public.origin_notepermissionmaster","to":"public.origin_customuser","source_schema":"public","source_table":"origin_notepermissionmaster","target_schema":"public","target_table":"origin_customuser","source_columns":["user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43640","constraint_name":"origin_notepermissio_team_id_c2aad76d_fk_origin_te","from":"public.origin_notepermissionmaster","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_notepermissionmaster","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"61951","constraint_name":"origin_noterecentmas_user_id_c83b7466_fk_origin_cu","from":"public.origin_noterecentmaster","to":"public.origin_customuser","source_schema":"public","source_table":"origin_noterecentmaster","target_schema":"public","target_table":"origin_customuser","source_columns":["user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"61946","constraint_name":"origin_noterecentmas_team_id_547b16a6_fk_origin_te","from":"public.origin_noterecentmaster","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_noterecentmaster","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62118","constraint_name":"origin_notificationp_user_id_2d38c159_fk_origin_cu","from":"public.origin_notificationpreference","to":"public.origin_customuser","source_schema":"public","source_table":"origin_notificationpreference","target_schema":"public","target_table":"origin_customuser","source_columns":["user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43379","constraint_name":"origin_personalnotea_uploader_id_f39f55ea_fk_origin_cu","from":"public.origin_personalnoteattachmentfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_personalnoteattachmentfact","target_schema":"public","target_table":"origin_customuser","source_columns":["uploader_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (uploader_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43386","constraint_name":"origin_personalnotea_note_id_d6d3481d_fk_origin_pe","from":"public.origin_personalnoteattachmentfact","to":"public.origin_personalnotemaster","source_schema":"public","source_table":"origin_personalnoteattachmentfact","target_schema":"public","target_table":"origin_personalnotemaster","source_columns":["note_id"],"target_columns":["note_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (note_id) REFERENCES origin_personalnotemaster(note_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43345","constraint_name":"origin_personalnotem_owner_id_ea15a8b5_fk_origin_cu","from":"public.origin_personalnotemaster","to":"public.origin_customuser","source_schema":"public","source_table":"origin_personalnotemaster","target_schema":"public","target_table":"origin_customuser","source_columns":["owner_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (owner_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43350","constraint_name":"origin_personalnotem_team_id_4476252b_fk_origin_te","from":"public.origin_personalnotemaster","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_personalnotemaster","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43532","constraint_name":"origin_pmattachmentf_uploader_id_ae0c57ff_fk_origin_cu","from":"public.origin_pmattachmentfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_pmattachmentfact","target_schema":"public","target_table":"origin_customuser","source_columns":["uploader_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (uploader_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43527","constraint_name":"origin_pmattachmentf_project_id_65afa9f8_fk_origin_pr","from":"public.origin_pmattachmentfact","to":"public.origin_projectmaster","source_schema":"public","source_table":"origin_pmattachmentfact","target_schema":"public","target_table":"origin_projectmaster","source_columns":["project_id"],"target_columns":["project_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (project_id) REFERENCES origin_projectmaster(project_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43035","constraint_name":"origin_pmmessages_sender_id_7679862c_fk_origin_customuser_id","from":"public.origin_pmmessages","to":"public.origin_customuser","source_schema":"public","source_table":"origin_pmmessages","target_schema":"public","target_table":"origin_customuser","source_columns":["sender_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (sender_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43030","constraint_name":"origin_pmmessages_project_id_25b9f584_fk_origin_pr","from":"public.origin_pmmessages","to":"public.origin_projectmaster","source_schema":"public","source_table":"origin_pmmessages","target_schema":"public","target_table":"origin_projectmaster","source_columns":["project_id"],"target_columns":["project_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (project_id) REFERENCES origin_projectmaster(project_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"33757","constraint_name":"origin_pmmessages_task_id_1d2ec080_fk_origin_taskmaster_task_id","from":"public.origin_pmmessages","to":"public.origin_taskmaster","source_schema":"public","source_table":"origin_pmmessages","target_schema":"public","target_table":"origin_taskmaster","source_columns":["task_id"],"target_columns":["task_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (task_id) REFERENCES origin_taskmaster(task_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43050","constraint_name":"origin_pmthreadmessa_sender_id_67ba18e3_fk_origin_cu","from":"public.origin_pmthreadmessages","to":"public.origin_customuser","source_schema":"public","source_table":"origin_pmthreadmessages","target_schema":"public","target_table":"origin_customuser","source_columns":["sender_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (sender_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43040","constraint_name":"origin_pmthreadmessa_parent_message_uid_i_098887f8_fk_origin_pm","from":"public.origin_pmthreadmessages","to":"public.origin_pmmessages","source_schema":"public","source_table":"origin_pmthreadmessages","target_schema":"public","target_table":"origin_pmmessages","source_columns":["parent_message_uid_id"],"target_columns":["uid"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (parent_message_uid_id) REFERENCES origin_pmmessages(uid) DEFERRABLE INITIALLY DEFERRED"},{"id":"43045","constraint_name":"origin_pmthreadmessa_project_id_0a1aeb61_fk_origin_pr","from":"public.origin_pmthreadmessages","to":"public.origin_projectmaster","source_schema":"public","source_table":"origin_pmthreadmessages","target_schema":"public","target_table":"origin_projectmaster","source_columns":["project_id"],"target_columns":["project_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (project_id) REFERENCES origin_projectmaster(project_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43055","constraint_name":"origin_projectmaster_owner_id_0a2e93f4_fk_origin_customuser_id","from":"public.origin_projectmaster","to":"public.origin_customuser","source_schema":"public","source_table":"origin_projectmaster","target_schema":"public","target_table":"origin_customuser","source_columns":["owner_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (owner_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43060","constraint_name":"origin_projectmaster_project_system_user__74835dab_fk_origin_cu","from":"public.origin_projectmaster","to":"public.origin_customuser","source_schema":"public","source_table":"origin_projectmaster","target_schema":"public","target_table":"origin_customuser","source_columns":["project_system_user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (project_system_user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43065","constraint_name":"origin_projectmaster_team_id_6b4d09c3_fk_origin_te","from":"public.origin_projectmaster","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_projectmaster","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43070","constraint_name":"origin_projectmember_attendee_id_c905cfb3_fk_origin_cu","from":"public.origin_projectmembers","to":"public.origin_customuser","source_schema":"public","source_table":"origin_projectmembers","target_schema":"public","target_table":"origin_customuser","source_columns":["attendee_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (attendee_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43075","constraint_name":"origin_projectmember_project_id_4326c922_fk_origin_pr","from":"public.origin_projectmembers","to":"public.origin_projectmaster","source_schema":"public","source_table":"origin_projectmembers","target_schema":"public","target_table":"origin_projectmaster","source_columns":["project_id"],"target_columns":["project_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (project_id) REFERENCES origin_projectmaster(project_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43080","constraint_name":"origin_projectmember_team_id_49cd952e_fk_origin_te","from":"public.origin_projectmembers","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_projectmembers","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43085","constraint_name":"origin_projecttags_project_id_6d35b172_fk_origin_pr","from":"public.origin_projecttags","to":"public.origin_projectmaster","source_schema":"public","source_table":"origin_projecttags","target_schema":"public","target_table":"origin_projectmaster","source_columns":["project_id"],"target_columns":["project_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (project_id) REFERENCES origin_projectmaster(project_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43090","constraint_name":"origin_projecttags_team_id_c6e12f31_fk_origin_te","from":"public.origin_projecttags","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_projecttags","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43095","constraint_name":"origin_reactionfact_sender_id_3cc58894_fk_origin_customuser_id","from":"public.origin_reactionfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_reactionfact","target_schema":"public","target_table":"origin_customuser","source_columns":["sender_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (sender_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43100","constraint_name":"origin_reactionfact_team_id_c9bcb8a4_fk_origin_te","from":"public.origin_reactionfact","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_reactionfact","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43258","constraint_name":"origin_readstatus_user_id_776f09d2_fk_origin_customuser_id","from":"public.origin_readstatus","to":"public.origin_customuser","source_schema":"public","source_table":"origin_readstatus","target_schema":"public","target_table":"origin_customuser","source_columns":["user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43652","constraint_name":"origin_readstatus_team_id_57b82af1_fk_origin_teammaster_team_id","from":"public.origin_readstatus","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_readstatus","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62024","constraint_name":"origin_sprint_project_id_e62546a0_fk_origin_pr","from":"public.origin_sprint","to":"public.origin_projectmaster","source_schema":"public","source_table":"origin_sprint","target_schema":"public","target_table":"origin_projectmaster","source_columns":["project_id"],"target_columns":["project_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (project_id) REFERENCES origin_projectmaster(project_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62029","constraint_name":"origin_sprint_team_id_9fe04888_fk_origin_teammaster_team_id","from":"public.origin_sprint","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_sprint","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62038","constraint_name":"origin_sprintconfig_project_id_047287c3_fk_origin_pr","from":"public.origin_sprintconfig","to":"public.origin_projectmaster","source_schema":"public","source_table":"origin_sprintconfig","target_schema":"public","target_table":"origin_projectmaster","source_columns":["project_id"],"target_columns":["project_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (project_id) REFERENCES origin_projectmaster(project_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62043","constraint_name":"origin_sprintconfig_team_id_4a631b73_fk_origin_te","from":"public.origin_sprintconfig","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_sprintconfig","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62082","constraint_name":"origin_taskactivity_actor_id_097dd838_fk_origin_customuser_id","from":"public.origin_taskactivity","to":"public.origin_customuser","source_schema":"public","source_table":"origin_taskactivity","target_schema":"public","target_table":"origin_customuser","source_columns":["actor_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (actor_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62087","constraint_name":"origin_taskactivity_project_id_e1308431_fk_origin_pr","from":"public.origin_taskactivity","to":"public.origin_projectmaster","source_schema":"public","source_table":"origin_taskactivity","target_schema":"public","target_table":"origin_projectmaster","source_columns":["project_id"],"target_columns":["project_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (project_id) REFERENCES origin_projectmaster(project_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62092","constraint_name":"origin_taskactivity_task_id_c8d9ab40_fk_origin_ta","from":"public.origin_taskactivity","to":"public.origin_taskmaster","source_schema":"public","source_table":"origin_taskactivity","target_schema":"public","target_table":"origin_taskmaster","source_columns":["task_id"],"target_columns":["task_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (task_id) REFERENCES origin_taskmaster(task_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"62097","constraint_name":"origin_taskactivity_team_id_7a16a6f1_fk_origin_te","from":"public.origin_taskactivity","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_taskactivity","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43105","constraint_name":"origin_taskattachmen_task_id_d26f32d2_fk_origin_ta","from":"public.origin_taskattachments","to":"public.origin_taskmaster","source_schema":"public","source_table":"origin_taskattachments","target_schema":"public","target_table":"origin_taskmaster","source_columns":["task_id"],"target_columns":["task_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (task_id) REFERENCES origin_taskmaster(task_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43544","constraint_name":"origin_taskbodyattac_uploader_id_10246dd9_fk_origin_cu","from":"public.origin_taskbodyattachmentfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_taskbodyattachmentfact","target_schema":"public","target_table":"origin_customuser","source_columns":["uploader_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (uploader_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43539","constraint_name":"origin_taskbodyattac_task_id_1bf2539f_fk_origin_ta","from":"public.origin_taskbodyattachmentfact","to":"public.origin_taskmaster","source_schema":"public","source_table":"origin_taskbodyattachmentfact","target_schema":"public","target_table":"origin_taskmaster","source_columns":["task_id"],"target_columns":["task_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (task_id) REFERENCES origin_taskmaster(task_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43110","constraint_name":"origin_taskcommentme_mentioned_user_id_a2ac69cb_fk_origin_cu","from":"public.origin_taskcommentmentionfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_taskcommentmentionfact","target_schema":"public","target_table":"origin_customuser","source_columns":["mentioned_user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (mentioned_user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43115","constraint_name":"origin_taskcommentme_task_id_ef09a338_fk_origin_ta","from":"public.origin_taskcommentmentionfact","to":"public.origin_taskmaster","source_schema":"public","source_table":"origin_taskcommentmentionfact","target_schema":"public","target_table":"origin_taskmaster","source_columns":["task_id"],"target_columns":["task_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (task_id) REFERENCES origin_taskmaster(task_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43120","constraint_name":"origin_taskcommentme_team_id_170a088b_fk_origin_te","from":"public.origin_taskcommentmentionfact","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_taskcommentmentionfact","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43125","constraint_name":"origin_taskcommentre_sender_id_1ea93ca6_fk_origin_cu","from":"public.origin_taskcommentreactionfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_taskcommentreactionfact","target_schema":"public","target_table":"origin_customuser","source_columns":["sender_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (sender_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43130","constraint_name":"origin_taskcommentre_task_id_91006989_fk_origin_ta","from":"public.origin_taskcommentreactionfact","to":"public.origin_taskmaster","source_schema":"public","source_table":"origin_taskcommentreactionfact","target_schema":"public","target_table":"origin_taskmaster","source_columns":["task_id"],"target_columns":["task_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (task_id) REFERENCES origin_taskmaster(task_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43135","constraint_name":"origin_taskcommentre_team_id_80cc5096_fk_origin_te","from":"public.origin_taskcommentreactionfact","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_taskcommentreactionfact","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43140","constraint_name":"origin_taskcomments_sender_id_66d85434_fk_origin_customuser_id","from":"public.origin_taskcomments","to":"public.origin_customuser","source_schema":"public","source_table":"origin_taskcomments","target_schema":"public","target_table":"origin_customuser","source_columns":["sender_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (sender_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43145","constraint_name":"origin_taskcomments_task_id_e869a8e5_fk_origin_ta","from":"public.origin_taskcomments","to":"public.origin_taskmaster","source_schema":"public","source_table":"origin_taskcomments","target_schema":"public","target_table":"origin_taskmaster","source_columns":["task_id"],"target_columns":["task_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (task_id) REFERENCES origin_taskmaster(task_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43150","constraint_name":"origin_taskmaster_assignee_id_1bc5b571_fk_origin_customuser_id","from":"public.origin_taskmaster","to":"public.origin_customuser","source_schema":"public","source_table":"origin_taskmaster","target_schema":"public","target_table":"origin_customuser","source_columns":["assignee_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (assignee_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43160","constraint_name":"origin_taskmaster_reporter_id_a4bbf3a9_fk_origin_customuser_id","from":"public.origin_taskmaster","to":"public.origin_customuser","source_schema":"public","source_table":"origin_taskmaster","target_schema":"public","target_table":"origin_customuser","source_columns":["reporter_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (reporter_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"61966","constraint_name":"origin_taskmaster_milestone_id_d0d9b55d_fk_origin_mi","from":"public.origin_taskmaster","to":"public.origin_milestonemaster","source_schema":"public","source_table":"origin_taskmaster","target_schema":"public","target_table":"origin_milestonemaster","source_columns":["milestone_id"],"target_columns":["milestone_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (milestone_id) REFERENCES origin_milestonemaster(milestone_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43155","constraint_name":"origin_taskmaster_project_id_e6a873f8_fk_origin_pr","from":"public.origin_taskmaster","to":"public.origin_projectmaster","source_schema":"public","source_table":"origin_taskmaster","target_schema":"public","target_table":"origin_projectmaster","source_columns":["project_id"],"target_columns":["project_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (project_id) REFERENCES origin_projectmaster(project_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"61982","constraint_name":"origin_taskmaster_sprint_id_69b7e42b_fk_origin_sprint_sprint_id","from":"public.origin_taskmaster","to":"public.origin_sprint","source_schema":"public","source_table":"origin_taskmaster","target_schema":"public","target_table":"origin_sprint","source_columns":["sprint_id"],"target_columns":["sprint_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (sprint_id) REFERENCES origin_sprint(sprint_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43165","constraint_name":"origin_taskmaster_team_id_03612e32_fk_origin_teammaster_team_id","from":"public.origin_taskmaster","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_taskmaster","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43466","constraint_name":"origin_tasknoteattac_uploader_id_482f05d2_fk_origin_cu","from":"public.origin_tasknoteattachmentfact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_tasknoteattachmentfact","target_schema":"public","target_table":"origin_customuser","source_columns":["uploader_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (uploader_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43461","constraint_name":"origin_tasknoteattac_task_id_d6aa1564_fk_origin_ta","from":"public.origin_tasknoteattachmentfact","to":"public.origin_taskmaster","source_schema":"public","source_table":"origin_tasknoteattachmentfact","target_schema":"public","target_table":"origin_taskmaster","source_columns":["task_id"],"target_columns":["task_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (task_id) REFERENCES origin_taskmaster(task_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43471","constraint_name":"origin_tasknoteattac_note_id_b9a64b39_fk_origin_ta","from":"public.origin_tasknoteattachmentfact","to":"public.origin_tasknotemaster","source_schema":"public","source_table":"origin_tasknoteattachmentfact","target_schema":"public","target_table":"origin_tasknotemaster","source_columns":["note_id"],"target_columns":["note_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (note_id) REFERENCES origin_tasknotemaster(note_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43443","constraint_name":"origin_tasknotemaster_owner_id_6e45fcd1_fk_origin_customuser_id","from":"public.origin_tasknotemaster","to":"public.origin_customuser","source_schema":"public","source_table":"origin_tasknotemaster","target_schema":"public","target_table":"origin_customuser","source_columns":["owner_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (owner_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43556","constraint_name":"origin_tasknotemaste_project_id_b73077ee_fk_origin_pr","from":"public.origin_tasknotemaster","to":"public.origin_projectmaster","source_schema":"public","source_table":"origin_tasknotemaster","target_schema":"public","target_table":"origin_projectmaster","source_columns":["project_id"],"target_columns":["project_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (project_id) REFERENCES origin_projectmaster(project_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43448","constraint_name":"origin_tasknotemaste_task_id_4249b603_fk_origin_ta","from":"public.origin_tasknotemaster","to":"public.origin_taskmaster","source_schema":"public","source_table":"origin_tasknotemaster","target_schema":"public","target_table":"origin_taskmaster","source_columns":["task_id"],"target_columns":["task_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (task_id) REFERENCES origin_taskmaster(task_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43453","constraint_name":"origin_tasknotemaste_team_id_53dd107d_fk_origin_te","from":"public.origin_tasknotemaster","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_tasknotemaster","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43170","constraint_name":"origin_tasktags_project_id_103aaef0_fk_origin_pr","from":"public.origin_tasktags","to":"public.origin_projectmaster","source_schema":"public","source_table":"origin_tasktags","target_schema":"public","target_table":"origin_projectmaster","source_columns":["project_id"],"target_columns":["project_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (project_id) REFERENCES origin_projectmaster(project_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43175","constraint_name":"origin_tasktags_task_id_a0ce712d_fk_origin_taskmaster_task_id","from":"public.origin_tasktags","to":"public.origin_taskmaster","source_schema":"public","source_table":"origin_tasktags","target_schema":"public","target_table":"origin_taskmaster","source_columns":["task_id"],"target_columns":["task_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (task_id) REFERENCES origin_taskmaster(task_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43180","constraint_name":"origin_teammaster_owner_id_dbee4035_fk_origin_customuser_id","from":"public.origin_teammaster","to":"public.origin_customuser","source_schema":"public","source_table":"origin_teammaster","target_schema":"public","target_table":"origin_customuser","source_columns":["owner_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (owner_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43185","constraint_name":"origin_teammembers_attendee_id_b0b185b4_fk_origin_customuser_id","from":"public.origin_teammembers","to":"public.origin_customuser","source_schema":"public","source_table":"origin_teammembers","target_schema":"public","target_table":"origin_customuser","source_columns":["attendee_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (attendee_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43190","constraint_name":"origin_teammembers_team_id_ad3738db_fk_origin_te","from":"public.origin_teammembers","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_teammembers","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43694","constraint_name":"origin_todofact_user_id_1e2a47e9_fk_origin_customuser_id","from":"public.origin_todofact","to":"public.origin_customuser","source_schema":"public","source_table":"origin_todofact","target_schema":"public","target_table":"origin_customuser","source_columns":["user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43689","constraint_name":"origin_todofact_team_id_46d065b8_fk_origin_teammaster_team_id","from":"public.origin_todofact","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_todofact","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43714","constraint_name":"origin_userchatmaster_user_id_15ab8100_fk_origin_customuser_id","from":"public.origin_userchatmaster","to":"public.origin_customuser","source_schema":"public","source_table":"origin_userchatmaster","target_schema":"public","target_table":"origin_customuser","source_columns":["user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"43709","constraint_name":"origin_userchatmaste_team_id_d57f0b47_fk_origin_te","from":"public.origin_userchatmaster","to":"public.origin_teammaster","source_schema":"public","source_table":"origin_userchatmaster","target_schema":"public","target_table":"origin_teammaster","source_columns":["team_id"],"target_columns":["team_id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (team_id) REFERENCES origin_teammaster(team_id) DEFERRABLE INITIALLY DEFERRED"},{"id":"71284","constraint_name":"token_blacklist_blacklistedtoken_token_id_3cc7fe56_fk","from":"public.token_blacklist_blacklistedtoken","to":"public.token_blacklist_outstandingtoken","source_schema":"public","source_table":"token_blacklist_blacklistedtoken","target_schema":"public","target_table":"token_blacklist_outstandingtoken","source_columns":["token_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (token_id) REFERENCES token_blacklist_outstandingtoken(id) DEFERRABLE INITIALLY DEFERRED"},{"id":"71250","constraint_name":"token_blacklist_outs_user_id_83bc629a_fk_origin_cu","from":"public.token_blacklist_outstandingtoken","to":"public.origin_customuser","source_schema":"public","source_table":"token_blacklist_outstandingtoken","target_schema":"public","target_table":"origin_customuser","source_columns":["user_id"],"target_columns":["id"],"on_update":"NO ACTION","on_delete":"NO ACTION","match_type":"SIMPLE","deferrable":true,"initially_deferred":true,"definition":"FOREIGN KEY (user_id) REFERENCES origin_customuser(id) DEFERRABLE INITIALLY DEFERRED"}],"schemas":["public"],"stats":{"table_count":65,"fk_count":144,"pk_count":65,"schema_count":1},"metadata":{"database_name":"origin","introspected_as":"postgres","server_version":"15.13 (Debian 15.13-1.pgdg120+1)"},"generated_at":"2026-05-11T11:10:05+00:00","generator_version":"2026-05-11-freeze-layout-v2","generation_filters":{"include_schemas":[],"exclude_schemas":[],"table_regex":null,"exclude_table_regex":null,"include_system_schemas":false}}</script>
+  <script src="https://unpkg.com/vis-network@9.1.9/dist/vis-network.min.js"></script>
+  <script>
+    const graph = JSON.parse(document.getElementById("graph-data").textContent);
+    const rawNodes = graph.nodes || [];
+    const rawEdges = graph.edges || [];
+    const nodesById = new Map(rawNodes.map((node) => [node.id, node]));
+    const edgesById = new Map(rawEdges.map((edge) => [edge.id, edge]));
+    const schemas = graph.schemas || [];
+    const degreeById = new Map(rawNodes.map((node) => [node.id, 0]));
+    const outgoingById = new Map(rawNodes.map((node) => [node.id, []]));
+    const incomingById = new Map(rawNodes.map((node) => [node.id, []]));
+
+    for (const edge of rawEdges) {
+      degreeById.set(edge.from, (degreeById.get(edge.from) || 0) + 1);
+      degreeById.set(edge.to, (degreeById.get(edge.to) || 0) + 1);
+      outgoingById.get(edge.from)?.push(edge);
+      incomingById.get(edge.to)?.push(edge);
+    }
+
+    const tableNameCounts = new Map();
+    for (const node of rawNodes) {
+      tableNameCounts.set(node.table, (tableNameCounts.get(node.table) || 0) + 1);
+    }
+
+    let lastVisibleIds = [];
+
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      }[char]));
+    }
+
+    function escAttr(value) {
+      return esc(value).replace(/`/g, "&#96;");
+    }
+
+    function hashCode(value) {
+      let hash = 0;
+      for (let i = 0; i < value.length; i++) {
+        hash = ((hash << 5) - hash) + value.charCodeAt(i);
+        hash |= 0;
+      }
+      return Math.abs(hash);
+    }
+
+    function colorForSchema(schema) {
+      const h = hashCode(schema) % 360;
+      return {
+        background: `hsl(${h}, 78%, 97%)`,
+        border: `hsl(${h}, 60%, 44%)`,
+        highlight: {
+          background: `hsl(${h}, 86%, 92%)`,
+          border: `hsl(${h}, 72%, 32%)`
+        },
+        hover: {
+          background: `hsl(${h}, 86%, 94%)`,
+          border: `hsl(${h}, 72%, 36%)`
+        }
+      };
+    }
+
+    function splitPatterns(text) {
+      return String(text || "")
+        .split(/[\n,]+/)
+        .map((part) => part.trim())
+        .filter(Boolean);
+    }
+
+    function wildcardToRegex(pattern) {
+      const escaped = pattern
+        .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+        .replace(/\*/g, ".*")
+        .replace(/\?/g, ".");
+      return new RegExp(`^${escaped}$`, "i");
+    }
+
+    function patternMatchesNode(pattern, node) {
+      const text = pattern.trim();
+      if (!text) return false;
+
+      if (text.startsWith("/") && text.lastIndexOf("/") > 0) {
+        const lastSlash = text.lastIndexOf("/");
+        const body = text.slice(1, lastSlash);
+        const flags = text.slice(lastSlash + 1) || "i";
+        try {
+          const re = new RegExp(body, flags.includes("i") ? flags : `${flags}i`);
+          return re.test(node.qualified_name) || re.test(node.table) || re.test(node.schema);
+        } catch {
+          return false;
+        }
+      }
+
+      const re = wildcardToRegex(text.toLowerCase());
+      return re.test(node.qualified_name.toLowerCase())
+        || re.test(node.table.toLowerCase())
+        || re.test(node.schema.toLowerCase());
+    }
+
+    function selectedSchemas() {
+      return new Set(
+        [...document.querySelectorAll("#schemaFilters input[type='checkbox']:checked")]
+          .map((input) => input.value)
+      );
+    }
+
+    function hasFocusFilter() {
+      return Boolean(
+        document.getElementById("tableSearch").value.trim()
+        || document.getElementById("includePatterns").value.trim()
+        || document.getElementById("columnSearch").value.trim()
+        || document.getElementById("excludePatterns").value.trim()
+        || document.getElementById("pkFilter").value !== "all"
+        || document.getElementById("relationKind").value !== "all"
+      );
+    }
+
+    function showWarning(message) {
+      const warning = document.getElementById("warning");
+      if (!message) {
+        warning.classList.remove("show");
+        warning.textContent = "";
+        return;
+      }
+      warning.textContent = message;
+      warning.classList.add("show");
+    }
+
+    function tableSearchMatches(node) {
+      const query = document.getElementById("tableSearch").value.trim();
+      if (!query) return true;
+
+      const haystack = `${node.qualified_name} ${node.table}`;
+      if (document.getElementById("regexMode").checked) {
+        try {
+          return new RegExp(query, "i").test(haystack);
+        } catch (err) {
+          showWarning(`Invalid table-search regex: ${err.message}`);
+          return true;
+        }
+      }
+
+      return haystack.toLowerCase().includes(query.toLowerCase());
+    }
+
+    function columnSearchMatches(node) {
+      const query = document.getElementById("columnSearch").value.trim().toLowerCase();
+      if (!query) return true;
+
+      return (node.columns || []).some((column) => {
+        return String(column.name || "").toLowerCase().includes(query)
+          || String(column.type || "").toLowerCase().includes(query)
+          || String(column.comment || "").toLowerCase().includes(query);
+      });
+    }
+
+    function relationKindMatches(node) {
+      const kind = document.getElementById("relationKind").value;
+      const outgoing = outgoingById.get(node.id)?.length || 0;
+      const incoming = incomingById.get(node.id)?.length || 0;
+      const degree = outgoing + incoming;
+
+      if (kind === "any") return degree > 0;
+      if (kind === "outgoing") return outgoing > 0;
+      if (kind === "incoming") return incoming > 0;
+      if (kind === "isolated") return degree === 0;
+      return true;
+    }
+
+    function pkFilterMatches(node) {
+      const pkFilter = document.getElementById("pkFilter").value;
+      const hasPk = Boolean(node.primary_key);
+      if (pkFilter === "with") return hasPk;
+      if (pkFilter === "without") return !hasPk;
+      return true;
+    }
+
+    function excludedByPattern(node) {
+      const excludes = splitPatterns(document.getElementById("excludePatterns").value);
+      return excludes.some((pattern) => patternMatchesNode(pattern, node));
+    }
+
+    function baseMatches(node) {
+      const schemas = selectedSchemas();
+      if (!schemas.has(node.schema)) return false;
+
+      if (document.getElementById("requireFilterFirst").checked && !hasFocusFilter()) {
+        return false;
+      }
+
+      const includes = splitPatterns(document.getElementById("includePatterns").value);
+      if (includes.length && !includes.some((pattern) => patternMatchesNode(pattern, node))) {
+        return false;
+      }
+
+      if (excludedByPattern(node)) return false;
+      if (!tableSearchMatches(node)) return false;
+      if (!columnSearchMatches(node)) return false;
+      if (!pkFilterMatches(node)) return false;
+      if (!relationKindMatches(node)) return false;
+
+      return true;
+    }
+
+    function canShowNeighbor(node) {
+      if (!node) return false;
+      if (excludedByPattern(node)) return false;
+
+      if (document.getElementById("strictSchemaNeighbors").checked) {
+        return selectedSchemas().has(node.schema);
+      }
+
+      return true;
+    }
+
+    function displayNode(node) {
+      const duplicateName = (tableNameCounts.get(node.table) || 0) > 1;
+      const baseLabel = duplicateName ? node.qualified_name : node.table;
+      const pk = node.primary_key?.columns?.length
+        ? `\nPK: ${node.primary_key.columns.join(", ")}`
+        : "";
+
+      return {
+        id: node.id,
+        label: `${baseLabel}${pk}`,
+        title: nodeTooltip(node),
+        shape: "box",
+        margin: 10,
+        color: colorForSchema(node.schema),
+        borderWidth: node.primary_key ? 2 : 1,
+        value: Math.max(1, degreeById.get(node.id) || 1),
+        font: {
+          face: "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif",
+          size: 13,
+          multi: true,
+          color: "#0f172a"
+        },
+        widthConstraint: { maximum: 260 },
+        shadow: {
+          enabled: true,
+          color: "rgba(15,23,42,0.12)",
+          size: 10,
+          x: 0,
+          y: 4
+        }
+      };
+    }
+
+    function displayEdge(edge) {
+      const showLabel = document.getElementById("showEdgeLabels").checked;
+      const label = showLabel
+        ? `${edge.constraint_name}\n${edge.source_columns.join(", ")} → ${edge.target_columns.join(", ")}`
+        : "";
+
+      return {
+        id: edge.id,
+        from: edge.from,
+        to: edge.to,
+        label,
+        title: edgeTooltip(edge),
+        arrows: "to",
+        width: 1.4,
+        color: { color: "#94a3b8", highlight: "#1d4ed8", hover: "#2563eb" },
+        font: {
+          size: 10,
+          color: "#334155",
+          strokeWidth: 4,
+          strokeColor: "#ffffff",
+          align: "middle"
+        },
+        smooth: {
+          enabled: true,
+          type: "dynamic",
+          roundness: 0.35
+        }
+      };
+    }
+
+    function nodeTooltip(node) {
+      const pk = node.primary_key?.columns?.length
+        ? node.primary_key.columns.join(", ")
+        : "No primary key";
+      const outCount = outgoingById.get(node.id)?.length || 0;
+      const inCount = incomingById.get(node.id)?.length || 0;
+
+      return `
+        <div style="max-width: 360px;">
+          <strong>${esc(node.qualified_name)}</strong><br/>
+          <span>Type: ${esc(node.type)}</span><br/>
+          <span>PK: ${esc(pk)}</span><br/>
+          <span>Outgoing FKs: ${outCount}; Incoming references: ${inCount}</span>
+        </div>
+      `;
+    }
+
+    function edgeTooltip(edge) {
+      return `
+        <div style="max-width: 420px;">
+          <strong>${esc(edge.constraint_name)}</strong><br/>
+          <span>${esc(edge.from)}.${esc(edge.source_columns.join(", "))}</span><br/>
+          <span>→ ${esc(edge.to)}.${esc(edge.target_columns.join(", "))}</span><br/>
+          <span>ON DELETE ${esc(edge.on_delete)}; ON UPDATE ${esc(edge.on_update)}</span>
+        </div>
+      `;
+    }
+
+    function renderSchemas() {
+      const counts = new Map();
+      for (const node of rawNodes) {
+        counts.set(node.schema, (counts.get(node.schema) || 0) + 1);
+      }
+
+      const container = document.getElementById("schemaFilters");
+      container.innerHTML = schemas.map((schema) => `
+        <label class="schema-pill" title="${escAttr(schema)}">
+          <input type="checkbox" value="${escAttr(schema)}" checked />
+          <span>${esc(schema)}</span>
+          <span class="badge gray">${counts.get(schema) || 0}</span>
+        </label>
+      `).join("");
+    }
+
+    function renderHeader() {
+      const stats = graph.stats || {};
+      const meta = graph.metadata || {};
+      document.getElementById("headerStats").innerHTML = [
+        ["Database", meta.database_name || "unknown"],
+        ["Schemas", stats.schema_count ?? schemas.length],
+        ["Tables", stats.table_count ?? rawNodes.length],
+        ["PKs", stats.pk_count ?? 0],
+        ["FKs", stats.fk_count ?? rawEdges.length]
+      ].map(([label, value]) => `<span class="stat-pill">${esc(label)}: <strong>${esc(value)}</strong></span>`).join("");
+
+      const generated = graph.generated_at ? `Generated ${esc(graph.generated_at)}` : "Generated";
+      const server = meta.server_version ? ` · PostgreSQL ${esc(meta.server_version)}` : "";
+      document.getElementById("subtitle").innerHTML = `${generated}${server}`;
+    }
+
+    function updateVisibleList(visibleNodes) {
+      const list = document.getElementById("visibleList");
+      const max = 120;
+      const chips = visibleNodes.slice(0, max).map((node) => `
+        <button class="table-chip" type="button" data-table="${escAttr(node.qualified_name)}">${esc(node.qualified_name)}</button>
+      `);
+
+      if (visibleNodes.length > max) {
+        chips.push(`<span class="badge gray">+${visibleNodes.length - max} more</span>`);
+      }
+
+      list.innerHTML = chips.length ? chips.join("") : `<span class="hint">No visible tables.</span>`;
+
+      for (const chip of list.querySelectorAll(".table-chip")) {
+        chip.addEventListener("click", () => {
+          document.getElementById("includePatterns").value = chip.dataset.table;
+          document.getElementById("tableSearch").value = "";
+          document.getElementById("relationDepth").value = "1";
+          applyFilters({ fit: true });
+        });
+      }
+    }
+
+    function renderNodeInspector(node) {
+      const pk = node.primary_key;
+      const columns = node.columns || [];
+      const outgoing = outgoingById.get(node.id) || [];
+      const incoming = incomingById.get(node.id) || [];
+
+      document.getElementById("inspector").innerHTML = `
+        <div class="detail-section">
+          <h3>${esc(node.qualified_name)}</h3>
+          <span class="badge">${esc(node.schema)}</span>
+          <span class="badge gray">${esc(node.type)}</span>
+          ${pk ? `<span class="badge green">PK</span>` : `<span class="badge orange">No PK</span>`}
+          ${node.comment ? `<p>${esc(node.comment)}</p>` : ""}
+        </div>
+
+        <div class="detail-section">
+          <h3>Primary key</h3>
+          ${pk ? `
+            <div class="mono">${esc(pk.name)}</div>
+            <div>${pk.columns.map((col) => `<span class="badge green">${esc(col)}</span>`).join("")}</div>
+            <div class="hint mono">${esc(pk.definition || "")}</div>
+          ` : `<div class="empty">No primary key constraint found.</div>`}
+        </div>
+
+        <div class="detail-section">
+          <h3>Columns (${columns.length})</h3>
+          <table>
+            <thead><tr><th>Name</th><th>Type</th><th>Flags</th></tr></thead>
+            <tbody>
+              ${columns.map((column) => `
+                <tr>
+                  <td class="mono">${esc(column.name)}</td>
+                  <td class="mono">${esc(column.type)}</td>
+                  <td>
+                    ${column.is_pk ? `<span class="badge green">PK</span>` : ""}
+                    ${column.not_null ? `<span class="badge gray">NOT NULL</span>` : ""}
+                  </td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="detail-section">
+          <h3>Outgoing foreign keys (${outgoing.length})</h3>
+          ${outgoing.length ? outgoing.map(renderFkCard).join("") : `<div class="empty">No outgoing foreign keys.</div>`}
+        </div>
+
+        <div class="detail-section">
+          <h3>Incoming references (${incoming.length})</h3>
+          ${incoming.length ? incoming.map(renderFkCard).join("") : `<div class="empty">No incoming references.</div>`}
+        </div>
+      `;
+    }
+
+    function renderFkCard(edge) {
+      return `
+        <div class="fk-card">
+          <div class="name">${esc(edge.constraint_name)}</div>
+          <div class="line">${esc(edge.from)}.${esc(edge.source_columns.join(", "))}</div>
+          <div class="line">→ ${esc(edge.to)}.${esc(edge.target_columns.join(", "))}</div>
+          <div style="margin-top: 7px;">
+            <span class="badge gray">ON DELETE ${esc(edge.on_delete)}</span>
+            <span class="badge gray">ON UPDATE ${esc(edge.on_update)}</span>
+            <span class="badge gray">MATCH ${esc(edge.match_type)}</span>
+            ${edge.deferrable ? `<span class="badge orange">DEFERRABLE</span>` : ""}
+            ${edge.initially_deferred ? `<span class="badge orange">INITIALLY DEFERRED</span>` : ""}
+          </div>
+          <div class="hint mono">${esc(edge.definition || "")}</div>
+        </div>
+      `;
+    }
+
+    function renderEdgeInspector(edge) {
+      document.getElementById("inspector").innerHTML = `
+        <div class="detail-section">
+          <h3>${esc(edge.constraint_name)}</h3>
+          <span class="badge">Foreign key</span>
+          <span class="badge gray">MATCH ${esc(edge.match_type)}</span>
+        </div>
+        <div class="detail-section">
+          <h3>Relation</h3>
+          <div class="mono">${esc(edge.from)}.${esc(edge.source_columns.join(", "))}</div>
+          <div class="mono">→ ${esc(edge.to)}.${esc(edge.target_columns.join(", "))}</div>
+        </div>
+        <div class="detail-section">
+          <h3>Actions</h3>
+          <span class="badge gray">ON DELETE ${esc(edge.on_delete)}</span>
+          <span class="badge gray">ON UPDATE ${esc(edge.on_update)}</span>
+          ${edge.deferrable ? `<span class="badge orange">DEFERRABLE</span>` : ""}
+          ${edge.initially_deferred ? `<span class="badge orange">INITIALLY DEFERRED</span>` : ""}
+        </div>
+        <div class="detail-section">
+          <h3>Definition</h3>
+          <div class="mono">${esc(edge.definition || "")}</div>
+        </div>
+      `;
+    }
+
+    function calculateVisibleSet() {
+      if (document.getElementById("requireFilterFirst").checked && !hasFocusFilter()) {
+        showWarning("Large schema mode is enabled: add a table, column, PK, or relation filter, or uncheck 'Require a table/column/relation filter before drawing'.");
+      } else {
+        showWarning("");
+      }
+
+      const baseIds = new Set(rawNodes.filter(baseMatches).map((node) => node.id));
+      const visible = new Set(baseIds);
+      let frontier = new Set(baseIds);
+
+      const depthRaw = document.getElementById("relationDepth").value;
+      const maxDepth = depthRaw === "all" ? rawNodes.length : Number(depthRaw || 0);
+      const direction = document.getElementById("relationDirection").value;
+
+      for (let depth = 0; depth < maxDepth && frontier.size > 0; depth++) {
+        const next = new Set();
+
+        for (const edge of rawEdges) {
+          if ((direction === "both" || direction === "outgoing") && frontier.has(edge.from)) {
+            const target = nodesById.get(edge.to);
+            if (!visible.has(edge.to) && canShowNeighbor(target)) {
+              next.add(edge.to);
+            }
+          }
+
+          if ((direction === "both" || direction === "incoming") && frontier.has(edge.to)) {
+            const source = nodesById.get(edge.from);
+            if (!visible.has(edge.from) && canShowNeighbor(source)) {
+              next.add(edge.from);
+            }
+          }
+        }
+
+        if (!next.size) break;
+        for (const id of next) visible.add(id);
+        frontier = next;
+      }
+
+      let visibleEdges = rawEdges.filter((edge) => visible.has(edge.from) && visible.has(edge.to));
+
+      if (document.getElementById("hideIsolated").checked) {
+        const connectedIds = new Set();
+        for (const edge of visibleEdges) {
+          connectedIds.add(edge.from);
+          connectedIds.add(edge.to);
+        }
+        for (const id of [...visible]) {
+          if (!connectedIds.has(id)) visible.delete(id);
+        }
+        visibleEdges = rawEdges.filter((edge) => visible.has(edge.from) && visible.has(edge.to));
+      }
+
+      return { visible, visibleEdges };
+    }
+
+    let network;
+    let nodeDataSet;
+    let edgeDataSet;
+
+    function applyFilters(options = {}) {
+      const { visible, visibleEdges } = calculateVisibleSet();
+      const visibleNodes = [...visible]
+        .map((id) => nodesById.get(id))
+        .filter(Boolean)
+        .sort((a, b) => a.qualified_name.localeCompare(b.qualified_name));
+
+      lastVisibleIds = visibleNodes.map((node) => node.id);
+
+      nodeDataSet.clear();
+      edgeDataSet.clear();
+      nodeDataSet.add(visibleNodes.map(displayNode));
+      edgeDataSet.add(visibleEdges.map(displayEdge));
+
+      document.getElementById("status").innerHTML = `
+        ${visibleNodes.length} / ${rawNodes.length} tables visible · ${visibleEdges.length} / ${rawEdges.length} FKs visible
+        <small>Use table patterns, schema toggles, column search, and relation depth to refine the graph.</small>
+      `;
+
+      updateVisibleList(visibleNodes);
+
+      if (document.getElementById("freezeAfterLayout")?.checked) {
+        stabilizeThenMaybeFreeze(120);
+      } else {
+        network.setOptions({ physics: { enabled: true } });
+      }
+
+      if (options.fit) {
+        window.setTimeout(() => {
+          network.fit({ animation: { duration: 300, easingFunction: "easeInOutQuad" } });
+        }, 80);
+      }
+    }
+
+    function debounce(fn, delay) {
+      let timer;
+      return (...args) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn(...args), delay);
+      };
+    }
+
+    function freezeGraphPositions() {
+      if (!network) return;
+      network.storePositions();
+      network.setOptions({ physics: { enabled: false } });
+      toast("Graph frozen. Nodes can still be dragged manually.");
+    }
+
+    function unfreezeGraphPositions() {
+      if (!network) return;
+      network.setOptions({ physics: { enabled: true } });
+      network.stabilize(80);
+      toast("Graph physics enabled temporarily.");
+    }
+
+    function stabilizeThenMaybeFreeze(iterations = 120) {
+      if (!network) return;
+
+      network.setOptions({ physics: { enabled: true } });
+      network.stabilize(iterations);
+
+      if (document.getElementById("freezeAfterLayout")?.checked) {
+        network.once("stabilized", () => {
+          freezeGraphPositions();
+        });
+      }
+    }
+
+    function resetFilters() {
+      document.getElementById("tableSearch").value = "";
+      document.getElementById("regexMode").checked = false;
+      document.getElementById("includePatterns").value = "";
+      document.getElementById("excludePatterns").value = "";
+      document.getElementById("columnSearch").value = "";
+      document.getElementById("relationDepth").value = "1";
+      document.getElementById("relationDirection").value = "both";
+      document.getElementById("pkFilter").value = "all";
+      document.getElementById("relationKind").value = "all";
+      document.getElementById("hideIsolated").checked = false;
+      document.getElementById("showEdgeLabels").checked = true;
+      document.getElementById("strictSchemaNeighbors").checked = false;
+      document.getElementById("freezeAfterLayout").checked = true;
+      document.getElementById("requireFilterFirst").checked = rawNodes.length > 350;
+      for (const input of document.querySelectorAll("#schemaFilters input[type='checkbox']")) {
+        input.checked = true;
+      }
+      applyFilters({ fit: true });
+    }
+
+    function copyVisibleTables() {
+      const text = lastVisibleIds.slice().sort().join("\n");
+      if (!text) {
+        toast("No visible tables to copy.");
+        return;
+      }
+
+      const fallback = () => {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+        toast("Copied visible table list.");
+      };
+
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(text).then(
+          () => toast("Copied visible table list."),
+          fallback
+        );
+      } else {
+        fallback();
+      }
+    }
+
+    function toast(message) {
+      const element = document.getElementById("toast");
+      element.textContent = message;
+      element.classList.add("show");
+      window.setTimeout(() => element.classList.remove("show"), 1800);
+    }
+
+    function initialize() {
+      renderHeader();
+      renderSchemas();
+
+      if (!window.vis) {
+        document.getElementById("network").innerHTML = `
+          <div style="padding: 20px;">
+            <div class="empty">
+              vis-network could not be loaded from the CDN. Connect to the internet, or download vis-network locally and update the script/link tags in this HTML.
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      nodeDataSet = new vis.DataSet([]);
+      edgeDataSet = new vis.DataSet([]);
+
+      network = new vis.Network(
+        document.getElementById("network"),
+        { nodes: nodeDataSet, edges: edgeDataSet },
+        {
+          interaction: {
+            hover: true,
+            tooltipDelay: 120,
+            navigationButtons: true,
+            keyboard: true,
+            multiselect: true
+          },
+          layout: {
+            improvedLayout: true
+          },
+          physics: {
+            enabled: true,
+            solver: "forceAtlas2Based",
+            forceAtlas2Based: {
+              gravitationalConstant: -36,
+              centralGravity: 0.008,
+              springLength: 190,
+              springConstant: 0.045,
+              damping: 0.75,
+              avoidOverlap: 0.85
+            },
+            minVelocity: 1.6,
+            stabilization: {
+              enabled: true,
+              iterations: 120,
+              updateInterval: 25,
+              fit: false
+            }
+          },
+          nodes: {
+            chosen: true
+          },
+          edges: {
+            selectionWidth: 2.5,
+            hoverWidth: 2
+          }
+        }
+      );
+
+      network.on("click", (params) => {
+        if (params.nodes?.length) {
+          const node = nodesById.get(params.nodes[0]);
+          if (node) renderNodeInspector(node);
+          return;
+        }
+        if (params.edges?.length) {
+          const edge = edgesById.get(params.edges[0]);
+          if (edge) renderEdgeInspector(edge);
+          return;
+        }
+      });
+
+      network.on("doubleClick", (params) => {
+        if (params.nodes?.length) {
+          const node = nodesById.get(params.nodes[0]);
+          if (!node) return;
+          document.getElementById("includePatterns").value = node.qualified_name;
+          document.getElementById("relationDepth").value = "1";
+          applyFilters({ fit: true });
+        }
+      });
+
+      const debouncedApply = debounce(() => applyFilters({ fit: false }), 220);
+      for (const element of document.querySelectorAll("input, textarea, select")) {
+        element.addEventListener("input", debouncedApply);
+        element.addEventListener("change", debouncedApply);
+      }
+
+      document.getElementById("applyFilters").addEventListener("click", () => applyFilters({ fit: true }));
+      document.getElementById("resetFilters").addEventListener("click", resetFilters);
+      document.getElementById("copyTables").addEventListener("click", copyVisibleTables);
+      document.getElementById("fitGraph").addEventListener("click", () => network.fit({ animation: true }));
+      document.getElementById("freezeGraph").addEventListener("click", freezeGraphPositions);
+      document.getElementById("unfreezeGraph").addEventListener("click", unfreezeGraphPositions);
+      document.getElementById("stabilizeGraph").addEventListener("click", () => stabilizeThenMaybeFreeze(120));
+
+      document.getElementById("selectAllSchemas").addEventListener("click", () => {
+        for (const input of document.querySelectorAll("#schemaFilters input[type='checkbox']")) {
+          input.checked = true;
+        }
+        applyFilters({ fit: true });
+      });
+
+      document.getElementById("selectNoSchemas").addEventListener("click", () => {
+        for (const input of document.querySelectorAll("#schemaFilters input[type='checkbox']")) {
+          input.checked = false;
+        }
+        applyFilters({ fit: true });
+      });
+
+      if (rawNodes.length > 350) {
+        document.getElementById("requireFilterFirst").checked = true;
+      }
+
+      applyFilters({ fit: true });
+    }
+
+    initialize();
+  </script>
+</body>
+</html>
