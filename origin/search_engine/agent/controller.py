@@ -150,8 +150,16 @@ def run_agent(
     emit: Callable[[dict[str, Any]], None],
     *,
     run_id: UUID | None = None,
+    prior_turns: list[tuple[str, str]] | None = None,
 ) -> dict[str, Any] | None:
     """Drive the agent loop from a fresh user query.
+
+    `prior_turns` is an ordered list of (user_query, assistant_answer)
+    pairs from earlier turns in the same session (Phase 8). When
+    present they are prepended to the messages list so the model can
+    resolve references like "that task" or "the note you mentioned".
+    Each answer is already truncated to ~400 chars by the view layer
+    to keep the context budget bounded.
 
     Returns:
         None on clean completion (text answer, error, or step cap).
@@ -165,7 +173,11 @@ def run_agent(
             }
         The view layer reflects the pause back onto the `AgentRun` row.
     """
-    messages: list[AgentMessage] = [_user_turn(query)]
+    messages: list[AgentMessage] = []
+    for prior_query, prior_answer in (prior_turns or []):
+        messages.append(_user_turn(prior_query))
+        messages.append(AgentMessage(role="assistant", text=prior_answer))
+    messages.append(_user_turn(query))
     return _drive_loop(
         messages=messages,
         ctx=ctx,

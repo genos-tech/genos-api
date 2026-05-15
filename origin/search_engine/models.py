@@ -1,6 +1,7 @@
 import uuid
 
 from django.db import models
+from django.utils import timezone
 
 
 class RagChunk(models.Model):
@@ -30,6 +31,33 @@ class RagChunk(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["entity_type", "entity_id"]),
+        ]
+
+
+class AgentSession(models.Model):
+    """Groups a sequence of /ask/ calls into one conversation.
+
+    Phase 8 — conversation memory. When the frontend sends
+    `session_id` with /ask/, the controller prepends the last
+    SESSION_MAX_PRIOR_TURNS (query, final_answer) pairs into the
+    model's context window before the current query. This allows
+    follow-up references like "show me more about that task".
+
+    TTL is enforced at load time via `last_active_at`. Sessions
+    older than SESSION_TTL_MINUTES are silently retired and a new
+    one is created. `last_active_at` is updated manually each time
+    the session is successfully loaded.
+    """
+
+    session_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    team_id = models.CharField(max_length=64, db_index=True)
+    user_id = models.CharField(max_length=64, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_active_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["team_id", "user_id", "-last_active_at"]),
         ]
 
 
@@ -63,6 +91,14 @@ class AgentRun(models.Model):
     error_message = models.TextField(blank=True, default="")
     # Phase 7 — write-tool approval flow.
     pending_approval_token = models.UUIDField(blank=True, null=True)
+    # Phase 8 — conversation memory.
+    session = models.ForeignKey(
+        AgentSession,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="runs",
+    )
     started_at = models.DateTimeField(auto_now_add=True)
     finished_at = models.DateTimeField(blank=True, null=True)
 

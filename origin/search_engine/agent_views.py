@@ -7,7 +7,10 @@ Two endpoints, both streaming NDJSON over POST:
 
 Phase 3 introduced the multi-step Gemini/Claude function-calling loop;
 Phase 7 adds the pause/resume protocol for tools with
-`requires_approval=True`. See `agent.controller` for the loop body.
+`requires_approval=True`. Phase 8 adds conversation memory via
+`AgentSession` — the frontend sends an optional `session_id` with
+each /ask/ call; the view prepends the last SESSION_MAX_PRIOR_TURNS
+Q&A pairs into the model context.
 
 NDJSON event types emitted:
 
@@ -18,7 +21,7 @@ NDJSON event types emitted:
                                            "approval_token": "<uuid>"}   ← Phase 7
     {"type": "sources",                    "sources": [...]}
     {"type": "answer_delta",               "text": "..."}
-    {"type": "done"}
+    {"type": "done",                       "session_id": "<uuid>"}       ← Phase 8
     {"type": "error",                      "message": "..."}
 
 POST instead of SSE so query payloads aren't logged in access logs.
@@ -30,8 +33,10 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import timedelta
 from typing import Callable, Iterator
 
+from django.conf import settings
 from django.http import StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import status
@@ -39,10 +44,66 @@ from rest_framework.response import Response
 
 from origin.search_engine.agent.controller import resume_agent, run_agent
 from origin.search_engine.agent.tools import ToolContext
-from origin.search_engine.models import AgentRun
+from origin.search_engine.models import AgentRun, AgentSession
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 log = logging.getLogger(__name__)
+
+# Answer truncation for session history — keeps the context budget bounded.
+_PRIOR_ANSWER_MAX_CHARS = 400
+
+
+# --------------------------------------------------------------------------- #
+# Session helpers (Phase 8)                                                   #
+# --------------------------------------------------------------------------- #
+
+
+def _get_or_create_session(
+    session_id_str: str | None,
+    team_id: str,
+    user_id: str,
+) -> AgentSession:
+    """Return an existing live session or create a fresh one.
+
+    If `session_id_str` points to a valid session that still belongs to
+    this user/team and hasn't expired, touch its `last_active_at` and
+    return it. Otherwise (DoesNotExist, wrong owner, expired) silently
+    create a new session.
+    """
+    ttl_minutes = int(settings.SEARCH_ENGINE.get("SESSION_TTL_MINUTES", 30))
+    if session_id_str:
+        try:
+            session = AgentSession.objects.get(
+                session_id=session_id_str,
+                team_id=team_id,
+                user_id=user_id,
+            )
+            cutoff = timezone.now() - timedelta(minutes=ttl_minutes)
+            if session.last_active_at >= cutoff:
+                AgentSession.objects.filter(session_id=session.session_id).update(
+                    last_active_at=timezone.now()
+                )
+                session.last_active_at = timezone.now()
+                return session
+        except (AgentSession.DoesNotExist, ValueError):
+            pass
+    return AgentSession.objects.create(team_id=team_id, user_id=user_id)
+
+
+def _load_prior_turns(session: AgentSession, max_turns: int) -> list[tuple[str, str]]:
+    """Return the last `max_turns` (query, answer) pairs from the session.
+
+    Only includes runs that have a non-empty `final_answer_text` (i.e.
+    the model produced an actual answer — done, rejected, etc.). Each
+    answer is truncated to `_PRIOR_ANSWER_MAX_CHARS` to keep the
+    context budget predictable.
+    """
+    runs = (
+        AgentRun.objects.filter(session=session)
+        .exclude(final_answer_text="")
+        .order_by("-started_at")[:max_turns]
+    )
+    return [(r.query, r.final_answer_text[:_PRIOR_ANSWER_MAX_CHARS]) for r in reversed(list(runs))]
 
 
 # --------------------------------------------------------------------------- #
@@ -77,6 +138,18 @@ class AgentAskView(AuthenticatedAPIView):
 
         ctx = ToolContext(team_id=str(team_id), user_id=user_id)
 
+        # Phase 8 — session memory. Non-fatal: if session machinery
+        # fails for any reason we fall back to a stateless single-turn.
+        session: AgentSession | None = None
+        prior_turns: list[tuple[str, str]] = []
+        session_id_str = (data.get("session_id") or "").strip() or None
+        max_prior_turns = int(settings.SEARCH_ENGINE.get("SESSION_MAX_PRIOR_TURNS", 3))
+        try:
+            session = _get_or_create_session(session_id_str, str(team_id), user_id)
+            prior_turns = _load_prior_turns(session, max_prior_turns)
+        except Exception:  # noqa: BLE001
+            log.exception("Session load failed; continuing without memory")
+
         # Persist one AgentRun row per /ask/ call. Failures here are
         # logged but never break the user-facing response.
         run: AgentRun | None = None
@@ -85,14 +158,25 @@ class AgentAskView(AuthenticatedAPIView):
                 team_id=str(team_id),
                 user_id=user_id,
                 query=query,
+                session=session,
             )
         except Exception:  # noqa: BLE001
             log.exception("Failed to create AgentRun row; continuing without persistence")
 
         def worker(emit):
-            return run_agent(query, ctx, emit, run_id=run.run_id if run else None)
+            return run_agent(
+                query,
+                ctx,
+                emit,
+                run_id=run.run_id if run else None,
+                prior_turns=prior_turns,
+            )
 
-        stream = _stream_ndjson(worker, run=run)
+        stream = _stream_ndjson(
+            worker,
+            run=run,
+            session_id=session.session_id if session else None,
+        )
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
         response["X-Accel-Buffering"] = "no"
@@ -160,6 +244,16 @@ class AgentDecideView(AuthenticatedAPIView):
         except Exception:  # noqa: BLE001
             log.exception("Failed to consume approval token for run %s", run.run_id)
 
+        # Touch session last_active_at so the approval round-trip
+        # doesn't count against the TTL window.
+        if run.session_id:
+            try:
+                AgentSession.objects.filter(session_id=run.session_id).update(
+                    last_active_at=timezone.now()
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
         ctx = ToolContext(team_id=run.team_id, user_id=run.user_id)
 
         def worker(emit):
@@ -170,6 +264,7 @@ class AgentDecideView(AuthenticatedAPIView):
             run=run,
             rejected=(decision == "reject"),
             append_to_existing_answer=True,
+            session_id=run.session_id,
         )
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
@@ -188,6 +283,7 @@ def _stream_ndjson(
     run: AgentRun | None = None,
     rejected: bool = False,
     append_to_existing_answer: bool = False,
+    session_id=None,
 ) -> Iterator[bytes]:
     """Bridge a controller callback into chunked NDJSON.
 
@@ -196,6 +292,10 @@ def _stream_ndjson(
     NDJSON line it wants to send and return either `None` (clean
     finish) or a `{"paused": True, "approval_token": UUID, ...}`
     descriptor when the loop is paused on a write tool.
+
+    `session_id`, when present, is injected into the `done` event
+    as `"session_id"`. The frontend uses this value in subsequent
+    /ask/ calls to thread conversation history (Phase 8).
 
     `run`, when present, is closed at end-of-stream:
         * `paused=True`     → status="awaiting_approval", token stored
@@ -248,6 +348,9 @@ def _stream_ndjson(
                 answer_parts.append(text)
         elif event_type == "done":
             final_status = "done"
+            # Inject session_id so the frontend can thread the next ask.
+            if session_id is not None:
+                event = {**event, "session_id": str(session_id)}
         elif event_type == "error":
             msg = event.get("message") or ""
             final_error = msg

@@ -350,4 +350,11 @@ SEARCH_ENGINE = {
     "RAG_USE_RERANKER": (os.environ.get("RAG_USE_RERANKER", "false").lower() == "true"),
     "RAG_RERANK_INPUT_K": int(os.environ.get("RAG_RERANK_INPUT_K", "20")),
     "RAG_RERANK_OUTPUT_K": int(os.environ.get("RAG_RERANK_OUTPUT_K", "10")),
+    # Phase 8 — conversation session memory.
+    # How many prior (query, answer) pairs to prepend into the model
+    # context on follow-up /ask/ calls within the same session.
+    "SESSION_MAX_PRIOR_TURNS": int(os.environ.get("SESSION_MAX_PRIOR_TURNS", "3")),
+    # Minutes of inactivity before a session is considered expired.
+    # An expired session ID silently creates a fresh session.
+    "SESSION_TTL_MINUTES": int(os.environ.get("SESSION_TTL_MINUTES", "30")),
 }
