@@ -34,6 +34,7 @@ from origin.search_engine.agent.tools.list_tasks import LIST_TASKS
 from origin.search_engine.agent.tools.search_kb import SEARCH_KNOWLEDGE_BASE
 from origin.search_engine.agent.tools.update_note import UPDATE_NOTE
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
+from origin.search_engine.agent.tools.web_search import SEARCH_WEB
 
 # Register at import time so REGISTRY is populated by the time the
 # controller asks for a tool by name. Read tools first, then write
@@ -59,6 +60,8 @@ for _t in (
     # --- Write tools (Phase 13) ---
     ASSIGN_TASK,
     UPDATE_NOTE,
+    # --- Read tools (Phase 14) ---
+    SEARCH_WEB,
 ):
     REGISTRY[_t.name] = _t
 
@@ -83,4 +86,5 @@ __all__ = [
     "ToolError",
     "UPDATE_NOTE",
     "UPDATE_TASK",
+    "SEARCH_WEB",
 ]

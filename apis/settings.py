@@ -373,4 +373,14 @@ SEARCH_ENGINE = {
     # endpoint — it never passes `rewrite=True`.
     "RAG_USE_QUERY_REWRITE": (os.environ.get("RAG_USE_QUERY_REWRITE", "false").lower() == "true"),
     "RAG_REWRITE_NUM_VARIANTS": int(os.environ.get("RAG_REWRITE_NUM_VARIANTS", "3")),
+    # Phase 14 — AI agent daily usage limit for free users.
+    # Users with the "unlimited_agent" UserFeatureAccess grant bypass
+    # this cap entirely. Set to 0 to disable the limit for everyone.
+    "AGENT_FREE_DAILY_LIMIT": int(os.environ.get("AGENT_FREE_DAILY_LIMIT", "5")),
+    # Phase 14 — live web search via Tavily.
+    # Sign up at https://tavily.com to get a free API key (1 000 req/month).
+    # Set TAVILY_API_KEY in .env (local) and Railway env vars (production).
+    # Leave empty to disable web search — the agent will surface a clean
+    # error rather than crashing when the key is absent.
+    "TAVILY_API_KEY": os.environ.get("TAVILY_API_KEY", ""),
 }

@@ -42,6 +42,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
+from origin.models.common.feature_models import UserFeatureAccess
 from origin.search_engine.agent.controller import resume_agent, run_agent
 from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.models import AgentRun, AgentSession
@@ -137,6 +138,32 @@ class AgentAskView(AuthenticatedAPIView):
             )
 
         ctx = ToolContext(team_id=str(team_id), user_id=user_id)
+
+        # --- Daily usage limit (free tier). ---
+        # Unlimited-agent subscribers bypass this check entirely.
+        # Set AGENT_FREE_DAILY_LIMIT=0 in env to disable for everyone.
+        daily_limit = int(settings.SEARCH_ENGINE.get("AGENT_FREE_DAILY_LIMIT", 5))
+        if daily_limit > 0 and not UserFeatureAccess.user_has(
+            user_id, UserFeatureAccess.FEATURE_UNLIMITED_AGENT
+        ):
+            today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            used_today = AgentRun.objects.filter(
+                user_id=user_id,
+                started_at__gte=today_start,
+            ).count()
+            if used_today >= daily_limit:
+                return Response(
+                    {
+                        "error": (
+                            f"You've used all {daily_limit} AI asks for today. "
+                            "Upgrade your plan to keep going."
+                        ),
+                        "limit_reached": True,
+                        "used": used_today,
+                        "limit": daily_limit,
+                    },
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
 
         # Phase 8 — session memory. Non-fatal: if session machinery
         # fails for any reason we fall back to a stateless single-turn.
@@ -402,3 +429,49 @@ def _stream_ndjson(
         )
     except Exception:  # noqa: BLE001
         log.exception("Failed to close AgentRun %s", run.run_id)
+
+
+# --------------------------------------------------------------------------- #
+# /usage/ — daily usage info for the current user                             #
+# --------------------------------------------------------------------------- #
+
+
+class AgentUsageView(AuthenticatedAPIView):
+    """GET /api/v2/agent/usage/
+
+    Returns today's AI-ask count and the plan limit so the frontend can
+    display a "N of M asks used today" indicator without waiting for the
+    next /ask/ call to fail.
+
+    Response schema:
+        {
+            "used":         int,          # asks started today (UTC day)
+            "limit":        int | null,   # null means unlimited
+            "is_unlimited": bool
+        }
+    """
+
+    def get(self, request):
+        user_id = str(getattr(request.user, "id", ""))
+        if not user_id:
+            return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        daily_limit = int(settings.SEARCH_ENGINE.get("AGENT_FREE_DAILY_LIMIT", 5))
+        is_unlimited = (
+            daily_limit == 0
+            or UserFeatureAccess.user_has(user_id, UserFeatureAccess.FEATURE_UNLIMITED_AGENT)
+        )
+
+        today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        used_today = AgentRun.objects.filter(
+            user_id=user_id,
+            started_at__gte=today_start,
+        ).count()
+
+        return Response(
+            {
+                "used": used_today,
+                "limit": None if is_unlimited else daily_limit,
+                "is_unlimited": is_unlimited,
+            }
+        )

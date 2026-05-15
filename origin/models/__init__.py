@@ -1,5 +1,6 @@
 from .common.user_models import *
 from .common.team_models import *
+from .common.feature_models import *
 from .common.inbox_models import *
 from .common.notification_models import *
 from .chat.reaction_models import *

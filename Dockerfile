@@ -9,8 +9,8 @@ ENV PYTHONUNBUFFERED=1 \
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        build-essential \
-        libpq-dev \
+    build-essential \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --upgrade pip pipenv
@@ -19,6 +19,9 @@ WORKDIR /app
 
 COPY Pipfile Pipfile.lock ./
 RUN pipenv sync
+# Extra packages not yet tracked in the root Pipfile.lock.
+# Add them here until the lock file is regenerated.
+RUN pip install tavily-python
 
 COPY backend_django ./backend_django
 
