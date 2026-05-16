@@ -77,10 +77,15 @@ class PMHistoryView(AuthenticatedAPIView):
                 status=status.HTTP_200_OK,
             )
 
-        # Messages for these projects (prefetch related sender/project/task)
+        # Messages for these projects (prefetch related sender/project/task).
+        # `project__project_system_user` extends the join one level deeper so
+        # `msg.project.project_system_user.id` in `serialize_message` /
+        # `init_chat_dict` is satisfied by the same row instead of triggering
+        # one extra query per message — eliminates the N+1 that drove most of
+        # this endpoint's runtime on workspaces with many PM messages.
         raw_messages = (
             PMMessages.objects.filter(project__in=project_ids, is_deleted=False)
-            .select_related("project", "sender", "task")
+            .select_related("project__project_system_user", "sender", "task")
             .order_by("ts_sent_at")
         )
 
