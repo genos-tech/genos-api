@@ -79,9 +79,22 @@ def iter_chat_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
 
         related = []
         chat_label = CHAT_TYPE_LABEL.get(note.chat_type)
+        # ChatNoteMaster.thread_id is `null=False` on the model — every
+        # chat note has one, regardless of `is_thread`. We surface it
+        # unconditionally so Spotlight always has the coordinates it
+        # needs to build a `/workspace/notes/chat/.../thread/X/note/Y`
+        # deep link. `related_entity_ids` mirrors the value with the
+        # same shape used for chat entities, so the frontend can fall
+        # back to parsing it for pre-fix chunks.
+        thread_id_str = str(note.thread_id) if note.thread_id else None
         if chat_label and note.chat_id:
-            thread_id = note.thread_id if note.is_thread else None
-            related.append(chat_entity_id(chat_label, note.chat_id, thread_id))
+            related.append(
+                chat_entity_id(
+                    chat_label,
+                    note.chat_id,
+                    note.thread_id if note.thread_id else None,
+                )
+            )
         if note.parent_note_id:
             related.append(f"note:chat:{note.parent_note_id}")
 
@@ -95,6 +108,11 @@ def iter_chat_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
             related=related,
             created_at=note.ts_created_at,
             updated_at=note.ts_updated_at,
+            # Surface chat coordinates on the chunk so Spotlight can
+            # build the proper /workspace/notes/chat/... URL.
+            chat_type_label=chat_label,
+            chat_id=str(note.chat_id) if note.chat_id else None,
+            thread_id=thread_id_str,
         )
         if chunks:
             yield EntityChunks(
@@ -206,6 +224,9 @@ def iter_task_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
             created_at=note.ts_created_at,
             updated_at=note.ts_updated_at,
             project_id=str(note.project_id) if note.project_id else None,
+            # Surface task_id so Spotlight can deep-link the task note
+            # without falling through to /workspace/notes.
+            task_id=str(note.task_id) if note.task_id else None,
         )
         if chunks:
             yield EntityChunks(
@@ -288,6 +309,17 @@ def _note_to_section_chunks(
     created_at,
     updated_at,
     project_id: Optional[str] = None,
+    # Task-note specific — populated for task notes so Spotlight can
+    # build `/workspace/notes/task/project/.../task/<id>/note/<id>`.
+    task_id: Optional[str] = None,
+    # Chat-note specifics — populated when the note is attached to a
+    # chat / thread so Spotlight can deep-link the result row to the
+    # right `/workspace/notes/chat/...` URL. None for personal/task
+    # notes, and None for chat notes attached to a chat without a
+    # thread (the chat-note URL pattern requires a thread_id).
+    chat_type_label: Optional[str] = None,
+    chat_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
 ) -> list[Chunk]:
     """Split the body into heading-bounded sections; one Chunk per section.
 
@@ -345,6 +377,10 @@ def _note_to_section_chunks(
                 note_id=str(note_id),
                 note_type=note_type_label,
                 project_id=project_id,
+                task_id=task_id,
+                chat_type=chat_type_label,
+                chat_id=chat_id,
+                thread_id=thread_id,
                 related_entity_ids=related,
                 created_at=iso(created_at),
                 updated_at=iso(updated_at),

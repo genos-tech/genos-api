@@ -361,6 +361,27 @@ def _build_filter(
     return filt
 
 
+# Trailing `:msg:<id>` on a chat_message chunk's id. Used to surface
+# the matched message id to the frontend so Spotlight can deep-link to
+# the exact message bubble. Matches both main-channel (`chat:dm:5:msg:42`)
+# and in-thread (`chat:dm:5:thread:3:msg:42`) message chunks; anchor
+# chunks (`...:anchor:<id>`) and thread-window chunks (`...:window`)
+# don't match, which is what we want — an anchor id refers to a main-
+# channel message id that doesn't map cleanly to a thread-message URL,
+# and windows aggregate many messages.
+_CHAT_MSG_ID_RE = re.compile(r":msg:(\d+)$")
+
+
+def _extract_chat_message_id(chunk_id: str | None, chunk_type: str | None) -> str | None:
+    """Pull the message id from a chat_message chunk's id, or None.
+    See `_CHAT_MSG_ID_RE` for the formats this recognises.
+    """
+    if chunk_type != "chat_message" or not chunk_id:
+        return None
+    m = _CHAT_MSG_ID_RE.search(chunk_id)
+    return m.group(1) if m else None
+
+
 _HIGHLIGHT_PRE = "\x02"
 _HIGHLIGHT_POST = "\x03"
 # Matches one analyzer-marked term inside the highlight response, e.g.
@@ -593,6 +614,12 @@ def _group_by_entity(
                 "project_id": src.get("project_id"),
                 "related_entity_ids": src.get("related_entity_ids") or [],
                 "matched_terms": list(c.get("matched_terms") or []),
+                # Surfaced for chat_message chunks so the frontend can
+                # deep-link straight to the matched message bubble.
+                # None for chat_thread_window / anchor chunks and for
+                # non-chat entities — frontend treats that as "land on
+                # the chat/thread, no specific message focus".
+                "message_id": _extract_chat_message_id(c["chunk_id"], src.get("chunk_type")),
             }
             if for_agent:
                 entry["chunks"] = [_chunk_for_agent(c)]
