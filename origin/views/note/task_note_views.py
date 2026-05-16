@@ -6,6 +6,7 @@ from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.serializers.note.note_serializers import *
 from origin.models.project.prj_models import ProjectMembers
+from origin.models.task.task_models import TaskMaster
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 NOTE_TYPE = 2  # Task Notes
@@ -86,9 +87,14 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
             ).values_list("project_id", flat=True)
         )
 
-        notes = (
+        # The five new fields (parentTaskId, isMilestone, milestoneId,
+        # milestoneTitle, plus parentTaskTitle resolved below) let the
+        # frontend sidebar group notes by Project → Milestone → Task →
+        # Subtask without having to load full task metadata client-side.
+        # `task__milestone` adds one JOIN for the milestone title.
+        notes = list(
             TaskNoteMaster.objects.filter(team=data["team_id"], project__in=project_ids)
-            .select_related("project", "task")
+            .select_related("project", "task", "task__milestone")
             .annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 noteId=F("note_id"),
@@ -97,6 +103,10 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
                 projectId=F("project"),
                 projectName=F("project__project_name"),
                 taskTitle=F("task__title"),
+                parentTaskId=F("task__parent_task_id"),
+                isMilestone=F("task__is_milestone"),
+                milestoneId=F("task__milestone_id"),
+                milestoneTitle=F("task__milestone__title"),
                 tsUpdated=F("ts_updated_at"),
             )
             .order_by("tsUpdated")
@@ -109,12 +119,33 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
                 "taskId",
                 "projectName",
                 "taskTitle",
+                "parentTaskId",
+                "isMilestone",
+                "milestoneId",
+                "milestoneTitle",
                 "title",
                 "tsUpdated",
             )
         )
 
-        return Response(list(notes), status=status.HTTP_200_OK)
+        # `TaskMaster.parent_task_id` is a plain BigIntegerField (not a
+        # ForeignKey), so `task__parent_task__title` won't resolve through
+        # the ORM. Resolve titles for the distinct set of parent task ids in
+        # one extra query and stamp them onto each note row.
+        parent_ids = {row["parentTaskId"] for row in notes if row["parentTaskId"] is not None}
+        parent_title_map = (
+            dict(
+                TaskMaster.objects.filter(
+                    team=data["team_id"], task_id__in=parent_ids
+                ).values_list("task_id", "title")
+            )
+            if parent_ids
+            else {}
+        )
+        for row in notes:
+            row["parentTaskTitle"] = parent_title_map.get(row["parentTaskId"])
+
+        return Response(notes, status=status.HTTP_200_OK)
 
 
 class TaskNoteMasterView(AuthenticatedAPIView):
