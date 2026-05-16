@@ -190,6 +190,13 @@ class AgentAskView(AuthenticatedAPIView):
         except Exception:  # noqa: BLE001
             log.exception("Failed to create AgentRun row; continuing without persistence")
 
+        # Per-request tool gates from the frontend Spotlight preferences.
+        # `allow_web_search` defaults to True so older clients that omit
+        # the field get the same behavior as before.
+        disabled_tools: set[str] = set()
+        if data.get("allow_web_search") is False:
+            disabled_tools.add("search_web")
+
         def worker(emit):
             return run_agent(
                 query,
@@ -197,6 +204,7 @@ class AgentAskView(AuthenticatedAPIView):
                 emit,
                 run_id=run.run_id if run else None,
                 prior_turns=prior_turns,
+                disabled_tools=disabled_tools,
             )
 
         stream = _stream_ndjson(
@@ -457,9 +465,8 @@ class AgentUsageView(AuthenticatedAPIView):
             return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
 
         daily_limit = int(settings.SEARCH_ENGINE.get("AGENT_FREE_DAILY_LIMIT", 5))
-        is_unlimited = (
-            daily_limit == 0
-            or UserFeatureAccess.user_has(user_id, UserFeatureAccess.FEATURE_UNLIMITED_AGENT)
+        is_unlimited = daily_limit == 0 or UserFeatureAccess.user_has(
+            user_id, UserFeatureAccess.FEATURE_UNLIMITED_AGENT
         )
 
         today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
