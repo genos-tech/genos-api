@@ -75,8 +75,17 @@ def _persist_step(run_id: UUID | None, **fields: Any) -> AgentStep | None:
         return None
 
 
-def _build_tool_declarations() -> list[ToolDeclaration]:
-    """Translate each registered Tool into a provider-neutral declaration."""
+def _build_tool_declarations(
+    disabled_tools: set[str] | None = None,
+) -> list[ToolDeclaration]:
+    """Translate each registered Tool into a provider-neutral declaration.
+
+    Tools whose name appears in `disabled_tools` are omitted from the
+    list, so the model never even sees them as callable. Currently used
+    to honour the frontend "Web search" toggle (filters out
+    `search_web`).
+    """
+    disabled = disabled_tools or set()
     return [
         ToolDeclaration(
             name=t.name,
@@ -84,6 +93,7 @@ def _build_tool_declarations() -> list[ToolDeclaration]:
             parameters_schema=t.parameters_schema,
         )
         for t in REGISTRY.values()
+        if t.name not in disabled
     ]
 
 
@@ -151,6 +161,7 @@ def run_agent(
     *,
     run_id: UUID | None = None,
     prior_turns: list[tuple[str, str]] | None = None,
+    disabled_tools: set[str] | None = None,
 ) -> dict[str, Any] | None:
     """Drive the agent loop from a fresh user query.
 
@@ -174,7 +185,7 @@ def run_agent(
         The view layer reflects the pause back onto the `AgentRun` row.
     """
     messages: list[AgentMessage] = []
-    for prior_query, prior_answer in (prior_turns or []):
+    for prior_query, prior_answer in prior_turns or []:
         messages.append(_user_turn(prior_query))
         messages.append(AgentMessage(role="assistant", text=prior_answer))
     messages.append(_user_turn(query))
@@ -185,6 +196,7 @@ def run_agent(
         run_id=run_id,
         starting_step=0,
         seen_sources_by_id={},
+        disabled_tools=disabled_tools,
     )
 
 
@@ -369,6 +381,7 @@ def _drive_loop(
     run_id: UUID | None,
     starting_step: int,
     seen_sources_by_id: dict[tuple, dict[str, Any]],
+    disabled_tools: set[str] | None = None,
 ) -> dict[str, Any] | None:
     """The core agent loop, shared by `run_agent` and `resume_agent`.
 
@@ -377,7 +390,7 @@ def _drive_loop(
     """
     max_steps = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
     client = get_model_client()
-    tools = _build_tool_declarations()
+    tools = _build_tool_declarations(disabled_tools)
 
     for step in range(starting_step, max_steps):
         accumulated_function_calls: list[FunctionCall] = []

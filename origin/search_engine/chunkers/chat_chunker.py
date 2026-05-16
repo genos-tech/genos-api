@@ -298,6 +298,10 @@ def _emit_chat_chunks(
 
     # 1) Main-channel entity (non-thread messages).
     main_entity_id = chat_entity_id(chat_label, chat_id_str)
+    # PM main "messages" are really task panels in the UI; scroll
+    # targeting keys off task_id, not the per-project message_id. See
+    # `_build_message_chunks` for the fallback path.
+    use_task_id_as_msg = chat_label == "pm"
     main_chunks = _build_message_chunks(
         chat_label=chat_label,
         chat_id=chat_id_str,
@@ -309,6 +313,7 @@ def _emit_chat_chunks(
         messages=main_msgs,
         body_attr=message_body_attr,
         project_id=project_id,
+        use_task_id_as_msg=use_task_id_as_msg,
     )
     if main_chunks:
         yield EntityChunks(entity_type="chat", entity_id=main_entity_id, chunks=main_chunks)
@@ -372,6 +377,13 @@ def _build_message_chunks(
     messages,
     body_attr,
     project_id,
+    # When True, the trailing `:msg:<id>` portion of each chunk_id is
+    # the linked task's id rather than the underlying `m.message_id`.
+    # Set for PM main-channel because the PM chat surface keys messages
+    # by task_id for scroll targeting (the per-project sequential
+    # message_id isn't what the UI exposes). Falls back to message_id
+    # for any PM main message that happens to lack a task FK.
+    use_task_id_as_msg: bool = False,
 ) -> list[Chunk]:
     out = []
     context_size = _context_window_size()
@@ -383,7 +395,8 @@ def _build_message_chunks(
         related = []
         if getattr(m, "task_id", None):
             related.append(f"task:{m.task_id}")
-        chunk_id = f"chat:{chat_label}:{chat_id}:msg:{m.message_id}"
+        msg_key = (getattr(m, "task_id", None) if use_task_id_as_msg else None) or m.message_id
+        chunk_id = f"chat:{chat_label}:{chat_id}:msg:{msg_key}"
         prior = recent_texts[-context_size:] if context_size else []
         out.append(
             Chunk(
