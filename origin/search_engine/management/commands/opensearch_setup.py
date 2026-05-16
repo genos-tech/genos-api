@@ -4,6 +4,7 @@ from django.core.management.base import BaseCommand
 from opensearchpy.exceptions import ConnectionError as OSConnectionError
 
 from origin.search_engine.index_config import build_index_settings
+from origin.search_engine.models import RagChunk
 from origin.search_engine.opensearch_client import (
     get_client,
     get_index_alias,
@@ -67,6 +68,20 @@ class Command(BaseCommand):
             body = build_index_settings()
             client.indices.create(index=physical, body=body)
             self.stdout.write(self.style.SUCCESS(f"Created index {physical}."))
+            # The index is brand-new (or was just recreated), so the Postgres
+            # RagChunk tracking table is now stale — it still records the
+            # previous index's chunks as "already indexed". Clear it so the
+            # next opensearch_reindex run treats every chunk as new and
+            # re-pushes them. Without this, reindex would see them as
+            # "unchanged" and skip them, leaving search returning nothing.
+            deleted = RagChunk.objects.all().delete()[0]
+            if deleted:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"Cleared {deleted} stale RagChunk records — "
+                        "run opensearch_reindex to repopulate the index."
+                    )
+                )
 
         # Point alias at the physical index. If the alias already exists
         # but points elsewhere, atomically swap it.
