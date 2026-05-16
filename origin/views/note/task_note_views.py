@@ -130,20 +130,27 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
 
         # `TaskMaster.parent_task_id` is a plain BigIntegerField (not a
         # ForeignKey), so `task__parent_task__title` won't resolve through
-        # the ORM. Resolve titles for the distinct set of parent task ids in
-        # one extra query and stamp them onto each note row.
+        # the ORM. Resolve `(title, is_milestone)` for the distinct set of
+        # parent task ids in one extra query and stamp them onto each note
+        # row. `parentTaskIsMilestone` lets the frontend collapse the case
+        # where a note's parent task is itself the milestone's backing task
+        # — without it, the sidebar would show a duplicate "Task N" folder
+        # underneath the milestone folder that already represents task N.
         parent_ids = {row["parentTaskId"] for row in notes if row["parentTaskId"] is not None}
-        parent_title_map = (
-            dict(
-                TaskMaster.objects.filter(
+        parent_info_map = (
+            {
+                t.task_id: (t.title, t.is_milestone)
+                for t in TaskMaster.objects.filter(
                     team=data["team_id"], task_id__in=parent_ids
-                ).values_list("task_id", "title")
-            )
+                ).only("task_id", "title", "is_milestone")
+            }
             if parent_ids
             else {}
         )
         for row in notes:
-            row["parentTaskTitle"] = parent_title_map.get(row["parentTaskId"])
+            info = parent_info_map.get(row["parentTaskId"])
+            row["parentTaskTitle"] = info[0] if info else None
+            row["parentTaskIsMilestone"] = info[1] if info else None
 
         return Response(notes, status=status.HTTP_200_OK)
 
@@ -236,6 +243,42 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                         "tsCreated": serializer.data["ts_created_at"],
                         "tsUpdated": serializer.data["ts_updated_at"],
                     }
+
+                    # Stamp the same Project → Milestone → Task → Subtask
+                    # hierarchy fields the meta endpoint exposes so the
+                    # sidebar can place the newly-created note in the
+                    # correct folder without waiting for a full meta
+                    # refetch.
+                    try:
+                        task = TaskMaster.objects.select_related("milestone").get(
+                            task_id=data["task"]
+                        )
+                        note["parentTaskId"] = task.parent_task_id
+                        note["isMilestone"] = task.is_milestone
+                        note["milestoneId"] = task.milestone_id
+                        note["milestoneTitle"] = task.milestone.title if task.milestone else None
+                        if task.parent_task_id is not None:
+                            parent = (
+                                TaskMaster.objects.filter(
+                                    team=data["team"], task_id=task.parent_task_id
+                                )
+                                .only("title", "is_milestone")
+                                .first()
+                            )
+                            note["parentTaskTitle"] = parent.title if parent else None
+                            note["parentTaskIsMilestone"] = parent.is_milestone if parent else None
+                        else:
+                            note["parentTaskTitle"] = None
+                            note["parentTaskIsMilestone"] = None
+                    except TaskMaster.DoesNotExist:
+                        # Fall back to empty hierarchy — the next meta
+                        # refetch will fill in the right fields.
+                        note["parentTaskId"] = None
+                        note["isMilestone"] = False
+                        note["milestoneId"] = None
+                        note["milestoneTitle"] = None
+                        note["parentTaskTitle"] = None
+                        note["parentTaskIsMilestone"] = None
 
                     print(
                         "{team}, {user}, {note_id}, {note_type}, {role_id}".format(
