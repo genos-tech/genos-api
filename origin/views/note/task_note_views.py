@@ -250,9 +250,15 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                     # correct folder without waiting for a full meta
                     # refetch.
                     try:
-                        task = TaskMaster.objects.select_related("milestone").get(
+                        task = TaskMaster.objects.select_related("milestone", "project").get(
                             task_id=data["task"]
                         )
+                        # `taskTitle` / `projectName` mirror the fields the
+                        # meta endpoint returns. Without them, the sidebar
+                        # would render "Task #<id>" / "Project <id>" until
+                        # the next full meta refetch.
+                        note["taskTitle"] = task.title
+                        note["projectName"] = task.project.project_name if task.project else None
                         note["parentTaskId"] = task.parent_task_id
                         note["isMilestone"] = task.is_milestone
                         note["milestoneId"] = task.milestone_id
@@ -273,6 +279,8 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                     except TaskMaster.DoesNotExist:
                         # Fall back to empty hierarchy — the next meta
                         # refetch will fill in the right fields.
+                        note["taskTitle"] = None
+                        note["projectName"] = None
                         note["parentTaskId"] = None
                         note["isMilestone"] = False
                         note["milestoneId"] = None
