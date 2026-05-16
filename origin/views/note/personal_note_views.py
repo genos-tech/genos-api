@@ -7,6 +7,17 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.serializers.note.note_serializers import *
 
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.utils.note_role import (
+    get_effective_role,
+    require_read_role,
+    require_write_role,
+    delete_note_permissions,
+    ROLE_OWNER,
+)
+from origin.views.utils.note_version import (
+    snapshot_note_version,
+    delete_note_versions,
+)
 
 NOTE_TYPE = 1  # Personal Notes
 
@@ -27,7 +38,7 @@ class AllPersonalNotesView(AuthenticatedAPIView):
             PersonalNoteMaster.objects.filter(team=data["team_id"], owner=data["user_id"])
             .annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
-                roleId=Value(1, output_field=IntegerField()),
+                roleId=Value(ROLE_OWNER, output_field=IntegerField()),
                 teamId=F("team"),
                 ownerId=F("owner"),
                 noteId=F("note_id"),
@@ -131,12 +142,23 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
                     }
 
                     # Second, create the associated role for that note
+                    team_obj = TeamMaster.objects.get(team_id=data["team"])
                     NotePermissionMaster.objects.create(
-                        team=TeamMaster.objects.get(team_id=data["team"]),
+                        team=team_obj,
                         user=CustomUser.objects.get(id=request_user_id),
                         note_id=note["noteId"],
                         note_type=NOTE_TYPE,
-                        role_id=1,  # Assign the creator as the 'owner' (= 1)
+                        role_id=ROLE_OWNER,
+                    )
+
+                    # Third, write the initial version snapshot (v1).
+                    snapshot_note_version(
+                        team=team_obj,
+                        editor=request.user,
+                        note_type=NOTE_TYPE,
+                        note_id=note["noteId"],
+                        title=note["title"],
+                        body=note["body"],
                     )
 
             except Exception as e:
@@ -155,7 +177,6 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
         request_user_id = request.user.id
 
         data = {
-            "owner": request.data.get("user_id"),
             "note_id": request.data.get("note_id"),
             "title": request.data.get("title"),
             "body": request.data.get("body"),
@@ -164,7 +185,7 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
         if res := validate_request_data(data):
             return res
 
-        if res := validate_request_user(str(request_user_id), str(data["owner"])):
+        if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
             return res
 
         try:
@@ -182,6 +203,21 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
         serializer = PersonalNoteMasterSerializer(note, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            # Snapshot the post-save state. The helper handles
+            # same-session coalescing internally.
+            try:
+                snapshot_note_version(
+                    team=note.team,
+                    editor=request.user,
+                    note_type=NOTE_TYPE,
+                    note_id=note.note_id,
+                    title=note.title,
+                    body=note.body,
+                )
+            except Exception as e:
+                # Version write failure shouldn't fail the user's save.
+                # Log and continue.
+                print(f"NoteVersion snapshot failed for personal note {note.note_id}: {e}")
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -191,21 +227,23 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
 
         data = {
             "team": request.GET.get("team_id"),
-            "user_id": request.GET.get("user_id"),
             "note_id": request.GET.get("note_id"),
         }
 
         if res := validate_request_data(data):
             return res
 
-        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+        if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
             return res
 
         try:
-            note = PersonalNoteMaster.objects.get(team=data["team"], note_id=data["note_id"])
-            note.delete()
+            with transaction.atomic():
+                note = PersonalNoteMaster.objects.get(team=data["team"], note_id=data["note_id"])
+                note.delete()
+                delete_note_permissions(NOTE_TYPE, data["note_id"])
+                delete_note_versions(NOTE_TYPE, data["note_id"])
             return Response(
-                {"message": f"Note deleted successfully."},
+                {"message": "Note deleted successfully."},
                 status=status.HTTP_204_NO_CONTENT,
             )
         except PersonalNoteMaster.DoesNotExist:
@@ -221,22 +259,25 @@ class SinglePersonalNoteView(AuthenticatedAPIView):
 
         data = {
             "team": request.GET.get("team_id"),
-            "owner": request.GET.get("user_id"),
             "note_id": request.GET.get("note_id"),
         }
 
         if res := validate_request_data(data):
             return res
 
-        if res := validate_request_user(str(request_user_id), str(data["owner"])):
+        # 404 if missing, 403 if no access — `require_read_role` does
+        # both checks in the right order so the existing single-note
+        # not-found contract still returns 404.
+        if res := require_read_role(request_user_id, NOTE_TYPE, data["note_id"], data["team"]):
             return res
 
+        role = get_effective_role(request_user_id, NOTE_TYPE, data["note_id"], data["team"])
+
         personal_notes = (
-            PersonalNoteMaster.objects.filter(
-                team=data["team"], owner=data["owner"], note_id=data["note_id"]
-            )
+            PersonalNoteMaster.objects.filter(team=data["team"], note_id=data["note_id"])
             .annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
+                roleId=Value(role, output_field=IntegerField()),
                 teamId=F("team"),
                 ownerId=F("owner"),
                 noteId=F("note_id"),
@@ -248,6 +289,7 @@ class SinglePersonalNoteView(AuthenticatedAPIView):
                 "noteType",
                 "teamId",
                 "ownerId",
+                "roleId",
                 "noteId",
                 "parentNoteId",
                 "title",
@@ -280,6 +322,9 @@ class PersonalNoteAttachmentView(AuthenticatedAPIView):
             return res
 
         if res := validate_request_user(str(request_user_id), str(data["uploader"])):
+            return res
+
+        if res := require_write_role(request_user_id, NOTE_TYPE, data["note"]):
             return res
 
         serializer = PersonalNoteAttachmentFactSerializer(data=data)
