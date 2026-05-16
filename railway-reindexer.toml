@@ -13,10 +13,12 @@
 #   pass idempotent — unchanged chunks consume zero OpenAI / OpenSearch
 #   cost.
 #
-# To run a full reindex instead (e.g. after a chunker change like
-# Phase 9 introduced), trigger it manually:
-#   railway run --service opensearch-reindexer \
-#     -- pipenv run python backend_django/manage.py opensearch_reindex
+# To run a full reindex instead (e.g. after a chunker change):
+# SSH into the backend-django container from the Railway dashboard shell and run:
+#   python manage.py opensearch_reindex
+#
+# NOTE: `railway run` cannot reach opensearch.railway.internal from your laptop.
+# Always run OpenSearch commands from inside the Railway container.
 #
 # All env vars from `backend-django` (OPENSEARCH_HOST, OPENAI_API_KEY,
 # DATABASE_URL, etc.) must also be set on this service — they read
@@ -29,6 +31,8 @@ dockerfilePath = "backend_django/Dockerfile"
 [deploy]
 # 10-minute cadence matches the `--since-minutes` value below; bump
 # both together if you want a different incremental window.
+# Absolute path avoids any ambiguity about the working directory when
+# Railway executes the startCommand override.
 cronSchedule = "*/10 * * * *"
-startCommand = "python backend_django/manage.py opensearch_reindex --since-minutes 11"
+startCommand = "python /app/backend_django/manage.py opensearch_reindex --since-minutes 11"
 restartPolicyType = "NEVER"
