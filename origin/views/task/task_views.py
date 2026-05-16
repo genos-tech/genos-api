@@ -990,8 +990,16 @@ class GetProjectTasksView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
-            team=team_id, project=project_id, is_init_task=False
+        # `select_related("assignee")` collapses what was N additional
+        # queries (one per task for assignee email/username/img) into a
+        # single JOIN. `team_id` / `project_id` use the FK column values
+        # directly (the FKs use `to_field="team_id"` / `to_field="project_id"`
+        # so these match what `t.team.team_id` returned previously) — no
+        # JOIN needed.
+        task_with_tags = (
+            TaskMaster.objects.select_related("assignee")
+            .prefetch_related("task_tags")
+            .filter(team=team_id, project=project_id, is_init_task=False)
         )
         response_data = []
         for t in task_with_tags:
@@ -1017,8 +1025,8 @@ class GetProjectTasksView(AuthenticatedAPIView):
                     "threadId": t.thread_id,
                     "tags": t.tags or [],
                     "concatTags": "/" + "/".join([tag["tagName"] for tag in (t.tags or [])]) + "/",
-                    "teamId": str(t.team.team_id),
-                    "projectId": t.project.project_id,
+                    "teamId": str(t.team_id),
+                    "projectId": t.project_id,
                     # Milestone hooks: TaskFilterMenu's milestone-scope
                     # filter and DraggableTaskTable's auto-expand effect
                     # rely on these to find the milestone's backing task
