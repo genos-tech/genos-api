@@ -16,6 +16,15 @@ fragile semantic search workarounds:
     get_current_user, get_project_summary
   Write (requires_approval):
     assign_task, update_note
+
+Phase 15 — aggregation/analytics surface. Five read-only tools that
+return cross-project, time-ranged statistics so the model can answer
+PM-style questions ("throughput last week", "top contributors", "which
+project has the most notes") without enumerating individual records:
+  Read (inline):
+    get_task_throughput_stats, get_top_task_closers,
+    get_project_activity_ranking, get_workload_distribution,
+    get_stale_tasks
 """
 
 from origin.search_engine.agent.tools.add_comment import ADD_COMMENT
@@ -27,8 +36,19 @@ from origin.search_engine.agent.tools.fetch_chat_thread import FETCH_CHAT_THREAD
 from origin.search_engine.agent.tools.fetch_note import FETCH_NOTE
 from origin.search_engine.agent.tools.fetch_task import FETCH_TASK
 from origin.search_engine.agent.tools.get_current_user import GET_CURRENT_USER
+from origin.search_engine.agent.tools.get_project_activity_ranking import (
+    GET_PROJECT_ACTIVITY_RANKING,
+)
 from origin.search_engine.agent.tools.get_project_summary import GET_PROJECT_SUMMARY
+from origin.search_engine.agent.tools.get_stale_tasks import GET_STALE_TASKS
+from origin.search_engine.agent.tools.get_task_throughput_stats import (
+    GET_TASK_THROUGHPUT_STATS,
+)
 from origin.search_engine.agent.tools.get_team_members import GET_TEAM_MEMBERS
+from origin.search_engine.agent.tools.get_top_task_closers import GET_TOP_TASK_CLOSERS
+from origin.search_engine.agent.tools.get_workload_distribution import (
+    GET_WORKLOAD_DISTRIBUTION,
+)
 from origin.search_engine.agent.tools.list_projects import LIST_PROJECTS
 from origin.search_engine.agent.tools.list_tasks import LIST_TASKS
 from origin.search_engine.agent.tools.search_kb import SEARCH_KNOWLEDGE_BASE
@@ -62,6 +82,12 @@ for _t in (
     UPDATE_NOTE,
     # --- Read tools (Phase 14) ---
     SEARCH_WEB,
+    # --- Read tools (Phase 15) — analytics/aggregation ---
+    GET_TASK_THROUGHPUT_STATS,
+    GET_TOP_TASK_CLOSERS,
+    GET_PROJECT_ACTIVITY_RANKING,
+    GET_WORKLOAD_DISTRIBUTION,
+    GET_STALE_TASKS,
 ):
     REGISTRY[_t.name] = _t
 
@@ -75,8 +101,13 @@ __all__ = [
     "FETCH_NOTE",
     "FETCH_TASK",
     "GET_CURRENT_USER",
+    "GET_PROJECT_ACTIVITY_RANKING",
     "GET_PROJECT_SUMMARY",
+    "GET_STALE_TASKS",
+    "GET_TASK_THROUGHPUT_STATS",
     "GET_TEAM_MEMBERS",
+    "GET_TOP_TASK_CLOSERS",
+    "GET_WORKLOAD_DISTRIBUTION",
     "LIST_PROJECTS",
     "LIST_TASKS",
     "REGISTRY",
