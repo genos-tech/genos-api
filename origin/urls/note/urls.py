@@ -10,6 +10,11 @@ from origin.views.note.note_role_views import (
     NoteRoleListView,
     SharedPersonalNoteMetaView,
 )
+from origin.views.note.note_version_views import (
+    NoteVersionListView,
+    NoteVersionDetailView,
+    NoteVersionRestoreView,
+)
 
 urlpatterns = [
     path("api/v2/note/personal/", PersonalNoteMasterView.as_view(), name="personal_note"),
@@ -100,5 +105,21 @@ urlpatterns = [
         "api/v2/note/role/all/",
         NoteRoleListView.as_view(),
         name="note_role_all",
+    ),
+    # Version / history endpoints
+    path(
+        "api/v2/note/version/all/",
+        NoteVersionListView.as_view(),
+        name="note_version_all",
+    ),
+    path(
+        "api/v2/note/version/",
+        NoteVersionDetailView.as_view(),
+        name="note_version_detail",
+    ),
+    path(
+        "api/v2/note/version/restore/",
+        NoteVersionRestoreView.as_view(),
+        name="note_version_restore",
     ),
 ]

@@ -21,6 +21,10 @@ from origin.views.utils.note_role import (
     ROLE_OWNER,
     ROLE_VIEWER,
 )
+from origin.views.utils.note_version import (
+    snapshot_note_version,
+    delete_note_versions,
+)
 
 NOTE_TYPE = 3  # Chat Notes
 
@@ -386,12 +390,23 @@ class ChatNoteMasterView(AuthenticatedAPIView):
                     }
 
                     # Second, create the associated role for that note
+                    team_obj = TeamMaster.objects.get(team_id=data["team"])
                     NotePermissionMaster.objects.create(
-                        team=TeamMaster.objects.get(team_id=data["team"]),
+                        team=team_obj,
                         user=CustomUser.objects.get(id=request_user_id),
                         note_id=note["noteId"],
                         note_type=NOTE_TYPE,
                         role_id=ROLE_OWNER,
+                    )
+
+                    # Third, write the initial version snapshot (v1).
+                    snapshot_note_version(
+                        team=team_obj,
+                        editor=request.user,
+                        note_type=NOTE_TYPE,
+                        note_id=note["noteId"],
+                        title=note["title"],
+                        body=note["body"],
                     )
 
             except Exception as e:
@@ -436,6 +451,17 @@ class ChatNoteMasterView(AuthenticatedAPIView):
         serializer = ChatNoteMasterSerializer(note, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            try:
+                snapshot_note_version(
+                    team=note.team,
+                    editor=request.user,
+                    note_type=NOTE_TYPE,
+                    note_id=note.note_id,
+                    title=note.title,
+                    body=note.body,
+                )
+            except Exception as e:
+                print(f"NoteVersion snapshot failed for chat note {note.note_id}: {e}")
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -459,6 +485,7 @@ class ChatNoteMasterView(AuthenticatedAPIView):
                 note = ChatNoteMaster.objects.get(team=data["team"], note_id=data["note_id"])
                 note.delete()
                 delete_note_permissions(NOTE_TYPE, data["note_id"])
+                delete_note_versions(NOTE_TYPE, data["note_id"])
             return Response(
                 {"message": "Note deleted successfully."},
                 status=status.HTTP_204_NO_CONTENT,
