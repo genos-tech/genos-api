@@ -49,6 +49,26 @@ class NotePermissionMasterSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class NoteRoleMemberSerializer(serializers.ModelSerializer):
+    userId = serializers.UUIDField(source="user.id", read_only=True)
+    userName = serializers.CharField(source="user.username", read_only=True)
+    avatarUrl = serializers.SerializerMethodField()
+    roleId = serializers.IntegerField(source="role_id", read_only=True)
+    tsCreated = serializers.DateTimeField(source="ts_created_at", read_only=True)
+
+    class Meta:
+        model = NotePermissionMaster
+        fields = ["userId", "userName", "avatarUrl", "roleId", "tsCreated"]
+
+    def get_avatarUrl(self, obj):
+        if obj.user and obj.user.profile_image_url:
+            try:
+                return obj.user.profile_image_url.url
+            except ValueError:
+                return None
+        return None
+
+
 class NoteFavoriteMasterSerializer(serializers.ModelSerializer):
     class Meta:
         model = NoteFavoriteMaster

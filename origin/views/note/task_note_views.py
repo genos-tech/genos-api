@@ -1,5 +1,5 @@
 from django.db import transaction
-from django.db.models import F, Value, IntegerField
+from django.db.models import F, Value, IntegerField, Q
 from rest_framework.response import Response
 from rest_framework import status
 
@@ -8,8 +8,46 @@ from origin.serializers.note.note_serializers import *
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.utils.note_role import (
+    get_effective_role,
+    require_read_role,
+    require_write_role,
+    delete_note_permissions,
+    ROLE_OWNER,
+    ROLE_VIEWER,
+)
 
 NOTE_TYPE = 2  # Task Notes
+
+
+def _accessible_task_note_ids(team_id, user_id):
+    """Notes the user can see: project-member notes + explicitly granted notes."""
+    project_ids = list(
+        ProjectMembers.objects.filter(team=team_id, attendee=user_id).values_list(
+            "project_id", flat=True
+        )
+    )
+    project_note_ids = set(
+        TaskNoteMaster.objects.filter(team=team_id, project__in=project_ids).values_list(
+            "note_id", flat=True
+        )
+    )
+    explicit_note_ids = set(
+        NotePermissionMaster.objects.filter(
+            team=team_id, user=user_id, note_type=NOTE_TYPE
+        ).values_list("note_id", flat=True)
+    )
+    return project_note_ids | explicit_note_ids
+
+
+def _role_map(user_id, note_ids):
+    """Map note_id -> role_id from explicit NotePermissionMaster rows."""
+    return {
+        row["note_id"]: row["role_id"]
+        for row in NotePermissionMaster.objects.filter(
+            user=user_id, note_type=NOTE_TYPE, note_id__in=list(note_ids)
+        ).values("note_id", "role_id")
+    }
 
 
 class AllTaskNotesView(AuthenticatedAPIView):
@@ -24,21 +62,13 @@ class AllTaskNotesView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
-        project_ids = list(
-            ProjectMembers.objects.filter(
-                team=data["team_id"], attendee=request_user_id
-            ).values_list("project_id", flat=True)
-        )
+        accessible = _accessible_task_note_ids(data["team_id"], request_user_id)
+        role_map = _role_map(request_user_id, accessible)
 
-        notes = (
-            TaskNoteMaster.objects.filter(team=data["team_id"], project__in=project_ids)
+        notes = list(
+            TaskNoteMaster.objects.filter(team=data["team_id"], note_id__in=accessible)
             .annotate(
-                # Add the static field here
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
-                roleId=Value(
-                    3, output_field=IntegerField()
-                ),  # TODO: use the correct role id (default: viewer)
-                # Your existing annotations
                 teamId=F("team"),
                 ownerId=F("owner"),
                 noteId=F("note_id"),
@@ -48,13 +78,11 @@ class AllTaskNotesView(AuthenticatedAPIView):
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
             )
-            .order_by("tsUpdated")
-            .reverse()
+            .order_by("-tsUpdated")
             .values(
                 "noteType",
                 "teamId",
                 "ownerId",
-                "roleId",
                 "noteId",
                 "parentNoteId",
                 "projectId",
@@ -65,6 +93,9 @@ class AllTaskNotesView(AuthenticatedAPIView):
                 "tsUpdated",
             )
         )
+
+        for n in notes:
+            n["roleId"] = role_map.get(n["noteId"], ROLE_VIEWER)
 
         return Response(notes, status=status.HTTP_200_OK)
 
@@ -81,19 +112,20 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
-        project_ids = list(
-            ProjectMembers.objects.filter(
-                team=data["team_id"], attendee=request_user_id
-            ).values_list("project_id", flat=True)
-        )
+        accessible = _accessible_task_note_ids(data["team_id"], request_user_id)
 
-        # The five new fields (parentTaskId, isMilestone, milestoneId,
+        # The five fields (parentTaskId, isMilestone, milestoneId,
         # milestoneTitle, plus parentTaskTitle resolved below) let the
         # frontend sidebar group notes by Project → Milestone → Task →
         # Subtask without having to load full task metadata client-side.
         # `task__milestone` adds one JOIN for the milestone title.
+        #
+        # Scope: `accessible` is the union of project-member notes and
+        # notes the user has an explicit NotePermissionMaster grant on,
+        # so shared-out task notes show up even if the user isn't a
+        # project member.
         notes = list(
-            TaskNoteMaster.objects.filter(team=data["team_id"], project__in=project_ids)
+            TaskNoteMaster.objects.filter(team=data["team_id"], note_id__in=accessible)
             .select_related("project", "task", "task__milestone")
             .annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
@@ -109,8 +141,7 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
                 milestoneTitle=F("task__milestone__title"),
                 tsUpdated=F("ts_updated_at"),
             )
-            .order_by("tsUpdated")
-            .reverse()
+            .order_by("-tsUpdated")
             .values(
                 "noteType",
                 "noteId",
@@ -288,23 +319,13 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                         note["parentTaskTitle"] = None
                         note["parentTaskIsMilestone"] = None
 
-                    print(
-                        "{team}, {user}, {note_id}, {note_type}, {role_id}".format(
-                            team=TeamMaster.objects.get(team_id=data["team"]),
-                            user=CustomUser.objects.get(id=request_user_id),
-                            note_id=note["noteId"],
-                            note_type=NOTE_TYPE,
-                            role_id=1,  # Assign the creator as the 'owner' (= 1))
-                        )
-                    )
-
                     # Second, create the associated role for that note
                     NotePermissionMaster.objects.create(
                         team=TeamMaster.objects.get(team_id=data["team"]),
                         user=CustomUser.objects.get(id=request_user_id),
                         note_id=note["noteId"],
                         note_type=NOTE_TYPE,
-                        role_id=1,  # Assign the creator as the 'owner' (= 1)
+                        role_id=ROLE_OWNER,
                     )
 
             except Exception as e:
@@ -323,7 +344,6 @@ class TaskNoteMasterView(AuthenticatedAPIView):
         request_user_id = request.user.id
 
         data = {
-            "user_id": request.data.get("user_id"),
             "note_id": request.data.get("note_id"),
             "title": request.data.get("title"),
             "body": request.data.get("body"),
@@ -332,7 +352,7 @@ class TaskNoteMasterView(AuthenticatedAPIView):
         if res := validate_request_data(data):
             return res
 
-        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+        if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
             return res
 
         try:
@@ -359,21 +379,22 @@ class TaskNoteMasterView(AuthenticatedAPIView):
 
         data = {
             "team": request.GET.get("team_id"),
-            "user_id": request.GET.get("user_id"),
             "note_id": request.GET.get("note_id"),
         }
 
         if res := validate_request_data(data):
             return res
 
-        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+        if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
             return res
 
         try:
-            note = TaskNoteMaster.objects.get(team=data["team"], note_id=data["note_id"])
-            note.delete()
+            with transaction.atomic():
+                note = TaskNoteMaster.objects.get(team=data["team"], note_id=data["note_id"])
+                note.delete()
+                delete_note_permissions(NOTE_TYPE, data["note_id"])
             return Response(
-                {"message": f"Note deleted successfully."},
+                {"message": "Note deleted successfully."},
                 status=status.HTTP_204_NO_CONTENT,
             )
         except TaskNoteMaster.DoesNotExist:
@@ -389,20 +410,22 @@ class SingleTaskNoteView(AuthenticatedAPIView):
 
         data = {
             "team": request.GET.get("team_id"),
-            "user_id": request.GET.get("user_id"),
             "note_id": request.GET.get("note_id"),
         }
 
         if res := validate_request_data(data):
             return res
 
-        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+        if res := require_read_role(request_user_id, NOTE_TYPE, data["note_id"], data["team"]):
             return res
 
-        personal_notes = (
+        role = get_effective_role(request_user_id, NOTE_TYPE, data["note_id"], data["team"])
+
+        task_notes = (
             TaskNoteMaster.objects.filter(team=data["team"], note_id=data["note_id"])
             .annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
+                roleId=Value(role, output_field=IntegerField()),
                 teamId=F("team"),
                 ownerId=F("owner"),
                 noteId=F("note_id"),
@@ -416,6 +439,7 @@ class SingleTaskNoteView(AuthenticatedAPIView):
                 "noteType",
                 "teamId",
                 "ownerId",
+                "roleId",
                 "noteId",
                 "parentNoteId",
                 "projectId",
@@ -427,13 +451,13 @@ class SingleTaskNoteView(AuthenticatedAPIView):
             )
         )
 
-        if len(personal_notes) == 0:
+        if len(task_notes) == 0:
             return Response(
                 {"error": "Note not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        return Response(personal_notes[0], status=status.HTTP_200_OK)
+        return Response(task_notes[0], status=status.HTTP_200_OK)
 
 
 class TaskNoteAttachmentView(AuthenticatedAPIView):
@@ -450,6 +474,9 @@ class TaskNoteAttachmentView(AuthenticatedAPIView):
             return res
 
         if res := validate_request_user(str(request_user_id), str(data["uploader"])):
+            return res
+
+        if res := require_write_role(request_user_id, NOTE_TYPE, data["note"]):
             return res
 
         serializer = TaskNoteAttachmentFactSerializer(data=data)

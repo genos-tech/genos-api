@@ -5,7 +5,11 @@ from origin.views.note.chat_note_views import *
 from origin.views.note.task_note_views import *
 from origin.views.note.favorite_note_views import *
 from origin.views.note.recent_note_views import *
-
+from origin.views.note.note_role_views import (
+    NoteRoleView,
+    NoteRoleListView,
+    SharedPersonalNoteMetaView,
+)
 
 urlpatterns = [
     path("api/v2/note/personal/", PersonalNoteMasterView.as_view(), name="personal_note"),
@@ -22,6 +26,11 @@ urlpatterns = [
         "api/v2/note/personal/attachment/",
         PersonalNoteAttachmentView.as_view(),
         name="personal_attachment",
+    ),
+    path(
+        "api/v2/note/personal/shared/meta/",
+        SharedPersonalNoteMetaView.as_view(),
+        name="shared_personal_note_meta",
     ),
     path("api/v2/note/task/", TaskNoteMasterView.as_view(), name="task_note"),
     path(
@@ -80,5 +89,16 @@ urlpatterns = [
         "api/v2/note/recent/meta/",
         AllRecentNotesMetaView.as_view(),
         name="all_recent_notes_meta",
+    ),
+    # Role / sharing endpoints
+    path(
+        "api/v2/note/role/",
+        NoteRoleView.as_view(),
+        name="note_role",
+    ),
+    path(
+        "api/v2/note/role/all/",
+        NoteRoleListView.as_view(),
+        name="note_role_all",
     ),
 ]

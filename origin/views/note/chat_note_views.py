@@ -1,20 +1,85 @@
 from django.db import transaction
-from django.db.models import F, Value, IntegerField, CharField, Case, When
+from django.db.models import F, Q, Value, IntegerField, CharField, Case, When
 from rest_framework.response import Response
 from rest_framework import status
 
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.serializers.note.note_serializers import *
-from origin.models.chat.dm_models import DMMaster
+from origin.models.chat.dm_models import DMMaster, UserDMMapping
 from origin.models.chat.pm_models import PMMessages
-from origin.models.chat.gm_models import GMMaster
+from origin.models.chat.gm_models import GMMaster, GMMembers
 from origin.models.chat.mdm_models import MDMMaster, MDMMembers
-from origin.models.project.prj_models import ProjectMaster
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.common.user_models import CustomUser
 
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.utils.note_role import (
+    get_effective_role,
+    require_read_role,
+    require_write_role,
+    delete_note_permissions,
+    ROLE_OWNER,
+    ROLE_VIEWER,
+)
 
 NOTE_TYPE = 3  # Chat Notes
+
+
+def _chat_membership_filters(team_id, user_id):
+    """Build a Q expression matching chat notes the user has implicit access to."""
+    dm_ids = list(
+        UserDMMapping.objects.filter(team_id=team_id, user_id=user_id).values_list(
+            "dm_id", flat=True
+        )
+    )
+    gm_ids = list(GMMembers.objects.filter(attendee=user_id).values_list("gm_id", flat=True))
+    pm_project_ids = list(
+        ProjectMembers.objects.filter(team=team_id, attendee=user_id).values_list(
+            "project_id", flat=True
+        )
+    )
+    mdm_ids = list(MDMMembers.objects.filter(attendee=user_id).values_list("mdm_id", flat=True))
+
+    q = Q()
+    if dm_ids:
+        q |= Q(chat_type=1, chat_id__in=dm_ids)
+    if gm_ids:
+        q |= Q(chat_type=2, chat_id__in=gm_ids)
+    if pm_project_ids:
+        q |= Q(chat_type=3, chat_id__in=pm_project_ids)
+    if mdm_ids:
+        q |= Q(chat_type=4, chat_id__in=mdm_ids)
+    return q
+
+
+def _accessible_chat_note_ids(team_id, user_id):
+    """Notes the user can see: chat-member notes + explicitly granted notes."""
+    membership_q = _chat_membership_filters(team_id, user_id)
+    if membership_q:
+        member_note_ids = set(
+            ChatNoteMaster.objects.filter(team=team_id)
+            .filter(membership_q)
+            .values_list("note_id", flat=True)
+        )
+    else:
+        member_note_ids = set()
+
+    explicit_note_ids = set(
+        NotePermissionMaster.objects.filter(
+            team=team_id, user=user_id, note_type=NOTE_TYPE
+        ).values_list("note_id", flat=True)
+    )
+    return member_note_ids | explicit_note_ids
+
+
+def _role_map(user_id, note_ids):
+    """Map note_id -> role_id from explicit NotePermissionMaster rows."""
+    return {
+        row["note_id"]: row["role_id"]
+        for row in NotePermissionMaster.objects.filter(
+            user=user_id, note_type=NOTE_TYPE, note_id__in=list(note_ids)
+        ).values("note_id", "role_id")
+    }
 
 
 class AllChatNotesView(AuthenticatedAPIView):
@@ -29,23 +94,13 @@ class AllChatNotesView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
-        notes = []
+        accessible = _accessible_chat_note_ids(data["team_id"], request_user_id)
+        role_map = _role_map(request_user_id, accessible)
 
-        role_id = 1  # owner
-        owner_chat_note_ids = list(
-            NotePermissionMaster.objects.filter(
-                team=data["team_id"], user=request_user_id, note_type=NOTE_TYPE, role_id=role_id
-            ).values_list("note_id", flat=True)
-        )
-        owner_chat_notes = (
-            ChatNoteMaster.objects.filter(
-                team=data["team_id"], owner=data["user_id"], note_id__in=owner_chat_note_ids
-            )
+        notes = list(
+            ChatNoteMaster.objects.filter(team=data["team_id"], note_id__in=accessible)
             .annotate(
-                # Add the static field here
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
-                roleId=Value(role_id, output_field=IntegerField()),
-                # Your existing annotations
                 teamId=F("team"),
                 ownerId=F("owner"),
                 noteId=F("note_id"),
@@ -57,13 +112,11 @@ class AllChatNotesView(AuthenticatedAPIView):
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
             )
-            .order_by("tsUpdated")
-            .reverse()
+            .order_by("-tsUpdated")
             .values(
                 "noteType",
                 "teamId",
                 "ownerId",
-                "roleId",
                 "noteId",
                 "parentNoteId",
                 "chatType",
@@ -77,101 +130,8 @@ class AllChatNotesView(AuthenticatedAPIView):
             )
         )
 
-        role_id = 2  # editor
-        editor_chat_note_ids = list(
-            NotePermissionMaster.objects.filter(
-                team=data["team_id"], user=request_user_id, note_type=NOTE_TYPE, role_id=role_id
-            ).values_list("note_id", flat=True)
-        )
-        editor_chat_notes = (
-            ChatNoteMaster.objects.filter(
-                team=data["team_id"], owner=data["user_id"], note_id__in=editor_chat_note_ids
-            )
-            .annotate(
-                # Add the static field here
-                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
-                roleId=Value(role_id, output_field=IntegerField()),
-                # Your existing annotations
-                teamId=F("team"),
-                ownerId=F("owner"),
-                noteId=F("note_id"),
-                parentNoteId=F("parent_note_id"),
-                chatType=F("chat_type"),
-                chatId=F("chat_id"),
-                isThread=F("is_thread"),
-                threadId=F("thread_id"),
-                tsCreated=F("ts_created_at"),
-                tsUpdated=F("ts_updated_at"),
-            )
-            .order_by("tsUpdated")
-            .reverse()
-            .values(
-                "noteType",
-                "teamId",
-                "ownerId",
-                "roleId",
-                "noteId",
-                "parentNoteId",
-                "chatType",
-                "chatId",
-                "isThread",
-                "threadId",
-                "title",
-                "body",
-                "tsCreated",
-                "tsUpdated",
-            )
-        )
-
-        role_id = 3  # viewer
-        viewer_chat_note_ids = list(
-            NotePermissionMaster.objects.filter(
-                team=data["team_id"], user=request_user_id, note_type=NOTE_TYPE, role_id=role_id
-            ).values_list("note_id", flat=True)
-        )
-        viewer_chat_notes = (
-            ChatNoteMaster.objects.filter(
-                team=data["team_id"], owner=data["user_id"], note_id__in=viewer_chat_note_ids
-            )
-            .annotate(
-                # Add the static field here
-                noteType=Value(NOTE_TYPE, output_field=IntegerField()),
-                roleId=Value(role_id, output_field=IntegerField()),
-                # Your existing annotations
-                teamId=F("team"),
-                ownerId=F("owner"),
-                noteId=F("note_id"),
-                parentNoteId=F("parent_note_id"),
-                chatType=F("chat_type"),
-                chatId=F("chat_id"),
-                isThread=F("is_thread"),
-                threadId=F("thread_id"),
-                tsCreated=F("ts_created_at"),
-                tsUpdated=F("ts_updated_at"),
-            )
-            .order_by("tsUpdated")
-            .reverse()
-            .values(
-                "noteType",
-                "teamId",
-                "ownerId",
-                "roleId",
-                "noteId",
-                "parentNoteId",
-                "chatType",
-                "chatId",
-                "isThread",
-                "threadId",
-                "title",
-                "body",
-                "tsCreated",
-                "tsUpdated",
-            )
-        )
-
-        notes.extend(list(owner_chat_notes))
-        notes.extend(list(editor_chat_notes))
-        notes.extend(list(viewer_chat_notes))
+        for n in notes:
+            n["roleId"] = role_map.get(n["noteId"], ROLE_VIEWER)
 
         return Response(notes, status=status.HTTP_200_OK)
 
@@ -188,15 +148,10 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
-        chat_note_ids = list(
-            NotePermissionMaster.objects.filter(
-                team=data["team_id"], user=request_user_id, note_type=NOTE_TYPE
-            ).values_list("note_id", flat=True)
-        )
+        accessible = _accessible_chat_note_ids(data["team_id"], request_user_id)
+
         chat_notes = (
-            ChatNoteMaster.objects.filter(
-                team=data["team_id"], owner=data["user_id"], note_id__in=chat_note_ids
-            )
+            ChatNoteMaster.objects.filter(team=data["team_id"], note_id__in=accessible)
             .annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 noteId=F("note_id"),
@@ -215,8 +170,7 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                     output_field=CharField(),
                 ),
             )
-            .order_by("tsUpdated")
-            .reverse()
+            .order_by("-tsUpdated")
             .values(
                 "noteType",
                 "noteId",
@@ -437,7 +391,7 @@ class ChatNoteMasterView(AuthenticatedAPIView):
                         user=CustomUser.objects.get(id=request_user_id),
                         note_id=note["noteId"],
                         note_type=NOTE_TYPE,
-                        role_id=1,  # Assign the creator as the 'owner' (= 1)
+                        role_id=ROLE_OWNER,
                     )
 
             except Exception as e:
@@ -456,7 +410,6 @@ class ChatNoteMasterView(AuthenticatedAPIView):
         request_user_id = request.user.id
 
         data = {
-            "user_id": request.data.get("user_id"),
             "note_id": request.data.get("note_id"),
             "title": request.data.get("title"),
             "body": request.data.get("body"),
@@ -465,7 +418,7 @@ class ChatNoteMasterView(AuthenticatedAPIView):
         if res := validate_request_data(data):
             return res
 
-        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+        if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
             return res
 
         try:
@@ -492,21 +445,22 @@ class ChatNoteMasterView(AuthenticatedAPIView):
 
         data = {
             "team": request.GET.get("team_id"),
-            "user_id": request.GET.get("user_id"),
             "note_id": request.GET.get("note_id"),
         }
 
         if res := validate_request_data(data):
             return res
 
-        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+        if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
             return res
 
         try:
-            note = ChatNoteMaster.objects.get(team=data["team"], note_id=data["note_id"])
-            note.delete()
+            with transaction.atomic():
+                note = ChatNoteMaster.objects.get(team=data["team"], note_id=data["note_id"])
+                note.delete()
+                delete_note_permissions(NOTE_TYPE, data["note_id"])
             return Response(
-                {"message": f"Note deleted successfully."},
+                {"message": "Note deleted successfully."},
                 status=status.HTTP_204_NO_CONTENT,
             )
         except ChatNoteMaster.DoesNotExist:
@@ -522,24 +476,25 @@ class SingleChatNoteView(AuthenticatedAPIView):
 
         data = {
             "team": request.GET.get("team_id"),
-            "owner": request.GET.get("user_id"),
             "note_id": request.GET.get("note_id"),
         }
 
         if res := validate_request_data(data):
             return res
 
-        if res := validate_request_user(str(request_user_id), str(data["owner"])):
+        if res := require_read_role(request_user_id, NOTE_TYPE, data["note_id"], data["team"]):
             return res
+
+        role = get_effective_role(request_user_id, NOTE_TYPE, data["note_id"], data["team"])
 
         chat_notes = (
             ChatNoteMaster.objects.filter(
                 team=data["team"],
-                owner=data["owner"],
                 note_id=data["note_id"],
             )
             .annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
+                roleId=Value(role, output_field=IntegerField()),
                 teamId=F("team"),
                 ownerId=F("owner"),
                 noteId=F("note_id"),
@@ -555,6 +510,7 @@ class SingleChatNoteView(AuthenticatedAPIView):
                 "noteType",
                 "teamId",
                 "ownerId",
+                "roleId",
                 "noteId",
                 "parentNoteId",
                 "chatType",
@@ -605,6 +561,9 @@ class ChatNoteAttachmentView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["uploader"])):
             return res
 
+        if res := require_write_role(request_user_id, NOTE_TYPE, data["note"]):
+            return res
+
         serializer = ChatNoteAttachmentFactSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
@@ -638,10 +597,17 @@ class ChatSubNotesView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["owner"])):
             return res
 
+        # Gate by access to the parent note.
+        parent_role = get_effective_role(request_user_id, NOTE_TYPE, data["note_id"], data["team"])
+        if parent_role is None:
+            return Response(
+                {"error": "You do not have access to this note."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         sub_notes = (
             ChatNoteMaster.objects.filter(
                 team=data["team"],
-                owner=data["owner"],
                 parent_note_id=data["note_id"],
             )
             .annotate(
