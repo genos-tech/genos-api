@@ -1,4 +1,7 @@
+import time
+
 from django.core.management.base import BaseCommand
+from opensearchpy.exceptions import ConnectionError as OSConnectionError
 
 from origin.search_engine.index_config import build_index_settings
 from origin.search_engine.opensearch_client import (
@@ -6,6 +9,9 @@ from origin.search_engine.opensearch_client import (
     get_index_alias,
     get_physical_index,
 )
+
+_MAX_RETRIES = 6
+_RETRY_DELAY_S = 5
 
 
 class Command(BaseCommand):
@@ -31,8 +37,28 @@ class Command(BaseCommand):
         physical = get_physical_index()
         alias = get_index_alias()
 
-        if options["recreate"] and client.indices.exists(index=physical):
-            self.stdout.write(f"Deleting existing index {physical}...")
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                self._setup(client, physical, alias, options["recreate"])
+                return
+            except OSConnectionError as exc:
+                if attempt < _MAX_RETRIES:
+                    self.stderr.write(
+                        f"OpenSearch not ready (attempt {attempt}/{_MAX_RETRIES}): {exc}. "
+                        f"Retrying in {_RETRY_DELAY_S}s…"
+                    )
+                    time.sleep(_RETRY_DELAY_S)
+                else:
+                    self.stderr.write(
+                        f"OpenSearch still unavailable after {_MAX_RETRIES} attempts. "
+                        "The app will start without search index setup. "
+                        "Run `manage.py opensearch_setup` once OpenSearch is ready."
+                    )
+                    # Exit 0 so the Dockerfile CMD continues to gunicorn.
+
+    def _setup(self, client, physical, alias, recreate):
+        if recreate and client.indices.exists(index=physical):
+            self.stdout.write(f"Deleting existing index {physical}…")
             client.indices.delete(index=physical)
 
         if client.indices.exists(index=physical):

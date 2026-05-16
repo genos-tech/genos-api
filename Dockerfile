@@ -51,5 +51,5 @@ CMD ["sh", "-c", "\
   fi && \
   python manage.py collectstatic --noinput && \
   python manage.py migrate --noinput && \
-  python manage.py opensearch_setup && \
+  python manage.py opensearch_setup || echo 'Warning: opensearch_setup failed — search features unavailable until OpenSearch is ready.' && \
   gunicorn apis.wsgi:application --bind 0.0.0.0:$PORT --workers 3"]
