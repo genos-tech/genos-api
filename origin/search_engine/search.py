@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -360,6 +361,36 @@ def _build_filter(
     return filt
 
 
+_HIGHLIGHT_PRE = "\x02"
+_HIGHLIGHT_POST = "\x03"
+# Matches one analyzer-marked term inside the highlight response, e.g.
+# "\x02running\x03". Control chars are used instead of `<em>` so we
+# can't collide with literal `<em>` substrings in user-generated text.
+_HIGHLIGHT_TERM_RE = re.compile(rf"{_HIGHLIGHT_PRE}(.*?){_HIGHLIGHT_POST}", re.DOTALL)
+
+
+def _extract_matched_terms(highlight: Optional[dict]) -> list[str]:
+    """Pull the unique analyzer-matched terms (stemmed/synonym forms
+    included) out of an OpenSearch hit's `highlight` block. Returned
+    lowercased and sorted longest-first so the frontend regex alternation
+    gives longer tokens priority over their prefixes.
+    """
+    if not highlight:
+        return []
+    seen: set[str] = set()
+    for fragments in highlight.values():
+        if not isinstance(fragments, list):
+            continue
+        for frag in fragments:
+            if not frag:
+                continue
+            for term in _HIGHLIGHT_TERM_RE.findall(frag):
+                cleaned = term.strip().lower()
+                if cleaned:
+                    seen.add(cleaned)
+    return sorted(seen, key=len, reverse=True)
+
+
 def _run_keyword(
     client, index: str, query: str, base_filter: list[dict], size: int, *, for_agent: bool = False
 ) -> list[dict]:
@@ -381,6 +412,20 @@ def _run_keyword(
                 },
                 "filter": base_filter,
             }
+        },
+        # Highlight lets the frontend bold analyzer-matched terms
+        # (stemming, synonyms) — not just literal user-typed words.
+        # `number_of_fragments: 0` returns the whole field with markers
+        # rather than fragments; we only consume the marked term list,
+        # not the marked text itself.
+        "highlight": {
+            "pre_tags": [_HIGHLIGHT_PRE],
+            "post_tags": [_HIGHLIGHT_POST],
+            "fields": {
+                "title": {"number_of_fragments": 0},
+                "snippet_text": {"number_of_fragments": 0},
+                "search_text": {"number_of_fragments": 0},
+            },
         },
     }
     try:
@@ -457,8 +502,11 @@ def _source_fields(*, for_agent: bool = False) -> list[str]:
 def _rrf_fuse(keyword_hits: list[dict], vector_hits: list[dict]) -> list[dict]:
     """Reciprocal Rank Fusion: combine two ranked chunk-hit lists.
 
-    Returns a list of `{chunk_id, source, score, keyword_rank, vector_rank}`
-    sorted by RRF score.
+    Returns a list of
+    `{chunk_id, source, score, keyword_rank, vector_rank, matched_terms}`
+    sorted by RRF score. `matched_terms` is the analyzer-aware token list
+    pulled from the keyword hit's highlight response (empty for
+    vector-only matches).
     """
     by_chunk: dict[str, dict] = {}
 
@@ -472,11 +520,14 @@ def _rrf_fuse(keyword_hits: list[dict], vector_hits: list[dict]) -> list[dict]:
                 "score": 0.0,
                 "keyword_rank": None,
                 "vector_rank": None,
+                "matched_terms": [],
             },
         )
         by_chunk[cid]["score"] += 1.0 / (RRF_K + rank)
         by_chunk[cid]["keyword_rank"] = rank
         by_chunk[cid]["source"] = hit["_source"]
+        # Only keyword hits carry highlights — overwrite unconditionally.
+        by_chunk[cid]["matched_terms"] = _extract_matched_terms(hit.get("highlight"))
 
     for rank, hit in enumerate(vector_hits, start=1):
         cid = hit["_id"]
@@ -488,6 +539,7 @@ def _rrf_fuse(keyword_hits: list[dict], vector_hits: list[dict]) -> list[dict]:
                 "score": 0.0,
                 "keyword_rank": None,
                 "vector_rank": None,
+                "matched_terms": [],
             },
         )
         by_chunk[cid]["score"] += 1.0 / (RRF_K + rank)
@@ -540,6 +592,7 @@ def _group_by_entity(
                 "note_type": src.get("note_type"),
                 "project_id": src.get("project_id"),
                 "related_entity_ids": src.get("related_entity_ids") or [],
+                "matched_terms": list(c.get("matched_terms") or []),
             }
             if for_agent:
                 entry["chunks"] = [_chunk_for_agent(c)]
@@ -550,6 +603,16 @@ def _group_by_entity(
                 existing["matched_chunk_types"].append(chunk_type)
             if for_agent and len(existing.get("chunks", [])) < max_chunks_per_entity:
                 existing["chunks"].append(_chunk_for_agent(c))
+            # Merge analyzer-matched terms across chunks of the same
+            # entity — a lower-ranked chunk may have surfaced a stemmed
+            # form the top chunk missed.
+            new_terms = c.get("matched_terms") or []
+            if new_terms:
+                seen = set(existing["matched_terms"])
+                for t in new_terms:
+                    if t not in seen:
+                        existing["matched_terms"].append(t)
+                        seen.add(t)
             # Keep the highest score — `fused_chunks` is already sorted
             # by score desc, so the first occurrence wins.
     return list(by_entity.values())
