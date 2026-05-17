@@ -1,0 +1,36 @@
+# Railway config for the `demo-user-cleanup` cron service.
+#
+# Same Docker image as the `backend-django` service (built from the
+# same Dockerfile), but Railway runs it as a cron job: the container
+# starts on each tick, runs the start command to completion, and
+# exits. No gunicorn, no long-running process.
+#
+# What this does:
+#   Once a day at 03:00 UTC, deletes every `is_demo=True` user whose
+#   `ts_created_at` is older than 24 hours, along with their owned
+#   demo team(s), bot peer users, and all team-scoped data. The
+#   signout path (`LogoutView`) already deletes demo accounts when
+#   the user explicitly signs out; this cron catches the ones that
+#   were abandoned (closed tab, expired refresh token, etc.).
+#
+# To dry-run from a Railway shell (no DB changes):
+#   python /app/backend_django/manage.py cleanup_demo_users --dry-run
+#
+# To purge older windows (e.g. emergency cleanup):
+#   python /app/backend_django/manage.py cleanup_demo_users --hours 1
+#
+# All env vars from `backend-django` (DATABASE_URL, etc.) must also be
+# set on this service.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "backend_django/Dockerfile"
+
+[deploy]
+# Daily at 03:00 UTC. Pick a low-traffic time so the row-deletion
+# pressure on Postgres doesn't compete with peak-hour queries.
+# Absolute path avoids any ambiguity about the working directory when
+# Railway executes the startCommand override.
+cronSchedule = "0 3 * * *"
+startCommand = "python /app/backend_django/manage.py cleanup_demo_users"
+restartPolicyType = "NEVER"

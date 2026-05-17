@@ -1,17 +1,32 @@
+import logging
+import secrets
+import uuid
+
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from rest_framework import viewsets, permissions
 from rest_framework.views import APIView
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.http import JsonResponse
 from rest_framework.request import Request
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from .base_auth_api_view import AuthenticatedAPIView
+
+from origin.services.demo_seeder import (
+    create_demo_environment,
+    delete_demo_environment,
+    kick_off_demo_reindex,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _set_refresh_cookie(response, refresh_value: str) -> None:
@@ -105,6 +120,79 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         return response
 
 
+class DemoSignInThrottle(AnonRateThrottle):
+    """Per-IP throttle for the unauthenticated demo signin endpoint.
+
+    Each call seeds ~150 rows, so without a cap a botnet could exhaust
+    the DB. 10/hour per IP is generous for legitimate evaluation while
+    making volumetric abuse impractical.
+    """
+
+    rate = "10/hour"
+    scope = "demo_signin"
+
+
+class DemoSignInView(APIView):
+    """Provision a one-click demo user, team, and seeded sample data.
+
+    Mirrors the response shape of `CustomTokenObtainPairView` so the
+    frontend can re-use its existing post-signin handler, plus adds
+    `team_id` / `team_name` / `is_demo` so the client can skip the
+    team-picker (`/jointeam`) and land directly in `/workspace`.
+    """
+
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [DemoSignInThrottle]
+
+    def post(self, request: Request):
+        short = uuid.uuid4().hex[:8]
+        email = f"demo+{short}@genos.app"
+        username = f"Demo User {short}"
+
+        try:
+            with transaction.atomic():
+                user = User.objects.create_user(
+                    email=email,
+                    username=username,
+                    password=secrets.token_urlsafe(32),
+                    is_demo=True,
+                )
+                team_info = create_demo_environment(user)
+        except Exception as exc:
+            logger.exception("Demo signin failed: %s", exc)
+            return Response(
+                {"error": "Failed to create demo environment. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # The seeded chats/tasks/notes need to land in OpenSearch before
+        # the demo user can use Spotlight (Cmd-K AI). The scheduled cron
+        # only runs every 10 min — too slow for a first-impression demo.
+        # Fire an incremental reindex on a background thread so the
+        # signin response stays fast; failures are logged but non-fatal.
+        kick_off_demo_reindex()
+
+        refresh = RefreshToken.for_user(user)
+        response_data = {
+            "access": str(refresh.access_token),
+            "username": user.username,
+            "user_id": str(user.id),
+            "email": user.email,
+            "profile_image_file_name": user.profile_image_file_name or "",
+            "ts_joined_at": user.ts_created_at.isoformat() if user.ts_created_at else "",
+            "is_offline_forced": user.is_offline_forced,
+            "role": user.role or "",
+            "base_country": user.base_country or "",
+            "custom_status": user.custom_status or "",
+            "team_id": team_info["team_id"],
+            "team_name": team_info["team_name"],
+            "is_demo": True,
+        }
+        response = JsonResponse(response_data, status=201)
+        _set_refresh_cookie(response, str(refresh))
+        return response
+
+
 class CookieTokenRefreshView(TokenRefreshView):
     def get(self, request: Request, *args, **kwargs):
         refresh = request.COOKIES.get("refresh")  # Get refresh token from cookies
@@ -158,6 +246,25 @@ class LogoutView(APIView):
     def post(self, request: Request):
         refresh = request.COOKIES.get("refresh")
 
+        # Identify the user *before* blacklisting so we can clean up
+        # demo accounts. LogoutView is AllowAny and the frontend
+        # logout fetch does not currently attach a Bearer header, so
+        # we look at the JWT first (in case it's there) and fall back
+        # to decoding the refresh cookie's claims.
+        user = None
+        try:
+            auth_result = JWTAuthentication().authenticate(request)
+            if auth_result:
+                user = auth_result[0]
+        except Exception:
+            pass
+        if user is None and refresh:
+            try:
+                user_id = RefreshToken(refresh).get("user_id")
+                user = User.objects.filter(id=user_id).first()
+            except (InvalidToken, TokenError, KeyError, AttributeError):
+                pass
+
         if refresh:
             try:
                 # `.blacklist()` requires the `token_blacklist` app
@@ -170,6 +277,16 @@ class LogoutView(APIView):
                 # want to clear the cookie below so the browser stops
                 # sending it.
                 pass
+
+        # Demo users are deleted on signout so each demo session is
+        # isolated and the DB doesn't accumulate abandoned demos. The
+        # daily cron sweeps anything that slipped through. Cleanup is
+        # best-effort — never 500 the logout if it fails.
+        if user is not None and getattr(user, "is_demo", False):
+            try:
+                delete_demo_environment(user)
+            except Exception as exc:
+                logger.exception("Demo cleanup on signout failed: %s", exc)
 
         response = JsonResponse({"message": "Signed out"})
         response.delete_cookie(

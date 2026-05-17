@@ -28,6 +28,7 @@ class TeamMaster(models.Model):
     profile_image_file = models.FileField(upload_to=profile_image_path, blank=True, null=True)
     profile_image_file_name = models.CharField(blank=True, null=True)
     is_deleted = models.BooleanField(default=False)
+    is_demo = models.BooleanField(default=False, db_index=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
