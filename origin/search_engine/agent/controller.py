@@ -127,7 +127,20 @@ def _strip_workspace_marker(s: str | None) -> str | None:
 
 
 def _ui_source_for_match(match: dict[str, Any]) -> dict[str, Any]:
-    """Shape a search-tool match into the UI's `sources` event payload."""
+    """Shape a search-tool match into the UI's `sources` event payload.
+
+    Mirrors the `SpotlightResult` shape returned by `/api/v2/search/`
+    so the frontend can hand the source chip directly to the same
+    `handleSpotlightSelect` router that the search-result rows use.
+    Two fields are essential for routing parity:
+
+      * `message_id` — lets a chat citation deep-link to the exact
+        bubble that matched (not just the chat/thread).
+      * `related_entity_ids` — fallback the frontend reads when chunks
+        pre-date direct `task_id` / `chat_*` fields on note rows. Older
+        chat-note / task-note chunks only carry their parent entity in
+        this list, so dropping it breaks routing for unupgraded data.
+    """
     return {
         "entity_type": match.get("entity_type"),
         "entity_id": match.get("entity_id"),
@@ -136,14 +149,19 @@ def _ui_source_for_match(match: dict[str, Any]) -> dict[str, Any]:
         "chat_type": match.get("chat_type"),
         "chat_id": match.get("chat_id"),
         "thread_id": match.get("thread_id"),
+        "message_id": match.get("message_id"),
         "task_id": match.get("task_id"),
         "note_id": match.get("note_id"),
         "note_type": match.get("note_type"),
         "project_id": match.get("project_id"),
-        "matched_chunk_types": [],
+        "matched_chunk_types": list(match.get("matched_chunk_types") or []),
+        "matched_terms": list(match.get("matched_terms") or []),
+        "related_entity_ids": list(match.get("related_entity_ids") or []),
+        "updated_at": match.get("updated_at"),
+        # These ranking fields are search-result-only; the agent never
+        # ranks sources itself. Defaults keep the shape uniform so the
+        # frontend doesn't have to branch on agent-vs-search origin.
         "score": 0.0,
-        "related_entity_ids": [],
-        "updated_at": None,
         "keyword_rank": None,
         "vector_rank": None,
     }

@@ -86,6 +86,18 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "note_id": entity.get("note_id"),
                 "note_type": entity.get("note_type"),
                 "project_id": entity.get("project_id"),
+                # Surfaced for the source-chip → workspace deep-link.
+                # `message_id` lets a chat citation focus the exact
+                # matched bubble; `related_entity_ids` is the fallback
+                # the frontend reads when chunks pre-date direct
+                # task_id / chat_* fields on note rows; the rest match
+                # the SpotlightResult shape used by search-result rows
+                # so the agent-source path can reuse the same router.
+                "message_id": entity.get("message_id"),
+                "matched_chunk_types": list(entity.get("matched_chunk_types") or []),
+                "matched_terms": list(entity.get("matched_terms") or []),
+                "related_entity_ids": list(entity.get("related_entity_ids") or []),
+                "updated_at": entity.get("updated_at"),
             }
         )
 
