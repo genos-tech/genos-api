@@ -60,6 +60,8 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         "auth.Permission", related_name="customuser_permissions", blank=True  # Unique related name
     )
 
+    is_demo = models.BooleanField(default=False, db_index=True)
+
     # Django Auth Fields
     is_active = models.BooleanField(default=True)  # Can be disabled
     is_staff = models.BooleanField(default=False)  # Access to admin panel
