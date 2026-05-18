@@ -362,9 +362,12 @@ class PMSingleMessageView(AuthenticatedAPIView):
             else set()
         )
 
+        # select_related("sender") collapses the per-row sender lookup into the
+        # same SQL — without it the loop below would issue one query per
+        # reaction (N+1).
         raw_reactions = ReactionFact.objects.filter(
             chat_type=CHAT_TYPE, chat_id=project_id, message_id=message_id, is_thread=False
-        )
+        ).select_related("sender")
         all_reactions = []
         for raw_reaction in raw_reactions:
             reaction = {
@@ -620,7 +623,7 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
             message_id=message_id,
             is_thread=True,
             thread_id=thread_id,
-        )
+        ).select_related("sender")
         all_reactions = []
         for raw_reaction in raw_reactions:
             reaction = {

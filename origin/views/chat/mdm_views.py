@@ -914,8 +914,11 @@ class MDMSingleThreadMessageView(AuthenticatedAPIView):
         )
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=CHAT_TYPE, chat_id=mdm_id, message_id=message_id, is_thread=True,
-            thread_id=thread_id
+            chat_type=CHAT_TYPE,
+            chat_id=mdm_id,
+            message_id=message_id,
+            is_thread=True,
+            thread_id=thread_id,
         ).select_related("sender")
         all_reactions = []
         for raw_reaction in raw_reactions:
@@ -1070,9 +1073,14 @@ class MDMThreadMessagesByIdView(AuthenticatedAPIView):
         if res := validate_request_user(str(request.user.id), str(data["user_id"])):
             return res
 
-        raw_messages = MDMThreadMessages.objects.filter(
-            mdm=mdm_id, thread_id=thread_id, is_deleted=False
-        ).order_by("ts_sent_at")
+        # select_related expands the FK chain accessed in the loop below
+        # (raw_message.mdm, raw_message.sender, raw_message.parent_message_uid.task)
+        # so the whole thread loads in a single SQL with joins.
+        raw_messages = (
+            MDMThreadMessages.objects.filter(mdm=mdm_id, thread_id=thread_id, is_deleted=False)
+            .select_related("mdm", "sender", "parent_message_uid__task")
+            .order_by("ts_sent_at")
+        )
 
         chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
             "flagged_messages", flat=True

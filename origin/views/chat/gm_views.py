@@ -998,10 +998,14 @@ class GMThreadMessagesByIdView(AuthenticatedAPIView):
         if res := validate_request_user(str(request.user.id), str(data["user_id"])):
             return res
 
-        # Fetch all messages where the gm_id matches and the user is involved
-        raw_messages = GMThreadMessages.objects.filter(
-            gm=gm_id, thread_id=thread_id, is_deleted=False
-        ).order_by("ts_sent_at")
+        # Fetch all messages where the gm_id matches and the user is involved.
+        # select_related expands the FK chain accessed in the loop below so the
+        # whole thread loads in a single SQL with joins.
+        raw_messages = (
+            GMThreadMessages.objects.filter(gm=gm_id, thread_id=thread_id, is_deleted=False)
+            .select_related("gm", "sender", "parent_message_uid__task")
+            .order_by("ts_sent_at")
+        )
 
         chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
             "flagged_messages", flat=True
@@ -1171,10 +1175,14 @@ class GMThreadMessagesByTaskIdView(AuthenticatedAPIView):
         if res := validate_request_user(str(request.user.id), str(data["user_id"])):
             return res
 
-        # Fetch all messages where the gm_id matches and the task_id matches and the user is involved
-        raw_messages = GMThreadMessages.objects.filter(
-            gm=gm_id, parent_message_uid__task=task_id, is_deleted=False
-        ).order_by("ts_sent_at")
+        # Fetch all messages where the gm_id matches and the task_id matches and the user is involved.
+        raw_messages = (
+            GMThreadMessages.objects.filter(
+                gm=gm_id, parent_message_uid__task=task_id, is_deleted=False
+            )
+            .select_related("gm", "sender", "parent_message_uid__task")
+            .order_by("ts_sent_at")
+        )
 
         thread_id = raw_messages[0].thread_id
         if not thread_id:

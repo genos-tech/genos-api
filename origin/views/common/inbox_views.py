@@ -22,18 +22,15 @@ class InboxItemView(AuthenticatedAPIView):
             "is_read": False,
         }
 
-        already_exist = (
-            len(
-                InboxItems.objects.filter(
-                    team=data["team"],
-                    sender=data["sender"],
-                    receiver=data["receiver"],
-                    item_body=data["item_body"],
-                    item_type=data["item_type"],
-                ).values()
-            )
-            > 0
-        )
+        # `.exists()` does an EXISTS subquery (no row materialization), unlike
+        # `len(qs.values())` which fetches every matching row just to count.
+        already_exist = InboxItems.objects.filter(
+            team=data["team"],
+            sender=data["sender"],
+            receiver=data["receiver"],
+            item_body=data["item_body"],
+            item_type=data["item_type"],
+        ).exists()
 
         serializer = InboxItemsSerializer(data=data)
         if serializer.is_valid():
@@ -127,17 +124,12 @@ class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
             "is_read": False,
         }
 
-        is_already_requested = (
-            len(
-                InboxItems.objects.filter(
-                    team=data["team"],
-                    sender=data["sender"],
-                    receiver=data["receiver"],
-                    item_type=data["item_type"],
-                ).values()
-            )
-            > 0
-        )
+        is_already_requested = InboxItems.objects.filter(
+            team=data["team"],
+            sender=data["sender"],
+            receiver=data["receiver"],
+            item_type=data["item_type"],
+        ).exists()
 
         serializer = InboxItemsSerializer(data=data)
         if serializer.is_valid():
@@ -180,18 +172,13 @@ class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
             "is_read": False,
         }
 
-        is_already_requested = (
-            len(
-                InboxItems.objects.filter(
-                    team=data["team"],
-                    sender=data["sender"],
-                    receiver=data["receiver"],
-                    item_type=data["item_type"],
-                    item_optionals=data["item_optionals"],
-                ).values()
-            )
-            > 0
-        )
+        is_already_requested = InboxItems.objects.filter(
+            team=data["team"],
+            sender=data["sender"],
+            receiver=data["receiver"],
+            item_type=data["item_type"],
+            item_optionals=data["item_optionals"],
+        ).exists()
 
         serializer = InboxItemsSerializer(data=data)
         if serializer.is_valid():
@@ -234,18 +221,13 @@ class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
             "is_read": False,
         }
 
-        is_already_requested = (
-            len(
-                InboxItems.objects.filter(
-                    team=data["team"],
-                    sender=data["sender"],
-                    receiver=data["receiver"],
-                    item_type=data["item_type"],
-                    item_optionals=data["item_optionals"],
-                ).values()
-            )
-            > 0
-        )
+        is_already_requested = InboxItems.objects.filter(
+            team=data["team"],
+            sender=data["sender"],
+            receiver=data["receiver"],
+            item_type=data["item_type"],
+            item_optionals=data["item_optionals"],
+        ).exists()
 
         serializer = InboxItemsSerializer(data=data)
         if serializer.is_valid():

@@ -1,5 +1,6 @@
 import os
 import base64
+from collections import defaultdict
 from datetime import datetime
 from django.db.models import Case, F, IntegerField, Max, Q, Value, When
 from rest_framework.response import Response
@@ -291,9 +292,11 @@ class TaskMasterView(AuthenticatedAPIView):
         # behavior for every other field.
         milestone_in_request = "milestone" in request.data
         requested_milestone_id = request.data.get("milestone") if milestone_in_request else None
-        
+
         # Get parent task id from request data
-        parent_task_id = request.data.get("parent_task_id") if "parent_task_id" in request.data else None
+        parent_task_id = (
+            request.data.get("parent_task_id") if "parent_task_id" in request.data else None
+        )
 
         # Same "key absent vs explicit null" trap for `due_date`: the
         # frontend sends `due_date: null` when the user picks TBD, but
@@ -478,8 +481,12 @@ class GetTeamTasksView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
-            team=team_id, is_init_task=False
+        # select_related on the FKs accessed in the loop (assignee, team,
+        # project) collapses 3 per-row lookups into JOINs on the main query.
+        task_with_tags = (
+            TaskMaster.objects.filter(team=team_id, is_init_task=False)
+            .select_related("assignee", "team", "project")
+            .prefetch_related("task_tags")
         )
         response_data = []
         for t in task_with_tags:
@@ -504,7 +511,11 @@ class GetTeamTasksView(AuthenticatedAPIView):
                     "rootTaskId": t.root_task_id,
                     "threadId": t.thread_id,
                     "tags": t.tags or [],
-                    "concatTags": ("/" + "/".join([tag["tagName"] for tag in t.tags]) + "/") if t.tags else None,
+                    "concatTags": (
+                        ("/" + "/".join([tag["tagName"] for tag in t.tags]) + "/")
+                        if t.tags
+                        else None
+                    ),
                     "teamId": str(t.team.team_id),
                     "projectId": t.project.project_id,
                     "isMilestone": t.is_milestone,
@@ -749,26 +760,34 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                     },
                     "title": t.title,
                     "body": t.content,
-                    "assignee": {
-                        "teamId": t.team.team_id,
-                        "userId": t.assignee.id,
-                        "userName": t.assignee.username,
-                        "userEmail": t.assignee.email,
-                        "avatarImgPath": t.assignee.profile_image_file_name,
-                        "tsLastSeen": "",
-                        "tsJoined": "",
-                        "customStatus": "",
-                    } if t.assignee else None,
-                    "reporter": {
-                        "teamId": t.team.team_id,
-                        "userId": t.reporter.id,
-                        "userName": t.reporter.username,
-                        "userEmail": t.reporter.email,
-                        "avatarImgPath": t.reporter.profile_image_file_name,
-                        "tsLastSeen": "",
-                        "tsJoined": "",
-                        "customStatus": "",
-                    } if t.reporter else None,
+                    "assignee": (
+                        {
+                            "teamId": t.team.team_id,
+                            "userId": t.assignee.id,
+                            "userName": t.assignee.username,
+                            "userEmail": t.assignee.email,
+                            "avatarImgPath": t.assignee.profile_image_file_name,
+                            "tsLastSeen": "",
+                            "tsJoined": "",
+                            "customStatus": "",
+                        }
+                        if t.assignee
+                        else None
+                    ),
+                    "reporter": (
+                        {
+                            "teamId": t.team.team_id,
+                            "userId": t.reporter.id,
+                            "userName": t.reporter.username,
+                            "userEmail": t.reporter.email,
+                            "avatarImgPath": t.reporter.profile_image_file_name,
+                            "tsLastSeen": "",
+                            "tsJoined": "",
+                            "customStatus": "",
+                        }
+                        if t.reporter
+                        else None
+                    ),
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
@@ -893,26 +912,34 @@ class GetTaskView(AuthenticatedAPIView):
                     },
                     "title": t.title,
                     "body": t.content,
-                    "assignee": {
-                        "teamId": t.team.team_id,
-                        "userId": t.assignee.id,
-                        "userName": t.assignee.username,
-                        "userEmail": t.assignee.email,
-                        "avatarImgPath": t.assignee.profile_image_file_name,
-                        "tsLastSeen": "",
-                        "tsJoined": "",
-                        "customStatus": "",
-                    } if t.assignee else None,
-                    "reporter": {
-                        "teamId": t.team.team_id,
-                        "userId": t.reporter.id,
-                        "userName": t.reporter.username,
-                        "userEmail": t.reporter.email,
-                        "avatarImgPath": t.reporter.profile_image_file_name,
-                        "tsLastSeen": "",
-                        "tsJoined": "",
-                        "customStatus": "",
-                    } if t.reporter else None,
+                    "assignee": (
+                        {
+                            "teamId": t.team.team_id,
+                            "userId": t.assignee.id,
+                            "userName": t.assignee.username,
+                            "userEmail": t.assignee.email,
+                            "avatarImgPath": t.assignee.profile_image_file_name,
+                            "tsLastSeen": "",
+                            "tsJoined": "",
+                            "customStatus": "",
+                        }
+                        if t.assignee
+                        else None
+                    ),
+                    "reporter": (
+                        {
+                            "teamId": t.team.team_id,
+                            "userId": t.reporter.id,
+                            "userName": t.reporter.username,
+                            "userEmail": t.reporter.email,
+                            "avatarImgPath": t.reporter.profile_image_file_name,
+                            "tsLastSeen": "",
+                            "tsJoined": "",
+                            "customStatus": "",
+                        }
+                        if t.reporter
+                        else None
+                    ),
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
@@ -1052,8 +1079,10 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
-            team=team_id, assignee=user_id, is_init_task=False
+        task_with_tags = (
+            TaskMaster.objects.filter(team=team_id, assignee=user_id, is_init_task=False)
+            .select_related("assignee", "team", "project")
+            .prefetch_related("task_tags")
         )
         response_data = []
         for t in task_with_tags:
@@ -1230,8 +1259,37 @@ class TaskCommentsView(AuthenticatedAPIView):
             )
         if task_id:
 
-            # Fetch reactions
-            raw_reactions = TaskCommentReactionFact.objects.filter(task_id=task_id)
+            # Fetch ALL reactions for this task in a single SQL (JOIN via the
+            # double-underscore traversal on sender). Group by comment_id in
+            # Python so the per-comment loop below just looks up a dict
+            # instead of re-querying — eliminates the previous nested N+1
+            # (one reaction query per comment).
+            reaction_rows = TaskCommentReactionFact.objects.filter(task_id=task_id).values_list(
+                "comment_id",
+                "reaction_id",
+                "reaction_emoji",
+                "sender__username",
+                "sender__id",
+                "sender__profile_image_file_name",
+                "ts_created_at",
+            )
+            reactions_by_comment = defaultdict(list)
+            for row in reaction_rows:
+                reactions_by_comment[int(row[0])].append(
+                    {
+                        "id": int(row[1]),
+                        "emoji": row[2],
+                        "sender": {
+                            "userName": row[3],
+                            "userId": row[4],
+                            "avatarImgPath": row[5],
+                            "tsLastSeen": "",
+                            "tsJoined": "",
+                            "customStatus": "",
+                        },
+                        "tsSent": row[6],
+                    }
+                )
 
             comments = (
                 TaskComments.objects.filter(task=task_id)
@@ -1249,33 +1307,6 @@ class TaskCommentsView(AuthenticatedAPIView):
 
             response_data = []
             for comment in comments:
-                reactions = raw_reactions.filter(
-                    comment_id=int(comment["comment_id"])
-                ).values_list(
-                    "reaction_id",
-                    "reaction_emoji",
-                    "sender__username",
-                    "sender__id",
-                    "sender__profile_image_file_name",
-                    "ts_created_at",
-                )
-                all_reactions = []
-                for reaction in reactions:
-                    _reaction = {
-                        "id": int(reaction[0]),
-                        "emoji": reaction[1],
-                        "sender": {
-                            "userName": reaction[2],
-                            "userId": reaction[3],
-                            "avatarImgPath": reaction[4],
-                            "tsLastSeen": "",
-                            "tsJoined": "",
-                            "customStatus": "",
-                        },
-                        "tsSent": reaction[5],
-                    }
-                    all_reactions.append(_reaction)
-
                 response_data.append(
                     {
                         "taskId": comment["task"],
@@ -1283,7 +1314,7 @@ class TaskCommentsView(AuthenticatedAPIView):
                         "senderName": comment["sender__username"],
                         "commentId": comment["comment_id"],
                         "commentBody": comment["comment_body"],
-                        "reactions": all_reactions,
+                        "reactions": reactions_by_comment.get(int(comment["comment_id"]), []),
                         "tsSent": str(comment["ts_sent_at"]),
                         "tsUpdated": str(comment["ts_updated_at"]),
                     }

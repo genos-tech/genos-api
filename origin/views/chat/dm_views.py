@@ -856,10 +856,15 @@ class DMThreadMessagesByIdView(AuthenticatedAPIView):
                 "dm_id and/or thread_id is not found", status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Fetch all messages where the dm_id matches and the user is involved
-        raw_messages = DMThreadMessages.objects.filter(
-            dm=dm_id, thread_id=thread_id, is_deleted=False
-        ).order_by("ts_sent_at")
+        # Fetch all messages where the dm_id matches and the user is involved.
+        # select_related expands the FK chain accessed in the loop below
+        # (raw_message.dm.dm_id, raw_message.sender.*, raw_message.parent_message_uid.task)
+        # so the whole history loads in a single SQL with joins.
+        raw_messages = (
+            DMThreadMessages.objects.filter(dm=dm_id, thread_id=thread_id, is_deleted=False)
+            .select_related("dm", "sender", "parent_message_uid__task")
+            .order_by("ts_sent_at")
+        )
 
         # Get chat master for this user
         chat_master = UserChatMaster.objects.filter(user=user_id, team=team_id).values_list(
@@ -1027,10 +1032,14 @@ class DMThreadMessagesByTaskIdView(AuthenticatedAPIView):
                 "dm_id and/or task_id is not found", status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Fetch all messages where the dm_id matches and the task_id matches and the user is involved
-        raw_messages = DMThreadMessages.objects.filter(
-            dm=dm_id, parent_message_uid__task=task_id, is_deleted=False
-        ).order_by("ts_sent_at")
+        # Fetch all messages where the dm_id matches and the task_id matches and the user is involved.
+        raw_messages = (
+            DMThreadMessages.objects.filter(
+                dm=dm_id, parent_message_uid__task=task_id, is_deleted=False
+            )
+            .select_related("dm", "sender", "parent_message_uid__task")
+            .order_by("ts_sent_at")
+        )
 
         thread_id = raw_messages[0].thread_id
         if not thread_id:
