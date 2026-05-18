@@ -414,7 +414,7 @@ PROJECT_BLUEPRINTS = [
             {
                 "title": "Audit existing marketing pages",
                 "status": "Closed",
-                "priority": "Medium",
+                "priority": "Normal",
                 "assignee": "demo",
                 "is_milestone_child": False,
                 "parent_idx": 0,
@@ -580,7 +580,7 @@ PROJECT_BLUEPRINTS = [
             {
                 "title": "Set up Plausible analytics with named events",
                 "status": "Open",
-                "priority": "Medium",
+                "priority": "Normal",
                 "assignee": "bot1",
                 "is_milestone_child": True,
                 "parent_idx": None,
@@ -644,7 +644,7 @@ PROJECT_BLUEPRINTS = [
             {
                 "title": "Accessibility audit and remediation pass",
                 "status": "Pending",
-                "priority": "Medium",
+                "priority": "Normal",
                 "assignee": "bot3",
                 "is_milestone_child": True,
                 "parent_idx": None,
@@ -704,7 +704,7 @@ PROJECT_BLUEPRINTS = [
             {
                 "title": "Investigate slow homepage load on mobile Safari",
                 "status": "WIP",
-                "priority": "Medium",
+                "priority": "Normal",
                 "assignee": "bot1",
                 "is_milestone_child": False,
                 "parent_idx": None,
@@ -974,7 +974,7 @@ PROJECT_BLUEPRINTS = [
             {
                 "title": "Schedule remaining 5 interviews",
                 "status": "Closed",
-                "priority": "Medium",
+                "priority": "Normal",
                 "assignee": "bot0",
                 "is_milestone_child": False,
                 "parent_idx": 0,
@@ -1047,7 +1047,7 @@ PROJECT_BLUEPRINTS = [
             {
                 "title": "Competitor analysis: Notion, Slack, Linear",
                 "status": "Open",
-                "priority": "Medium",
+                "priority": "Normal",
                 "assignee": "demo",
                 "is_milestone_child": True,
                 "parent_idx": None,
@@ -1153,7 +1153,7 @@ PROJECT_BLUEPRINTS = [
             {
                 "title": "Onboarding funnel teardown",
                 "status": "Pending",
-                "priority": "Medium",
+                "priority": "Normal",
                 "assignee": "bot3",
                 "is_milestone_child": True,
                 "parent_idx": None,
