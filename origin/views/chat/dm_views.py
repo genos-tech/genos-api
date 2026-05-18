@@ -1,5 +1,6 @@
 from collections import defaultdict
 
+from django.core.cache import cache
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from rest_framework.response import Response
@@ -120,9 +121,16 @@ class AllDMIdsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        dm_ids = UserDMMapping.objects.filter(user_id=user_id).values_list("dm_id", flat=True)
+        cache_key = f"dm:ids:{user_id}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
 
-        return Response({"dm_ids": list(dm_ids)}, status=status.HTTP_200_OK)
+        dm_ids = UserDMMapping.objects.filter(user_id=user_id).values_list("dm_id", flat=True)
+        payload = {"dm_ids": list(dm_ids)}
+
+        cache.set(cache_key, payload, timeout=60)
+        return Response(payload, status=status.HTTP_200_OK)
 
 
 #############################
@@ -448,9 +456,12 @@ class DMSingleMessageView(AuthenticatedAPIView):
             else set()
         )
 
+        # select_related("sender") collapses the per-row sender lookup into
+        # the same SQL — without it the loop below would issue one query per
+        # reaction (N+1).
         raw_reactions = ReactionFact.objects.filter(
             chat_type=CHAT_TYPE, chat_id=dm_id, message_id=message_id, is_thread=False
-        )
+        ).select_related("sender")
         all_reactions = []
         for raw_reaction in raw_reactions:
             reaction = {
@@ -686,9 +697,12 @@ class DMSingleThreadMessageView(AuthenticatedAPIView):
         )
 
         raw_reactions = ReactionFact.objects.filter(
-            chat_type=CHAT_TYPE, chat_id=dm_id, message_id=message_id, is_thread=True,
-            thread_id=thread_id
-        )
+            chat_type=CHAT_TYPE,
+            chat_id=dm_id,
+            message_id=message_id,
+            is_thread=True,
+            thread_id=thread_id,
+        ).select_related("sender")
         all_reactions = []
         for raw_reaction in raw_reactions:
             reaction = {

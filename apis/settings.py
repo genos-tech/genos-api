@@ -138,6 +138,7 @@ if DATABASE_URL:
             DATABASE_URL,
             conn_max_age=600,
             ssl_require=False,
+            conn_health_checks=True,
         )
     }
 else:
@@ -149,6 +150,8 @@ else:
             "PASSWORD": "postgres",
             "HOST": "172.29.30.3",
             "PORT": "5432",
+            "CONN_MAX_AGE": 600,
+            "CONN_HEALTH_CHECKS": True,
         }
     }
 
@@ -195,6 +198,54 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedStaticFilesStorage"
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# Explicit logging config — defaults to INFO so hot-path debug calls
+# (per-request `logger.debug(...)`) don't pay the f-string + I/O cost.
+# Override via env: LOG_LEVEL=DEBUG for local debugging.
+_LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "format": "[%(asctime)s] %(levelname)s %(name)s: %(message)s",
+            "datefmt": "%Y-%m-%d %H:%M:%S",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+            "formatter": "default",
+        },
+    },
+    "loggers": {
+        "django": {"handlers": ["console"], "level": _LOG_LEVEL, "propagate": False},
+        "django.request": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+        "django.db.backends": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+        "origin": {"handlers": ["console"], "level": _LOG_LEVEL, "propagate": False},
+    },
+    "root": {"handlers": ["console"], "level": _LOG_LEVEL},
+}
+
+# Cache backend — Redis when available; falls back transparently to
+# "no cache" on Redis outages thanks to IGNORE_EXCEPTIONS. Keep timeouts
+# tight (2s) so a slow Redis can't cascade into slow Django responses.
+REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/1")
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": REDIS_URL,
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "SOCKET_CONNECT_TIMEOUT": 2,
+            "SOCKET_TIMEOUT": 2,
+            "IGNORE_EXCEPTIONS": True,
+        },
+        "KEY_PREFIX": "origin",
+    }
+}
+DJANGO_REDIS_IGNORE_EXCEPTIONS = True
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (

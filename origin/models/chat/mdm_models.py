@@ -13,6 +13,7 @@ class MDMMaster(models.Model):
     Unlike GM, MDM doesn't require a formal group name and is designed for
     quick, informal conversations between 3+ members.
     """
+
     mdm_id = models.BigAutoField(primary_key=True, unique=True)
     owner_user = models.ForeignKey(
         CustomUser,
@@ -37,6 +38,7 @@ class MDMMaster(models.Model):
 
 class MDMMembers(models.Model):
     """Maps users to their MDM chats."""
+
     mdm = models.ForeignKey(
         MDMMaster,
         on_delete=models.SET_NULL,
@@ -97,6 +99,12 @@ class MDMMessages(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["mdm", "message_id"], name="unique_mdm_message")
         ]
+        indexes = [
+            models.Index(
+                fields=["mdm", "message_id", "is_deleted"],
+                name="mdm_msg_lookup_idx",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         """Automatically generate `uid` before saving the model."""
@@ -136,8 +144,15 @@ class MDMThreadMessages(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["mdm_id", "thread_id", "thread_message_id"], name="unique_mdm_thread_message"
+                fields=["mdm_id", "thread_id", "thread_message_id"],
+                name="unique_mdm_thread_message",
             )
+        ]
+        indexes = [
+            models.Index(
+                fields=["mdm", "thread_id", "thread_message_id", "is_deleted"],
+                name="mdm_thread_msg_lookup_idx",
+            ),
         ]
 
 

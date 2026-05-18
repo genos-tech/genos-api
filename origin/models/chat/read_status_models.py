@@ -33,6 +33,12 @@ class ReadStatus(models.Model):
                 name="unique_read_status",
             )
         ]
+        indexes = [
+            models.Index(
+                fields=["user", "chat_type", "chat_id", "is_thread"],
+                name="read_status_user_chat_idx",
+            ),
+        ]
 
 
 class ActivityReadStatus(models.Model):

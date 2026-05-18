@@ -1,5 +1,6 @@
 from collections import defaultdict
 
+from django.core.cache import cache
 from django.db.models import Exists, OuterRef, Q
 
 from rest_framework.parsers import MultiPartParser
@@ -164,6 +165,11 @@ class ProjectsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        cache_key = f"project:list:{team_id}:{attendee_id}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
+
         member_exists_subquery = ProjectMembers.objects.filter(
             project=OuterRef("project_id"), team=team_id, attendee=attendee_id
         )
@@ -199,6 +205,7 @@ class ProjectsView(AuthenticatedAPIView):
             for project in projects
         ]
 
+        cache.set(cache_key, team_projects, timeout=60)
         return Response(team_projects, status=status.HTTP_200_OK)
 
 

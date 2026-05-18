@@ -1,3 +1,4 @@
+from django.core.cache import cache
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -203,11 +204,18 @@ class AllMDMIdsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        cache_key = f"mdm:ids:{attendee_id}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
+
         mdm_ids = MDMMembers.objects.filter(
             Q(attendee=attendee_id, mdm__is_deleted=False)
         ).values_list("mdm", flat=True)
+        payload = {"mdm_ids": list(set(mdm_ids))}
 
-        return Response({"mdm_ids": list(set(mdm_ids))}, status=status.HTTP_200_OK)
+        cache.set(cache_key, payload, timeout=60)
+        return Response(payload, status=status.HTTP_200_OK)
 
 
 class MDMMembersView(AuthenticatedAPIView):
@@ -218,11 +226,17 @@ class MDMMembersView(AuthenticatedAPIView):
                 {"error": "mdm_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        cache_key = f"mdm:members:{mdm_id}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
+
         members = MDMMembers.objects.filter(mdm_id=mdm_id).values("attendee_id")
-        return Response(
-            {"members": list(members)},
-            status=status.HTTP_200_OK,
-        )
+        payload = {"members": list(members)}
+
+        cache.set(cache_key, payload, timeout=60)
+        return Response(payload, status=status.HTTP_200_OK)
 
     def post(self, request):
         from origin.models.common.user_models import CustomUser
@@ -424,8 +438,13 @@ class MDMHistoryView(AuthenticatedAPIView):
         )
 
     def _get_thread_reply_count_map(self, mdm_ids):
+        # Scope to the caller's mdm_ids so we don't scan the entire thread
+        # table for chats the user isn't even in.
         counts = (
-            MDMThreadMessages.objects.filter(is_deleted=False)
+            MDMThreadMessages.objects.filter(
+                is_deleted=False,
+                parent_message_uid__mdm__mdm_id__in=mdm_ids,
+            )
             .values("parent_message_uid__mdm__mdm_id", "parent_message_uid__message_id")
             .annotate(num_of_replies=Count("thread_message_id"))
         )
@@ -666,9 +685,12 @@ class MDMSingleMessageView(AuthenticatedAPIView):
             else set()
         )
 
+        # select_related("sender") collapses the per-row sender lookup into
+        # the same SQL — without it the loop below would issue one query per
+        # reaction (N+1).
         raw_reactions = ReactionFact.objects.filter(
             chat_type=CHAT_TYPE, chat_id=mdm_id, message_id=message_id, is_thread=False
-        )
+        ).select_related("sender")
         all_reactions = []
         for raw_reaction in raw_reactions:
             all_reactions.append(
@@ -894,7 +916,7 @@ class MDMSingleThreadMessageView(AuthenticatedAPIView):
         raw_reactions = ReactionFact.objects.filter(
             chat_type=CHAT_TYPE, chat_id=mdm_id, message_id=message_id, is_thread=True,
             thread_id=thread_id
-        )
+        ).select_related("sender")
         all_reactions = []
         for raw_reaction in raw_reactions:
             all_reactions.append(

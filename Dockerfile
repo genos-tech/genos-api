@@ -52,4 +52,14 @@ CMD ["sh", "-c", "\
   python manage.py collectstatic --noinput && \
   python manage.py migrate --noinput && \
   python manage.py opensearch_setup || echo 'Warning: opensearch_setup failed — search features unavailable until OpenSearch is ready.' && \
-  gunicorn apis.wsgi:application --bind 0.0.0.0:$PORT --workers 3"]
+  gunicorn apis.wsgi:application \
+    --bind 0.0.0.0:$PORT \
+    --workers 1 \
+    --worker-class gthread \
+    --threads 4 \
+    --worker-tmp-dir /dev/shm \
+    --timeout 30 \
+    --graceful-timeout 30 \
+    --keep-alive 5 \
+    --max-requests 1000 \
+    --max-requests-jitter 100"]

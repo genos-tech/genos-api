@@ -43,6 +43,12 @@ class PMMessages(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["project", "message_id"], name="unique_pm_message")
         ]
+        indexes = [
+            models.Index(
+                fields=["project", "message_id", "is_deleted"],
+                name="pm_msg_lookup_idx",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         """Automatically generate `uid` before saving the model."""
@@ -85,6 +91,12 @@ class PMThreadMessages(models.Model):
                 fields=["project_id", "thread_id", "thread_message_id"],
                 name="unique_pm_thread_message",
             )
+        ]
+        indexes = [
+            models.Index(
+                fields=["project", "thread_id", "thread_message_id", "is_deleted"],
+                name="pm_thread_msg_lookup_idx",
+            ),
         ]
 
 

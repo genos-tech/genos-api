@@ -1,3 +1,6 @@
+from collections import defaultdict
+
+from django.core.cache import cache
 from django.db.models import F, Q
 from rest_framework.response import Response
 from rest_framework import status
@@ -164,67 +167,84 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        raw_my_teams = TeamMembers.objects.filter(
-            Q(attendee=user_id, team__is_deleted=False)
-        ).values_list(
-            "team__team_id",
-            "team__team_name",
-            "team__team_email",
-            "team__owner",
-            "team__profile_image_file_name",
-            "team__ts_created_at",
+        # Heartbeat hot path — cache for 60s. Invalidated by
+        # cache_invalidation.py signals on TeamMembers / CustomUser writes.
+        cache_key = f"team:my_teams:{user_id}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
+
+        # Single round trip: fetch the user's teams in one query, then fetch
+        # all members for those teams in a second query, then group by team
+        # in Python. Replaces a 1+N pattern (1 query for teams, N queries for
+        # members) — called on every Flask heartbeat per user, so the savings
+        # compound across the running fleet.
+        raw_my_teams = list(
+            TeamMembers.objects.filter(attendee=user_id, team__is_deleted=False).values_list(
+                "team__team_id",
+                "team__team_name",
+                "team__team_email",
+                "team__owner",
+                "team__profile_image_file_name",
+                "team__ts_created_at",
+            )
         )
 
-        my_teams = []
-        for team in raw_my_teams:
-            team_members = (
-                TeamMembers.objects.filter(Q(team=team[0], attendee__is_system_user=False))
-                .select_related("attendee")
-                .order_by("attendee__email")
-                .annotate(
-                    teamId=F("team"),
-                    teamName=F("team__team_name"),
-                    userId=F("attendee__id"),
-                    userName=F("attendee__username"),
-                    userEmail=F("attendee__email"),
-                    avatarImgPath=F("attendee__profile_image_file_name"),
-                    tsLastSeen=F("attendee__last_seen"),
-                    tsJoined=F("attendee__ts_created_at"),
-                    customStatus=F("attendee__custom_status"),
-                    isOfflineForced=F("attendee__is_offline_forced"),
-                    role=F("attendee__role"),
-                    baseCountry=F("attendee__base_country"),
-                    isSystemUser=F("attendee__is_system_user"),
-                )
-                .values(
-                    "teamId",
-                    "teamName",
-                    "userId",
-                    "userName",
-                    "userEmail",
-                    "avatarImgPath",
-                    "tsLastSeen",
-                    "tsJoined",
-                    "customStatus",
-                    "isOfflineForced",
-                    "role",
-                    "baseCountry",
-                    "isSystemUser",
-                )
+        team_ids = [row[0] for row in raw_my_teams]
+        member_rows = (
+            TeamMembers.objects.filter(team_id__in=team_ids, attendee__is_system_user=False)
+            .select_related("attendee")
+            .order_by("attendee__email")
+            .annotate(
+                teamId=F("team"),
+                teamName=F("team__team_name"),
+                userId=F("attendee__id"),
+                userName=F("attendee__username"),
+                userEmail=F("attendee__email"),
+                avatarImgPath=F("attendee__profile_image_file_name"),
+                tsLastSeen=F("attendee__last_seen"),
+                tsJoined=F("attendee__ts_created_at"),
+                customStatus=F("attendee__custom_status"),
+                isOfflineForced=F("attendee__is_offline_forced"),
+                role=F("attendee__role"),
+                baseCountry=F("attendee__base_country"),
+                isSystemUser=F("attendee__is_system_user"),
             )
-            team_members = list(team_members)
-            my_teams.append(
-                {
-                    "teamId": team[0],
-                    "teamName": team[1],
-                    "teamEmail": team[2],
-                    "teamOwnerId": team[3],
-                    "teamImgPath": team[4],
-                    "teamMembers": team_members,
-                    "tsCreatedAt": team[5],
-                }
+            .values(
+                "teamId",
+                "teamName",
+                "userId",
+                "userName",
+                "userEmail",
+                "avatarImgPath",
+                "tsLastSeen",
+                "tsJoined",
+                "customStatus",
+                "isOfflineForced",
+                "role",
+                "baseCountry",
+                "isSystemUser",
             )
+        )
 
+        members_by_team = defaultdict(list)
+        for member in member_rows:
+            members_by_team[member["teamId"]].append(member)
+
+        my_teams = [
+            {
+                "teamId": team[0],
+                "teamName": team[1],
+                "teamEmail": team[2],
+                "teamOwnerId": team[3],
+                "teamImgPath": team[4],
+                "teamMembers": members_by_team.get(team[0], []),
+                "tsCreatedAt": team[5],
+            }
+            for team in raw_my_teams
+        ]
+
+        cache.set(cache_key, my_teams, timeout=60)
         return Response(my_teams, status=status.HTTP_200_OK)
 
 
@@ -324,6 +344,13 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Per-message hot path — cache for 60s. Invalidated by signals when
+        # CustomUser or TeamMembers rows change.
+        cache_key = f"team:member_info:{team_id}:{user_id}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
+
         member_info = (
             TeamMembers.objects.filter(Q(team=team_id, attendee=user_id))
             .select_related("attendee")
@@ -371,4 +398,5 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
             "isSystemUser": member_info.get("attendee__is_system_user", None),
         }
 
+        cache.set(cache_key, response_data, timeout=60)
         return Response(response_data, status=status.HTTP_200_OK)

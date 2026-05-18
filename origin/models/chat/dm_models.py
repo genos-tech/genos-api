@@ -110,6 +110,12 @@ class DMMessages(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["dm", "message_id"], name="unique_dm_message")
         ]
+        indexes = [
+            models.Index(
+                fields=["dm", "message_id", "is_deleted"],
+                name="dm_msg_lookup_idx",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         self.uid = f"{self.dm.dm_id}-{self.message_id}"
@@ -157,6 +163,12 @@ class DMThreadMessages(models.Model):
             models.UniqueConstraint(
                 fields=["dm_id", "thread_id", "thread_message_id"], name="unique_dm_thread_message"
             )
+        ]
+        indexes = [
+            models.Index(
+                fields=["dm", "thread_id", "thread_message_id", "is_deleted"],
+                name="dm_thread_msg_lookup_idx",
+            ),
         ]
 
 

@@ -1,3 +1,4 @@
+from django.core.cache import cache
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from rest_framework.response import Response
@@ -235,13 +236,20 @@ class AllGMIdsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        cache_key = f"gm:ids:{attendee_id}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
+
         gm_ids = GMMembers.objects.filter(Q(attendee=attendee_id)).values_list("gm")
 
         connected_set = set()
         for (group_id,) in gm_ids:
             connected_set.add(group_id)
 
-        return Response({"gm_ids": list(connected_set)}, status=status.HTTP_200_OK)
+        payload = {"gm_ids": list(connected_set)}
+        cache.set(cache_key, payload, timeout=60)
+        return Response(payload, status=status.HTTP_200_OK)
 
 
 #############################
@@ -351,8 +359,13 @@ class GMHistoryView(AuthenticatedAPIView):
     # Helpers
     # -----------------------------------------------------------------
     def _get_thread_reply_count_map(self, gm_ids):
+        # Scope to the caller's gm_ids so we don't scan the entire thread
+        # table for chats the user isn't even in.
         counts = (
-            GMThreadMessages.objects.filter(is_deleted=False)
+            GMThreadMessages.objects.filter(
+                is_deleted=False,
+                parent_message_uid__gm__gm_id__in=gm_ids,
+            )
             .values("parent_message_uid__gm__gm_id", "parent_message_uid__message_id")
             .annotate(num_of_replies=Count("thread_message_id"))
         )
@@ -582,9 +595,12 @@ class GMSingleMessageView(AuthenticatedAPIView):
             else set()
         )
 
+        # select_related("sender") collapses the per-row sender lookup into
+        # the same SQL — without it the loop below would issue one query per
+        # reaction (N+1).
         raw_reactions = ReactionFact.objects.filter(
             chat_type=CHAT_TYPE, chat_id=gm_id, message_id=message_id, is_thread=False
-        )
+        ).select_related("sender")
         all_reactions = []
         for raw_reaction in raw_reactions:
             reaction = {
@@ -823,7 +839,7 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
         raw_reactions = ReactionFact.objects.filter(
             chat_type=CHAT_TYPE, chat_id=gm_id, message_id=message_id, is_thread=True,
             thread_id=thread_id
-        )
+        ).select_related("sender")
         all_reactions = []
         for raw_reaction in raw_reactions:
             reaction = {

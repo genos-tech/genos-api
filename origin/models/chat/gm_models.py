@@ -103,6 +103,12 @@ class GMMessages(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["gm", "message_id"], name="unique_gm_message")
         ]
+        indexes = [
+            models.Index(
+                fields=["gm", "message_id", "is_deleted"],
+                name="gm_msg_lookup_idx",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         """Automatically generate `uid` before saving the model."""
@@ -144,6 +150,12 @@ class GMThreadMessages(models.Model):
             models.UniqueConstraint(
                 fields=["gm_id", "thread_id", "thread_message_id"], name="unique_gm_thread_message"
             )
+        ]
+        indexes = [
+            models.Index(
+                fields=["gm", "thread_id", "thread_message_id", "is_deleted"],
+                name="gm_thread_msg_lookup_idx",
+            ),
         ]
 
 

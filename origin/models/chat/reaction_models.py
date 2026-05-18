@@ -36,6 +36,16 @@ class ReactionFact(models.Model):
                 name="unique_reaction",
             )
         ]
+        indexes = [
+            models.Index(
+                fields=["chat_type", "chat_id", "message_id", "is_thread", "thread_id"],
+                name="reaction_lookup_idx",
+            ),
+            models.Index(
+                fields=["team", "chat_type", "chat_id", "message_id", "is_thread"],
+                name="reaction_team_lookup_idx",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         self.uid = f"{self.chat_type}-{self.chat_id}-{self.thread_id}-{self.message_id}-{self.reaction_id}"
