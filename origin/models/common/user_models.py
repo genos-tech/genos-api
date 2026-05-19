@@ -31,6 +31,13 @@ def user_profile_image_path(instance, filename):
     )
 
 
+PRIMARY_AUTH_CHOICES = [
+    ("email", "email"),
+    ("google", "google"),
+    ("github", "github"),
+]
+
+
 class CustomUser(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     username = models.CharField(max_length=50, unique=False)
@@ -48,6 +55,16 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     ts_updated_at = models.DateTimeField(auto_now=True)
 
     is_system_user = models.BooleanField(default=False)
+
+    # Auth method picked at signup. Immutable: "email" means the user
+    # has a password and signs in via the email/password form; "google"
+    # / "github" mean they sign in via OAuth and their password field
+    # is unusable (`set_unusable_password()`). Combined with the
+    # unique-email constraint above, a given email always maps to one
+    # account whose signup method is fixed for the account's lifetime.
+    primary_auth_provider = models.CharField(
+        max_length=16, choices=PRIMARY_AUTH_CHOICES, default="email"
+    )
 
     token = models.CharField(max_length=100, null=True, blank=True)
     token_expiration = models.DateTimeField(null=True, blank=True)
@@ -77,3 +94,61 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
 
     USERNAME_FIELD = "email"  # Use email as the unique identifier
     REQUIRED_FIELDS = ["username"]
+
+
+CONNECTED_PROVIDER_CHOICES = [
+    ("google", "google"),
+    ("github", "github"),
+]
+
+
+class ConnectedAccount(models.Model):
+    """A user's OAuth grant for a third-party provider.
+
+    Two roles in one table:
+      1. Login identity — when `provider` matches the user's
+         `primary_auth_provider`, this row was created at signup and
+         signing in with that provider again finds the user via the
+         (provider, provider_user_id) lookup. Cannot be disconnected
+         while the account exists.
+      2. Pure API connection — when `provider` differs from the user's
+         primary, this row exists only so we can call the provider's
+         APIs on behalf of the user (Calendar events, GitHub PRs).
+         Can be freely connected and disconnected.
+
+    The two UniqueConstraints below enforce: (a) each provider identity
+    (e.g. each Google account) maps to at most one of our users, and
+    (b) a single user has at most one connection per provider.
+
+    Access / refresh tokens are stored encrypted with Fernet — never
+    write the plaintext token to the DB directly.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        CustomUser, on_delete=models.CASCADE, related_name="connected_accounts"
+    )
+    provider = models.CharField(max_length=16, choices=CONNECTED_PROVIDER_CHOICES)
+    provider_user_id = models.CharField(max_length=255)
+    provider_email = models.EmailField(blank=True, null=True)
+    scopes = models.JSONField(default=list)
+    access_token_encrypted = models.TextField()
+    refresh_token_encrypted = models.TextField(blank=True, null=True)
+    access_token_expires_at = models.DateTimeField(blank=True, null=True)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "provider_user_id"],
+                name="connected_account_unique_per_provider_id",
+            ),
+            models.UniqueConstraint(
+                fields=["user", "provider"],
+                name="connected_account_unique_per_user_provider",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.provider}:{self.provider_email or self.provider_user_id} → {self.user_id}"
