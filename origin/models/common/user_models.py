@@ -51,6 +51,13 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
 
     token = models.CharField(max_length=100, null=True, blank=True)
     token_expiration = models.DateTimeField(null=True, blank=True)
+    # Password reset: separate from `token` above (which the demo flow
+    # repurposes) so the two paths don't collide. We store SHA-256 hash
+    # of the URL token, not the token itself.
+    password_reset_token_hash = models.CharField(
+        max_length=64, null=True, blank=True, db_index=True
+    )
+    password_reset_token_expires_at = models.DateTimeField(null=True, blank=True)
     ts_last_login_at = models.DateTimeField(null=True, auto_now=True)
     # Avoid conflicts with Django's default User model
     groups = models.ManyToManyField(

@@ -1,6 +1,8 @@
+import hashlib
 import logging
 import secrets
 import uuid
+from datetime import timedelta
 
 from rest_framework.response import Response
 from rest_framework import status
@@ -12,8 +14,11 @@ from rest_framework import viewsets, permissions
 from rest_framework.views import APIView
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.http import JsonResponse
+from django.utils import timezone
 from rest_framework.request import Request
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -47,7 +52,10 @@ from origin.serializers.common.user_serializers import (
     UserSerializer,
     UserCreateSerializer,
     CustomTokenObtainPairSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetConfirmSerializer,
 )
+from origin.services.email import send_templated_email
 
 User = get_user_model()
 
@@ -301,3 +309,101 @@ class UserInfoView(AuthenticatedAPIView):
         user = request.user  # Get the currently authenticated user
         serializer = UserSerializer(user)  # Serialize user data
         return Response(serializer.data)
+
+
+class PasswordResetRequestView(APIView):
+    """Accept an email, mint a one-time reset token, and email a link.
+
+    Always returns 200 — even if the email isn't registered — to
+    prevent user-enumeration via response or timing differences. The
+    token is stored as a SHA-256 hash so a DB read can't recover the
+    live URL.
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request: Request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data["email"]
+
+        user = User.objects.filter(email__iexact=email, is_deleted=False).first()
+        if user is not None:
+            token = secrets.token_urlsafe(32)
+            user.password_reset_token_hash = hashlib.sha256(token.encode()).hexdigest()
+            user.password_reset_token_expires_at = timezone.now() + timedelta(
+                minutes=settings.PASSWORD_RESET_TOKEN_EXPIRY_MINUTES
+            )
+            user.save(
+                update_fields=[
+                    "password_reset_token_hash",
+                    "password_reset_token_expires_at",
+                ]
+            )
+            reset_url = f"{settings.FRONTEND_BASE_URL}/reset-password?token={token}"
+            try:
+                send_templated_email(
+                    to=user.email,
+                    subject="Reset your Genos password",
+                    template_base="password_reset",
+                    context={
+                        "reset_url": reset_url,
+                        "expiry_minutes": settings.PASSWORD_RESET_TOKEN_EXPIRY_MINUTES,
+                        "user_name": user.username,
+                    },
+                )
+            except Exception as exc:
+                # Don't leak SMTP failures to the client (would also
+                # leak that the email exists). Log for ops to chase.
+                logger.exception("Password reset email send failed: %s", exc)
+
+        return Response(status=status.HTTP_200_OK)
+
+
+class PasswordResetConfirmView(APIView):
+    """Consume a reset token + set the new password.
+
+    Looks the token up by its SHA-256 hash (so DB reads can't recover
+    live tokens), checks expiry, runs Django's full password validator
+    chain, then clears the token so it can't be reused.
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request: Request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        token = serializer.validated_data["token"]
+        new_password = serializer.validated_data["new_password"]
+
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        user = User.objects.filter(
+            password_reset_token_hash=token_hash,
+            password_reset_token_expires_at__gt=timezone.now(),
+            is_deleted=False,
+        ).first()
+        if user is None:
+            return Response(
+                {"detail": "Invalid or expired token."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            validate_password(new_password, user=user)
+        except DjangoValidationError as exc:
+            return Response(
+                {"detail": " ".join(exc.messages)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user.set_password(new_password)
+        user.password_reset_token_hash = None
+        user.password_reset_token_expires_at = None
+        user.save(
+            update_fields=[
+                "password",
+                "password_reset_token_hash",
+                "password_reset_token_expires_at",
+            ]
+        )
+        return Response(status=status.HTTP_200_OK)

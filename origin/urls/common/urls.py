@@ -17,6 +17,16 @@ urlpatterns = [
     path("api/v2/user/signin/refresh/", CookieTokenRefreshView.as_view(), name="token_refresh"),
     path("api/v2/user/demo/", DemoSignInView.as_view(), name="demo_signin"),
     path("api/v2/user/signout/", LogoutView.as_view(), name="signout"),
+    path(
+        "api/v2/user/password-reset/request/",
+        PasswordResetRequestView.as_view(),
+        name="password_reset_request",
+    ),
+    path(
+        "api/v2/user/password-reset/confirm/",
+        PasswordResetConfirmView.as_view(),
+        name="password_reset_confirm",
+    ),
     path("api/v2/user/profile/", UserProfileView.as_view(), name="update_status"),
     path(
         "api/v2/user/profile/image/",

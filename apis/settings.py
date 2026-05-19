@@ -435,3 +435,31 @@ SEARCH_ENGINE = {
     # error rather than crashing when the key is absent.
     "TAVILY_API_KEY": os.environ.get("TAVILY_API_KEY", ""),
 }
+
+# --- Email ---
+# Dev default: print emails to the runserver console so engineers don't
+# need SMTP credentials locally. In staging / production, set
+# EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend in the env
+# along with EMAIL_HOST_USER (Gmail address) and EMAIL_HOST_PASSWORD
+# (Gmail App Password, NOT account password — generate one at Google
+# Account → Security → App Passwords; requires 2FA).
+EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = "smtp.gmail.com"
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "Genos <noreply@example.com>")
+
+# Public origin used to build absolute URLs in outgoing emails (e.g.
+# password-reset links). Default matches the dockerised dev frontend
+# (see docker/docker-compose.yml, react service on :3000). Override in
+# deployed environments to the actual frontend host.
+FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "http://localhost:3000")
+
+# How long a password-reset URL is valid for, in minutes. Short enough
+# that a leaked link is unlikely to still work, long enough that users
+# can finish reading the email and clicking.
+PASSWORD_RESET_TOKEN_EXPIRY_MINUTES = int(
+    os.environ.get("PASSWORD_RESET_TOKEN_EXPIRY_MINUTES", "60")
+)

@@ -61,6 +61,23 @@ class UserCreateSerializer(serializers.ModelSerializer):
         return user
 
 
+class PasswordResetRequestSerializer(serializers.Serializer):
+    """Request body for POST /password-reset/request/."""
+
+    email = serializers.EmailField()
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    """Request body for POST /password-reset/confirm/.
+
+    `min_length=8` mirrors UserCreateSerializer above; the view also runs
+    Django's full AUTH_PASSWORD_VALIDATORS chain before saving.
+    """
+
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True, min_length=8)
+
+
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     """Custom JWT Login Serializer to include user data"""
 
