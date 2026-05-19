@@ -447,6 +447,9 @@ EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.conso
 EMAIL_HOST = "smtp.gmail.com"
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
+# Cap SMTP connect/handshake so a hung Gmail call can't pin a request
+# worker indefinitely.
+EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
 EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "Genos <noreply@example.com>")
