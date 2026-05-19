@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     "origin",
     "origin.search_engine",
     "corsheaders",
+    "anymail",
 ]
 
 MIDDLEWARE = [
@@ -438,21 +439,21 @@ SEARCH_ENGINE = {
 
 # --- Email ---
 # Dev default: print emails to the runserver console so engineers don't
-# need SMTP credentials locally. In staging / production, set
-# EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend in the env
-# along with EMAIL_HOST_USER (Gmail address) and EMAIL_HOST_PASSWORD
-# (Gmail App Password, NOT account password — generate one at Google
-# Account → Security → App Passwords; requires 2FA).
+# need credentials locally. In production, send via Resend's HTTPS API
+# (django-anymail) — Railway blocks/filters outbound SMTP, so SMTP to
+# Gmail times out from the deployed container. To enable:
+#   EMAIL_BACKEND=anymail.backends.resend.EmailBackend
+#   RESEND_API_KEY=re_xxx                 (from resend.com/api-keys)
+#   DEFAULT_FROM_EMAIL=Genos <noreply@your-verified-domain>
+# Sender domain must be verified at resend.com/domains, or use
+# `onboarding@resend.dev` for self-testing (only delivers to the
+# Resend account owner's verified address).
 EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
-EMAIL_HOST = "smtp.gmail.com"
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
-# Cap SMTP connect/handshake so a hung Gmail call can't pin a request
-# worker indefinitely.
-EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
-EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
-EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "Genos <noreply@example.com>")
+
+ANYMAIL = {
+    "RESEND_API_KEY": os.environ.get("RESEND_API_KEY", ""),
+}
 
 # Public origin used to build absolute URLs in outgoing emails (e.g.
 # password-reset links). Default matches the dockerised dev frontend

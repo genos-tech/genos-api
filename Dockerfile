@@ -28,7 +28,8 @@ RUN pip install \
     google-genai==2.3.0 \
     anthropic==0.102.0 \
     PyYAML==6.0.2 \
-    tavily-python
+    tavily-python \
+    'django-anymail[resend]'
 
 COPY backend_django ./backend_django
 
