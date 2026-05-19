@@ -5,6 +5,21 @@ from origin.views.common.user_views import *
 from origin.views.common.team_views import *
 from origin.views.common.inbox_views import *
 from origin.views.common.notification_views import NotificationPreferenceView
+from origin.views.common.oauth_views import (
+    IntegrationsDisconnectView,
+    IntegrationsListView,
+    OAuthCallbackView,
+    OAuthInitiateView,
+)
+from origin.views.common.calendar_views import (
+    CalendarEventDetailView,
+    CalendarEventsView,
+    CalendarListView,
+)
+from origin.views.common.github_views import (
+    GithubMyPullsView,
+    GithubPullDetailView,
+)
 from origin.views.chat.reaction_views import *
 from origin.views.utils.extract_page_title_view import get_page_title
 
@@ -27,7 +42,48 @@ urlpatterns = [
         PasswordResetConfirmView.as_view(),
         name="password_reset_confirm",
     ),
+    # OAuth + Integrations
+    path(
+        "api/v2/oauth/<str:provider_name>/initiate/",
+        OAuthInitiateView.as_view(),
+        name="oauth_initiate",
+    ),
+    path(
+        "api/v2/oauth/<str:provider_name>/callback/",
+        OAuthCallbackView.as_view(),
+        name="oauth_callback",
+    ),
+    path(
+        "api/v2/integrations/me/",
+        IntegrationsListView.as_view(),
+        name="integrations_list",
+    ),
+    path(
+        "api/v2/integrations/<str:provider_name>/",
+        IntegrationsDisconnectView.as_view(),
+        name="integrations_disconnect",
+    ),
+    # Google Calendar
+    path("api/v2/calendar/list/", CalendarListView.as_view(), name="calendar_list"),
+    path(
+        "api/v2/calendar/events/",
+        CalendarEventsView.as_view(),
+        name="calendar_events",
+    ),
+    path(
+        "api/v2/calendar/events/<str:event_id>/",
+        CalendarEventDetailView.as_view(),
+        name="calendar_event_detail",
+    ),
+    # GitHub PRs (read-only)
+    path("api/v2/github/pulls/", GithubMyPullsView.as_view(), name="github_pulls"),
+    path(
+        "api/v2/github/pulls/<str:owner>/<str:repo>/<str:number>/",
+        GithubPullDetailView.as_view(),
+        name="github_pull_detail",
+    ),
     path("api/v2/user/profile/", UserProfileView.as_view(), name="update_status"),
+    path("api/v2/user/me/", UserInfoView.as_view(), name="user_me"),
     path(
         "api/v2/user/profile/image/",
         UserProfileImageView.as_view(),

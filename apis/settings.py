@@ -467,3 +467,27 @@ FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "http://localhost:3000")
 PASSWORD_RESET_TOKEN_EXPIRY_MINUTES = int(
     os.environ.get("PASSWORD_RESET_TOKEN_EXPIRY_MINUTES", "60")
 )
+
+# --- OAuth (Google, GitHub) ---
+# Fernet key used to encrypt third-party access / refresh tokens at
+# rest in the ConnectedAccount table. Generate one with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Required in production. In dev it can be left empty as long as you
+# don't exercise OAuth flows — the crypto helper raises a clear error
+# only when actually used (see origin/services/crypto.py).
+OAUTH_TOKEN_ENCRYPTION_KEY = os.environ.get("OAUTH_TOKEN_ENCRYPTION_KEY", "")
+
+# Per-provider OAuth client credentials. Empty defaults so the rest of
+# Django still imports cleanly when these aren't configured yet; the
+# OAuth views check for them and 503 with a helpful message.
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
+GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
+GITHUB_OAUTH_CLIENT_ID = os.environ.get("GITHUB_OAUTH_CLIENT_ID", "")
+GITHUB_OAUTH_CLIENT_SECRET = os.environ.get("GITHUB_OAUTH_CLIENT_SECRET", "")
+
+# Public-facing URL of THIS backend, used to build OAuth callback URLs
+# that match what's registered in the Google / GitHub OAuth app config.
+# Defaults to the dockerised dev Django port (see docker/docker-compose.yml;
+# 8889 is Flask's websocket, 8890 is Django REST — confirmed by
+# `python manage.py runserver 127.0.0.1:8890` in docs/setup.sh).
+BACKEND_BASE_URL = os.environ.get("BACKEND_BASE_URL", "http://localhost:8890")

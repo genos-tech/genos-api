@@ -2,6 +2,11 @@
 psycopg2==2.9.10
 requests==2.32.3
 
+# Symmetric encryption for OAuth tokens at rest (Fernet). Pinned
+# explicitly because we use it directly even though it would otherwise
+# be a transitive dep of cryptography-using libs.
+cryptography>=42.0
+
 # Django
 django==5.1.5
 djangorestframework==3.15.2
