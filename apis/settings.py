@@ -492,6 +492,13 @@ GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
 GITHUB_OAUTH_CLIENT_ID = os.environ.get("GITHUB_OAUTH_CLIENT_ID", "")
 GITHUB_OAUTH_CLIENT_SECRET = os.environ.get("GITHUB_OAUTH_CLIENT_SECRET", "")
 
+# Shared secret for GitHub repo webhook payload verification. Generate
+# any random string (e.g. `openssl rand -hex 32`), set the SAME value
+# both here AND in the GitHub repo's Webhook settings (under "Secret")
+# so the signed payload's `X-Hub-Signature-256` header validates.
+# When empty, the webhook endpoint rejects all incoming requests.
+GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+
 # Public-facing URL of THIS backend, used to build OAuth callback URLs
 # that match what's registered in the Google / GitHub OAuth app config.
 # Defaults to the dockerised dev Django port (see docker/docker-compose.yml;
