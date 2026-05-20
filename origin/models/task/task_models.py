@@ -71,9 +71,6 @@ class TaskMaster(models.Model):
     status_code = models.BigIntegerField(blank=True, null=True)
     content = models.JSONField(blank=True, null=True)
     links = models.JSONField(blank=True, null=True)
-    # Single GitHub PR URL linked to this task. Surfaced on the task
-    # detail view alongside state + CI badge — see LinkedPrCard.
-    linked_pr_url = models.CharField(max_length=512, blank=True, null=True)
     due_date = models.DateField(blank=True, null=True)
     tags = models.JSONField(blank=True, null=True)
     mentioned_user_ids = models.JSONField(blank=True, null=True)
