@@ -54,6 +54,7 @@ from origin.serializers.common.user_serializers import (
     CustomTokenObtainPairSerializer,
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
+    ResendVerificationSerializer,
 )
 from origin.services.email import send_templated_email
 
@@ -72,32 +73,80 @@ class UserViewSet(viewsets.ModelViewSet):
         return UserSerializer
 
     def create(self, request, *args, **kwargs):
-        """Override user registration to return JWT token"""
+        """Register a user. For email/password signups, send a verification
+        link instead of issuing JWTs — the user must click the link before
+        they can sign in. Non-email paths (none currently use this endpoint
+        but kept defensively) still receive immediate tokens."""
         serializer = self.get_serializer(data=request.data)
-        if serializer.is_valid():
-            user = serializer.save()
-
-            # Generate JWT token
-            refresh = RefreshToken.for_user(user)
-            access_token = str(refresh.access_token)
-
+        if not serializer.is_valid():
             return Response(
-                {
-                    "access": access_token,
-                    "refresh": str(refresh),
-                    "user": {"username": user.username, "email": user.email, "id": user.id},
-                    "message": "User creation completed",
-                },
+                {"message": serializer.errors.items()},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = serializer.save()
+
+        # System users (created internally for project automations) are
+        # not real humans with a real inbox — they're pre-verified and
+        # still get a JWT so the caller can drive the rest of the flow.
+        if user.primary_auth_provider == "email" and not user.is_system_user:
+            raw = _issue_verification_token(user)
+            try:
+                _send_verification_email(user, raw)
+            except Exception as exc:
+                # Don't fail the signup; user can request a resend.
+                logger.exception("Verification email send failed: %s", exc)
+            return Response(
+                {"message": "verification_email_sent", "email": user.email},
                 status=status.HTTP_201_CREATED,
             )
 
-        return Response({"message": serializer.errors.items()}, status=status.HTTP_400_BAD_REQUEST)
+        # System users + (defensively) non-email providers — return JWT
+        # for immediate use. Mark verified so the sign-in gate doesn't
+        # block their next login.
+        if user.is_system_user and not user.is_email_verified:
+            user.is_email_verified = True
+            user.save(update_fields=["is_email_verified"])
+        refresh = RefreshToken.for_user(user)
+        return Response(
+            {
+                "access": str(refresh.access_token),
+                "refresh": str(refresh),
+                "user": {"username": user.username, "email": user.email, "id": user.id},
+                "message": "User creation completed",
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer  # Use custom serializer
 
     def post(self, request, *args, **kwargs):
+        # Email-verification gate. We check before delegating to
+        # `super().post()` so we never mint a token for an unverified
+        # account. The `check_password` guard ensures `email_not_verified`
+        # is only revealed once credentials are otherwise valid — wrong
+        # passwords still flow through to the normal 401 below, so this
+        # doesn't leak account existence.
+        email = (request.data or {}).get("email")
+        password = (request.data or {}).get("password")
+        if email and password:
+            unverified = User.objects.filter(email__iexact=email).first()
+            if (
+                unverified is not None
+                and unverified.primary_auth_provider == "email"
+                and not unverified.is_email_verified
+                and unverified.check_password(password)
+            ):
+                return JsonResponse(
+                    {
+                        "detail": "email_not_verified",
+                        "email": unverified.email,
+                    },
+                    status=403,
+                )
+
         response = super().post(request, *args, **kwargs)
         data = response.data
 
@@ -164,6 +213,7 @@ class DemoSignInView(APIView):
                     username=username,
                     password=secrets.token_urlsafe(32),
                     is_demo=True,
+                    is_email_verified=True,
                 )
                 team_info = create_demo_environment(user)
         except Exception as exc:
@@ -406,4 +456,115 @@ class PasswordResetConfirmView(APIView):
                 "password_reset_token_expires_at",
             ]
         )
+        return Response(status=status.HTTP_200_OK)
+
+
+def _issue_verification_token(user) -> str:
+    """Mint a fresh verification token, hash it onto the user row, and
+    return the raw token for the URL. Overwrites any existing token so
+    the most recent link in the user's inbox is the only one that works.
+    """
+    raw = secrets.token_urlsafe(32)
+    user.email_verification_token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    user.email_verification_token_expires_at = timezone.now() + timedelta(
+        minutes=settings.EMAIL_VERIFICATION_TOKEN_EXPIRY_MINUTES
+    )
+    user.save(
+        update_fields=[
+            "email_verification_token_hash",
+            "email_verification_token_expires_at",
+        ]
+    )
+    return raw
+
+
+def _send_verification_email(user, raw_token: str) -> None:
+    verify_url = f"{settings.FRONTEND_BASE_URL}/verify-email?token={raw_token}"
+    send_templated_email(
+        to=user.email,
+        subject="Verify your Genos email",
+        template_base="email_verification",
+        context={
+            "verify_url": verify_url,
+            "expiry_hours": settings.EMAIL_VERIFICATION_TOKEN_EXPIRY_MINUTES // 60,
+            "user_name": user.username,
+        },
+    )
+
+
+class VerifyEmailView(APIView):
+    """Consume a one-time verification token from the email link.
+
+    GET /api/v2/user/verify-email/?token=<token>
+
+    The token is looked up by its SHA-256 hash and checked against the
+    expiry timestamp. On success we flip `is_email_verified=True` and
+    clear the token columns so the link can't be reused. The user is
+    NOT signed in by this endpoint — they still need to authenticate
+    via `/signin/` afterwards.
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request: Request):
+        token = request.query_params.get("token", "")
+        if not token:
+            return Response(
+                {"detail": "invalid_or_expired"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        user = User.objects.filter(
+            email_verification_token_hash=token_hash,
+            email_verification_token_expires_at__gt=timezone.now(),
+            is_email_verified=False,
+            is_deleted=False,
+        ).first()
+        if user is None:
+            return Response(
+                {"detail": "invalid_or_expired"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user.is_email_verified = True
+        user.email_verification_token_hash = None
+        user.email_verification_token_expires_at = None
+        user.save(
+            update_fields=[
+                "is_email_verified",
+                "email_verification_token_hash",
+                "email_verification_token_expires_at",
+            ]
+        )
+        return Response({"message": "verified"}, status=status.HTTP_200_OK)
+
+
+class ResendVerificationView(APIView):
+    """Re-send the verification email for an unverified email-password user.
+
+    POST /api/v2/user/verify-email/resend/  body: {"email": "..."}
+
+    Always returns 200 — mirrors PasswordResetRequestView to avoid
+    leaking which addresses are registered or already verified. A fresh
+    token is minted (invalidating any prior link), so the most recent
+    email in the user's inbox is always the working one.
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request: Request):
+        serializer = ResendVerificationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data["email"]
+
+        user = User.objects.filter(email__iexact=email, is_deleted=False).first()
+        if (
+            user is not None
+            and user.primary_auth_provider == "email"
+            and not user.is_email_verified
+        ):
+            raw = _issue_verification_token(user)
+            try:
+                _send_verification_email(user, raw)
+            except Exception as exc:
+                logger.exception("Resend verification email failed: %s", exc)
         return Response(status=status.HTTP_200_OK)

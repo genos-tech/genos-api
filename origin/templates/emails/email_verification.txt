@@ -1,0 +1,13 @@
+Hi {{ user_name }},
+
+Welcome to Genos! Please verify your email address to finish setting up
+your account.
+
+Open this link in your browser to verify:
+
+{{ verify_url }}
+
+This link expires in {{ expiry_hours }} hours. If you didn't sign up
+for Genos, you can safely ignore this email.
+
+— The Genos team
