@@ -552,6 +552,11 @@ class GetTeamTasksView(AuthenticatedAPIView):
                     "isMilestone": t.is_milestone,
                     "milestoneId": t.milestone_id,
                     "sprintId": t.sprint_id,
+                    # `links` powers the table's PR column. Most callers
+                    # don't need it but the cost is one JSON field per
+                    # row and the table is the only place this view's
+                    # output lands.
+                    "links": t.links or [],
                 },
             )
 

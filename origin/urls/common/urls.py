@@ -20,6 +20,7 @@ from origin.views.common.github_views import (
     GithubBranchesForTaskView,
     GithubMyPullsView,
     GithubPullDetailView,
+    GithubPullsForTaskView,
     GithubWebhookView,
 )
 from origin.views.chat.reaction_views import *
@@ -105,6 +106,13 @@ urlpatterns = [
         "api/v2/github/branches/for-task/",
         GithubBranchesForTaskView.as_view(),
         name="github_branches_for_task",
+    ),
+    # PRs whose head branches match a task's display ID — drives the
+    # task table's PR column.
+    path(
+        "api/v2/github/pulls/for-task/",
+        GithubPullsForTaskView.as_view(),
+        name="github_pulls_for_task",
     ),
     path("api/v2/user/profile/", UserProfileView.as_view(), name="update_status"),
     path("api/v2/user/me/", UserInfoView.as_view(), name="user_me"),

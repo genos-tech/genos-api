@@ -20,6 +20,7 @@ import re
 
 import requests
 from django.conf import settings
+from django.core.cache import cache
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from rest_framework import permissions, status
@@ -280,6 +281,108 @@ def _branch_match_re(display_id: str) -> re.Pattern[str]:
     )
 
 
+# ── Server-side cache for GitHub fan-out ──────────────────────────────
+#
+# The branches-for-task and pulls-for-task endpoints fan out one GitHub
+# call per known repo and (for pulls) one call per matching branch. A
+# table view of 100 tasks all calling these endpoints would otherwise
+# churn 100×N calls on first paint. We cache the per-repo branch list
+# and the per-branch PR lookup in Redis with a short TTL so the table
+# load coalesces down to ~N calls and re-paints cost nothing.
+#
+# Cache scope: the data is *user-tokenable* (different users may have
+# different access to the same repo), but for our case all
+# webhook-registered repos are visible to the requesting user already
+# (otherwise the webhook would never have been registered for them).
+# Keying purely on (owner, repo) is safe and gives the highest hit rate.
+
+_BRANCH_CACHE_TTL = 60  # seconds — matches the frontend prStatusCache
+_PULL_CACHE_TTL = 60
+
+
+def _branch_cache_key(owner: str, repo: str) -> str:
+    return f"gh:branches:{owner.lower()}:{repo.lower()}"
+
+
+def _pull_cache_key(owner: str, repo: str, branch: str) -> str:
+    return f"gh:head_pull:{owner.lower()}:{repo.lower()}:{branch}"
+
+
+def _list_repo_branches(account: ConnectedAccount, owner: str, repo: str) -> list[dict] | None:
+    """Cached wrapper over `GET /repos/{o}/{r}/branches`. Returns None on
+    upstream error so callers can skip the repo silently."""
+    key = _branch_cache_key(owner, repo)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    resp = _github_get(account, f"/repos/{owner}/{repo}/branches", params={"per_page": 100})
+    if not resp.ok:
+        return None
+    branches = resp.json() or []
+    cache.set(key, branches, _BRANCH_CACHE_TTL)
+    return branches
+
+
+def _find_pr_for_branch(
+    account: ConnectedAccount, owner: str, repo: str, branch: str
+) -> dict | None:
+    """Look up the PR (if any) whose head ref is `owner:branch`. Returns
+    a slim PR dict or None. Cached so the table doesn't re-fetch on
+    every row mount within the TTL."""
+    key = _pull_cache_key(owner, repo, branch)
+    cached = cache.get(key)
+    if cached is not None:
+        # Cached payload may legitimately be the sentinel `{}` meaning
+        # "this branch has no PR" — normalize that back to None.
+        return cached or None
+    resp = _github_get(
+        account,
+        f"/repos/{owner}/{repo}/pulls",
+        params={
+            "head": f"{owner}:{branch}",
+            "state": "all",
+            "per_page": 1,
+            "sort": "updated",
+            "direction": "desc",
+        },
+    )
+    if not resp.ok:
+        return None
+    items = resp.json() or []
+    if not items:
+        # Cache the "no PR" answer too — it's the common case for
+        # branches without an associated PR.
+        cache.set(key, {}, _PULL_CACHE_TTL)
+        return None
+    pr = items[0]
+    slim = {
+        "owner": owner,
+        "repo": repo,
+        "branch": branch,
+        "number": pr.get("number"),
+        "html_url": pr.get("html_url"),
+        "title": pr.get("title"),
+        "state": pr.get("state"),
+        "draft": pr.get("draft", False),
+        "merged_at": pr.get("merged_at"),
+    }
+    cache.set(key, slim, _PULL_CACHE_TTL)
+    return slim
+
+
+def _resolve_task_display_id(task_id: str):
+    """Common task lookup + display-id guard shared by both endpoints.
+    Returns (task, display_id) on success or a Response on failure."""
+    try:
+        task = TaskMaster.objects.select_related("project").get(task_id=task_id)
+    except TaskMaster.DoesNotExist:
+        return None, Response({"detail": "task_not_found"}, status=status.HTTP_404_NOT_FOUND)
+    display_id = task.display_id
+    if not display_id or display_id.startswith("#"):
+        return None, None  # signal "empty result"
+    return (task, display_id), None
+
+
 class GithubBranchesForTaskView(APIView):
     """List branches across known repos whose names reference this task's
     display ID. Returns an empty list when GitHub is not connected or no
@@ -291,16 +394,12 @@ class GithubBranchesForTaskView(APIView):
         task_id = request.GET.get("task_id")
         if not task_id:
             return Response({"detail": "task_id_required"}, status=status.HTTP_400_BAD_REQUEST)
-        try:
-            task = TaskMaster.objects.select_related("project").get(task_id=task_id)
-        except TaskMaster.DoesNotExist:
-            return Response({"detail": "task_not_found"}, status=status.HTTP_404_NOT_FOUND)
-
-        display_id = task.display_id
-        # Bail when there's no project-scoped ID — matching against "#42"
-        # would alias every task in the team.
-        if not display_id or display_id.startswith("#"):
+        resolved, err = _resolve_task_display_id(task_id)
+        if err is not None:
+            return err
+        if resolved is None:
             return Response({"branches": []})
+        _task, display_id = resolved
 
         account = _connected_account(request.user)
         if account is None:
@@ -311,16 +410,12 @@ class GithubBranchesForTaskView(APIView):
 
         matches: list[dict] = []
         for owner, repo in repos:
-            resp = _github_get(
-                account,
-                f"/repos/{owner}/{repo}/branches",
-                params={"per_page": 100},
-            )
-            if not resp.ok:
+            branches = _list_repo_branches(account, owner, repo)
+            if branches is None:
                 # 404 (no access) / 403 (rate limit) / etc. — skip the
                 # repo silently so one bad repo doesn't poison the list.
                 continue
-            for branch in resp.json() or []:
+            for branch in branches:
                 name = branch.get("name") or ""
                 if not pattern.search(name):
                     continue
@@ -335,3 +430,62 @@ class GithubBranchesForTaskView(APIView):
                     }
                 )
         return Response({"branches": matches})
+
+
+class GithubPullsForTaskView(APIView):
+    """List PRs auto-linked to this task via branch naming convention.
+
+    A PR is "auto-linked" when its head ref (branch name) contains the
+    task's display ID at non-alphanumeric boundaries. This is the single
+    source of truth for the task table's PR column — manually-pasted PR
+    links in `task.links` are intentionally not included; auto-linking
+    is the only path so the column doesn't surface stale links.
+
+    Returns an empty list when GitHub is not connected, the task has no
+    project-scoped display ID, or no auto-linked PRs exist.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request: Request):
+        task_id = request.GET.get("task_id")
+        if not task_id:
+            return Response({"detail": "task_id_required"}, status=status.HTTP_400_BAD_REQUEST)
+        resolved, err = _resolve_task_display_id(task_id)
+        if err is not None:
+            return err
+        if resolved is None:
+            return Response({"pulls": []})
+        _task, display_id = resolved
+
+        account = _connected_account(request.user)
+        if account is None:
+            return Response({"pulls": []})
+
+        pattern = _branch_match_re(display_id)
+        repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
+
+        pulls: list[dict] = []
+        seen_urls: set[str] = set()
+        for owner, repo in repos:
+            branches = _list_repo_branches(account, owner, repo)
+            if branches is None:
+                continue
+            for branch in branches:
+                name = branch.get("name") or ""
+                if not pattern.search(name):
+                    continue
+                pr = _find_pr_for_branch(account, owner, repo, name)
+                if pr is None:
+                    continue
+                # Same PR can appear from different matching branches
+                # (rare — but a renamed-then-recreated branch could do
+                # it). Dedupe by html_url so the column shows one badge
+                # per PR.
+                url = pr.get("html_url")
+                if url and url in seen_urls:
+                    continue
+                if url:
+                    seen_urls.add(url)
+                pulls.append(pr)
+        return Response({"pulls": pulls})

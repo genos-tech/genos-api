@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import requests
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -61,6 +62,9 @@ class TestBranchMatchRegex(TestCase):
 
 class TestBranchesForTaskView(TestCase):
     def setUp(self):
+        # Branch list is now Redis-cached. Clear between tests so a
+        # cached payload from a prior test doesn't shadow this test's mock.
+        cache.clear()
         self.client = APIClient()
         self.user = User.objects.create_user(
             username="branch-test",
