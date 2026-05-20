@@ -19,6 +19,7 @@ from origin.views.common.calendar_views import (
 from origin.views.common.github_views import (
     GithubMyPullsView,
     GithubPullDetailView,
+    GithubWebhookView,
 )
 from origin.views.chat.reaction_views import *
 from origin.views.utils.extract_page_title_view import get_page_title
@@ -91,6 +92,12 @@ urlpatterns = [
         "api/v2/github/pulls/<str:owner>/<str:repo>/<str:number>/",
         GithubPullDetailView.as_view(),
         name="github_pull_detail",
+    ),
+    # Inbound webhook receiver — auto-status sync on PR merge.
+    path(
+        "api/v2/github/webhook/",
+        GithubWebhookView.as_view(),
+        name="github_webhook",
     ),
     path("api/v2/user/profile/", UserProfileView.as_view(), name="update_status"),
     path("api/v2/user/me/", UserInfoView.as_view(), name="user_me"),

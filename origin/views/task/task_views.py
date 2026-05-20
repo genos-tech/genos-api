@@ -15,6 +15,7 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.reaction_models import *
 from origin.serializers.chat.reaction_serializers import *
 
+from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 from origin.views.utils.mention_handler import extractMentionedUsers
 
@@ -256,6 +257,14 @@ class TaskMasterView(AuthenticatedAPIView):
         serializer = TaskMasterSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
+            # Best-effort: if any of the task's links is a GitHub PR URL,
+            # auto-register our webhook on that repo so PR merges sync
+            # back to task status. Swallows all errors — user lacking
+            # repo admin is the common failure path.
+            try:
+                ensure_webhooks_for_links(request.user, data.get("links"))
+            except Exception:
+                pass
             return Response(
                 {
                     "task": serializer.data,
@@ -327,6 +336,14 @@ class TaskMasterView(AuthenticatedAPIView):
         serializer = TaskMasterSerializer(task, data=update_data)
         if serializer.is_valid():
             serializer.save()
+
+            # Same best-effort webhook registration as the POST path:
+            # whenever a task's links change, scan for new PR URLs and
+            # try to register the webhook for each unseen (owner, repo).
+            try:
+                ensure_webhooks_for_links(request.user, update_data.get("links"))
+            except Exception:
+                pass
 
             # Apply the explicit-clear intent captured above. The
             # serializer never saw `due_date` (the None-strip removed

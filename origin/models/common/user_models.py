@@ -160,3 +160,38 @@ class ConnectedAccount(models.Model):
 
     def __str__(self) -> str:
         return f"{self.provider}:{self.provider_email or self.provider_user_id} → {self.user_id}"
+
+
+class GithubWebhookRegistration(models.Model):
+    """Tracks which GitHub repos we've already auto-registered our PR
+    webhook on, so the task-save hot path doesn't re-call GitHub's
+    `POST /repos/{owner}/{repo}/hooks` every time a user pastes a PR
+    URL from the same repo.
+
+    `registered_by` is informational — the row is owned by the *repo*,
+    not the user. If user A's token registered the hook and user A
+    later leaves the team, the webhook stays alive; we don't tear it
+    down because anyone else's task is probably still linked.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.CharField(max_length=255)
+    repo = models.CharField(max_length=255)
+    # GitHub's hook id, returned by POST /repos/.../hooks. Used if we
+    # ever want to delete the hook programmatically.
+    hook_id = models.BigIntegerField()
+    registered_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, related_name="+"
+    )
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["owner", "repo"],
+                name="github_webhook_unique_per_repo",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.owner}/{self.repo} (hook#{self.hook_id})"

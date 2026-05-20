@@ -34,9 +34,7 @@ class TestTaskViews(TestCase):
             owner=self.user,
             project_system_user=self.user,
         )
-        ProjectMembers.objects.create(
-            team=self.team, project=self.project, attendee=self.user
-        )
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user)
 
     def _task_payload(self, **overrides):
         defaults = {
