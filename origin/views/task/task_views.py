@@ -243,6 +243,7 @@ class TaskMasterView(AuthenticatedAPIView):
             "due_date": request.data["due_date"],
             "links": request.data["links"],
             "tags": request.data["tags"],
+            "linked_pr_url": request.data.get("linked_pr_url"),
             "is_init_task": request.data["is_init_task"] == True,
         }
 
@@ -308,6 +309,15 @@ class TaskMasterView(AuthenticatedAPIView):
         # same as null because some legacy callers ship `""` instead.
         clear_due_date = "due_date" in request.data and request.data.get("due_date") in (None, "")
 
+        # Same explicit-null trap for `linked_pr_url` — the frontend
+        # sends `linked_pr_url: null` (or "") to clear the link, but the
+        # None-strip below would drop the key and leave the column
+        # untouched.
+        clear_linked_pr_url = (
+            "linked_pr_url" in request.data
+            and request.data.get("linked_pr_url") in (None, "")
+        )
+
         # Remove None values from the update_data
         for key, val in request.data.items():
             if val is None:
@@ -339,6 +349,12 @@ class TaskMasterView(AuthenticatedAPIView):
                 if task.due_date is not None:
                     task.due_date = None
                     task.save(update_fields=["due_date", "ts_updated_at"])
+
+            if clear_linked_pr_url:
+                task.refresh_from_db()
+                if task.linked_pr_url is not None:
+                    task.linked_pr_url = None
+                    task.save(update_fields=["linked_pr_url", "ts_updated_at"])
 
             # Bridge milestone <-> parent_task_id / root_task_id and
             # cascade the new milestone_id to descendant sub-tasks so
@@ -982,6 +998,7 @@ class GetTaskView(AuthenticatedAPIView):
                     },
                     "tags": t.tags or [],
                     "links": t.links or [],
+                    "linkedPrUrl": t.linked_pr_url,
                     "attachments": attached_files,
                     "parentTaskId": t.parent_task_id,
                     "rootTaskId": t.root_task_id,

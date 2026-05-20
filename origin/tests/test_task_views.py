@@ -34,9 +34,7 @@ class TestTaskViews(TestCase):
             owner=self.user,
             project_system_user=self.user,
         )
-        ProjectMembers.objects.create(
-            team=self.team, project=self.project, attendee=self.user
-        )
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user)
 
     def _task_payload(self, **overrides):
         defaults = {
@@ -247,3 +245,67 @@ class TestTaskViews(TestCase):
         client = APIClient()
         response = client.get("/api/v2/task/getTeamTasks/")
         self.assertEqual(response.status_code, 401)
+
+    # ── Linked PR URL ──────────────────────────────────────────────
+
+    def test_create_task_with_valid_pr_url(self):
+        url = "https://github.com/foo/bar/pull/42"
+        response = self._create_task(linked_pr_url=url)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["task"]["linked_pr_url"], url)
+
+    def test_create_task_without_pr_url_defaults_to_none(self):
+        response = self._create_task()
+        self.assertEqual(response.status_code, 201)
+        task = TaskMaster.objects.get(task_id=response.data["task"]["task_id"])
+        self.assertIsNone(task.linked_pr_url)
+
+    def test_create_task_with_malformed_pr_url_rejected(self):
+        # Missing scheme.
+        response = self._create_task(linked_pr_url="github.com/foo/bar/pull/1")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("linked_pr_url", response.data)
+
+    def test_create_task_with_non_pr_github_url_rejected(self):
+        # Repo root, not a PR.
+        response = self._create_task(linked_pr_url="https://github.com/foo/bar")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("linked_pr_url", response.data)
+
+    def test_create_task_with_issue_url_rejected(self):
+        # Issue URL — wrong path component.
+        response = self._create_task(linked_pr_url="https://github.com/foo/bar/issues/42")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("linked_pr_url", response.data)
+
+    def test_update_task_set_pr_url(self):
+        create_resp = self._create_task()
+        task_id = create_resp.data["task"]["task_id"]
+        url = "https://github.com/foo/bar/pull/7"
+        payload = self._task_payload(task_id=task_id, linked_pr_url=url)
+        response = self.client.put("/api/v2/task/", payload, format="json")
+        self.assertEqual(response.status_code, 200)
+        task = TaskMaster.objects.get(task_id=task_id)
+        self.assertEqual(task.linked_pr_url, url)
+
+    def test_update_task_clear_pr_url(self):
+        url = "https://github.com/foo/bar/pull/5"
+        create_resp = self._create_task(linked_pr_url=url)
+        task_id = create_resp.data["task"]["task_id"]
+        # Send linked_pr_url=null explicitly to clear.
+        payload = self._task_payload(task_id=task_id, linked_pr_url=None)
+        response = self.client.put("/api/v2/task/", payload, format="json")
+        self.assertEqual(response.status_code, 200)
+        task = TaskMaster.objects.get(task_id=task_id)
+        self.assertIsNone(task.linked_pr_url)
+
+    def test_update_task_with_malformed_pr_url_rejected(self):
+        url = "https://github.com/foo/bar/pull/9"
+        create_resp = self._create_task(linked_pr_url=url)
+        task_id = create_resp.data["task"]["task_id"]
+        payload = self._task_payload(task_id=task_id, linked_pr_url="not-a-url")
+        response = self.client.put("/api/v2/task/", payload, format="json")
+        self.assertEqual(response.status_code, 400)
+        # Original value preserved.
+        task = TaskMaster.objects.get(task_id=task_id)
+        self.assertEqual(task.linked_pr_url, url)
