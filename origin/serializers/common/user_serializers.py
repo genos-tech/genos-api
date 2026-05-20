@@ -67,6 +67,12 @@ class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
 
 
+class ResendVerificationSerializer(serializers.Serializer):
+    """Request body for POST /verify-email/resend/."""
+
+    email = serializers.EmailField()
+
+
 class PasswordResetConfirmSerializer(serializers.Serializer):
     """Request body for POST /password-reset/confirm/.
 

@@ -42,6 +42,16 @@ urlpatterns = [
         PasswordResetConfirmView.as_view(),
         name="password_reset_confirm",
     ),
+    path(
+        "api/v2/user/verify-email/",
+        VerifyEmailView.as_view(),
+        name="verify_email",
+    ),
+    path(
+        "api/v2/user/verify-email/resend/",
+        ResendVerificationView.as_view(),
+        name="resend_verification",
+    ),
     # OAuth + Integrations
     path(
         "api/v2/oauth/<str:provider_name>/initiate/",

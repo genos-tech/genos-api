@@ -291,6 +291,9 @@ class OAuthCallbackView(APIView):
                 email=email,
                 username=display_name,
                 primary_auth_provider=provider_name,
+                # Provider verified the email before issuing the OAuth
+                # token, so the user doesn't need to re-prove ownership.
+                is_email_verified=True,
             )
             user.set_unusable_password()
             user.save()

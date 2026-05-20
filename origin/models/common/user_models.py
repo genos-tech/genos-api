@@ -75,6 +75,14 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         max_length=64, null=True, blank=True, db_index=True
     )
     password_reset_token_expires_at = models.DateTimeField(null=True, blank=True)
+    # Email verification: gates email/password sign-in until the user
+    # clicks the verification link sent to their inbox at signup.
+    # OAuth signups skip this because the provider already verified.
+    is_email_verified = models.BooleanField(default=False)
+    email_verification_token_hash = models.CharField(
+        max_length=64, null=True, blank=True, db_index=True
+    )
+    email_verification_token_expires_at = models.DateTimeField(null=True, blank=True)
     ts_last_login_at = models.DateTimeField(null=True, auto_now=True)
     # Avoid conflicts with Django's default User model
     groups = models.ManyToManyField(

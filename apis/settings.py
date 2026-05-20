@@ -468,6 +468,13 @@ PASSWORD_RESET_TOKEN_EXPIRY_MINUTES = int(
     os.environ.get("PASSWORD_RESET_TOKEN_EXPIRY_MINUTES", "60")
 )
 
+# How long an email-verification URL is valid for, in minutes. Longer
+# than password-reset because the user just opened their inbox at signup
+# and the cost of expiry is mild (they request a resend).
+EMAIL_VERIFICATION_TOKEN_EXPIRY_MINUTES = int(
+    os.environ.get("EMAIL_VERIFICATION_TOKEN_EXPIRY_MINUTES", "1440")
+)
+
 # --- OAuth (Google, GitHub) ---
 # Fernet key used to encrypt third-party access / refresh tokens at
 # rest in the ConnectedAccount table. Generate one with:
