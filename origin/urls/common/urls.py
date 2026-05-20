@@ -17,6 +17,7 @@ from origin.views.common.calendar_views import (
     CalendarListView,
 )
 from origin.views.common.github_views import (
+    GithubBranchesForTaskView,
     GithubMyPullsView,
     GithubPullDetailView,
     GithubWebhookView,
@@ -98,6 +99,12 @@ urlpatterns = [
         "api/v2/github/webhook/",
         GithubWebhookView.as_view(),
         name="github_webhook",
+    ),
+    # Branches matching a task's display ID (e.g. branches containing "GEN-42").
+    path(
+        "api/v2/github/branches/for-task/",
+        GithubBranchesForTaskView.as_view(),
+        name="github_branches_for_task",
     ),
     path("api/v2/user/profile/", UserProfileView.as_view(), name="update_status"),
     path("api/v2/user/me/", UserInfoView.as_view(), name="user_me"),

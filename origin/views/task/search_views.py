@@ -63,6 +63,8 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
                     "status",
                     "ts_updated_at",
                     "root_task_id",
+                    "project__code",
+                    "project_task_number",
                 )
                 .order_by("ts_updated_at")
                 .reverse()
@@ -90,6 +92,8 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
                     "status",
                     "ts_updated_at",
                     "root_task_id",
+                    "project__code",
+                    "project_task_number",
                 )
                 .order_by("ts_updated_at")
                 .reverse()
@@ -108,12 +112,22 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
             if task[7] in finished_task_ids:
                 continue
 
+            # Compute display id from the tuple positions added above.
+            # Mirrors `TaskMaster.display_id` semantics — falls back to
+            # "#<task_id>" when project lacks a code or task lacks a
+            # number (pre-migration / orphan tasks).
+            _code = task[8]
+            _num = task[9]
+            _display_id = f"{_code}-{_num}" if _code and _num is not None else f"#{task[3]}"
+
             _team_tasks[str(task[5]).lower()].append(
                 {
                     "projectId": task[0],
                     "projectName": task[1],
+                    "projectCode": _code,
                     "projectTags": task[2],
                     "taskId": task[3],
+                    "displayId": _display_id,
                     "title": task[4],
                     "status": {
                         "code": 0,

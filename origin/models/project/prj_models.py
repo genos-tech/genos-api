@@ -41,8 +41,24 @@ class ProjectMaster(models.Model):
     )
     is_private = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
+    # Short 2-6 letter uppercase code used as the prefix in human-
+    # readable task display IDs (e.g. "GEN-42"). Unique within a team
+    # (different teams can both have a "GEN" project — the constraint
+    # below scopes uniqueness to team). Auto-derived from project_name
+    # on create (see services/project_code.py) but editable later via
+    # the project settings UI.
+    code = models.CharField(max_length=6, blank=True, null=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["team", "code"],
+                name="project_code_unique_per_team",
+                condition=models.Q(code__isnull=False),
+            ),
+        ]
 
 
 class ProjectMembers(models.Model):
