@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 
 import requests
 from django.conf import settings
@@ -26,7 +27,7 @@ from rest_framework.response import Response
 from rest_framework.request import Request
 from rest_framework.views import APIView
 
-from origin.models.common.user_models import ConnectedAccount
+from origin.models.common.user_models import ConnectedAccount, GithubWebhookRegistration
 from origin.models.task.task_models import TaskMaster
 from origin.services.oauth.tokens import get_valid_access_token
 
@@ -252,3 +253,85 @@ class GithubWebhookView(APIView):
             return Response({"detail": "ok", "updated": updated}, status=status.HTTP_200_OK)
 
         return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# Branch auto-linking
+# ---------------------------------------------------------------------------
+#
+# Once tasks have human-readable display IDs ("GEN-42"), developers tend to
+# follow a "branch per task" convention where the branch name embeds the
+# display ID (e.g. "feature/GEN-42-new-thing", "GEN-42_fix"). This endpoint
+# scans the repos we've already auto-registered a webhook on and returns any
+# branch whose name matches the task's display ID, so the task UI can show
+# them under the Links section without the user having to paste branch URLs.
+#
+# Scoped to repos with an existing `GithubWebhookRegistration` row — i.e.
+# repos this team has already touched via a PR link. That keeps the API
+# fan-out bounded and avoids querying every repo the user can see.
+
+
+def _branch_match_re(display_id: str) -> re.Pattern[str]:
+    """Match a branch name that contains `display_id` at a non-alnum
+    boundary, case-insensitive. Avoids false positives like "GEN-4" → "GEN-42"."""
+    return re.compile(
+        rf"(^|[^A-Za-z0-9]){re.escape(display_id)}([^A-Za-z0-9]|$)",
+        re.IGNORECASE,
+    )
+
+
+class GithubBranchesForTaskView(APIView):
+    """List branches across known repos whose names reference this task's
+    display ID. Returns an empty list when GitHub is not connected or no
+    match is found (the UI hides the section in that case)."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request: Request):
+        task_id = request.GET.get("task_id")
+        if not task_id:
+            return Response({"detail": "task_id_required"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            task = TaskMaster.objects.select_related("project").get(task_id=task_id)
+        except TaskMaster.DoesNotExist:
+            return Response({"detail": "task_not_found"}, status=status.HTTP_404_NOT_FOUND)
+
+        display_id = task.display_id
+        # Bail when there's no project-scoped ID — matching against "#42"
+        # would alias every task in the team.
+        if not display_id or display_id.startswith("#"):
+            return Response({"branches": []})
+
+        account = _connected_account(request.user)
+        if account is None:
+            return Response({"branches": []})
+
+        pattern = _branch_match_re(display_id)
+        repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
+
+        matches: list[dict] = []
+        for owner, repo in repos:
+            resp = _github_get(
+                account,
+                f"/repos/{owner}/{repo}/branches",
+                params={"per_page": 100},
+            )
+            if not resp.ok:
+                # 404 (no access) / 403 (rate limit) / etc. — skip the
+                # repo silently so one bad repo doesn't poison the list.
+                continue
+            for branch in resp.json() or []:
+                name = branch.get("name") or ""
+                if not pattern.search(name):
+                    continue
+                sha = (branch.get("commit") or {}).get("sha")
+                matches.append(
+                    {
+                        "owner": owner,
+                        "repo": repo,
+                        "name": name,
+                        "url": f"https://github.com/{owner}/{repo}/tree/{name}",
+                        "commit_sha": sha,
+                    }
+                )
+        return Response({"branches": matches})

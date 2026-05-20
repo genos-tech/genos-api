@@ -1,6 +1,7 @@
 import os
 
-from django.db import models
+from django.db import models, transaction
+from django.db.models import Max
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
@@ -83,8 +84,38 @@ class TaskMaster(models.Model):
     # that belong to the milestone) reference it through
     # `parent_task_id`, so the table renders them as sub-tasks.
     is_milestone = models.BooleanField(default=False)
+    # Per-project sequential number used in the human-readable display
+    # ID (e.g. the "42" in "GEN-42"). Auto-assigned on create by the
+    # post-save signal below, MAX(project_task_number)+1 within the
+    # owning project. Existing tasks backfilled by migration 0104 in
+    # task_id order. Nullable so the migration can land before the
+    # backfill runs and to support tasks without a project.
+    project_task_number = models.IntegerField(null=True, blank=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "project_task_number"],
+                name="task_project_number_unique_per_project",
+                condition=models.Q(project_task_number__isnull=False),
+            ),
+        ]
+
+    @property
+    def display_id(self) -> str:
+        """Human-readable task ID used everywhere the UI shows a task to
+        a user: "<project.code>-<project_task_number>" when both are
+        present, else "#<task_id>" as a defensive fallback for orphan
+        tasks or pre-backfill rows."""
+        if (
+            self.project_id
+            and self.project_task_number is not None
+            and getattr(self.project, "code", None)
+        ):
+            return f"{self.project.code}-{self.project_task_number}"
+        return f"#{self.task_id}"
 
 
 @receiver(post_save, sender=TaskMaster)
@@ -92,6 +123,29 @@ def set_root_task_id(sender, instance, created, **kwargs):
     if created and instance.root_task_id is None:
         instance.root_task_id = instance.task_id
         instance.save(update_fields=["root_task_id"])
+
+
+@receiver(post_save, sender=TaskMaster)
+def assign_project_task_number(sender, instance, created, **kwargs):
+    """On task create, claim the next sequential number within the
+    owning project. Skips tasks without a project (orphan tasks fall
+    back to "#<task_id>" in `display_id`). The unique constraint on
+    (project, project_task_number) is the ultimate race backstop —
+    if two concurrent creates collide on the same number, one save
+    raises IntegrityError and the caller retries."""
+    if not created or instance.project_id is None:
+        return
+    if instance.project_task_number is not None:
+        return
+    with transaction.atomic():
+        next_num = (
+            TaskMaster.objects.filter(project_id=instance.project_id)
+            .exclude(pk=instance.pk)
+            .aggregate(m=Max("project_task_number"))["m"]
+            or 0
+        ) + 1
+        instance.project_task_number = next_num
+        instance.save(update_fields=["project_task_number"])
 
 
 def task_attachment_path(instance, filename):

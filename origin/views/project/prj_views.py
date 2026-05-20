@@ -10,12 +10,79 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.project.prj_models import *
 from origin.models.common.inbox_models import InboxItems
 from origin.serializers.project.prj_serializers import *
+from origin.services.project_code import derive_project_code
 from origin.views.utils.request_validators import validate_request_data
 
 
+import re
+
+_PROJECT_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
+
+
 class ProjectMasterView(AuthenticatedAPIView):
+    def put(self, request):
+        """Update editable project fields. MVP scope: just `code` (the
+        display-id prefix). Validates 2-6 uppercase letters/digits and
+        uniqueness within the team."""
+        project_id = request.data.get("project_id")
+        new_code = request.data.get("code")
+        if not project_id:
+            return Response(
+                {"error": "project_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            project = ProjectMaster.objects.get(project_id=project_id)
+        except ProjectMaster.DoesNotExist:
+            return Response(
+                {"error": "Project not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if new_code is not None:
+            new_code = (new_code or "").strip().upper()
+            if not new_code:
+                return Response(
+                    {"error": "Code cannot be empty."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not _PROJECT_CODE_RE.match(new_code):
+                return Response(
+                    {
+                        "error": "Code must be 2-6 uppercase letters/digits, starting with a letter."
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if (
+                ProjectMaster.objects.filter(team=project.team_id, code=new_code)
+                .exclude(project_id=project.project_id)
+                .exists()
+            ):
+                return Response(
+                    {"error": "Another project in this team already uses that code."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            project.code = new_code
+            project.save(update_fields=["code", "ts_updated_at"])
+
+        return Response(ProjectMasterSerializer(project).data, status=status.HTTP_200_OK)
+
     def post(self, request):
-        serializer = ProjectMasterSerializer(data=request.data)
+        # Auto-derive a unique-per-team `code` if the caller didn't
+        # supply one. The code is the prefix in human-readable task
+        # display IDs (e.g. "GEN-42"). Users can edit it later from
+        # project settings.
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        if not data.get("code"):
+            team_id = data.get("team")
+            taken = set(
+                ProjectMaster.objects.filter(team=team_id, code__isnull=False).values_list(
+                    "code", flat=True
+                )
+            )
+            data["code"] = derive_project_code(data.get("project_name", "") or "", taken)
+
+        serializer = ProjectMasterSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -92,6 +159,7 @@ class ProjectMasterView(AuthenticatedAPIView):
             res = {
                 "projectId": project_data["project_id"],
                 "projectName": project_data["project_name"],
+                "code": project_data.get("code"),
                 "ownerUserId": project_data["owner_id"],
                 "profileImagePath": project_data["profile_image_file_name"],
                 "isPrivate": project_data["is_private"],

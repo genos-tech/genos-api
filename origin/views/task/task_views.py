@@ -254,6 +254,12 @@ class TaskMasterView(AuthenticatedAPIView):
             newly_mentioned_user_ids = list(extract_user_handler.mentioned_user_ids)
             data["mentioned_user_ids"] = newly_mentioned_user_ids
 
+        # `project_task_number` is auto-assigned by the post-save signal
+        # on TaskMaster, but the DRF serializer's `__all__` still requires
+        # it in the input dict — pass None and let the signal claim a
+        # number atomically once the row exists.
+        data["project_task_number"] = None
+
         serializer = TaskMasterSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
@@ -332,6 +338,13 @@ class TaskMasterView(AuthenticatedAPIView):
             newly_mentioned_user_ids = list(
                 set(extract_user_handler.mentioned_user_ids) - set(current_mentioned_user_ids)
             )
+
+        # Preserve `project_task_number` across the update — fields="__all__"
+        # would otherwise demand it in the payload, and the frontend never
+        # sends a value the user can't see/edit. The signal already assigned
+        # it on first create; updates never change it.
+        if "project_task_number" not in update_data:
+            update_data["project_task_number"] = task.project_task_number
 
         serializer = TaskMasterSerializer(task, data=update_data)
         if serializer.is_valid():
@@ -510,6 +523,7 @@ class GetTeamTasksView(AuthenticatedAPIView):
             response_data.append(
                 {
                     "id": str(t.task_id),
+                    "displayId": t.display_id,
                     "title": t.title,
                     "priority": t.priority,
                     "effortLevel": t.effort_level,
@@ -652,6 +666,7 @@ class ChildTaskView(AuthenticatedAPIView):
                 "root_task_id",
                 "parent_task_id",
                 "thread_id",
+                "project_task_number",
                 "assignee__id",
                 "assignee__username",
                 "assignee__email",
@@ -659,6 +674,7 @@ class ChildTaskView(AuthenticatedAPIView):
                 "team__team_id",
                 "project__project_id",
                 "project__project_name",
+                "project__code",
                 "project__project_system_user__id",
             )
         )
@@ -668,12 +684,21 @@ class ChildTaskView(AuthenticatedAPIView):
             status_label = t["status"] or ""
             status_color = STATUS_COLOR_MAP.get(status_label.lower(), {})
 
+            # Compute display id from the flat dict — no model instance
+            # here. Mirrors `TaskMaster.display_id` semantics.
+            _code = t.get("project__code")
+            _num = t.get("project_task_number")
+            display_id = (
+                f"{_code}-{_num}" if _code and _num is not None else f"#{t['task_id']}"
+            )
             response_data.append(
                 {
                     "id": t["task_id"],
+                    "displayId": display_id,
                     "project": {
                         "projectId": t["project__project_id"],
                         "projectName": t["project__project_name"],
+                        "projectCode": t.get("project__code"),
                         "systemUserId": t["project__project_system_user__id"],
                     },
                     "title": t["title"],
@@ -770,9 +795,11 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
             response_data.append(
                 {
                     "id": t.task_id,
+                    "displayId": t.display_id,
                     "project": {
                         "projectId": t.project.project_id,
                         "projectName": t.project.project_name,
+                        "projectCode": t.project.code,
                         "systemUserId": t.project.project_system_user.id,
                     },
                     "title": t.title,
@@ -922,9 +949,11 @@ class GetTaskView(AuthenticatedAPIView):
             response_data.append(
                 {
                     "id": t.task_id,
+                    "displayId": t.display_id,
                     "project": {
                         "projectId": t.project.project_id,
                         "projectName": t.project.project_name,
+                        "projectCode": t.project.code,
                         "systemUserId": t.project.project_system_user.id,
                     },
                     "title": t.title,
@@ -1050,6 +1079,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
             response_data.append(
                 {
                     "id": str(t.task_id),
+                    "displayId": t.display_id,
                     "title": t.title,
                     "priority": t.priority,
                     "effortLevel": t.effort_level,
@@ -1106,6 +1136,7 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
             response_data.append(
                 {
                     "id": t.task_id,
+                    "displayId": t.display_id,
                     "title": t.title,
                     "priority": t.priority,
                     "effortLevel": t.effort_level,
