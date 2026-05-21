@@ -29,7 +29,9 @@ from rest_framework.request import Request
 from rest_framework.views import APIView
 
 from origin.models.common.user_models import ConnectedAccount, GithubWebhookRegistration
+from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
+from origin.services.github_webhooks import parse_pr_url
 from origin.services.oauth.tokens import get_valid_access_token
 
 logger = logging.getLogger(__name__)
@@ -229,6 +231,117 @@ def _close_tasks_for_merged_pr(head_ref: str) -> int:
     return updated
 
 
+# ---------------------------------------------------------------------------
+# PR comments → task activity feed
+# ---------------------------------------------------------------------------
+#
+# On `issue_comment` (PR comments only) and `pull_request_review_comment`
+# (inline review comments), we record a `TaskActivity` row on every task
+# whose `display_id` appears in the PR's head branch — same auto-link
+# pattern used by the merge handler above. Only `created` actions are
+# recorded for v1; edits/deletes are deferred.
+
+# How long the head-ref lookup result is cached. The `issue_comment`
+# payload doesn't carry the PR's head ref, so we fetch it via the
+# GitHub API once and reuse the result across the burst of comment
+# events that typically follows.
+_PR_HEAD_REF_CACHE_TTL = 60
+
+
+def _fetch_pr_head_ref(owner: str, repo: str, number: int) -> str | None:
+    """Look up a PR's head branch ref via the GitHub API. Cached.
+
+    Used to resolve `issue_comment` events to tasks. The webhook
+    endpoint is unauthenticated, so we use a token from the repo's
+    `GithubWebhookRegistration.registered_by` user — the same identity
+    that auto-registered the webhook in the first place.
+    """
+    key = f"gh:pr_head_ref:{owner.lower()}:{repo.lower()}:{number}"
+    cached = cache.get(key)
+    if cached is not None:
+        # Empty string is the "we tried and failed" sentinel — keep it
+        # cached for the negative-result TTL, but return None to callers.
+        return cached or None
+
+    reg = GithubWebhookRegistration.objects.filter(owner__iexact=owner, repo__iexact=repo).first()
+    if reg is None or reg.registered_by_id is None:
+        return None
+    account = ConnectedAccount.objects.filter(
+        user_id=reg.registered_by_id, provider="github"
+    ).first()
+    if account is None:
+        return None
+    try:
+        resp = _github_get(account, f"/repos/{owner}/{repo}/pulls/{number}")
+    except Exception:
+        logger.exception("PR head-ref lookup crashed on %s/%s#%s", owner, repo, number)
+        return None
+    if not resp.ok:
+        cache.set(key, "", _PR_HEAD_REF_CACHE_TTL)
+        return None
+    head_ref = ((resp.json() or {}).get("head") or {}).get("ref") or ""
+    cache.set(key, head_ref, _PR_HEAD_REF_CACHE_TTL)
+    return head_ref or None
+
+
+def _record_pr_comment_activity(
+    head_ref: str, pr_url: str, comment: dict, comment_kind: str
+) -> int:
+    """For each task whose `display_id` matches `head_ref`, create a
+    `TaskActivity` row recording this PR comment. Idempotent by
+    `(action_type, metadata.comment_id, task)` so webhook retries don't
+    duplicate. Returns the count of rows actually created."""
+    if not head_ref or not comment.get("id"):
+        return 0
+    candidates = TaskMaster.objects.select_related("project", "team").filter(
+        is_deleted=False,
+        project__code__isnull=False,
+        project_task_number__isnull=False,
+    )
+    user = comment.get("user") or {}
+    body = comment.get("body") or ""
+    metadata = {
+        "pr_url": pr_url,
+        "comment_id": comment.get("id"),
+        "comment_url": comment.get("html_url"),
+        # Cap so a long comment doesn't bloat the activity row; the
+        # frontend renders this as a short preview with a link out.
+        "comment_excerpt": body[:280],
+        "github_username": user.get("login"),
+        "github_avatar_url": user.get("avatar_url"),
+        # "issue" for top-level PR comments, "review" for inline.
+        "comment_kind": comment_kind,
+        "file_path": comment.get("path"),
+        "line": comment.get("line"),
+    }
+    created = 0
+    pattern = _branch_match_re  # forward ref; resolved at call time
+    for task in candidates:
+        display_id = task.display_id
+        if not display_id or display_id.startswith("#"):
+            continue
+        if not pattern(display_id).search(head_ref):
+            continue
+        # Idempotency guard — webhook redeliveries (e.g. retry after a
+        # transient failure) shouldn't produce duplicate activity rows.
+        if TaskActivity.objects.filter(
+            task=task,
+            action_type=TaskActivityActionType.PR_COMMENT_ADDED,
+            metadata__comment_id=metadata["comment_id"],
+        ).exists():
+            continue
+        TaskActivity.objects.create(
+            team=task.team,
+            project=task.project,
+            task=task,
+            actor=None,
+            action_type=TaskActivityActionType.PR_COMMENT_ADDED,
+            metadata=metadata,
+        )
+        created += 1
+    return created
+
+
 @method_decorator(csrf_exempt, name="dispatch")
 class GithubWebhookView(APIView):
     """Receive GitHub repo webhooks (`pull_request` events).
@@ -262,7 +375,7 @@ class GithubWebhookView(APIView):
         if event == "ping":
             return Response({"detail": "pong"}, status=status.HTTP_200_OK)
 
-        if event != "pull_request":
+        if event not in ("pull_request", "issue_comment", "pull_request_review_comment"):
             return Response({"detail": "ignored"}, status=status.HTTP_200_OK)
 
         try:
@@ -270,26 +383,97 @@ class GithubWebhookView(APIView):
         except ValueError:
             return Response({"detail": "bad_json"}, status=status.HTTP_400_BAD_REQUEST)
 
-        pr = payload.get("pull_request") or {}
-        action = payload.get("action")
-        merged = bool(pr.get("merged"))
-        head_ref = ((pr.get("head") or {}).get("ref")) or ""
-        html_url = pr.get("html_url")
+        if event == "pull_request":
+            pr = payload.get("pull_request") or {}
+            action = payload.get("action")
+            merged = bool(pr.get("merged"))
+            head_ref = ((pr.get("head") or {}).get("ref")) or ""
+            html_url = pr.get("html_url")
 
-        # MVP: only the merge transition fires. Other action types
-        # (opened, ready_for_review, closed-unmerged, etc.) are
-        # acknowledged but not acted on.
-        if action == "closed" and merged and head_ref:
-            updated = _close_tasks_for_merged_pr(head_ref)
-            logger.info(
-                "GitHub webhook: PR merged %s (head=%s) → updated %d task(s)",
-                html_url,
-                head_ref,
-                updated,
+            # MVP: only the merge transition fires. Other action types
+            # (opened, ready_for_review, closed-unmerged, etc.) are
+            # acknowledged but not acted on.
+            if action == "closed" and merged and head_ref:
+                updated = _close_tasks_for_merged_pr(head_ref)
+                logger.info(
+                    "GitHub webhook: PR merged %s (head=%s) → updated %d task(s)",
+                    html_url,
+                    head_ref,
+                    updated,
+                )
+                return Response({"detail": "ok", "updated": updated}, status=status.HTTP_200_OK)
+
+            return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+
+        # Comment events — record on the auto-linked task's activity feed.
+        # Only `created` actions are recorded; edits/deletes are deferred.
+        if event == "pull_request_review_comment":
+            return self._handle_pr_comment_event(
+                payload=payload,
+                head_ref_source="payload",
             )
-            return Response({"detail": "ok", "updated": updated}, status=status.HTTP_200_OK)
+        if event == "issue_comment":
+            # Only PR comments — plain issue comments are out of scope.
+            issue = payload.get("issue") or {}
+            if not (issue.get("pull_request") or {}).get("html_url"):
+                return Response({"detail": "ignored_non_pr"}, status=status.HTTP_200_OK)
+            return self._handle_pr_comment_event(
+                payload=payload,
+                head_ref_source="fetch",
+            )
 
         return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+
+    def _handle_pr_comment_event(self, *, payload: dict, head_ref_source: str) -> Response:
+        """Shared handler for `issue_comment` (PR comments only) and
+        `pull_request_review_comment` events. The two event types differ
+        in how the PR's head ref is obtained (`head_ref_source`):
+
+            "payload" — `pull_request_review_comment` payload already has
+                        `pull_request.head.ref`; use it directly.
+            "fetch"   — `issue_comment` payload has the PR URL but no
+                        head ref; one cached GitHub API call resolves it.
+        """
+        action = payload.get("action")
+        if action != "created":
+            return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+
+        comment = payload.get("comment") or {}
+        if not comment.get("id"):
+            return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+
+        if head_ref_source == "payload":
+            pr = payload.get("pull_request") or {}
+            head_ref = ((pr.get("head") or {}).get("ref")) or ""
+            pr_url = pr.get("html_url") or ""
+            comment_kind = "review"
+        else:
+            issue = payload.get("issue") or {}
+            pr_url = (issue.get("pull_request") or {}).get("html_url") or ""
+            ref = parse_pr_url(pr_url)
+            if ref is None:
+                return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+            owner, repo = ref
+            number = issue.get("number")
+            head_ref = _fetch_pr_head_ref(owner, repo, int(number)) if number else None
+            head_ref = head_ref or ""
+            comment_kind = "issue"
+
+        if not head_ref:
+            logger.info(
+                "GitHub webhook: PR comment skipped — could not resolve head ref (pr=%s)", pr_url
+            )
+            return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+
+        recorded = _record_pr_comment_activity(head_ref, pr_url, comment, comment_kind)
+        logger.info(
+            "GitHub webhook: %s comment %s (head=%s) → recorded %d activity row(s)",
+            comment_kind,
+            pr_url,
+            head_ref,
+            recorded,
+        )
+        return Response({"detail": "ok", "recorded": recorded}, status=status.HTTP_200_OK)
 
 
 # ---------------------------------------------------------------------------
