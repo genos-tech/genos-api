@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import Optional
+from typing import Literal, Optional
 
 import requests
 
@@ -32,6 +32,12 @@ logger = logging.getLogger(__name__)
 CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 LINK_ONLY_FIELDS = ("linked_calendar_event_id", "linked_calendar_id")
 DONE_STATUS_PREFIX = "✓ "
+# Prefixes synced task titles with this emoji to make calendar
+# entries scannable — without it a "Implement login" event looks
+# identical to a real meeting. Stripped on Done transitions so the
+# done-prefix is the only marker on a completed task.
+DUE_TITLE_PREFIX = "📅 "
+_KNOWN_TITLE_PREFIXES = (DONE_STATUS_PREFIX, DUE_TITLE_PREFIX)
 # Status values that are considered "done" / closed. Kept liberal so
 # variations across the codebase (e.g. "Done" vs "Closed") all trigger
 # the check-prefix update.
@@ -52,9 +58,23 @@ def _is_done(task) -> bool:
 
 def _event_title(task) -> str:
     base = task.title or ""
-    if _is_done(task) and not base.startswith(DONE_STATUS_PREFIX):
+    # Strip any stale prefix(es) from a prior sync so transitions
+    # (Open ↔ Done) never accumulate stacked markers like
+    # "✓ 📅 Foo" or "📅 ✓ Foo". Loops because pre-fix legacy
+    # titles may contain both stacked; bails as soon as the
+    # remaining base no longer starts with a known prefix.
+    while True:
+        stripped = False
+        for prefix in _KNOWN_TITLE_PREFIXES:
+            if base.startswith(prefix):
+                base = base[len(prefix) :]
+                stripped = True
+                break
+        if not stripped:
+            break
+    if _is_done(task):
         return f"{DONE_STATUS_PREFIX}{base}"
-    return base
+    return f"{DUE_TITLE_PREFIX}{base}"
 
 
 def _all_day_payload(task) -> dict:
@@ -80,20 +100,26 @@ def _google(account: ConnectedAccount, method: str, path: str, **kwargs):
     )
 
 
-def sync_task_event(account: ConnectedAccount, task) -> bool:
+SyncOutcome = Literal["created", "patched", "cleared", "failed"]
+
+
+def sync_task_event(account: ConnectedAccount, task) -> SyncOutcome:
     """Create or patch the linked Google event for `task`.
 
-    Returns True if the model row was modified (so the caller knows
-    whether to save) — the caller saves with update_fields=LINK_ONLY_FIELDS
-    so the post_save recursion guard kicks in.
+    Returns one of:
+      - "created" : new event posted; link columns now set. Caller saves.
+      - "patched" : existing event PATCHed in place. No model change.
+      - "cleared" : Google returned 404; link columns nulled. Caller saves.
+                    Per the "never re-create" decision, no follow-up POST.
+      - "failed"  : API error or transport blew up (already logged).
 
-    On 404 (event deleted upstream) the link columns are cleared in
-    place and the function returns True. Per the v1 product decision,
-    we do NOT re-create after a 404 — the deletion is treated as
-    deliberate user intent.
+    The "created" vs "patched" distinction matters for the backfill
+    count UI; both are "real" syncs. "cleared" looks like a sync to
+    the old bool API but isn't one — surfacing it explicitly so the
+    backfill endpoint can exclude it.
     """
     if task is None or task.due_date is None:
-        return False
+        return "failed"
     calendar_id = task.linked_calendar_id or "primary"
     body = _all_day_payload(task)
 
@@ -106,10 +132,11 @@ def sync_task_event(account: ConnectedAccount, task) -> bool:
                 json=body,
             )
             if resp.status_code == 404:
-                # Upstream gone — clear the link and bail. No re-create.
+                # Hard-deleted upstream — clear the link and bail.
+                # Per the never-re-create decision, no follow-up POST.
                 task.linked_calendar_event_id = None
                 task.linked_calendar_id = None
-                return True
+                return "cleared"
             if not resp.ok:
                 logger.warning(
                     "calendar_sync patch failed task=%s status=%s body=%s",
@@ -117,8 +144,22 @@ def sync_task_event(account: ConnectedAccount, task) -> bool:
                     resp.status_code,
                     resp.text[:500],
                 )
-                return False
-            return False  # Patched in place; columns unchanged.
+                return "failed"
+            # Google soft-deletes events from the UI: PATCH against
+            # a cancelled event returns 200 with `status="cancelled"`
+            # instead of 404. Without this check we'd count it as a
+            # successful "patched" sync while the user sees no event
+            # on their calendar — surfaced by a user as misleading.
+            # Treat the same as a 404: clear the link, never re-create.
+            try:
+                payload = resp.json()
+            except ValueError:
+                payload = {}
+            if payload.get("status") == "cancelled":
+                task.linked_calendar_event_id = None
+                task.linked_calendar_id = None
+                return "cleared"
+            return "patched"
 
         # No link yet — create.
         resp = _google(account, "POST", f"/calendars/{calendar_id}/events", json=body)
@@ -129,14 +170,14 @@ def sync_task_event(account: ConnectedAccount, task) -> bool:
                 resp.status_code,
                 resp.text[:500],
             )
-            return False
+            return "failed"
         event = resp.json()
         task.linked_calendar_event_id = event.get("id")
         task.linked_calendar_id = calendar_id
-        return True
+        return "created"
     except requests.RequestException as exc:
         logger.warning("calendar_sync transport error task=%s err=%s", task.pk, exc)
-        return False
+        return "failed"
 
 
 def delete_task_event(account: ConnectedAccount, task) -> bool:

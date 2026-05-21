@@ -222,15 +222,43 @@ class CalendarSyncBackfillView(AuthenticatedAPIView):
         ).only(
             "pk", "title", "status", "due_date", "linked_calendar_event_id", "linked_calendar_id"
         )
-        synced = 0
+        created = 0
+        patched = 0
+        cleared = 0
         for task in tasks:
             try:
-                if sync_task_event(account, task):
+                outcome = sync_task_event(account, task)
+                # Save when link columns changed (create stored a new
+                # id, or the link was cleared because Google's event
+                # was deleted/cancelled). "patched" leaves the model
+                # untouched; "failed" was already logged.
+                if outcome in ("created", "cleared"):
                     task.save(update_fields=list(LINK_ONLY_FIELDS))
-                synced += 1
+                # Three-way split so the UI can tell the user what
+                # actually happened. "cleared" counts a task whose
+                # upstream event was missing — surfaced separately
+                # because the user would otherwise wonder why
+                # "patched" showed up when no events exist.
+                if outcome == "created":
+                    created += 1
+                elif outcome == "patched":
+                    patched += 1
+                elif outcome == "cleared":
+                    cleared += 1
             except Exception:
                 # Defensive — sync_task_event already swallows
                 # transport errors, but any unexpected exception
                 # shouldn't kill the whole backfill.
                 continue
-        return Response({"synced": synced}, status=status.HTTP_200_OK)
+        return Response(
+            # `synced` is the convenience total of real syncs
+            # (excludes cleared/failed). Frontend uses all four
+            # counts to compose an accurate toast.
+            {
+                "created": created,
+                "patched": patched,
+                "cleared": cleared,
+                "synced": created + patched,
+            },
+            status=status.HTTP_200_OK,
+        )

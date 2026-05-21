@@ -466,7 +466,11 @@ def _run_upsert(task_pk: int) -> None:
         account = get_google_connected_account(user)
         if account is None:
             return
-        if sync_task_event(account, task):
+        # Save the model row only when link columns actually changed
+        # (a new event was created, or Google returned 404 and we
+        # cleared the stale link). A clean "patched" outcome means
+        # the columns are already accurate; no save needed.
+        if sync_task_event(account, task) in ("created", "cleared"):
             _sync_save(task)
     except Exception as exc:  # pragma: no cover - defensive
         _calendar_logger.warning("auto-sync upsert failed task=%s err=%s", task_pk, exc)

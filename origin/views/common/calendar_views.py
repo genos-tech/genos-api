@@ -162,13 +162,37 @@ class CalendarEventsView(APIView):
                 {"detail": "summary, start, and end are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Attendees: when provided, copy through to Google so the
+        # event shows up on each attendee's calendar. We suppress
+        # email notifications (`sendUpdates=none`) because the
+        # callers driving this today (Quick Meet) post the link
+        # into chat — emailing on top of that is duplicate noise.
+        attendees = request.data.get("attendees")
+        params = {}
+        if isinstance(attendees, list) and attendees:
+            # Defensively rebuild the list so a malformed payload
+            # can't smuggle arbitrary Calendar event keys.
+            cleaned = []
+            for a in attendees:
+                if not isinstance(a, dict):
+                    continue
+                email = a.get("email")
+                if not email or not isinstance(email, str):
+                    continue
+                entry = {"email": email}
+                display_name = a.get("displayName")
+                if isinstance(display_name, str) and display_name:
+                    entry["displayName"] = display_name
+                cleaned.append(entry)
+            if cleaned:
+                body["attendees"] = cleaned
+                params["sendUpdates"] = "none"
         # When the caller asks for a Google Meet link, attach a
         # createRequest. Google may return the link inline OR with
         # status.statusCode="pending" — clients must handle both.
         # `conferenceDataVersion=1` is required for Google to honor the
         # createRequest at all; without it, the field is silently
         # dropped.
-        params = {}
         if request.data.get("add_meet"):
             body["conferenceData"] = {
                 "createRequest": {
