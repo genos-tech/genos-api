@@ -34,6 +34,7 @@ from origin.search_engine.agent.tools.create_note import CREATE_NOTE
 from origin.search_engine.agent.tools.create_task import CREATE_TASK
 from origin.search_engine.agent.tools.fetch_chat_thread import FETCH_CHAT_THREAD
 from origin.search_engine.agent.tools.fetch_note import FETCH_NOTE
+from origin.search_engine.agent.tools.fetch_pr import FETCH_PR
 from origin.search_engine.agent.tools.fetch_task import FETCH_TASK
 from origin.search_engine.agent.tools.get_current_user import GET_CURRENT_USER
 from origin.search_engine.agent.tools.get_project_activity_ranking import (
@@ -49,6 +50,10 @@ from origin.search_engine.agent.tools.get_top_task_closers import GET_TOP_TASK_C
 from origin.search_engine.agent.tools.get_workload_distribution import (
     GET_WORKLOAD_DISTRIBUTION,
 )
+from origin.search_engine.agent.tools.list_pr_comments import LIST_PR_COMMENTS
+from origin.search_engine.agent.tools.list_pr_commits import LIST_PR_COMMITS
+from origin.search_engine.agent.tools.list_pr_files import LIST_PR_FILES
+from origin.search_engine.agent.tools.list_pr_reviews import LIST_PR_REVIEWS
 from origin.search_engine.agent.tools.list_projects import LIST_PROJECTS
 from origin.search_engine.agent.tools.list_tasks import LIST_TASKS
 from origin.search_engine.agent.tools.search_kb import SEARCH_KNOWLEDGE_BASE
@@ -88,6 +93,12 @@ for _t in (
     GET_PROJECT_ACTIVITY_RANKING,
     GET_WORKLOAD_DISTRIBUTION,
     GET_STALE_TASKS,
+    # --- Read tools (Phase 16) — GitHub PR introspection ---
+    FETCH_PR,
+    LIST_PR_COMMENTS,
+    LIST_PR_FILES,
+    LIST_PR_REVIEWS,
+    LIST_PR_COMMITS,
 ):
     REGISTRY[_t.name] = _t
 
@@ -99,6 +110,7 @@ __all__ = [
     "CREATE_TASK",
     "FETCH_CHAT_THREAD",
     "FETCH_NOTE",
+    "FETCH_PR",
     "FETCH_TASK",
     "GET_CURRENT_USER",
     "GET_PROJECT_ACTIVITY_RANKING",
@@ -108,6 +120,10 @@ __all__ = [
     "GET_TEAM_MEMBERS",
     "GET_TOP_TASK_CLOSERS",
     "GET_WORKLOAD_DISTRIBUTION",
+    "LIST_PR_COMMENTS",
+    "LIST_PR_COMMITS",
+    "LIST_PR_FILES",
+    "LIST_PR_REVIEWS",
     "LIST_PROJECTS",
     "LIST_TASKS",
     "REGISTRY",
