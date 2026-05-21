@@ -1,7 +1,10 @@
+import logging
 import os
 import base64
 from collections import defaultdict
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 from django.db.models import Case, F, IntegerField, Max, Q, Value, When
 from rest_framework.response import Response
 from rest_framework import status
@@ -267,10 +270,15 @@ class TaskMasterView(AuthenticatedAPIView):
             # auto-register our webhook on that repo so PR merges sync
             # back to task status. Swallows all errors — user lacking
             # repo admin is the common failure path.
+            links_for_webhook = data.get("links")
+            logger.info(
+                "task POST: invoking ensure_webhooks_for_links (links_count=%s)",
+                len(links_for_webhook) if isinstance(links_for_webhook, list) else "non-list",
+            )
             try:
-                ensure_webhooks_for_links(request.user, data.get("links"))
+                ensure_webhooks_for_links(request.user, links_for_webhook)
             except Exception:
-                pass
+                logger.exception("ensure_webhooks_for_links crashed (swallowed)")
             return Response(
                 {
                     "task": serializer.data,
@@ -353,10 +361,16 @@ class TaskMasterView(AuthenticatedAPIView):
             # Same best-effort webhook registration as the POST path:
             # whenever a task's links change, scan for new PR URLs and
             # try to register the webhook for each unseen (owner, repo).
+            links_for_webhook = update_data.get("links")
+            logger.info(
+                "task PUT %s: invoking ensure_webhooks_for_links (links_count=%s)",
+                task_id,
+                len(links_for_webhook) if isinstance(links_for_webhook, list) else "non-list",
+            )
             try:
-                ensure_webhooks_for_links(request.user, update_data.get("links"))
+                ensure_webhooks_for_links(request.user, links_for_webhook)
             except Exception:
-                pass
+                logger.exception("ensure_webhooks_for_links crashed (swallowed)")
 
             # Apply the explicit-clear intent captured above. The
             # serializer never saw `due_date` (the None-strip removed
@@ -693,9 +707,7 @@ class ChildTaskView(AuthenticatedAPIView):
             # here. Mirrors `TaskMaster.display_id` semantics.
             _code = t.get("project__code")
             _num = t.get("project_task_number")
-            display_id = (
-                f"{_code}-{_num}" if _code and _num is not None else f"#{t['task_id']}"
-            )
+            display_id = f"{_code}-{_num}" if _code and _num is not None else f"#{t['task_id']}"
             response_data.append(
                 {
                     "id": t["task_id"],

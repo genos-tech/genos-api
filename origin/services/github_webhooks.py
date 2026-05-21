@@ -64,20 +64,40 @@ def ensure_repo_webhook(user, owner: str, repo: str) -> Optional[GithubWebhookRe
     Returns the registration row on success, None on any failure mode
     (not connected, no token, no admin, 4xx, network error, missing
     secret config). Never raises — this runs on the task-save hot path.
+
+    Logs at every silent early-return path so prod debugging can answer
+    "why didn't this register?" by grepping for `ensure_repo_webhook`.
     """
     if not settings.GITHUB_WEBHOOK_SECRET:
         # Without a secret, our webhook endpoint refuses requests, so
         # registering the hook on GitHub would be pointless.
+        logger.warning(
+            "ensure_repo_webhook: GITHUB_WEBHOOK_SECRET is unset; skipping %s/%s",
+            owner,
+            repo,
+        )
         return None
 
     existing = GithubWebhookRegistration.objects.filter(
         owner__iexact=owner, repo__iexact=repo
     ).first()
     if existing:
+        logger.info(
+            "ensure_repo_webhook: %s/%s already cached (hook_id=%s); short-circuit",
+            owner,
+            repo,
+            existing.hook_id,
+        )
         return existing
 
     account = ConnectedAccount.objects.filter(user=user, provider="github").first()
     if account is None:
+        logger.info(
+            "ensure_repo_webhook: user %s has no GitHub ConnectedAccount; skipping %s/%s",
+            user.id,
+            owner,
+            repo,
+        )
         return None  # User hasn't connected GitHub at all.
 
     try:
@@ -86,6 +106,7 @@ def ensure_repo_webhook(user, owner: str, repo: str) -> Optional[GithubWebhookRe
         logger.exception("Could not get valid GitHub token for user %s", user.id)
         return None
 
+    logger.info("ensure_repo_webhook: posting hook to %s/%s (user=%s)", owner, repo, user.id)
     payload_url = _webhook_payload_url()
     body = {
         "name": "web",
@@ -197,6 +218,10 @@ def ensure_webhooks_for_links(user, links) -> None:
     repo), and call `ensure_repo_webhook` once per unique repo. Best-
     effort: any exception from a single repo doesn't stop the loop."""
     if not isinstance(links, list):
+        logger.info(
+            "ensure_webhooks_for_links: `links` is not a list (type=%s); skipping",
+            type(links).__name__,
+        )
         return
     seen: set[tuple[str, str]] = set()
     for link in links:
@@ -210,3 +235,8 @@ def ensure_webhooks_for_links(user, links) -> None:
             ensure_repo_webhook(user, ref[0], ref[1])
         except Exception:
             logger.exception("ensure_repo_webhook crashed on %s/%s (swallowed)", ref[0], ref[1])
+    if not seen:
+        logger.info(
+            "ensure_webhooks_for_links: 0 PR URLs in %d link(s); nothing to register",
+            len(links),
+        )
