@@ -14,6 +14,7 @@ import hmac
 import json
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
@@ -309,6 +310,118 @@ class TestGithubWebhook(TestCase):
         self.assertEqual(response.data["updated"], 0)
         orphan.refresh_from_db()
         self.assertEqual(orphan.status, "Open")
+
+
+@override_settings(GITHUB_WEBHOOK_SECRET=WEBHOOK_SECRET)
+class TestPullRequestWebhookInvalidatesCaches(TestCase):
+    """When a `pull_request` event arrives, our Redis-cached lookups for
+    that PR / its head branch must be dropped so the UI surfaces the new
+    state on the next fetch (rather than serving up to 60s of stale TTL).
+
+    Comment events (`issue_comment`, `pull_request_review_comment`) do
+    NOT trigger invalidation because they don't mutate any cached field.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.client = APIClient()
+
+    def tearDown(self):
+        cache.clear()
+
+    def _post(self, payload: dict, *, event: str = "pull_request"):
+        body = json.dumps(payload).encode("utf-8")
+        return self.client.post(
+            "/api/v2/github/webhook/",
+            data=body,
+            content_type="application/json",
+            HTTP_X_HUB_SIGNATURE_256=_sign(body),
+            HTTP_X_GITHUB_EVENT=event,
+        )
+
+    # The cache key shapes here must stay aligned with the helpers in
+    # `github_views.py`. We assert against the exact keys so a silent
+    # rename of either side surfaces here instead of in prod.
+    @staticmethod
+    def _seed_pr_caches(owner: str, repo: str, branch: str, number: int):
+        cache.set(f"gh:branches:{owner.lower()}:{repo.lower()}", [{"name": branch}], 60)
+        cache.set(
+            f"gh:head_pull:{owner.lower()}:{repo.lower()}:{branch}",
+            {"number": number, "state": "open"},
+            60,
+        )
+        cache.set(
+            f"gh:pr_by_number:{owner.lower()}:{repo.lower()}:{number}",
+            {"number": number, "state": "open"},
+            60,
+        )
+        cache.set(
+            f"gh:pr_head_ref:{owner.lower()}:{repo.lower()}:{number}",
+            branch,
+            60,
+        )
+
+    @staticmethod
+    def _cached_keys_present(owner: str, repo: str, branch: str, number: int) -> list[str]:
+        keys = [
+            f"gh:branches:{owner.lower()}:{repo.lower()}",
+            f"gh:head_pull:{owner.lower()}:{repo.lower()}:{branch}",
+            f"gh:pr_by_number:{owner.lower()}:{repo.lower()}:{number}",
+            f"gh:pr_head_ref:{owner.lower()}:{repo.lower()}:{number}",
+        ]
+        return [k for k in keys if cache.get(k) is not None]
+
+    def test_pull_request_opened_invalidates_all_pr_caches(self):
+        self._seed_pr_caches("owner", "repo", "feature/abc", 42)
+        self.assertEqual(len(self._cached_keys_present("owner", "repo", "feature/abc", 42)), 4)
+        self._post(_pr_payload(action="opened", merged=False, head_ref="feature/abc"))
+        # All four keys should be gone after invalidation.
+        self.assertEqual(self._cached_keys_present("owner", "repo", "feature/abc", 42), [])
+
+    def test_pull_request_merged_invalidates_all_pr_caches(self):
+        # The merge path also needs invalidation — without it the UI
+        # would render "open" for up to 60s after the merge fires.
+        self._seed_pr_caches("owner", "repo", "feature/abc", 42)
+        self._post(_pr_payload(action="closed", merged=True, head_ref="feature/abc"))
+        self.assertEqual(self._cached_keys_present("owner", "repo", "feature/abc", 42), [])
+
+    def test_pull_request_event_for_different_pr_does_not_touch_other_caches(self):
+        # Seed caches for two different PRs in the same repo. An event
+        # for PR #42 must only drop #42's keys; PR #99's stay.
+        self._seed_pr_caches("owner", "repo", "feature/abc", 42)
+        self._seed_pr_caches("owner", "repo", "feature/xyz", 99)
+        # An event for #42 still drops the per-repo branch list (which
+        # is shared — there's no way to invalidate just one branch's
+        # entry inside that list).
+        self._post(
+            _pr_payload(
+                action="opened",
+                merged=False,
+                head_ref="feature/abc",
+                html_url="https://github.com/owner/repo/pull/42",
+            )
+        )
+        # PR #99's per-PR keys survive.
+        self.assertIsNotNone(cache.get("gh:head_pull:owner:repo:feature/xyz"))
+        self.assertIsNotNone(cache.get("gh:pr_by_number:owner:repo:99"))
+        self.assertIsNotNone(cache.get("gh:pr_head_ref:owner:repo:99"))
+        # PR #42's keys are gone.
+        self.assertIsNone(cache.get("gh:head_pull:owner:repo:feature/abc"))
+        self.assertIsNone(cache.get("gh:pr_by_number:owner:repo:42"))
+
+    def test_unparseable_pr_url_skips_invalidation(self):
+        # If the PR URL doesn't parse (malformed payload), we silently
+        # skip invalidation rather than blow up.
+        self._seed_pr_caches("owner", "repo", "feature/abc", 42)
+        self._post(
+            _pr_payload(
+                action="opened",
+                merged=False,
+                head_ref="feature/abc",
+                html_url="not-a-real-url",
+            )
+        )
+        self.assertEqual(len(self._cached_keys_present("owner", "repo", "feature/abc", 42)), 4)
 
 
 @override_settings(GITHUB_WEBHOOK_SECRET="")

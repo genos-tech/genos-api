@@ -248,6 +248,10 @@ def _close_tasks_for_merged_pr(head_ref: str) -> int:
 _PR_HEAD_REF_CACHE_TTL = 60
 
 
+def _pr_head_ref_cache_key(owner: str, repo: str, number: int) -> str:
+    return f"gh:pr_head_ref:{owner.lower()}:{repo.lower()}:{number}"
+
+
 def _fetch_pr_head_ref(owner: str, repo: str, number: int) -> str | None:
     """Look up a PR's head branch ref via the GitHub API. Cached.
 
@@ -256,7 +260,7 @@ def _fetch_pr_head_ref(owner: str, repo: str, number: int) -> str | None:
     `GithubWebhookRegistration.registered_by` user — the same identity
     that auto-registered the webhook in the first place.
     """
-    key = f"gh:pr_head_ref:{owner.lower()}:{repo.lower()}:{number}"
+    key = _pr_head_ref_cache_key(owner, repo, number)
     cached = cache.get(key)
     if cached is not None:
         # Empty string is the "we tried and failed" sentinel — keep it
@@ -388,7 +392,18 @@ class GithubWebhookView(APIView):
             action = payload.get("action")
             merged = bool(pr.get("merged"))
             head_ref = ((pr.get("head") or {}).get("ref")) or ""
-            html_url = pr.get("html_url")
+            html_url = pr.get("html_url") or ""
+
+            # Drop our Redis-cached lookups of this PR / its head branch
+            # so the UI sees the new state on the next fetch. Done for
+            # every `pull_request` action (opened, ready_for_review,
+            # closed, reopened, edited, synchronize, …) since each can
+            # mutate state we cache (state, draft, merged_at, head sha).
+            # Comment events skip this — they don't touch cached fields.
+            ref = parse_pr_url_full(html_url)
+            if ref is not None:
+                owner_inv, repo_inv, number_inv = ref
+                _invalidate_pr_caches(owner_inv, repo_inv, number_inv, head_ref or None)
 
             # MVP: only the merge transition fires. Other action types
             # (opened, ready_for_review, closed-unmerged, etc.) are
@@ -629,6 +644,37 @@ def _fetch_pr_by_number(
     }
     cache.set(key, slim, _PULL_CACHE_TTL)
     return slim
+
+
+def _invalidate_pr_caches(owner: str, repo: str, number: int | None, head_ref: str | None) -> None:
+    """Drop the Redis-cached GitHub lookups for this PR so the UI sees
+    the new PR state on the next fetch (rather than waiting up to 60s
+    for TTL).
+
+    Called from the `pull_request` webhook dispatch. Comment events
+    (`issue_comment`, `pull_request_review_comment`) don't trigger this
+    because they don't mutate any of the fields we cache.
+
+    Best-effort: a cache-delete failure logs but never propagates — a
+    missed invalidation just means an extra TTL cycle of staleness.
+    """
+    keys: list[str] = [_branch_cache_key(owner, repo)]
+    if head_ref:
+        keys.append(_pull_cache_key(owner, repo, head_ref))
+    if number is not None:
+        keys.append(_pr_by_number_cache_key(owner, repo, number))
+        keys.append(_pr_head_ref_cache_key(owner, repo, number))
+    try:
+        cache.delete_many(keys)
+        logger.info(
+            "ensure_repo_webhook: invalidated %d PR cache key(s) for %s/%s#%s",
+            len(keys),
+            owner,
+            repo,
+            number,
+        )
+    except Exception:
+        logger.exception("PR cache invalidation failed for %s/%s#%s", owner, repo, number)
 
 
 def _resolve_task_display_id(task_id: str):
