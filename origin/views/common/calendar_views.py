@@ -261,6 +261,32 @@ class CalendarEventDetailView(APIView):
             }.items()
             if v is not None
         }
+        # Attendees on PATCH: same shape as POST. When provided,
+        # Google's PATCH overwrites the entire attendees list, so
+        # the caller must send the full intended list (not a diff).
+        # Omitting attendees leaves the existing list untouched on
+        # Google's side, which is what users want when they edit a
+        # non-attendee field.
+        attendees = request.data.get("attendees")
+        params = {}
+        if isinstance(attendees, list):
+            cleaned = []
+            for a in attendees:
+                if not isinstance(a, dict):
+                    continue
+                email = a.get("email")
+                if not email or not isinstance(email, str):
+                    continue
+                entry = {"email": email}
+                display_name = a.get("displayName")
+                if isinstance(display_name, str) and display_name:
+                    entry["displayName"] = display_name
+                cleaned.append(entry)
+            body["attendees"] = cleaned
+            # Suppress email invites for the same reason as POST —
+            # the chat / event modal is the notification surface.
+            if cleaned:
+                params["sendUpdates"] = "none"
         # Meet toggle semantics (only when `add_meet` is explicitly in
         # the request — omitting it leaves the event's Meet state
         # untouched):
@@ -271,7 +297,6 @@ class CalendarEventDetailView(APIView):
         #                    any existing Meet link.
         # The createRequest path needs `conferenceDataVersion=1`;
         # without it Google silently drops the field.
-        params = {}
         if "add_meet" in request.data:
             if request.data.get("add_meet"):
                 body["conferenceData"] = {
