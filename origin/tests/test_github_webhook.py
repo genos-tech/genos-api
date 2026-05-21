@@ -1,4 +1,13 @@
-"""Tests for the GitHub repo webhook (PR merge → task status sync)."""
+"""Tests for the GitHub repo webhook (PR merge → task status sync).
+
+Behavior under test:
+- Match path: PR's head branch ref contains a task's display ID
+  (e.g. `feature/GEN-42-foo` matches task GEN-42), word-boundary regex.
+- Opt-in gate: the task's assignee must have
+  `auto_close_on_pr_merge=True`. Default is OFF for every user.
+- `task.links` is *not* used here anymore — auto-link by branch name is
+  the single source of truth for "what PR belongs to what task."
+"""
 
 import hashlib
 import hmac
@@ -22,7 +31,13 @@ def _sign(payload_bytes: bytes, secret: str = WEBHOOK_SECRET) -> str:
     return f"sha256={sig}"
 
 
-def _pr_payload(*, action: str, merged: bool, html_url: str) -> dict:
+def _pr_payload(
+    *,
+    action: str,
+    merged: bool,
+    html_url: str = "https://github.com/owner/repo/pull/42",
+    head_ref: str = "main",
+) -> dict:
     return {
         "action": action,
         "pull_request": {
@@ -31,8 +46,8 @@ def _pr_payload(*, action: str, merged: bool, html_url: str) -> dict:
             "number": 42,
             "title": "Test PR",
             "state": "closed" if merged else "open",
-            "head": {"sha": "abc123"},
-            "base": {"repo": {"full_name": "owner/repo"}},
+            "head": {"sha": "abc123", "ref": head_ref},
+            "base": {"repo": {"full_name": "owner/repo"}, "ref": "main"},
         },
         "repository": {"full_name": "owner/repo"},
     }
@@ -42,11 +57,14 @@ def _pr_payload(*, action: str, merged: bool, html_url: str) -> dict:
 class TestGithubWebhook(TestCase):
     def setUp(self):
         self.client = APIClient()
+        # Default user opts INTO auto-close so the happy-path tests
+        # exercise the close branch. The opt-out test flips it off.
         self.user = User.objects.create_user(
             username="webhookuser",
             email="hook@test.com",
             password="testpass123",
             is_email_verified=True,
+            auto_close_on_pr_merge=True,
         )
         self.team = TeamMaster.objects.create(
             team_name="Hook Team",
@@ -58,18 +76,28 @@ class TestGithubWebhook(TestCase):
             project_name="Hook Project",
             owner=self.user,
             project_system_user=self.user,
+            code="HK",
         )
         ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user)
 
-    def _create_task(self, *, status_value: str = "Open", links=None) -> TaskMaster:
+    def _create_task(
+        self,
+        *,
+        status_value: str = "Open",
+        project_task_number: int | None = None,
+        assignee=None,
+    ) -> TaskMaster:
+        # project_task_number is normally assigned by the post-save
+        # signal, but we accept an explicit override so tests can pin
+        # the display ID to a known value (HK-42, HK-99, …).
         return TaskMaster.objects.create(
             team=self.team,
             project=self.project,
-            assignee=self.user,
+            assignee=assignee or self.user,
             reporter=self.user,
             title="Test task",
             status=status_value,
-            links=links or [],
+            project_task_number=project_task_number,
         )
 
     def _post_webhook(
@@ -91,7 +119,7 @@ class TestGithubWebhook(TestCase):
     # ── Signature verification ────────────────────────────────────
 
     def test_missing_signature_returns_401(self):
-        payload = _pr_payload(action="closed", merged=True, html_url="x")
+        payload = _pr_payload(action="closed", merged=True)
         response = self.client.post(
             "/api/v2/github/webhook/",
             data=json.dumps(payload),
@@ -101,7 +129,7 @@ class TestGithubWebhook(TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_wrong_signature_returns_401(self):
-        body = json.dumps(_pr_payload(action="closed", merged=True, html_url="x")).encode()
+        body = json.dumps(_pr_payload(action="closed", merged=True)).encode()
         response = self.client.post(
             "/api/v2/github/webhook/",
             data=body,
@@ -112,7 +140,7 @@ class TestGithubWebhook(TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_signed_with_different_secret_returns_401(self):
-        body = json.dumps(_pr_payload(action="closed", merged=True, html_url="x")).encode()
+        body = json.dumps(_pr_payload(action="closed", merged=True)).encode()
         response = self.client.post(
             "/api/v2/github/webhook/",
             data=body,
@@ -129,99 +157,158 @@ class TestGithubWebhook(TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_unrelated_event_returns_200_noop(self):
-        response = self._post_webhook(
-            _pr_payload(action="closed", merged=True, html_url="x"), event="push"
-        )
+        response = self._post_webhook(_pr_payload(action="closed", merged=True), event="push")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["detail"], "ignored")
 
     def test_pr_opened_does_nothing(self):
-        url = "https://github.com/owner/repo/pull/42"
-        task = self._create_task(links=[{"id": "l1", "url": url, "title": "T", "isGitHub": True}])
-        response = self._post_webhook(_pr_payload(action="opened", merged=False, html_url=url))
+        task = self._create_task(project_task_number=42)
+        response = self._post_webhook(
+            _pr_payload(action="opened", merged=False, head_ref="feature/HK-42-foo")
+        )
         self.assertEqual(response.status_code, 200)
         task.refresh_from_db()
         self.assertEqual(task.status, "Open")
 
     def test_pr_closed_without_merge_does_nothing(self):
-        url = "https://github.com/owner/repo/pull/42"
-        task = self._create_task(links=[{"id": "l1", "url": url, "title": "T", "isGitHub": True}])
-        response = self._post_webhook(_pr_payload(action="closed", merged=False, html_url=url))
+        task = self._create_task(project_task_number=42)
+        response = self._post_webhook(
+            _pr_payload(action="closed", merged=False, head_ref="feature/HK-42-foo")
+        )
         self.assertEqual(response.status_code, 200)
         task.refresh_from_db()
         self.assertEqual(task.status, "Open")
 
-    # ── PR merge → status transition ──────────────────────────────
+    # ── PR merge → status transition (opt-in path) ────────────────
 
-    def test_merged_pr_transitions_open_task_to_closed(self):
-        url = "https://github.com/owner/repo/pull/42"
-        task = self._create_task(links=[{"id": "l1", "url": url, "title": "T", "isGitHub": True}])
-        response = self._post_webhook(_pr_payload(action="closed", merged=True, html_url=url))
+    def test_merged_pr_closes_task_whose_display_id_is_in_branch(self):
+        task = self._create_task(project_task_number=42)
+        response = self._post_webhook(
+            _pr_payload(action="closed", merged=True, head_ref="feature/HK-42-add-thing")
+        )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["updated"], 1)
         task.refresh_from_db()
         self.assertEqual(task.status, "Closed")
 
-    def test_merged_pr_fans_out_to_multiple_tasks(self):
-        url = "https://github.com/owner/repo/pull/77"
-        link = {"id": "l1", "url": url, "title": "T", "isGitHub": True}
-        t1 = self._create_task(links=[link])
-        t2 = self._create_task(links=[link])
-        response = self._post_webhook(_pr_payload(action="closed", merged=True, html_url=url))
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["updated"], 2)
-        t1.refresh_from_db()
-        t2.refresh_from_db()
-        self.assertEqual(t1.status, "Closed")
-        self.assertEqual(t2.status, "Closed")
-
-    def test_merged_pr_does_not_clobber_already_closed_task(self):
-        url = "https://github.com/owner/repo/pull/42"
-        task = self._create_task(
-            status_value="Closed",
-            links=[{"id": "l1", "url": url, "title": "T", "isGitHub": True}],
-        )
-        first_updated = task.ts_updated_at
-        response = self._post_webhook(_pr_payload(action="closed", merged=True, html_url=url))
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["updated"], 0)
+    def test_merged_pr_matches_at_string_start(self):
+        task = self._create_task(project_task_number=42)
+        response = self._post_webhook(_pr_payload(action="closed", merged=True, head_ref="HK-42"))
+        self.assertEqual(response.data["updated"], 1)
         task.refresh_from_db()
         self.assertEqual(task.status, "Closed")
-        # ts_updated_at must NOT have moved — confirms we skipped the save.
-        self.assertEqual(task.ts_updated_at, first_updated)
 
-    def test_merged_pr_skips_unlinked_tasks(self):
-        url = "https://github.com/owner/repo/pull/42"
-        unrelated = self._create_task()
-        response = self._post_webhook(_pr_payload(action="closed", merged=True, html_url=url))
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["updated"], 0)
-        unrelated.refresh_from_db()
-        self.assertEqual(unrelated.status, "Open")
+    def test_merged_pr_matches_case_insensitive(self):
+        task = self._create_task(project_task_number=42)
+        response = self._post_webhook(
+            _pr_payload(action="closed", merged=True, head_ref="feature/hk-42-foo")
+        )
+        self.assertEqual(response.data["updated"], 1)
+        task.refresh_from_db()
+        self.assertEqual(task.status, "Closed")
 
-    def test_merged_pr_skips_deleted_tasks(self):
-        url = "https://github.com/owner/repo/pull/42"
-        task = self._create_task(links=[{"id": "l1", "url": url, "title": "T", "isGitHub": True}])
-        task.is_deleted = True
-        task.save(update_fields=["is_deleted"])
-        response = self._post_webhook(_pr_payload(action="closed", merged=True, html_url=url))
+    # ── Word-boundary regex (no aliasing) ─────────────────────────
+
+    def test_does_not_close_task_whose_id_is_a_prefix(self):
+        # HK-4 should NOT be closed by a branch named HK-42-foo. The
+        # word-boundary regex prevents this aliasing.
+        task = self._create_task(project_task_number=4)
+        response = self._post_webhook(
+            _pr_payload(action="closed", merged=True, head_ref="feature/HK-42-foo")
+        )
         self.assertEqual(response.data["updated"], 0)
         task.refresh_from_db()
         self.assertEqual(task.status, "Open")
 
-    def test_substring_match_rejected_by_strict_url_check(self):
-        # The icontains query is wide on purpose (fast initial filter) but
-        # then we walk the JSON list and require exact URL equality. A
-        # task whose link is /pull/4 should NOT match /pull/42's webhook.
-        url_short = "https://github.com/owner/repo/pull/4"
-        url_long = "https://github.com/owner/repo/pull/42"
-        task_short = self._create_task(
-            links=[{"id": "l1", "url": url_short, "title": "T", "isGitHub": True}]
-        )
-        response = self._post_webhook(_pr_payload(action="closed", merged=True, html_url=url_long))
+    def test_does_not_close_when_branch_has_no_matching_id(self):
+        task = self._create_task(project_task_number=42)
+        response = self._post_webhook(_pr_payload(action="closed", merged=True, head_ref="main"))
         self.assertEqual(response.data["updated"], 0)
-        task_short.refresh_from_db()
-        self.assertEqual(task_short.status, "Open")
+        task.refresh_from_db()
+        self.assertEqual(task.status, "Open")
+
+    # ── Per-user opt-in gate ──────────────────────────────────────
+
+    def test_does_not_close_when_assignee_has_not_opted_in(self):
+        opted_out = User.objects.create_user(
+            username="opted-out",
+            email="out@test.com",
+            password="x",
+            is_email_verified=True,
+            auto_close_on_pr_merge=False,
+        )
+        # Add opted-out user to project so they can own a task.
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=opted_out)
+        task = self._create_task(project_task_number=42, assignee=opted_out)
+        response = self._post_webhook(
+            _pr_payload(action="closed", merged=True, head_ref="feature/HK-42-foo")
+        )
+        # The branch matches and the merge fired, but the assignee
+        # didn't opt in — so we don't touch the task.
+        self.assertEqual(response.data["updated"], 0)
+        task.refresh_from_db()
+        self.assertEqual(task.status, "Open")
+
+    def test_closes_only_opted_in_assignees_when_multiple_tasks_match(self):
+        # Two tasks could match a branch like "HK-42-and-HK-99-merge".
+        # Only the one whose assignee opted in should close.
+        opted_out = User.objects.create_user(
+            username="opted-out-fan",
+            email="out-fan@test.com",
+            password="x",
+            is_email_verified=True,
+            auto_close_on_pr_merge=False,
+        )
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=opted_out)
+        t_in = self._create_task(project_task_number=42)  # assignee=self.user (opted in)
+        t_out = self._create_task(project_task_number=99, assignee=opted_out)
+        response = self._post_webhook(
+            _pr_payload(action="closed", merged=True, head_ref="feature/HK-42-and-HK-99")
+        )
+        self.assertEqual(response.data["updated"], 1)
+        t_in.refresh_from_db()
+        t_out.refresh_from_db()
+        self.assertEqual(t_in.status, "Closed")
+        self.assertEqual(t_out.status, "Open")
+
+    # ── Already-done + deleted guards ─────────────────────────────
+
+    def test_merged_pr_does_not_clobber_already_closed_task(self):
+        task = self._create_task(project_task_number=42, status_value="Closed")
+        first_updated = task.ts_updated_at
+        response = self._post_webhook(_pr_payload(action="closed", merged=True, head_ref="HK-42"))
+        self.assertEqual(response.data["updated"], 0)
+        task.refresh_from_db()
+        self.assertEqual(task.status, "Closed")
+        self.assertEqual(task.ts_updated_at, first_updated)
+
+    def test_merged_pr_skips_deleted_tasks(self):
+        task = self._create_task(project_task_number=42)
+        task.is_deleted = True
+        task.save(update_fields=["is_deleted"])
+        response = self._post_webhook(_pr_payload(action="closed", merged=True, head_ref="HK-42"))
+        self.assertEqual(response.data["updated"], 0)
+        task.refresh_from_db()
+        self.assertEqual(task.status, "Open")
+
+    def test_merged_pr_skips_orphan_tasks_with_no_display_id(self):
+        # A task without a project has display_id like "#<id>" which
+        # would alias every task in the system — the close path bails
+        # out for these explicitly.
+        orphan = TaskMaster.objects.create(
+            team=self.team,
+            project=None,
+            assignee=self.user,
+            reporter=self.user,
+            title="Orphan",
+            status="Open",
+        )
+        response = self._post_webhook(
+            _pr_payload(action="closed", merged=True, head_ref=f"#{orphan.task_id}")
+        )
+        self.assertEqual(response.data["updated"], 0)
+        orphan.refresh_from_db()
+        self.assertEqual(orphan.status, "Open")
 
 
 @override_settings(GITHUB_WEBHOOK_SECRET="")
@@ -231,7 +318,7 @@ class TestGithubWebhookSecretUnset(TestCase):
 
     def test_empty_secret_rejects_all(self):
         client = APIClient()
-        body = json.dumps(_pr_payload(action="closed", merged=True, html_url="x")).encode()
+        body = json.dumps(_pr_payload(action="closed", merged=True)).encode()
         response = client.post(
             "/api/v2/github/webhook/",
             data=body,

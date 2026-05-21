@@ -41,6 +41,12 @@ class TaskActivityActionType(models.TextChoices):
     # ASSIGNEE row with a list diff.
     MILESTONE_ASSIGNEE_ADDED = "milestone_assignee_added", "Milestone assignee added"
     MILESTONE_ASSIGNEE_REMOVED = "milestone_assignee_removed", "Milestone assignee removed"
+    # GitHub PR comment surfaced on the auto-linked task (branch name
+    # contains the task's display_id). Populated by `GithubWebhookView`
+    # on `issue_comment` / `pull_request_review_comment` create events.
+    # actor=None — GitHub commenters are not Genos users; the GitHub
+    # login + avatar URL are stored in metadata.
+    PR_COMMENT_ADDED = "pr_comment_added", "PR comment added"
 
 
 class TaskActivity(models.Model):

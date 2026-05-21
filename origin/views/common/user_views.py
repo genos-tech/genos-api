@@ -100,3 +100,32 @@ class UserProfileImageView(AuthenticatedAPIView):
             return Response(UserSerializer(saved_user).data, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AutoCloseOnPrMergePreferenceView(AuthenticatedAPIView):
+    """GET / PATCH the calling user's "auto-close task on PR merge"
+    preference. Operates on `request.user`; no user_id is accepted or
+    required, so a leaked token can't toggle someone else's setting.
+
+    Returns and accepts a single boolean field `auto_close_on_pr_merge`.
+    """
+
+    def get(self, request):
+        return Response(
+            {"auto_close_on_pr_merge": bool(request.user.auto_close_on_pr_merge)},
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request):
+        value = request.data.get("auto_close_on_pr_merge")
+        if not isinstance(value, bool):
+            return Response(
+                {"error": "auto_close_on_pr_merge must be a boolean."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        request.user.auto_close_on_pr_merge = value
+        request.user.save(update_fields=["auto_close_on_pr_merge"])
+        return Response(
+            {"auto_close_on_pr_merge": value},
+            status=status.HTTP_200_OK,
+        )

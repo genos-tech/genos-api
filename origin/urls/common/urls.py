@@ -126,6 +126,11 @@ urlpatterns = [
         NotificationPreferenceView.as_view(),
         name="user_notification_preferences",
     ),
+    path(
+        "api/v2/user/preferences/auto-close-on-pr-merge/",
+        AutoCloseOnPrMergePreferenceView.as_view(),
+        name="auto_close_on_pr_merge_preference",
+    ),
     # Team
     path("api/v2/team/create/", TeamMasterView.as_view(), name="join_team"),
     path("api/v2/team/exist/", CheckTeamExistsView.as_view(), name="exist_team"),
