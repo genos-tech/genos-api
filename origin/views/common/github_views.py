@@ -574,17 +574,27 @@ def _list_repo_branches(
 
 
 def _find_pr_for_branch(
-    account: ConnectedAccount, owner: str, repo: str, branch: str
+    account: ConnectedAccount,
+    owner: str,
+    repo: str,
+    branch: str,
+    *,
+    bypass_cache: bool = False,
 ) -> dict | None:
     """Look up the PR (if any) whose head ref is `owner:branch`. Returns
     a slim PR dict or None. Cached so the table doesn't re-fetch on
-    every row mount within the TTL."""
+    every row mount within the TTL.
+
+    When `bypass_cache=True`, skips the read but still writes the fresh
+    result so subsequent natural fetches within the TTL benefit.
+    """
     key = _pull_cache_key(owner, repo, branch)
-    cached = cache.get(key)
-    if cached is not None:
-        # Cached payload may legitimately be the sentinel `{}` meaning
-        # "this branch has no PR" — normalize that back to None.
-        return cached or None
+    if not bypass_cache:
+        cached = cache.get(key)
+        if cached is not None:
+            # Cached payload may legitimately be the sentinel `{}` meaning
+            # "this branch has no PR" — normalize that back to None.
+            return cached or None
     resp = _github_get(
         account,
         f"/repos/{owner}/{repo}/pulls",
@@ -621,7 +631,12 @@ def _find_pr_for_branch(
 
 
 def _fetch_pr_by_number(
-    account: ConnectedAccount, owner: str, repo: str, number: int
+    account: ConnectedAccount,
+    owner: str,
+    repo: str,
+    number: int,
+    *,
+    bypass_cache: bool = False,
 ) -> dict | None:
     """Fetch a PR's detail by its number. Cached. Returns the same slim
     dict shape as `_find_pr_for_branch` so the two sources can be unioned
@@ -630,13 +645,17 @@ def _fetch_pr_by_number(
     Used for auto-linked PR URLs persisted in `task.links` whose source
     branch has since been deleted — branch-list-based lookup can't find
     them anymore, but the PR record itself still lives on GitHub.
+
+    When `bypass_cache=True`, skips the read but still writes the fresh
+    result so subsequent natural fetches within the TTL benefit.
     """
     key = _pr_by_number_cache_key(owner, repo, number)
-    cached = cache.get(key)
-    if cached is not None:
-        # Empty dict is the sentinel for "we tried and failed" so we
-        # don't keep retrying inside the TTL window.
-        return cached or None
+    if not bypass_cache:
+        cached = cache.get(key)
+        if cached is not None:
+            # Empty dict is the sentinel for "we tried and failed" so we
+            # don't keep retrying inside the TTL window.
+            return cached or None
     resp = _github_get(account, f"/repos/{owner}/{repo}/pulls/{number}")
     if not resp.ok:
         cache.set(key, {}, _PULL_CACHE_TTL)
@@ -792,19 +811,20 @@ class GithubPullsForTaskView(APIView):
 
         pattern = _branch_match_re(display_id)
         repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
+        bypass_cache = request.GET.get("fresh") == "1"
 
         pulls: list[dict] = []
         seen_urls: set[str] = set()
         # --- Source 1: live branches matching display_id -------------
         for owner, repo in repos:
-            branches = _list_repo_branches(account, owner, repo)
+            branches = _list_repo_branches(account, owner, repo, bypass_cache=bypass_cache)
             if branches is None:
                 continue
             for branch in branches:
                 name = branch.get("name") or ""
                 if not pattern.search(name):
                     continue
-                pr = _find_pr_for_branch(account, owner, repo, name)
+                pr = _find_pr_for_branch(account, owner, repo, name, bypass_cache=bypass_cache)
                 if pr is None:
                     continue
                 # Same PR can appear from different matching branches
@@ -832,7 +852,7 @@ class GithubPullsForTaskView(APIView):
             if ref is None:
                 continue
             owner_p, repo_p, number = ref
-            pr = _fetch_pr_by_number(account, owner_p, repo_p, number)
+            pr = _fetch_pr_by_number(account, owner_p, repo_p, number, bypass_cache=bypass_cache)
             if pr is None:
                 continue
             seen_urls.add(url)
