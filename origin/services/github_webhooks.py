@@ -21,6 +21,7 @@ from typing import Optional
 
 import requests
 from django.conf import settings
+from django.core.cache import cache
 from django.db import IntegrityError
 
 from origin.models.common.user_models import (
@@ -35,6 +36,20 @@ GITHUB_API_BASE = "https://api.github.com"
 
 # Same shape the frontend's parsePrUrl uses — keep them in sync.
 _PR_URL_RE = re.compile(r"^https://github\.com/([^/]+)/([^/]+)/pull/(\d+)/?$")
+
+# Canonical event list our webhook handler dispatches on. The backend's
+# `GithubWebhookView` knows how to deal with each of these:
+#   - `pull_request`          → merge → auto-close, also drives PR state
+#                                detection used elsewhere.
+#   - `issue_comment`         → top-level PR comments (the payload's
+#                                `issue.pull_request` distinguishes a PR
+#                                comment from a plain issue comment).
+#   - `pull_request_review_comment` → inline code-review comments.
+#
+# When this list changes, bump `_HOOK_EVENTS_VERSION` below so existing
+# registrations get re-PATCHed on the next task save.
+_HOOK_EVENTS = ["pull_request", "issue_comment", "pull_request_review_comment"]
+_HOOK_EVENTS_VERSION = 2  # v1 was [pull_request] only.
 
 
 def parse_pr_url(url) -> Optional[tuple[str, str]]:
@@ -93,6 +108,10 @@ def ensure_repo_webhook(user, owner: str, repo: str) -> Optional[GithubWebhookRe
         owner__iexact=owner, repo__iexact=repo
     ).first()
     if existing:
+        # Sync the events list on the GitHub side in case this hook was
+        # registered before we added the new event subscriptions (e.g.
+        # PR comment events). No-op when already in sync — cheap, cached.
+        _sync_existing_hook_events_if_needed(user, owner, repo, existing.hook_id)
         logger.info(
             "ensure_repo_webhook: %s/%s already cached (hook_id=%s); short-circuit",
             owner,
@@ -122,7 +141,7 @@ def ensure_repo_webhook(user, owner: str, repo: str) -> Optional[GithubWebhookRe
     body = {
         "name": "web",
         "active": True,
-        "events": ["pull_request"],
+        "events": list(_HOOK_EVENTS),
         "config": {
             "url": payload_url,
             "content_type": "json",
@@ -189,6 +208,95 @@ def ensure_repo_webhook(user, owner: str, repo: str) -> Optional[GithubWebhookRe
         (resp.text or "")[:200],
     )
     return None
+
+
+def _sync_existing_hook_events_if_needed(user, owner: str, repo: str, hook_id: int) -> None:
+    """Best-effort: PATCH the existing webhook's events list to match our
+    current `_HOOK_EVENTS`.
+
+    Why: a `GithubWebhookRegistration` row registered before we added the
+    `issue_comment` / `pull_request_review_comment` subscriptions will
+    still only receive `pull_request` deliveries on GitHub's side — the
+    DB row doesn't know that. Without this sync, PR-comment activity
+    rows never get created because GitHub never delivers the events.
+
+    Cached via Redis (keyed by repo + a hand-bumped events version) so
+    we don't PATCH on every task save. Bump `_HOOK_EVENTS_VERSION` when
+    you change `_HOOK_EVENTS` so existing repos re-sync on the next
+    save. Never raises — silent best-effort, just like
+    `ensure_repo_webhook` itself.
+    """
+    cache_key = f"gh:hook_events_synced:{owner.lower()}:{repo.lower()}:v{_HOOK_EVENTS_VERSION}"
+    if cache.get(cache_key):
+        return
+
+    # We need a token to PATCH. Try the current user first (matches the
+    # registration path's convention); fall back to the registration's
+    # original `registered_by` user if the current user has no GitHub
+    # link or no admin on the repo.
+    account = ConnectedAccount.objects.filter(user=user, provider="github").first()
+    if account is None:
+        reg = GithubWebhookRegistration.objects.filter(
+            owner__iexact=owner, repo__iexact=repo
+        ).first()
+        if reg is None or reg.registered_by_id is None:
+            return
+        account = ConnectedAccount.objects.filter(
+            user_id=reg.registered_by_id, provider="github"
+        ).first()
+        if account is None:
+            return
+
+    try:
+        token = get_valid_access_token(account)
+    except Exception:
+        logger.exception(
+            "Could not get valid GitHub token to sync hook events on %s/%s", owner, repo
+        )
+        return
+
+    headers = _hooks_api_headers(token)
+    try:
+        resp = requests.patch(
+            f"{GITHUB_API_BASE}/repos/{owner}/{repo}/hooks/{hook_id}",
+            json={"events": list(_HOOK_EVENTS)},
+            headers=headers,
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        logger.warning("GitHub hook PATCH network error on %s/%s: %s", owner, repo, exc)
+        return
+
+    if resp.ok:
+        logger.info(
+            "ensure_repo_webhook: synced events on %s/%s (hook_id=%s) → %s",
+            owner,
+            repo,
+            hook_id,
+            _HOOK_EVENTS,
+        )
+        # Long TTL — the events list is stable across the lifetime of
+        # the deploy. Restart / version bump invalidates via the
+        # version-suffixed key.
+        cache.set(cache_key, "1", 60 * 60 * 24 * 30)  # 30 days
+    elif resp.status_code in (401, 403, 404):
+        # User lacks admin on this repo, or hook was deleted on GitHub
+        # side. Either way we can't fix it from here. Log so the user
+        # can take manual action.
+        logger.info(
+            "ensure_repo_webhook: hook events PATCH %d on %s/%s — manual fix needed",
+            resp.status_code,
+            owner,
+            repo,
+        )
+    else:
+        logger.warning(
+            "ensure_repo_webhook: hook events PATCH unexpected %d on %s/%s: %s",
+            resp.status_code,
+            owner,
+            repo,
+            (resp.text or "")[:200],
+        )
 
 
 def _adopt_existing_hook(
