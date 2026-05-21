@@ -45,6 +45,17 @@ def parse_pr_url(url) -> Optional[tuple[str, str]]:
     return (m.group(1), m.group(2)) if m else None
 
 
+def parse_pr_url_full(url) -> Optional[tuple[str, str, int]]:
+    """Return (owner, repo, number) for a valid PR URL, None otherwise.
+    Used when the PR number is needed in addition to (owner, repo) —
+    e.g. to fetch the PR's detail by id without scraping it back out
+    of the URL elsewhere."""
+    if not isinstance(url, str):
+        return None
+    m = _PR_URL_RE.match(url)
+    return (m.group(1), m.group(2), int(m.group(3))) if m else None
+
+
 def _webhook_payload_url() -> str:
     base = (settings.BACKEND_BASE_URL or "").rstrip("/")
     return f"{base}/api/v2/github/webhook/"
