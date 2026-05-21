@@ -1,4 +1,5 @@
 import os
+import time
 
 from rest_framework.response import Response
 from rest_framework import status
@@ -94,7 +95,21 @@ class UserProfileImageView(AuthenticatedAPIView):
             # equivalent today but coupled to `user_profile_image_path`'s
             # exact `user_profiles/<uuid>/<file>` shape, so any future
             # tweak to that helper would silently drift the served URL.
-            saved_user.profile_image_file_name = saved_user.profile_image_url.name
+            #
+            # Append `?v=<ms-timestamp>` so the served URL is unique per
+            # upload. The delete-first cleanup above keeps the on-disk
+            # filename stable (`profile.jpg`), which means *without* this
+            # suffix the URL never changes and the browser keeps serving
+            # the cached bytes after a page refresh — even though
+            # `myself.avatarImgPath` was re-hydrated from a fresh API
+            # response. The query string is ignored by Django's media
+            # serving (path matching uses the path part only), and the
+            # `profile_image_url` FileField still stores the clean path
+            # so the next upload's `delete(save=False)` finds the file.
+            cache_buster = int(time.time() * 1000)
+            saved_user.profile_image_file_name = (
+                f"{saved_user.profile_image_url.name}?v={cache_buster}"
+            )
             saved_user.save(update_fields=["profile_image_file_name"])
 
             return Response(UserSerializer(saved_user).data, status=status.HTTP_200_OK)
