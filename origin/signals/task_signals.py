@@ -20,9 +20,11 @@ Adding a new field to track:
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any, Optional
 
+from django.db import transaction
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
@@ -31,6 +33,14 @@ from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMas
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskAttachments, TaskComments, TaskMaster
+from origin.services.calendar_sync import (
+    LINK_ONLY_FIELDS,
+    delete_task_event,
+    get_google_connected_account,
+    sync_task_event,
+)
+
+_calendar_logger = logging.getLogger("origin.calendar_sync")
 
 
 # ---------------------------------------------------------------------------
@@ -416,3 +426,118 @@ def milestone_assignee_record_remove(sender, instance: MilestoneAssignees, **kwa
             "userName": getattr(instance.user, "username", None),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Task → Google Calendar auto-sync (opt-in per user)
+# ---------------------------------------------------------------------------
+#
+# One-way sync: changes flow App → Google only. Deletions or edits on
+# Google never propagate back. Per the v1 product decision, if a user
+# deletes the linked event on Google we clear the link on the next 404
+# and never re-create.
+#
+# Calendar API calls are deferred via `transaction.on_commit` so the
+# request transaction commits before any Google round-trip. This keeps
+# task-save latency tied to the DB write only, and naturally drops the
+# sync if the transaction rolls back.
+
+
+def _sync_save(task: TaskMaster) -> None:
+    """Persist any link-column mutations made by the sync helpers,
+    using `update_fields=LINK_ONLY_FIELDS` so the post_save recursion
+    guard short-circuits the re-fire."""
+    task.save(update_fields=list(LINK_ONLY_FIELDS))
+
+
+def _run_upsert(task_pk: int) -> None:
+    """on_commit callback — re-fetch the task fresh (the instance in
+    the signal closure may be stale by the time the txn commits), do
+    the upsert, save link columns if changed."""
+    try:
+        task = TaskMaster.objects.filter(pk=task_pk).first()
+        if task is None or task.due_date is None or task.is_deleted:
+            return
+        if task.assignee_id is None:
+            return
+        user = task.assignee
+        if not getattr(user, "auto_sync_tasks_to_calendar", False):
+            return
+        account = get_google_connected_account(user)
+        if account is None:
+            return
+        if sync_task_event(account, task):
+            _sync_save(task)
+    except Exception as exc:  # pragma: no cover - defensive
+        _calendar_logger.warning("auto-sync upsert failed task=%s err=%s", task_pk, exc)
+
+
+def _run_delete(task_pk: int) -> None:
+    """on_commit callback for deletion paths (soft-delete or due_date
+    cleared while a link exists). Always tries to clear the link
+    columns even if the upstream DELETE fails."""
+    try:
+        task = TaskMaster.objects.filter(pk=task_pk).first()
+        if task is None or not task.linked_calendar_event_id:
+            return
+        if task.assignee_id is None:
+            return
+        account = get_google_connected_account(task.assignee)
+        if account is None:
+            # No account → just clear our pointer; nothing to delete
+            # upstream we could touch.
+            task.linked_calendar_event_id = None
+            task.linked_calendar_id = None
+            _sync_save(task)
+            return
+        if delete_task_event(account, task):
+            _sync_save(task)
+    except Exception as exc:  # pragma: no cover - defensive
+        _calendar_logger.warning("auto-sync delete failed task=%s err=%s", task_pk, exc)
+
+
+@receiver(post_save, sender=TaskMaster)
+def task_auto_sync_to_calendar(sender, instance: TaskMaster, created: bool, **kwargs):
+    """Opt-in auto-sync of task changes to the assignee's Google
+    Calendar. Toggled per-user via `auto_sync_tasks_to_calendar`.
+
+    Decisions:
+      - Recursion guard: when the sync helpers save link columns with
+        `update_fields=LINK_ONLY_FIELDS`, the re-fired post_save
+        early-returns here so we don't loop.
+      - Defer the API call to `on_commit` so a rolled-back request
+        doesn't trigger a phantom Google write, and request latency
+        isn't gated on the Google round-trip.
+      - Init-task placeholders never sync — they're empty rows the
+        Create Task form uses pre-save.
+      - Past-due tasks DO sync on edit (only the backfill endpoint
+        filters out past dates).
+    """
+    update_fields = kwargs.get("update_fields")
+    if update_fields and set(update_fields).issubset(set(LINK_ONLY_FIELDS)):
+        return
+    if instance.is_init_task:
+        return
+    if instance.assignee_id is None:
+        return
+
+    # Soft-delete: drop the upstream event if one exists.
+    if instance.is_deleted:
+        if instance.linked_calendar_event_id:
+            transaction.on_commit(lambda pk=instance.pk: _run_delete(pk))
+        return
+
+    # No due_date: if a link exists, clear it; otherwise nothing to do.
+    if instance.due_date is None:
+        if instance.linked_calendar_event_id:
+            transaction.on_commit(lambda pk=instance.pk: _run_delete(pk))
+        return
+
+    # Assignee opt-in check is repeated in `_run_upsert` since the user
+    # could toggle off between now and the on_commit callback firing.
+    # The short-circuit here is just a cheap defense against queueing
+    # an unnecessary callback.
+    if not getattr(instance.assignee, "auto_sync_tasks_to_calendar", False):
+        return
+
+    transaction.on_commit(lambda pk=instance.pk: _run_upsert(pk))

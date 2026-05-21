@@ -131,6 +131,16 @@ urlpatterns = [
         AutoCloseOnPrMergePreferenceView.as_view(),
         name="auto_close_on_pr_merge_preference",
     ),
+    path(
+        "api/v2/user/preferences/auto-sync-tasks-to-calendar/",
+        AutoSyncTasksToCalendarPreferenceView.as_view(),
+        name="auto_sync_tasks_to_calendar_preference",
+    ),
+    path(
+        "api/v2/user/calendar-sync/backfill/",
+        CalendarSyncBackfillView.as_view(),
+        name="calendar_sync_backfill",
+    ),
     # Team
     path("api/v2/team/create/", TeamMasterView.as_view(), name="join_team"),
     path("api/v2/team/exist/", CheckTeamExistsView.as_view(), name="exist_team"),

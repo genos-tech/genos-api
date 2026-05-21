@@ -1,4 +1,5 @@
 import os
+from datetime import date
 
 from rest_framework.response import Response
 from rest_framework import status
@@ -6,7 +7,13 @@ from rest_framework.parsers import MultiPartParser
 
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.common.user_models import CustomUser
+from origin.models.task.task_models import TaskMaster
 from origin.serializers.common.user_serializers import UserSerializer
+from origin.services.calendar_sync import (
+    LINK_ONLY_FIELDS,
+    get_google_connected_account,
+    sync_task_event,
+)
 
 
 #############################
@@ -129,3 +136,86 @@ class AutoCloseOnPrMergePreferenceView(AuthenticatedAPIView):
             {"auto_close_on_pr_merge": value},
             status=status.HTTP_200_OK,
         )
+
+
+class AutoSyncTasksToCalendarPreferenceView(AuthenticatedAPIView):
+    """GET / PATCH the calling user's "auto-sync task due dates to
+    Google Calendar" preference. Mirrors `AutoCloseOnPrMergePreferenceView`
+    in shape — single boolean field, scoped to `request.user`.
+
+    Toggling OFF is non-destructive: existing linked events stay on
+    Google. Toggling back ON resumes syncing those events rather than
+    re-creating them. Deletions on Google never propagate back —
+    one-way sync is the whole point of this preference.
+    """
+
+    def get(self, request):
+        return Response(
+            {"auto_sync_tasks_to_calendar": bool(request.user.auto_sync_tasks_to_calendar)},
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request):
+        value = request.data.get("auto_sync_tasks_to_calendar")
+        if not isinstance(value, bool):
+            return Response(
+                {"error": "auto_sync_tasks_to_calendar must be a boolean."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        request.user.auto_sync_tasks_to_calendar = value
+        request.user.save(update_fields=["auto_sync_tasks_to_calendar"])
+        return Response(
+            {"auto_sync_tasks_to_calendar": value},
+            status=status.HTTP_200_OK,
+        )
+
+
+class CalendarSyncBackfillView(AuthenticatedAPIView):
+    """POST one-shot backfill of the calling user's open future-dated
+    tasks to Google Calendar.
+
+    Pre-conditions:
+      - `auto_sync_tasks_to_calendar` is True.
+      - The user has a connected Google account.
+    Returns `{synced: <count>}` for the UI to surface a confirmation
+    toast. Errors on individual tasks are logged and skipped — the
+    response count reflects only successful syncs. No pagination —
+    individual users rarely have more than a few hundred open tasks.
+    """
+
+    def post(self, request):
+        if not request.user.auto_sync_tasks_to_calendar:
+            return Response(
+                {"detail": "preference_disabled"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        account = get_google_connected_account(request.user)
+        if account is None:
+            return Response(
+                {"detail": "google_not_connected"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Open, future-dated tasks assigned to this user. "Open" =
+        # not soft-deleted. Past-due tasks are skipped to avoid
+        # cluttering the user's calendar with backlog — the signal
+        # will catch them next time they're edited.
+        today = date.today()
+        tasks = TaskMaster.objects.filter(
+            assignee=request.user,
+            is_deleted=False,
+            due_date__gte=today,
+        ).only(
+            "pk", "title", "status", "due_date", "linked_calendar_event_id", "linked_calendar_id"
+        )
+        synced = 0
+        for task in tasks:
+            try:
+                if sync_task_event(account, task):
+                    task.save(update_fields=list(LINK_ONLY_FIELDS))
+                synced += 1
+            except Exception:
+                # Defensive — sync_task_event already swallows
+                # transport errors, but any unexpected exception
+                # shouldn't kill the whole backfill.
+                continue
+        return Response({"synced": synced}, status=status.HTTP_200_OK)

@@ -101,6 +101,16 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     # opt-in per user from Settings → Tasks.
     auto_close_on_pr_merge = models.BooleanField(default=False)
 
+    # When True, tasks assigned to this user with a `due_date` are
+    # auto-synced to their Google Calendar as all-day events. Toggled
+    # from Settings → Tasks. OFF by default. Sync is one-way (App →
+    # Google) — deletions or edits on Google never propagate back; if
+    # the user deletes the upstream event the link is cleared on the
+    # next 404 and never re-created. Requires a connected Google
+    # account (see `ConnectedAccount`); without one, the signal exits
+    # cleanly without error.
+    auto_sync_tasks_to_calendar = models.BooleanField(default=False)
+
     # Django Auth Fields
     is_active = models.BooleanField(default=True)  # Can be disabled
     is_staff = models.BooleanField(default=False)  # Access to admin panel

@@ -15,6 +15,7 @@ source of truth; we just present its data.
 from __future__ import annotations
 
 import logging
+import uuid
 
 import requests
 from rest_framework import permissions, status
@@ -129,7 +130,24 @@ class CalendarEventsView(APIView):
                 {"detail": "summary, start, and end are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        resp = _google_request(account, "POST", f"/calendars/{calendar_id}/events", json=body)
+        # When the caller asks for a Google Meet link, attach a
+        # createRequest. Google may return the link inline OR with
+        # status.statusCode="pending" — clients must handle both.
+        # `conferenceDataVersion=1` is required for Google to honor the
+        # createRequest at all; without it, the field is silently
+        # dropped.
+        params = {}
+        if request.data.get("add_meet"):
+            body["conferenceData"] = {
+                "createRequest": {
+                    "requestId": uuid.uuid4().hex,
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
+                }
+            }
+            params["conferenceDataVersion"] = 1
+        resp = _google_request(
+            account, "POST", f"/calendars/{calendar_id}/events", json=body, params=params or None
+        )
         if not resp.ok:
             logger.warning("Calendar event create failed: %s %s", resp.status_code, resp.text)
             return Response(
@@ -144,10 +162,33 @@ class CalendarEventsView(APIView):
 
 
 class CalendarEventDetailView(APIView):
-    """PATCH  /api/v2/calendar/events/<event_id>/ — update an event.
+    """GET    /api/v2/calendar/events/<event_id>/ — fetch one event.
+    PATCH  /api/v2/calendar/events/<event_id>/ — update an event.
     DELETE /api/v2/calendar/events/<event_id>/ — delete an event."""
 
     permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request: Request, event_id: str):
+        account = _connected_account(request.user)
+        if account is None:
+            return _not_connected()
+        calendar_id = request.GET.get("calendar_id", "primary")
+        resp = _google_request(account, "GET", f"/calendars/{calendar_id}/events/{event_id}")
+        if resp.status_code == 404:
+            # Event was deleted upstream (or the ID never existed). The
+            # frontend surfaces this as a distinct state so the user can
+            # unlink without it looking like a transient network error.
+            return Response(
+                {"detail": "event_deleted_upstream"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if not resp.ok:
+            logger.warning("Calendar event GET failed: %s %s", resp.status_code, resp.text)
+            return Response(
+                {"detail": "calendar_api_error", "upstream_status": resp.status_code},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response(resp.json())
 
     def patch(self, request: Request, event_id: str):
         account = _connected_account(request.user)
@@ -164,8 +205,34 @@ class CalendarEventDetailView(APIView):
             }.items()
             if v is not None
         }
+        # Meet toggle semantics (only when `add_meet` is explicitly in
+        # the request — omitting it leaves the event's Meet state
+        # untouched):
+        #   add_meet=true  → attach a createRequest. If the event
+        #                    already has a Meet link, Google preserves
+        #                    it; otherwise it generates one.
+        #   add_meet=false → null out `conferenceData`, which removes
+        #                    any existing Meet link.
+        # The createRequest path needs `conferenceDataVersion=1`;
+        # without it Google silently drops the field.
+        params = {}
+        if "add_meet" in request.data:
+            if request.data.get("add_meet"):
+                body["conferenceData"] = {
+                    "createRequest": {
+                        "requestId": uuid.uuid4().hex,
+                        "conferenceSolutionKey": {"type": "hangoutsMeet"},
+                    }
+                }
+            else:
+                body["conferenceData"] = None
+            params["conferenceDataVersion"] = 1
         resp = _google_request(
-            account, "PATCH", f"/calendars/{calendar_id}/events/{event_id}", json=body
+            account,
+            "PATCH",
+            f"/calendars/{calendar_id}/events/{event_id}",
+            json=body,
+            params=params or None,
         )
         if not resp.ok:
             logger.warning("Calendar event patch failed: %s %s", resp.status_code, resp.text)

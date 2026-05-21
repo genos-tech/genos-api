@@ -75,6 +75,14 @@ class TaskMaster(models.Model):
     due_date = models.DateField(blank=True, null=True)
     tags = models.JSONField(blank=True, null=True)
     mentioned_user_ids = models.JSONField(blank=True, null=True)
+    # Google Calendar linkage. When a user schedules a task on their
+    # Calendar (manual "Schedule on Calendar" button, or opt-in
+    # auto-sync), we store the returned event ID here so we can
+    # update/unlink the event later. Empty/null linked_calendar_id is
+    # treated as "primary" by the frontend. Google's IDs are opaque
+    # strings ~26 chars; we cap at 128 with margin.
+    linked_calendar_event_id = models.CharField(max_length=128, blank=True, null=True)
+    linked_calendar_id = models.CharField(max_length=128, blank=True, null=True)
     is_deleted = models.BooleanField(default=False)
     # True: An empty initial task before saved by the user.
     # False: A task that is saved by the user.
