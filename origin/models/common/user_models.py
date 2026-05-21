@@ -94,6 +94,13 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
 
     is_demo = models.BooleanField(default=False, db_index=True)
 
+    # When True, the GitHub PR-merge webhook will auto-close tasks
+    # assigned to this user that this PR head branch references via the
+    # task's display ID (e.g. branch `feature/GEN-42-foo` closes task
+    # `GEN-42` for its assignee when the PR merges). OFF by default —
+    # opt-in per user from Settings → Tasks.
+    auto_close_on_pr_merge = models.BooleanField(default=False)
+
     # Django Auth Fields
     is_active = models.BooleanField(default=True)  # Can be disabled
     is_staff = models.BooleanField(default=False)  # Access to admin panel

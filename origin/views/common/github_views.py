@@ -173,23 +173,55 @@ def _verify_signature(raw_body: bytes, signature_header: str | None) -> bool:
     return hmac.compare_digest(expected, received)
 
 
-def _close_tasks_linked_to_pr(pr_url: str) -> int:
-    """Find tasks whose `links` array references this PR URL and flip
-    their status to DONE_STATUS. Returns the count of tasks updated."""
-    # `links` is a JSONField holding a list of {id, url, title, isGitHub}
-    # objects. icontains over a JSON dump matches both straight and
-    # encoded forms; PR URLs are ASCII so encoding differences don't
-    # bite us here.
-    candidates = TaskMaster.objects.filter(links__icontains=pr_url, is_deleted=False)
+def _close_tasks_for_merged_pr(head_ref: str) -> int:
+    """Auto-close tasks referenced by a merged PR's head branch name.
+
+    Resolution path: walk every task that has a project-scoped display
+    ID (`project.code` + `project_task_number`) and check whether the
+    head branch name contains that ID with the same word-boundary regex
+    used for branch auto-linking. Tasks that match AND whose assignee
+    has opted in via `auto_close_on_pr_merge` get bumped to DONE_STATUS.
+
+    Returns the count of tasks actually closed.
+
+    Why not `task.links`: the source of truth for "what does this PR
+    belong to" is the branch naming convention (PR column, branch
+    chips), not whether someone pasted the URL into Links. Using the
+    same resolution path everywhere keeps the system coherent —
+    automatic for users who follow the convention, no-op for users who
+    don't.
+    """
+    if not head_ref:
+        return 0
+    # Pre-filter to tasks that *could* have a display ID matched.
+    # `select_related("project", "assignee")` keeps the per-row lookup
+    # cheap; for a workspace with thousands of tasks this iterates in
+    # SQL once, then the regex pass runs in memory.
+    candidates = (
+        TaskMaster.objects.select_related("project", "assignee")
+        .filter(
+            is_deleted=False,
+            project__code__isnull=False,
+            project_task_number__isnull=False,
+        )
+        .exclude(status__in=DONE_STATUSES)
+    )
     updated = 0
+    # We don't know up front which task's display ID matches — but for
+    # any given head ref the matching display IDs are bounded by the
+    # branch name's content, so this loop is fast in practice (most
+    # tasks fail the regex check immediately).
     for task in candidates:
-        # Belt-and-suspenders verify (icontains can match substrings):
-        # walk the JSON list and check exact URL equality.
-        if not isinstance(task.links, list):
+        display_id = task.display_id
+        if not display_id or display_id.startswith("#"):
             continue
-        if not any(isinstance(link, dict) and link.get("url") == pr_url for link in task.links):
+        if not _branch_match_re(display_id).search(head_ref):
             continue
-        if task.status in DONE_STATUSES:
+        # Per-user opt-in. Assignee's preference wins; reporter's
+        # preference is intentionally ignored (the assignee owns the
+        # task's "done" decision).
+        assignee = task.assignee
+        if assignee is None or not getattr(assignee, "auto_close_on_pr_merge", False):
             continue
         task.status = DONE_STATUS
         task.save(update_fields=["status", "ts_updated_at"])
@@ -201,9 +233,11 @@ def _close_tasks_linked_to_pr(pr_url: str) -> int:
 class GithubWebhookView(APIView):
     """Receive GitHub repo webhooks (`pull_request` events).
 
-    Auto-transition: when a PR is merged, every task whose `links`
-    references the PR's `html_url` gets bumped to "Closed". No-ops for
-    tasks already closed or otherwise out of scope.
+    Auto-transition: when a PR merges, any task whose display ID
+    appears in the PR's head branch name (e.g. `feature/GEN-42-foo`
+    closes task `GEN-42`) is bumped to "Closed" — *but only if the
+    task's assignee has opted in* via the `auto_close_on_pr_merge`
+    preference. Default is opt-out.
 
     GitHub retries failed webhooks for ~3 days, so we always return 200
     once signature verification passes — even when no tasks matched.
@@ -239,16 +273,18 @@ class GithubWebhookView(APIView):
         pr = payload.get("pull_request") or {}
         action = payload.get("action")
         merged = bool(pr.get("merged"))
+        head_ref = ((pr.get("head") or {}).get("ref")) or ""
         html_url = pr.get("html_url")
 
         # MVP: only the merge transition fires. Other action types
         # (opened, ready_for_review, closed-unmerged, etc.) are
-        # acknowledged but not acted on. See AskUserQuestion answer.
-        if action == "closed" and merged and html_url:
-            updated = _close_tasks_linked_to_pr(html_url)
+        # acknowledged but not acted on.
+        if action == "closed" and merged and head_ref:
+            updated = _close_tasks_for_merged_pr(head_ref)
             logger.info(
-                "GitHub webhook: PR merged %s → updated %d task(s)",
+                "GitHub webhook: PR merged %s (head=%s) → updated %d task(s)",
                 html_url,
+                head_ref,
                 updated,
             )
             return Response({"detail": "ok", "updated": updated}, status=status.HTTP_200_OK)
