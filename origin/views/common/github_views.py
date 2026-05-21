@@ -547,13 +547,24 @@ def _pr_by_number_cache_key(owner: str, repo: str, number: int) -> str:
     return f"gh:pr_by_number:{owner.lower()}:{repo.lower()}:{number}"
 
 
-def _list_repo_branches(account: ConnectedAccount, owner: str, repo: str) -> list[dict] | None:
+def _list_repo_branches(
+    account: ConnectedAccount,
+    owner: str,
+    repo: str,
+    *,
+    bypass_cache: bool = False,
+) -> list[dict] | None:
     """Cached wrapper over `GET /repos/{o}/{r}/branches`. Returns None on
-    upstream error so callers can skip the repo silently."""
+    upstream error so callers can skip the repo silently.
+
+    When `bypass_cache=True`, skips the read but still writes the fresh
+    result so subsequent natural fetches within the TTL benefit.
+    """
     key = _branch_cache_key(owner, repo)
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
+    if not bypass_cache:
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
     resp = _github_get(account, f"/repos/{owner}/{repo}/branches", params={"per_page": 100})
     if not resp.ok:
         return None
@@ -714,10 +725,11 @@ class GithubBranchesForTaskView(APIView):
 
         pattern = _branch_match_re(display_id)
         repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
+        bypass_cache = request.GET.get("fresh") == "1"
 
         matches: list[dict] = []
         for owner, repo in repos:
-            branches = _list_repo_branches(account, owner, repo)
+            branches = _list_repo_branches(account, owner, repo, bypass_cache=bypass_cache)
             if branches is None:
                 # 404 (no access) / 403 (rate limit) / etc. — skip the
                 # repo silently so one bad repo doesn't poison the list.
