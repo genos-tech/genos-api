@@ -779,10 +779,13 @@ class GithubPullsForTaskView(APIView):
          walk branches whose name contains the task's display ID and look
          up each branch's PR. This is the "discovery" path.
       2. **Persisted auto-links** — PR URLs in `task.links` flagged with
-         `isAutoLinked: true` are looked up by number. This catches PRs
-         whose source branch has since been deleted (typical post-merge
-         cleanup) — without it the column would go blank the moment a
-         merged PR's branch is removed.
+         `isAutoLinked: true` AND whose head branch still matches this
+         task's display ID. Picks up PRs whose source branch has since
+         been deleted (typical post-merge cleanup) — without it the
+         column would go blank the moment a merged PR's branch is
+         removed. The branch-match re-validation is a backstop against
+         stale/bad flags in `task.links` (e.g. from earlier frontend
+         versions that auto-flagged body-pasted PR URLs).
 
     Manually-pasted PR links in `task.links` (no `isAutoLinked` flag) are
     intentionally NOT surfaced — auto-linking is the only source of
@@ -842,6 +845,15 @@ class GithubPullsForTaskView(APIView):
         # `isAutoLinked` marker. Picks up PRs whose source branch has
         # been deleted post-merge (Source 1's branch walk misses those
         # because the branch is gone).
+        #
+        # We re-validate that the fetched PR's head branch actually
+        # contains the task's display_id. The flag is set by the
+        # frontend and an earlier bug in the body-mirror effect could
+        # mark unrelated PR URLs (referenced from the task body) as
+        # auto-linked. Without this backstop those bad flags would
+        # leak unrelated PRs into the column. GitHub keeps the head
+        # ref on the PR record even after branch deletion, so this
+        # check still works for the post-merge persistence case.
         for link in task.links or []:
             if not isinstance(link, dict) or not link.get("isAutoLinked"):
                 continue
@@ -854,6 +866,9 @@ class GithubPullsForTaskView(APIView):
             owner_p, repo_p, number = ref
             pr = _fetch_pr_by_number(account, owner_p, repo_p, number, bypass_cache=bypass_cache)
             if pr is None:
+                continue
+            head_ref = pr.get("branch") or ""
+            if not head_ref or not pattern.search(head_ref):
                 continue
             seen_urls.add(url)
             pulls.append(pr)

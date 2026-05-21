@@ -418,6 +418,47 @@ class TestPullsForTaskView(TestCase):
         self.assertEqual(resp.json()["pulls"], [])
 
     @patch("origin.views.common.github_views._github_get")
+    def test_persisted_pr_with_unrelated_branch_is_dropped(self, mock_get):
+        # Backstop for the old body-mirror bug: a link entry can carry
+        # `isAutoLinked: true` even though its branch has nothing to do
+        # with this task (e.g. user referenced another task's PR from
+        # the body and a prior frontend version flagged it). Source 2
+        # must re-validate the PR's head branch against the task's
+        # display_id and skip the unrelated PR.
+        url = "https://github.com/acme/rocket/pull/77"
+        self.task.links = [
+            {
+                "id": "link-pr-77",
+                "url": url,
+                "title": "acme/rocket#77",
+                "isGitHub": True,
+                "isAutoLinked": True,  # set in error by old frontend code
+            }
+        ]
+        self.task.save(update_fields=["links"])
+        unrelated_pr = {
+            "number": 77,
+            "html_url": url,
+            "title": "Unrelated work for another task",
+            "state": "open",
+            "draft": False,
+            "merged_at": None,
+            "head": {"ref": "feature/OTHER-9-thing"},  # no GEN-42 in branch
+        }
+
+        def side_effect(_account, path, params=None):
+            if path.endswith("/branches"):
+                return self._branches_response([])
+            if path.endswith("/pulls/77"):
+                return self._pr_detail_response(unrelated_pr)
+            self.fail(f"Unexpected path: {path}")
+
+        mock_get.side_effect = side_effect
+        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["pulls"], [])
+
+    @patch("origin.views.common.github_views._github_get")
     def test_persisted_and_live_branch_for_same_pr_is_deduped(self, mock_get):
         # The PR exists both via a still-live branch AND as a persisted
         # auto-link in task.links — we should only see it once.
@@ -478,7 +519,10 @@ class TestPullsForTaskView(TestCase):
             "state": "closed",
             "draft": False,
             "merged_at": "2026-05-19T00:00:00Z",
-            "head": {"ref": "deleted-branch"},
+            # Head ref retains the original (now-deleted) branch name on
+            # the GitHub PR record. Must still contain the task's
+            # display_id so Source 2's branch-match backstop accepts it.
+            "head": {"ref": "feature/GEN-42-deleted"},
         }
 
         def side_effect(_account, path, params=None):
