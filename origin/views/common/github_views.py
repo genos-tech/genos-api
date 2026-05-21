@@ -31,7 +31,7 @@ from rest_framework.views import APIView
 from origin.models.common.user_models import ConnectedAccount, GithubWebhookRegistration
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
-from origin.services.github_webhooks import parse_pr_url
+from origin.services.github_webhooks import parse_pr_url, parse_pr_url_full
 from origin.services.oauth.tokens import get_valid_access_token
 
 logger = logging.getLogger(__name__)
@@ -528,6 +528,10 @@ def _pull_cache_key(owner: str, repo: str, branch: str) -> str:
     return f"gh:head_pull:{owner.lower()}:{repo.lower()}:{branch}"
 
 
+def _pr_by_number_cache_key(owner: str, repo: str, number: int) -> str:
+    return f"gh:pr_by_number:{owner.lower()}:{repo.lower()}:{number}"
+
+
 def _list_repo_branches(account: ConnectedAccount, owner: str, repo: str) -> list[dict] | None:
     """Cached wrapper over `GET /repos/{o}/{r}/branches`. Returns None on
     upstream error so callers can skip the repo silently."""
@@ -579,6 +583,43 @@ def _find_pr_for_branch(
         "owner": owner,
         "repo": repo,
         "branch": branch,
+        "number": pr.get("number"),
+        "html_url": pr.get("html_url"),
+        "title": pr.get("title"),
+        "state": pr.get("state"),
+        "draft": pr.get("draft", False),
+        "merged_at": pr.get("merged_at"),
+    }
+    cache.set(key, slim, _PULL_CACHE_TTL)
+    return slim
+
+
+def _fetch_pr_by_number(
+    account: ConnectedAccount, owner: str, repo: str, number: int
+) -> dict | None:
+    """Fetch a PR's detail by its number. Cached. Returns the same slim
+    dict shape as `_find_pr_for_branch` so the two sources can be unioned
+    in `GithubPullsForTaskView`.
+
+    Used for auto-linked PR URLs persisted in `task.links` whose source
+    branch has since been deleted — branch-list-based lookup can't find
+    them anymore, but the PR record itself still lives on GitHub.
+    """
+    key = _pr_by_number_cache_key(owner, repo, number)
+    cached = cache.get(key)
+    if cached is not None:
+        # Empty dict is the sentinel for "we tried and failed" so we
+        # don't keep retrying inside the TTL window.
+        return cached or None
+    resp = _github_get(account, f"/repos/{owner}/{repo}/pulls/{number}")
+    if not resp.ok:
+        cache.set(key, {}, _PULL_CACHE_TTL)
+        return None
+    pr = resp.json() or {}
+    slim = {
+        "owner": owner,
+        "repo": repo,
+        "branch": (pr.get("head") or {}).get("ref") or "",
         "number": pr.get("number"),
         "html_url": pr.get("html_url"),
         "title": pr.get("title"),
@@ -655,11 +696,20 @@ class GithubBranchesForTaskView(APIView):
 class GithubPullsForTaskView(APIView):
     """List PRs auto-linked to this task via branch naming convention.
 
-    A PR is "auto-linked" when its head ref (branch name) contains the
-    task's display ID at non-alphanumeric boundaries. This is the single
-    source of truth for the task table's PR column — manually-pasted PR
-    links in `task.links` are intentionally not included; auto-linking
-    is the only path so the column doesn't surface stale links.
+    Two sources are unioned (deduped by html_url):
+
+      1. **Live branches** — for each repo we've registered our webhook on,
+         walk branches whose name contains the task's display ID and look
+         up each branch's PR. This is the "discovery" path.
+      2. **Persisted auto-links** — PR URLs in `task.links` flagged with
+         `isAutoLinked: true` are looked up by number. This catches PRs
+         whose source branch has since been deleted (typical post-merge
+         cleanup) — without it the column would go blank the moment a
+         merged PR's branch is removed.
+
+    Manually-pasted PR links in `task.links` (no `isAutoLinked` flag) are
+    intentionally NOT surfaced — auto-linking is the only source of
+    truth for the PR column so stale URLs from manual entry don't leak in.
 
     Returns an empty list when GitHub is not connected, the task has no
     project-scoped display ID, or no auto-linked PRs exist.
@@ -676,7 +726,7 @@ class GithubPullsForTaskView(APIView):
             return err
         if resolved is None:
             return Response({"pulls": []})
-        _task, display_id = resolved
+        task, display_id = resolved
 
         account = _connected_account(request.user)
         if account is None:
@@ -687,6 +737,7 @@ class GithubPullsForTaskView(APIView):
 
         pulls: list[dict] = []
         seen_urls: set[str] = set()
+        # --- Source 1: live branches matching display_id -------------
         for owner, repo in repos:
             branches = _list_repo_branches(account, owner, repo)
             if branches is None:
@@ -708,4 +759,25 @@ class GithubPullsForTaskView(APIView):
                 if url:
                     seen_urls.add(url)
                 pulls.append(pr)
+
+        # --- Source 2: PR URLs persisted in task.links with the
+        # `isAutoLinked` marker. Picks up PRs whose source branch has
+        # been deleted post-merge (Source 1's branch walk misses those
+        # because the branch is gone).
+        for link in task.links or []:
+            if not isinstance(link, dict) or not link.get("isAutoLinked"):
+                continue
+            url = link.get("url")
+            if not isinstance(url, str) or url in seen_urls:
+                continue
+            ref = parse_pr_url_full(url)
+            if ref is None:
+                continue
+            owner_p, repo_p, number = ref
+            pr = _fetch_pr_by_number(account, owner_p, repo_p, number)
+            if pr is None:
+                continue
+            seen_urls.add(url)
+            pulls.append(pr)
+
         return Response({"pulls": pulls})

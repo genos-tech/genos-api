@@ -299,3 +299,201 @@ class TestPullsForTaskView(TestCase):
         self.client.force_authenticate(user=None)
         resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
         self.assertIn(resp.status_code, (401, 403))
+
+    # ── Persistence: PR URL in task.links, branch deleted ─────────
+    #
+    # Once a PR is auto-discovered, the frontend stamps the link object
+    # with `isAutoLinked: true`. After the source branch is deleted
+    # (typical post-merge cleanup) the branch-walk path stops finding
+    # the PR — but we want the badge to keep showing. The endpoint must
+    # consult `task.links` as a fallback source.
+
+    @staticmethod
+    def _pr_detail_response(pr: dict):
+        resp = MagicMock(spec=requests.Response)
+        resp.ok = True
+        resp.status_code = 200
+        resp.json.return_value = pr
+        return resp
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_persisted_pr_url_surfaces_when_branch_is_gone(self, mock_get):
+        # Branch was deleted — branch listing returns no matching name.
+        url = "https://github.com/acme/rocket/pull/7"
+        self.task.links = [
+            {
+                "id": "link-pr-1",
+                "url": url,
+                "title": "acme/rocket#7",
+                "isGitHub": True,
+                "isAutoLinked": True,
+            }
+        ]
+        self.task.save(update_fields=["links"])
+        merged_pr = {
+            "number": 7,
+            "html_url": url,
+            "title": "Add thing",
+            "state": "closed",
+            "draft": False,
+            "merged_at": "2026-05-20T00:00:00Z",
+            "head": {"ref": "feature/GEN-42-something"},
+        }
+
+        def side_effect(_account, path, params=None):
+            if path.endswith("/branches"):
+                return self._branches_response([])  # branch gone
+            if path.endswith("/pulls/7"):
+                return self._pr_detail_response(merged_pr)
+            self.fail(f"Unexpected path: {path}")
+
+        mock_get.side_effect = side_effect
+        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
+        self.assertEqual(resp.status_code, 200)
+        pulls = resp.json()["pulls"]
+        self.assertEqual(len(pulls), 1)
+        self.assertEqual(pulls[0]["number"], 7)
+        # State + merged_at flow through so the frontend can render the
+        # right badge color (merged vs closed-unmerged vs open).
+        self.assertEqual(pulls[0]["state"], "closed")
+        self.assertEqual(pulls[0]["merged_at"], "2026-05-20T00:00:00Z")
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_persisted_pr_url_closed_unmerged_renders_state(self, mock_get):
+        # Same persistence path, but the PR was closed without merging.
+        # We should still surface it with state=closed and merged_at=null.
+        url = "https://github.com/acme/rocket/pull/9"
+        self.task.links = [
+            {
+                "id": "link-pr-9",
+                "url": url,
+                "title": "acme/rocket#9",
+                "isGitHub": True,
+                "isAutoLinked": True,
+            }
+        ]
+        self.task.save(update_fields=["links"])
+        closed_pr = {
+            "number": 9,
+            "html_url": url,
+            "title": "Abandoned",
+            "state": "closed",
+            "draft": False,
+            "merged_at": None,
+            "head": {"ref": "feature/GEN-42-other"},
+        }
+
+        def side_effect(_account, path, params=None):
+            if path.endswith("/branches"):
+                return self._branches_response([])
+            if path.endswith("/pulls/9"):
+                return self._pr_detail_response(closed_pr)
+            self.fail(f"Unexpected path: {path}")
+
+        mock_get.side_effect = side_effect
+        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
+        pulls = resp.json()["pulls"]
+        self.assertEqual(len(pulls), 1)
+        self.assertEqual(pulls[0]["state"], "closed")
+        self.assertIsNone(pulls[0]["merged_at"])
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_manual_pr_url_in_links_is_not_surfaced(self, mock_get):
+        # A PR URL pasted manually via DynamicURLManager — no
+        # `isAutoLinked` flag. The endpoint must ignore it so the
+        # column doesn't drift back into "show every linked URL" mode.
+        self.task.links = [
+            {
+                "id": "link-manual-1",
+                "url": "https://github.com/acme/rocket/pull/99",
+                "title": "Manual",
+                "isGitHub": True,
+                # No isAutoLinked: true here.
+            }
+        ]
+        self.task.save(update_fields=["links"])
+        mock_get.return_value = self._branches_response([])  # nothing live
+        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["pulls"], [])
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_persisted_and_live_branch_for_same_pr_is_deduped(self, mock_get):
+        # The PR exists both via a still-live branch AND as a persisted
+        # auto-link in task.links — we should only see it once.
+        url = "https://github.com/acme/rocket/pull/12"
+        self.task.links = [
+            {
+                "id": "link-pr-12",
+                "url": url,
+                "title": "acme/rocket#12",
+                "isGitHub": True,
+                "isAutoLinked": True,
+            }
+        ]
+        self.task.save(update_fields=["links"])
+        live_pr = {
+            "number": 12,
+            "html_url": url,
+            "title": "Still in flight",
+            "state": "open",
+            "draft": False,
+            "merged_at": None,
+        }
+
+        def side_effect(_account, path, params=None):
+            if path.endswith("/branches"):
+                return self._branches_response(["feature/GEN-42-thing"])
+            if path.endswith("/pulls") and (params or {}).get("head"):
+                return self._pulls_response([live_pr])
+            if path.endswith("/pulls/12"):
+                return self._pr_detail_response(
+                    {**live_pr, "head": {"ref": "feature/GEN-42-thing"}}
+                )
+            self.fail(f"Unexpected path: {path}")
+
+        mock_get.side_effect = side_effect
+        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
+        pulls = resp.json()["pulls"]
+        self.assertEqual(len(pulls), 1)
+        self.assertEqual(pulls[0]["number"], 12)
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_persisted_pr_lookup_is_cached(self, mock_get):
+        url = "https://github.com/acme/rocket/pull/22"
+        self.task.links = [
+            {
+                "id": "link-pr-22",
+                "url": url,
+                "title": "acme/rocket#22",
+                "isGitHub": True,
+                "isAutoLinked": True,
+            }
+        ]
+        self.task.save(update_fields=["links"])
+        pr = {
+            "number": 22,
+            "html_url": url,
+            "title": "Cached",
+            "state": "closed",
+            "draft": False,
+            "merged_at": "2026-05-19T00:00:00Z",
+            "head": {"ref": "deleted-branch"},
+        }
+
+        def side_effect(_account, path, params=None):
+            if path.endswith("/branches"):
+                return self._branches_response([])
+            if path.endswith("/pulls/22"):
+                return self._pr_detail_response(pr)
+            self.fail(f"Unexpected path: {path}")
+
+        mock_get.side_effect = side_effect
+        url_endpoint = f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}"
+        self.client.get(url_endpoint)
+        # Reset the call log and re-request — the persisted-PR lookup
+        # should be served from the cache.
+        mock_get.reset_mock()
+        self.client.get(url_endpoint)
+        pulls_calls = sum(1 for c in mock_get.call_args_list if c.args[1].endswith("/pulls/22"))
+        self.assertEqual(pulls_calls, 0)

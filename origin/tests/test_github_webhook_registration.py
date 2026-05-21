@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import requests
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 
 from origin.models.common.user_models import (
@@ -31,6 +32,11 @@ User = get_user_model()
 )
 class TestEnsureRepoWebhook(TestCase):
     def setUp(self):
+        # `_sync_existing_hook_events_if_needed` caches a "synced" flag
+        # in Redis per (owner, repo, version). Clear between tests so a
+        # prior test's cache hit doesn't suppress the sync path we're
+        # asserting against.
+        cache.clear()
         self.user = User.objects.create_user(
             username="hook-test",
             email="hook@test.com",
@@ -71,18 +77,97 @@ class TestEnsureRepoWebhook(TestCase):
         call = mock_post.call_args
         self.assertIn("/repos/acme/rocket/hooks", call.args[0])
         body = call.kwargs["json"]
-        self.assertEqual(body["events"], ["pull_request"])
+        # All three event types must be requested — `pull_request` for
+        # merges/state, the two comment events for PR-comment activity.
+        # If you add an event type to the dispatcher, add it here too.
+        self.assertEqual(
+            sorted(body["events"]),
+            sorted(["pull_request", "issue_comment", "pull_request_review_comment"]),
+        )
         self.assertEqual(body["config"]["url"], "https://api.example.com/api/v2/github/webhook/")
         self.assertEqual(body["config"]["secret"], "test-secret")
 
+    @patch("origin.services.github_webhooks.requests.patch")
     @patch("origin.services.github_webhooks.requests.post")
-    def test_short_circuits_when_already_registered(self, mock_post):
+    def test_short_circuits_when_already_registered(self, mock_post, mock_patch):
         existing = GithubWebhookRegistration.objects.create(
             owner="acme", repo="rocket", hook_id=999, registered_by=self.user
         )
         result = ensure_repo_webhook(self.user, "acme", "rocket")
         self.assertEqual(result.pk, existing.pk)
-        mock_post.assert_not_called()  # no GitHub call needed
+        # No POST — we don't need to register again.
+        mock_post.assert_not_called()
+        # The sync helper may issue a PATCH, but only when we can get a
+        # valid token. In this test `get_valid_access_token` is not
+        # mocked and the placeholder token decryption will fail, so the
+        # helper bails before reaching PATCH. The assertion below is the
+        # important contract: no second create-attempt.
+
+    @patch("origin.services.github_webhooks.requests.patch")
+    @patch("origin.services.github_webhooks.get_valid_access_token", return_value="ghp_xx")
+    def test_existing_registration_syncs_events_list(self, _token, mock_patch):
+        # Setup: an old registration row exists from when our events list
+        # was just ["pull_request"]. We need to PATCH GitHub to also
+        # subscribe to issue_comment / pull_request_review_comment so
+        # comment activity can flow.
+        GithubWebhookRegistration.objects.create(
+            owner="acme", repo="rocket", hook_id=999, registered_by=self.user
+        )
+        resp = MagicMock(spec=requests.Response)
+        resp.ok = True
+        resp.status_code = 200
+        mock_patch.return_value = resp
+
+        ensure_repo_webhook(self.user, "acme", "rocket")
+
+        # PATCH hit the hook's specific URL with the full events list.
+        mock_patch.assert_called_once()
+        call = mock_patch.call_args
+        self.assertIn("/repos/acme/rocket/hooks/999", call.args[0])
+        self.assertEqual(
+            sorted(call.kwargs["json"]["events"]),
+            sorted(["pull_request", "issue_comment", "pull_request_review_comment"]),
+        )
+
+    @patch("origin.services.github_webhooks.requests.patch")
+    @patch("origin.services.github_webhooks.get_valid_access_token", return_value="ghp_xx")
+    def test_events_sync_is_cached_after_success(self, _token, mock_patch):
+        # Once a sync succeeds, repeated calls within the cache TTL must
+        # not re-PATCH — webhook activity is best-effort and we don't
+        # want it to be a per-task-save cost.
+        GithubWebhookRegistration.objects.create(
+            owner="acme", repo="rocket", hook_id=999, registered_by=self.user
+        )
+        resp = MagicMock(spec=requests.Response)
+        resp.ok = True
+        resp.status_code = 200
+        mock_patch.return_value = resp
+
+        ensure_repo_webhook(self.user, "acme", "rocket")
+        self.assertEqual(mock_patch.call_count, 1)
+        mock_patch.reset_mock()
+        ensure_repo_webhook(self.user, "acme", "rocket")
+        self.assertEqual(mock_patch.call_count, 0)  # cached, no second PATCH
+
+    @patch("origin.services.github_webhooks.requests.patch")
+    @patch("origin.services.github_webhooks.get_valid_access_token", return_value="ghp_xx")
+    def test_events_sync_not_cached_on_failure(self, _token, mock_patch):
+        # If GitHub rejects the PATCH (403, etc.), don't cache the "synced"
+        # flag — let the next call try again in case admin perms were
+        # subsequently granted.
+        GithubWebhookRegistration.objects.create(
+            owner="acme", repo="rocket", hook_id=999, registered_by=self.user
+        )
+        bad = MagicMock(spec=requests.Response)
+        bad.ok = False
+        bad.status_code = 403
+        bad.text = ""
+        mock_patch.return_value = bad
+
+        ensure_repo_webhook(self.user, "acme", "rocket")
+        ensure_repo_webhook(self.user, "acme", "rocket")
+        # Two calls — failure didn't poison the retry path.
+        self.assertEqual(mock_patch.call_count, 2)
 
     # ── Failure paths (all should return None silently) ───────────
 
