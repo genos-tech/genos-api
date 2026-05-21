@@ -38,19 +38,29 @@ class GoogleOAuthProvider(OAuthProvider):
 
     def authorize_url(self, *, state: str, intent: FlowIntent, redirect_uri: str) -> str:
         scopes = GOOGLE_CONNECT_SCOPES if intent == "connect" else GOOGLE_LOGIN_SCOPES
-        params = {
+        params: dict[str, str] = {
             "client_id": settings.GOOGLE_OAUTH_CLIENT_ID,
             "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": " ".join(scopes),
             "state": state,
-            # access_type=offline + prompt=consent ensures we always get
-            # a refresh_token back — Google omits it on re-consent
-            # otherwise, which would leave us unable to refresh later.
-            "access_type": "offline",
-            "prompt": "consent",
             "include_granted_scopes": "true",
         }
+        # `access_type=offline` + `prompt=consent` are only meaningful for
+        # the `connect` flow, which needs a refresh_token to call the
+        # Calendar API on the user's behalf later. Google only returns a
+        # refresh_token on first consent unless `prompt=consent` is set,
+        # so we force a re-consent on every connect to guarantee one.
+        #
+        # The `login` flow only identifies the user (openid/email/profile);
+        # we use our own JWT for ongoing access and never touch the
+        # Google access token again, so a refresh_token is dead weight.
+        # Omitting both lets Google take its normal "remembered approval"
+        # path on subsequent sign-ins — returning users skip the consent
+        # screen instead of having to re-approve every time.
+        if intent == "connect":
+            params["access_type"] = "offline"
+            params["prompt"] = "consent"
         return f"{AUTHORIZE_URL}?{urlencode(params)}"
 
     def exchange_code(self, *, code: str, redirect_uri: str) -> TokenResponse:
