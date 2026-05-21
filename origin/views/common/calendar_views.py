@@ -29,10 +29,19 @@ from origin.services.oauth.tokens import get_valid_access_token
 logger = logging.getLogger(__name__)
 
 CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
+# Minimum scope needed to read AND write calendar events. A user who
+# only signed in with Google ("login" intent) has openid/email/profile
+# and will hit Google-side 403s on any Calendar v3 call. Checking up
+# front lets us surface a clean, actionable signal to the frontend.
+CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events"
 
 
 def _connected_account(user) -> ConnectedAccount | None:
     return ConnectedAccount.objects.filter(user=user, provider="google").first()
+
+
+def _has_calendar_scope(account: ConnectedAccount) -> bool:
+    return CALENDAR_EVENTS_SCOPE in (account.scopes or [])
 
 
 def _google_request(account: ConnectedAccount, method: str, path: str, **kwargs):
@@ -50,6 +59,29 @@ def _not_connected() -> Response:
     return Response({"detail": "google_not_connected"}, status=status.HTTP_400_BAD_REQUEST)
 
 
+def _scope_missing() -> Response:
+    # 403 because the account is connected; the user just lacks the
+    # specific permission to operate on Calendar. The frontend uses
+    # this discriminator to render a "Grant Calendar access" button
+    # that re-runs the OAuth flow with the connect-intent scopes
+    # (which upgrades the existing account's scopes in place).
+    return Response({"detail": "calendar_scope_missing"}, status=status.HTTP_403_FORBIDDEN)
+
+
+def _resolve_account(user) -> tuple[ConnectedAccount | None, Response | None]:
+    """Centralised gate for every Calendar endpoint. Returns either
+    `(account, None)` on success, or `(None, error_response)` so the
+    caller can `return error_response`. Pulling the scope check up
+    here means a Google sign-in-only user gets the same clean signal
+    on every endpoint instead of leaking an upstream 403."""
+    account = _connected_account(user)
+    if account is None:
+        return None, _not_connected()
+    if not _has_calendar_scope(account):
+        return None, _scope_missing()
+    return account, None
+
+
 class CalendarListView(APIView):
     """GET /api/v2/calendar/list/ — return the user's calendars so the
     UI can show a picker."""
@@ -57,9 +89,9 @@ class CalendarListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request: Request):
-        account = _connected_account(request.user)
-        if account is None:
-            return _not_connected()
+        account, _err = _resolve_account(request.user)
+        if _err is not None:
+            return _err
         resp = _google_request(account, "GET", "/users/me/calendarList")
         if not resp.ok:
             logger.warning("Calendar list failed: %s %s", resp.status_code, resp.text)
@@ -90,9 +122,9 @@ class CalendarEventsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request: Request):
-        account = _connected_account(request.user)
-        if account is None:
-            return _not_connected()
+        account, _err = _resolve_account(request.user)
+        if _err is not None:
+            return _err
         calendar_id = request.GET.get("calendar_id", "primary")
         params = {
             "singleEvents": "true",
@@ -113,9 +145,9 @@ class CalendarEventsView(APIView):
         return Response(resp.json())
 
     def post(self, request: Request):
-        account = _connected_account(request.user)
-        if account is None:
-            return _not_connected()
+        account, _err = _resolve_account(request.user)
+        if _err is not None:
+            return _err
         calendar_id = request.data.get("calendar_id", "primary")
         body = {
             "summary": request.data.get("summary"),
@@ -169,9 +201,9 @@ class CalendarEventDetailView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request: Request, event_id: str):
-        account = _connected_account(request.user)
-        if account is None:
-            return _not_connected()
+        account, _err = _resolve_account(request.user)
+        if _err is not None:
+            return _err
         calendar_id = request.GET.get("calendar_id", "primary")
         resp = _google_request(account, "GET", f"/calendars/{calendar_id}/events/{event_id}")
         if resp.status_code == 404:
@@ -191,9 +223,9 @@ class CalendarEventDetailView(APIView):
         return Response(resp.json())
 
     def patch(self, request: Request, event_id: str):
-        account = _connected_account(request.user)
-        if account is None:
-            return _not_connected()
+        account, _err = _resolve_account(request.user)
+        if _err is not None:
+            return _err
         calendar_id = request.data.get("calendar_id", "primary")
         body = {
             k: v
@@ -243,9 +275,9 @@ class CalendarEventDetailView(APIView):
         return Response(resp.json())
 
     def delete(self, request: Request, event_id: str):
-        account = _connected_account(request.user)
-        if account is None:
-            return _not_connected()
+        account, _err = _resolve_account(request.user)
+        if _err is not None:
+            return _err
         calendar_id = request.GET.get("calendar_id", "primary")
         resp = _google_request(account, "DELETE", f"/calendars/{calendar_id}/events/{event_id}")
         if not resp.ok and resp.status_code != 404:
