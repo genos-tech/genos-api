@@ -1603,3 +1603,169 @@ class TaskBodyAttachmentView(AuthenticatedAPIView):
             return Response(res, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+def _hydrate_dependency_ref(dep, other_task):
+    """Shape a TaskDependency row + its 'other' endpoint for the API.
+
+    `other_task` is the endpoint the caller doesn't already have — i.e.
+    when the row appears in `blocking`, `other_task` is the blocked
+    side; when it appears in `blockedBy`, `other_task` is the blocker.
+    """
+    status_label = other_task.status or ""
+    status_color = STATUS_COLOR_MAP.get(status_label.lower(), {})
+    return {
+        "dependencyId": dep.id,
+        "otherTaskId": other_task.task_id,
+        "displayId": other_task.display_id,
+        "projectId": other_task.project_id,
+        "projectName": (
+            other_task.project.project_name if other_task.project_id else None
+        ),
+        "title": other_task.title,
+        "status": {
+            "code": 0,
+            "status": status_label,
+            "color": status_color.get("chipColor"),
+            "textColor": status_color.get("textColor"),
+        },
+        "assigneeUserId": other_task.assignee_id,
+        "isMilestone": other_task.is_milestone,
+    }
+
+
+class TaskDependencyView(AuthenticatedAPIView):
+    """CRUD for task↔task dependency edges.
+
+    Endpoints (see urls/task/urls.py for the mounted paths):
+      GET    ?task_id=<id>                     -> { blocking, blockedBy }
+      POST   { blocker_task_id, blocked_task_id } -> created row
+      DELETE /<id>/                            -> 204
+    """
+
+    def get(self, request):
+        raw_task_id = request.GET.get("task_id")
+        if not raw_task_id:
+            return Response(
+                {"error": "task_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            task_id = int(raw_task_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "task_id must be an integer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # `blocking` = rows where the current task is the blocker; the
+        # "other" endpoint is the blocked side.
+        # `blockedBy` = rows where the current task is the blocked one;
+        # the "other" endpoint is the blocker.
+        # Tombstones (either endpoint soft-deleted) are filtered so the
+        # UI never shows ghosts.
+        blocking_rows = (
+            TaskDependency.objects.filter(blocker_task_id=task_id)
+            .select_related("blocked_task", "blocked_task__project")
+            .exclude(blocked_task__is_deleted=True)
+        )
+        blocked_by_rows = (
+            TaskDependency.objects.filter(blocked_task_id=task_id)
+            .select_related("blocker_task", "blocker_task__project")
+            .exclude(blocker_task__is_deleted=True)
+        )
+
+        return Response(
+            {
+                "blocking": [_hydrate_dependency_ref(d, d.blocked_task) for d in blocking_rows],
+                "blockedBy": [_hydrate_dependency_ref(d, d.blocker_task) for d in blocked_by_rows],
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def post(self, request):
+        blocker_task_id = request.data.get("blocker_task_id")
+        blocked_task_id = request.data.get("blocked_task_id")
+        if blocker_task_id is None or blocked_task_id is None:
+            return Response(
+                {"error": "blocker_task_id and blocked_task_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Clean message before falling through to the DB-level
+        # CheckConstraint, which would raise IntegrityError.
+        if str(blocker_task_id) == str(blocked_task_id):
+            return Response(
+                {"error": "A task cannot block itself."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            blocker = TaskMaster.objects.select_related("project").get(
+                task_id=blocker_task_id, is_deleted=False
+            )
+            blocked = TaskMaster.objects.select_related("project").get(
+                task_id=blocked_task_id, is_deleted=False
+            )
+        except TaskMaster.DoesNotExist:
+            return Response(
+                {"error": "One or both tasks were not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if blocker.team_id is None or blocked.team_id is None:
+            return Response(
+                {"error": "Tasks without a team cannot participate in dependencies."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if blocker.team_id != blocked.team_id:
+            return Response(
+                {"error": "Cross-team dependencies are not allowed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if TaskDependency.objects.filter(
+            blocker_task_id=blocked_task_id, blocked_task_id=blocker_task_id
+        ).exists():
+            return Response(
+                {"error": "The reverse dependency already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if TaskDependency.objects.filter(
+            blocker_task_id=blocker_task_id, blocked_task_id=blocked_task_id
+        ).exists():
+            return Response(
+                {"error": "This dependency already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        dep = TaskDependency.objects.create(
+            blocker_task=blocker,
+            blocked_task=blocked,
+            team_id=blocker.team_id,
+            created_by=request.user if request.user.is_authenticated else None,
+        )
+        # Return the row hydrated as a Ref keyed against `blocked_task`
+        # so the caller (which was viewing `blocker`) can drop it into
+        # its `blocking` list without a refetch.
+        return Response(
+            _hydrate_dependency_ref(dep, blocked),
+            status=status.HTTP_201_CREATED,
+        )
+
+    def delete(self, request, dependency_id=None):
+        if dependency_id is None:
+            return Response(
+                {"error": "dependency_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            dep = TaskDependency.objects.get(pk=dependency_id)
+        except TaskDependency.DoesNotExist:
+            return Response(
+                {"error": "Dependency not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        dep.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

@@ -356,3 +356,61 @@ class TaskBodyAttachmentFact(models.Model):
     body_attachment_url = models.FileField(upload_to=task_body_attachment_path)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
+
+
+class TaskDependency(models.Model):
+    """Directional "blocker -> blocked" relation between two TaskMaster
+    rows. Milestones use their backing TaskMaster (`is_milestone=True`),
+    so the same table covers task↔task, task↔milestone, and
+    milestone↔milestone with no extra glue.
+
+    Cross-project allowed, cross-team disallowed (enforced in the view).
+    """
+
+    blocker_task = models.ForeignKey(
+        TaskMaster,
+        on_delete=models.CASCADE,
+        related_name="blocks_dependencies",
+        to_field="task_id",
+    )
+    blocked_task = models.ForeignKey(
+        TaskMaster,
+        on_delete=models.CASCADE,
+        related_name="blocked_by_dependencies",
+        to_field="task_id",
+    )
+    # Denormalized from blocker.project.team at create time so listings
+    # can be cheaply scoped by team. SET_NULL mirrors sibling tables —
+    # the row stays queryable even if the team is later torn down.
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="team_task_dependencies",
+        to_field="team_id",
+    )
+    created_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="created_task_dependencies",
+        to_field="id",
+    )
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["blocker_task", "blocked_task"],
+                name="unique_task_dependency_pair",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(blocker_task=models.F("blocked_task")),
+                name="task_dependency_no_self_block",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["blocker_task"]),
+            models.Index(fields=["blocked_task"]),
+        ]

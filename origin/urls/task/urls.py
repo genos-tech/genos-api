@@ -14,7 +14,6 @@ from origin.views.task.milestone_views import (
 )
 from origin.views.task.task_activity_views import TaskActivityListView
 
-
 urlpatterns = [
     path("api/v2/task/", TaskMasterView.as_view(), name="task_create"),
     path("api/v2/task/meta/", TaskMetaView.as_view(), name="task_meta"),
@@ -41,6 +40,22 @@ urlpatterns = [
     ),
     path("api/v2/task/comment/", TaskCommentsView.as_view(), name="add_task_comment"),
     path("api/v2/task/activity/", TaskActivityListView.as_view(), name="task_activity_list"),
+    # Dependencies (blocking / blocked-by)
+    path(
+        "api/v2/task/dependency/",
+        TaskDependencyView.as_view(),
+        name="task_dependency_create",
+    ),
+    path(
+        "api/v2/task/dependency/list/",
+        TaskDependencyView.as_view(),
+        name="task_dependency_list",
+    ),
+    path(
+        "api/v2/task/dependency/<int:dependency_id>/",
+        TaskDependencyView.as_view(),
+        name="task_dependency_detail",
+    ),
     # Search
     path(
         "api/v2/search/teamTasks/",

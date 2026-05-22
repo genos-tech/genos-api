@@ -62,3 +62,9 @@ class TaskBodyAttachmentFactSerializer(serializers.ModelSerializer):
     class Meta:
         model = TaskBodyAttachmentFact
         fields = "__all__"
+
+
+class TaskDependencySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TaskDependency
+        fields = "__all__"
