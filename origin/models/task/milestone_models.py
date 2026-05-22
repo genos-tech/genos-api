@@ -71,6 +71,7 @@ class MilestoneMaster(models.Model):
     priority_code = models.BigIntegerField(blank=True, null=True)
     effort_level = models.CharField(blank=True, null=True)
     effort_level_code = models.BigIntegerField(blank=True, null=True)
+    start_date = models.DateField(blank=True, null=True)
     due_date = models.DateField(blank=True, null=True)
     tags = models.JSONField(blank=True, null=True)
     # External links (e.g. design docs, GitHub PRs). Mirrors

@@ -78,6 +78,7 @@ def _ensure_backing_task(milestone: MilestoneMaster) -> TaskMaster:
         priority_code=milestone.priority_code,
         effort_level=milestone.effort_level,
         effort_level_code=milestone.effort_level_code,
+        start_date=milestone.start_date,
         due_date=milestone.due_date,
         tags=milestone.tags,
         links=milestone.links,
@@ -105,6 +106,7 @@ def _sync_backing_task(milestone: MilestoneMaster) -> None:
     backing.priority_code = milestone.priority_code
     backing.effort_level = milestone.effort_level
     backing.effort_level_code = milestone.effort_level_code
+    backing.start_date = milestone.start_date
     backing.due_date = milestone.due_date
     backing.tags = milestone.tags
     # Mirror the milestone's external links onto the backing task so
@@ -174,6 +176,7 @@ def _serialize_milestone(m: MilestoneMaster, *, with_aggregates: bool = True) ->
         "priorityCode": m.priority_code,
         "effortLevel": m.effort_level,
         "effortLevelCode": m.effort_level_code,
+        "startDate": _format_due_date(m.start_date),
         "dueDate": _format_due_date(m.due_date),
         "tags": m.tags,
         "links": m.links,
@@ -316,6 +319,7 @@ class MilestoneView(AuthenticatedAPIView):
                 priority_code=request.data.get("priority_code"),
                 effort_level=request.data.get("effort_level"),
                 effort_level_code=request.data.get("effort_level_code"),
+                start_date=_parse_iso_date(request.data.get("start_date")),
                 due_date=_parse_iso_date(request.data.get("due_date")),
                 tags=request.data.get("tags"),
                 links=request.data.get("links"),
@@ -377,6 +381,9 @@ class MilestoneView(AuthenticatedAPIView):
             ):
                 if field in request.data:
                     setattr(milestone, field, request.data.get(field))
+
+            if "start_date" in request.data:
+                milestone.start_date = _parse_iso_date(request.data.get("start_date"))
 
             if "due_date" in request.data:
                 milestone.due_date = _parse_iso_date(request.data.get("due_date"))
