@@ -12,7 +12,7 @@ from origin.views.task.milestone_views import (
     MilestoneView,
     ProjectMilestonesView,
 )
-from origin.views.task.task_activity_views import TaskActivityListView
+from origin.views.task.task_activity_views import MilestoneBurndownView, TaskActivityListView
 
 urlpatterns = [
     path("api/v2/task/", TaskMasterView.as_view(), name="task_create"),
@@ -40,6 +40,11 @@ urlpatterns = [
     ),
     path("api/v2/task/comment/", TaskCommentsView.as_view(), name="add_task_comment"),
     path("api/v2/task/activity/", TaskActivityListView.as_view(), name="task_activity_list"),
+    path(
+        "api/v2/task/burndown/",
+        MilestoneBurndownView.as_view(),
+        name="milestone_burndown",
+    ),
     # Dependencies (blocking / blocked-by)
     path(
         "api/v2/task/dependency/",

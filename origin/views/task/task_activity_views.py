@@ -1,11 +1,18 @@
-from datetime import timedelta
+from collections import defaultdict
+from datetime import date, datetime, timedelta
 
 from django.db.models import Q
 from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
+from origin.models.task.task_models import TaskMaster
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+
+# Mirrors `milestone_views.CLOSED_STATUSES` — kept duplicated here on
+# purpose so the burndown view doesn't import from the milestone view
+# (and risk a circular import as the modules grow).
+_CLOSED_STATUSES = {"Closed", "Deleted"}
 
 
 # Tasks generate audit rows liberally — clamp the default page so we
@@ -191,3 +198,132 @@ class TaskActivityListView(AuthenticatedAPIView):
         page = collapsed[offset : offset + limit]
 
         return Response([_serialize_activity(r) for r in page], status=status.HTTP_200_OK)
+
+
+def _parse_iso_day(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
+class MilestoneBurndownView(AuthenticatedAPIView):
+    """`GET /api/v2/task/burndown/?task_ids=1,2,3&start=YYYY-MM-DD&end=YYYY-MM-DD`
+
+    Returns a daily remaining-task series for the given task set across
+    the requested window. Powers the burndown sparkline on the diagram
+    modal.
+
+    Algorithm: for each currently-closed task, find the most recent
+    `status_changed` activity whose `new_value` is in CLOSED_STATUSES —
+    that timestamp is the task's effective close date. Tasks closed
+    *before* the window are counted as "closed at start"; tasks closed
+    inside the window subtract from `remaining` on their close date.
+    Tasks currently open never decrement the series, even if they
+    bounced through a temporary Closed state during the window (since
+    they're not "burned down" today).
+
+    Days where nothing happens carry forward the previous day's count,
+    so the series is dense — `data.length === end_day - start + 1`.
+    """
+
+    MAX_TASK_IDS = 500
+
+    def get(self, request):
+        raw_ids = request.GET.get("task_ids") or ""
+        raw_start = request.GET.get("start")
+        raw_end = request.GET.get("end")
+
+        try:
+            task_ids = sorted({int(p) for p in raw_ids.split(",") if p.strip()})
+        except ValueError:
+            return Response(
+                {"error": "task_ids must be a comma-separated list of integers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not task_ids:
+            return Response({"burndown": [], "total": 0}, status=status.HTTP_200_OK)
+        if len(task_ids) > self.MAX_TASK_IDS:
+            return Response(
+                {"error": f"Too many task_ids (max {self.MAX_TASK_IDS})."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        start_day = _parse_iso_day(raw_start)
+        end_day = _parse_iso_day(raw_end)
+        if start_day is None or end_day is None:
+            return Response(
+                {"error": "start and end must be YYYY-MM-DD."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if end_day < start_day:
+            return Response(
+                {"error": "end must be on or after start."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        today = date.today()
+        # Cap at today — the series can't show points beyond now,
+        # they'd just be flat extrapolations of the current state.
+        last_day = min(end_day, today)
+        if last_day < start_day:
+            return Response({"burndown": [], "total": 0}, status=status.HTTP_200_OK)
+
+        tasks = list(
+            TaskMaster.objects.filter(task_id__in=task_ids).values_list("task_id", "status")
+        )
+        total = len(tasks)
+        closed_now_ids = [tid for tid, s in tasks if s in _CLOSED_STATUSES]
+
+        # Most-recent close activity per currently-closed task. Ordered
+        # by `-ts_created_at` so the first row we see for each task IS
+        # its most recent transition into a closed state. Walking in one
+        # pass + a `seen` set is O(n) over the candidate activities.
+        close_dates: dict[int, date] = {}
+        if closed_now_ids:
+            acts = (
+                TaskActivity.objects.filter(
+                    task_id__in=closed_now_ids,
+                    action_type=TaskActivityActionType.STATUS,
+                    new_value__in=list(_CLOSED_STATUSES),
+                )
+                .order_by("task_id", "-ts_created_at")
+                .values_list("task_id", "ts_created_at")
+            )
+            for tid, ts in acts:
+                if tid in close_dates:
+                    continue
+                close_dates[tid] = ts.date()
+
+        closed_before_start = 0
+        closes_by_day: dict[date, int] = defaultdict(int)
+        for tid in closed_now_ids:
+            cd = close_dates.get(tid)
+            if cd is None or cd < start_day:
+                # Either no recorded close activity (task created
+                # closed, or pre-signal era) or closed before the
+                # window — count toward the baseline.
+                closed_before_start += 1
+            elif cd > last_day:
+                # Defensive: shouldn't happen since `last_day <= today`
+                # and the close already occurred, but guard anyway.
+                pass
+            else:
+                closes_by_day[cd] += 1
+
+        series: list[dict[str, object]] = []
+        cur_closed = closed_before_start
+        cursor = start_day
+        while cursor <= last_day:
+            cur_closed += closes_by_day.get(cursor, 0)
+            series.append(
+                {
+                    "date": cursor.isoformat(),
+                    "remaining": max(0, total - cur_closed),
+                }
+            )
+            cursor += timedelta(days=1)
+
+        return Response({"burndown": series, "total": total}, status=status.HTTP_200_OK)
