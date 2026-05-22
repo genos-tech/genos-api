@@ -73,6 +73,10 @@ class TaskMaster(models.Model):
     content = models.JSONField(blank=True, null=True)
     links = models.JSONField(blank=True, null=True)
     due_date = models.DateField(blank=True, null=True)
+    # Optional planning start date. Pairs with `due_date` to support
+    # Gantt-style scheduling in the diagram view and any future
+    # timeline UI. Always nullable so existing tasks remain valid.
+    start_date = models.DateField(blank=True, null=True)
     tags = models.JSONField(blank=True, null=True)
     mentioned_user_ids = models.JSONField(blank=True, null=True)
     # Google Calendar linkage. When a user schedules a task on their

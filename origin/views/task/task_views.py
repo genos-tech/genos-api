@@ -251,6 +251,7 @@ class TaskMasterView(AuthenticatedAPIView):
             "status_code": 0,
             "content": request.data["content"],
             "due_date": request.data["due_date"],
+            "start_date": request.data.get("start_date"),
             "links": request.data["links"],
             "tags": request.data["tags"],
             "is_init_task": request.data["is_init_task"] == True,
@@ -365,7 +366,14 @@ class TaskMasterView(AuthenticatedAPIView):
         if "project_task_number" not in update_data:
             update_data["project_task_number"] = task.project_task_number
 
-        serializer = TaskMasterSerializer(task, data=update_data)
+        # Partial=True so callers (e.g. the task-graph diagram) can PUT
+        # a subset of fields like `{task_id, start_date}` without being
+        # forced to round-trip the full TaskProps object. The full-PUT
+        # callers (sendUpdatedSpecificTask) still work — they just send
+        # every field. Combined with the None-strip above, this lets
+        # the same endpoint serve both "rewrite everything" and "patch
+        # one field" usage patterns.
+        serializer = TaskMasterSerializer(task, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
 
@@ -569,6 +577,7 @@ class GetTeamTasksView(AuthenticatedAPIView):
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
+                    "startDate": str(t.start_date) if t.start_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
@@ -877,6 +886,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
+                    "startDate": str(t.start_date) if t.start_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
@@ -1031,6 +1041,7 @@ class GetTaskView(AuthenticatedAPIView):
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
+                    "startDate": str(t.start_date) if t.start_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
@@ -1139,6 +1150,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
+                    "startDate": str(t.start_date) if t.start_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
@@ -1197,6 +1209,7 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
+                    "startDate": str(t.start_date) if t.start_date else None,
                     "daysLeft": (
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
