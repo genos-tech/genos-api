@@ -10,9 +10,9 @@ from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
+from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data
-
 
 CLOSED_STATUSES = {"Closed", "Deleted"}
 
@@ -325,6 +325,9 @@ class MilestoneView(AuthenticatedAPIView):
             assignee_ids = request.data.get("assignee_ids") or []
             self._sync_assignees(milestone, assignee_ids)
 
+        # Creating a milestone always writes a backing TaskMaster row,
+        # which the project task table renders alongside regular tasks.
+        invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
         return Response(
             {"milestone": _serialize_milestone(milestone)},
             status=status.HTTP_201_CREATED,
@@ -403,6 +406,11 @@ class MilestoneView(AuthenticatedAPIView):
             .select_related("task", "reporter")
             .get(milestone_id=milestone.milestone_id)
         )
+        # `_sync_backing_task` mirrors most milestone fields onto the
+        # backing TaskMaster row, and the sprint-changed branch updates
+        # every milestone-linked task. Drop the project-tasks cache so
+        # the table reflects the changes on next read.
+        invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
         return Response(
             {"milestone": _serialize_milestone(milestone)},
             status=status.HTTP_200_OK,
@@ -427,6 +435,9 @@ class MilestoneView(AuthenticatedAPIView):
         TaskMaster.objects.filter(milestone=milestone).update(milestone=None)
         if milestone.task_id is not None:
             TaskMaster.objects.filter(parent_task_id=milestone.task_id).update(parent_task_id=None)
+        # Backing task got soft-deleted + every child detached → next
+        # project-tasks read needs a fresh DB pull.
+        invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
         return Response(
             {"message": "Milestone soft-deleted."},
             status=status.HTTP_200_OK,
@@ -490,6 +501,7 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
         # Mirror the picked assignee onto the backing task so the
         # project task table reflects the change without a reload.
         _sync_backing_task(milestone)
+        invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
         milestone = (
             MilestoneMaster.objects.prefetch_related("milestone_assignees__user")
             .select_related("task", "reporter")
@@ -509,6 +521,7 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
         # Backing task assignee may need to fall back to the reporter
         # when the removed user was the previously synced assignee.
         _sync_backing_task(milestone)
+        invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
         milestone = (
             MilestoneMaster.objects.prefetch_related("milestone_assignees__user")
             .select_related("task", "reporter")

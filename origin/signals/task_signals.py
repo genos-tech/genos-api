@@ -39,6 +39,7 @@ from origin.services.calendar_sync import (
     get_google_connected_account,
     sync_task_event,
 )
+from origin.services.task_cache import invalidate_project_tasks_cache
 
 _calendar_logger = logging.getLogger("origin.calendar_sync")
 
@@ -545,3 +546,24 @@ def task_auto_sync_to_calendar(sender, instance: TaskMaster, created: bool, **kw
         return
 
     transaction.on_commit(lambda pk=instance.pk: _run_upsert(pk))
+
+
+# ---------------------------------------------------------------------------
+# Project-tasks response cache invalidation
+# ---------------------------------------------------------------------------
+#
+# Catches every `TaskMaster.save()` / `.delete()` regardless of caller —
+# view, agent tool, webhook, or signal-driven sync (e.g. PR-merge
+# auto-close, calendar reconciliation). Queryset-level
+# `.update(...)` / `.delete()` bypass post_save, so the milestone +
+# sprint views that bulk-update task rows still invalidate explicitly.
+
+
+@receiver(post_save, sender=TaskMaster)
+def task_invalidate_project_cache_on_save(sender, instance: TaskMaster, **kwargs):
+    invalidate_project_tasks_cache(instance.team_id, instance.project_id)
+
+
+@receiver(post_delete, sender=TaskMaster)
+def task_invalidate_project_cache_on_delete(sender, instance: TaskMaster, **kwargs):
+    invalidate_project_tasks_cache(instance.team_id, instance.project_id)

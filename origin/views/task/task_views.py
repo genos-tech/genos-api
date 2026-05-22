@@ -19,6 +19,12 @@ from origin.models.chat.reaction_models import *
 from origin.serializers.chat.reaction_serializers import *
 
 from origin.services.github_webhooks import ensure_webhooks_for_links
+from origin.services.task_cache import (
+    get_cached_project_tasks,
+    invalidate_for_task,
+    invalidate_project_tasks_cache,
+    set_cached_project_tasks,
+)
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 from origin.views.utils.mention_handler import extractMentionedUsers
 
@@ -266,6 +272,11 @@ class TaskMasterView(AuthenticatedAPIView):
         serializer = TaskMasterSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
+            # Drop the project-tasks cache so the next sidebar fetch
+            # sees the new row. `data["team"]` / `data["project"]` are
+            # the FK target values (team_id / project_id, given the
+            # `to_field` settings on TaskMaster).
+            invalidate_project_tasks_cache(data.get("team"), data.get("project"))
             # Best-effort: if any of the task's links is a GitHub PR URL,
             # auto-register our webhook on that repo so PR merges sync
             # back to task status. Swallows all errors — user lacking
@@ -393,6 +404,14 @@ class TaskMasterView(AuthenticatedAPIView):
                 _bridge_milestone_to_parent(task, requested_milestone_id, parent_task_id)
                 _cascade_milestone_to_subtasks(task.task_id, requested_milestone_id)
 
+            # Drop the project-tasks cache so the next sidebar fetch
+            # reflects the update. `task.refresh_from_db()` above (when
+            # milestone_in_request) keeps team/project current; the
+            # non-milestone path didn't refresh, but team & project
+            # aren't editable via this endpoint so the original instance
+            # values are still authoritative.
+            invalidate_for_task(task)
+
             return Response(
                 {
                     "task": serializer.data,
@@ -419,7 +438,13 @@ class TaskMasterView(AuthenticatedAPIView):
                 task_id=data["task_id"],
                 is_init_task=int(data["is_init_task_boolean"]) == 1,
             )
+            # Snapshot before delete — the row is gone after `.delete()`
+            # so we can't read team_id/project_id off it for the cache
+            # invalidation otherwise.
+            cache_team_id = task.team_id
+            cache_project_id = task.project_id
             task.delete()
+            invalidate_project_tasks_cache(cache_team_id, cache_project_id)
             return Response(
                 {"message": "Task deleted successfully."}, status=status.HTTP_204_NO_CONTENT
             )
@@ -1080,6 +1105,17 @@ class GetProjectTasksView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Redis short-circuit. Mutation paths in this file +
+        # milestone_views + sprint_views call
+        # `invalidate_project_tasks_cache(...)` so any cached entry only
+        # survives until the next task write or the TTL, whichever
+        # comes first. `daysLeft` is the only field that drifts with
+        # wall-clock time and we tolerate the 5-min window in exchange
+        # for the orders-of-magnitude latency win on repeat hops.
+        cached = get_cached_project_tasks(team_id, project_id)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
+
         # `select_related("assignee")` collapses what was N additional
         # queries (one per task for assignee email/username/img) into a
         # single JOIN. `team_id` / `project_id` use the FK column values
@@ -1129,6 +1165,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
                 },
             )
 
+        set_cached_project_tasks(team_id, project_id, response_data)
         return Response(response_data, status=status.HTTP_200_OK)
 
 

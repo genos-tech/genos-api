@@ -110,6 +110,16 @@ class TaskMaster(models.Model):
                 condition=models.Q(project_task_number__isnull=False),
             ),
         ]
+        indexes = [
+            # Matches the hot filter in GetProjectTasksView
+            # (team=X, project=Y, is_init_task=False). Without this index
+            # the query degraded to a sequential scan on teams with many
+            # tasks, which dominated project-switch latency.
+            models.Index(
+                fields=["team", "project", "is_init_task"],
+                name="taskmaster_team_proj_init_idx",
+            ),
+        ]
 
     @property
     def display_id(self) -> str:
