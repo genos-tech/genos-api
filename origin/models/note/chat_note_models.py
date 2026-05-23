@@ -27,6 +27,7 @@ class ChatNoteMaster(models.Model):
     parent_note_id = models.BigIntegerField(blank=True, null=True)
     title = models.CharField(max_length=255)
     body = models.JSONField(blank=True, null=True)
+    mentioned_user_ids = models.JSONField(blank=True, default=list)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 

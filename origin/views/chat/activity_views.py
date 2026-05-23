@@ -26,7 +26,9 @@ from origin.views.chat.modules.activity.get_reaction_activities import (
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 """
-chatType:
+chatType (the `chat_type` column on ActivityFact — namespaces the
+`activity_id` PK string. NOT the user-facing chat type code which only
+covers 1-4):
     1 = DM
     2 = GM
     3 = PM
@@ -35,6 +37,12 @@ chatType:
         - MDM messages store `chat_id = mdm_id`         (and `task = None`).
         Both share `chat_type = 4` for historical reasons; we discriminate
         downstream via `task`.
+    5 = Task body mention. `chat_id = project_id`, `message_id = 0`,
+        `task = task_id`. Distinct from 4 to prevent activity_id
+        collisions with task-comment / MDM rows.
+    6 = Personal note mention. `chat_id = note_id`, `message_id = 0`.
+    7 = Task note mention.     `chat_id = note_id`, `message_id = 0`.
+    8 = Chat note mention.     `chat_id = note_id`, `message_id = 0`.
 activityType = {1: message or comment, 2: reaction, 3: mention}
 """
 

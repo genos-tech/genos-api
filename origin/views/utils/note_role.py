@@ -47,15 +47,20 @@ def get_effective_role(user_id, note_type, note_id, team_id=None):
     Compute the effective role for a user on a note.
 
     1) Explicit NotePermissionMaster row wins.
-    2) Otherwise, implicit viewer access:
-       - task notes: any ProjectMembers row for the note's project
-       - chat notes: any chat membership for the note's chat_type/chat_id
+    2) Otherwise, implicit access:
+       - task notes: project members get **Editor** (task notes are a
+         shared, collaboratively-edited surface within the project; the
+         expectation is anyone with project access can edit them)
+       - chat notes: chat members get Viewer (chat notes default to
+         read-only; the chat owner promotes individual users to Editor
+         via NotePermissionMaster)
     3) Otherwise None (no access).
 
-    Lower role_id is stronger (1=owner > 2=editor > 3=viewer). If both an
-    explicit and an implicit access exist, the stronger of the two is
-    returned, but in practice explicit always wins because an owner/editor
-    grant is also stronger than implicit viewer.
+    Lower role_id is stronger (1=owner > 2=editor > 3=viewer). If both
+    an explicit and an implicit access exist, the explicit row always
+    wins (we return it on the first check above) — so a project member
+    explicitly granted Viewer on a task note stays a Viewer, never gets
+    auto-promoted to Editor via the implicit fallback.
     """
     explicit = get_explicit_role(user_id, note_type, note_id)
     if explicit is not None:
@@ -67,7 +72,7 @@ def get_effective_role(user_id, note_type, note_id, team_id=None):
         except TaskNoteMaster.DoesNotExist:
             return None
         if ProjectMembers.objects.filter(project=note.project_id, attendee=user_id).exists():
-            return ROLE_VIEWER
+            return ROLE_EDITOR
         return None
 
     if note_type == NOTE_TYPE_CHAT:

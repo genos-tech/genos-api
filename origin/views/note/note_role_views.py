@@ -13,6 +13,7 @@ from origin.views.utils.request_validators import validate_request_data, validat
 from origin.views.utils.note_role import (
     get_explicit_role,
     get_effective_role,
+    note_exists,
     ROLE_OWNER,
 )
 
@@ -157,6 +158,47 @@ class NoteRoleView(AuthenticatedAPIView):
             )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class NoteRoleCheckView(AuthenticatedAPIView):
+    """
+    Permission probe used by the Hocuspocus collab server to gate
+    document loads. The collab server forwards the user's JWT and the
+    note coordinates it parsed from `documentName`; we return 200 on
+    allow (with the resolved role_id so the caller can surface it) and
+    403 on deny. JWT auth already verifies the caller's identity — we
+    don't trust an explicit `user_id` field.
+    """
+
+    def post(self, request):
+        request_user_id = request.user.id
+
+        try:
+            note_type = int(request.data.get("note_type"))
+            note_id = int(request.data.get("note_id"))
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "note_type and note_id must be integers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if note_type not in VALID_NOTE_TYPES:
+            return Response({"error": "Invalid note_type."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not note_exists(note_type, note_id):
+            return Response(
+                {"error": "Note not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        role = get_effective_role(request_user_id, note_type, note_id)
+        if role is None:
+            return Response(
+                {"error": "You do not have access to this note."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        return Response({"role_id": role}, status=status.HTTP_200_OK)
 
 
 class NoteRoleListView(AuthenticatedAPIView):

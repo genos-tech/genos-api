@@ -23,6 +23,12 @@ class PersonalNoteMaster(models.Model):
     parent_note_id = models.BigIntegerField(blank=True, null=True)
     title = models.CharField(max_length=255)
     body = models.JSONField(blank=True, null=True)
+    # Snapshot of every user mentioned in `body` after the latest save.
+    # The PUT view computes a delta against this column and emits one
+    # toast per newly-mentioned user; the column itself is what
+    # `loadActivityHistory` filters against so prior recipients keep
+    # their feed entry on next reload. Mirrors `TaskMaster.mentioned_user_ids`.
+    mentioned_user_ids = models.JSONField(blank=True, default=list)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
