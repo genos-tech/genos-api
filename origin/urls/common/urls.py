@@ -4,6 +4,11 @@ from origin.views.common.auth_views import *
 from origin.views.common.user_views import *
 from origin.views.common.team_views import *
 from origin.views.common.inbox_views import *
+from origin.views.common.mention_group_views import (
+    MentionGroupView,
+    MentionGroupMembersView,
+    MentionGroupResolveView,
+)
 from origin.views.common.notification_views import NotificationPreferenceView
 from origin.views.common.oauth_views import (
     IntegrationsDisconnectView,
@@ -161,6 +166,19 @@ urlpatterns = [
         "api/v2/team/getTeamMemberInfo/",
         GetTeamMemberInfoView.as_view(),
         name="get_team_member_info",
+    ),
+    # Mention groups (Slack-style @group). team-scoped CRUD + bulk
+    # group→user resolver used by the Flask mention pipeline.
+    path("api/v2/mention-group/", MentionGroupView.as_view(), name="mention_group"),
+    path(
+        "api/v2/mention-group/members/",
+        MentionGroupMembersView.as_view(),
+        name="mention_group_members",
+    ),
+    path(
+        "api/v2/mention-group/resolve/",
+        MentionGroupResolveView.as_view(),
+        name="mention_group_resolve",
     ),
     # Inbox
     path("api/v2/inbox/", InboxItemView.as_view(), name="inbox_item"),
