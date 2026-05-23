@@ -301,6 +301,11 @@ class TaskMasterView(AuthenticatedAPIView):
                 {
                     "task": serializer.data,
                     "newly_mentioned_user_ids": newly_mentioned_user_ids,
+                    # On create there's no prior set; `all` equals `newly`
+                    # and `removed` is empty. Returning the keys keeps the
+                    # frontend response shape identical to PUT.
+                    "all_mentioned_user_ids": newly_mentioned_user_ids,
+                    "removed_user_ids": [],
                 },
                 status=status.HTTP_201_CREATED,
             )
@@ -355,6 +360,8 @@ class TaskMasterView(AuthenticatedAPIView):
                 update_data.pop(key)
 
         newly_mentioned_user_ids = []
+        all_mentioned_user_ids = []
+        removed_user_ids = []
         if "content" in update_data:
             extract_user_handler = extractMentionedUsers()
             extract_user_handler.extract(update_data["content"])
@@ -365,9 +372,16 @@ class TaskMasterView(AuthenticatedAPIView):
             update_data["mentioned_user_ids"] = list(full_mentioned)
 
             current_mentioned_user_ids = task.mentioned_user_ids if task.mentioned_user_ids else []
-            newly_mentioned_user_ids = list(
-                full_mentioned - set(current_mentioned_user_ids)
-            )
+            prev_set = set(current_mentioned_user_ids)
+            # `newly` drives the per-user broadcast loop (real-time toasts);
+            # `all` is what gets written to the ActivityFact row so prior
+            # recipients keep their feed entry on next reload; `removed`
+            # lets the handler delete the row when the body has zero
+            # mentions left. Keeping all three explicit avoids the bug
+            # where the activity row was overwritten with just the delta.
+            newly_mentioned_user_ids = list(full_mentioned - prev_set)
+            removed_user_ids = list(prev_set - full_mentioned)
+            all_mentioned_user_ids = list(full_mentioned)
 
         # Preserve `project_task_number` across the update — fields="__all__"
         # would otherwise demand it in the payload, and the frontend never
@@ -434,6 +448,8 @@ class TaskMasterView(AuthenticatedAPIView):
                 {
                     "task": serializer.data,
                     "newly_mentioned_user_ids": newly_mentioned_user_ids,
+                    "all_mentioned_user_ids": all_mentioned_user_ids,
+                    "removed_user_ids": removed_user_ids,
                 },
                 status=status.HTTP_200_OK,
             )

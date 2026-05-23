@@ -18,6 +18,7 @@ from origin.views.utils.note_version import (
     snapshot_note_version,
     delete_note_versions,
 )
+from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 
 NOTE_TYPE = 1  # Personal Notes
 
@@ -200,6 +201,26 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
             if val is None:
                 update_data.pop(key)
 
+        # Walk the BlockNote body and compute the three mention lists,
+        # mirroring task_views.py PUT. `newly_*` drives the per-user
+        # toast, `all_*` is what the ActivityFact row stores so prior
+        # recipients keep their feed entry, and `removed_*` tells the
+        # handler to DELETE the row when the body is mention-free.
+        newly_mentioned_user_ids = []
+        all_mentioned_user_ids = []
+        removed_user_ids = []
+        if "body" in update_data:
+            extract_user_handler = extractMentionedUsers()
+            extract_user_handler.extract(update_data["body"])
+            full_mentioned = set(extract_user_handler.mentioned_user_ids)
+            full_mentioned |= resolve_group_members(extract_user_handler.mentioned_group_ids)
+            update_data["mentioned_user_ids"] = list(full_mentioned)
+
+            prev_set = set(note.mentioned_user_ids or [])
+            newly_mentioned_user_ids = list(full_mentioned - prev_set)
+            removed_user_ids = list(prev_set - full_mentioned)
+            all_mentioned_user_ids = list(full_mentioned)
+
         serializer = PersonalNoteMasterSerializer(note, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -218,7 +239,15 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
                 # Version write failure shouldn't fail the user's save.
                 # Log and continue.
                 print(f"NoteVersion snapshot failed for personal note {note.note_id}: {e}")
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(
+                {
+                    **serializer.data,
+                    "newly_mentioned_user_ids": newly_mentioned_user_ids,
+                    "all_mentioned_user_ids": all_mentioned_user_ids,
+                    "removed_user_ids": removed_user_ids,
+                },
+                status=status.HTTP_200_OK,
+            )
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

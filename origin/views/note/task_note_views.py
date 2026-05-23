@@ -20,6 +20,7 @@ from origin.views.utils.note_version import (
     snapshot_note_version,
     delete_note_versions,
 )
+from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 
 NOTE_TYPE = 2  # Task Notes
 
@@ -382,6 +383,24 @@ class TaskNoteMasterView(AuthenticatedAPIView):
             if val is None:
                 update_data.pop(key)
 
+        # Mirror personal/task body PUT: walk BlockNote body, dedupe
+        # direct user + group-expanded mentions, persist the full set,
+        # and return the three lists the socket handler needs.
+        newly_mentioned_user_ids = []
+        all_mentioned_user_ids = []
+        removed_user_ids = []
+        if "body" in update_data:
+            extract_user_handler = extractMentionedUsers()
+            extract_user_handler.extract(update_data["body"])
+            full_mentioned = set(extract_user_handler.mentioned_user_ids)
+            full_mentioned |= resolve_group_members(extract_user_handler.mentioned_group_ids)
+            update_data["mentioned_user_ids"] = list(full_mentioned)
+
+            prev_set = set(note.mentioned_user_ids or [])
+            newly_mentioned_user_ids = list(full_mentioned - prev_set)
+            removed_user_ids = list(prev_set - full_mentioned)
+            all_mentioned_user_ids = list(full_mentioned)
+
         serializer = TaskNoteMasterSerializer(note, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -396,7 +415,15 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                 )
             except Exception as e:
                 print(f"NoteVersion snapshot failed for task note {note.note_id}: {e}")
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(
+                {
+                    **serializer.data,
+                    "newly_mentioned_user_ids": newly_mentioned_user_ids,
+                    "all_mentioned_user_ids": all_mentioned_user_ids,
+                    "removed_user_ids": removed_user_ids,
+                },
+                status=status.HTTP_200_OK,
+            )
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
