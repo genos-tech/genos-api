@@ -26,7 +26,7 @@ from origin.services.task_cache import (
     set_cached_project_tasks,
 )
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
-from origin.views.utils.mention_handler import extractMentionedUsers
+from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 
 from .common_color import STATUS_COLOR_MAP, PRIORITY_COLOR_MAP, EFFORT_LEVEL_COLOR_MAP
 
@@ -261,7 +261,13 @@ class TaskMasterView(AuthenticatedAPIView):
         if "content" in request.data and request.data["content"] is not None:
             extract_user_handler = extractMentionedUsers()
             extract_user_handler.extract(request.data["content"])
-            newly_mentioned_user_ids = list(extract_user_handler.mentioned_user_ids)
+            # Merge direct user mentions with members of any mentioned
+            # groups. Dedupe via set so a user reachable both ways gets
+            # one entry; downstream notification fan-out then sends
+            # exactly one notification.
+            user_set = set(extract_user_handler.mentioned_user_ids)
+            user_set |= resolve_group_members(extract_user_handler.mentioned_group_ids)
+            newly_mentioned_user_ids = list(user_set)
             data["mentioned_user_ids"] = newly_mentioned_user_ids
 
         # `project_task_number` is auto-assigned by the post-save signal
@@ -352,11 +358,15 @@ class TaskMasterView(AuthenticatedAPIView):
         if "content" in update_data:
             extract_user_handler = extractMentionedUsers()
             extract_user_handler.extract(update_data["content"])
-            update_data["mentioned_user_ids"] = list(set(extract_user_handler.mentioned_user_ids))
+            # Same dedupe-merge as the POST path: direct user mentions
+            # plus expanded group members.
+            full_mentioned = set(extract_user_handler.mentioned_user_ids)
+            full_mentioned |= resolve_group_members(extract_user_handler.mentioned_group_ids)
+            update_data["mentioned_user_ids"] = list(full_mentioned)
 
             current_mentioned_user_ids = task.mentioned_user_ids if task.mentioned_user_ids else []
             newly_mentioned_user_ids = list(
-                set(extract_user_handler.mentioned_user_ids) - set(current_mentioned_user_ids)
+                full_mentioned - set(current_mentioned_user_ids)
             )
 
         # Preserve `project_task_number` across the update — fields="__all__"
