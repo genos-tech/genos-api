@@ -31,6 +31,7 @@ Event types emitted (full NDJSON protocol):
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from typing import Any, Callable
 from uuid import UUID
@@ -385,6 +386,56 @@ def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list
 
 
 # --------------------------------------------------------------------------- #
+# Phase 4.2 — source-chip ranking by citation density                         #
+# --------------------------------------------------------------------------- #
+
+# Matches the same `[entity_id]` shape used in the agent's prompt and the
+# frontend citation rewriter — keep this in sync with `_CITATION_RE` in
+# evals/runner.py and the regex in SpotlightOverlay's rewriteCitations.
+_INLINE_CITATION_RE = re.compile(r"\[([a-z][a-z0-9_:\-]+)\]")
+
+
+def _rank_sources_by_citation(
+    answer_text: str,
+    sources: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Re-sort the source list so chips actually cited in the answer
+    surface leftmost. Stable for sources with the same citation count
+    (preserves original tool-emission order — which is already a
+    reasonable secondary signal since the most-relevant tool usually
+    fires first).
+
+    Citation-id matching mirrors the frontend's `sourcesById` lookup
+    (see Phase 0.3): citation tokens are always `<type>:<rest>`, but
+    some entity types (chats) ship `entity_id` without the leading
+    `<type>:` prefix. Normalise to the prefixed form for matching so
+    `chat:dm:9:thread:4` in the answer text finds a chat source whose
+    entity_id is `dm:9:thread:4`.
+    """
+    if not sources:
+        return sources
+
+    cited_tokens = {m.lower() for m in _INLINE_CITATION_RE.findall(answer_text or "")}
+    if not cited_tokens:
+        return sources
+
+    def _token_key(src: dict[str, Any]) -> str:
+        etype = (src.get("entity_type") or "").lower()
+        eid = (src.get("entity_id") or "").lower()
+        if not eid:
+            return ""
+        return eid if eid.startswith(f"{etype}:") else f"{etype}:{eid}"
+
+    def _citation_count(src: dict[str, Any]) -> int:
+        key = _token_key(src)
+        return 1 if key and key in cited_tokens else 0
+
+    # Stable sort by (cited > uncited). Python's `sorted` is stable so
+    # within-bucket order is preserved (= original tool-emission order).
+    return sorted(sources, key=lambda s: -_citation_count(s))
+
+
+# --------------------------------------------------------------------------- #
 # Public entry points                                                         #
 # --------------------------------------------------------------------------- #
 
@@ -699,6 +750,19 @@ def _drive_loop(
                 )
                 _persist_step(run_id, step_index=step, error="empty_response")
                 return None
+            # Phase 4.2 — re-emit the sources list re-sorted by citation
+            # density before `done`. Frontend already handles `sources`
+            # events by replacing wholesale, so the final emit overrides
+            # the in-flight tool-emission order with the more-relevant
+            # citation-first order. Gated on a flag (default True) so
+            # operators can flip it off if the chip-reshuffle UX bites.
+            if (
+                settings.SEARCH_ENGINE.get("RAG_RANK_SOURCES_BY_CITATION", True)
+                and seen_sources_by_id
+            ):
+                final_answer = "".join(accumulated_text_parts)
+                ranked = _rank_sources_by_citation(final_answer, list(seen_sources_by_id.values()))
+                emit({"type": "sources", "sources": ranked})
             emit({"type": "done"})
             return None
 

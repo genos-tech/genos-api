@@ -62,7 +62,9 @@ You will be given:
     TOOL_RESULTS as ground truth alongside SOURCES.
   - The system's ANSWER (markdown; may contain inline citations
     formatted as [task:N], [chat:dm:N:thread:N], [note:type:N], or
-    [project:N])
+    [project:N]). Chat-type letters: `dm` = direct message,
+    `gm` = group message (team channel), `pm` = project message
+    (chat tied to a project — NOT "private message"), `mdm` = multi-DM.
 
 Score three dimensions, each on a 0.0–1.0 scale:
 

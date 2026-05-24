@@ -489,6 +489,15 @@ SEARCH_ENGINE = {
     "RAG_SESSION_ROLLING_SUMMARY": (
         os.environ.get("RAG_SESSION_ROLLING_SUMMARY", "false").lower() == "true"
     ),
+    # Phase 4.2 — re-sort source chips by citation density at end-of-turn.
+    # When True, the final `sources` event (emitted just before `done`)
+    # reorders chips so entities the answer actually cites surface
+    # leftmost. Stable for ties (preserves tool-emission order).
+    # Default True — clean UX win, low risk. Flip to False if the chip
+    # reshuffle at done-time turns out to be jarring.
+    "RAG_RANK_SOURCES_BY_CITATION": (
+        os.environ.get("RAG_RANK_SOURCES_BY_CITATION", "true").lower() == "true"
+    ),
     # Phase 14 — AI agent daily usage limit for free users.
     # Users with the "unlimited_agent" UserFeatureAccess grant bypass
     # this cap entirely. Set to 0 to disable the limit for everyone.
