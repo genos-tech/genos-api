@@ -192,7 +192,17 @@ def search(
             output_k=min(output_k, limit),
         )
 
-    return {"query": query, "results": grouped[:limit]}
+    # --- Final pass: friendly chat titles. ---
+    # OpenSearch stores a viewer-agnostic placeholder for chats ("DM 9")
+    # because a DM's name depends on who's looking. Resolve here so
+    # every search consumer (typeahead, agent) sees the same friendly
+    # name (partner / group / project name).
+    from origin.search_engine.friendly_titles import apply_friendly_titles  # noqa: PLC0415
+
+    final = grouped[:limit]
+    apply_friendly_titles(final, user_id)
+
+    return {"query": query, "results": final}
 
 
 def _multi_variant_fuse(
