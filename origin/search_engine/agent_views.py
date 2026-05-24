@@ -34,18 +34,24 @@ from __future__ import annotations
 import json
 import logging
 from datetime import timedelta
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator
 
 from django.conf import settings
+from django.db.models import Prefetch
 from django.http import StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.common.feature_models import UserFeatureAccess
-from origin.search_engine.agent.controller import resume_agent, run_agent
+from origin.search_engine.agent.controller import (
+    _ui_source_for_match,
+    _ui_sources_from_tool_result,
+    resume_agent,
+    run_agent,
+)
 from origin.search_engine.agent.tools import ToolContext
-from origin.search_engine.models import AgentRun, AgentSession
+from origin.search_engine.models import AgentRun, AgentSession, AgentStep
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 log = logging.getLogger(__name__)
@@ -498,5 +504,236 @@ class AgentUsageView(AuthenticatedAPIView):
                 "used": used_today,
                 "limit": None if is_unlimited else daily_limit,
                 "is_unlimited": is_unlimited,
+            }
+        )
+
+
+# Cap how many recent sessions the list endpoint returns. Keeps the
+# response small on workspaces with deep history; the UI exposes only
+# this many today (no search / no pagination — see roadmap §11).
+_HISTORY_LIST_LIMIT = 20
+
+
+def _reconstruct_sources_for_run(run: AgentRun) -> list[dict[str, Any]]:
+    """Rebuild the same source list the live `/ask/` flow emitted for
+    this run, replaying against persisted `AgentStep.result_json`.
+
+    Walks the run's steps in `step_index` order and dispatches each
+    one through the same per-tool source builders the live controller
+    uses (`_ui_source_for_match` for `search_knowledge_base` matches,
+    `_ui_sources_from_tool_result` for structured reads). Dedupes by
+    `entity_id` so a task touched by both `list_tasks` and a
+    follow-up `fetch_task` produces a single source row — matches the
+    live `seen_sources_by_id` behavior in `_drive_loop`.
+
+    Used by the History detail endpoint so inline citation tokens
+    (e.g. `[task:200]`) in archived answers can resolve back to a
+    clickable preview, the same way they do in the live conversation.
+    """
+    seen_by_id: dict[str, dict[str, Any]] = {}
+    # `.steps` is already prefetched on the run by the caller; iterating
+    # `.all()` here doesn't trigger another query.
+    for step in run.steps.all():
+        if not step.tool_name or step.result_json is None:
+            continue
+        result = step.result_json
+        if step.tool_name == "search_knowledge_base":
+            new_sources = [_ui_source_for_match(m) for m in (result.get("matches") or [])]
+        else:
+            new_sources = _ui_sources_from_tool_result(step.tool_name, result)
+        for s in new_sources:
+            eid = s.get("entity_id")
+            if eid and eid not in seen_by_id:
+                seen_by_id[eid] = s
+    return list(seen_by_id.values())
+
+
+class AgentSessionsListView(AuthenticatedAPIView):
+    """GET /api/v2/agent/sessions/?team_id=<id>
+
+    Lists this user's recent agent conversations within `team_id` so the
+    frontend can render the History panel inside Spotlight. Read-only,
+    ACL-scoped to (team_id, user_id) — never returns another user's
+    sessions. Ordered by `-last_active_at`, capped at
+    `_HISTORY_LIST_LIMIT` rows.
+
+    Each row carries enough metadata to render a list item (relative
+    timestamp + first-query preview + turn count) without fetching the
+    full conversation. Click-through hits the detail endpoint below.
+
+    Response schema:
+        {
+            "sessions": [
+                {
+                    "session_id":      "<uuid>",
+                    "created_at":      "<iso>",
+                    "last_active_at":  "<iso>",
+                    "first_query":     "...",  # first run's query, possibly truncated
+                    "turn_count":      int     # AgentRun count for this session
+                },
+                ...
+            ]
+        }
+    """
+
+    # Truncate the first-query preview to keep the list-row payload
+    # small. Long queries get an ellipsis suffix — the detail view
+    # has the full text.
+    _FIRST_QUERY_PREVIEW_LEN = 140
+
+    def get(self, request):
+        user_id = str(getattr(request.user, "id", ""))
+        if not user_id:
+            return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        team_id = request.GET.get("team_id")
+        if not team_id:
+            return Response(
+                {"error": "team_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        sessions_qs = AgentSession.objects.filter(team_id=str(team_id), user_id=user_id).order_by(
+            "-last_active_at"
+        )[:_HISTORY_LIST_LIMIT]
+        sessions = list(sessions_qs)
+        if not sessions:
+            return Response({"sessions": []})
+
+        # Hydrate per-session metadata in one extra query each. With the
+        # cap above this is at most 20 round-trips; on a real workspace
+        # this is dominated by AgentRun read latency, not query count.
+        # If history list latency ever matters, switch to a single
+        # GROUP BY query. Not worth it at this scale.
+        sessions_payload = []
+        for s in sessions:
+            runs_qs = AgentRun.objects.filter(session=s)
+            turn_count = runs_qs.count()
+            first_run = runs_qs.order_by("started_at").only("query").first()
+            first_query = (first_run.query if first_run else "") or ""
+            if len(first_query) > self._FIRST_QUERY_PREVIEW_LEN:
+                first_query = first_query[: self._FIRST_QUERY_PREVIEW_LEN].rstrip() + "…"
+            sessions_payload.append(
+                {
+                    "session_id": str(s.session_id),
+                    "created_at": s.created_at.isoformat(),
+                    "last_active_at": s.last_active_at.isoformat(),
+                    "first_query": first_query,
+                    "turn_count": turn_count,
+                }
+            )
+
+        return Response({"sessions": sessions_payload})
+
+
+class AgentSessionDetailView(AuthenticatedAPIView):
+    """GET /api/v2/agent/sessions/<session_id>/?team_id=<id>
+
+    Returns the full Q&A trace for one past session so the frontend can
+    render a read-only archive view inside Spotlight. ACL-scoped to
+    (team_id, user_id) — a UUID guess returns 404, not someone else's
+    conversation.
+
+    Only runs with a final answer OR an error message are returned —
+    in-flight runs (status="running" / "awaiting_approval") and runs
+    that wrote no answer at all are filtered out. This keeps the
+    read-only archive coherent: every visible row is a completed
+    exchange.
+
+    `sources` on each turn is rebuilt from the persisted
+    `AgentStep.result_json` so inline `[task:N]` / `[chat:...]` /
+    `[note:...]` / `[project:N]` tokens in archived answers resolve
+    to clickable previews via the same `rewriteCitations` machinery
+    the live view uses.
+
+    Response schema:
+        {
+            "session_id":     "<uuid>",
+            "created_at":     "<iso>",
+            "last_active_at": "<iso>",
+            "turns": [
+                {
+                    "run_id":     "<uuid>",
+                    "query":      "...",
+                    "answer":     "...",          # final_answer_text
+                    "status":     "done|error|step_cap|rejected",
+                    "error":      "..." | null,   # error_message when status=error
+                    "started_at": "<iso>",
+                    "sources":    [SpotlightResult-shaped dict, ...]
+                },
+                ...
+            ]
+        }
+    """
+
+    def get(self, request, session_id: str):
+        user_id = str(getattr(request.user, "id", ""))
+        if not user_id:
+            return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        team_id = request.GET.get("team_id")
+        if not team_id:
+            return Response(
+                {"error": "team_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            session = AgentSession.objects.get(
+                session_id=session_id,
+                team_id=str(team_id),
+                user_id=user_id,
+            )
+        except (AgentSession.DoesNotExist, ValueError):
+            # ValueError covers malformed UUIDs. Both surface as 404 so
+            # we don't reveal "this id exists but you can't see it".
+            return Response(
+                {"error": "Session not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Prefetch steps so `_reconstruct_sources_for_run` resolves in
+        # 2 queries total (runs + steps) instead of N+1. Steps are
+        # ordered by `step_index` so the rebuilt source list matches
+        # the live emission order, which the Phase 4.2 citation-density
+        # ranker uses as a stable secondary sort.
+        runs = (
+            AgentRun.objects.filter(session=session)
+            .order_by("started_at")
+            .prefetch_related(
+                Prefetch(
+                    "steps",
+                    queryset=AgentStep.objects.order_by("step_index"),
+                )
+            )
+        )
+
+        turns = []
+        for r in runs:
+            answer = r.final_answer_text or ""
+            error = r.error_message or ""
+            # Skip rows that produced neither — most commonly an
+            # abandoned run that never completed. They'd render as
+            # empty bubbles in the archive view.
+            if not answer and not error:
+                continue
+            turns.append(
+                {
+                    "run_id": str(r.run_id),
+                    "query": r.query or "",
+                    "answer": answer,
+                    "status": r.status,
+                    "error": error or None,
+                    "started_at": r.started_at.isoformat(),
+                    "sources": _reconstruct_sources_for_run(r),
+                }
+            )
+
+        return Response(
+            {
+                "session_id": str(session.session_id),
+                "created_at": session.created_at.isoformat(),
+                "last_active_at": session.last_active_at.isoformat(),
+                "turns": turns,
             }
         )

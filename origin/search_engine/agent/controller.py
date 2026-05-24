@@ -331,16 +331,32 @@ def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list
         return []
 
     if call_name in ("list_tasks", "get_stale_tasks"):
-        return [
+        tasks = result.get("tasks") or []
+        task_sources = [
             _task_source(
                 t.get("task_id"),
                 t.get("title"),
                 t.get("project_id"),
                 display_id=t.get("display_id"),
             )
-            for t in (result.get("tasks") or [])
+            for t in tasks
             if t.get("task_id")
         ]
+        # Also emit one source per distinct project so inline
+        # `[project:N]` citations the model writes (e.g.
+        # "In Q2 Roadmap [project:18]: ...") resolve via the frontend
+        # rewriter — without this, the bare token renders raw. Phase 4.2
+        # citation-density ranking pushes uncited project chips down,
+        # so unprompted-chip noise is bounded.
+        seen_project_ids: set[Any] = set()
+        project_sources: list[dict[str, Any]] = []
+        for t in tasks:
+            pid = t.get("project_id")
+            if pid is None or pid in seen_project_ids:
+                continue
+            seen_project_ids.add(pid)
+            project_sources.append(_project_source(pid, t.get("project_name")))
+        return task_sources + project_sources
 
     if call_name == "fetch_task":
         tid = result.get("task_id")
