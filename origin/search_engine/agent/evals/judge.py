@@ -78,6 +78,13 @@ Score three dimensions, each on a 0.0–1.0 scale:
      actually supports the surrounding sentence. Citing a source
      that's only topically adjacent = lower. Missing citations on
      load-bearing claims also count against this axis.
+     **Aggregate/stats tools** (`get_workload_distribution`,
+     `get_task_throughput_stats`, `get_stale_tasks` when empty,
+     `get_project_activity_ranking` for non-project numbers) often
+     produce user-level or aggregate numbers with no per-claim
+     entity to cite. Do NOT penalize missing citations in that case
+     — only flag missing citations when there is a clear entity in
+     TOOL_RESULTS or SOURCES that the sentence is about.
      1.0 = every citation correctly attached. 0.0 = citations look
      random / wrong / absent on the key claims.
 
