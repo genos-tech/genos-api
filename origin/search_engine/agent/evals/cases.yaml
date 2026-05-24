@@ -51,20 +51,24 @@
 # B. Specific-entity fetch (3)                                           #
 # --------------------------------------------------------------------- #
 
-- id: fetch_task_by_id
-  query: "Show me the full content of task 1 including any comments."
-  fixture: true
-  expect:
-    tools_used_contains: ["fetch_task"]
-    citations_contain: ["task:1"]
-    no_errors: true
+# Note: the original `fetch_task_by_id` case (query "Show me the full
+# content of task 1 …") was deleted — task id 1 doesn't exist in the
+# eval fixture (lives in another team), so the case was just a duplicate
+# of `acl_unauthorized_fetch_task`. The active fetch_task coverage now
+# lives in `fetch_existing_task_v1_launch` (search-then-read flow) and
+# `fetch_nonexistent_task` (error-path) below.
 
-- id: fetch_task_opensearch
-  query: "What's the description of task 9 about?"
+- id: fetch_existing_task_v1_launch
+  # Rewritten from `fetch_task_opensearch` (which queried task id 9
+  # that doesn't exist). Asks about an existing task by NAME so the
+  # agent can search → snippet OR search → fetch_task. We don't pin
+  # the tool to fetch_task because for an entity this well-titled,
+  # search alone may already have enough content.
+  query: "Tell me about the v1.0 Public Launch task."
   fixture: true
   expect:
-    tools_used_contains: ["fetch_task"]
-    answer_contains_any: ["opensearch", "summary", "search"]
+    tool_calls_at_least: 1
+    answer_contains_any: ["launch", "v1.0", "public", "marketing"]
     no_errors: true
 
 - id: fetch_pm_chat
@@ -78,14 +82,18 @@
 # C. Multi-step search → fetch (2)                                       #
 # --------------------------------------------------------------------- #
 
-- id: multi_step_task_then_detail
-  query: "Find the task about OpenSearch and tell me what its acceptance criteria say."
+- id: multi_step_search_then_fetch_existing
+  # Rewritten from `multi_step_task_then_detail` (which asked about an
+  # OpenSearch task that doesn't exist in fixture). Asks about a topic
+  # that's spread across multiple entities, so the agent reasonably
+  # searches and may follow up with a fetch.
+  query: "Find the task about responsive navigation and tell me what its acceptance criteria say."
   fixture: true
   expect:
     # The agent decides whether a fetch_task is needed — if the search
     # snippet already contains enough, a single search is correct
-    # behaviour. We only require that the answer is grounded (cites the
-    # task it found) and stays within the step budget.
+    # behaviour. We require: at least one tool call, the answer is
+    # grounded (cites the task it found), and step budget respected.
     tool_calls_at_least: 1
     tools_used_contains: ["search_knowledge_base"]
     has_citations: true
@@ -236,4 +244,146 @@
   expect:
     # A simple question should answer in 1-2 tool calls, not loop.
     tool_calls_at_most: 3
+    no_errors: true
+
+# --------------------------------------------------------------------- #
+# J. Aggregate / stats tool answers                                     #
+# --------------------------------------------------------------------- #
+# Tools that produce counts and rollups (no per-claim entity to cite).
+# Phase 3.1 added a judge carve-out for these; the cases here lock the
+# expected agent routing in place.
+
+- id: aggregate_project_summary
+  query: "How is the Q2 Roadmap project going?"
+  fixture: true
+  expect:
+    tools_used_contains: ["get_project_summary"]
+    answer_contains_any: ["open", "wip", "task", "progress", "total"]
+    no_errors: true
+
+- id: aggregate_workload_distribution
+  query: "Who currently has the most open tasks?"
+  fixture: true
+  expect:
+    tools_used_contains: ["get_workload_distribution"]
+    answer_contains_any: ["alice", "bob", "carol", "dan", "eval fixture", "open"]
+    no_errors: true
+
+- id: aggregate_throughput_stats
+  query: "How many tasks did we create in the last 7 days?"
+  fixture: true
+  expect:
+    tools_used_contains: ["get_task_throughput_stats"]
+    no_errors: true
+
+- id: aggregate_stale_tasks
+  query: "Any tasks that have been sitting idle for 2+ weeks?"
+  fixture: true
+  expect:
+    tools_used_contains: ["get_stale_tasks"]
+    no_errors: true
+
+# --------------------------------------------------------------------- #
+# K. Compound queries (Phase 3.3 measurement surface)                   #
+# --------------------------------------------------------------------- #
+
+- id: compound_perf_and_owner
+  query: "What's the perf budget for the marketing site, and who owns the framer-motion spike?"
+  fixture: true
+  expect:
+    # Compound query — needs both retrieval AND attribution. Agent
+    # may use search + one or two fetch/list calls.
+    tool_calls_at_least: 1
+    has_citations: true
+    no_errors: true
+
+- id: compound_blockers_overview
+  query: "What's blocking the homepage rebuild and what's blocking the roadmap proposal?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    has_citations: true
+    answer_contains_any: ["block", "synthesis", "featuregrid", "interview"]
+    no_errors: true
+
+# --------------------------------------------------------------------- #
+# L. Citation discipline (locks in Phase 3.1 prompt rules)              #
+# --------------------------------------------------------------------- #
+
+- id: citation_no_fake_on_nonexistent_task
+  # Task id that doesn't exist — fetch_task should error. Phase 3.1
+  # prompt rule says: do not invent a citation for an entity that
+  # wasn't retrieved. The answer should explain the failure plainly
+  # WITHOUT a `[task:99999]` citation.
+  query: "Show me task 99999."
+  fixture: true
+  expect:
+    tools_used_contains: ["fetch_task"]
+    tool_call_errors_contain: ["not found"]
+    no_citations: true
+    no_errors: true
+
+- id: citation_lists_each_project
+  # When the agent lists multiple projects (or fetches per-project
+  # summary), Phase 3.1 prompt rule says: cite EACH item in the list.
+  # Two projects exist → answer should cite at least 2 [project:N].
+  query: "List all the projects I'm a member of."
+  fixture: true
+  expect:
+    tools_used_contains: ["list_projects"]
+    citations_count_at_least: 2
+    no_errors: true
+
+# --------------------------------------------------------------------- #
+# M. List / filter tasks (structural queries)                           #
+# --------------------------------------------------------------------- #
+
+- id: list_overdue_tasks
+  query: "What tasks are overdue?"
+  fixture: true
+  expect:
+    tools_used_contains: ["list_tasks"]
+    # Whether overdue tasks exist depends on the seed date; the case
+    # asserts only that the agent uses the right tool and doesn't
+    # error. Content-validity is the judge's job.
+    no_errors: true
+
+- id: list_high_priority_open
+  query: "Show me my high priority open tasks."
+  fixture: true
+  expect:
+    tools_used_contains: ["list_tasks"]
+    no_errors: true
+
+# --------------------------------------------------------------------- #
+# N. User / team lookup                                                 #
+# --------------------------------------------------------------------- #
+
+- id: who_am_i
+  query: "Who am I?"
+  fixture: true
+  expect:
+    tools_used_contains: ["get_current_user"]
+    answer_contains_any: ["eval fixture", "user", "you"]
+    no_errors: true
+
+- id: who_is_on_team
+  query: "Who's on the team?"
+  fixture: true
+  expect:
+    tools_used_contains: ["get_team_members"]
+    answer_contains_any: ["alice", "bob", "carol", "dan"]
+    no_errors: true
+
+# --------------------------------------------------------------------- #
+# B (expand). Specific-entity fetch                                     #
+# --------------------------------------------------------------------- #
+
+- id: fetch_personal_note_spotlight_tips
+  query: "Read me the 'Spotlight tips' note in full."
+  fixture: true
+  expect:
+    # search_knowledge_base + fetch_note OR a direct fetch_note path.
+    tool_calls_at_least: 1
+    answer_contains_any: ["spotlight", "cmd-k", "shortcut", "ai search"]
     no_errors: true

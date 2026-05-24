@@ -400,3 +400,186 @@
   query: "Where do users drop off in onboarding?"
   expect:
     top_result_title_contains: "Onboarding funnel"
+
+# ============================================================ #
+# K. Stem / synonym / abbreviation recall                       #
+# ============================================================ #
+# User phrasing != indexed phrasing. Direct measurement target
+# for Phase 1.4 (analyzer/synonym expansion at index time). Today
+# these mostly ride the vector lane; with a synonym filter the
+# keyword lane should also resolve them.
+
+- id: synonym_a11y_finds_accessibility
+  fixture: true
+  # Fixture uses both "accessibility" (titles/bodies) and "a11y"
+  # (chats/notes). User typing the abbreviation should still find
+  # the Accessibility task.
+  query: "a11y audit work"
+  expect:
+    must_contain_title_in_top_n:
+      n: 5
+      title_substrings: ["Accessibility audit"]
+
+- id: synonym_perf_long_form
+  fixture: true
+  # Fixture has both "perf" (chats/comments) and "performance" usage.
+  # Long-form query should surface ANY of the perf-related work
+  # (framer-motion spike, mobile-Safari perf task, design-system
+  # migration which carries perf budget). OR-semantics: any one is
+  # a valid answer.
+  query: "site performance optimisation"
+  expect:
+    must_contain_any_title_in_top_n:
+      n: 5
+      title_substrings: ["framer-motion", "mobile Safari", "design system v3"]
+
+- id: stem_navigation_plural_singular
+  fixture: true
+  # "navigation" (in title) vs "navigations" (plural in the query).
+  # Vector lane handles it semantically; stemmed analyzer would
+  # also resolve on the keyword lane.
+  query: "responsive navigations"
+  expect:
+    top_result_title_contains: "responsive navigation"
+
+# ============================================================ #
+# L. Date-filtered positive                                      #
+# ============================================================ #
+
+- id: date_filter_recent_year_returns_some
+  fixture: true
+  # Fixture is seeded with current-year timestamps. A broad
+  # current-year window with a generic query should still return
+  # at least a few entities — positive smoke test paired with
+  # `future_date_filter_returns_empty`. We intentionally don't
+  # demand many (the threshold + min-score cutoff after date
+  # filtering is conservative; the goal is "filter doesn't kill
+  # everything", not "filter returns 10+").
+  query: "task"
+  date_from: "2026-01-01T00:00:00+00:00"
+  expect:
+    result_count_at_least: 1
+
+# ============================================================ #
+# M. Note-recall (notes were underrepresented — only 1 case)    #
+# ============================================================ #
+
+- id: note_recall_shortcuts_tip
+  fixture: true
+  # Spotlight tips note documents Cmd-K. Query is shortcut-shaped,
+  # the answer is the tips note.
+  query: "keyboard shortcut to open search"
+  expect:
+    must_contain_title_in_top_n:
+      n: 5
+      title_substrings: ["Spotlight"]
+
+- id: note_recall_weekly_focus
+  fixture: true
+  # "This week's priorities" personal note is the on-topic match.
+  query: "what's the focus this week"
+  expect:
+    top_result_title_contains: "week"
+
+- id: note_recall_design_inventory
+  fixture: true
+  # Design System Inventory note lists primitives ("Stack, Grid, Box"
+  # etc.); query should surface it ahead of design-system tasks.
+  query: "which design system primitives are stable"
+  expect:
+    must_contain_title_in_top_n:
+      n: 3
+      title_substrings: ["Design system inventory"]
+
+# ============================================================ #
+# N. Body-content recall (matches deep in body, not title)       #
+# ============================================================ #
+
+- id: body_recall_button_contrast
+  fixture: true
+  # "secondary-button contrast" appears in the Design System
+  # Inventory body and in a DM. Title contains neither term;
+  # this is a pure body-content recall test.
+  query: "secondary button contrast fix"
+  expect:
+    must_contain_entity_type_in_top_n:
+      n: 5
+      entity_types: ["note", "chat"]
+
+- id: body_recall_featuregrid_blocker
+  fixture: true
+  # Sprint 1 kickoff recap (chat-note) lists "FeatureGrid PR" as a
+  # blocker; the FeatureGrid task is the build target. Either
+  # surfacing satisfies the query.
+  query: "FeatureGrid blocking work"
+  expect:
+    must_contain_any_title_in_top_n:
+      n: 5
+      title_substrings: ["FeatureGrid", "Sprint 1 kickoff"]
+
+# ============================================================ #
+# J (expand). Precision — the WRONG entity must NOT win          #
+# ============================================================ #
+
+- id: precision_design_primitives_not_welcome
+  fixture: true
+  # Welcome note mentions "design" generically. Design System
+  # Inventory is the on-topic note. Welcome should not crowd it out.
+  query: "stable design system primitives"
+  expect:
+    must_not_contain_title:
+      - "Welcome to your demo workspace"
+
+- id: precision_q3_okrs_not_welcome
+  fixture: true
+  # Welcome touches Q3 tangentially; Q3 OKRs task is the load-bearing
+  # match.
+  query: "Q3 OKRs draft tasks"
+  expect:
+    top_result_title_contains: "Q3 OKRs"
+
+# ============================================================ #
+# F (expand). Chat-surface recall                                #
+# ============================================================ #
+
+- id: chat_pricing_component_blocked
+  fixture: true
+  # "Pricing-table component still doesn't have a spec" lives in
+  # Carol's DM; the same blocker is restated in the Sprint 1 recap.
+  query: "pricing component blocked"
+  expect:
+    must_contain_entity_type_in_top_n:
+      n: 5
+      entity_types: ["chat", "note"]
+
+- id: chat_proactive_surfacing_decision
+  fixture: true
+  # "Proactive surfacing vs search" is discussed in Alice's DM thread
+  # and recorded in the Sprint 1 kickoff recap.
+  query: "proactive surfacing vs search decision"
+  expect:
+    must_contain_entity_type_in_top_n:
+      n: 5
+      entity_types: ["chat", "note"]
+
+# ============================================================ #
+# I (expand). Robustness                                          #
+# ============================================================ #
+
+- id: query_with_quotes_no_crash
+  fixture: true
+  # User pasted a quoted phrase. Should not crash the tokenizer
+  # or the OpenSearch query parser.
+  query: "\"customer interview\""
+  expect:
+    result_count_at_least: 0
+
+- id: query_with_special_chars
+  fixture: true
+  # Punctuation + markdown chars in query. Should still resolve
+  # to the framer-motion content.
+  query: "framer-motion vs *CSS* (decision)"
+  expect:
+    must_contain_title_in_top_n:
+      n: 5
+      title_substrings: ["framer-motion"]

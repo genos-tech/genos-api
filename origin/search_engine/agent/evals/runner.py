@@ -278,6 +278,25 @@ def _check_behavior_expectations(
         if not citations_seen:
             _add("has_citations: answer contains no [entity_id] citations")
 
+    if "no_citations" in expect and expect["no_citations"]:
+        if citations_seen:
+            _add(f"no_citations: answer contains citations: {sorted(citations_seen)}")
+
+    if "citations_count_at_least" in expect:
+        n = int(expect["citations_count_at_least"])
+        if len(citations_seen) < n:
+            _add(
+                f"citations_count_at_least: got {len(citations_seen)} citation(s), "
+                f"expected >= {n} (saw {sorted(citations_seen)})"
+            )
+
+    if "answer_contains_all" in expect:
+        needles = [s.lower() for s in expect["answer_contains_all"]]
+        haystack = answer.lower()
+        missing = [n for n in needles if n not in haystack]
+        if missing:
+            _add(f"answer_contains_all: missing {missing} from answer")
+
     if "answer_length_at_least" in expect:
         n = int(expect["answer_length_at_least"])
         if len(answer) < n:
