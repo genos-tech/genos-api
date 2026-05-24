@@ -81,6 +81,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             ts_updated_at__lt=cutoff,
         )
         .exclude(status__in=["Closed", "Deleted"])
+        .select_related("project")
         .order_by("ts_updated_at")[:limit]
     )
 
@@ -95,6 +96,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "priority": t.priority,
                 "assignee_id": str(t.assignee_id) if t.assignee_id else None,
                 "project_id": t.project_id,
+                "project_name": t.project.project_name if t.project else None,
                 "days_stale": days_stale,
                 "ts_updated_at": t.ts_updated_at.isoformat() if t.ts_updated_at else None,
             }
@@ -123,7 +125,7 @@ GET_STALE_TASKS = Tool(
         "`stale_days` days, oldest first. Use to identify stuck work — "
         "tasks that may need attention, reassignment, or cleanup. "
         "Returns task_id, title, status, priority, assignee_id, "
-        "project_id, days_stale, and ts_updated_at. Scoped to projects "
+        "project_id, project_name, days_stale, and ts_updated_at. Scoped to projects "
         "the current user is a member of."
     ),
     parameters_schema={

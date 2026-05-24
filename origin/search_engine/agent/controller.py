@@ -167,6 +167,139 @@ def _ui_source_for_match(match: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _blank_source(entity_type: str, entity_id: str) -> dict[str, Any]:
+    """Skeleton source dict; structured-tool helpers fill in the type-specific fields."""
+    return {
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "title": None,
+        "snippet": None,
+        "chat_type": None,
+        "chat_id": None,
+        "thread_id": None,
+        "message_id": None,
+        "task_id": None,
+        "note_id": None,
+        "note_type": None,
+        "project_id": None,
+        "matched_chunk_types": [],
+        "matched_terms": [],
+        "related_entity_ids": [],
+        "updated_at": None,
+        "score": 0.0,
+        "keyword_rank": None,
+        "vector_rank": None,
+    }
+
+
+def _task_source(task_id: Any, title: Any, project_id: Any) -> dict[str, Any]:
+    s = _blank_source("task", f"task:{task_id}")
+    s["title"] = title or ""
+    s["task_id"] = str(task_id) if task_id is not None else None
+    s["project_id"] = str(project_id) if project_id is not None else None
+    return s
+
+
+def _project_source(project_id: Any, project_name: Any) -> dict[str, Any]:
+    s = _blank_source("project", f"project:{project_id}")
+    s["title"] = project_name or ""
+    s["project_id"] = str(project_id) if project_id is not None else None
+    return s
+
+
+def _chat_source(
+    chat_type: Any,
+    chat_id: Any,
+    thread_id: Any = None,
+    title: Any = None,
+) -> dict[str, Any]:
+    # Chunker convention: entity_id has no leading "chat:" prefix.
+    base = f"{chat_type}:{chat_id}"
+    eid = f"{base}:thread:{thread_id}" if thread_id else base
+    s = _blank_source("chat", eid)
+    s["title"] = title or ""
+    s["chat_type"] = chat_type
+    s["chat_id"] = str(chat_id) if chat_id is not None else None
+    s["thread_id"] = str(thread_id) if thread_id else None
+    return s
+
+
+def _note_source(
+    note_type: Any,
+    note_id: Any,
+    title: Any = None,
+    parent_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    s = _blank_source("note", f"note:{note_type}:{note_id}")
+    s["title"] = title or ""
+    s["note_id"] = str(note_id) if note_id is not None else None
+    s["note_type"] = note_type
+    pc = parent_context or {}
+    s["project_id"] = pc.get("project_id")
+    s["task_id"] = pc.get("task_id")
+    s["chat_type"] = pc.get("chat_type")
+    s["chat_id"] = pc.get("chat_id")
+    s["thread_id"] = pc.get("thread_id")
+    return s
+
+
+def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build UI source dicts from a non-search read tool's result.
+
+    Returns [] for tools whose results don't map to a clickable entity
+    (e.g. analytics aggregations without per-row ids, get_current_user,
+    get_team_members — no user-detail view exists to link to).
+
+    Sources are deduped upstream by (entity_type, entity_id), so emitting
+    the same task from both `list_tasks` and `search_knowledge_base` in
+    one run only produces a single chip.
+    """
+    if not isinstance(result, dict):
+        return []
+
+    if call_name in ("list_tasks", "get_stale_tasks"):
+        return [
+            _task_source(t.get("task_id"), t.get("title"), t.get("project_id"))
+            for t in (result.get("tasks") or [])
+            if t.get("task_id")
+        ]
+
+    if call_name == "fetch_task":
+        tid = result.get("task_id")
+        if not tid:
+            return []
+        return [_task_source(tid, result.get("title"), result.get("project_id"))]
+
+    if call_name == "list_projects":
+        return [
+            _project_source(p.get("project_id"), p.get("project_name"))
+            for p in (result.get("projects") or [])
+            if p.get("project_id")
+        ]
+
+    if call_name == "get_project_summary":
+        pid = result.get("project_id")
+        if not pid:
+            return []
+        return [_project_source(pid, result.get("project_name"))]
+
+    if call_name == "fetch_chat_thread":
+        chat_type = result.get("chat_type")
+        chat_id = result.get("chat_id")
+        if not chat_type or not chat_id:
+            return []
+        return [_chat_source(chat_type, chat_id, result.get("thread_id"))]
+
+    if call_name == "fetch_note":
+        nid = result.get("note_id")
+        ntype = result.get("note_type")
+        if not nid or not ntype:
+            return []
+        return [_note_source(ntype, nid, result.get("title"), result.get("parent_context"))]
+
+    return []
+
+
 # --------------------------------------------------------------------------- #
 # Public entry points                                                         #
 # --------------------------------------------------------------------------- #
@@ -591,12 +724,26 @@ def _drive_loop(
                 result_json=result,
             )
 
+            # Collect citation chips from this tool's result. Search produces
+            # them via _ui_source_for_match (one per match); structured read
+            # tools produce them via _ui_sources_from_tool_result. Both feed
+            # the same dedup map so a task surfaced by both list_tasks and
+            # search_knowledge_base in one run is still a single chip.
+            new_sources: list[dict[str, Any]] = []
             if call_name == "search_knowledge_base":
-                for match in result.get("matches", []):
-                    key = (match.get("entity_type"), match.get("entity_id"))
-                    if key in seen_sources_by_id:
-                        continue
-                    seen_sources_by_id[key] = _ui_source_for_match(match)
+                new_sources = [_ui_source_for_match(m) for m in result.get("matches", [])]
+            else:
+                new_sources = _ui_sources_from_tool_result(call_name, result)
+
+            added = False
+            for src in new_sources:
+                key = (src.get("entity_type"), src.get("entity_id"))
+                if not all(key) or key in seen_sources_by_id:
+                    continue
+                seen_sources_by_id[key] = src
+                added = True
+
+            if added:
                 emit(
                     {
                         "type": "sources",
