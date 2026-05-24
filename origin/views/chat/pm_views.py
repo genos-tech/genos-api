@@ -218,6 +218,10 @@ class PMHistoryView(AuthenticatedAPIView):
                         },
                         "project": msg_dict["project"],
                         "taskId": msg_dict["taskId"],
+                        # Forward the human-readable id so the
+                        # flagged-message chip can render "<code>-<n>"
+                        # instead of the raw numeric id.
+                        "displayId": msg_dict.get("displayId"),
                         "tsSent": msg_dict["tsSent"],
                     }
                 )
@@ -650,9 +654,7 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
 
         contentText = generate_first_line.get(pm.thread_message_body[0])
         task_id = pm.parent_message_uid.task.task_id if pm.parent_message_uid.task else -1
-        display_id = (
-            pm.parent_message_uid.task.display_id if pm.parent_message_uid.task else None
-        )
+        display_id = pm.parent_message_uid.task.display_id if pm.parent_message_uid.task else None
         messageIdWithChatIdAndThreadId = f"{project_id}-{task_id}-{message_id}"
         message = {
             "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,

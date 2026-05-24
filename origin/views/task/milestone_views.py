@@ -161,6 +161,12 @@ def _serialize_milestone(m: MilestoneMaster, *, with_aggregates: bool = True) ->
     out = {
         "milestoneId": m.milestone_id,
         "taskId": m.task_id,
+        # Human-readable id from the backing task's `display_id`
+        # property ("<code>-<n>"). Lets the table / preview surfaces
+        # show "TP-3" instead of "#3" for milestone rows without an
+        # extra lookup. Falls back to None when the milestone has no
+        # backing task yet (legacy rows lazy-backfilled below).
+        "displayId": m.task.display_id if m.task_id is not None and m.task else None,
         "projectId": m.project_id,
         "teamId": m.team_id,
         "sprintId": m.sprint_id,
