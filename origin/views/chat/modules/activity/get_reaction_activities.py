@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from django.db.models import F, Q, Exists, OuterRef
+from django.db.models import F, Q, Exists, OuterRef, Case, When, Value, CharField
+from django.db.models.functions import Concat
 
 from origin.models.chat.activity_models import *
 from origin.models.chat.read_status_models import *
@@ -50,6 +51,24 @@ def get(
             messageUniqueKey=F("message_unique_key"),
             threadMessageUniqueKey=F("thread_message_unique_key"),
             taskId=F("task"),
+            # Mirror TaskMaster.display_id at the DB level so the
+            # activity feed can render "<code>-<n>" without an extra
+            # lookup. NULL when either side is missing — the frontend
+            # `formatTaskDisplayId` util falls back to "#<taskId>".
+            displayId=Case(
+                When(
+                    Q(task__project__code__isnull=False)
+                    & Q(task__project_task_number__isnull=False),
+                    then=Concat(
+                        F("task__project__code"),
+                        Value("-"),
+                        F("task__project_task_number"),
+                        output_field=CharField(),
+                    ),
+                ),
+                default=Value(None),
+                output_field=CharField(),
+            ),
             firstLineContent=F("first_line_content"),
             senderId=F("sender"),
             projectId=F("project"),
@@ -80,6 +99,7 @@ def get(
             "messageUniqueKey",
             "threadMessageUniqueKey",
             "taskId",
+            "displayId",
             "projectId",
             "projectName",
             "firstLineContent",

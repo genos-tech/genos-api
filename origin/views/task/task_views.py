@@ -446,7 +446,15 @@ class TaskMasterView(AuthenticatedAPIView):
 
             return Response(
                 {
-                    "task": serializer.data,
+                    # Surface the computed `display_id` ("<code>-<n>")
+                    # alongside the serialized fields. TaskMasterSerializer
+                    # uses `fields="__all__"` on a ModelSerializer so it
+                    # only emits DB columns, not @property values — the
+                    # frontend needs displayId to stamp it onto outgoing
+                    # socket payloads (message / task_body_mention / etc.)
+                    # so the live activity chip can render the friendly id
+                    # without waiting for the next REST refetch.
+                    "task": {**serializer.data, "displayId": task.display_id},
                     "newly_mentioned_user_ids": newly_mentioned_user_ids,
                     "all_mentioned_user_ids": all_mentioned_user_ids,
                     "removed_user_ids": removed_user_ids,
