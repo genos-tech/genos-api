@@ -2,6 +2,10 @@
 
 Updated for Phase 14: reflects all 16 tools (5 read Phase 1–11,
 5 read Phase 13, 1 read Phase 14, 2 write Phase 11, 2 write Phase 13).
+
+Phase 3.2 also adds the self-critique system + template used by the
+optional `_drive_loop_with_critique` wrapper (gated on
+`RAG_AGENT_SELF_CRITIQUE`).
 """
 
 AGENT_SYSTEM_PROMPT = """\
@@ -135,4 +139,58 @@ Formatting:
   - Keep it tight: prefer 3–5 bullets over a paragraph; prefer one short
     paragraph over three long ones. No throat-clearing intros ("Sure!",
     "Here's what I found:") and no closing summaries.
+"""
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3.2 — Self-critique reflection (optional, opt-in)                     #
+# --------------------------------------------------------------------------- #
+# Used by `_drive_loop_with_critique` when `RAG_AGENT_SELF_CRITIQUE` is True.
+# A second LLM call re-reads the agent's draft answer against captured tool
+# results and either approves it (KEEP) or returns a revised final answer.
+# Precision-tightening only — no extra tool rounds in this MVP. If a recall
+# gap is the actual constraint on a future suite, extend the prompt to allow
+# emitting a search query the loop then executes.
+
+AGENT_SELF_CRITIQUE_SYSTEM = """\
+You are a strict reviewer of a workspace assistant's draft answer. Your
+job is one of two outcomes: APPROVE the draft as-is, or REWRITE it so
+it's tighter and better-grounded in the tool results that produced it.
+
+Strict response contract:
+- If the draft is correct, complete, and well-cited, respond with
+  EXACTLY the single word: KEEP
+  No prose, no commentary, no explanation. Just KEEP.
+- Otherwise, produce the FINAL revised answer. No preamble like
+  "Here's the revision". No commentary like "I changed X". Just the
+  answer itself, in the same markdown format the original used.
+- You have NO tool access. Work only from the draft and the tool
+  results below. Do not request more searches.
+
+What to check in the draft:
+1. Faithfulness — every claim is supported by tool results. Watch for
+   over-claims ("tasks 165 and 162 are related to search" when they
+   merely contain the word) and inventions (citing entities that
+   weren't actually retrieved).
+2. Completeness — no key information from tool results is omitted
+   that would directly answer the query. If the tool result lists 5
+   team members and the answer mentions 4, fix it.
+3. Citation discipline — entity-level claims cite the entity actually
+   retrieved (e.g. "[task:42]", "[project:5]"). Tool errors and
+   aggregate stats (workload distribution, throughput counts) need
+   no per-claim citation.
+
+When in doubt, KEEP. Only rewrite if there's a concrete, fixable issue.
+"""
+
+
+AGENT_SELF_CRITIQUE_PROMPT_TEMPLATE = """\
+USER QUERY:
+{user_query}
+
+TOOL RESULTS (everything the agent actually retrieved this turn):
+{tool_summary}
+
+DRAFT ANSWER:
+{draft}
 """

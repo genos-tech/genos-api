@@ -37,7 +37,11 @@ from uuid import UUID
 
 from django.conf import settings
 
-from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
+from origin.search_engine.agent.prompts import (
+    AGENT_SELF_CRITIQUE_PROMPT_TEMPLATE,
+    AGENT_SELF_CRITIQUE_SYSTEM,
+    AGENT_SYSTEM_PROMPT,
+)
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError
 from origin.search_engine.llm import (
     AgentMessage,
@@ -421,6 +425,22 @@ def run_agent(
         messages.append(_user_turn(prior_query))
         messages.append(AgentMessage(role="assistant", text=prior_answer))
     messages.append(_user_turn(query))
+
+    # Phase 3.2 — optional self-critique pass. Dispatched here so the
+    # resume_agent path (write-tool approval flow) is NOT critiqued;
+    # critique only makes sense on a complete, un-paused turn.
+    if settings.SEARCH_ENGINE.get("RAG_AGENT_SELF_CRITIQUE", False):
+        return _drive_loop_with_critique(
+            user_query=query,
+            messages=messages,
+            ctx=ctx,
+            emit=emit,
+            run_id=run_id,
+            starting_step=0,
+            seen_sources_by_id={},
+            disabled_tools=disabled_tools,
+            trace_hook=trace_hook,
+        )
     return _drive_loop(
         messages=messages,
         ctx=ctx,
@@ -868,6 +888,207 @@ def _drive_loop(
     )
     _persist_step(run_id, step_index=max_steps, error="step_cap_reached")
     return None
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3.2 — self-critique reflection wrapper                                #
+# --------------------------------------------------------------------------- #
+
+
+def _drive_loop_with_critique(
+    *,
+    user_query: str,
+    messages: list[AgentMessage],
+    ctx: ToolContext,
+    emit: Callable[[dict[str, Any]], None],
+    run_id: UUID | None,
+    starting_step: int,
+    seen_sources_by_id: dict[tuple, dict[str, Any]],
+    disabled_tools: set[str] | None = None,
+    trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
+) -> dict[str, Any] | None:
+    """Run `_drive_loop` with captured events, then optionally rewrite
+    the draft answer via a single self-critique LLM call.
+
+    Wrapper design (intentionally NOT inside `_drive_loop`): the inner
+    loop is untouched and remains the canonical control path. The
+    wrapper buffers events, runs a critique pass, then replays events
+    to the real `emit` with the draft answer possibly swapped for a
+    revised version.
+
+    Precision-tightening only — the critique cannot fire more tool
+    calls in this MVP. If a recall gap turns out to be the bottleneck
+    on a future suite, extend the critique prompt to allow emitting
+    a query the loop then executes.
+
+    Tradeoff: TTFT becomes "end of loop + critique" because all
+    answer_delta events are buffered. Acceptable for an experimental
+    flag (off by default). Production rollout should weigh streaming
+    vs. precision wins.
+
+    Pause path (write-tool approval) is passed through unchanged — the
+    `_drive_loop` returns a pause descriptor and the wrapper flushes
+    captured events as-is. Critique never fires on a paused run.
+    """
+    captured_events: list[dict[str, Any]] = []
+    captured_tool_results: list[dict[str, Any]] = []
+
+    def _capture_emit(event: dict[str, Any]) -> None:
+        captured_events.append(event)
+
+    def _capture_trace(name: str, args: dict[str, Any], result: dict[str, Any]) -> None:
+        captured_tool_results.append({"tool_name": name, "arguments": args, "result": result})
+        # Also forward to the caller's trace_hook if any (e.g. the eval runner).
+        if trace_hook is not None:
+            try:
+                trace_hook(name, args, result)
+            except Exception:  # noqa: BLE001
+                log.exception("Outer trace_hook failed inside critique wrapper for %s", name)
+
+    pause_descriptor = _drive_loop(
+        messages=messages,
+        ctx=ctx,
+        emit=_capture_emit,
+        run_id=run_id,
+        starting_step=starting_step,
+        seen_sources_by_id=seen_sources_by_id,
+        disabled_tools=disabled_tools,
+        trace_hook=_capture_trace,
+    )
+
+    if pause_descriptor is not None:
+        # Loop paused on a write tool; do not critique. Flush as captured.
+        for e in captured_events:
+            emit(e)
+        return pause_descriptor
+
+    draft_answer = "".join(
+        (e.get("text") or "") for e in captured_events if e.get("type") == "answer_delta"
+    )
+    if not draft_answer.strip():
+        # No final answer to critique (e.g. step-cap, fatal error).
+        for e in captured_events:
+            emit(e)
+        return None
+
+    try:
+        revised = _run_self_critique(
+            user_query=user_query,
+            tool_results=captured_tool_results,
+            draft=draft_answer,
+        )
+    except Exception:  # noqa: BLE001 — never break the loop on critique failure
+        log.exception("Self-critique LLM call failed; emitting draft unchanged")
+        for e in captured_events:
+            emit(e)
+        return None
+
+    if revised is None or _critique_says_keep(revised):
+        # KEEP path — flush as captured.
+        for e in captured_events:
+            emit(e)
+        return None
+
+    # Revise path — replay everything except the draft answer_delta
+    # events, then emit the revised answer once (just before `done`).
+    revised_emitted = False
+    for e in captured_events:
+        etype = e.get("type")
+        if etype == "answer_delta":
+            # Drop the draft text.
+            continue
+        if etype == "done" and not revised_emitted:
+            emit({"type": "answer_delta", "text": revised})
+            revised_emitted = True
+        emit(e)
+    # Defensive: if there was no `done` event in the capture (shouldn't
+    # happen for a clean termination) but we have a revision, surface it.
+    if not revised_emitted:
+        emit({"type": "answer_delta", "text": revised})
+        emit({"type": "done"})
+    return None
+
+
+def _critique_says_keep(text: str) -> bool:
+    """Recognise the literal KEEP signal. Anything else is a revision.
+
+    Strict: only `"KEEP"` (case-insensitive) plus optional surrounding
+    whitespace counts. If the model writes "KEEP, but actually …" or
+    "Looks good — KEEP", treat it as a revision so we don't accidentally
+    suppress a corrective rewrite.
+    """
+    return text.strip().upper() == "KEEP"
+
+
+def _run_self_critique(
+    *,
+    user_query: str,
+    tool_results: list[dict[str, Any]],
+    draft: str,
+) -> str | None:
+    """Run one self-critique LLM call. Returns the model's text response
+    (which may be the literal `KEEP` or a revised final answer).
+    """
+    prompt = AGENT_SELF_CRITIQUE_PROMPT_TEMPLATE.format(
+        user_query=user_query,
+        tool_summary=_format_tool_results_for_critique(tool_results),
+        draft=draft,
+    )
+    client = get_model_client()
+    chunks: list[str] = []
+    for text, _fcall in client.generate_step(
+        messages=[AgentMessage(role="user", text=prompt)],
+        tools=[],
+        system_instruction=AGENT_SELF_CRITIQUE_SYSTEM,
+    ):
+        if text:
+            chunks.append(text)
+    out = "".join(chunks).strip()
+    return out or None
+
+
+# Limits for the tool-result blob we hand to the critique LLM. The
+# critique only needs the scalar fields (status / due_date / counts) to
+# verify the draft — long comment bodies don't carry weight. Mirrors
+# the same per-string / per-list caps the eval judge uses, but inlined
+# here to keep controller / eval coupling at zero.
+_CRITIQUE_MAX_STRING_LEN = 500
+_CRITIQUE_MAX_LIST_LEN = 30
+
+
+def _format_tool_results_for_critique(tool_results: list[dict[str, Any]]) -> str:
+    """Compact, size-bounded JSON-ish rendering for the critique prompt."""
+    import json  # local — only loaded when the critique fires
+
+    lines: list[str] = []
+    for i, tr in enumerate(tool_results, start=1):
+        name = tr.get("tool_name") or "?"
+        args = json.dumps(tr.get("arguments") or {}, ensure_ascii=False, default=str)
+        result = json.dumps(
+            _truncate_for_critique(tr.get("result") or {}), ensure_ascii=False, default=str
+        )
+        lines.append(f"  {i}. {name}({args})\n     result: {result}")
+    return "\n".join(lines) if lines else "  (no tool calls)"
+
+
+def _truncate_for_critique(value: Any) -> Any:
+    """Recursively head-tail long strings and cap long lists.
+    Scalars (numbers, bools, dates) pass through verbatim — those are
+    where the critique's grounding checks land.
+    """
+    if isinstance(value, str):
+        if len(value) > _CRITIQUE_MAX_STRING_LEN:
+            half = _CRITIQUE_MAX_STRING_LEN // 2
+            return f"{value[:half]} … [{len(value) - _CRITIQUE_MAX_STRING_LEN} chars elided] … {value[-half:]}"
+        return value
+    if isinstance(value, list):
+        truncated = [_truncate_for_critique(v) for v in value[:_CRITIQUE_MAX_LIST_LEN]]
+        if len(value) > _CRITIQUE_MAX_LIST_LEN:
+            truncated.append(f"… [{len(value) - _CRITIQUE_MAX_LIST_LEN} more items elided]")
+        return truncated
+    if isinstance(value, dict):
+        return {k: _truncate_for_critique(v) for k, v in value.items()}
+    return value
 
 
 # --------------------------------------------------------------------------- #

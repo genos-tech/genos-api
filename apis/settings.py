@@ -469,6 +469,15 @@ SEARCH_ENGINE = {
     # endpoint — it never passes `rewrite=True`.
     "RAG_USE_QUERY_REWRITE": (os.environ.get("RAG_USE_QUERY_REWRITE", "false").lower() == "true"),
     "RAG_REWRITE_NUM_VARIANTS": int(os.environ.get("RAG_REWRITE_NUM_VARIANTS", "3")),
+    # Phase 3.2 — self-critique reflection step. When True, after the
+    # agent produces its draft final answer, a second LLM call re-reads
+    # the draft against the captured tool results and may produce a
+    # revised final answer (precision-tightening only — no extra tool
+    # rounds). Adds +1 LLM call per ask that reaches a final answer.
+    # Off by default; opt-in via env or per-call settings override.
+    "RAG_AGENT_SELF_CRITIQUE": (
+        os.environ.get("RAG_AGENT_SELF_CRITIQUE", "false").lower() == "true"
+    ),
     # Phase 14 — AI agent daily usage limit for free users.
     # Users with the "unlimited_agent" UserFeatureAccess grant bypass
     # this cap entirely. Set to 0 to disable the limit for everyone.
