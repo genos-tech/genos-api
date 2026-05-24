@@ -340,9 +340,26 @@ SEARCH_ENGINE = {
     "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
     "OPENAI_EMBEDDING_MODEL": os.environ.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
     "OPENAI_EMBEDDING_DIMENSIONS": int(os.environ.get("OPENAI_EMBEDDING_DIMENSIONS", "1536")),
+    # Embedding provider selection. "openai" (default) keeps existing
+    # behavior. "vertex" routes embeddings through Vertex AI using the
+    # same GCP auth as the Gemini LLM client below (GEMINI_USE_VERTEX,
+    # GEMINI_PROJECT, GEMINI_LOCATION, GEMINI_SERVICE_ACCOUNT_FILE).
+    # Switching providers automatically re-embeds all chunks on the
+    # next opensearch_reindex (the RagChunk.embedding_model mismatch
+    # check in ingestion.py picks it up). Switching to a model with a
+    # different dimension also requires bumping OPENSEARCH_INDEX
+    # (e.g. v1 -> v2) and re-running opensearch_setup.
+    "EMBEDDING_PROVIDER": (os.environ.get("EMBEDDING_PROVIDER", "openai") or "openai").lower(),
+    # Vertex embedding configuration (only used when
+    # EMBEDDING_PROVIDER=vertex). Default uses gemini-embedding-001
+    # truncated to 1536 dims via Matryoshka so it drops into the
+    # existing 1536-dim OpenSearch index without recreating it. Bump
+    # VERTEX_EMBEDDING_DIMENSIONS (and the index) if you want full 3072.
+    "VERTEX_EMBEDDING_MODEL": os.environ.get("VERTEX_EMBEDDING_MODEL", "gemini-embedding-001"),
+    "VERTEX_EMBEDDING_DIMENSIONS": int(os.environ.get("VERTEX_EMBEDDING_DIMENSIONS", "1536")),
     # Bulk-indexing batch size for OpenSearch _bulk requests.
     "BULK_BATCH_SIZE": int(os.environ.get("SEARCH_BULK_BATCH_SIZE", "200")),
-    # OpenAI embedding batch size (max items per /v1/embeddings request).
+    # Embedding batch size (max items per provider /embeddings request).
     "EMBEDDING_BATCH_SIZE": int(os.environ.get("SEARCH_EMBEDDING_BATCH_SIZE", "100")),
     # Gemini configuration for the RAG-answer endpoint
     # (POST /api/v2/agent/ask). `gemini-2.5-flash` is the MVP default

@@ -32,7 +32,11 @@ from origin.search_engine.chunkers.base import Chunk, EntityChunks
 from origin.search_engine.chunkers.chat_chunker import iter_all_chat_chunks
 from origin.search_engine.chunkers.note_chunker import iter_all_note_chunks
 from origin.search_engine.chunkers.task_chunker import iter_task_chunks
-from origin.search_engine.embeddings import embed_texts, hash_text
+from origin.search_engine.embeddings import (
+    embed_texts,
+    get_active_embedding_model_name,
+    hash_text,
+)
 from origin.search_engine.index_config import INDEX_SCHEMA_VERSION
 from origin.search_engine.models import RagChunk
 from origin.search_engine.opensearch_client import get_client, get_index_alias
@@ -116,7 +120,7 @@ def _ingest_entity(entity: EntityChunks, stats: IngestionStats, *, dry_run: bool
             _delete_stale(entity.entity_type, entity.entity_id, keep_chunk_ids=set(), stats=stats)
         return
 
-    model = settings.SEARCH_ENGINE["OPENAI_EMBEDDING_MODEL"]
+    model = get_active_embedding_model_name()
 
     # Compute hashes.
     incoming: dict[str, Chunk] = {}

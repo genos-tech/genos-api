@@ -1,4 +1,4 @@
-from django.conf import settings
+from origin.search_engine.embeddings import get_active_embedding_dimensions
 
 INDEX_SCHEMA_VERSION = "v1"
 
@@ -17,7 +17,7 @@ def build_index_settings():
 
 
 def build_mappings():
-    dims = settings.SEARCH_ENGINE["OPENAI_EMBEDDING_DIMENSIONS"]
+    dims = get_active_embedding_dimensions()
     return {
         "properties": {
             "chunk_id": {"type": "keyword"},
