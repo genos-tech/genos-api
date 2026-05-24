@@ -167,6 +167,96 @@ def _ui_source_for_match(match: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _friendly_chat_title(
+    ctx: ToolContext,
+    chat_type_label: Any,
+    chat_id: Any,
+) -> str | None:
+    """Resolve a viewer-facing chat title.
+
+    Chat docs are indexed once (not per-viewer), so the chunker can only
+    write a viewer-agnostic placeholder like "DM 9". Real titles depend
+    on context: a DM's name is the OTHER participant; a PM's name is
+    the project's; GM / MDM use the group/display name. Resolved here
+    at read time using ctx.user_id so each viewer sees a name they
+    recognise.
+
+    Returns None on lookup failure so the caller keeps whatever was
+    already on the source (typically the indexed placeholder).
+    """
+    if not chat_type_label or not chat_id:
+        return None
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return None
+
+    label = str(chat_type_label).lower()
+
+    # Lazy imports — keep the controller's import block tidy and avoid
+    # circular-import surprises during Django startup.
+    if label == "dm":
+        from origin.models.chat.dm_models import DMMaster
+        from origin.models.common.user_models import CustomUser
+
+        try:
+            dm = DMMaster.objects.get(dm_id=cid)
+        except DMMaster.DoesNotExist:
+            return None
+        partner_id = dm.user_2_id if str(dm.user_1_id) == ctx.user_id else dm.user_1_id
+        if not partner_id:
+            return None
+        try:
+            user = CustomUser.objects.get(id=partner_id)
+        except CustomUser.DoesNotExist:
+            return None
+        return user.username or None
+
+    if label == "gm":
+        from origin.models.chat.gm_models import GMMaster
+
+        try:
+            return GMMaster.objects.get(gm_id=cid).group_name or None
+        except GMMaster.DoesNotExist:
+            return None
+
+    if label == "mdm":
+        from origin.models.chat.mdm_models import MDMMaster
+
+        try:
+            return MDMMaster.objects.get(mdm_id=cid).display_name or None
+        except MDMMaster.DoesNotExist:
+            return None
+
+    if label == "pm":
+        from origin.models.project.prj_models import ProjectMaster
+
+        try:
+            # For PM chats the chat_id is the project_id (see fetch_chat_thread).
+            return ProjectMaster.objects.get(project_id=cid).project_name or None
+        except ProjectMaster.DoesNotExist:
+            return None
+
+    return None
+
+
+def _apply_friendly_titles(
+    sources: list[dict[str, Any]], ctx: ToolContext
+) -> list[dict[str, Any]]:
+    """Replace placeholder chat titles ('DM 9', 'Project 5') with viewer-friendly names.
+
+    Best-effort: lookup failures leave the original title in place so a
+    missing partner / soft-deleted chat doesn't blank out the chip.
+    """
+    for src in sources:
+        if src.get("entity_type") != "chat":
+            continue
+        title = _friendly_chat_title(ctx, src.get("chat_type"), src.get("chat_id"))
+        if title:
+            src["title"] = title
+    return sources
+
+
 def _blank_source(entity_type: str, entity_id: str) -> dict[str, Any]:
     """Skeleton source dict; structured-tool helpers fill in the type-specific fields."""
     return {
@@ -734,6 +824,10 @@ def _drive_loop(
                 new_sources = [_ui_source_for_match(m) for m in result.get("matches", [])]
             else:
                 new_sources = _ui_sources_from_tool_result(call_name, result)
+
+            # Swap viewer-agnostic placeholders ("DM 9") for friendly
+            # titles (partner / group / project name) before chips ship.
+            _apply_friendly_titles(new_sources, ctx)
 
             added = False
             for src in new_sources:
