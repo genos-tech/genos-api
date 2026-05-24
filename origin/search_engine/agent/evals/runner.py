@@ -96,6 +96,10 @@ class CaseResult:
     # and title, not the status/due_date/priority the model legitimately
     # quotes from a `list_tasks` result).
     tool_results: list[dict[str, Any]] = field(default_factory=list)
+    # Phase 4.4 — milliseconds from run_agent invocation to the first
+    # `answer_delta` event (the strict TTFT metric). -1 if no
+    # answer_delta was ever emitted (model errored or returned no text).
+    ttft_ms: int = -1
     # Optional LLM-judge scores; only set when `--judge` was on.
     judge_scores: dict[str, Any] | None = None
 
@@ -168,13 +172,29 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
 
         events: list[dict[str, Any]] = []
         tool_traces: list[dict[str, Any]] = []
+        # Phase 4.4 — capture per-event timing to compute TTFT.
+        # Wrapping the emit callback is the smallest non-invasive hook
+        # (controller code untouched). Timestamps are relative to the
+        # run_agent invocation, in seconds.
+        emit_t0 = time.monotonic()
+        ttft_s: float | None = None
+
+        def _ts_emit(event: dict[str, Any]) -> None:
+            nonlocal ttft_s
+            if (
+                ttft_s is None
+                and event.get("type") == "answer_delta"
+                and (event.get("text") or "")
+            ):
+                ttft_s = time.monotonic() - emit_t0
+            events.append(event)
 
         def _capture_trace(name: str, args: dict[str, Any], result: dict[str, Any]) -> None:
             tool_traces.append({"tool_name": name, "arguments": args, "result": result})
 
         ctx = ToolContext(team_id=team_id, user_id=user_id)
         try:
-            run_agent(query, ctx, events.append, run_id=None, trace_hook=_capture_trace)
+            run_agent(query, ctx, _ts_emit, run_id=None, trace_hook=_capture_trace)
         except Exception as e:  # noqa: BLE001 — report as failure rather than crash the suite
             duration_ms = int((time.monotonic() - started) * 1000)
             return CaseResult(
@@ -210,6 +230,7 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
             answer=answer_text,
             sources=list(last_sources),
             tool_results=tool_traces,
+            ttft_ms=int(ttft_s * 1000) if ttft_s is not None else -1,
         )
     finally:
         for handle in cleanup_handles:
@@ -277,6 +298,7 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
     last_events: list[dict[str, Any]] = []
     last_tool_traces: list[dict[str, Any]] = []
     last_query = ""
+    last_ttft_s: float | None = None
     started = time.monotonic()
 
     for i, turn in enumerate(turns):
@@ -291,6 +313,19 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
 
         events: list[dict[str, Any]] = []
         tool_traces: list[dict[str, Any]] = []
+        # Per-turn TTFT — we only retain the FINAL turn's value below.
+        per_turn_t0 = time.monotonic()
+        per_turn_ttft_s: float | None = None
+
+        def _ts_emit(event: dict[str, Any]) -> None:
+            nonlocal per_turn_ttft_s
+            if (
+                per_turn_ttft_s is None
+                and event.get("type") == "answer_delta"
+                and (event.get("text") or "")
+            ):
+                per_turn_ttft_s = time.monotonic() - per_turn_t0
+            events.append(event)
 
         def _capture_trace(name: str, args: dict[str, Any], result: dict[str, Any]) -> None:
             tool_traces.append({"tool_name": name, "arguments": args, "result": result})
@@ -300,7 +335,7 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
             run_agent(
                 q,
                 ctx,
-                events.append,
+                _ts_emit,
                 run_id=None,
                 prior_turns=verbatim_turns,
                 prior_summary=summary,
@@ -321,6 +356,7 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
         last_query = q
         last_events = events
         last_tool_traces = tool_traces
+        last_ttft_s = per_turn_ttft_s
 
     # Score only the final turn.
     reasons = _check_behavior_expectations(last_events, final_expect)
@@ -345,6 +381,7 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
         answer=answer_text,
         sources=list(last_sources),
         tool_results=last_tool_traces,
+        ttft_ms=int(last_ttft_s * 1000) if last_ttft_s is not None else -1,
     )
 
 

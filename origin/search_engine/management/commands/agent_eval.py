@@ -168,10 +168,14 @@ class Command(BaseCommand):
 
     def _print_one(self, r: CaseResult) -> None:
         label = self.style.SUCCESS("PASS") if r.passed else self.style.ERROR("FAIL")
+        ttft_part = f", ttft {r.ttft_ms} ms" if getattr(r, "ttft_ms", -1) >= 0 else ""
         if r.tool_call_count > 0 or r.step_count > 0:
-            detail = f"({r.step_count} step{'s' if r.step_count != 1 else ''}, {r.duration_ms} ms)"
+            detail = (
+                f"({r.step_count} step{'s' if r.step_count != 1 else ''}, "
+                f"{r.duration_ms} ms{ttft_part})"
+            )
         else:
-            detail = f"({r.duration_ms} ms)"
+            detail = f"({r.duration_ms} ms{ttft_part})"
         self.stdout.write(f"  {label}  {r.case_id:<48} {detail}")
         for reason in r.failure_reasons:
             self.stdout.write(self.style.ERROR(f"        - {reason}"))
@@ -251,6 +255,7 @@ class Command(BaseCommand):
                             "case_id": r.case_id,
                             "passed": r.passed,
                             "duration_ms": r.duration_ms,
+                            "ttft_ms": r.ttft_ms,
                             "query": r.query,
                             "answer": r.answer,
                             "sources": [

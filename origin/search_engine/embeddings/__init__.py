@@ -8,22 +8,32 @@ Provider is chosen by `SEARCH_ENGINE["EMBEDDING_PROVIDER"]`:
     "openai" (default) → `OpenAIEmbedder`
     "vertex"           → `VertexEmbedder` (reuses GEMINI_USE_VERTEX auth)
 
-`embed_one` keeps the bounded LRU cache that the Spotlight typeahead
-hot path relies on: backspacing "hello" → "hell" → "hello" costs one
-roundtrip instead of three. Cache key is `(model_name, text)`; the
-model name differs across providers so a provider/model swap simply
-ages the old entries out of the LRU.
+Two-tier query embedding cache:
+
+  L1 — `embed_one` keeps a bounded per-worker `lru_cache` so the Spotlight
+  typeahead path (one embed per keystroke) hits zero network on
+  backspace and within-burst repeats. Cache key is `(model_name, text)`;
+  a provider/model swap ages stale entries out naturally.
+
+  L2 — Phase 5.1 adds a Redis-backed cache (via Django's cache framework)
+  that survives worker restarts and is shared across workers/pods. Same
+  key shape (hashed text + model), TTL from `RAG_EMBEDDING_CACHE_TTL_S`
+  (default 600s; set to 0 to disable). L2 hit logs at INFO sporadically
+  so operators can see the cache is doing something.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 from functools import lru_cache
 from typing import Iterable
 
 from django.conf import settings
 
 from origin.search_engine.embeddings.base import Embedder, TaskType
+
+log = logging.getLogger(__name__)
 
 
 def embed_texts(texts: Iterable[str]) -> list[list[float]]:
@@ -64,13 +74,92 @@ def embed_one(text: str) -> list[float]:
 # 256 entries * 1536 floats * 8 bytes ≈ 3 MB.
 @lru_cache(maxsize=256)
 def _embed_one_cached(model: str, text: str) -> tuple:
-    """Underlying cached single-text embedder. Keys on `(model, text)`
-    so a model swap (provider change, dimension change, version bump)
-    doesn't return stale vectors — old entries simply age out of the
-    LRU. `task_type` is implicit ("query" for every cached call) so
-    it's not in the key."""
+    """L1 cache layer for single-text query embeddings. Keys on
+    `(model, text)` so a model swap (provider change, dimension
+    change, version bump) doesn't return stale vectors — old entries
+    simply age out of the LRU. `task_type` is implicit ("query" for
+    every cached call) so it's not in the key.
+
+    On L1 miss: checks the L2 (Redis) cache before hitting the
+    provider API. On L2 miss: calls the provider, populates L2, and
+    lets the LRU cache the return value as L1.
+    """
+    cached = _l2_get(model, text)
+    if cached is not None:
+        return tuple(cached)
     embedder = _get_embedder()
-    return tuple(embedder.embed([text], task_type="query")[0])
+    vec = embedder.embed([text], task_type="query")[0]
+    _l2_set(model, text, vec)
+    return tuple(vec)
+
+
+# Sparse hit logging — at INFO every Nth L2 hit so operators can
+# eyeball the cache is doing real work without flooding logs on a
+# busy typeahead day. Tracked per-process; not thread-safe, but the
+# counter is best-effort observability — a missed increment doesn't
+# matter.
+_L2_HIT_COUNTER = {"n": 0}
+_L2_HIT_LOG_EVERY = 25
+
+
+def _l2_enabled() -> bool:
+    """L2 is on when TTL > 0. Operators flip it off via
+    `RAG_EMBEDDING_CACHE_TTL_S=0`."""
+    return int(settings.SEARCH_ENGINE.get("RAG_EMBEDDING_CACHE_TTL_S", 600)) > 0
+
+
+def _l2_key(model: str, text: str) -> str:
+    """Cache key shape: `rag:emb:<model>:<sha256-prefix>`.
+
+    Hashed text (not raw) keeps keys compact and avoids encoding
+    issues with weird Unicode. 24 hex chars = 96 bits = collision
+    probability ~0 in practice; full 64-char hash is overkill.
+    """
+    h = hashlib.sha256(text.encode("utf-8")).hexdigest()[:24]
+    return f"rag:emb:{model}:{h}"
+
+
+def _l2_get(model: str, text: str) -> list[float] | None:
+    """Fetch a cached vector from Redis. Returns None on miss, error,
+    or when L2 is disabled. Never raises — embedding the same text
+    via the provider API is always a valid fallback.
+    """
+    if not _l2_enabled():
+        return None
+    try:
+        from django.core.cache import cache  # noqa: PLC0415 — Django ready by call time
+
+        vec = cache.get(_l2_key(model, text))
+    except Exception:  # noqa: BLE001 — cache failures must not break embedding
+        log.exception("L2 embedding cache GET failed; falling through to API")
+        return None
+
+    if vec is not None:
+        _L2_HIT_COUNTER["n"] += 1
+        if _L2_HIT_COUNTER["n"] % _L2_HIT_LOG_EVERY == 0:
+            log.info(
+                "embedding L2 cache hit %d (model=%s, text-hash-prefix=%s)",
+                _L2_HIT_COUNTER["n"],
+                model,
+                _l2_key(model, text).rsplit(":", 1)[-1][:8],
+            )
+    return vec
+
+
+def _l2_set(model: str, text: str, vec: list[float]) -> None:
+    """Store a vector in Redis with the configured TTL. Silent on
+    failure — the LRU already has a fresh copy so the next request
+    from this worker still benefits even if Redis is unreachable.
+    """
+    if not _l2_enabled():
+        return
+    try:
+        from django.core.cache import cache  # noqa: PLC0415
+
+        ttl = int(settings.SEARCH_ENGINE.get("RAG_EMBEDDING_CACHE_TTL_S", 600))
+        cache.set(_l2_key(model, text), vec, timeout=ttl)
+    except Exception:  # noqa: BLE001 — non-fatal
+        log.exception("L2 embedding cache SET failed; entry not persisted")
 
 
 def hash_text(text: str) -> str:

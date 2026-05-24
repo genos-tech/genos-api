@@ -498,6 +498,13 @@ SEARCH_ENGINE = {
     "RAG_RANK_SOURCES_BY_CITATION": (
         os.environ.get("RAG_RANK_SOURCES_BY_CITATION", "true").lower() == "true"
     ),
+    # Phase 5.1 — L2 Redis cache for query-side embeddings. Sits BEHIND
+    # the existing per-worker LRU (L1) in `embeddings/__init__.py`, so
+    # the typeahead hot path keeps its zero-network L1 hits AND a
+    # cross-worker / post-restart hit also skips the embedding API.
+    # Key = (model_name, sha256(text)); value = the float vector.
+    # TTL in seconds — set to 0 to disable L2 entirely (L1 LRU stays).
+    "RAG_EMBEDDING_CACHE_TTL_S": int(os.environ.get("RAG_EMBEDDING_CACHE_TTL_S", "600")),
     # Phase 14 — AI agent daily usage limit for free users.
     # Users with the "unlimited_agent" UserFeatureAccess grant bypass
     # this cap entirely. Set to 0 to disable the limit for everyone.
