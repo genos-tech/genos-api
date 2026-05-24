@@ -174,7 +174,17 @@ def search(
 
     # --- Sort, apply relevance threshold, truncate to limit. ---
     grouped.sort(key=lambda x: x["score"], reverse=True)
+    pre_threshold = grouped  # keep the un-cut ranking for the floor restore
     grouped = _apply_relevance_threshold(grouped, min_score_ratio, min_score)
+
+    # --- Phase 1.2: per-entity-type representation floor (flag-gated) ---
+    # Off by default. When on, ensures the result set contains the
+    # top-ranked entity of each type that existed in the pre-threshold
+    # ranking. Counteracts the "task crowds out a strong chat" failure
+    # where threshold ratio cuts a legitimate #2/#3 hit just because
+    # the #1 hit is a different type with much higher score.
+    if settings.SEARCH_ENGINE.get("RAG_REPRESENTATION_FLOOR") and pre_threshold:
+        grouped = _apply_representation_floor(grouped, pre_threshold)
 
     # --- Phase 6: optional LLM-as-judge reranker (flag-gated) ---
     # Off by default. When on, we hand the top INPUT_K entities to the
@@ -332,6 +342,15 @@ def _apply_relevance_threshold(
     """Drop results that are weak in absolute or relative terms.
 
     `grouped` must already be sorted by score desc.
+
+    Adaptive guard: when the threshold would leave fewer than
+    `RAG_THRESHOLD_MIN_SURVIVORS` entities, we treat that as evidence
+    the candidate set is already tight (small or low-confidence corpus
+    for this query) and skip the cut entirely. The original bug this
+    addresses: a query that surfaced one strong DM + two weaker hits
+    saw all three cut because the strong DM made the ratio floor too
+    high — leaving the user with zero results instead of three useful
+    ones. Default min_survivors=3; setting 0 disables the guard.
     """
     if not grouped:
         return grouped
@@ -340,7 +359,47 @@ def _apply_relevance_threshold(
     floor = max(relative_floor, min_score)
     if floor <= 0:
         return grouped
-    return [g for g in grouped if g["score"] >= floor]
+    survivors = [g for g in grouped if g["score"] >= floor]
+
+    min_survivors = int(settings.SEARCH_ENGINE.get("RAG_THRESHOLD_MIN_SURVIVORS", 3))
+    if 0 < min_survivors and len(survivors) < min_survivors:
+        # Keep the top-`min_survivors` un-cut so the consumer always
+        # sees a usable set. They were ranked highest pre-threshold;
+        # their absolute scores being low just means this query was
+        # narrow, not that the matches are wrong.
+        return grouped[:min_survivors]
+    return survivors
+
+
+def _apply_representation_floor(survivors: list[dict], pre_threshold: list[dict]) -> list[dict]:
+    """Guarantee each entity type that had ANY match survives the cut.
+
+    Walks `pre_threshold` (the un-cut, score-sorted ranking) for each
+    entity type. If a type is missing from `survivors`, the highest-
+    ranked entity of that type is appended back.
+
+    Preserves the score order of `survivors`; restored entries land at
+    the tail (they were already below the threshold so they shouldn't
+    outrank the legitimate survivors, but they're better than zero
+    representation for that type).
+    """
+    if not pre_threshold:
+        return survivors
+
+    present_types = {e.get("entity_type") for e in survivors}
+    seen_ids = {(e.get("entity_type"), e.get("entity_id")) for e in survivors}
+    out = list(survivors)
+    for entity in pre_threshold:
+        etype = entity.get("entity_type")
+        if etype in present_types:
+            continue
+        key = (etype, entity.get("entity_id"))
+        if key in seen_ids:
+            continue
+        out.append(entity)
+        present_types.add(etype)
+        seen_ids.add(key)
+    return out
 
 
 # --------------------------------------------------------------------------- #

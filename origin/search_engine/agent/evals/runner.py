@@ -49,6 +49,30 @@ RETRIEVAL_CASES_PATH = Path(__file__).parent / "retrieval_cases.yaml"
 CASES_PATH = BEHAVIOR_CASES_PATH
 
 
+def _resolve_fixture(case: dict[str, Any]) -> dict[str, Any]:
+    """If `case.fixture == True`, fill in team_id / user_id from the
+    deterministic eval fixture (see `agent/evals/fixture.py`).
+
+    Mutates and returns the same dict for convenience. Cases that
+    pin their own team_id are left untouched — useful for legacy
+    dev-DB fixture cases and adversarial cross-tenant tests.
+    """
+    if not case.get("fixture"):
+        return case
+
+    # Lazy import — the fixture module touches Django models, which
+    # would blow up if imported at module load before app-ready.
+    from origin.search_engine.agent.evals.fixture import (  # noqa: PLC0415
+        FIXTURE_USER_ID,
+        ensure_fixture,
+    )
+
+    info = ensure_fixture()
+    case.setdefault("team_id", info["team_id"])
+    case.setdefault("user_id", str(FIXTURE_USER_ID))
+    return case
+
+
 @dataclass
 class CaseResult:
     case_id: str
@@ -58,6 +82,14 @@ class CaseResult:
     # Populated for behavior cases; meaningless for retrieval cases.
     step_count: int = 0
     tool_call_count: int = 0
+    # Captured behavior-case artefacts — populated only when the caller
+    # asked for them (e.g. `judge=True`). Kept on the result dataclass
+    # so the LLM judge / trace writer can read them without re-running.
+    query: str = ""
+    answer: str = ""
+    sources: list[dict[str, Any]] = field(default_factory=list)
+    # Optional LLM-judge scores; only set when `--judge` was on.
+    judge_scores: dict[str, Any] | None = None
 
 
 def load_cases(path: Path = BEHAVIOR_CASES_PATH) -> list[dict[str, Any]]:
@@ -78,6 +110,7 @@ def load_cases(path: Path = BEHAVIOR_CASES_PATH) -> list[dict[str, Any]]:
 
 def run_behavior_case(case: dict[str, Any]) -> CaseResult:
     """Execute one behavior case through the full agent loop."""
+    case = _resolve_fixture(case)
     case_id = case.get("id") or "(unnamed)"
     query = case.get("query") or ""
     team_id = case.get("team_id") or ""
@@ -119,6 +152,15 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
         tool_calls = [e for e in events if e.get("type") == "tool_call_start"]
         step_count = max((e.get("step", -1) for e in tool_calls), default=-1) + 1
 
+        # Capture answer + last `sources` snapshot so the LLM judge
+        # (or any post-hoc analyser) can score this run without
+        # re-executing it.
+        answer_text = "".join(
+            e.get("text") or "" for e in events if e.get("type") == "answer_delta"
+        )
+        source_events = [e for e in events if e.get("type") == "sources"]
+        last_sources = source_events[-1].get("sources", []) if source_events else []
+
         return CaseResult(
             case_id=case_id,
             passed=not reasons,
@@ -126,6 +168,9 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
             failure_reasons=reasons,
             step_count=step_count,
             tool_call_count=len(tool_calls),
+            query=query,
+            answer=answer_text,
+            sources=list(last_sources),
         )
     finally:
         for handle in cleanup_handles:
@@ -262,6 +307,7 @@ def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
     optional filters and a set of gold-standard assertions about
     which entities should appear (and at what rank) in the result.
     """
+    case = _resolve_fixture(case)
     case_id = case.get("id") or "(unnamed)"
     query = case.get("query") or ""
     team_id = case.get("team_id") or ""
@@ -315,12 +361,13 @@ def _check_retrieval_expectations(
     """Assertions for retrieval-quality cases.
 
     Operates on the entity list returned by `search(...)`, where each
-    entity has at least `entity_type` and `entity_id`. Rank is 1-indexed
-    in the failure messages so they read naturally.
+    entity has at least `entity_type`, `entity_id`, and `title`. Rank
+    is 1-indexed in the failure messages so they read naturally.
     """
     reasons: list[str] = []
     ranked_ids = [e.get("entity_id") for e in entities]
     ranked_types = [e.get("entity_type") for e in entities]
+    ranked_titles = [(e.get("title") or "") for e in entities]
 
     def _add(reason: str) -> None:
         reasons.append(reason)
@@ -335,6 +382,50 @@ def _check_retrieval_expectations(
             _add(
                 f"must_contain_in_top_n: missing {missing} from top {n} "
                 f"(top {n} was {ranked_ids[:n]})"
+            )
+
+    # Title-substring matcher — robust across reseedings.
+    #
+    # Each entry in `title_substrings` must appear (case-insensitive
+    # substring) as the title of SOME entity in the top N. Use when the
+    # fixture's auto-incremented ids drift but content is stable (e.g.
+    # the demo seeder regenerates the same projects with different
+    # primary keys).
+    if "must_contain_title_in_top_n" in expect:
+        spec = expect["must_contain_title_in_top_n"] or {}
+        n = int(spec.get("n", 0))
+        required = [s.lower() for s in (spec.get("title_substrings") or [])]
+        top_titles = [t.lower() for t in ranked_titles[:n]]
+        missing = [needle for needle in required if not any(needle in t for t in top_titles)]
+        if missing:
+            _add(
+                f"must_contain_title_in_top_n: missing {missing} from top {n} "
+                f"(top {n} titles were {ranked_titles[:n]})"
+            )
+
+    # Title-substring NEGATIVE matcher — none of these substrings may
+    # appear as a title in the result set. Use for adversarial /
+    # ACL-leak cases ("the off-team document must NOT surface").
+    if "must_not_contain_title" in expect:
+        forbidden = [s.lower() for s in (expect["must_not_contain_title"] or [])]
+        leaked = [
+            needle for needle in forbidden if any(needle in t.lower() for t in ranked_titles)
+        ]
+        if leaked:
+            _add(
+                f"must_not_contain_title: forbidden title substring(s) "
+                f"appeared: {leaked} (titles: {ranked_titles})"
+            )
+
+    # Top-result title matcher — the #1 ranked entity must have a
+    # title that contains this substring (case-insensitive).
+    if "top_result_title_contains" in expect:
+        needle = str(expect["top_result_title_contains"]).lower()
+        top_title = ranked_titles[0].lower() if ranked_titles else ""
+        if needle not in top_title:
+            _add(
+                f"top_result_title_contains: top hit title {top_title!r} "
+                f"does not contain {needle!r}"
             )
 
     if "must_contain_entity_type_in_top_n" in expect:

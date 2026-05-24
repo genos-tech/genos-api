@@ -1943,7 +1943,7 @@ CHAT_NOTE_GM_KICKOFF_RECAP_BODY = _body(
 # ---------------------------------------------------------------------------
 
 
-def create_demo_environment(demo_user: CustomUser) -> dict:
+def create_demo_environment(demo_user: CustomUser, *, short: str | None = None) -> dict:
     """Provision a fresh demo team + bot peers + sample data for
     `demo_user`. Returns `{"team_id": str, "team_name": str}` so the
     sign-in endpoint can pre-fill the frontend localStorage and skip
@@ -1952,8 +1952,14 @@ def create_demo_environment(demo_user: CustomUser) -> dict:
     Wrapped in a single transaction so partial failures roll back —
     the caller's `create_user` call must also be inside the same
     `transaction.atomic()` for the user row to roll back too.
+
+    `short`: optional override for the per-tenant slug suffix. The demo
+    sign-in path leaves this None so each demo user gets a fresh random
+    slug. The eval fixture passes a fixed slug so the same content
+    re-seeds the same names / emails reproducibly.
     """
-    short = uuid.uuid4().hex[:8]
+    if short is None:
+        short = uuid.uuid4().hex[:8]
 
     with transaction.atomic():
         # 1. Bot peer users
