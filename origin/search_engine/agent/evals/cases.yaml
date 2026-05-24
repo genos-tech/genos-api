@@ -306,6 +306,85 @@
     answer_contains_any: ["block", "synthesis", "featuregrid", "interview"]
     no_errors: true
 
+# Phase 3.3 measurement surface — 6 harder compound cases to ground-truth
+# the current pass rate on multi-part questions. The roadmap's "~50%
+# answerable" baseline was a guess; these cases test it for real before
+# deciding whether decomposition is the right intervention.
+
+- id: compound_indep_perf_and_wip_count
+  # Independent: perf budget (search) AND WIP count (list_tasks).
+  # Both halves can be retrieved in parallel.
+  query: "What's the perf budget for the marketing site, and how many tasks are currently in WIP status?"
+  fixture: true
+  expect:
+    # The agent must use both a search + a structural list query.
+    # Don't pin exact tools — `search_knowledge_base`+`list_tasks` is
+    # one valid path; `search_knowledge_base`+`get_project_summary`
+    # is another. We just require >=2 tool calls of distinct types.
+    tool_calls_at_least: 2
+    # Both halves of the answer must appear.
+    answer_contains_all: ["perf", "wip"]
+    has_citations: true
+    no_errors: true
+
+- id: compound_dep_responsive_nav_assignee
+  # Dependent: identify the responsive-nav task first, THEN its
+  # assignee. Parallel decomposition can't help here — sub-Q2 needs
+  # sub-Q1's result. The existing multi-step loop is the right tool.
+  query: "Who is assigned to the task about implementing responsive navigation?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    answer_contains_any: ["bob", "martinez", "assigned"]
+    no_errors: true
+
+- id: compound_mixed_framer_chat_and_task
+  # Mixed-source compound: the decision is recorded in a chat AND in
+  # a note; the related task is the framer-motion spike. Agent needs
+  # to surface both halves.
+  query: "What did the team decide about framer-motion in chat, and which spike task is about it?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    answer_contains_all: ["framer-motion", "spike"]
+    has_citations: true
+    no_errors: true
+
+- id: compound_two_project_summaries
+  # Two parallel summaries — classic decomposition target. Each
+  # half is fully independent of the other.
+  query: "Summarise what's blocking the Website Redesign project, and separately summarise what's happening in the Q2 Roadmap project."
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    # Both project names must appear in the answer.
+    answer_contains_all: ["website redesign", "q2 roadmap"]
+    has_citations: true
+    no_errors: true
+
+- id: compound_three_part_facts
+  # Three independent facts. The hardest parallel case — the agent
+  # has to remember to cover all three parts in the final answer.
+  query: "What's the perf budget for the marketing site, who's assigned to the FeatureGrid task, and what's the status of the Plausible analytics task?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    # All three subjects must appear.
+    answer_contains_all: ["perf", "featuregrid", "plausible"]
+    has_citations: true
+    no_errors: true
+
+- id: compound_blocker_and_plan
+  # Dependent compound: identify a blocker (a11y audit ↔ FeatureGrid),
+  # then describe the plan to unblock. Multi-step retrieval territory.
+  query: "What's blocking the accessibility audit from starting, and what needs to happen to unblock it?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    answer_contains_any: ["featuregrid", "pr", "land"]
+    has_citations: true
+    no_errors: true
+
 # --------------------------------------------------------------------- #
 # L. Citation discipline (locks in Phase 3.1 prompt rules)              #
 # --------------------------------------------------------------------- #
