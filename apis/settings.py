@@ -419,6 +419,33 @@ SEARCH_ENGINE = {
     "RAG_USE_RERANKER": (os.environ.get("RAG_USE_RERANKER", "false").lower() == "true"),
     "RAG_RERANK_INPUT_K": int(os.environ.get("RAG_RERANK_INPUT_K", "20")),
     "RAG_RERANK_OUTPUT_K": int(os.environ.get("RAG_RERANK_OUTPUT_K", "10")),
+    # Reranker provider — "llm" (default, uses the configured LLM
+    # provider as a judge) or "cohere" (purpose-built cross-encoder
+    # via the Cohere v2 Rerank API, requires COHERE_API_KEY). Future
+    # stubs in reranker.py: "jina" / "local" / "vertex_ranking".
+    "RAG_RERANKER_PROVIDER": (os.environ.get("RAG_RERANKER_PROVIDER", "llm") or "llm").lower(),
+    # Optional: per-call model override for the "llm" reranker — point
+    # at a smaller/faster model (e.g. "gemini-2.5-flash") than the main
+    # GEMINI_MODEL/CLAUDE_MODEL used for answer generation. Empty =
+    # use the provider's default.
+    "RAG_RERANKER_MODEL": os.environ.get("RAG_RERANKER_MODEL", ""),
+    # "rerank but never drop" mode for the LLM reranker — keep items
+    # the model omitted, append in pre-rerank order. Off by default.
+    "RAG_RERANK_KEEP_DROPPED": (
+        os.environ.get("RAG_RERANK_KEEP_DROPPED", "false").lower() == "true"
+    ),
+    # Cohere Rerank — used when RAG_RERANKER_PROVIDER=cohere.
+    # Get an API key at https://dashboard.cohere.com/api-keys
+    # Pricing as of late 2025 is ~$2 / 1k queries.
+    "COHERE_API_KEY": os.environ.get("COHERE_API_KEY", ""),
+    "COHERE_RERANK_MODEL": os.environ.get("COHERE_RERANK_MODEL", "rerank-v3.5"),
+    "COHERE_RERANK_BASE_URL": os.environ.get(
+        "COHERE_RERANK_BASE_URL", "https://api.cohere.com/v2/rerank"
+    ),
+    # Network timeout for the rerank call. Cohere's p95 is ~300 ms;
+    # we cap at 10 s so a hung call falls back to pre-rerank order
+    # instead of dominating turn latency.
+    "COHERE_RERANK_TIMEOUT_S": float(os.environ.get("COHERE_RERANK_TIMEOUT_S", "10")),
     # Phase 8 — conversation session memory.
     # How many prior (query, answer) pairs to prepend into the model
     # context on follow-up /ask/ calls within the same session.

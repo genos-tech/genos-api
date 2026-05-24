@@ -324,6 +324,13 @@ def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
 
     started = time.monotonic()
     try:
+        # Honor the same RAG_USE_QUERY_REWRITE flag the agent path
+        # uses, so `agent_eval_compare --b-overrides
+        # '{"RAG_USE_QUERY_REWRITE": true}'` actually exercises
+        # rewriting on the retrieval suite. Lazy import — `settings`
+        # is set up once Django has loaded.
+        from django.conf import settings as _settings  # noqa: PLC0415
+
         result = search(
             query=query,
             team_id=team_id,
@@ -333,6 +340,7 @@ def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
             date_to=case.get("date_to"),
             limit=int(case.get("limit", 10)),
             use_vector=bool(case.get("use_vector", True)),
+            rewrite=bool(_settings.SEARCH_ENGINE.get("RAG_USE_QUERY_REWRITE", False)),
         )
     except Exception as e:  # noqa: BLE001
         duration_ms = int((time.monotonic() - started) * 1000)

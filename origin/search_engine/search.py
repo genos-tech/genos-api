@@ -186,21 +186,55 @@ def search(
     if settings.SEARCH_ENGINE.get("RAG_REPRESENTATION_FLOOR") and pre_threshold:
         grouped = _apply_representation_floor(grouped, pre_threshold)
 
-    # --- Phase 6: optional LLM-as-judge reranker (flag-gated) ---
-    # Off by default. When on, we hand the top INPUT_K entities to the
-    # active ModelClient and use its reordering. The reranker is
-    # responsible for falling back to pre-rerank order on any error.
+    # --- Phase 6: optional rerank stage (LLM judge or Cohere, flag-gated) ---
+    # Off by default. When on, dispatched via RAG_RERANKER_PROVIDER
+    # to either the LLM judge or Cohere v2 Rerank. Reranker module
+    # falls back to pre-rerank order on any error.
+    #
+    # `RAG_RERANK_LOCK_TOP_N` (default 0 = disabled) lets us protect
+    # the top-N RRF hits from being reshuffled by the semantic
+    # reranker. A/B on this suite showed that any semantic reranker
+    # applied to the *whole* result set wins on paraphrase queries but
+    # regresses on exact-phrase queries (RRF's already-confident top
+    # hits get displaced by semantically-richer-but-less-precise
+    # candidates). Locking the top-N from RRF preserves those wins
+    # while still letting the reranker fix the noisy tail.
     if settings.SEARCH_ENGINE.get("RAG_USE_RERANKER") and grouped:
         from origin.search_engine.reranker import rerank  # noqa: PLC0415
 
         input_k = int(settings.SEARCH_ENGINE.get("RAG_RERANK_INPUT_K", 20))
         output_k = int(settings.SEARCH_ENGINE.get("RAG_RERANK_OUTPUT_K", 10))
-        grouped = rerank(
-            query=query,
-            entities=grouped,
-            input_k=input_k,
-            output_k=min(output_k, limit),
-        )
+        lock_top_n = int(settings.SEARCH_ENGINE.get("RAG_RERANK_LOCK_TOP_N", 0))
+        lock_top_n = max(0, min(lock_top_n, len(grouped)))
+
+        if lock_top_n > 0 and len(grouped) > lock_top_n:
+            # Lock the top-N RRF hits; rerank only the tail. Final
+            # output = locked head + reranked tail (deduped, capped
+            # at output_k).
+            head = grouped[:lock_top_n]
+            tail = grouped[lock_top_n:]
+            # Effective input_k for the tail-only rerank — the locked
+            # head doesn't count toward the model's input budget.
+            tail_input_k = max(0, input_k - lock_top_n)
+            tail_output_k = max(0, min(output_k, limit) - lock_top_n)
+            reranked_tail = (
+                rerank(
+                    query=query,
+                    entities=tail,
+                    input_k=tail_input_k,
+                    output_k=tail_output_k,
+                )
+                if tail_output_k > 0 and tail_input_k > 0
+                else []
+            )
+            grouped = head + reranked_tail
+        else:
+            grouped = rerank(
+                query=query,
+                entities=grouped,
+                input_k=input_k,
+                output_k=min(output_k, limit),
+            )
 
     # --- Final pass: friendly chat titles. ---
     # OpenSearch stores a viewer-agnostic placeholder for chats ("DM 9")
@@ -228,16 +262,25 @@ def _multi_variant_fuse(
     """Run keyword + vector for each variant and merge into one ranked list.
 
     Per-variant: `_run_keyword` + `_run_vector` (if enabled) → `_rrf_fuse`.
-    Across variants: chunk-level score summation. A chunk that appears
-    in K of N variants accumulates K RRF scores — so multi-variant
-    matches naturally outrank single-variant ones without any
-    per-variant weighting heuristics.
+    Across variants: chunk-level WEIGHTED score summation. The original
+    query (index 0 in `variants`) contributes at a higher weight than
+    LLM-generated rewrites because it carries the user's actual intent;
+    rewrites are aids that can drift on-topic-but-off-meaning. Without
+    this weighting, an exact-phrase match against the original (e.g.
+    "competitor analysis" → task titled "Competitor analysis") gets
+    crowded out by RRF noise from variant-only hits.
 
-    Single-variant case (`len(variants) == 1`) is byte-identical to the
-    pre-Phase-10 path.
+    Weight is `RAG_REWRITE_ORIGINAL_WEIGHT` (default 2.0); each
+    variant contributes weight 1.0. With weight 1.0 the behavior is
+    byte-identical to the un-weighted Phase-10 path. Single-variant
+    case (`len(variants) == 1`) is unaffected by weighting.
     """
+    original_weight = float(settings.SEARCH_ENGINE.get("RAG_REWRITE_ORIGINAL_WEIGHT", 2.0))
+
     chunks_by_id: dict[str, dict] = {}
-    for variant in variants:
+    for idx, variant in enumerate(variants):
+        weight = original_weight if idx == 0 else 1.0
+
         keyword_hits = _run_keyword(
             client, index, variant, base_filter, pool_size, for_agent=for_agent
         )
@@ -256,15 +299,20 @@ def _multi_variant_fuse(
         variant_fused = _rrf_fuse(keyword_hits, vector_hits)
         for hit in variant_fused:
             cid = hit["chunk_id"]
+            weighted_score = hit["score"] * weight
             existing = chunks_by_id.get(cid)
             if existing is None:
-                # First time we see this chunk — keep the dict as-is.
-                chunks_by_id[cid] = dict(hit)
+                # First time we see this chunk — keep the dict, but
+                # store the weighted score so subsequent merges are on
+                # equal footing.
+                copied = dict(hit)
+                copied["score"] = weighted_score
+                chunks_by_id[cid] = copied
                 continue
-            # Same chunk surfaced for a previous variant. Sum the RRF
-            # scores and keep the best (lowest) lane ranks for the UI's
-            # debug fields.
-            existing["score"] += hit["score"]
+            # Same chunk surfaced for a previous variant. Add the
+            # weighted RRF contribution and keep best (lowest) lane
+            # ranks for the UI's debug fields.
+            existing["score"] += weighted_score
             existing["keyword_rank"] = _min_rank(
                 existing.get("keyword_rank"), hit.get("keyword_rank")
             )
