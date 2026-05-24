@@ -286,6 +286,11 @@ class PMHistoryView(AuthenticatedAPIView):
                 "systemUserId": msg.project.project_system_user.id,
             },
             "taskId": msg.task.task_id if msg.task else None,
+            # Human-readable id from `TaskMaster.display_id`. Lets the
+            # `BubbleUserName` ID chip render "<code>-<n>" without an
+            # extra lookup. None when the message has no task — the
+            # frontend falls back via `formatTaskDisplayId`.
+            "displayId": msg.task.display_id if msg.task else None,
             "taskExist": True if msg.task else False,
             "taskStatus": msg.task.status if msg.task else None,
             "isFlagged": (
@@ -443,6 +448,8 @@ class PMSingleMessageView(AuthenticatedAPIView):
             ),
             "reactions": all_reactions,
             "taskId": pm.task.task_id if pm.task else None,
+            # See PMHistoryView.serialize_message for the rationale.
+            "displayId": pm.task.display_id if pm.task else None,
             "taskExist": True if pm.task else False,
             "taskStatus": pm.task.status if pm.task else None,
             "project": {
@@ -643,6 +650,9 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
 
         contentText = generate_first_line.get(pm.thread_message_body[0])
         task_id = pm.parent_message_uid.task.task_id if pm.parent_message_uid.task else -1
+        display_id = (
+            pm.parent_message_uid.task.display_id if pm.parent_message_uid.task else None
+        )
         messageIdWithChatIdAndThreadId = f"{project_id}-{task_id}-{message_id}"
         message = {
             "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
@@ -674,6 +684,10 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
             },
             "reactions": all_reactions,
             "taskId": task_id,
+            # Mirrors PMHistoryView.serialize_message — gives the thread
+            # message its parent task's "<code>-<n>" id for the bubble
+            # chip without a follow-up fetch.
+            "displayId": display_id,
             "taskExist": True if pm.parent_message_uid.task else False,
             "project": {
                 "projectId": (
@@ -881,6 +895,11 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                 if raw_message.parent_message_uid.task
                 else -1
             )
+            display_id = (
+                raw_message.parent_message_uid.task.display_id
+                if raw_message.parent_message_uid.task
+                else None
+            )
             messageIdWithChatIdAndThreadId = f"{chat_id}-{task_id}-{message_id}"
             new_message = {
                 "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
@@ -914,6 +933,9 @@ class PMThreadMessagesByIdView(AuthenticatedAPIView):
                 },
                 "reactions": all_reactions,
                 "taskId": task_id,
+                # Same rationale as PMHistoryView.serialize_message —
+                # human-readable id for the bubble chip.
+                "displayId": display_id,
                 "taskExist": True if raw_message.parent_message_uid.task else False,
                 "project": {
                     "projectId": (
@@ -1048,6 +1070,11 @@ class PMThreadMessagesByTaskIdView(AuthenticatedAPIView):
                 if raw_message.parent_message_uid.task
                 else -1
             )
+            display_id = (
+                raw_message.parent_message_uid.task.display_id
+                if raw_message.parent_message_uid.task
+                else None
+            )
             messageIdWithChatIdAndThreadId = f"{chat_id}-{task_id}-{message_id}"
             new_message = {
                 "messageIdWithChatIdAndThreadId": messageIdWithChatIdAndThreadId,
@@ -1081,6 +1108,9 @@ class PMThreadMessagesByTaskIdView(AuthenticatedAPIView):
                 },
                 "reactions": all_reactions,
                 "taskId": task_id,
+                # Same rationale as PMHistoryView.serialize_message —
+                # human-readable id for the bubble chip.
+                "displayId": display_id,
                 "taskExist": True if raw_message.parent_message_uid.task else False,
                 "project": {
                     "projectId": (
