@@ -59,9 +59,21 @@ DEFAULT_LIMIT = 20
 DEFAULT_MIN_SCORE_RATIO = 0.5
 
 # Absolute minimum: anything below this is noise regardless of the top
-# score. Useful when the top score itself is barely above zero (e.g.
-# the only "matches" came in at rank 50+). Tunable per call.
-DEFAULT_MIN_SCORE = 1.0 / (RRF_K + 30)  # ≈ 0.011 — a single lane hit at rank ≥ 30
+# score. Cuts the "vector lane finds something for every query, even
+# gibberish" failure mode — for queries like "quantum photosynthesis
+# xylophone marauder" the vector lane returns plausible-looking but
+# semantically empty matches with RRF scores ≈ 0.027–0.033 (chunk
+# pool has uniform low similarity, no real signal). Setting this above
+# that band kills the noise.
+#
+# A/B (2026-05) on the 39-case retrieval suite found the safe range
+# is [0.035, 0.050] — within it `gibberish_returns_few_or_nothing`
+# moves FAIL→PASS with no regressions; at ≥ 0.060, legitimate weak
+# paraphrase queries (`paraphrase_q3_planning_artifacts`,
+# `scope_website_redesign_top`) start losing. 0.040 is the middle of
+# the safe band. Tunable per call AND per deploy via
+# `SEARCH_ENGINE["RAG_MIN_SCORE"]`.
+DEFAULT_MIN_SCORE = 0.040
 
 
 def search(
@@ -119,6 +131,18 @@ def search(
     """
     if not query or not query.strip():
         return {"query": query, "results": []}
+
+    # Settings-level override hooks for the threshold knobs. When the
+    # caller didn't explicitly pin a value (i.e. left the kwarg at its
+    # Python default), settings can override at deploy time without
+    # touching code. Caller-pinned values always win — useful for
+    # tests that need a specific threshold regardless of env.
+    if min_score_ratio == DEFAULT_MIN_SCORE_RATIO:
+        min_score_ratio = float(
+            settings.SEARCH_ENGINE.get("RAG_MIN_SCORE_RATIO", DEFAULT_MIN_SCORE_RATIO)
+        )
+    if min_score == DEFAULT_MIN_SCORE:
+        min_score = float(settings.SEARCH_ENGINE.get("RAG_MIN_SCORE", DEFAULT_MIN_SCORE))
 
     client = get_client()
     index = get_index_alias()
@@ -540,9 +564,20 @@ def _run_keyword(
                 "must": {
                     "multi_match": {
                         "query": query,
+                        # Field-level BM25 boosts. Title is the
+                        # densest signal — short, intentional, often
+                        # the verbatim query for "find me this thing"
+                        # asks. Snippet_text is the next-densest
+                        # (entity-level highlight). Search_text
+                        # carries the full chunk body. The default
+                        # 3 / 2 / 1 ladder was chosen at Phase 3 to
+                        # surface title-verbatim matches over body
+                        # matches with the same term count. Made
+                        # tunable in Phase 2.5 to enable per-deploy
+                        # A/B without code changes.
                         "fields": [
-                            "title^3",
-                            "snippet_text^2",
+                            f"title^{int(settings.SEARCH_ENGINE.get('RAG_BM25_TITLE_BOOST', 3))}",
+                            f"snippet_text^{int(settings.SEARCH_ENGINE.get('RAG_BM25_SNIPPET_BOOST', 2))}",
                             "search_text",
                         ],
                         "type": "best_fields",

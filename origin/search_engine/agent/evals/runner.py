@@ -392,13 +392,10 @@ def _check_retrieval_expectations(
                 f"(top {n} was {ranked_ids[:n]})"
             )
 
-    # Title-substring matcher — robust across reseedings.
-    #
-    # Each entry in `title_substrings` must appear (case-insensitive
-    # substring) as the title of SOME entity in the top N. Use when the
-    # fixture's auto-incremented ids drift but content is stable (e.g.
-    # the demo seeder regenerates the same projects with different
-    # primary keys).
+    # Title-substring AND matcher — every entry in `title_substrings`
+    # must appear (case-insensitive) in the title of some entity in
+    # the top N. Use when ALL of several expected entities need to
+    # surface together. Robust across reseedings.
     if "must_contain_title_in_top_n" in expect:
         spec = expect["must_contain_title_in_top_n"] or {}
         n = int(spec.get("n", 0))
@@ -408,6 +405,22 @@ def _check_retrieval_expectations(
         if missing:
             _add(
                 f"must_contain_title_in_top_n: missing {missing} from top {n} "
+                f"(top {n} titles were {ranked_titles[:n]})"
+            )
+
+    # Title-substring OR matcher — AT LEAST ONE entry in
+    # `title_substrings` must appear in the top N. Use when the
+    # question has multiple acceptable answers and any of them
+    # surfacing is a pass.
+    if "must_contain_any_title_in_top_n" in expect:
+        spec = expect["must_contain_any_title_in_top_n"] or {}
+        n = int(spec.get("n", 0))
+        candidates = [s.lower() for s in (spec.get("title_substrings") or [])]
+        top_titles = [t.lower() for t in ranked_titles[:n]]
+        any_match = any(needle in t for needle in candidates for t in top_titles)
+        if candidates and not any_match:
+            _add(
+                f"must_contain_any_title_in_top_n: none of {candidates} found in top {n} "
                 f"(top {n} titles were {ranked_titles[:n]})"
             )
 
