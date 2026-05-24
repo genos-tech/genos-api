@@ -122,9 +122,7 @@ class Command(BaseCommand):
         if case_id_filter:
             cases = [c for c in cases if c.get("id") == case_id_filter]
             if not cases:
-                self.stderr.write(
-                    self.style.ERROR(f"No case with id={case_id_filter!r}")
-                )
+                self.stderr.write(self.style.ERROR(f"No case with id={case_id_filter!r}"))
                 sys.exit(2)
 
         self.stdout.write(
@@ -159,7 +157,10 @@ class Command(BaseCommand):
             r = runner(dict(case))
             if run_judge and label == "behavior" and r.answer:
                 r.judge_scores = judge_answer(
-                    query=r.query, sources=r.sources, answer=r.answer
+                    query=r.query,
+                    sources=r.sources,
+                    answer=r.answer,
+                    tool_results=r.tool_results,
                 )
             results.append(r)
             self.stdout.write(
@@ -192,11 +193,7 @@ class Command(BaseCommand):
         delta_str = (
             self.style.SUCCESS(f"+{passed_b - passed_a}")
             if passed_b > passed_a
-            else (
-                self.style.ERROR(f"{passed_b - passed_a}")
-                if passed_b < passed_a
-                else "0"
-            )
+            else (self.style.ERROR(f"{passed_b - passed_a}") if passed_b < passed_a else "0")
         )
         self.stdout.write(
             f"  Pass count: A={passed_a}/{len(a)}  B={passed_b}/{len(b)}  delta {delta_str}"
@@ -222,6 +219,7 @@ class Command(BaseCommand):
             judged_a = [r for r in a if r.judge_scores]
             judged_b = [r for r in b if r.judge_scores]
             if judged_a and judged_b:
+
                 def _avg(rs: list[CaseResult], key: str) -> float:
                     return sum(r.judge_scores.get(key, 0.0) for r in rs) / len(rs)
 
@@ -238,9 +236,7 @@ class Command(BaseCommand):
                             else f"{delta:+.2f}"
                         )
                     )
-                    self.stdout.write(
-                        f"  judge.{k:<20} A={av:.2f}  B={bv:.2f}  delta {arrow}"
-                    )
+                    self.stdout.write(f"  judge.{k:<20} A={av:.2f}  B={bv:.2f}  delta {arrow}")
 
 
 class _override_search_engine:

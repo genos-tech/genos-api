@@ -88,6 +88,14 @@ class CaseResult:
     query: str = ""
     answer: str = ""
     sources: list[dict[str, Any]] = field(default_factory=list)
+    # Full tool-call traces captured via the controller's `trace_hook`.
+    # Each entry: {"tool_name": str, "arguments": dict, "result": dict}.
+    # Used by the LLM judge to verify the answer's factual claims
+    # against the actual data the model saw (sources alone are too
+    # sparse for structured-tool answers — they carry only entity_id
+    # and title, not the status/due_date/priority the model legitimately
+    # quotes from a `list_tasks` result).
+    tool_results: list[dict[str, Any]] = field(default_factory=list)
     # Optional LLM-judge scores; only set when `--judge` was on.
     judge_scores: dict[str, Any] | None = None
 
@@ -134,9 +142,14 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
             cleanup_handles.append(handle)
 
         events: list[dict[str, Any]] = []
+        tool_traces: list[dict[str, Any]] = []
+
+        def _capture_trace(name: str, args: dict[str, Any], result: dict[str, Any]) -> None:
+            tool_traces.append({"tool_name": name, "arguments": args, "result": result})
+
         ctx = ToolContext(team_id=team_id, user_id=user_id)
         try:
-            run_agent(query, ctx, events.append, run_id=None)
+            run_agent(query, ctx, events.append, run_id=None, trace_hook=_capture_trace)
         except Exception as e:  # noqa: BLE001 — report as failure rather than crash the suite
             duration_ms = int((time.monotonic() - started) * 1000)
             return CaseResult(
@@ -171,6 +184,7 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
             query=query,
             answer=answer_text,
             sources=list(last_sources),
+            tool_results=tool_traces,
         )
     finally:
         for handle in cleanup_handles:

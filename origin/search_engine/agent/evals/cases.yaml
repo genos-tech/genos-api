@@ -25,7 +25,11 @@
   fixture: true
   expect:
     tool_calls_at_least: 1
-    tools_used_contains: ["search_knowledge_base"]
+    # "What tasks are in WIP status" is a structural query — list_tasks
+    # is the correct tool (search_knowledge_base would be a regression
+    # to keyword guessing). The agent's prompt teaches it to prefer
+    # structural tools for status/assignee/overdue questions.
+    tools_used_contains: ["list_tasks"]
     no_errors: true
 
 - id: simple_rag_opensearch_topic

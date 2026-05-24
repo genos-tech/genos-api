@@ -139,6 +139,7 @@ class Command(BaseCommand):
                         query=result.query,
                         sources=result.sources,
                         answer=result.answer,
+                        tool_results=result.tool_results,
                     )
                 all_results.append(result)
                 self._print_one(result)
@@ -258,6 +259,14 @@ class Command(BaseCommand):
                                     "title": s.get("title"),
                                 }
                                 for s in r.sources
+                            ],
+                            "tool_results": [
+                                {
+                                    "tool_name": tr.get("tool_name"),
+                                    "arguments": tr.get("arguments"),
+                                    "result": tr.get("result"),
+                                }
+                                for tr in r.tool_results
                             ],
                             "judge": r.judge_scores,
                         },

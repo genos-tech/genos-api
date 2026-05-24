@@ -393,6 +393,7 @@ def run_agent(
     run_id: UUID | None = None,
     prior_turns: list[tuple[str, str]] | None = None,
     disabled_tools: set[str] | None = None,
+    trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
     """Drive the agent loop from a fresh user query.
 
@@ -428,6 +429,7 @@ def run_agent(
         starting_step=0,
         seen_sources_by_id={},
         disabled_tools=disabled_tools,
+        trace_hook=trace_hook,
     )
 
 
@@ -613,6 +615,7 @@ def _drive_loop(
     starting_step: int,
     seen_sources_by_id: dict[tuple, dict[str, Any]],
     disabled_tools: set[str] | None = None,
+    trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
     """The core agent loop, shared by `run_agent` and `resume_agent`.
 
@@ -761,6 +764,11 @@ def _drive_loop(
                     arguments_json=call_args,
                     error=str(e),
                 )
+                if trace_hook is not None:
+                    try:
+                        trace_hook(call_name, call_args, {"error": str(e)})
+                    except Exception:  # noqa: BLE001
+                        log.exception("trace_hook failed for tool %s (error path)", call_name)
                 messages.append(_assistant_function_call_turn(call))
                 messages.append(_function_response_turn(call_name, {"error": str(e)}))
                 continue
@@ -782,6 +790,11 @@ def _drive_loop(
                     arguments_json=call_args,
                     error=err,
                 )
+                if trace_hook is not None:
+                    try:
+                        trace_hook(call_name, call_args, {"error": err})
+                    except Exception:  # noqa: BLE001
+                        log.exception("trace_hook failed for tool %s (crash path)", call_name)
                 messages.append(_assistant_function_call_turn(call))
                 messages.append(_function_response_turn(call_name, {"error": err}))
                 continue
@@ -803,6 +816,11 @@ def _drive_loop(
                 summary=summary,
                 result_json=result,
             )
+            if trace_hook is not None:
+                try:
+                    trace_hook(call_name, call_args, result)
+                except Exception:  # noqa: BLE001 — trace hook must never break the loop
+                    log.exception("trace_hook failed for tool %s", call_name)
 
             # Collect citation chips from this tool's result. Search produces
             # them via _ui_source_for_match (one per match); structured read
