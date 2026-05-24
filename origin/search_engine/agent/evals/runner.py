@@ -49,6 +49,30 @@ RETRIEVAL_CASES_PATH = Path(__file__).parent / "retrieval_cases.yaml"
 CASES_PATH = BEHAVIOR_CASES_PATH
 
 
+def _resolve_fixture(case: dict[str, Any]) -> dict[str, Any]:
+    """If `case.fixture == True`, fill in team_id / user_id from the
+    deterministic eval fixture (see `agent/evals/fixture.py`).
+
+    Mutates and returns the same dict for convenience. Cases that
+    pin their own team_id are left untouched — useful for legacy
+    dev-DB fixture cases and adversarial cross-tenant tests.
+    """
+    if not case.get("fixture"):
+        return case
+
+    # Lazy import — the fixture module touches Django models, which
+    # would blow up if imported at module load before app-ready.
+    from origin.search_engine.agent.evals.fixture import (  # noqa: PLC0415
+        FIXTURE_USER_ID,
+        ensure_fixture,
+    )
+
+    info = ensure_fixture()
+    case.setdefault("team_id", info["team_id"])
+    case.setdefault("user_id", str(FIXTURE_USER_ID))
+    return case
+
+
 @dataclass
 class CaseResult:
     case_id: str
@@ -58,6 +82,26 @@ class CaseResult:
     # Populated for behavior cases; meaningless for retrieval cases.
     step_count: int = 0
     tool_call_count: int = 0
+    # Captured behavior-case artefacts — populated only when the caller
+    # asked for them (e.g. `judge=True`). Kept on the result dataclass
+    # so the LLM judge / trace writer can read them without re-running.
+    query: str = ""
+    answer: str = ""
+    sources: list[dict[str, Any]] = field(default_factory=list)
+    # Full tool-call traces captured via the controller's `trace_hook`.
+    # Each entry: {"tool_name": str, "arguments": dict, "result": dict}.
+    # Used by the LLM judge to verify the answer's factual claims
+    # against the actual data the model saw (sources alone are too
+    # sparse for structured-tool answers — they carry only entity_id
+    # and title, not the status/due_date/priority the model legitimately
+    # quotes from a `list_tasks` result).
+    tool_results: list[dict[str, Any]] = field(default_factory=list)
+    # Phase 4.4 — milliseconds from run_agent invocation to the first
+    # `answer_delta` event (the strict TTFT metric). -1 if no
+    # answer_delta was ever emitted (model errored or returned no text).
+    ttft_ms: int = -1
+    # Optional LLM-judge scores; only set when `--judge` was on.
+    judge_scores: dict[str, Any] | None = None
 
 
 def load_cases(path: Path = BEHAVIOR_CASES_PATH) -> list[dict[str, Any]]:
@@ -77,8 +121,34 @@ def load_cases(path: Path = BEHAVIOR_CASES_PATH) -> list[dict[str, Any]]:
 
 
 def run_behavior_case(case: dict[str, Any]) -> CaseResult:
-    """Execute one behavior case through the full agent loop."""
+    """Execute one behavior case through the full agent loop.
+
+    Single-turn shape (default):
+        - id: ...
+          query: "..."
+          expect: {...}
+
+    Multi-turn shape (Phase 3.5):
+        - id: ...
+          turns:
+            - query: "first turn"           # no expect
+            - query: "second turn"          # no expect
+            - query: "final turn"
+              expect: {...}                  # assertions on the final turn
+
+        Assertions live on the LAST turn (or in the case's top-level
+        `expect` block). The runner threads `prior_turns` between turns
+        the same way `agent_views.py` does in production, so the case
+        exercises real multi-turn memory.
+    """
+    case = _resolve_fixture(case)
     case_id = case.get("id") or "(unnamed)"
+
+    # Multi-turn fork — handled in a dedicated helper that mirrors the
+    # single-turn flow per-turn and thread prior turns between them.
+    if "turns" in case:
+        return _run_multiturn_case(case, case_id)
+
     query = case.get("query") or ""
     team_id = case.get("team_id") or ""
     user_id = case.get("user_id") or ""
@@ -101,9 +171,30 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
             cleanup_handles.append(handle)
 
         events: list[dict[str, Any]] = []
+        tool_traces: list[dict[str, Any]] = []
+        # Phase 4.4 — capture per-event timing to compute TTFT.
+        # Wrapping the emit callback is the smallest non-invasive hook
+        # (controller code untouched). Timestamps are relative to the
+        # run_agent invocation, in seconds.
+        emit_t0 = time.monotonic()
+        ttft_s: float | None = None
+
+        def _ts_emit(event: dict[str, Any]) -> None:
+            nonlocal ttft_s
+            if (
+                ttft_s is None
+                and event.get("type") == "answer_delta"
+                and (event.get("text") or "")
+            ):
+                ttft_s = time.monotonic() - emit_t0
+            events.append(event)
+
+        def _capture_trace(name: str, args: dict[str, Any], result: dict[str, Any]) -> None:
+            tool_traces.append({"tool_name": name, "arguments": args, "result": result})
+
         ctx = ToolContext(team_id=team_id, user_id=user_id)
         try:
-            run_agent(query, ctx, events.append, run_id=None)
+            run_agent(query, ctx, _ts_emit, run_id=None, trace_hook=_capture_trace)
         except Exception as e:  # noqa: BLE001 — report as failure rather than crash the suite
             duration_ms = int((time.monotonic() - started) * 1000)
             return CaseResult(
@@ -119,6 +210,15 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
         tool_calls = [e for e in events if e.get("type") == "tool_call_start"]
         step_count = max((e.get("step", -1) for e in tool_calls), default=-1) + 1
 
+        # Capture answer + last `sources` snapshot so the LLM judge
+        # (or any post-hoc analyser) can score this run without
+        # re-executing it.
+        answer_text = "".join(
+            e.get("text") or "" for e in events if e.get("type") == "answer_delta"
+        )
+        source_events = [e for e in events if e.get("type") == "sources"]
+        last_sources = source_events[-1].get("sources", []) if source_events else []
+
         return CaseResult(
             case_id=case_id,
             passed=not reasons,
@@ -126,6 +226,11 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
             failure_reasons=reasons,
             step_count=step_count,
             tool_call_count=len(tool_calls),
+            query=query,
+            answer=answer_text,
+            sources=list(last_sources),
+            tool_results=tool_traces,
+            ttft_ms=int(ttft_s * 1000) if ttft_s is not None else -1,
         )
     finally:
         for handle in cleanup_handles:
@@ -138,6 +243,146 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
 # Backwards-compatible alias. The Phase-4 management command imported
 # this name; keep it so existing call sites don't break.
 run_case = run_behavior_case
+
+
+def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
+    """Phase 3.5 — execute a multi-turn case by running the agent loop
+    once per turn, threading prior (query, answer) pairs between turns.
+
+    Mirrors the production agent_views.py session-threading shape so the
+    multi-turn-memory mechanism is exercised end-to-end. The eval does
+    NOT honor `SESSION_MAX_PRIOR_TURNS` truncation itself — it passes
+    ALL prior turns to `run_agent`, the same way production would for a
+    fresh session. Truncation/summarisation is applied INSIDE the
+    prior-turns prep helper, so flag-toggling `RAG_SESSION_ROLLING_SUMMARY`
+    in an A/B works without changing the case shape.
+
+    Assertions live on the LAST turn's expectations (or on the case's
+    top-level `expect`). Earlier turns are setup; we never fail-fast on
+    a per-turn intermediate.
+    """
+    turns = case.get("turns") or []
+    if not turns:
+        return CaseResult(
+            case_id=case_id,
+            passed=False,
+            duration_ms=0,
+            failure_reasons=["multi-turn case has empty `turns` list"],
+        )
+
+    team_id = case.get("team_id") or ""
+    user_id = case.get("user_id") or ""
+    if not team_id or not user_id:
+        return CaseResult(
+            case_id=case_id,
+            passed=False,
+            duration_ms=0,
+            failure_reasons=["case is missing team_id/user_id"],
+        )
+
+    # The terminal expectation set: prefer the last turn's `expect`,
+    # else fall back to the case-level `expect`.
+    final_turn = turns[-1]
+    final_expect = final_turn.get("expect") or case.get("expect") or {}
+
+    # Phase 3.5 — defer truncation + (optional) rolling summary to the
+    # shared helper, so a single `RAG_SESSION_ROLLING_SUMMARY=true`
+    # override in agent_eval_compare exercises the exact code path
+    # production /ask/ uses. Helper is no-op when the flag is off OR
+    # the session is shorter than the verbatim window — i.e. matches
+    # pre-3.5 behavior unless explicitly opted in.
+    from origin.search_engine.agent.multi_turn import build_prior_context  # noqa: PLC0415
+
+    ctx = ToolContext(team_id=team_id, user_id=user_id)
+    prior_turns: list[tuple[str, str]] = []
+    last_events: list[dict[str, Any]] = []
+    last_tool_traces: list[dict[str, Any]] = []
+    last_query = ""
+    last_ttft_s: float | None = None
+    started = time.monotonic()
+
+    for i, turn in enumerate(turns):
+        q = (turn.get("query") or "").strip()
+        if not q:
+            return CaseResult(
+                case_id=case_id,
+                passed=False,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                failure_reasons=[f"turn {i + 1} is missing a non-empty `query`"],
+            )
+
+        events: list[dict[str, Any]] = []
+        tool_traces: list[dict[str, Any]] = []
+        # Per-turn TTFT — we only retain the FINAL turn's value below.
+        per_turn_t0 = time.monotonic()
+        per_turn_ttft_s: float | None = None
+
+        def _ts_emit(event: dict[str, Any]) -> None:
+            nonlocal per_turn_ttft_s
+            if (
+                per_turn_ttft_s is None
+                and event.get("type") == "answer_delta"
+                and (event.get("text") or "")
+            ):
+                per_turn_ttft_s = time.monotonic() - per_turn_t0
+            events.append(event)
+
+        def _capture_trace(name: str, args: dict[str, Any], result: dict[str, Any]) -> None:
+            tool_traces.append({"tool_name": name, "arguments": args, "result": result})
+
+        verbatim_turns, summary = build_prior_context(prior_turns)
+        try:
+            run_agent(
+                q,
+                ctx,
+                _ts_emit,
+                run_id=None,
+                prior_turns=verbatim_turns,
+                prior_summary=summary,
+                trace_hook=_capture_trace,
+            )
+        except Exception as e:  # noqa: BLE001
+            return CaseResult(
+                case_id=case_id,
+                passed=False,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                failure_reasons=[f"turn {i + 1} run_agent crashed: {e!r}"],
+            )
+
+        answer_text = "".join(
+            (e.get("text") or "") for e in events if e.get("type") == "answer_delta"
+        )
+        prior_turns.append((q, answer_text))
+        last_query = q
+        last_events = events
+        last_tool_traces = tool_traces
+        last_ttft_s = per_turn_ttft_s
+
+    # Score only the final turn.
+    reasons = _check_behavior_expectations(last_events, final_expect)
+    duration_ms = int((time.monotonic() - started) * 1000)
+
+    tool_calls = [e for e in last_events if e.get("type") == "tool_call_start"]
+    step_count = max((e.get("step", -1) for e in tool_calls), default=-1) + 1
+    answer_text = "".join(
+        (e.get("text") or "") for e in last_events if e.get("type") == "answer_delta"
+    )
+    source_events = [e for e in last_events if e.get("type") == "sources"]
+    last_sources = source_events[-1].get("sources", []) if source_events else []
+
+    return CaseResult(
+        case_id=case_id,
+        passed=not reasons,
+        duration_ms=duration_ms,
+        failure_reasons=reasons,
+        step_count=step_count,
+        tool_call_count=len(tool_calls),
+        query=last_query,
+        answer=answer_text,
+        sources=list(last_sources),
+        tool_results=last_tool_traces,
+        ttft_ms=int(last_ttft_s * 1000) if last_ttft_s is not None else -1,
+    )
 
 
 # `_CITATION_RE` finds `[entity_id]` references in answer text. The
@@ -219,6 +464,25 @@ def _check_behavior_expectations(
         if not citations_seen:
             _add("has_citations: answer contains no [entity_id] citations")
 
+    if "no_citations" in expect and expect["no_citations"]:
+        if citations_seen:
+            _add(f"no_citations: answer contains citations: {sorted(citations_seen)}")
+
+    if "citations_count_at_least" in expect:
+        n = int(expect["citations_count_at_least"])
+        if len(citations_seen) < n:
+            _add(
+                f"citations_count_at_least: got {len(citations_seen)} citation(s), "
+                f"expected >= {n} (saw {sorted(citations_seen)})"
+            )
+
+    if "answer_contains_all" in expect:
+        needles = [s.lower() for s in expect["answer_contains_all"]]
+        haystack = answer.lower()
+        missing = [n for n in needles if n not in haystack]
+        if missing:
+            _add(f"answer_contains_all: missing {missing} from answer")
+
     if "answer_length_at_least" in expect:
         n = int(expect["answer_length_at_least"])
         if len(answer) < n:
@@ -262,6 +526,7 @@ def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
     optional filters and a set of gold-standard assertions about
     which entities should appear (and at what rank) in the result.
     """
+    case = _resolve_fixture(case)
     case_id = case.get("id") or "(unnamed)"
     query = case.get("query") or ""
     team_id = case.get("team_id") or ""
@@ -278,6 +543,13 @@ def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
 
     started = time.monotonic()
     try:
+        # Honor the same RAG_USE_QUERY_REWRITE flag the agent path
+        # uses, so `agent_eval_compare --b-overrides
+        # '{"RAG_USE_QUERY_REWRITE": true}'` actually exercises
+        # rewriting on the retrieval suite. Lazy import — `settings`
+        # is set up once Django has loaded.
+        from django.conf import settings as _settings  # noqa: PLC0415
+
         result = search(
             query=query,
             team_id=team_id,
@@ -287,6 +559,7 @@ def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
             date_to=case.get("date_to"),
             limit=int(case.get("limit", 10)),
             use_vector=bool(case.get("use_vector", True)),
+            rewrite=bool(_settings.SEARCH_ENGINE.get("RAG_USE_QUERY_REWRITE", False)),
         )
     except Exception as e:  # noqa: BLE001
         duration_ms = int((time.monotonic() - started) * 1000)
@@ -315,12 +588,13 @@ def _check_retrieval_expectations(
     """Assertions for retrieval-quality cases.
 
     Operates on the entity list returned by `search(...)`, where each
-    entity has at least `entity_type` and `entity_id`. Rank is 1-indexed
-    in the failure messages so they read naturally.
+    entity has at least `entity_type`, `entity_id`, and `title`. Rank
+    is 1-indexed in the failure messages so they read naturally.
     """
     reasons: list[str] = []
     ranked_ids = [e.get("entity_id") for e in entities]
     ranked_types = [e.get("entity_type") for e in entities]
+    ranked_titles = [(e.get("title") or "") for e in entities]
 
     def _add(reason: str) -> None:
         reasons.append(reason)
@@ -335,6 +609,63 @@ def _check_retrieval_expectations(
             _add(
                 f"must_contain_in_top_n: missing {missing} from top {n} "
                 f"(top {n} was {ranked_ids[:n]})"
+            )
+
+    # Title-substring AND matcher — every entry in `title_substrings`
+    # must appear (case-insensitive) in the title of some entity in
+    # the top N. Use when ALL of several expected entities need to
+    # surface together. Robust across reseedings.
+    if "must_contain_title_in_top_n" in expect:
+        spec = expect["must_contain_title_in_top_n"] or {}
+        n = int(spec.get("n", 0))
+        required = [s.lower() for s in (spec.get("title_substrings") or [])]
+        top_titles = [t.lower() for t in ranked_titles[:n]]
+        missing = [needle for needle in required if not any(needle in t for t in top_titles)]
+        if missing:
+            _add(
+                f"must_contain_title_in_top_n: missing {missing} from top {n} "
+                f"(top {n} titles were {ranked_titles[:n]})"
+            )
+
+    # Title-substring OR matcher — AT LEAST ONE entry in
+    # `title_substrings` must appear in the top N. Use when the
+    # question has multiple acceptable answers and any of them
+    # surfacing is a pass.
+    if "must_contain_any_title_in_top_n" in expect:
+        spec = expect["must_contain_any_title_in_top_n"] or {}
+        n = int(spec.get("n", 0))
+        candidates = [s.lower() for s in (spec.get("title_substrings") or [])]
+        top_titles = [t.lower() for t in ranked_titles[:n]]
+        any_match = any(needle in t for needle in candidates for t in top_titles)
+        if candidates and not any_match:
+            _add(
+                f"must_contain_any_title_in_top_n: none of {candidates} found in top {n} "
+                f"(top {n} titles were {ranked_titles[:n]})"
+            )
+
+    # Title-substring NEGATIVE matcher — none of these substrings may
+    # appear as a title in the result set. Use for adversarial /
+    # ACL-leak cases ("the off-team document must NOT surface").
+    if "must_not_contain_title" in expect:
+        forbidden = [s.lower() for s in (expect["must_not_contain_title"] or [])]
+        leaked = [
+            needle for needle in forbidden if any(needle in t.lower() for t in ranked_titles)
+        ]
+        if leaked:
+            _add(
+                f"must_not_contain_title: forbidden title substring(s) "
+                f"appeared: {leaked} (titles: {ranked_titles})"
+            )
+
+    # Top-result title matcher — the #1 ranked entity must have a
+    # title that contains this substring (case-insensitive).
+    if "top_result_title_contains" in expect:
+        needle = str(expect["top_result_title_contains"]).lower()
+        top_title = ranked_titles[0].lower() if ranked_titles else ""
+        if needle not in top_title:
+            _add(
+                f"top_result_title_contains: top hit title {top_title!r} "
+                f"does not contain {needle!r}"
             )
 
     if "must_contain_entity_type_in_top_n" in expect:

@@ -113,19 +113,24 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         limit = 20
     limit = max(1, min(limit, _MAX_LIMIT))
 
-    qs = qs.order_by("-ts_updated_at")[:limit]
+    qs = qs.select_related("project").order_by("-ts_updated_at")[:limit]
 
     tasks = []
     for t in qs:
         tasks.append(
             {
                 "task_id": t.task_id,
+                # Human-readable PRJ-123 form. Used in chip labels and
+                # whenever the prose references a task — never expose the
+                # raw integer task_id to end users.
+                "display_id": t.display_id,
                 "title": t.title,
                 "status": t.status,
                 "priority": t.priority,
                 "due_date": t.due_date.isoformat() if t.due_date else None,
                 "assignee_id": str(t.assignee_id) if t.assignee_id else None,
                 "project_id": t.project_id,
+                "project_name": t.project.project_name if t.project else None,
             }
         )
 
@@ -143,7 +148,9 @@ LIST_TASKS = Tool(
         "the user asks a structural question like 'what are my open tasks?', "
         "'which tasks are overdue in project X?', or 'list all WIP tasks'. "
         "Returns task_id, title, status, priority, due_date, assignee_id, "
-        "and project_id. Results are scoped to tasks the current user is "
+        "project_id, and project_name. Prefer naming projects by their "
+        "project_name in prose (e.g. 'In **Website Redesign**: ...') rather "
+        "than as 'Project N'. Results are scoped to tasks the current user is "
         "authorised to see (project member, assignee, or reporter)."
     ),
     parameters_schema={

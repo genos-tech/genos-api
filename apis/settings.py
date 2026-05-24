@@ -419,6 +419,33 @@ SEARCH_ENGINE = {
     "RAG_USE_RERANKER": (os.environ.get("RAG_USE_RERANKER", "false").lower() == "true"),
     "RAG_RERANK_INPUT_K": int(os.environ.get("RAG_RERANK_INPUT_K", "20")),
     "RAG_RERANK_OUTPUT_K": int(os.environ.get("RAG_RERANK_OUTPUT_K", "10")),
+    # Reranker provider — "llm" (default, uses the configured LLM
+    # provider as a judge) or "cohere" (purpose-built cross-encoder
+    # via the Cohere v2 Rerank API, requires COHERE_API_KEY). Future
+    # stubs in reranker.py: "jina" / "local" / "vertex_ranking".
+    "RAG_RERANKER_PROVIDER": (os.environ.get("RAG_RERANKER_PROVIDER", "llm") or "llm").lower(),
+    # Optional: per-call model override for the "llm" reranker — point
+    # at a smaller/faster model (e.g. "gemini-2.5-flash") than the main
+    # GEMINI_MODEL/CLAUDE_MODEL used for answer generation. Empty =
+    # use the provider's default.
+    "RAG_RERANKER_MODEL": os.environ.get("RAG_RERANKER_MODEL", ""),
+    # "rerank but never drop" mode for the LLM reranker — keep items
+    # the model omitted, append in pre-rerank order. Off by default.
+    "RAG_RERANK_KEEP_DROPPED": (
+        os.environ.get("RAG_RERANK_KEEP_DROPPED", "false").lower() == "true"
+    ),
+    # Cohere Rerank — used when RAG_RERANKER_PROVIDER=cohere.
+    # Get an API key at https://dashboard.cohere.com/api-keys
+    # Pricing as of late 2025 is ~$2 / 1k queries.
+    "COHERE_API_KEY": os.environ.get("COHERE_API_KEY", ""),
+    "COHERE_RERANK_MODEL": os.environ.get("COHERE_RERANK_MODEL", "rerank-v3.5"),
+    "COHERE_RERANK_BASE_URL": os.environ.get(
+        "COHERE_RERANK_BASE_URL", "https://api.cohere.com/v2/rerank"
+    ),
+    # Network timeout for the rerank call. Cohere's p95 is ~300 ms;
+    # we cap at 10 s so a hung call falls back to pre-rerank order
+    # instead of dominating turn latency.
+    "COHERE_RERANK_TIMEOUT_S": float(os.environ.get("COHERE_RERANK_TIMEOUT_S", "10")),
     # Phase 8 — conversation session memory.
     # How many prior (query, answer) pairs to prepend into the model
     # context on follow-up /ask/ calls within the same session.
@@ -442,6 +469,42 @@ SEARCH_ENGINE = {
     # endpoint — it never passes `rewrite=True`.
     "RAG_USE_QUERY_REWRITE": (os.environ.get("RAG_USE_QUERY_REWRITE", "false").lower() == "true"),
     "RAG_REWRITE_NUM_VARIANTS": int(os.environ.get("RAG_REWRITE_NUM_VARIANTS", "3")),
+    # Phase 3.2 — self-critique reflection step. When True, after the
+    # agent produces its draft final answer, a second LLM call re-reads
+    # the draft against the captured tool results and may produce a
+    # revised final answer (precision-tightening only — no extra tool
+    # rounds). Adds +1 LLM call per ask that reaches a final answer.
+    # Off by default; opt-in via env or per-call settings override.
+    "RAG_AGENT_SELF_CRITIQUE": (
+        os.environ.get("RAG_AGENT_SELF_CRITIQUE", "false").lower() == "true"
+    ),
+    # Phase 3.5 — rolling-summary multi-turn context. When True AND a
+    # session has more than `SESSION_MAX_PRIOR_TURNS` prior turns, the
+    # earliest turns are condensed into a single short summary that is
+    # prepended to the messages alongside the last `SESSION_MAX_PRIOR_TURNS`
+    # turns verbatim. Lets long conversations retain early-turn context
+    # the verbatim window would otherwise drop. Costs one summary LLM
+    # call per turn that triggers the summary path (i.e. only when the
+    # session already has > N prior turns). Off by default.
+    "RAG_SESSION_ROLLING_SUMMARY": (
+        os.environ.get("RAG_SESSION_ROLLING_SUMMARY", "false").lower() == "true"
+    ),
+    # Phase 4.2 — re-sort source chips by citation density at end-of-turn.
+    # When True, the final `sources` event (emitted just before `done`)
+    # reorders chips so entities the answer actually cites surface
+    # leftmost. Stable for ties (preserves tool-emission order).
+    # Default True — clean UX win, low risk. Flip to False if the chip
+    # reshuffle at done-time turns out to be jarring.
+    "RAG_RANK_SOURCES_BY_CITATION": (
+        os.environ.get("RAG_RANK_SOURCES_BY_CITATION", "true").lower() == "true"
+    ),
+    # Phase 5.1 — L2 Redis cache for query-side embeddings. Sits BEHIND
+    # the existing per-worker LRU (L1) in `embeddings/__init__.py`, so
+    # the typeahead hot path keeps its zero-network L1 hits AND a
+    # cross-worker / post-restart hit also skips the embedding API.
+    # Key = (model_name, sha256(text)); value = the float vector.
+    # TTL in seconds — set to 0 to disable L2 entirely (L1 LRU stays).
+    "RAG_EMBEDDING_CACHE_TTL_S": int(os.environ.get("RAG_EMBEDDING_CACHE_TTL_S", "600")),
     # Phase 14 — AI agent daily usage limit for free users.
     # Users with the "unlimited_agent" UserFeatureAccess grant bypass
     # this cap entirely. Set to 0 to disable the limit for everyone.

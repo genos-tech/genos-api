@@ -94,6 +94,8 @@ class GeminiClient:
         messages: list[AgentMessage],
         tools: list[ToolDeclaration],
         system_instruction: str,
+        *,
+        model_override: str | None = None,
     ) -> Iterator[tuple[str | None, FunctionCall | None]]:
         """Stream one model turn against the given history.
 
@@ -105,7 +107,7 @@ class GeminiClient:
 
         sdk_messages = [_message_to_sdk(m, types) for m in messages]
         sdk_tools = _tools_to_sdk(tools, types) if tools else None
-        model = settings.SEARCH_ENGINE["GEMINI_MODEL"]
+        model = model_override or settings.SEARCH_ENGINE["GEMINI_MODEL"]
 
         config = types.GenerateContentConfig(
             tools=sdk_tools,

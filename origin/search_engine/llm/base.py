@@ -40,4 +40,14 @@ class ModelClient(Protocol):
         messages: list[AgentMessage],
         tools: list[ToolDeclaration],
         system_instruction: str,
-    ) -> Iterator[tuple[str | None, FunctionCall | None]]: ...
+        *,
+        model_override: str | None = None,
+    ) -> Iterator[tuple[str | None, FunctionCall | None]]:
+        """Run one model turn.
+
+        `model_override` lets short-lived callers (e.g. the reranker)
+        point the same client at a faster / cheaper model for that one
+        call without mutating shared settings. None = use the
+        provider's default (the configured `*_MODEL` setting).
+        """
+        ...

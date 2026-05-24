@@ -35,7 +35,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"task_id must be an integer (got {raw_task_id!r}).")
 
     try:
-        task = TaskMaster.objects.get(task_id=task_id)
+        # select_related("project") lets the display_id property
+        # ("<project.code>-<project_task_number>") resolve without an
+        # extra query.
+        task = TaskMaster.objects.select_related("project").get(task_id=task_id)
     except TaskMaster.DoesNotExist:
         raise ToolError(f"Task {task_id} not found.")
 
@@ -78,6 +81,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     return {
         "task_id": task_id,
+        "display_id": task.display_id,
         "title": task.title or "",
         "status": task.status,
         "priority": task.priority,
@@ -89,7 +93,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "content_text": wrap_workspace_content(content_text),
         "comments": comments,
         "__summary__": (
-            f"Loaded task #{task_id}" + (f" + {len(comments)} comments" if comments else "")
+            f"Loaded task {task.display_id}" + (f" + {len(comments)} comments" if comments else "")
         ),
     }
 

@@ -31,13 +31,18 @@ Event types emitted (full NDJSON protocol):
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from typing import Any, Callable
 from uuid import UUID
 
 from django.conf import settings
 
-from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
+from origin.search_engine.agent.prompts import (
+    AGENT_SELF_CRITIQUE_PROMPT_TEMPLATE,
+    AGENT_SELF_CRITIQUE_SYSTEM,
+    AGENT_SYSTEM_PROMPT,
+)
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError
 from origin.search_engine.llm import (
     AgentMessage,
@@ -151,6 +156,10 @@ def _ui_source_for_match(match: dict[str, Any]) -> dict[str, Any]:
         "thread_id": match.get("thread_id"),
         "message_id": match.get("message_id"),
         "task_id": match.get("task_id"),
+        # Human-readable task ID ("<project.code>-<project_task_number>",
+        # e.g. "PRJ-42"). Hydrated by `_hydrate_task_display_ids` after
+        # the source list is built — the OpenSearch index doesn't carry it.
+        "task_display_id": None,
         "note_id": match.get("note_id"),
         "note_type": match.get("note_type"),
         "project_id": match.get("project_id"),
@@ -167,6 +176,265 @@ def _ui_source_for_match(match: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+from origin.search_engine.friendly_titles import (
+    apply_friendly_titles as _resolve_chat_titles,
+)
+
+
+def _apply_friendly_titles(
+    sources: list[dict[str, Any]], ctx: ToolContext
+) -> list[dict[str, Any]]:
+    """Replace placeholder chat titles ('DM 9') with viewer-friendly names.
+
+    Thin adapter over the shared `friendly_titles.apply_friendly_titles`
+    helper — kept so the in-loop call signature stays terse and so
+    structured-tool sources (which don't go through `search()`) still
+    get title resolution before chip emission.
+    """
+    return _resolve_chat_titles(sources, ctx.user_id)
+
+
+def _hydrate_task_display_ids(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Backfill `task_display_id` for task sources that don't already have one.
+
+    `_task_source` (called from structured tools like list_tasks /
+    fetch_task) sets display_id directly because the tool result already
+    carries it. `_ui_source_for_match` (search-knowledge-base path) does
+    NOT — the OpenSearch index stores only the raw task_id. We resolve
+    those missing ones here with one batched DB query.
+    """
+    missing_ids: list[int] = []
+    for src in sources:
+        if src.get("entity_type") != "task" or src.get("task_display_id"):
+            continue
+        raw = src.get("task_id")
+        if raw is None:
+            continue
+        try:
+            missing_ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+
+    if not missing_ids:
+        return sources
+
+    from origin.models.task.task_models import TaskMaster
+
+    by_id: dict[int, str] = {}
+    for t in TaskMaster.objects.select_related("project").filter(task_id__in=missing_ids):
+        by_id[t.task_id] = t.display_id
+
+    for src in sources:
+        if src.get("entity_type") != "task" or src.get("task_display_id"):
+            continue
+        try:
+            tid = int(src.get("task_id"))
+        except (TypeError, ValueError):
+            continue
+        if tid in by_id:
+            src["task_display_id"] = by_id[tid]
+    return sources
+
+
+def _blank_source(entity_type: str, entity_id: str) -> dict[str, Any]:
+    """Skeleton source dict; structured-tool helpers fill in the type-specific fields."""
+    return {
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "title": None,
+        "snippet": None,
+        "chat_type": None,
+        "chat_id": None,
+        "thread_id": None,
+        "message_id": None,
+        "task_id": None,
+        "task_display_id": None,
+        "note_id": None,
+        "note_type": None,
+        "project_id": None,
+        "matched_chunk_types": [],
+        "matched_terms": [],
+        "related_entity_ids": [],
+        "updated_at": None,
+        "score": 0.0,
+        "keyword_rank": None,
+        "vector_rank": None,
+    }
+
+
+def _task_source(
+    task_id: Any, title: Any, project_id: Any, display_id: Any = None
+) -> dict[str, Any]:
+    s = _blank_source("task", f"task:{task_id}")
+    s["title"] = title or ""
+    s["task_id"] = str(task_id) if task_id is not None else None
+    s["task_display_id"] = display_id or None
+    s["project_id"] = str(project_id) if project_id is not None else None
+    return s
+
+
+def _project_source(project_id: Any, project_name: Any) -> dict[str, Any]:
+    s = _blank_source("project", f"project:{project_id}")
+    s["title"] = project_name or ""
+    s["project_id"] = str(project_id) if project_id is not None else None
+    return s
+
+
+def _chat_source(
+    chat_type: Any,
+    chat_id: Any,
+    thread_id: Any = None,
+    title: Any = None,
+) -> dict[str, Any]:
+    # Chunker convention: entity_id has no leading "chat:" prefix.
+    base = f"{chat_type}:{chat_id}"
+    eid = f"{base}:thread:{thread_id}" if thread_id else base
+    s = _blank_source("chat", eid)
+    s["title"] = title or ""
+    s["chat_type"] = chat_type
+    s["chat_id"] = str(chat_id) if chat_id is not None else None
+    s["thread_id"] = str(thread_id) if thread_id else None
+    return s
+
+
+def _note_source(
+    note_type: Any,
+    note_id: Any,
+    title: Any = None,
+    parent_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    s = _blank_source("note", f"note:{note_type}:{note_id}")
+    s["title"] = title or ""
+    s["note_id"] = str(note_id) if note_id is not None else None
+    s["note_type"] = note_type
+    pc = parent_context or {}
+    s["project_id"] = pc.get("project_id")
+    s["task_id"] = pc.get("task_id")
+    s["chat_type"] = pc.get("chat_type")
+    s["chat_id"] = pc.get("chat_id")
+    s["thread_id"] = pc.get("thread_id")
+    return s
+
+
+def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build UI source dicts from a non-search read tool's result.
+
+    Returns [] for tools whose results don't map to a clickable entity
+    (e.g. analytics aggregations without per-row ids, get_current_user,
+    get_team_members — no user-detail view exists to link to).
+
+    Sources are deduped upstream by (entity_type, entity_id), so emitting
+    the same task from both `list_tasks` and `search_knowledge_base` in
+    one run only produces a single chip.
+    """
+    if not isinstance(result, dict):
+        return []
+
+    if call_name in ("list_tasks", "get_stale_tasks"):
+        return [
+            _task_source(
+                t.get("task_id"),
+                t.get("title"),
+                t.get("project_id"),
+                display_id=t.get("display_id"),
+            )
+            for t in (result.get("tasks") or [])
+            if t.get("task_id")
+        ]
+
+    if call_name == "fetch_task":
+        tid = result.get("task_id")
+        if not tid:
+            return []
+        return [
+            _task_source(
+                tid,
+                result.get("title"),
+                result.get("project_id"),
+                display_id=result.get("display_id"),
+            )
+        ]
+
+    if call_name == "list_projects":
+        return [
+            _project_source(p.get("project_id"), p.get("project_name"))
+            for p in (result.get("projects") or [])
+            if p.get("project_id")
+        ]
+
+    if call_name == "get_project_summary":
+        pid = result.get("project_id")
+        if not pid:
+            return []
+        return [_project_source(pid, result.get("project_name"))]
+
+    if call_name == "fetch_chat_thread":
+        chat_type = result.get("chat_type")
+        chat_id = result.get("chat_id")
+        if not chat_type or not chat_id:
+            return []
+        return [_chat_source(chat_type, chat_id, result.get("thread_id"))]
+
+    if call_name == "fetch_note":
+        nid = result.get("note_id")
+        ntype = result.get("note_type")
+        if not nid or not ntype:
+            return []
+        return [_note_source(ntype, nid, result.get("title"), result.get("parent_context"))]
+
+    return []
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4.2 — source-chip ranking by citation density                         #
+# --------------------------------------------------------------------------- #
+
+# Matches the same `[entity_id]` shape used in the agent's prompt and the
+# frontend citation rewriter — keep this in sync with `_CITATION_RE` in
+# evals/runner.py and the regex in SpotlightOverlay's rewriteCitations.
+_INLINE_CITATION_RE = re.compile(r"\[([a-z][a-z0-9_:\-]+)\]")
+
+
+def _rank_sources_by_citation(
+    answer_text: str,
+    sources: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Re-sort the source list so chips actually cited in the answer
+    surface leftmost. Stable for sources with the same citation count
+    (preserves original tool-emission order — which is already a
+    reasonable secondary signal since the most-relevant tool usually
+    fires first).
+
+    Citation-id matching mirrors the frontend's `sourcesById` lookup
+    (see Phase 0.3): citation tokens are always `<type>:<rest>`, but
+    some entity types (chats) ship `entity_id` without the leading
+    `<type>:` prefix. Normalise to the prefixed form for matching so
+    `chat:dm:9:thread:4` in the answer text finds a chat source whose
+    entity_id is `dm:9:thread:4`.
+    """
+    if not sources:
+        return sources
+
+    cited_tokens = {m.lower() for m in _INLINE_CITATION_RE.findall(answer_text or "")}
+    if not cited_tokens:
+        return sources
+
+    def _token_key(src: dict[str, Any]) -> str:
+        etype = (src.get("entity_type") or "").lower()
+        eid = (src.get("entity_id") or "").lower()
+        if not eid:
+            return ""
+        return eid if eid.startswith(f"{etype}:") else f"{etype}:{eid}"
+
+    def _citation_count(src: dict[str, Any]) -> int:
+        key = _token_key(src)
+        return 1 if key and key in cited_tokens else 0
+
+    # Stable sort by (cited > uncited). Python's `sorted` is stable so
+    # within-bucket order is preserved (= original tool-emission order).
+    return sorted(sources, key=lambda s: -_citation_count(s))
+
+
 # --------------------------------------------------------------------------- #
 # Public entry points                                                         #
 # --------------------------------------------------------------------------- #
@@ -179,7 +447,9 @@ def run_agent(
     *,
     run_id: UUID | None = None,
     prior_turns: list[tuple[str, str]] | None = None,
+    prior_summary: str | None = None,
     disabled_tools: set[str] | None = None,
+    trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
     """Drive the agent loop from a fresh user query.
 
@@ -203,10 +473,37 @@ def run_agent(
         The view layer reflects the pause back onto the `AgentRun` row.
     """
     messages: list[AgentMessage] = []
+    # Phase 3.5 — rolling summary of earlier turns prepended as an
+    # assistant "note to self" so the model can reference topics that
+    # have fallen out of the verbatim prior_turns window. Cheap, opt-in
+    # context recovery for long sessions. See `multi_turn.py`.
+    if prior_summary:
+        messages.append(
+            AgentMessage(
+                role="assistant",
+                text=f"[Context recap from earlier in this conversation: {prior_summary}]",
+            )
+        )
     for prior_query, prior_answer in prior_turns or []:
         messages.append(_user_turn(prior_query))
         messages.append(AgentMessage(role="assistant", text=prior_answer))
     messages.append(_user_turn(query))
+
+    # Phase 3.2 — optional self-critique pass. Dispatched here so the
+    # resume_agent path (write-tool approval flow) is NOT critiqued;
+    # critique only makes sense on a complete, un-paused turn.
+    if settings.SEARCH_ENGINE.get("RAG_AGENT_SELF_CRITIQUE", False):
+        return _drive_loop_with_critique(
+            user_query=query,
+            messages=messages,
+            ctx=ctx,
+            emit=emit,
+            run_id=run_id,
+            starting_step=0,
+            seen_sources_by_id={},
+            disabled_tools=disabled_tools,
+            trace_hook=trace_hook,
+        )
     return _drive_loop(
         messages=messages,
         ctx=ctx,
@@ -215,6 +512,7 @@ def run_agent(
         starting_step=0,
         seen_sources_by_id={},
         disabled_tools=disabled_tools,
+        trace_hook=trace_hook,
     )
 
 
@@ -400,6 +698,7 @@ def _drive_loop(
     starting_step: int,
     seen_sources_by_id: dict[tuple, dict[str, Any]],
     disabled_tools: set[str] | None = None,
+    trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
     """The core agent loop, shared by `run_agent` and `resume_agent`.
 
@@ -451,6 +750,19 @@ def _drive_loop(
                 )
                 _persist_step(run_id, step_index=step, error="empty_response")
                 return None
+            # Phase 4.2 — re-emit the sources list re-sorted by citation
+            # density before `done`. Frontend already handles `sources`
+            # events by replacing wholesale, so the final emit overrides
+            # the in-flight tool-emission order with the more-relevant
+            # citation-first order. Gated on a flag (default True) so
+            # operators can flip it off if the chip-reshuffle UX bites.
+            if (
+                settings.SEARCH_ENGINE.get("RAG_RANK_SOURCES_BY_CITATION", True)
+                and seen_sources_by_id
+            ):
+                final_answer = "".join(accumulated_text_parts)
+                ranked = _rank_sources_by_citation(final_answer, list(seen_sources_by_id.values()))
+                emit({"type": "sources", "sources": ranked})
             emit({"type": "done"})
             return None
 
@@ -548,6 +860,11 @@ def _drive_loop(
                     arguments_json=call_args,
                     error=str(e),
                 )
+                if trace_hook is not None:
+                    try:
+                        trace_hook(call_name, call_args, {"error": str(e)})
+                    except Exception:  # noqa: BLE001
+                        log.exception("trace_hook failed for tool %s (error path)", call_name)
                 messages.append(_assistant_function_call_turn(call))
                 messages.append(_function_response_turn(call_name, {"error": str(e)}))
                 continue
@@ -569,6 +886,11 @@ def _drive_loop(
                     arguments_json=call_args,
                     error=err,
                 )
+                if trace_hook is not None:
+                    try:
+                        trace_hook(call_name, call_args, {"error": err})
+                    except Exception:  # noqa: BLE001
+                        log.exception("trace_hook failed for tool %s (crash path)", call_name)
                 messages.append(_assistant_function_call_turn(call))
                 messages.append(_function_response_turn(call_name, {"error": err}))
                 continue
@@ -590,13 +912,39 @@ def _drive_loop(
                 summary=summary,
                 result_json=result,
             )
+            if trace_hook is not None:
+                try:
+                    trace_hook(call_name, call_args, result)
+                except Exception:  # noqa: BLE001 — trace hook must never break the loop
+                    log.exception("trace_hook failed for tool %s", call_name)
 
+            # Collect citation chips from this tool's result. Search produces
+            # them via _ui_source_for_match (one per match); structured read
+            # tools produce them via _ui_sources_from_tool_result. Both feed
+            # the same dedup map so a task surfaced by both list_tasks and
+            # search_knowledge_base in one run is still a single chip.
+            new_sources: list[dict[str, Any]] = []
             if call_name == "search_knowledge_base":
-                for match in result.get("matches", []):
-                    key = (match.get("entity_type"), match.get("entity_id"))
-                    if key in seen_sources_by_id:
-                        continue
-                    seen_sources_by_id[key] = _ui_source_for_match(match)
+                new_sources = [_ui_source_for_match(m) for m in result.get("matches", [])]
+            else:
+                new_sources = _ui_sources_from_tool_result(call_name, result)
+
+            # Swap viewer-agnostic placeholders ("DM 9") for friendly
+            # titles (partner / group / project name) before chips ship.
+            _apply_friendly_titles(new_sources, ctx)
+            # Backfill PRJ-123 display ids for search-result task sources
+            # (the index stores raw task_id only).
+            _hydrate_task_display_ids(new_sources)
+
+            added = False
+            for src in new_sources:
+                key = (src.get("entity_type"), src.get("entity_id"))
+                if not all(key) or key in seen_sources_by_id:
+                    continue
+                seen_sources_by_id[key] = src
+                added = True
+
+            if added:
                 emit(
                     {
                         "type": "sources",
@@ -616,6 +964,207 @@ def _drive_loop(
     )
     _persist_step(run_id, step_index=max_steps, error="step_cap_reached")
     return None
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3.2 — self-critique reflection wrapper                                #
+# --------------------------------------------------------------------------- #
+
+
+def _drive_loop_with_critique(
+    *,
+    user_query: str,
+    messages: list[AgentMessage],
+    ctx: ToolContext,
+    emit: Callable[[dict[str, Any]], None],
+    run_id: UUID | None,
+    starting_step: int,
+    seen_sources_by_id: dict[tuple, dict[str, Any]],
+    disabled_tools: set[str] | None = None,
+    trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
+) -> dict[str, Any] | None:
+    """Run `_drive_loop` with captured events, then optionally rewrite
+    the draft answer via a single self-critique LLM call.
+
+    Wrapper design (intentionally NOT inside `_drive_loop`): the inner
+    loop is untouched and remains the canonical control path. The
+    wrapper buffers events, runs a critique pass, then replays events
+    to the real `emit` with the draft answer possibly swapped for a
+    revised version.
+
+    Precision-tightening only — the critique cannot fire more tool
+    calls in this MVP. If a recall gap turns out to be the bottleneck
+    on a future suite, extend the critique prompt to allow emitting
+    a query the loop then executes.
+
+    Tradeoff: TTFT becomes "end of loop + critique" because all
+    answer_delta events are buffered. Acceptable for an experimental
+    flag (off by default). Production rollout should weigh streaming
+    vs. precision wins.
+
+    Pause path (write-tool approval) is passed through unchanged — the
+    `_drive_loop` returns a pause descriptor and the wrapper flushes
+    captured events as-is. Critique never fires on a paused run.
+    """
+    captured_events: list[dict[str, Any]] = []
+    captured_tool_results: list[dict[str, Any]] = []
+
+    def _capture_emit(event: dict[str, Any]) -> None:
+        captured_events.append(event)
+
+    def _capture_trace(name: str, args: dict[str, Any], result: dict[str, Any]) -> None:
+        captured_tool_results.append({"tool_name": name, "arguments": args, "result": result})
+        # Also forward to the caller's trace_hook if any (e.g. the eval runner).
+        if trace_hook is not None:
+            try:
+                trace_hook(name, args, result)
+            except Exception:  # noqa: BLE001
+                log.exception("Outer trace_hook failed inside critique wrapper for %s", name)
+
+    pause_descriptor = _drive_loop(
+        messages=messages,
+        ctx=ctx,
+        emit=_capture_emit,
+        run_id=run_id,
+        starting_step=starting_step,
+        seen_sources_by_id=seen_sources_by_id,
+        disabled_tools=disabled_tools,
+        trace_hook=_capture_trace,
+    )
+
+    if pause_descriptor is not None:
+        # Loop paused on a write tool; do not critique. Flush as captured.
+        for e in captured_events:
+            emit(e)
+        return pause_descriptor
+
+    draft_answer = "".join(
+        (e.get("text") or "") for e in captured_events if e.get("type") == "answer_delta"
+    )
+    if not draft_answer.strip():
+        # No final answer to critique (e.g. step-cap, fatal error).
+        for e in captured_events:
+            emit(e)
+        return None
+
+    try:
+        revised = _run_self_critique(
+            user_query=user_query,
+            tool_results=captured_tool_results,
+            draft=draft_answer,
+        )
+    except Exception:  # noqa: BLE001 — never break the loop on critique failure
+        log.exception("Self-critique LLM call failed; emitting draft unchanged")
+        for e in captured_events:
+            emit(e)
+        return None
+
+    if revised is None or _critique_says_keep(revised):
+        # KEEP path — flush as captured.
+        for e in captured_events:
+            emit(e)
+        return None
+
+    # Revise path — replay everything except the draft answer_delta
+    # events, then emit the revised answer once (just before `done`).
+    revised_emitted = False
+    for e in captured_events:
+        etype = e.get("type")
+        if etype == "answer_delta":
+            # Drop the draft text.
+            continue
+        if etype == "done" and not revised_emitted:
+            emit({"type": "answer_delta", "text": revised})
+            revised_emitted = True
+        emit(e)
+    # Defensive: if there was no `done` event in the capture (shouldn't
+    # happen for a clean termination) but we have a revision, surface it.
+    if not revised_emitted:
+        emit({"type": "answer_delta", "text": revised})
+        emit({"type": "done"})
+    return None
+
+
+def _critique_says_keep(text: str) -> bool:
+    """Recognise the literal KEEP signal. Anything else is a revision.
+
+    Strict: only `"KEEP"` (case-insensitive) plus optional surrounding
+    whitespace counts. If the model writes "KEEP, but actually …" or
+    "Looks good — KEEP", treat it as a revision so we don't accidentally
+    suppress a corrective rewrite.
+    """
+    return text.strip().upper() == "KEEP"
+
+
+def _run_self_critique(
+    *,
+    user_query: str,
+    tool_results: list[dict[str, Any]],
+    draft: str,
+) -> str | None:
+    """Run one self-critique LLM call. Returns the model's text response
+    (which may be the literal `KEEP` or a revised final answer).
+    """
+    prompt = AGENT_SELF_CRITIQUE_PROMPT_TEMPLATE.format(
+        user_query=user_query,
+        tool_summary=_format_tool_results_for_critique(tool_results),
+        draft=draft,
+    )
+    client = get_model_client()
+    chunks: list[str] = []
+    for text, _fcall in client.generate_step(
+        messages=[AgentMessage(role="user", text=prompt)],
+        tools=[],
+        system_instruction=AGENT_SELF_CRITIQUE_SYSTEM,
+    ):
+        if text:
+            chunks.append(text)
+    out = "".join(chunks).strip()
+    return out or None
+
+
+# Limits for the tool-result blob we hand to the critique LLM. The
+# critique only needs the scalar fields (status / due_date / counts) to
+# verify the draft — long comment bodies don't carry weight. Mirrors
+# the same per-string / per-list caps the eval judge uses, but inlined
+# here to keep controller / eval coupling at zero.
+_CRITIQUE_MAX_STRING_LEN = 500
+_CRITIQUE_MAX_LIST_LEN = 30
+
+
+def _format_tool_results_for_critique(tool_results: list[dict[str, Any]]) -> str:
+    """Compact, size-bounded JSON-ish rendering for the critique prompt."""
+    import json  # local — only loaded when the critique fires
+
+    lines: list[str] = []
+    for i, tr in enumerate(tool_results, start=1):
+        name = tr.get("tool_name") or "?"
+        args = json.dumps(tr.get("arguments") or {}, ensure_ascii=False, default=str)
+        result = json.dumps(
+            _truncate_for_critique(tr.get("result") or {}), ensure_ascii=False, default=str
+        )
+        lines.append(f"  {i}. {name}({args})\n     result: {result}")
+    return "\n".join(lines) if lines else "  (no tool calls)"
+
+
+def _truncate_for_critique(value: Any) -> Any:
+    """Recursively head-tail long strings and cap long lists.
+    Scalars (numbers, bools, dates) pass through verbatim — those are
+    where the critique's grounding checks land.
+    """
+    if isinstance(value, str):
+        if len(value) > _CRITIQUE_MAX_STRING_LEN:
+            half = _CRITIQUE_MAX_STRING_LEN // 2
+            return f"{value[:half]} … [{len(value) - _CRITIQUE_MAX_STRING_LEN} chars elided] … {value[-half:]}"
+        return value
+    if isinstance(value, list):
+        truncated = [_truncate_for_critique(v) for v in value[:_CRITIQUE_MAX_LIST_LEN]]
+        if len(value) > _CRITIQUE_MAX_LIST_LEN:
+            truncated.append(f"… [{len(value) - _CRITIQUE_MAX_LIST_LEN} more items elided]")
+        return truncated
+    if isinstance(value, dict):
+        return {k: _truncate_for_critique(v) for k, v in value.items()}
+    return value
 
 
 # --------------------------------------------------------------------------- #

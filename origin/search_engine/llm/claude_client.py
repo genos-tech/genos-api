@@ -64,6 +64,8 @@ class ClaudeClient:
         messages: list[AgentMessage],
         tools: list[ToolDeclaration],
         system_instruction: str,
+        *,
+        model_override: str | None = None,
     ) -> Iterator[tuple[str | None, FunctionCall | None]]:
         """Stream one model turn against the given history.
 
@@ -81,7 +83,7 @@ class ClaudeClient:
             for t in tools
         ]
 
-        model = settings.SEARCH_ENGINE["CLAUDE_MODEL"]
+        model = model_override or settings.SEARCH_ENGINE["CLAUDE_MODEL"]
         max_tokens = int(settings.SEARCH_ENGINE.get("CLAUDE_MAX_TOKENS", 4096))
 
         try:

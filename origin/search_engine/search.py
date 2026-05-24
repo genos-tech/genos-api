@@ -59,9 +59,21 @@ DEFAULT_LIMIT = 20
 DEFAULT_MIN_SCORE_RATIO = 0.5
 
 # Absolute minimum: anything below this is noise regardless of the top
-# score. Useful when the top score itself is barely above zero (e.g.
-# the only "matches" came in at rank 50+). Tunable per call.
-DEFAULT_MIN_SCORE = 1.0 / (RRF_K + 30)  # ≈ 0.011 — a single lane hit at rank ≥ 30
+# score. Cuts the "vector lane finds something for every query, even
+# gibberish" failure mode — for queries like "quantum photosynthesis
+# xylophone marauder" the vector lane returns plausible-looking but
+# semantically empty matches with RRF scores ≈ 0.027–0.033 (chunk
+# pool has uniform low similarity, no real signal). Setting this above
+# that band kills the noise.
+#
+# A/B (2026-05) on the 39-case retrieval suite found the safe range
+# is [0.035, 0.050] — within it `gibberish_returns_few_or_nothing`
+# moves FAIL→PASS with no regressions; at ≥ 0.060, legitimate weak
+# paraphrase queries (`paraphrase_q3_planning_artifacts`,
+# `scope_website_redesign_top`) start losing. 0.040 is the middle of
+# the safe band. Tunable per call AND per deploy via
+# `SEARCH_ENGINE["RAG_MIN_SCORE"]`.
+DEFAULT_MIN_SCORE = 0.040
 
 
 def search(
@@ -120,6 +132,18 @@ def search(
     if not query or not query.strip():
         return {"query": query, "results": []}
 
+    # Settings-level override hooks for the threshold knobs. When the
+    # caller didn't explicitly pin a value (i.e. left the kwarg at its
+    # Python default), settings can override at deploy time without
+    # touching code. Caller-pinned values always win — useful for
+    # tests that need a specific threshold regardless of env.
+    if min_score_ratio == DEFAULT_MIN_SCORE_RATIO:
+        min_score_ratio = float(
+            settings.SEARCH_ENGINE.get("RAG_MIN_SCORE_RATIO", DEFAULT_MIN_SCORE_RATIO)
+        )
+    if min_score == DEFAULT_MIN_SCORE:
+        min_score = float(settings.SEARCH_ENGINE.get("RAG_MIN_SCORE", DEFAULT_MIN_SCORE))
+
     client = get_client()
     index = get_index_alias()
 
@@ -174,25 +198,79 @@ def search(
 
     # --- Sort, apply relevance threshold, truncate to limit. ---
     grouped.sort(key=lambda x: x["score"], reverse=True)
+    pre_threshold = grouped  # keep the un-cut ranking for the floor restore
     grouped = _apply_relevance_threshold(grouped, min_score_ratio, min_score)
 
-    # --- Phase 6: optional LLM-as-judge reranker (flag-gated) ---
-    # Off by default. When on, we hand the top INPUT_K entities to the
-    # active ModelClient and use its reordering. The reranker is
-    # responsible for falling back to pre-rerank order on any error.
+    # --- Phase 1.2: per-entity-type representation floor (flag-gated) ---
+    # Off by default. When on, ensures the result set contains the
+    # top-ranked entity of each type that existed in the pre-threshold
+    # ranking. Counteracts the "task crowds out a strong chat" failure
+    # where threshold ratio cuts a legitimate #2/#3 hit just because
+    # the #1 hit is a different type with much higher score.
+    if settings.SEARCH_ENGINE.get("RAG_REPRESENTATION_FLOOR") and pre_threshold:
+        grouped = _apply_representation_floor(grouped, pre_threshold)
+
+    # --- Phase 6: optional rerank stage (LLM judge or Cohere, flag-gated) ---
+    # Off by default. When on, dispatched via RAG_RERANKER_PROVIDER
+    # to either the LLM judge or Cohere v2 Rerank. Reranker module
+    # falls back to pre-rerank order on any error.
+    #
+    # `RAG_RERANK_LOCK_TOP_N` (default 0 = disabled) lets us protect
+    # the top-N RRF hits from being reshuffled by the semantic
+    # reranker. A/B on this suite showed that any semantic reranker
+    # applied to the *whole* result set wins on paraphrase queries but
+    # regresses on exact-phrase queries (RRF's already-confident top
+    # hits get displaced by semantically-richer-but-less-precise
+    # candidates). Locking the top-N from RRF preserves those wins
+    # while still letting the reranker fix the noisy tail.
     if settings.SEARCH_ENGINE.get("RAG_USE_RERANKER") and grouped:
         from origin.search_engine.reranker import rerank  # noqa: PLC0415
 
         input_k = int(settings.SEARCH_ENGINE.get("RAG_RERANK_INPUT_K", 20))
         output_k = int(settings.SEARCH_ENGINE.get("RAG_RERANK_OUTPUT_K", 10))
-        grouped = rerank(
-            query=query,
-            entities=grouped,
-            input_k=input_k,
-            output_k=min(output_k, limit),
-        )
+        lock_top_n = int(settings.SEARCH_ENGINE.get("RAG_RERANK_LOCK_TOP_N", 0))
+        lock_top_n = max(0, min(lock_top_n, len(grouped)))
 
-    return {"query": query, "results": grouped[:limit]}
+        if lock_top_n > 0 and len(grouped) > lock_top_n:
+            # Lock the top-N RRF hits; rerank only the tail. Final
+            # output = locked head + reranked tail (deduped, capped
+            # at output_k).
+            head = grouped[:lock_top_n]
+            tail = grouped[lock_top_n:]
+            # Effective input_k for the tail-only rerank — the locked
+            # head doesn't count toward the model's input budget.
+            tail_input_k = max(0, input_k - lock_top_n)
+            tail_output_k = max(0, min(output_k, limit) - lock_top_n)
+            reranked_tail = (
+                rerank(
+                    query=query,
+                    entities=tail,
+                    input_k=tail_input_k,
+                    output_k=tail_output_k,
+                )
+                if tail_output_k > 0 and tail_input_k > 0
+                else []
+            )
+            grouped = head + reranked_tail
+        else:
+            grouped = rerank(
+                query=query,
+                entities=grouped,
+                input_k=input_k,
+                output_k=min(output_k, limit),
+            )
+
+    # --- Final pass: friendly chat titles. ---
+    # OpenSearch stores a viewer-agnostic placeholder for chats ("DM 9")
+    # because a DM's name depends on who's looking. Resolve here so
+    # every search consumer (typeahead, agent) sees the same friendly
+    # name (partner / group / project name).
+    from origin.search_engine.friendly_titles import apply_friendly_titles  # noqa: PLC0415
+
+    final = grouped[:limit]
+    apply_friendly_titles(final, user_id)
+
+    return {"query": query, "results": final}
 
 
 def _multi_variant_fuse(
@@ -208,16 +286,25 @@ def _multi_variant_fuse(
     """Run keyword + vector for each variant and merge into one ranked list.
 
     Per-variant: `_run_keyword` + `_run_vector` (if enabled) → `_rrf_fuse`.
-    Across variants: chunk-level score summation. A chunk that appears
-    in K of N variants accumulates K RRF scores — so multi-variant
-    matches naturally outrank single-variant ones without any
-    per-variant weighting heuristics.
+    Across variants: chunk-level WEIGHTED score summation. The original
+    query (index 0 in `variants`) contributes at a higher weight than
+    LLM-generated rewrites because it carries the user's actual intent;
+    rewrites are aids that can drift on-topic-but-off-meaning. Without
+    this weighting, an exact-phrase match against the original (e.g.
+    "competitor analysis" → task titled "Competitor analysis") gets
+    crowded out by RRF noise from variant-only hits.
 
-    Single-variant case (`len(variants) == 1`) is byte-identical to the
-    pre-Phase-10 path.
+    Weight is `RAG_REWRITE_ORIGINAL_WEIGHT` (default 2.0); each
+    variant contributes weight 1.0. With weight 1.0 the behavior is
+    byte-identical to the un-weighted Phase-10 path. Single-variant
+    case (`len(variants) == 1`) is unaffected by weighting.
     """
+    original_weight = float(settings.SEARCH_ENGINE.get("RAG_REWRITE_ORIGINAL_WEIGHT", 2.0))
+
     chunks_by_id: dict[str, dict] = {}
-    for variant in variants:
+    for idx, variant in enumerate(variants):
+        weight = original_weight if idx == 0 else 1.0
+
         keyword_hits = _run_keyword(
             client, index, variant, base_filter, pool_size, for_agent=for_agent
         )
@@ -236,15 +323,20 @@ def _multi_variant_fuse(
         variant_fused = _rrf_fuse(keyword_hits, vector_hits)
         for hit in variant_fused:
             cid = hit["chunk_id"]
+            weighted_score = hit["score"] * weight
             existing = chunks_by_id.get(cid)
             if existing is None:
-                # First time we see this chunk — keep the dict as-is.
-                chunks_by_id[cid] = dict(hit)
+                # First time we see this chunk — keep the dict, but
+                # store the weighted score so subsequent merges are on
+                # equal footing.
+                copied = dict(hit)
+                copied["score"] = weighted_score
+                chunks_by_id[cid] = copied
                 continue
-            # Same chunk surfaced for a previous variant. Sum the RRF
-            # scores and keep the best (lowest) lane ranks for the UI's
-            # debug fields.
-            existing["score"] += hit["score"]
+            # Same chunk surfaced for a previous variant. Add the
+            # weighted RRF contribution and keep best (lowest) lane
+            # ranks for the UI's debug fields.
+            existing["score"] += weighted_score
             existing["keyword_rank"] = _min_rank(
                 existing.get("keyword_rank"), hit.get("keyword_rank")
             )
@@ -322,6 +414,15 @@ def _apply_relevance_threshold(
     """Drop results that are weak in absolute or relative terms.
 
     `grouped` must already be sorted by score desc.
+
+    Adaptive guard: when the threshold would leave fewer than
+    `RAG_THRESHOLD_MIN_SURVIVORS` entities, we treat that as evidence
+    the candidate set is already tight (small or low-confidence corpus
+    for this query) and skip the cut entirely. The original bug this
+    addresses: a query that surfaced one strong DM + two weaker hits
+    saw all three cut because the strong DM made the ratio floor too
+    high — leaving the user with zero results instead of three useful
+    ones. Default min_survivors=3; setting 0 disables the guard.
     """
     if not grouped:
         return grouped
@@ -330,7 +431,47 @@ def _apply_relevance_threshold(
     floor = max(relative_floor, min_score)
     if floor <= 0:
         return grouped
-    return [g for g in grouped if g["score"] >= floor]
+    survivors = [g for g in grouped if g["score"] >= floor]
+
+    min_survivors = int(settings.SEARCH_ENGINE.get("RAG_THRESHOLD_MIN_SURVIVORS", 3))
+    if 0 < min_survivors and len(survivors) < min_survivors:
+        # Keep the top-`min_survivors` un-cut so the consumer always
+        # sees a usable set. They were ranked highest pre-threshold;
+        # their absolute scores being low just means this query was
+        # narrow, not that the matches are wrong.
+        return grouped[:min_survivors]
+    return survivors
+
+
+def _apply_representation_floor(survivors: list[dict], pre_threshold: list[dict]) -> list[dict]:
+    """Guarantee each entity type that had ANY match survives the cut.
+
+    Walks `pre_threshold` (the un-cut, score-sorted ranking) for each
+    entity type. If a type is missing from `survivors`, the highest-
+    ranked entity of that type is appended back.
+
+    Preserves the score order of `survivors`; restored entries land at
+    the tail (they were already below the threshold so they shouldn't
+    outrank the legitimate survivors, but they're better than zero
+    representation for that type).
+    """
+    if not pre_threshold:
+        return survivors
+
+    present_types = {e.get("entity_type") for e in survivors}
+    seen_ids = {(e.get("entity_type"), e.get("entity_id")) for e in survivors}
+    out = list(survivors)
+    for entity in pre_threshold:
+        etype = entity.get("entity_type")
+        if etype in present_types:
+            continue
+        key = (etype, entity.get("entity_id"))
+        if key in seen_ids:
+            continue
+        out.append(entity)
+        present_types.add(etype)
+        seen_ids.add(key)
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -423,9 +564,20 @@ def _run_keyword(
                 "must": {
                     "multi_match": {
                         "query": query,
+                        # Field-level BM25 boosts. Title is the
+                        # densest signal — short, intentional, often
+                        # the verbatim query for "find me this thing"
+                        # asks. Snippet_text is the next-densest
+                        # (entity-level highlight). Search_text
+                        # carries the full chunk body. The default
+                        # 3 / 2 / 1 ladder was chosen at Phase 3 to
+                        # surface title-verbatim matches over body
+                        # matches with the same term count. Made
+                        # tunable in Phase 2.5 to enable per-deploy
+                        # A/B without code changes.
                         "fields": [
-                            "title^3",
-                            "snippet_text^2",
+                            f"title^{int(settings.SEARCH_ENGINE.get('RAG_BM25_TITLE_BOOST', 3))}",
+                            f"snippet_text^{int(settings.SEARCH_ENGINE.get('RAG_BM25_SNIPPET_BOOST', 2))}",
                             "search_text",
                         ],
                         "type": "best_fields",

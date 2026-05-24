@@ -1,26 +1,47 @@
-"""LLM-as-judge reranker.
+"""Reranker — provider-pluggable second stage over hybrid results.
 
-After hybrid retrieval produces an entity-level result list, this
-module asks the configured `ModelClient` (Gemini or Claude, whichever
-is active) to re-order the top-K results by actual relevance to the
-user's query. Off by default; enabled per deploy via
-`SEARCH_ENGINE["RAG_USE_RERANKER"]`.
+After hybrid retrieval produces an entity-level result list, an
+optional rerank stage can reorder the top-K. Off by default; enabled
+per deploy via `SEARCH_ENGINE["RAG_USE_RERANKER"]`.
 
-Why an LLM-as-judge instead of a dedicated cross-encoder model:
+Providers (`SEARCH_ENGINE["RAG_RERANKER_PROVIDER"]`):
 
-  * We already have a provider-neutral `ModelClient` interface from
-    Phase 5. Reusing it means no new SDK and no provider lock-in.
-  * Cross-encoder rerankers (e.g. Cohere Rerank, BGE) are excellent
-    but add another vendor / deployment dependency. We can swap in
-    one later behind the same `rerank(...)` function signature.
-  * The cost is bounded — input is title + truncated snippet for
-    each candidate (~150 chars each × 20 candidates ≈ 3 K tokens
-    input, tiny output). Pennies per call.
+  * `"llm"` (default) — LLM-as-judge via the configured `ModelClient`.
+    Quality-vs-speed knobs:
+      - `RAG_RERANKER_MODEL`: per-call model override
+        (e.g. `gemini-2.5-flash` — ~3× faster than `pro` at equivalent
+        rerank quality on our suite).
+      - `RAG_RERANK_KEEP_DROPPED`: when True, items the model omits
+        are appended in their pre-rerank order instead of being
+        discarded. A/B showed this doesn't help on its own — the
+        reranker reorders so badly that keeping items just preserves
+        the bad order — but kept as a knob for downstream tuning.
 
-Graceful degradation: if the model returns malformed JSON, an empty
-list, or fails entirely, we return the original ordering unchanged
-and log a warning. The reranker should never be the reason a query
-crashes.
+  * `"cohere"` — hosted cross-encoder via Cohere v2 Rerank API.
+    Requires `COHERE_API_KEY` (gracefully falls back to `"llm"` with
+    a warning when unset). Defaults: model `rerank-v3.5`, p95 ~300 ms,
+    ~$2 / 1k queries. Cross-encoders trained on (query, passage)
+    relevance pairs don't have the LLM judge's paraphrase-wins
+    / exact-phrase-loses tradeoff — see session A/B notes in the
+    roadmap.
+
+  * (future) `"jina"` — Jina AI Rerank, same shape as Cohere.
+
+  * (future) `"local"` — sentence-transformers cross-encoder
+    (`cross-encoder/ms-marco-MiniLM-L-6-v2` or BGE-reranker). Zero
+    per-query cost but adds torch/transformers to the image. Implement
+    `_rerank_local(...)` behind the same signature.
+
+The eval-suite findings (session 2026-05) show LLM rerank is **net
+zero** on this case set: it wins paraphrase queries but loses
+exact-phrase queries at similar rate. True cross-encoder models are
+trained on (query, passage) → relevance pairs and don't have this
+tradeoff; they're the right next step.
+
+Graceful degradation: any error path — malformed JSON, empty
+response, model failure, unknown provider — falls back to the
+pre-rerank ordering and logs a warning. The reranker should never
+crash a query.
 """
 
 from __future__ import annotations
@@ -29,6 +50,8 @@ import json
 import logging
 import re
 from typing import Any
+
+from django.conf import settings
 
 from origin.search_engine.llm import AgentMessage, get_model_client
 
@@ -66,7 +89,38 @@ def rerank(
     input_k: int,
     output_k: int,
 ) -> list[dict[str, Any]]:
-    """Return up to `output_k` entities reordered by LLM-judged relevance.
+    """Dispatch to the configured reranker provider.
+
+    Provider is `SEARCH_ENGINE["RAG_RERANKER_PROVIDER"]` (default
+    `"llm"`). Unknown providers fall through to the LLM path with a
+    warning so a typo in the env var doesn't crash retrieval.
+    """
+    provider = (settings.SEARCH_ENGINE.get("RAG_RERANKER_PROVIDER") or "llm").lower()
+    if provider == "llm":
+        return _rerank_llm(query=query, entities=entities, input_k=input_k, output_k=output_k)
+    if provider == "cohere":
+        return _rerank_cohere(query=query, entities=entities, input_k=input_k, output_k=output_k)
+    # Stubs for future cross-encoder providers — implement these and
+    # the dispatcher routes traffic automatically.
+    if provider in {"jina", "local", "vertex_ranking"}:
+        log.warning(
+            "RAG_RERANKER_PROVIDER=%r is not yet implemented; falling back to llm. "
+            "See agent/evals/runs/ for the latest A/B numbers when this lands.",
+            provider,
+        )
+        return _rerank_llm(query=query, entities=entities, input_k=input_k, output_k=output_k)
+    log.warning("RAG_RERANKER_PROVIDER=%r is unknown; falling back to llm.", provider)
+    return _rerank_llm(query=query, entities=entities, input_k=input_k, output_k=output_k)
+
+
+def _rerank_llm(
+    *,
+    query: str,
+    entities: list[dict[str, Any]],
+    input_k: int,
+    output_k: int,
+) -> list[dict[str, Any]]:
+    """LLM-as-judge reranker.
 
     Args:
         query:     the user query (the original `search(...)` `query` arg).
@@ -91,12 +145,21 @@ def rerank(
     client = get_model_client()
     msgs = [AgentMessage(role="user", text=prompt)]
 
+    # Reranking is a narrow classification task — no tool use, no
+    # multi-step reasoning. A smaller / faster model usually matches
+    # the bigger one's quality at a fraction of the latency. Wire a
+    # per-call override so operators can point `RAG_RERANKER_MODEL` at
+    # e.g. `gemini-2.5-flash` for the agent path without changing the
+    # main `GEMINI_MODEL` used for answer generation.
+    model_override = settings.SEARCH_ENGINE.get("RAG_RERANKER_MODEL") or None
+
     try:
         chunks: list[str] = []
         for text, fc in client.generate_step(
             messages=msgs,
             tools=[],
             system_instruction=_SYSTEM_PROMPT,
+            model_override=model_override,
         ):
             if text:
                 chunks.append(text)
@@ -120,8 +183,164 @@ def rerank(
         )
         return candidates[:output_k]
 
+    # Optional "rerank but never drop" mode: the model's order wins,
+    # but any input candidate the model omitted is appended in its
+    # original (pre-rerank) position so nothing is lost. Useful when
+    # the reranker is over-pruning. Off by default — A/B in the
+    # retrieval suite showed it doesn't help on its own (the
+    # reranker reorders so badly that keeping all items just preserves
+    # the bad order). Kept as a knob for downstream tuning.
+    if settings.SEARCH_ENGINE.get("RAG_RERANK_KEEP_DROPPED", False):
+        chosen = set(indices)
+        tail = [j for j in range(len(candidates)) if j not in chosen]
+        indices = indices + tail
+
     reordered = [candidates[i] for i in indices[:output_k]]
     return reordered
+
+
+# --------------------------------------------------------------------------- #
+# Cohere Rerank v2 — purpose-built cross-encoder                              #
+# --------------------------------------------------------------------------- #
+
+
+def _rerank_cohere(
+    *,
+    query: str,
+    entities: list[dict[str, Any]],
+    input_k: int,
+    output_k: int,
+) -> list[dict[str, Any]]:
+    """Reorder via Cohere's hosted Rerank v2 API.
+
+    Cross-encoders trained on `(query, passage) → relevance` pairs
+    don't have the LLM judge's paraphrase-wins-exact-phrase-loses
+    tradeoff. They're also ~30–50× faster than an LLM rerank call
+    (p95 ~300 ms) and ~5× cheaper.
+
+    Falls back to LLM rerank when `COHERE_API_KEY` is unset, so an
+    operator can flip `RAG_RERANKER_PROVIDER=cohere` ahead of
+    receiving the key without taking the surface down.
+
+    Pre-rerank-order fallback (same as the LLM path) on any network
+    or parsing error so the reranker never crashes a query.
+    """
+    if not entities or input_k <= 1 or output_k <= 0:
+        return entities[: max(output_k, 0)]
+
+    api_key = settings.SEARCH_ENGINE.get("COHERE_API_KEY") or ""
+    if not api_key:
+        log.warning(
+            "RAG_RERANKER_PROVIDER=cohere but COHERE_API_KEY is unset; "
+            "falling back to llm reranker."
+        )
+        return _rerank_llm(query=query, entities=entities, input_k=input_k, output_k=output_k)
+
+    candidates = entities[:input_k]
+    documents = [_cohere_doc_text(c) for c in candidates]
+
+    payload = {
+        "model": settings.SEARCH_ENGINE.get("COHERE_RERANK_MODEL") or "rerank-v3.5",
+        "query": query,
+        "documents": documents,
+        "top_n": min(output_k, len(documents)),
+    }
+    url = (
+        settings.SEARCH_ENGINE.get("COHERE_RERANK_BASE_URL")
+        or "https://api.cohere.com/v2/rerank"
+    )
+    timeout = float(settings.SEARCH_ENGINE.get("COHERE_RERANK_TIMEOUT_S") or 10)
+
+    try:
+        import time as _time  # noqa: PLC0415
+
+        import httpx  # noqa: PLC0415 — httpx is already an indirect dep
+
+        # Rate-limit-aware retry. Trial keys are 10 calls/min (60s
+        # rolling window); production keys are ~1000/min. Both can
+        # transiently 429 under bursty load (e.g. a 39-case eval
+        # batch). Retries honor `Retry-After` when Cohere sends it;
+        # otherwise we sleep `COHERE_RERANK_RETRY_BACKOFF_S` (default
+        # 15s) so a few back-to-back trial-key bursts naturally fall
+        # back into the next window. Tunable via
+        # `COHERE_RERANK_MAX_RETRIES` (default 3 = up to ~45s of
+        # cumulative wait per failing call).
+        max_retries = int(settings.SEARCH_ENGINE.get("COHERE_RERANK_MAX_RETRIES", 3))
+        retry_backoff = float(
+            settings.SEARCH_ENGINE.get("COHERE_RERANK_RETRY_BACKOFF_S", 15)
+        )
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(url, headers=headers, json=payload)
+            attempts = 1
+            while resp.status_code == 429 and attempts <= max_retries:
+                wait_s = float(resp.headers.get("Retry-After") or retry_backoff)
+                log.warning(
+                    "Cohere rerank 429; sleeping %.1fs then retrying (attempt %d/%d)",
+                    wait_s,
+                    attempts,
+                    max_retries,
+                )
+                _time.sleep(wait_s)
+                resp = client.post(url, headers=headers, json=payload)
+                attempts += 1
+
+        if resp.status_code != 200:
+            log.warning(
+                "Cohere rerank returned %d: %s; falling back to pre-rerank order",
+                resp.status_code,
+                resp.text[:200],
+            )
+            return candidates[:output_k]
+        data = resp.json()
+    except Exception:  # noqa: BLE001 — surface as fallback, not a crash
+        log.exception("Cohere rerank call failed; falling back to pre-rerank order")
+        return candidates[:output_k]
+
+    # v2 response shape: {"id": "...", "results": [{"index": 0,
+    # "relevance_score": 0.93}, ...]}. Results are pre-sorted by
+    # relevance_score descending; we honor that order.
+    raw_results = data.get("results") or []
+    indices: list[int] = []
+    seen: set[int] = set()
+    for r in raw_results:
+        idx = r.get("index")
+        if not isinstance(idx, int):
+            continue
+        if 0 <= idx < len(candidates) and idx not in seen:
+            seen.add(idx)
+            indices.append(idx)
+
+    if not indices:
+        log.warning(
+            "Cohere rerank returned no usable indices (%r); falling back to pre-rerank order",
+            data,
+        )
+        return candidates[:output_k]
+
+    return [candidates[i] for i in indices[:output_k]]
+
+
+def _cohere_doc_text(entity: dict[str, Any]) -> str:
+    """Flatten an entity to the single string Cohere reranks against.
+
+    Same surface the LLM reranker sees (title + truncated snippet) so
+    the A/B between the two providers compares like-for-like. Empty
+    components are skipped so we don't ship blank documents that
+    Cohere would reject.
+    """
+    title = (entity.get("title") or "").strip()
+    snippet = (entity.get("snippet") or "").strip()
+    snippet = snippet.replace("<workspace_content>", "").replace("</workspace_content>", "").strip()
+    if len(snippet) > _SNIPPET_TRUNCATE:
+        snippet = snippet[:_SNIPPET_TRUNCATE].rstrip() + "…"
+    if title and snippet:
+        return f"{title}\n{snippet}"
+    return title or snippet or "(untitled)"
 
 
 # --------------------------------------------------------------------------- #

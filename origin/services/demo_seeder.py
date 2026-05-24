@@ -1943,7 +1943,7 @@ CHAT_NOTE_GM_KICKOFF_RECAP_BODY = _body(
 # ---------------------------------------------------------------------------
 
 
-def create_demo_environment(demo_user: CustomUser) -> dict:
+def create_demo_environment(demo_user: CustomUser, *, short: str | None = None) -> dict:
     """Provision a fresh demo team + bot peers + sample data for
     `demo_user`. Returns `{"team_id": str, "team_name": str}` so the
     sign-in endpoint can pre-fill the frontend localStorage and skip
@@ -1952,8 +1952,14 @@ def create_demo_environment(demo_user: CustomUser) -> dict:
     Wrapped in a single transaction so partial failures roll back —
     the caller's `create_user` call must also be inside the same
     `transaction.atomic()` for the user row to roll back too.
+
+    `short`: optional override for the per-tenant slug suffix. The demo
+    sign-in path leaves this None so each demo user gets a fresh random
+    slug. The eval fixture passes a fixed slug so the same content
+    re-seeds the same names / emails reproducibly.
     """
-    short = uuid.uuid4().hex[:8]
+    if short is None:
+        short = uuid.uuid4().hex[:8]
 
     with transaction.atomic():
         # 1. Bot peer users
@@ -2126,9 +2132,19 @@ def _create_project_from_blueprint(team, demo_user, all_members, bots, short, bl
     """Create one project, its tags, sprint, milestone (with backing
     task), and all tasks + subtasks + comments. Returns
     `{"project": project, "blueprint": blueprint, "tasks": [TaskMaster, ...]}`."""
+    from origin.services.project_code import derive_project_code
+
+    project_name = f"{blueprint['name']} · demo-{short}"
+    # Derive a 2–6 letter code so each task gets a real PRJ-123 display
+    # id instead of the "#42" fallback. Scope uniqueness to the team
+    # (different demo teams can both have a "WR" code).
+    taken_codes = set(
+        ProjectMaster.objects.filter(team=team, code__isnull=False).values_list("code", flat=True)
+    )
     project = ProjectMaster.objects.create(
         team=team,
-        project_name=f"{blueprint['name']} · demo-{short}",
+        project_name=project_name,
+        code=derive_project_code(project_name, taken_codes),
         owner=demo_user,
         project_system_user=demo_user,
         is_private=False,
