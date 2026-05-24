@@ -1,5 +1,6 @@
 from django.db import transaction
-from django.db.models import F, Value, IntegerField, Q
+from django.db.models import Case, CharField, F, IntegerField, Q, Value, When
+from django.db.models.functions import Concat
 from rest_framework.response import Response
 from rest_framework import status
 
@@ -140,6 +141,25 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
                 projectId=F("project"),
                 projectName=F("project__project_name"),
                 taskTitle=F("task__title"),
+                # Mirror `TaskMaster.display_id` at the DB level so the
+                # sidebar's task-folder label can render "<code>-<n>"
+                # without an extra lookup. NULL when either side is
+                # missing — frontend `formatTaskDisplayId` falls back to
+                # "#<taskId>".
+                displayId=Case(
+                    When(
+                        Q(task__project__code__isnull=False)
+                        & Q(task__project_task_number__isnull=False),
+                        then=Concat(
+                            F("task__project__code"),
+                            Value("-"),
+                            F("task__project_task_number"),
+                            output_field=CharField(),
+                        ),
+                    ),
+                    default=Value(None),
+                    output_field=CharField(),
+                ),
                 parentTaskId=F("task__parent_task_id"),
                 isMilestone=F("task__is_milestone"),
                 milestoneId=F("task__milestone_id"),
@@ -155,6 +175,7 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
                 "taskId",
                 "projectName",
                 "taskTitle",
+                "displayId",
                 "parentTaskId",
                 "isMilestone",
                 "milestoneId",
@@ -173,12 +194,16 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
         # — without it, the sidebar would show a duplicate "Task N" folder
         # underneath the milestone folder that already represents task N.
         parent_ids = {row["parentTaskId"] for row in notes if row["parentTaskId"] is not None}
+        # Pull `project` alongside title/is_milestone so each parent's
+        # `display_id` (computed from project.code + project_task_number)
+        # is resolvable without an extra query — the sidebar uses it as
+        # the L3-subtask folder's label.
         parent_info_map = (
             {
-                t.task_id: (t.title, t.is_milestone)
-                for t in TaskMaster.objects.filter(
-                    team=data["team_id"], task_id__in=parent_ids
-                ).only("task_id", "title", "is_milestone")
+                t.task_id: (t.title, t.is_milestone, t.display_id)
+                for t in TaskMaster.objects.filter(team=data["team_id"], task_id__in=parent_ids)
+                .select_related("project")
+                .only("task_id", "title", "is_milestone", "project", "project_task_number")
             }
             if parent_ids
             else {}
@@ -187,6 +212,7 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
             info = parent_info_map.get(row["parentTaskId"])
             row["parentTaskTitle"] = info[0] if info else None
             row["parentTaskIsMilestone"] = info[1] if info else None
+            row["parentTaskDisplayId"] = info[2] if info else None
 
         return Response(notes, status=status.HTTP_200_OK)
 
@@ -294,6 +320,11 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                         # would render "Task #<id>" / "Project <id>" until
                         # the next full meta refetch.
                         note["taskTitle"] = task.title
+                        # Surface the human-readable id so the
+                        # optimistic sidebar render uses "<code>-<n>"
+                        # for the new note's task folder. Same fallback
+                        # semantics as `TaskMaster.display_id`.
+                        note["displayId"] = task.display_id
                         note["projectName"] = task.project.project_name if task.project else None
                         note["parentTaskId"] = task.parent_task_id
                         note["isMilestone"] = task.is_milestone
@@ -304,18 +335,27 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                                 TaskMaster.objects.filter(
                                     team=data["team"], task_id=task.parent_task_id
                                 )
-                                .only("title", "is_milestone")
+                                .select_related("project")
+                                .only(
+                                    "title",
+                                    "is_milestone",
+                                    "project",
+                                    "project_task_number",
+                                )
                                 .first()
                             )
                             note["parentTaskTitle"] = parent.title if parent else None
                             note["parentTaskIsMilestone"] = parent.is_milestone if parent else None
+                            note["parentTaskDisplayId"] = parent.display_id if parent else None
                         else:
                             note["parentTaskTitle"] = None
                             note["parentTaskIsMilestone"] = None
+                            note["parentTaskDisplayId"] = None
                     except TaskMaster.DoesNotExist:
                         # Fall back to empty hierarchy — the next meta
                         # refetch will fill in the right fields.
                         note["taskTitle"] = None
+                        note["displayId"] = None
                         note["projectName"] = None
                         note["parentTaskId"] = None
                         note["isMilestone"] = False
@@ -323,6 +363,7 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                         note["milestoneTitle"] = None
                         note["parentTaskTitle"] = None
                         note["parentTaskIsMilestone"] = None
+                        note["parentTaskDisplayId"] = None
 
                     # Second, create the associated role for that note
                     team_obj = TeamMaster.objects.get(team_id=data["team"])
