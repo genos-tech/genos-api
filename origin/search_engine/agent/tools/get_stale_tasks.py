@@ -91,6 +91,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         tasks.append(
             {
                 "task_id": t.task_id,
+                "display_id": t.display_id,
                 "title": t.title,
                 "status": t.status,
                 "priority": t.priority,

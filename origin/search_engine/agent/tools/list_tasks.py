@@ -120,6 +120,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         tasks.append(
             {
                 "task_id": t.task_id,
+                # Human-readable PRJ-123 form. Used in chip labels and
+                # whenever the prose references a task — never expose the
+                # raw integer task_id to end users.
+                "display_id": t.display_id,
                 "title": t.title,
                 "status": t.status,
                 "priority": t.priority,

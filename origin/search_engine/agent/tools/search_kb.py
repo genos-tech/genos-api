@@ -19,6 +19,14 @@ from origin.search_engine.agent.tools.base import Tool, ToolContext, wrap_worksp
 from origin.search_engine.search import search
 
 _MAX_LIMIT = 20
+# Agent path uses a tighter relevance cutoff than typeahead search.
+# Typeahead is browse-y — users want comprehensive matches as they type.
+# The agent feeds matches directly into an answer + chip row, so a long
+# tail of weak hits becomes prompt-bloat AND noisy citation chips.
+# Default search() floor is `top_score * 0.5`; bumping to 0.7 trims the
+# bottom 30% relative to the top hit. Tunable per-call via the tool's
+# `limit`; the threshold itself is fixed.
+_AGENT_MIN_SCORE_RATIO = 0.7
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -51,6 +59,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         user_id=ctx.user_id,
         entity_types=entity_types,
         limit=limit,
+        min_score_ratio=_AGENT_MIN_SCORE_RATIO,
         for_agent=True,
         rewrite=use_rewrite,
     )

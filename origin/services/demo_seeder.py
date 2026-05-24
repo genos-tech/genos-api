@@ -2126,9 +2126,19 @@ def _create_project_from_blueprint(team, demo_user, all_members, bots, short, bl
     """Create one project, its tags, sprint, milestone (with backing
     task), and all tasks + subtasks + comments. Returns
     `{"project": project, "blueprint": blueprint, "tasks": [TaskMaster, ...]}`."""
+    from origin.services.project_code import derive_project_code
+
+    project_name = f"{blueprint['name']} · demo-{short}"
+    # Derive a 2–6 letter code so each task gets a real PRJ-123 display
+    # id instead of the "#42" fallback. Scope uniqueness to the team
+    # (different demo teams can both have a "WR" code).
+    taken_codes = set(
+        ProjectMaster.objects.filter(team=team, code__isnull=False).values_list("code", flat=True)
+    )
     project = ProjectMaster.objects.create(
         team=team,
-        project_name=f"{blueprint['name']} · demo-{short}",
+        project_name=project_name,
+        code=derive_project_code(project_name, taken_codes),
         owner=demo_user,
         project_system_user=demo_user,
         is_private=False,

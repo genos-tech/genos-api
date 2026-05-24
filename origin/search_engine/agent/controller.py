@@ -151,6 +151,10 @@ def _ui_source_for_match(match: dict[str, Any]) -> dict[str, Any]:
         "thread_id": match.get("thread_id"),
         "message_id": match.get("message_id"),
         "task_id": match.get("task_id"),
+        # Human-readable task ID ("<project.code>-<project_task_number>",
+        # e.g. "PRJ-42"). Hydrated by `_hydrate_task_display_ids` after
+        # the source list is built — the OpenSearch index doesn't carry it.
+        "task_display_id": None,
         "note_id": match.get("note_id"),
         "note_type": match.get("note_type"),
         "project_id": match.get("project_id"),
@@ -257,6 +261,48 @@ def _apply_friendly_titles(
     return sources
 
 
+def _hydrate_task_display_ids(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Backfill `task_display_id` for task sources that don't already have one.
+
+    `_task_source` (called from structured tools like list_tasks /
+    fetch_task) sets display_id directly because the tool result already
+    carries it. `_ui_source_for_match` (search-knowledge-base path) does
+    NOT — the OpenSearch index stores only the raw task_id. We resolve
+    those missing ones here with one batched DB query.
+    """
+    missing_ids: list[int] = []
+    for src in sources:
+        if src.get("entity_type") != "task" or src.get("task_display_id"):
+            continue
+        raw = src.get("task_id")
+        if raw is None:
+            continue
+        try:
+            missing_ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+
+    if not missing_ids:
+        return sources
+
+    from origin.models.task.task_models import TaskMaster
+
+    by_id: dict[int, str] = {}
+    for t in TaskMaster.objects.select_related("project").filter(task_id__in=missing_ids):
+        by_id[t.task_id] = t.display_id
+
+    for src in sources:
+        if src.get("entity_type") != "task" or src.get("task_display_id"):
+            continue
+        try:
+            tid = int(src.get("task_id"))
+        except (TypeError, ValueError):
+            continue
+        if tid in by_id:
+            src["task_display_id"] = by_id[tid]
+    return sources
+
+
 def _blank_source(entity_type: str, entity_id: str) -> dict[str, Any]:
     """Skeleton source dict; structured-tool helpers fill in the type-specific fields."""
     return {
@@ -269,6 +315,7 @@ def _blank_source(entity_type: str, entity_id: str) -> dict[str, Any]:
         "thread_id": None,
         "message_id": None,
         "task_id": None,
+        "task_display_id": None,
         "note_id": None,
         "note_type": None,
         "project_id": None,
@@ -282,10 +329,13 @@ def _blank_source(entity_type: str, entity_id: str) -> dict[str, Any]:
     }
 
 
-def _task_source(task_id: Any, title: Any, project_id: Any) -> dict[str, Any]:
+def _task_source(
+    task_id: Any, title: Any, project_id: Any, display_id: Any = None
+) -> dict[str, Any]:
     s = _blank_source("task", f"task:{task_id}")
     s["title"] = title or ""
     s["task_id"] = str(task_id) if task_id is not None else None
+    s["task_display_id"] = display_id or None
     s["project_id"] = str(project_id) if project_id is not None else None
     return s
 
@@ -349,7 +399,12 @@ def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list
 
     if call_name in ("list_tasks", "get_stale_tasks"):
         return [
-            _task_source(t.get("task_id"), t.get("title"), t.get("project_id"))
+            _task_source(
+                t.get("task_id"),
+                t.get("title"),
+                t.get("project_id"),
+                display_id=t.get("display_id"),
+            )
             for t in (result.get("tasks") or [])
             if t.get("task_id")
         ]
@@ -358,7 +413,14 @@ def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list
         tid = result.get("task_id")
         if not tid:
             return []
-        return [_task_source(tid, result.get("title"), result.get("project_id"))]
+        return [
+            _task_source(
+                tid,
+                result.get("title"),
+                result.get("project_id"),
+                display_id=result.get("display_id"),
+            )
+        ]
 
     if call_name == "list_projects":
         return [
@@ -828,6 +890,9 @@ def _drive_loop(
             # Swap viewer-agnostic placeholders ("DM 9") for friendly
             # titles (partner / group / project name) before chips ship.
             _apply_friendly_titles(new_sources, ctx)
+            # Backfill PRJ-123 display ids for search-result task sources
+            # (the index stores raw task_id only).
+            _hydrate_task_display_ids(new_sources)
 
             added = False
             for src in new_sources:
