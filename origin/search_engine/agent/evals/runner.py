@@ -117,9 +117,34 @@ def load_cases(path: Path = BEHAVIOR_CASES_PATH) -> list[dict[str, Any]]:
 
 
 def run_behavior_case(case: dict[str, Any]) -> CaseResult:
-    """Execute one behavior case through the full agent loop."""
+    """Execute one behavior case through the full agent loop.
+
+    Single-turn shape (default):
+        - id: ...
+          query: "..."
+          expect: {...}
+
+    Multi-turn shape (Phase 3.5):
+        - id: ...
+          turns:
+            - query: "first turn"           # no expect
+            - query: "second turn"          # no expect
+            - query: "final turn"
+              expect: {...}                  # assertions on the final turn
+
+        Assertions live on the LAST turn (or in the case's top-level
+        `expect` block). The runner threads `prior_turns` between turns
+        the same way `agent_views.py` does in production, so the case
+        exercises real multi-turn memory.
+    """
     case = _resolve_fixture(case)
     case_id = case.get("id") or "(unnamed)"
+
+    # Multi-turn fork — handled in a dedicated helper that mirrors the
+    # single-turn flow per-turn and thread prior turns between them.
+    if "turns" in case:
+        return _run_multiturn_case(case, case_id)
+
     query = case.get("query") or ""
     team_id = case.get("team_id") or ""
     user_id = case.get("user_id") or ""
@@ -197,6 +222,130 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
 # Backwards-compatible alias. The Phase-4 management command imported
 # this name; keep it so existing call sites don't break.
 run_case = run_behavior_case
+
+
+def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
+    """Phase 3.5 — execute a multi-turn case by running the agent loop
+    once per turn, threading prior (query, answer) pairs between turns.
+
+    Mirrors the production agent_views.py session-threading shape so the
+    multi-turn-memory mechanism is exercised end-to-end. The eval does
+    NOT honor `SESSION_MAX_PRIOR_TURNS` truncation itself — it passes
+    ALL prior turns to `run_agent`, the same way production would for a
+    fresh session. Truncation/summarisation is applied INSIDE the
+    prior-turns prep helper, so flag-toggling `RAG_SESSION_ROLLING_SUMMARY`
+    in an A/B works without changing the case shape.
+
+    Assertions live on the LAST turn's expectations (or on the case's
+    top-level `expect`). Earlier turns are setup; we never fail-fast on
+    a per-turn intermediate.
+    """
+    turns = case.get("turns") or []
+    if not turns:
+        return CaseResult(
+            case_id=case_id,
+            passed=False,
+            duration_ms=0,
+            failure_reasons=["multi-turn case has empty `turns` list"],
+        )
+
+    team_id = case.get("team_id") or ""
+    user_id = case.get("user_id") or ""
+    if not team_id or not user_id:
+        return CaseResult(
+            case_id=case_id,
+            passed=False,
+            duration_ms=0,
+            failure_reasons=["case is missing team_id/user_id"],
+        )
+
+    # The terminal expectation set: prefer the last turn's `expect`,
+    # else fall back to the case-level `expect`.
+    final_turn = turns[-1]
+    final_expect = final_turn.get("expect") or case.get("expect") or {}
+
+    # Phase 3.5 — defer truncation + (optional) rolling summary to the
+    # shared helper, so a single `RAG_SESSION_ROLLING_SUMMARY=true`
+    # override in agent_eval_compare exercises the exact code path
+    # production /ask/ uses. Helper is no-op when the flag is off OR
+    # the session is shorter than the verbatim window — i.e. matches
+    # pre-3.5 behavior unless explicitly opted in.
+    from origin.search_engine.agent.multi_turn import build_prior_context  # noqa: PLC0415
+
+    ctx = ToolContext(team_id=team_id, user_id=user_id)
+    prior_turns: list[tuple[str, str]] = []
+    last_events: list[dict[str, Any]] = []
+    last_tool_traces: list[dict[str, Any]] = []
+    last_query = ""
+    started = time.monotonic()
+
+    for i, turn in enumerate(turns):
+        q = (turn.get("query") or "").strip()
+        if not q:
+            return CaseResult(
+                case_id=case_id,
+                passed=False,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                failure_reasons=[f"turn {i + 1} is missing a non-empty `query`"],
+            )
+
+        events: list[dict[str, Any]] = []
+        tool_traces: list[dict[str, Any]] = []
+
+        def _capture_trace(name: str, args: dict[str, Any], result: dict[str, Any]) -> None:
+            tool_traces.append({"tool_name": name, "arguments": args, "result": result})
+
+        verbatim_turns, summary = build_prior_context(prior_turns)
+        try:
+            run_agent(
+                q,
+                ctx,
+                events.append,
+                run_id=None,
+                prior_turns=verbatim_turns,
+                prior_summary=summary,
+                trace_hook=_capture_trace,
+            )
+        except Exception as e:  # noqa: BLE001
+            return CaseResult(
+                case_id=case_id,
+                passed=False,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                failure_reasons=[f"turn {i + 1} run_agent crashed: {e!r}"],
+            )
+
+        answer_text = "".join(
+            (e.get("text") or "") for e in events if e.get("type") == "answer_delta"
+        )
+        prior_turns.append((q, answer_text))
+        last_query = q
+        last_events = events
+        last_tool_traces = tool_traces
+
+    # Score only the final turn.
+    reasons = _check_behavior_expectations(last_events, final_expect)
+    duration_ms = int((time.monotonic() - started) * 1000)
+
+    tool_calls = [e for e in last_events if e.get("type") == "tool_call_start"]
+    step_count = max((e.get("step", -1) for e in tool_calls), default=-1) + 1
+    answer_text = "".join(
+        (e.get("text") or "") for e in last_events if e.get("type") == "answer_delta"
+    )
+    source_events = [e for e in last_events if e.get("type") == "sources"]
+    last_sources = source_events[-1].get("sources", []) if source_events else []
+
+    return CaseResult(
+        case_id=case_id,
+        passed=not reasons,
+        duration_ms=duration_ms,
+        failure_reasons=reasons,
+        step_count=step_count,
+        tool_call_count=len(tool_calls),
+        query=last_query,
+        answer=answer_text,
+        sources=list(last_sources),
+        tool_results=last_tool_traces,
+    )
 
 
 # `_CITATION_RE` finds `[entity_id]` references in answer text. The

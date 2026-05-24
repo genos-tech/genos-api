@@ -478,6 +478,17 @@ SEARCH_ENGINE = {
     "RAG_AGENT_SELF_CRITIQUE": (
         os.environ.get("RAG_AGENT_SELF_CRITIQUE", "false").lower() == "true"
     ),
+    # Phase 3.5 — rolling-summary multi-turn context. When True AND a
+    # session has more than `SESSION_MAX_PRIOR_TURNS` prior turns, the
+    # earliest turns are condensed into a single short summary that is
+    # prepended to the messages alongside the last `SESSION_MAX_PRIOR_TURNS`
+    # turns verbatim. Lets long conversations retain early-turn context
+    # the verbatim window would otherwise drop. Costs one summary LLM
+    # call per turn that triggers the summary path (i.e. only when the
+    # session already has > N prior turns). Off by default.
+    "RAG_SESSION_ROLLING_SUMMARY": (
+        os.environ.get("RAG_SESSION_ROLLING_SUMMARY", "false").lower() == "true"
+    ),
     # Phase 14 — AI agent daily usage limit for free users.
     # Users with the "unlimited_agent" UserFeatureAccess grant bypass
     # this cap entirely. Set to 0 to disable the limit for everyone.

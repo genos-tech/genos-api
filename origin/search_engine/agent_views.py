@@ -53,6 +53,12 @@ log = logging.getLogger(__name__)
 # Answer truncation for session history — keeps the context budget bounded.
 _PRIOR_ANSWER_MAX_CHARS = 400
 
+# Phase 3.5 — upper bound on how many prior turns we'll load when
+# `RAG_SESSION_ROLLING_SUMMARY` is on. The session TTL (default 30 min)
+# realistically caps active sessions well below this, but we set a hard
+# ceiling so a runaway session can't blow up the summary prompt.
+_ROLLING_SUMMARY_LOAD_CAP = 20
+
 
 # --------------------------------------------------------------------------- #
 # Session helpers (Phase 8)                                                   #
@@ -167,15 +173,26 @@ class AgentAskView(AuthenticatedAPIView):
 
         # Phase 8 — session memory. Non-fatal: if session machinery
         # fails for any reason we fall back to a stateless single-turn.
+        # Phase 3.5 — when RAG_SESSION_ROLLING_SUMMARY is on, load up to
+        # `_ROLLING_SUMMARY_LOAD_CAP` prior turns so the helper has the
+        # full earlier history to summarise. Off-path keeps the original
+        # tight load (just the verbatim window).
         session: AgentSession | None = None
-        prior_turns: list[tuple[str, str]] = []
+        prior_turns_all: list[tuple[str, str]] = []
+        prior_summary: str | None = None
         session_id_str = (data.get("session_id") or "").strip() or None
         max_prior_turns = int(settings.SEARCH_ENGINE.get("SESSION_MAX_PRIOR_TURNS", 3))
+        rolling_summary = bool(settings.SEARCH_ENGINE.get("RAG_SESSION_ROLLING_SUMMARY", False))
+        load_cap = _ROLLING_SUMMARY_LOAD_CAP if rolling_summary else max_prior_turns
         try:
             session = _get_or_create_session(session_id_str, str(team_id), user_id)
-            prior_turns = _load_prior_turns(session, max_prior_turns)
+            prior_turns_all = _load_prior_turns(session, load_cap)
+            from origin.search_engine.agent.multi_turn import build_prior_context  # noqa: PLC0415
+
+            prior_turns, prior_summary = build_prior_context(prior_turns_all)
         except Exception:  # noqa: BLE001
             log.exception("Session load failed; continuing without memory")
+            prior_turns = []
 
         # Persist one AgentRun row per /ask/ call. Failures here are
         # logged but never break the user-facing response.
@@ -204,6 +221,7 @@ class AgentAskView(AuthenticatedAPIView):
                 emit,
                 run_id=run.run_id if run else None,
                 prior_turns=prior_turns,
+                prior_summary=prior_summary,
                 disabled_tools=disabled_tools,
             )
 

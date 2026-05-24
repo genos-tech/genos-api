@@ -396,6 +396,7 @@ def run_agent(
     *,
     run_id: UUID | None = None,
     prior_turns: list[tuple[str, str]] | None = None,
+    prior_summary: str | None = None,
     disabled_tools: set[str] | None = None,
     trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
@@ -421,6 +422,17 @@ def run_agent(
         The view layer reflects the pause back onto the `AgentRun` row.
     """
     messages: list[AgentMessage] = []
+    # Phase 3.5 — rolling summary of earlier turns prepended as an
+    # assistant "note to self" so the model can reference topics that
+    # have fallen out of the verbatim prior_turns window. Cheap, opt-in
+    # context recovery for long sessions. See `multi_turn.py`.
+    if prior_summary:
+        messages.append(
+            AgentMessage(
+                role="assistant",
+                text=f"[Context recap from earlier in this conversation: {prior_summary}]",
+            )
+        )
     for prior_query, prior_answer in prior_turns or []:
         messages.append(_user_turn(prior_query))
         messages.append(AgentMessage(role="assistant", text=prior_answer))
