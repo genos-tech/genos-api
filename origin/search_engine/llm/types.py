@@ -31,6 +31,18 @@ class FunctionCall:
 
     name: str
     args: dict[str, Any]
+    # Gemini 3+ returns an opaque "thought signature" alongside each
+    # functionCall part that captures the model's internal reasoning
+    # state at the point of the call. The client MUST echo it back
+    # when replaying the assistant turn (in the same /ask round-trip)
+    # or Gemini 3 rejects the request with
+    #   400 INVALID_ARGUMENT: Function call is missing a
+    #   thought_signature in functionCall parts. ...
+    # Older Gemini versions and Claude don't use it, so `None` is the
+    # safe default. Stored as raw bytes; the adapter handles wire-
+    # format encoding (Google's SDK serialises to base64 internally).
+    # See https://ai.google.dev/gemini-api/docs/thought-signatures
+    thought_signature: bytes | None = None
 
 
 @dataclass

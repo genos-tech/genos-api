@@ -121,6 +121,22 @@ class GeminiClient:
                 contents=sdk_messages,
                 config=config,
             )
+            # Parallel function calls — when Gemini 3 emits multiple
+            # function_call parts in one response, only the FIRST part
+            # carries a `thought_signature`; the rest come back with
+            # `None`. Our controller splits those parallel calls into
+            # separate assistant Content turns when echoing, so each
+            # split-out call needs its OWN signature or Gemini 3 rejects
+            # the request with:
+            #   400 INVALID_ARGUMENT: Function call is missing a
+            #   thought_signature in functionCall parts.
+            # Replicating the shared signature to every split-out call
+            # works (verified against the live API): the model treats
+            # them as part of the same reasoning block. Track the last
+            # signature we saw in THIS stream and back-fill missing ones
+            # — scope is one `generate_step` call so we never leak a
+            # signature from a prior turn.
+            last_seen_signature: bytes | None = None
             for chunk in stream:
                 # A streaming chunk's candidates carry content.parts —
                 # each part is either a text fragment or a function
@@ -133,9 +149,20 @@ class GeminiClient:
                         continue
                     parts = getattr(content, "parts", None) or []
                     for part in parts:
+                        # Update the carry-forward signature ANY time we
+                        # see one, regardless of part kind — text parts
+                        # in reasoning mode can carry signatures too.
+                        part_sig = getattr(part, "thought_signature", None)
+                        if part_sig is not None:
+                            last_seen_signature = part_sig
+
                         fcall = getattr(part, "function_call", None)
                         if fcall is not None:
-                            yield (None, _sdk_function_call_to_neutral(fcall))
+                            # Use this part's own signature when set;
+                            # otherwise the most recent one we saw in
+                            # this response (covers parallel calls 2+).
+                            sig_for_call = part_sig or last_seen_signature
+                            yield (None, _sdk_function_call_to_neutral(fcall, sig_for_call))
                             continue
                         text = getattr(part, "text", None)
                         if text:
@@ -159,16 +186,22 @@ def _message_to_sdk(msg: AgentMessage, types: Any):
         )
     if msg.role == "assistant":
         if msg.function_call is not None:
+            # Build Part kwargs dynamically so we only set
+            # `thought_signature` when we actually captured one — old
+            # SDK versions whose Part type rejects unknown kwargs
+            # stay happy, and we don't accidentally send a `None`
+            # signature that the API might reject.
+            part_kwargs: dict[str, Any] = {
+                "function_call": types.FunctionCall(
+                    name=msg.function_call.name,
+                    args=dict(msg.function_call.args),
+                ),
+            }
+            if msg.function_call.thought_signature is not None:
+                part_kwargs["thought_signature"] = msg.function_call.thought_signature
             return types.Content(
                 role="model",
-                parts=[
-                    types.Part(
-                        function_call=types.FunctionCall(
-                            name=msg.function_call.name,
-                            args=dict(msg.function_call.args),
-                        )
-                    )
-                ],
+                parts=[types.Part(**part_kwargs)],
             )
         return types.Content(
             role="model",
@@ -200,9 +233,19 @@ def _tools_to_sdk(tools: list[ToolDeclaration], types: Any) -> list:
     return [types.Tool(function_declarations=declarations)]
 
 
-def _sdk_function_call_to_neutral(fcall: Any) -> FunctionCall:
-    """Convert a Gemini SDK function-call object to neutral `FunctionCall`."""
+def _sdk_function_call_to_neutral(
+    fcall: Any,
+    thought_signature: bytes | None = None,
+) -> FunctionCall:
+    """Convert a Gemini SDK function-call object to neutral `FunctionCall`.
+
+    `thought_signature` comes from the surrounding `Part` (not the
+    function-call object itself) and is required by Gemini 3+ when we
+    echo this call back as part of the assistant turn — see
+    `FunctionCall.thought_signature` in `types.py` for the rationale.
+    """
     return FunctionCall(
         name=getattr(fcall, "name", "") or "",
         args=dict(getattr(fcall, "args", {}) or {}),
+        thought_signature=thought_signature,
     )
