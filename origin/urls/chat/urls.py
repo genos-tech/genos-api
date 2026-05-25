@@ -1,8 +1,28 @@
 from django.urls import path
 from origin.views.chat.dm_views import *
+from origin.views.chat.dm_delta_views import (
+    DMChatsListView,
+    DMMessagesDeltaView,
+    DMThreadMessagesDeltaView,
+)
 from origin.views.chat.gm_views import *
+from origin.views.chat.gm_delta_views import (
+    GMChatsListView,
+    GMMessagesDeltaView,
+    GMThreadMessagesDeltaView,
+)
 from origin.views.chat.mdm_views import *
+from origin.views.chat.mdm_delta_views import (
+    MDMChatsListView,
+    MDMMessagesDeltaView,
+    MDMThreadMessagesDeltaView,
+)
 from origin.views.chat.pm_views import *
+from origin.views.chat.pm_delta_views import (
+    PMChatsListView,
+    PMMessagesDeltaView,
+    PMThreadMessagesDeltaView,
+)
 from origin.views.chat.search_views import *
 from origin.views.chat.reaction_views import *
 from origin.views.chat.activity_views import *
@@ -19,6 +39,19 @@ urlpatterns = [
     path("api/v2/dm/id/", DMIdView.as_view(), name="get_dm_id"),
     path("api/v2/dm/ids/", AllDMIdsView.as_view(), name="get_all_my_dm_ids"),
     path("api/v2/dm/history/", DMHistoryView.as_view(), name="get_all_my_dm_messages"),
+    # Phase 2 incremental-sync endpoints (replaces /dm/history/ as the
+    # initial-load path; the old endpoint stays for backwards compat).
+    path("api/v2/dm/chats/", DMChatsListView.as_view(), name="dm_chats_list"),
+    path(
+        "api/v2/dm/messagesDelta/",
+        DMMessagesDeltaView.as_view(),
+        name="dm_messages_delta",
+    ),
+    path(
+        "api/v2/dm/threadMessagesDelta/",
+        DMThreadMessagesDeltaView.as_view(),
+        name="dm_thread_messages_delta",
+    ),
     path("api/v2/dm/message/", DMSingleMessageView.as_view(), name="insert_dm_message"),
     path(
         "api/v2/dm/checkThreadExistence/",
@@ -48,6 +81,18 @@ urlpatterns = [
     path("api/v2/mdm/join/", MDMMembersView.as_view(), name="join_mdm"),
     path("api/v2/mdm/members/", MDMMembersView.as_view(), name="get_mdm_members"),
     path("api/v2/mdm/history/", MDMHistoryView.as_view(), name="get_all_my_mdm_messages"),
+    # Phase 2 incremental-sync MDM endpoints.
+    path("api/v2/mdm/chats/", MDMChatsListView.as_view(), name="mdm_chats_list"),
+    path(
+        "api/v2/mdm/messagesDelta/",
+        MDMMessagesDeltaView.as_view(),
+        name="mdm_messages_delta",
+    ),
+    path(
+        "api/v2/mdm/threadMessagesDelta/",
+        MDMThreadMessagesDeltaView.as_view(),
+        name="mdm_thread_messages_delta",
+    ),
     path("api/v2/mdm/message/", MDMSingleMessageView.as_view(), name="insert_mdm_message"),
     path(
         "api/v2/mdm/checkThreadExistence/",
@@ -74,6 +119,18 @@ urlpatterns = [
     path("api/v2/gm/join/", GMMembersView.as_view(), name="join_gm"),
     path("api/v2/gm/join/fromInbox/", JoinGMFromInboxView.as_view(), name="join_gm_from_inbox"),
     path("api/v2/gm/history/", GMHistoryView.as_view(), name="get_all_my_gm_messages"),
+    # Phase 2 incremental-sync GM endpoints.
+    path("api/v2/gm/chats/", GMChatsListView.as_view(), name="gm_chats_list"),
+    path(
+        "api/v2/gm/messagesDelta/",
+        GMMessagesDeltaView.as_view(),
+        name="gm_messages_delta",
+    ),
+    path(
+        "api/v2/gm/threadMessagesDelta/",
+        GMThreadMessagesDeltaView.as_view(),
+        name="gm_thread_messages_delta",
+    ),
     path("api/v2/gm/message/", GMSingleMessageView.as_view(), name="insert_gm_message"),
     path(
         "api/v2/gm/checkThreadExistence/",
@@ -97,6 +154,18 @@ urlpatterns = [
     ),
     # PM urls
     path("api/v2/pm/history/", PMHistoryView.as_view(), name="pm_history"),
+    # Phase 2 incremental-sync PM endpoints.
+    path("api/v2/pm/chats/", PMChatsListView.as_view(), name="pm_chats_list"),
+    path(
+        "api/v2/pm/messagesDelta/",
+        PMMessagesDeltaView.as_view(),
+        name="pm_messages_delta",
+    ),
+    path(
+        "api/v2/pm/threadMessagesDelta/",
+        PMThreadMessagesDeltaView.as_view(),
+        name="pm_thread_messages_delta",
+    ),
     path("api/v2/pm/message/", PMSingleMessageView.as_view(), name="pm_message"),
     path(
         "api/v2/pm/threadMessage/",
