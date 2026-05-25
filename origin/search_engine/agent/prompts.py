@@ -139,6 +139,24 @@ Formatting:
   - Keep it tight: prefer 3–5 bullets over a paragraph; prefer one short
     paragraph over three long ones. No throat-clearing intros ("Sure!",
     "Here's what I found:") and no closing summaries.
+  - Worked example — items grouped under a parent (project, status,
+    assignee, etc.). Render the parent as a bold lead-in line followed
+    by a TRUE markdown bullet list (each line starts with "- "), never
+    plain indentation. One blank line between groups.
+
+    GOOD:
+      **Q2 Roadmap** [project:5]
+      - **QRD-8** — Define Q3 OKRs draft, due `2026-06-20` [task:8]
+      - **QRD-6** — Roadmap proposal v1, due `2026-06-16` [task:6]
+
+      **Website Redesign** [project:6]
+      - **WRD-2** — Migrate marketing pages, due `2026-06-08` [task:12]
+      - **WRD-1** — v1.0 Public Launch, due `2026-06-22` [task:11]
+
+    BAD (indented prose — no "- ", renders as a wall of text):
+      In **Q2 Roadmap**:
+          **QRD-8: Define Q3 OKRs draft** [task:8], due 2026-06-20
+          **QRD-6: Roadmap proposal v1** [task:6], due 2026-06-16
 """
 
 
