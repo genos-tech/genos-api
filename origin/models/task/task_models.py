@@ -142,9 +142,62 @@ class TaskMaster(models.Model):
 
 @receiver(post_save, sender=TaskMaster)
 def set_root_task_id(sender, instance, created, **kwargs):
-    if created and instance.root_task_id is None:
+    """Populate `root_task_id` on creation by walking up the parent
+    chain to the top-most ancestor. The diagram view, sub-task drawer,
+    and "rooted-at-chain-top" shortcut entry points all read this field
+    to anchor on the WHOLE hierarchy a task lives in — without it,
+    opening any of them from a sub-task would only show that single
+    node.
+
+    Cases:
+      * Top-level task (parent_task_id IS NULL) → root is self.
+      * Sub-task with a parent already in the DB → inherit parent's
+        already-set `root_task_id` (O(1) — parent's signal ran first
+        when tasks are created sequentially).
+      * Sub-task whose parent hasn't been resolved yet → walk up
+        ancestors manually until we hit a top-level task. The cycle
+        guard defends against bad data even though FK shape forbids it.
+      * Sub-task whose parent has been deleted → fall back to self so
+        the row isn't left with NULL root.
+
+    Skipped when `root_task_id` is already set (e.g. caller passed it
+    explicitly, or `_bridge_milestone_to_parent` in task_views set it
+    when linking the task to a milestone). The second save from this
+    handler comes through with `created=False` and is a no-op via the
+    guard.
+    """
+    if not created or instance.root_task_id is not None:
+        return
+
+    parent_id = instance.parent_task_id
+    if parent_id is None:
         instance.root_task_id = instance.task_id
         instance.save(update_fields=["root_task_id"])
+        return
+
+    try:
+        parent = TaskMaster.objects.get(task_id=parent_id)
+    except TaskMaster.DoesNotExist:
+        instance.root_task_id = instance.task_id
+        instance.save(update_fields=["root_task_id"])
+        return
+
+    if parent.root_task_id is not None:
+        instance.root_task_id = parent.root_task_id
+    else:
+        ancestor = parent
+        visited = {ancestor.task_id}
+        while ancestor.parent_task_id is not None:
+            if ancestor.parent_task_id in visited:
+                break
+            try:
+                ancestor = TaskMaster.objects.get(task_id=ancestor.parent_task_id)
+            except TaskMaster.DoesNotExist:
+                break
+            visited.add(ancestor.task_id)
+        instance.root_task_id = ancestor.task_id
+
+    instance.save(update_fields=["root_task_id"])
 
 
 @receiver(post_save, sender=TaskMaster)
