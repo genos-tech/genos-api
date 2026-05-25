@@ -23,6 +23,11 @@ from origin.views.chat.modules.activity.get_reaction_activities import (
     get as get_reaction_activities,
 )
 
+from origin.views.utils.incremental import (
+    build_delta_response,
+    capture_server_time,
+    parse_since,
+)
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 """
@@ -124,8 +129,20 @@ class ActivityHistoryView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
-        # Filter messages of the last <period_days> days
-        n_days_ago = timezone.now() - timedelta(days=max(min(data["period_days"], 30), 1))
+        # Snapshot server time BEFORE any query runs. The client persists
+        # this as the next sync's `since` value; any write that commits
+        # during the query window is guaranteed to be picked up next time
+        # because its commit_time > server_time. See utils/incremental.py.
+        server_time = capture_server_time()
+        since = parse_since(request)
+
+        # Full load (since=None): cap window at last <period_days> days
+        # (existing behavior, max 30). Incremental load: lower bound is
+        # the previous checkpoint, no cap.
+        if since is None:
+            window_start = timezone.now() - timedelta(days=max(min(data["period_days"], 30), 1))
+        else:
+            window_start = since
 
         my_dm_ids = list(
             UserDMMapping.objects.filter(
@@ -158,96 +175,99 @@ class ActivityHistoryView(AuthenticatedAPIView):
             #   chat_type: 1
             #   activity_type: 1
             get_message_activities(
-                payload=data, chat_type=1, chat_ids=my_dm_ids, n_days_ago=n_days_ago
+                payload=data, chat_type=1, chat_ids=my_dm_ids, n_days_ago=window_start
             )
             # For DM reaction messages;
             #   chat_type: 1
             #   activity_type: 2
             + get_reaction_activities(
-                payload=data, chat_type=1, chat_ids=my_dm_ids, n_days_ago=n_days_ago
+                payload=data, chat_type=1, chat_ids=my_dm_ids, n_days_ago=window_start
             )
             # For DM mention messages;
             #   chat_type: 1
             #   activity_type: 3 (In database, it's 1, but we'll change it to 3
             #                   when the request user is mentioned in the message.)
             + get_mention_activities(
-                payload=data, chat_type=1, chat_ids=my_dm_ids, n_days_ago=n_days_ago
+                payload=data, chat_type=1, chat_ids=my_dm_ids, n_days_ago=window_start
             )
             # For GM thread messages except mention messages;
             #   chat_type: 2
             #   activity_type: 1
             + get_message_activities(
-                payload=data, chat_type=2, chat_ids=gm_ids, n_days_ago=n_days_ago
+                payload=data, chat_type=2, chat_ids=gm_ids, n_days_ago=window_start
             )
             # For GM reaction messages;
             #   chat_type: 2
             #   activity_type: 2
             + get_reaction_activities(
-                payload=data, chat_type=2, chat_ids=gm_ids, n_days_ago=n_days_ago
+                payload=data, chat_type=2, chat_ids=gm_ids, n_days_ago=window_start
             )
             # For GM mention messages;
             #   chat_type: 2
             #   activity_type: 3 (In database, it's 1, but we'll change it to 3
             #                   when the request user is mentioned in the message.)
             + get_mention_activities(
-                payload=data, chat_type=2, chat_ids=gm_ids, n_days_ago=n_days_ago
+                payload=data, chat_type=2, chat_ids=gm_ids, n_days_ago=window_start
             )
             # For PM thread and mention messages;
             #   chat_type: 3
             #   activity_type: 1
             + get_message_activities(
-                payload=data, chat_type=3, chat_ids=project_ids, n_days_ago=n_days_ago
+                payload=data, chat_type=3, chat_ids=project_ids, n_days_ago=window_start
             )
             # For PM reaction messages;
             #   chat_type: 3
             #   activity_type: 2
             + get_reaction_activities(
-                payload=data, chat_type=3, chat_ids=project_ids, n_days_ago=n_days_ago
+                payload=data, chat_type=3, chat_ids=project_ids, n_days_ago=window_start
             )
             # For PM mention messages;
             #   chat_type: 3
             #   activity_type: 3 (In database, it's 1, but we'll change it to 3
             #                   when the request user is mentioned in the message.)
             + get_mention_activities(
-                payload=data, chat_type=3, chat_ids=project_ids, n_days_ago=n_days_ago
+                payload=data, chat_type=3, chat_ids=project_ids, n_days_ago=window_start
             )
             # For task comments except mention messages;
             #   chat_type: 4 (task-comment side, chat_id = project_id)
             #   activity_type: 1
             + get_message_activities(
-                payload=data, chat_type=4, chat_ids=project_ids, n_days_ago=n_days_ago
+                payload=data, chat_type=4, chat_ids=project_ids, n_days_ago=window_start
             )
             # For task comment reaction;
             #   chat_type: 4
             #   activity_type: 2
             + get_reaction_activities(
-                payload=data, chat_type=4, chat_ids=project_ids, n_days_ago=n_days_ago
+                payload=data, chat_type=4, chat_ids=project_ids, n_days_ago=window_start
             )
             # For task comment mention messages;
             #   chat_type: 4
             #   activity_type: 3 (In database, it's 1, but we'll change it to 3
             #                   when the request user is mentioned in the message.)
             + get_mention_activities(
-                payload=data, chat_type=4, chat_ids=project_ids, n_days_ago=n_days_ago
+                payload=data, chat_type=4, chat_ids=project_ids, n_days_ago=window_start
             )
             # For MDM messages (thread + GM-style "everyone gets it");
             #   chat_type: 4 (MDM side, chat_id = mdm_id, task IS NULL)
             #   activity_type: 1
             + get_message_activities(
-                payload=data, chat_type=4, chat_ids=mdm_ids, n_days_ago=n_days_ago
+                payload=data, chat_type=4, chat_ids=mdm_ids, n_days_ago=window_start
             )
             # For MDM reactions;
             #   chat_type: 4
             #   activity_type: 2
             + get_reaction_activities(
-                payload=data, chat_type=4, chat_ids=mdm_ids, n_days_ago=n_days_ago
+                payload=data, chat_type=4, chat_ids=mdm_ids, n_days_ago=window_start
             )
             # For MDM mentions;
             #   chat_type: 4
             #   activity_type: 3 (rewritten from 1 when the user is mentioned).
             + get_mention_activities(
-                payload=data, chat_type=4, chat_ids=mdm_ids, n_days_ago=n_days_ago
+                payload=data, chat_type=4, chat_ids=mdm_ids, n_days_ago=window_start
             )
         )
 
-        return Response(all_activities, status=status.HTTP_200_OK)
+        return Response(
+            build_delta_response({"activity": all_activities}, server_time),
+            status=status.HTTP_200_OK,
+        )

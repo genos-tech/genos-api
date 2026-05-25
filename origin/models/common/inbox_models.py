@@ -45,5 +45,6 @@ class InboxItems(models.Model):
     #   "rejected" = rejected by owner
     #########################################################
     request_status = models.CharField(max_length=10, default="pending", blank=True)
+    is_deleted = models.BooleanField(default=False, db_index=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

@@ -1,4 +1,5 @@
 """Tests for team-related and user-profile API endpoints."""
+
 import uuid
 
 from django.contrib.auth import get_user_model
@@ -111,9 +112,7 @@ class TestTeamJoin(BaseAPITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertTrue(
-            TeamMembers.objects.filter(team=self.team, attendee=new_user).exists()
-        )
+        self.assertTrue(TeamMembers.objects.filter(team=self.team, attendee=new_user).exists())
 
     def test_join_team_already_member(self):
         """Re-joining should still return 201 (idempotent)."""
@@ -183,9 +182,12 @@ class TestGetTeamMembers(BaseAPITestCase):
             },
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIsInstance(response.data, list)
-        self.assertEqual(len(response.data), 2)
-        emails = {m["userEmail"] for m in response.data}
+        # Delta envelope: {server_time, data: {members: [...]}}.
+        self.assertIn("server_time", response.data)
+        members = response.data["data"]["members"]
+        self.assertIsInstance(members, list)
+        self.assertEqual(len(members), 2)
+        emails = {m["userEmail"] for m in members}
         self.assertIn("test@example.com", emails)
         self.assertIn("other@example.com", emails)
 

@@ -25,6 +25,11 @@ from origin.services.task_cache import (
     invalidate_project_tasks_cache,
     set_cached_project_tasks,
 )
+from origin.views.utils.incremental import (
+    build_delta_response,
+    capture_server_time,
+    parse_since,
+)
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 
@@ -1150,16 +1155,27 @@ class GetProjectTasksView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Redis short-circuit. Mutation paths in this file +
-        # milestone_views + sprint_views call
-        # `invalidate_project_tasks_cache(...)` so any cached entry only
-        # survives until the next task write or the TTL, whichever
-        # comes first. `daysLeft` is the only field that drifts with
-        # wall-clock time and we tolerate the 5-min window in exchange
-        # for the orders-of-magnitude latency win on repeat hops.
-        cached = get_cached_project_tasks(team_id, project_id)
-        if cached is not None:
-            return Response(cached, status=status.HTTP_200_OK)
+        # Snapshot server time BEFORE any query runs. See utils/incremental.py.
+        server_time = capture_server_time()
+        since = parse_since(request)
+
+        # Redis short-circuit only for the full-load path. Caching the
+        # incremental path would require encoding `since` in the cache
+        # key, which produces unbounded cache entries; the per-client
+        # IDB checkpoint already provides the bigger latency win. Mutation
+        # paths in this file + milestone_views + sprint_views call
+        # `invalidate_project_tasks_cache(...)`, so any cached entry
+        # only survives until the next task write or the TTL.
+        # `daysLeft` is the only field that drifts with wall-clock time
+        # and we tolerate the 5-min window for the latency win on
+        # repeat hops.
+        if since is None:
+            cached = get_cached_project_tasks(team_id, project_id)
+            if cached is not None:
+                return Response(
+                    build_delta_response({"tasks": cached}, server_time),
+                    status=status.HTTP_200_OK,
+                )
 
         # `select_related("assignee")` collapses what was N additional
         # queries (one per task for assignee email/username/img) into a
@@ -1167,13 +1183,20 @@ class GetProjectTasksView(AuthenticatedAPIView):
         # directly (the FKs use `to_field="team_id"` / `to_field="project_id"`
         # so these match what `t.team.team_id` returned previously) — no
         # JOIN needed.
-        task_with_tags = (
+        qs = (
             TaskMaster.objects.select_related("assignee")
             .prefetch_related("task_tags")
             .filter(team=team_id, project=project_id, is_init_task=False)
         )
+        if since is None:
+            qs = qs.filter(is_deleted=False)
+        else:
+            # Incremental: include deleted rows so the client can apply
+            # tombstones; bound by ts_updated_at against the checkpoint.
+            qs = qs.filter(ts_updated_at__gt=since)
+
         response_data = []
-        for t in task_with_tags:
+        for t in qs:
             response_data.append(
                 {
                     "id": str(t.task_id),
@@ -1208,11 +1231,19 @@ class GetProjectTasksView(AuthenticatedAPIView):
                     "isMilestone": t.is_milestone,
                     "milestoneId": t.milestone_id,
                     "sprintId": t.sprint_id,
+                    # Tombstone flag for incremental sync; only set when
+                    # the client provided ?since= and a soft-deleted row
+                    # is being surfaced for eviction.
+                    "isDeleted": t.is_deleted,
                 },
             )
 
-        set_cached_project_tasks(team_id, project_id, response_data)
-        return Response(response_data, status=status.HTTP_200_OK)
+        if since is None:
+            set_cached_project_tasks(team_id, project_id, response_data)
+        return Response(
+            build_delta_response({"tasks": response_data}, server_time),
+            status=status.HTTP_200_OK,
+        )
 
 
 class GetMyAssignedTasksView(AuthenticatedAPIView):

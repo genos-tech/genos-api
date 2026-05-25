@@ -141,7 +141,9 @@ class ActivityHistoryViewTests(BaseAPITestCase):
             },
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIsInstance(response.data, list)
+        # Delta envelope: {server_time, data: {activity: [...]}}.
+        self.assertIn("server_time", response.data)
+        self.assertIsInstance(response.data["data"]["activity"], list)
 
     def test_missing_team_id(self):
         self.authenticate()

@@ -10,6 +10,11 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.inbox_models import InboxItems
 from origin.serializers.common.team_serializers import TeamMasterSerializer, TeamMembersSerializer
+from origin.views.utils.incremental import (
+    build_delta_response,
+    capture_server_time,
+    parse_since,
+)
 
 
 #############################
@@ -281,11 +286,25 @@ class GetTeamMembersView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Snapshot server time BEFORE the query. See utils/incremental.py.
+        server_time = capture_server_time()
+        since = parse_since(request)
+
+        qs = TeamMembers.objects.filter(Q(team_id=team_id, attendee__is_system_user=False))
+        if since is None:
+            # Full load: hide soft-deleted memberships and users.
+            qs = qs.filter(is_deleted=False, attendee__is_deleted=False)
+        else:
+            # Incremental: catch both membership-level changes (user
+            # joined/left a team) and user-level changes (profile edits,
+            # account soft-delete) since the last checkpoint.
+            qs = qs.filter(Q(ts_updated_at__gt=since) | Q(attendee__ts_updated_at__gt=since))
+
         attendees = (
-            TeamMembers.objects.filter(Q(team_id=team_id, attendee__is_system_user=False))
-            .select_related("attendee")
+            qs.select_related("attendee")
             .order_by("attendee__email")
             .values(
+                "is_deleted",
                 "attendee__id",
                 "attendee__username",
                 "attendee__email",
@@ -296,6 +315,7 @@ class GetTeamMembersView(AuthenticatedAPIView):
                 "attendee__custom_status",
                 "attendee__ts_created_at",
                 "attendee__is_system_user",
+                "attendee__is_deleted",
             )
         )
 
@@ -327,10 +347,17 @@ class GetTeamMembersView(AuthenticatedAPIView):
                     ),
                     "tsLastSeen": "",
                     "tsJoined": attendee["attendee__ts_created_at"],
+                    # Tombstone flag: client evicts when either the
+                    # membership row OR the user account itself is
+                    # soft-deleted. Only set on incremental responses.
+                    "isDeleted": bool(attendee["is_deleted"] or attendee["attendee__is_deleted"]),
                 }
             )
 
-        return Response(response_data, status=status.HTTP_200_OK)
+        return Response(
+            build_delta_response({"members": response_data}, server_time),
+            status=status.HTTP_200_OK,
+        )
 
 
 class GetTeamMemberInfoView(AuthenticatedAPIView):

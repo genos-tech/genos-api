@@ -1,4 +1,5 @@
 """Tests for inbox API endpoints."""
+
 from django.contrib.auth import get_user_model
 from rest_framework import status
 
@@ -89,8 +90,12 @@ class TestInboxList(BaseAPITestCase):
             },
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIsInstance(response.data, list)
-        self.assertEqual(len(response.data), 2)
+        # Delta envelope: {server_time, data: {items: [...]}}.
+        self.assertIn("server_time", response.data)
+        self.assertIn("data", response.data)
+        items = response.data["data"]["items"]
+        self.assertIsInstance(items, list)
+        self.assertEqual(len(items), 2)
 
     def test_list_inbox_returns_empty_for_other_user(self):
         self.authenticate(self.user)
@@ -102,7 +107,7 @@ class TestInboxList(BaseAPITestCase):
             },
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 0)
+        self.assertEqual(len(response.data["data"]["items"]), 0)
 
     def test_list_inbox_missing_params(self):
         self.authenticate()
