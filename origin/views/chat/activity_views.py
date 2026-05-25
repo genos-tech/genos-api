@@ -26,7 +26,7 @@ from origin.views.chat.modules.activity.get_reaction_activities import (
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
-    parse_since,
+    check_since,
 )
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
@@ -99,7 +99,13 @@ class ActivityView(AuthenticatedAPIView):
 
         try:
             activity = ActivityFact.objects.get(team=data["team"], activity_id=data["activity_id"])
-            activity.delete()
+            # Soft-delete (not hard) so the incremental-sync path can
+            # tell clients to evict the row on their next refresh. A
+            # hard delete is invisible to delta sync — the row simply
+            # vanishes — leaving stale entries in clients' IDB until
+            # they full-reload.
+            activity.is_deleted = True
+            activity.save(update_fields=["is_deleted", "ts_updated_at"])
             return Response(
                 {"message": f"Activity deleted successfully."},
                 status=status.HTTP_204_NO_CONTENT,
@@ -134,7 +140,7 @@ class ActivityHistoryView(AuthenticatedAPIView):
         # during the query window is guaranteed to be picked up next time
         # because its commit_time > server_time. See utils/incremental.py.
         server_time = capture_server_time()
-        since = parse_since(request)
+        since, force_full = check_since(request)
 
         # Full load (since=None): cap window at last <period_days> days
         # (existing behavior, max 30). Incremental load: lower bound is
@@ -175,99 +181,163 @@ class ActivityHistoryView(AuthenticatedAPIView):
             #   chat_type: 1
             #   activity_type: 1
             get_message_activities(
-                payload=data, chat_type=1, chat_ids=my_dm_ids, n_days_ago=window_start
+                payload=data,
+                chat_type=1,
+                chat_ids=my_dm_ids,
+                n_days_ago=window_start,
+                is_delta_load=(since is not None),
             )
             # For DM reaction messages;
             #   chat_type: 1
             #   activity_type: 2
             + get_reaction_activities(
-                payload=data, chat_type=1, chat_ids=my_dm_ids, n_days_ago=window_start
+                payload=data,
+                chat_type=1,
+                chat_ids=my_dm_ids,
+                n_days_ago=window_start,
+                is_delta_load=(since is not None),
             )
             # For DM mention messages;
             #   chat_type: 1
             #   activity_type: 3 (In database, it's 1, but we'll change it to 3
             #                   when the request user is mentioned in the message.)
             + get_mention_activities(
-                payload=data, chat_type=1, chat_ids=my_dm_ids, n_days_ago=window_start
+                payload=data,
+                chat_type=1,
+                chat_ids=my_dm_ids,
+                n_days_ago=window_start,
+                is_delta_load=(since is not None),
             )
             # For GM thread messages except mention messages;
             #   chat_type: 2
             #   activity_type: 1
             + get_message_activities(
-                payload=data, chat_type=2, chat_ids=gm_ids, n_days_ago=window_start
+                payload=data,
+                chat_type=2,
+                chat_ids=gm_ids,
+                n_days_ago=window_start,
+                is_delta_load=(since is not None),
             )
             # For GM reaction messages;
             #   chat_type: 2
             #   activity_type: 2
             + get_reaction_activities(
-                payload=data, chat_type=2, chat_ids=gm_ids, n_days_ago=window_start
+                payload=data,
+                chat_type=2,
+                chat_ids=gm_ids,
+                n_days_ago=window_start,
+                is_delta_load=(since is not None),
             )
             # For GM mention messages;
             #   chat_type: 2
             #   activity_type: 3 (In database, it's 1, but we'll change it to 3
             #                   when the request user is mentioned in the message.)
             + get_mention_activities(
-                payload=data, chat_type=2, chat_ids=gm_ids, n_days_ago=window_start
+                payload=data,
+                chat_type=2,
+                chat_ids=gm_ids,
+                n_days_ago=window_start,
+                is_delta_load=(since is not None),
             )
             # For PM thread and mention messages;
             #   chat_type: 3
             #   activity_type: 1
             + get_message_activities(
-                payload=data, chat_type=3, chat_ids=project_ids, n_days_ago=window_start
+                payload=data,
+                chat_type=3,
+                chat_ids=project_ids,
+                n_days_ago=window_start,
+                is_delta_load=(since is not None),
             )
             # For PM reaction messages;
             #   chat_type: 3
             #   activity_type: 2
             + get_reaction_activities(
-                payload=data, chat_type=3, chat_ids=project_ids, n_days_ago=window_start
+                payload=data,
+                chat_type=3,
+                chat_ids=project_ids,
+                n_days_ago=window_start,
+                is_delta_load=(since is not None),
             )
             # For PM mention messages;
             #   chat_type: 3
             #   activity_type: 3 (In database, it's 1, but we'll change it to 3
             #                   when the request user is mentioned in the message.)
             + get_mention_activities(
-                payload=data, chat_type=3, chat_ids=project_ids, n_days_ago=window_start
+                payload=data,
+                chat_type=3,
+                chat_ids=project_ids,
+                n_days_ago=window_start,
+                is_delta_load=(since is not None),
             )
             # For task comments except mention messages;
             #   chat_type: 4 (task-comment side, chat_id = project_id)
             #   activity_type: 1
             + get_message_activities(
-                payload=data, chat_type=4, chat_ids=project_ids, n_days_ago=window_start
+                payload=data,
+                chat_type=4,
+                chat_ids=project_ids,
+                n_days_ago=window_start,
+                is_delta_load=(since is not None),
             )
             # For task comment reaction;
             #   chat_type: 4
             #   activity_type: 2
             + get_reaction_activities(
-                payload=data, chat_type=4, chat_ids=project_ids, n_days_ago=window_start
+                payload=data,
+                chat_type=4,
+                chat_ids=project_ids,
+                n_days_ago=window_start,
+                is_delta_load=(since is not None),
             )
             # For task comment mention messages;
             #   chat_type: 4
             #   activity_type: 3 (In database, it's 1, but we'll change it to 3
             #                   when the request user is mentioned in the message.)
             + get_mention_activities(
-                payload=data, chat_type=4, chat_ids=project_ids, n_days_ago=window_start
+                payload=data,
+                chat_type=4,
+                chat_ids=project_ids,
+                n_days_ago=window_start,
+                is_delta_load=(since is not None),
             )
             # For MDM messages (thread + GM-style "everyone gets it");
             #   chat_type: 4 (MDM side, chat_id = mdm_id, task IS NULL)
             #   activity_type: 1
             + get_message_activities(
-                payload=data, chat_type=4, chat_ids=mdm_ids, n_days_ago=window_start
+                payload=data,
+                chat_type=4,
+                chat_ids=mdm_ids,
+                n_days_ago=window_start,
+                is_delta_load=(since is not None),
             )
             # For MDM reactions;
             #   chat_type: 4
             #   activity_type: 2
             + get_reaction_activities(
-                payload=data, chat_type=4, chat_ids=mdm_ids, n_days_ago=window_start
+                payload=data,
+                chat_type=4,
+                chat_ids=mdm_ids,
+                n_days_ago=window_start,
+                is_delta_load=(since is not None),
             )
             # For MDM mentions;
             #   chat_type: 4
             #   activity_type: 3 (rewritten from 1 when the user is mentioned).
             + get_mention_activities(
-                payload=data, chat_type=4, chat_ids=mdm_ids, n_days_ago=window_start
+                payload=data,
+                chat_type=4,
+                chat_ids=mdm_ids,
+                n_days_ago=window_start,
+                is_delta_load=(since is not None),
             )
         )
 
         return Response(
-            build_delta_response({"activity": all_activities}, server_time),
+            build_delta_response(
+                {"activity": all_activities},
+                server_time,
+                force_full_reload=force_full,
+            ),
             status=status.HTTP_200_OK,
         )

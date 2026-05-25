@@ -13,7 +13,7 @@ from origin.serializers.common.team_serializers import TeamMasterSerializer, Tea
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
-    parse_since,
+    check_since,
 )
 
 
@@ -288,7 +288,7 @@ class GetTeamMembersView(AuthenticatedAPIView):
 
         # Snapshot server time BEFORE the query. See utils/incremental.py.
         server_time = capture_server_time()
-        since = parse_since(request)
+        since, force_full = check_since(request)
 
         qs = TeamMembers.objects.filter(Q(team_id=team_id, attendee__is_system_user=False))
         if since is None:
@@ -355,7 +355,9 @@ class GetTeamMembersView(AuthenticatedAPIView):
             )
 
         return Response(
-            build_delta_response({"members": response_data}, server_time),
+            build_delta_response(
+                {"members": response_data}, server_time, force_full_reload=force_full
+            ),
             status=status.HTTP_200_OK,
         )
 

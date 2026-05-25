@@ -36,7 +36,7 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
-    parse_since,
+    check_since,
 )
 from origin.views.utils.request_validators import (
     validate_request_data,
@@ -423,14 +423,14 @@ class DMMessagesDeltaView(AuthenticatedAPIView):
             return res
 
         server_time = capture_server_time()
-        since = parse_since(request)
+        since, force_full = check_since(request)
 
         dm_ids = list(
             UserDMMapping.objects.filter(user_id=user_id).values_list("dm_id", flat=True)
         )
         if not dm_ids:
             return Response(
-                build_delta_response({"messages": []}, server_time),
+                build_delta_response({"messages": []}, server_time, force_full_reload=force_full),
                 status=status.HTTP_200_OK,
             )
 
@@ -467,7 +467,7 @@ class DMMessagesDeltaView(AuthenticatedAPIView):
         )
         if not msgs:
             return Response(
-                build_delta_response({"messages": []}, server_time),
+                build_delta_response({"messages": []}, server_time, force_full_reload=force_full),
                 status=status.HTTP_200_OK,
             )
 
@@ -530,7 +530,9 @@ class DMMessagesDeltaView(AuthenticatedAPIView):
             )
 
         return Response(
-            build_delta_response({"messages": messages}, server_time),
+            build_delta_response(
+                {"messages": messages}, server_time, force_full_reload=force_full
+            ),
             status=status.HTTP_200_OK,
         )
 
@@ -558,14 +560,16 @@ class DMThreadMessagesDeltaView(AuthenticatedAPIView):
             return res
 
         server_time = capture_server_time()
-        since = parse_since(request)
+        since, force_full = check_since(request)
 
         dm_ids = list(
             UserDMMapping.objects.filter(user_id=user_id).values_list("dm_id", flat=True)
         )
         if not dm_ids:
             return Response(
-                build_delta_response({"thread_messages": []}, server_time),
+                build_delta_response(
+                    {"thread_messages": []}, server_time, force_full_reload=force_full
+                ),
                 status=status.HTTP_200_OK,
             )
 
@@ -598,7 +602,9 @@ class DMThreadMessagesDeltaView(AuthenticatedAPIView):
         )
         if not tms:
             return Response(
-                build_delta_response({"thread_messages": []}, server_time),
+                build_delta_response(
+                    {"thread_messages": []}, server_time, force_full_reload=force_full
+                ),
                 status=status.HTTP_200_OK,
             )
 
@@ -645,6 +651,10 @@ class DMThreadMessagesDeltaView(AuthenticatedAPIView):
             )
 
         return Response(
-            build_delta_response({"thread_messages": thread_messages}, server_time),
+            build_delta_response(
+                {"thread_messages": thread_messages},
+                server_time,
+                force_full_reload=force_full,
+            ),
             status=status.HTTP_200_OK,
         )

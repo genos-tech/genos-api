@@ -21,7 +21,7 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
-    parse_since,
+    check_since,
 )
 from origin.views.utils.request_validators import (
     validate_request_data,
@@ -295,7 +295,7 @@ class PMMessagesDeltaView(AuthenticatedAPIView):
             return res
 
         server_time = capture_server_time()
-        since = parse_since(request)
+        since, force_full = check_since(request)
 
         project_ids = list(
             ProjectMembers.objects.filter(team=team_id, attendee=user_id).values_list(
@@ -304,7 +304,7 @@ class PMMessagesDeltaView(AuthenticatedAPIView):
         )
         if not project_ids:
             return Response(
-                build_delta_response({"messages": []}, server_time),
+                build_delta_response({"messages": []}, server_time, force_full_reload=force_full),
                 status=status.HTTP_200_OK,
             )
 
@@ -337,7 +337,7 @@ class PMMessagesDeltaView(AuthenticatedAPIView):
         )
         if not msgs:
             return Response(
-                build_delta_response({"messages": []}, server_time),
+                build_delta_response({"messages": []}, server_time, force_full_reload=force_full),
                 status=status.HTTP_200_OK,
             )
 
@@ -411,7 +411,9 @@ class PMMessagesDeltaView(AuthenticatedAPIView):
             for m in msgs
         ]
         return Response(
-            build_delta_response({"messages": messages}, server_time),
+            build_delta_response(
+                {"messages": messages}, server_time, force_full_reload=force_full
+            ),
             status=status.HTTP_200_OK,
         )
 
@@ -429,7 +431,7 @@ class PMThreadMessagesDeltaView(AuthenticatedAPIView):
             return res
 
         server_time = capture_server_time()
-        since = parse_since(request)
+        since, force_full = check_since(request)
 
         project_ids = list(
             ProjectMembers.objects.filter(team=team_id, attendee=user_id).values_list(
@@ -438,7 +440,9 @@ class PMThreadMessagesDeltaView(AuthenticatedAPIView):
         )
         if not project_ids:
             return Response(
-                build_delta_response({"thread_messages": []}, server_time),
+                build_delta_response(
+                    {"thread_messages": []}, server_time, force_full_reload=force_full
+                ),
                 status=status.HTTP_200_OK,
             )
 
@@ -467,7 +471,9 @@ class PMThreadMessagesDeltaView(AuthenticatedAPIView):
         )
         if not tms:
             return Response(
-                build_delta_response({"thread_messages": []}, server_time),
+                build_delta_response(
+                    {"thread_messages": []}, server_time, force_full_reload=force_full
+                ),
                 status=status.HTTP_200_OK,
             )
 
@@ -511,6 +517,10 @@ class PMThreadMessagesDeltaView(AuthenticatedAPIView):
             for tm in tms
         ]
         return Response(
-            build_delta_response({"thread_messages": thread_messages}, server_time),
+            build_delta_response(
+                {"thread_messages": thread_messages},
+                server_time,
+                force_full_reload=force_full,
+            ),
             status=status.HTTP_200_OK,
         )

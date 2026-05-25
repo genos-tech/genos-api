@@ -26,7 +26,7 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
-    parse_since,
+    check_since,
 )
 from origin.views.utils.request_validators import (
     validate_request_data,
@@ -330,7 +330,7 @@ class MDMMessagesDeltaView(AuthenticatedAPIView):
             return res
 
         server_time = capture_server_time()
-        since = parse_since(request)
+        since, force_full = check_since(request)
 
         mdm_ids = list(
             MDMMembers.objects.filter(Q(mdm__owner_team=team_id, attendee=user_id)).values_list(
@@ -339,7 +339,7 @@ class MDMMessagesDeltaView(AuthenticatedAPIView):
         )
         if not mdm_ids:
             return Response(
-                build_delta_response({"messages": []}, server_time),
+                build_delta_response({"messages": []}, server_time, force_full_reload=force_full),
                 status=status.HTTP_200_OK,
             )
 
@@ -370,7 +370,7 @@ class MDMMessagesDeltaView(AuthenticatedAPIView):
         )
         if not msgs:
             return Response(
-                build_delta_response({"messages": []}, server_time),
+                build_delta_response({"messages": []}, server_time, force_full_reload=force_full),
                 status=status.HTTP_200_OK,
             )
 
@@ -423,7 +423,9 @@ class MDMMessagesDeltaView(AuthenticatedAPIView):
             for m in msgs
         ]
         return Response(
-            build_delta_response({"messages": messages}, server_time),
+            build_delta_response(
+                {"messages": messages}, server_time, force_full_reload=force_full
+            ),
             status=status.HTTP_200_OK,
         )
 
@@ -441,7 +443,7 @@ class MDMThreadMessagesDeltaView(AuthenticatedAPIView):
             return res
 
         server_time = capture_server_time()
-        since = parse_since(request)
+        since, force_full = check_since(request)
 
         mdm_ids = list(
             MDMMembers.objects.filter(Q(mdm__owner_team=team_id, attendee=user_id)).values_list(
@@ -450,7 +452,9 @@ class MDMThreadMessagesDeltaView(AuthenticatedAPIView):
         )
         if not mdm_ids:
             return Response(
-                build_delta_response({"thread_messages": []}, server_time),
+                build_delta_response(
+                    {"thread_messages": []}, server_time, force_full_reload=force_full
+                ),
                 status=status.HTTP_200_OK,
             )
 
@@ -479,7 +483,9 @@ class MDMThreadMessagesDeltaView(AuthenticatedAPIView):
         )
         if not tms:
             return Response(
-                build_delta_response({"thread_messages": []}, server_time),
+                build_delta_response(
+                    {"thread_messages": []}, server_time, force_full_reload=force_full
+                ),
                 status=status.HTTP_200_OK,
             )
 
@@ -523,6 +529,10 @@ class MDMThreadMessagesDeltaView(AuthenticatedAPIView):
             for tm in tms
         ]
         return Response(
-            build_delta_response({"thread_messages": thread_messages}, server_time),
+            build_delta_response(
+                {"thread_messages": thread_messages},
+                server_time,
+                force_full_reload=force_full,
+            ),
             status=status.HTTP_200_OK,
         )

@@ -28,7 +28,7 @@ from origin.services.task_cache import (
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
-    parse_since,
+    check_since,
 )
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
@@ -1157,7 +1157,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
 
         # Snapshot server time BEFORE any query runs. See utils/incremental.py.
         server_time = capture_server_time()
-        since = parse_since(request)
+        since, force_full = check_since(request)
 
         # Redis short-circuit only for the full-load path. Caching the
         # incremental path would require encoding `since` in the cache
@@ -1173,7 +1173,11 @@ class GetProjectTasksView(AuthenticatedAPIView):
             cached = get_cached_project_tasks(team_id, project_id)
             if cached is not None:
                 return Response(
-                    build_delta_response({"tasks": cached}, server_time),
+                    build_delta_response(
+                        {"tasks": cached},
+                        server_time,
+                        force_full_reload=force_full,
+                    ),
                     status=status.HTTP_200_OK,
                 )
 
@@ -1241,7 +1245,9 @@ class GetProjectTasksView(AuthenticatedAPIView):
         if since is None:
             set_cached_project_tasks(team_id, project_id, response_data)
         return Response(
-            build_delta_response({"tasks": response_data}, server_time),
+            build_delta_response(
+                {"tasks": response_data}, server_time, force_full_reload=force_full
+            ),
             status=status.HTTP_200_OK,
         )
 
@@ -1697,9 +1703,7 @@ def _hydrate_dependency_ref(dep, other_task):
         "otherTaskId": other_task.task_id,
         "displayId": other_task.display_id,
         "projectId": other_task.project_id,
-        "projectName": (
-            other_task.project.project_name if other_task.project_id else None
-        ),
+        "projectName": (other_task.project.project_name if other_task.project_id else None),
         "title": other_task.title,
         "status": {
             "code": 0,

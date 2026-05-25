@@ -9,7 +9,7 @@ from origin.models.chat.gm_models import *
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
-    parse_since,
+    check_since,
 )
 
 
@@ -98,7 +98,7 @@ class InboxItemView(AuthenticatedAPIView):
 
         # Snapshot server time BEFORE the query. See utils/incremental.py.
         server_time = capture_server_time()
-        since = parse_since(request)
+        since, force_full = check_since(request)
 
         qs = InboxItems.objects.filter(Q(team_id=team_id, receiver=user_id))
         if since is None:
@@ -125,7 +125,7 @@ class InboxItemView(AuthenticatedAPIView):
             )
 
         return Response(
-            build_delta_response({"items": items}, server_time),
+            build_delta_response({"items": items}, server_time, force_full_reload=force_full),
             status=status.HTTP_200_OK,
         )
 

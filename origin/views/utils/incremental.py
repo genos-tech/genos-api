@@ -16,12 +16,18 @@ Any write that commits during the query window has commit_time
 writes.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from django.db.models import QuerySet
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+
+# Catastrophic-delta cap. If the client's checkpoint is older than this,
+# the delta query would scan a huge window — we re-run as a full load
+# and signal the client (via `force_full_reload`) to clear its IDB store
+# before applying. Keeps both server CPU and client memory bounded.
+MAX_DELTA_AGE_DAYS = 60
 
 
 def parse_since(request) -> Optional[datetime]:
@@ -71,10 +77,49 @@ def apply_since_filter(
     return queryset.filter(**{f"{ts_field}__gt": since})
 
 
-def build_delta_response(data: dict, server_time: datetime) -> dict:
+def check_since(request) -> tuple:
+    """One-stop helper for a delta view: parse `?since=` and decide
+    whether to force a full load.
+
+    Returns `(since, force_full_reload)`:
+      - `(<datetime>, False)`: normal incremental sync — caller filters
+        by `since`.
+      - `(None, False)`: no checkpoint provided — caller does a full load.
+      - `(None, True)`: checkpoint exists but is too old (catastrophic
+        delta cap). Caller should run the full-load query AND set
+        `force_full_reload=True` on the response so the client clears
+        its IDB store before applying.
+    """
+    since = parse_since(request)
+    if is_since_too_old(since):
+        return None, True
+    return since, False
+
+
+def is_since_too_old(since: Optional[datetime]) -> bool:
+    """True when the requested checkpoint is older than the catastrophic-
+    delta threshold. The view should respond as if `since` were None
+    (full load) AND set `force_full_reload=True` on the response so the
+    client clears its IDB store before applying the payload."""
+    if since is None:
+        return False
+    return since < timezone.now() - timedelta(days=MAX_DELTA_AGE_DAYS)
+
+
+def build_delta_response(
+    data: dict,
+    server_time: datetime,
+    force_full_reload: bool = False,
+) -> dict:
     """Wrap an endpoint payload in the standard delta envelope:
-    `{server_time: ISO, data: {...}}`."""
-    return {
+    `{server_time: ISO, data: {...}}`. When `force_full_reload=True`,
+    adds a top-level flag that tells the client to treat this response
+    as a full load (clear-before-insert) even though it sent a `since`
+    value. Used for the catastrophic-delta fallback."""
+    response = {
         "server_time": server_time.isoformat(),
         "data": data,
     }
+    if force_full_reload:
+        response["force_full_reload"] = True
+    return response

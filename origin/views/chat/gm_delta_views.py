@@ -25,7 +25,7 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
-    parse_since,
+    check_since,
 )
 from origin.views.utils.request_validators import (
     validate_request_data,
@@ -304,7 +304,7 @@ class GMMessagesDeltaView(AuthenticatedAPIView):
             return res
 
         server_time = capture_server_time()
-        since = parse_since(request)
+        since, force_full = check_since(request)
 
         gm_ids = list(
             GMMembers.objects.filter(Q(gm__owner_team=team_id, attendee=user_id)).values_list(
@@ -313,7 +313,7 @@ class GMMessagesDeltaView(AuthenticatedAPIView):
         )
         if not gm_ids:
             return Response(
-                build_delta_response({"messages": []}, server_time),
+                build_delta_response({"messages": []}, server_time, force_full_reload=force_full),
                 status=status.HTTP_200_OK,
             )
 
@@ -344,7 +344,7 @@ class GMMessagesDeltaView(AuthenticatedAPIView):
         )
         if not msgs:
             return Response(
-                build_delta_response({"messages": []}, server_time),
+                build_delta_response({"messages": []}, server_time, force_full_reload=force_full),
                 status=status.HTTP_200_OK,
             )
 
@@ -397,7 +397,9 @@ class GMMessagesDeltaView(AuthenticatedAPIView):
             for m in msgs
         ]
         return Response(
-            build_delta_response({"messages": messages}, server_time),
+            build_delta_response(
+                {"messages": messages}, server_time, force_full_reload=force_full
+            ),
             status=status.HTTP_200_OK,
         )
 
@@ -415,7 +417,7 @@ class GMThreadMessagesDeltaView(AuthenticatedAPIView):
             return res
 
         server_time = capture_server_time()
-        since = parse_since(request)
+        since, force_full = check_since(request)
 
         gm_ids = list(
             GMMembers.objects.filter(Q(gm__owner_team=team_id, attendee=user_id)).values_list(
@@ -424,7 +426,9 @@ class GMThreadMessagesDeltaView(AuthenticatedAPIView):
         )
         if not gm_ids:
             return Response(
-                build_delta_response({"thread_messages": []}, server_time),
+                build_delta_response(
+                    {"thread_messages": []}, server_time, force_full_reload=force_full
+                ),
                 status=status.HTTP_200_OK,
             )
 
@@ -453,7 +457,9 @@ class GMThreadMessagesDeltaView(AuthenticatedAPIView):
         )
         if not tms:
             return Response(
-                build_delta_response({"thread_messages": []}, server_time),
+                build_delta_response(
+                    {"thread_messages": []}, server_time, force_full_reload=force_full
+                ),
                 status=status.HTTP_200_OK,
             )
 
@@ -495,6 +501,10 @@ class GMThreadMessagesDeltaView(AuthenticatedAPIView):
             for tm in tms
         ]
         return Response(
-            build_delta_response({"thread_messages": thread_messages}, server_time),
+            build_delta_response(
+                {"thread_messages": thread_messages},
+                server_time,
+                force_full_reload=force_full,
+            ),
             status=status.HTTP_200_OK,
         )

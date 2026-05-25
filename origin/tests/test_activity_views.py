@@ -103,7 +103,11 @@ class ActivityViewDeleteTests(BaseAPITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertFalse(ActivityFact.objects.filter(activity_id="1-1-100-500").exists())
+        # Soft-delete: row stays but `is_deleted` flips so the delta
+        # path can emit a tombstone on the client's next sync.
+        self.assertTrue(
+            ActivityFact.objects.filter(activity_id="1-1-100-500", is_deleted=True).exists()
+        )
 
     def test_delete_not_found(self):
         self.authenticate()
