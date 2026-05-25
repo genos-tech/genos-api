@@ -51,7 +51,20 @@ from origin.search_engine.agent.controller import (
     run_agent,
 )
 from origin.search_engine.agent.tools import ToolContext
+from origin.search_engine.llm.choice import (
+    LlmChoice,
+    resolve_user_choice,
+    reset_llm_choice,
+    set_llm_choice,
+)
 from origin.search_engine.models import AgentRun, AgentSession, AgentStep
+from origin.search_engine.quota import (
+    check_remaining,
+    get_quota,
+    get_used_today,
+    get_user_tier,
+    increment_usage,
+)
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 log = logging.getLogger(__name__)
@@ -177,6 +190,34 @@ class AgentAskView(AuthenticatedAPIView):
                     status=status.HTTP_429_TOO_MANY_REQUESTS,
                 )
 
+        # --- Per-model daily quota (free vs paid tier). ---
+        # Layered on top of the global AGENT_FREE_DAILY_LIMIT above —
+        # `check_remaining` returns (allowed, used, limit) where
+        # `limit=None` means "no quota configured for this user/model"
+        # (treated as unlimited). The user's selection has already been
+        # validated against the catalog by `resolve_user_choice`, so a
+        # stale preference falls back to the server default before we
+        # count quota.
+        chosen = resolve_user_choice(
+            request.user.preferred_llm_provider,
+            request.user.preferred_llm_model,
+        )
+        allowed, model_used, model_limit = check_remaining(user_id, chosen.model)
+        if not allowed:
+            return Response(
+                {
+                    "error": (
+                        f"You've used all {model_limit} {chosen.model} asks for today. "
+                        "Switch to another model or upgrade your plan to keep going."
+                    ),
+                    "limit_reached": True,
+                    "used": model_used,
+                    "limit": model_limit,
+                    "model": chosen.model,
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
         # Phase 8 — session memory. Non-fatal: if session machinery
         # fails for any reason we fall back to a stateless single-turn.
         # Phase 3.5 — when RAG_SESSION_ROLLING_SUMMARY is on, load up to
@@ -220,21 +261,34 @@ class AgentAskView(AuthenticatedAPIView):
         if data.get("allow_web_search") is False:
             disabled_tools.add("search_web")
 
+        # `chosen` is captured in the worker closure so the contextvar
+        # is set inside the controller's threading.Thread — a bare
+        # thread does NOT inherit contextvars from its parent.
         def worker(emit):
-            return run_agent(
-                query,
-                ctx,
-                emit,
-                run_id=run.run_id if run else None,
-                prior_turns=prior_turns,
-                prior_summary=prior_summary,
-                disabled_tools=disabled_tools,
-            )
+            token = set_llm_choice(chosen)
+            try:
+                return run_agent(
+                    query,
+                    ctx,
+                    emit,
+                    run_id=run.run_id if run else None,
+                    prior_turns=prior_turns,
+                    prior_summary=prior_summary,
+                    disabled_tools=disabled_tools,
+                )
+            finally:
+                reset_llm_choice(token)
 
         stream = _stream_ndjson(
             worker,
             run=run,
             session_id=session.session_id if session else None,
+            # Increment the per-model counter on the first answer_delta
+            # of the stream. Sub-calls (query rewriter, reranker) share
+            # the user's chosen model but do NOT count toward quota —
+            # only the user-initiated ask does.
+            user_id_for_quota=user_id,
+            model_for_quota=chosen.model,
         )
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
@@ -315,8 +369,27 @@ class AgentDecideView(AuthenticatedAPIView):
 
         ctx = ToolContext(team_id=run.team_id, user_id=run.user_id)
 
+        # Resolve the user's LLM choice for the resumed leg. No quota
+        # increment here — the original /ask/ call already counted; a
+        # resume after tool approval is a continuation of the same ask.
+        # Note: this re-reads the user's *current* preference, not the
+        # one in effect when the original /ask/ ran. If the user opens
+        # Settings and changes their model between the pause and the
+        # resume, the second leg uses the new model. Approval round-
+        # trips are typically seconds, so this is effectively never a
+        # problem in practice; it's also the principle-of-least-surprise
+        # behavior — the user's *current* preference is what counts.
+        resumed_choice = resolve_user_choice(
+            request.user.preferred_llm_provider,
+            request.user.preferred_llm_model,
+        )
+
         def worker(emit):
-            return resume_agent(run, decision, ctx, emit)
+            token = set_llm_choice(resumed_choice)
+            try:
+                return resume_agent(run, decision, ctx, emit)
+            finally:
+                reset_llm_choice(token)
 
         stream = _stream_ndjson(
             worker,
@@ -343,6 +416,8 @@ def _stream_ndjson(
     rejected: bool = False,
     append_to_existing_answer: bool = False,
     session_id=None,
+    user_id_for_quota: str | None = None,
+    model_for_quota: str | None = None,
 ) -> Iterator[bytes]:
     """Bridge a controller callback into chunked NDJSON.
 
@@ -395,6 +470,10 @@ def _stream_ndjson(
     answer_parts: list[str] = []
     final_status: str | None = None
     final_error = ""
+    # Quota counter — fired once on the first non-empty answer_delta.
+    # Sub-tool LLM calls and empty-response failures don't charge.
+    # Guarded with a flag so a stream of N tokens still counts as 1.
+    quota_charged = False
 
     while True:
         event = event_q.get()
@@ -405,6 +484,9 @@ def _stream_ndjson(
             text = event.get("text") or ""
             if text:
                 answer_parts.append(text)
+                if not quota_charged and user_id_for_quota and model_for_quota:
+                    increment_usage(user_id_for_quota, model_for_quota)
+                    quota_charged = True
         elif event_type == "done":
             final_status = "done"
             # Inject session_id so the frontend can thread the next ask.
@@ -539,6 +621,93 @@ class AgentFeaturesView(AuthenticatedAPIView):
                 "unlimited_agent": UserFeatureAccess.user_has(
                     user_id, UserFeatureAccess.FEATURE_UNLIMITED_AGENT
                 ),
+            }
+        )
+
+
+class AgentModelsView(AuthenticatedAPIView):
+    """GET /api/v2/agent/models/
+
+    Returns the LLM provider/model catalog tailored for the calling
+    user, including:
+      - The user's resolved tier ('free' / 'paid').
+      - Their currently-effective `(provider, model)` after applying
+        their saved preference + stale-pref fallback.
+      - Per-model daily quota (`daily_limit`) and today's count
+        (`used_today`), so the Settings UI can render
+        "3 / 10 used today" rows without an extra round-trip.
+
+    Response schema:
+        {
+          "tier": "free" | "paid",
+          "current": {"provider": "gemini", "model": "gemini-2.5-flash"},
+          "models": [
+            {"provider": "gemini", "model": "gemini-2.5-flash",
+             "label": "...", "note": "...",
+             "daily_limit": int | None,   # null = unlimited
+             "used_today":  int},
+            ...
+          ]
+        }
+    """
+
+    def get(self, request):
+        user_id = str(getattr(request.user, "id", ""))
+        if not user_id:
+            return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        tier = get_user_tier(user_id)
+        catalog = settings.SEARCH_ENGINE.get("MODEL_CATALOG") or []
+
+        models_payload = []
+        for entry in catalog:
+            provider = entry.get("provider", "")
+            model_name = entry.get("model", "")
+            models_payload.append(
+                {
+                    "provider": provider,
+                    "model": model_name,
+                    "label": entry.get("label", model_name),
+                    "note": entry.get("note", ""),
+                    "daily_limit": get_quota(user_id, model_name),
+                    "used_today": get_used_today(user_id, model_name),
+                }
+            )
+
+        resolved = resolve_user_choice(
+            request.user.preferred_llm_provider,
+            request.user.preferred_llm_model,
+        )
+
+        # Picker fallback: if the resolved model isn't in the catalog
+        # (e.g. an operator left `GEMINI_MODEL` pointing at a preview
+        # model not listed in `MODEL_CATALOG`), substitute the first
+        # catalog entry for the resolved provider so the frontend
+        # `<Select>` has a matching `<Option>`. The agent loop still
+        # uses the resolved value at request time — only the picker's
+        # displayed selection is normalized.
+        catalog_has_resolved = any(
+            m["provider"] == resolved.provider and m["model"] == resolved.model
+            for m in models_payload
+        )
+        if not catalog_has_resolved:
+            same_provider = next(
+                (m for m in models_payload if m["provider"] == resolved.provider),
+                None,
+            )
+            if same_provider is None and models_payload:
+                same_provider = models_payload[0]
+            if same_provider is not None:
+                resolved = LlmChoice(
+                    provider=same_provider["provider"],
+                    model=same_provider["model"],
+                )
+
+        return Response(
+            {
+                "tier": tier,
+                "current": {"provider": resolved.provider, "model": resolved.model},
+                "models": models_payload,
             }
         )
 

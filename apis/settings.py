@@ -515,6 +515,74 @@ SEARCH_ENGINE = {
     # Leave empty to disable web search — the agent will surface a clean
     # error rather than crashing when the key is absent.
     "TAVILY_API_KEY": os.environ.get("TAVILY_API_KEY", ""),
+    # User-selectable LLM provider/model catalog. Each entry is shown
+    # in the Settings → Spotlight → AI Model picker. `note` is a short
+    # one-liner shown beneath the model dropdown ("Slower — uses
+    # extended thinking" etc.). When a user removes their selection
+    # (or an admin removes a model from this list), `resolve_user_choice`
+    # in llm/choice.py falls back to the server default and logs a
+    # warning — no silent SDK error.
+    "MODEL_CATALOG": [
+        {
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "label": "Gemini 2.5 Flash",
+            "note": "Fast responses, good for simple questions.",
+        },
+        {
+            "provider": "gemini",
+            "model": "gemini-2.5-pro",
+            "label": "Gemini 2.5 Pro",
+            "note": "Slower — uses extended thinking for hard questions.",
+        },
+        {
+            "provider": "gemini",
+            "model": "gemini-3.5-flash",
+            "label": "Gemini 3.5 Flash",
+            "note": "Fast responses, good for most questions.",
+        },
+        {
+            "provider": "gemini",
+            "model": "gemini-3.1-pro-preview",
+            "label": "Gemini 3.1 Pro Preview",
+            "note": "Slower — uses extended thinking for hard questions.",
+        },
+        {
+            "provider": "claude",
+            "model": "claude-haiku-4-5",
+            "label": "Claude Haiku 4.5",
+            "note": "Fast and economical.",
+        },
+        {
+            "provider": "claude",
+            "model": "claude-sonnet-4-6",
+            "label": "Claude Sonnet 4.6",
+            "note": "Higher quality, slower.",
+        },
+    ],
+    # Daily per-model quota by tier. "free" applies to users without
+    # an active `FEATURE_PAID_TIER` UserFeatureAccess grant; "paid"
+    # applies to those who have one. Resets at UTC midnight. A model
+    # missing from a tier's dict is treated as unlimited for that tier
+    # (e.g. paid users facing a cheap model with no entry → unlimited).
+    "MODEL_DAILY_QUOTAS": {
+        "free": {
+            "gemini-2.5-flash": 30,
+            "gemini-3.5-flash": 10,
+            "gemini-2.5-pro": 10,
+            "gemini-3.1-pro-preview": 5,
+            "claude-haiku-4-5": 10,
+            "claude-sonnet-4-6": 5,
+        },
+        "paid": {
+            "gemini-2.5-flash": 9999,
+            "gemini-2.5-pro": 9999,
+            "gemini-3.5-flash": 9999,
+            "gemini-3.1-pro-preview": 9999,
+            "claude-haiku-4-5": 9999,
+            "claude-sonnet-4-6": 9999,
+        },
+    },
 }
 
 # --- Email ---

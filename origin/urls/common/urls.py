@@ -142,6 +142,11 @@ urlpatterns = [
         name="auto_sync_tasks_to_calendar_preference",
     ),
     path(
+        "api/v2/user/preferences/llm-model/",
+        LlmModelPreferenceView.as_view(),
+        name="llm_model_preference",
+    ),
+    path(
         "api/v2/user/calendar-sync/backfill/",
         CalendarSyncBackfillView.as_view(),
         name="calendar_sync_backfill",

@@ -4,6 +4,7 @@ from origin.search_engine.agent_views import (
     AgentAskView,
     AgentDecideView,
     AgentFeaturesView,
+    AgentModelsView,
     AgentSessionDetailView,
     AgentSessionsListView,
     AgentUsageView,
@@ -16,6 +17,7 @@ urlpatterns = [
     path("api/v2/agent/decide/", AgentDecideView.as_view(), name="agent_decide"),
     path("api/v2/agent/usage/", AgentUsageView.as_view(), name="agent_usage"),
     path("api/v2/agent/features/", AgentFeaturesView.as_view(), name="agent_features"),
+    path("api/v2/agent/models/", AgentModelsView.as_view(), name="agent_models"),
     path(
         "api/v2/agent/sessions/",
         AgentSessionsListView.as_view(),

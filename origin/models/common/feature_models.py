@@ -29,10 +29,17 @@ class UserFeatureAccess(models.Model):
     # strings in the database and referenced in tool code.
     FEATURE_WEB_SEARCH = "web_search"
     FEATURE_UNLIMITED_AGENT = "unlimited_agent"
+    # Granted when a user is on a paid plan. Bumps their per-model
+    # daily quota from the "free" tier in SEARCH_ENGINE["MODEL_DAILY_QUOTAS"]
+    # to the "paid" tier. Currently granted manually via Django admin /
+    # `feature_access` management command; a Stripe webhook can flip
+    # this automatically in the future.
+    FEATURE_PAID_TIER = "paid_tier"
 
     FEATURE_CHOICES = [
         (FEATURE_WEB_SEARCH, "Web Search (Tavily)"),
         (FEATURE_UNLIMITED_AGENT, "Unlimited AI Agent asks (no daily cap)"),
+        (FEATURE_PAID_TIER, "Paid tier (raised per-model daily quotas)"),
     ]
 
     user = models.ForeignKey(

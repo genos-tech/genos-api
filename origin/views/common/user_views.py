@@ -185,6 +185,57 @@ class AutoSyncTasksToCalendarPreferenceView(AuthenticatedAPIView):
         )
 
 
+class LlmModelPreferenceView(AuthenticatedAPIView):
+    """GET / PATCH the calling user's LLM provider + model preference.
+
+    Same shape as `AutoCloseOnPrMergePreferenceView` — scoped to
+    `request.user`, no `user_id` accepted, so a leaked token can't
+    rewrite someone else's choice.
+
+    Both fields are optional strings; empty string means "use the
+    server default" (env-driven `LLM_PROVIDER` / `GEMINI_MODEL` /
+    `CLAUDE_MODEL`). Validation here is lenient on purpose — the
+    request-time resolver in `llm/choice.py` falls back to the server
+    default with a warning if the saved value isn't in the current
+    `MODEL_CATALOG`, so removing a model from the catalog doesn't
+    brick existing users.
+    """
+
+    def get(self, request):
+        return Response(
+            {
+                "provider": request.user.preferred_llm_provider or "",
+                "model": request.user.preferred_llm_model or "",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request):
+        provider = request.data.get("provider", "")
+        model = request.data.get("model", "")
+        if not isinstance(provider, str) or not isinstance(model, str):
+            return Response(
+                {"error": "provider and model must be strings."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        provider = provider.strip().lower()
+        model = model.strip()
+        # Reject obviously wrong provider values up front. Specific
+        # model strings are NOT validated here — see docstring.
+        if provider and provider not in ("gemini", "claude"):
+            return Response(
+                {"error": "provider must be 'gemini', 'claude', or empty."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        request.user.preferred_llm_provider = provider
+        request.user.preferred_llm_model = model
+        request.user.save(update_fields=["preferred_llm_provider", "preferred_llm_model"])
+        return Response(
+            {"provider": provider, "model": model},
+            status=status.HTTP_200_OK,
+        )
+
+
 class CalendarSyncBackfillView(AuthenticatedAPIView):
     """POST one-shot backfill of the calling user's open future-dated
     tasks to Google Calendar.

@@ -111,6 +111,26 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     # cleanly without error.
     auto_sync_tasks_to_calendar = models.BooleanField(default=False)
 
+    # User-selected LLM provider + model id. Empty string means "fall
+    # back to the server default" (SEARCH_ENGINE["LLM_PROVIDER"] /
+    # GEMINI_MODEL / CLAUDE_MODEL). Validated against
+    # SEARCH_ENGINE["MODEL_CATALOG"] at request time by
+    # `origin.search_engine.llm.choice.resolve_user_choice`; an unknown
+    # value falls back to the server default with a warning rather
+    # than failing the request.
+    preferred_llm_provider = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="'gemini', 'claude', or '' to use the server default.",
+    )
+    preferred_llm_model = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        help_text="Model id within the chosen provider; '' = provider default.",
+    )
+
     # Django Auth Fields
     is_active = models.BooleanField(default=True)  # Can be disabled
     is_staff = models.BooleanField(default=False)  # Access to admin panel
