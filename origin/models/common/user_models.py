@@ -38,6 +38,18 @@ PRIMARY_AUTH_CHOICES = [
 ]
 
 
+# User subscription tier. Controls daily quotas for AI features:
+# LLM ask total, web search, and per-model usage. Set via the
+# `feature_access set-tier` management command. Limits live in
+# SEARCH_ENGINE["TIER_QUOTAS"]. Resolved at request time by
+# `origin.search_engine.quota.get_user_tier`.
+TIER_CHOICES = [
+    ("free", "Free"),
+    ("pro", "Pro"),
+    ("max", "Max"),
+]
+
+
 class CustomUser(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     username = models.CharField(max_length=50, unique=False)
@@ -110,6 +122,15 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     # account (see `ConnectedAccount`); without one, the signal exits
     # cleanly without error.
     auto_sync_tasks_to_calendar = models.BooleanField(default=False)
+
+    # Subscription tier. Free is the default; admins move users to
+    # 'pro' or 'max' via `manage.py feature_access set-tier`.
+    tier = models.CharField(
+        max_length=16,
+        choices=TIER_CHOICES,
+        default="free",
+        db_index=True,
+    )
 
     # User-selected LLM provider + model id. Empty string means "fall
     # back to the server default" (SEARCH_ENGINE["LLM_PROVIDER"] /

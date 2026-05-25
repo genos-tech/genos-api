@@ -1,11 +1,12 @@
 """Per-user feature gating.
 
-`UserFeatureAccess` is the long-term hook for subscription billing: when
-a user subscribes, a webhook (Stripe, etc.) creates or reactivates the
-relevant record; on cancellation it sets `is_active=False`.
-
-Short-term it is managed manually via the Django admin or the
-`feature_access` management command.
+`UserFeatureAccess` is a generic per-user per-feature flag. It used to
+be the primary control for AI features (web search, agent quota
+bypass) but has been superseded by `CustomUser.tier` —
+SEARCH_ENGINE["TIER_QUOTAS"] now drives all three AI quotas (LLM ask
+total, web search, per-model). The two AI-related entries below
+(`web_search`, `unlimited_agent`) are kept in the enum so historical
+rows remain valid, but no code path reads them.
 
 Adding a new gated feature:
   1. Add its constant and a CHOICES entry here.
@@ -27,19 +28,17 @@ class UserFeatureAccess(models.Model):
     # ---- Feature name constants ----
     # Add new gated features here. Keep names stable — they are stored as
     # strings in the database and referenced in tool code.
+    # DEPRECATED: superseded by CustomUser.tier + SEARCH_ENGINE["TIER_QUOTAS"].
+    # Kept as enum values so any historical rows remain valid. No
+    # code path reads them as of the tier rollout. To grant a user
+    # access to AI features now, run:
+    #   manage.py feature_access set-tier --email <e> --tier <free|pro|max>
     FEATURE_WEB_SEARCH = "web_search"
     FEATURE_UNLIMITED_AGENT = "unlimited_agent"
-    # Granted when a user is on a paid plan. Bumps their per-model
-    # daily quota from the "free" tier in SEARCH_ENGINE["MODEL_DAILY_QUOTAS"]
-    # to the "paid" tier. Currently granted manually via Django admin /
-    # `feature_access` management command; a Stripe webhook can flip
-    # this automatically in the future.
-    FEATURE_PAID_TIER = "paid_tier"
 
     FEATURE_CHOICES = [
-        (FEATURE_WEB_SEARCH, "Web Search (Tavily)"),
-        (FEATURE_UNLIMITED_AGENT, "Unlimited AI Agent asks (no daily cap)"),
-        (FEATURE_PAID_TIER, "Paid tier (raised per-model daily quotas)"),
+        (FEATURE_WEB_SEARCH, "Web Search (Tavily) [deprecated]"),
+        (FEATURE_UNLIMITED_AGENT, "Unlimited AI Agent asks [deprecated]"),
     ]
 
     user = models.ForeignKey(

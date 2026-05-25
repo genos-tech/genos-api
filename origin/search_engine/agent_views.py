@@ -43,7 +43,6 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
-from origin.models.common.feature_models import UserFeatureAccess
 from origin.search_engine.agent.controller import (
     _ui_source_for_match,
     _ui_sources_from_tool_result,
@@ -59,6 +58,8 @@ from origin.search_engine.llm.choice import (
 )
 from origin.search_engine.models import AgentRun, AgentSession, AgentStep
 from origin.search_engine.quota import (
+    LLM_ASK_KEY,
+    WEB_SEARCH_KEY,
     check_remaining,
     get_quota,
     get_used_today,
@@ -164,46 +165,36 @@ class AgentAskView(AuthenticatedAPIView):
 
         ctx = ToolContext(team_id=str(team_id), user_id=user_id)
 
-        # --- Daily usage limit (free tier). ---
-        # Unlimited-agent subscribers bypass this check entirely.
-        # Set AGENT_FREE_DAILY_LIMIT=0 in env to disable for everyone.
-        daily_limit = int(settings.SEARCH_ENGINE.get("AGENT_FREE_DAILY_LIMIT", 5))
-        if daily_limit > 0 and not UserFeatureAccess.user_has(
-            user_id, UserFeatureAccess.FEATURE_UNLIMITED_AGENT
-        ):
-            today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            used_today = AgentRun.objects.filter(
-                user_id=user_id,
-                started_at__gte=today_start,
-            ).count()
-            if used_today >= daily_limit:
-                return Response(
-                    {
-                        "error": (
-                            f"You've used all {daily_limit} AI asks for today. "
-                            "Upgrade your plan to keep going."
-                        ),
-                        "limit_reached": True,
-                        "used": used_today,
-                        "limit": daily_limit,
-                    },
-                    status=status.HTTP_429_TOO_MANY_REQUESTS,
-                )
-
-        # --- Per-model daily quota (free vs paid tier). ---
-        # Layered on top of the global AGENT_FREE_DAILY_LIMIT above —
-        # `check_remaining` returns (allowed, used, limit) where
-        # `limit=None` means "no quota configured for this user/model"
-        # (treated as unlimited). The user's selection has already been
-        # validated against the catalog by `resolve_user_choice`, so a
-        # stale preference falls back to the server default before we
-        # count quota.
+        # --- Tier-based daily quotas. ---
+        # Two pre-flight checks: total LLM asks for the day (LLM_ASK_KEY)
+        # AND the user's chosen per-model count. Either failing returns
+        # 429 with the existing payload shape, plus a `category` field so
+        # the frontend can render the right message. Numbers come from
+        # SEARCH_ENGINE["TIER_QUOTAS"][user.tier]. A None limit means
+        # "no quota applies" (treated as unlimited).
         chosen = resolve_user_choice(
             request.user.preferred_llm_provider,
             request.user.preferred_llm_model,
         )
-        allowed, model_used, model_limit = check_remaining(user_id, chosen.model)
-        if not allowed:
+
+        llm_ok, llm_used, llm_limit = check_remaining(user_id, LLM_ASK_KEY)
+        if not llm_ok:
+            return Response(
+                {
+                    "error": (
+                        f"You've used all {llm_limit} AI asks for today. "
+                        "Upgrade your plan to keep going."
+                    ),
+                    "limit_reached": True,
+                    "used": llm_used,
+                    "limit": llm_limit,
+                    "category": "llm_ask",
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        model_ok, model_used, model_limit = check_remaining(user_id, chosen.model)
+        if not model_ok:
             return Response(
                 {
                     "error": (
@@ -213,6 +204,7 @@ class AgentAskView(AuthenticatedAPIView):
                     "limit_reached": True,
                     "used": model_used,
                     "limit": model_limit,
+                    "category": "model",
                     "model": chosen.model,
                 },
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -283,12 +275,12 @@ class AgentAskView(AuthenticatedAPIView):
             worker,
             run=run,
             session_id=session.session_id if session else None,
-            # Increment the per-model counter on the first answer_delta
-            # of the stream. Sub-calls (query rewriter, reranker) share
-            # the user's chosen model but do NOT count toward quota —
-            # only the user-initiated ask does.
+            # Increment BOTH the per-model and the LLM-ask total counter
+            # on the first answer_delta of the stream. Sub-calls (query
+            # rewriter, reranker) share the user's chosen model but do
+            # NOT count toward quota — only the user-initiated ask does.
             user_id_for_quota=user_id,
-            model_for_quota=chosen.model,
+            quota_keys=[LLM_ASK_KEY, chosen.model],
         )
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
@@ -417,7 +409,7 @@ def _stream_ndjson(
     append_to_existing_answer: bool = False,
     session_id=None,
     user_id_for_quota: str | None = None,
-    model_for_quota: str | None = None,
+    quota_keys: list[str] | None = None,
 ) -> Iterator[bytes]:
     """Bridge a controller callback into chunked NDJSON.
 
@@ -473,6 +465,8 @@ def _stream_ndjson(
     # Quota counter — fired once on the first non-empty answer_delta.
     # Sub-tool LLM calls and empty-response failures don't charge.
     # Guarded with a flag so a stream of N tokens still counts as 1.
+    # Each key in `quota_keys` is incremented atomically (LLM_ASK total
+    # AND the chosen per-model counter both bump together).
     quota_charged = False
 
     while True:
@@ -484,8 +478,9 @@ def _stream_ndjson(
             text = event.get("text") or ""
             if text:
                 answer_parts.append(text)
-                if not quota_charged and user_id_for_quota and model_for_quota:
-                    increment_usage(user_id_for_quota, model_for_quota)
+                if not quota_charged and user_id_for_quota and quota_keys:
+                    for key in quota_keys:
+                        increment_usage(user_id_for_quota, key)
                     quota_charged = True
         elif event_type == "done":
             final_status = "done"
@@ -550,18 +545,26 @@ def _stream_ndjson(
 # --------------------------------------------------------------------------- #
 
 
+def _tier_limit_block(user_id: str, key: str) -> dict:
+    """Helper: return `{"used": int, "limit": int|null}` for one quota
+    dimension, used by AgentUsageView / AgentFeaturesView / AgentModelsView."""
+    _, used, limit = check_remaining(user_id, key)
+    return {"used": used, "limit": limit}
+
+
 class AgentUsageView(AuthenticatedAPIView):
     """GET /api/v2/agent/usage/
 
-    Returns today's AI-ask count and the plan limit so the frontend can
-    display a "N of M asks used today" indicator without waiting for the
-    next /ask/ call to fail.
+    Returns today's LLM-ask count + per-tier daily limit so the
+    frontend can display a "N of M asks used today" indicator without
+    waiting for the next /ask/ call to fail. Tier comes from
+    `CustomUser.tier`.
 
     Response schema:
         {
-            "used":         int,          # asks started today (UTC day)
-            "limit":        int | null,   # null means unlimited
-            "is_unlimited": bool
+            "used":         int,          # LLM asks completed today (UTC day)
+            "limit":        int | null,   # null means unlimited for this tier
+            "is_unlimited": bool          # convenience flag
         }
     """
 
@@ -570,22 +573,12 @@ class AgentUsageView(AuthenticatedAPIView):
         if not user_id:
             return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
 
-        daily_limit = int(settings.SEARCH_ENGINE.get("AGENT_FREE_DAILY_LIMIT", 5))
-        is_unlimited = daily_limit == 0 or UserFeatureAccess.user_has(
-            user_id, UserFeatureAccess.FEATURE_UNLIMITED_AGENT
-        )
-
-        today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        used_today = AgentRun.objects.filter(
-            user_id=user_id,
-            started_at__gte=today_start,
-        ).count()
-
+        block = _tier_limit_block(user_id, LLM_ASK_KEY)
         return Response(
             {
-                "used": used_today,
-                "limit": None if is_unlimited else daily_limit,
-                "is_unlimited": is_unlimited,
+                "used": block["used"],
+                "limit": block["limit"],
+                "is_unlimited": block["limit"] is None,
             }
         )
 
@@ -593,20 +586,17 @@ class AgentUsageView(AuthenticatedAPIView):
 class AgentFeaturesView(AuthenticatedAPIView):
     """GET /api/v2/agent/features/
 
-    Returns the calling user's per-feature access flags so the frontend
-    can surface "you need to request access" warnings BEFORE the user
-    attempts to use a gated tool (web search, etc.) instead of letting
-    the request fail mid-stream with the generic "subscribers only"
-    ToolError.
+    Returns the calling user's tier + the two cross-cutting daily
+    quotas (LLM ask + web search). The frontend uses this to surface
+    "your web search quota is exhausted" warnings up front instead of
+    letting the user hit a mid-stream ToolError.
 
     Response schema:
         {
-            "web_search":      bool,
-            "unlimited_agent": bool,
+            "tier":       "free" | "pro" | "max",
+            "llm_ask":    {"used": int, "limit": int | null},
+            "web_search": {"used": int, "limit": int | null}
         }
-
-    Keep the keys aligned with `UserFeatureAccess.FEATURE_*` constants
-    so adding a new gated feature is a one-line change here.
     """
 
     def get(self, request):
@@ -615,12 +605,9 @@ class AgentFeaturesView(AuthenticatedAPIView):
             return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
         return Response(
             {
-                "web_search": UserFeatureAccess.user_has(
-                    user_id, UserFeatureAccess.FEATURE_WEB_SEARCH
-                ),
-                "unlimited_agent": UserFeatureAccess.user_has(
-                    user_id, UserFeatureAccess.FEATURE_UNLIMITED_AGENT
-                ),
+                "tier": get_user_tier(user_id),
+                "llm_ask": _tier_limit_block(user_id, LLM_ASK_KEY),
+                "web_search": _tier_limit_block(user_id, WEB_SEARCH_KEY),
             }
         )
 
@@ -630,16 +617,18 @@ class AgentModelsView(AuthenticatedAPIView):
 
     Returns the LLM provider/model catalog tailored for the calling
     user, including:
-      - The user's resolved tier ('free' / 'paid').
+      - The user's resolved tier ('free' / 'pro' / 'max').
       - Their currently-effective `(provider, model)` after applying
         their saved preference + stale-pref fallback.
       - Per-model daily quota (`daily_limit`) and today's count
         (`used_today`), so the Settings UI can render
         "3 / 10 used today" rows without an extra round-trip.
+      - The two cross-cutting daily quotas (LLM ask + web search), so
+        the Settings UI can render those rows alongside per-model.
 
     Response schema:
         {
-          "tier": "free" | "paid",
+          "tier": "free" | "pro" | "max",
           "current": {"provider": "gemini", "model": "gemini-2.5-flash"},
           "models": [
             {"provider": "gemini", "model": "gemini-2.5-flash",
@@ -647,7 +636,11 @@ class AgentModelsView(AuthenticatedAPIView):
              "daily_limit": int | None,   # null = unlimited
              "used_today":  int},
             ...
-          ]
+          ],
+          "limits": {
+            "llm_ask":    {"used": int, "limit": int | null},
+            "web_search": {"used": int, "limit": int | null}
+          }
         }
     """
 
@@ -708,6 +701,10 @@ class AgentModelsView(AuthenticatedAPIView):
                 "tier": tier,
                 "current": {"provider": resolved.provider, "model": resolved.model},
                 "models": models_payload,
+                "limits": {
+                    "llm_ask": _tier_limit_block(user_id, LLM_ASK_KEY),
+                    "web_search": _tier_limit_block(user_id, WEB_SEARCH_KEY),
+                },
             }
         )
 

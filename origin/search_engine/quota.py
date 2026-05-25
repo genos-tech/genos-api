@@ -1,15 +1,25 @@
-"""Per-model daily quota helpers.
+"""Per-tier daily quota helpers.
 
-Wraps `ModelUsageCounter` reads and `F('count')+1` writes for the
-agent-ask hot path. Tier resolution uses `UserFeatureAccess`
-(`FEATURE_PAID_TIER` grant = "paid", absence = "free").
+A single `ModelUsageCounter` table holds counts for THREE quota
+dimensions, distinguished by the `model_name` field which acts as a
+polymorphic key:
 
-Race note: the `(check, increment)` pair is *not* atomic. Two
+  - `"gemini-2.5-flash"`, `"claude-sonnet-4-6"`, ...
+        → per-model agent ask count.
+  - `LLM_ASK_KEY = "__llm_ask__"`
+        → daily total of agent asks (any model).
+  - `WEB_SEARCH_KEY = "__web_search__"`
+        → daily total of Tavily web searches.
+
+Tier resolution reads `CustomUser.tier` directly (free | pro | max).
+Per-tier limits live in `settings.SEARCH_ENGINE["TIER_QUOTAS"]`.
+
+Race note: `(check_remaining, increment_usage)` is not atomic. Two
 concurrent asks at 9/10 both pass the pre-check and both increment,
 yielding 11/10. Accepted for v1 — the over-count is at most the
 worker's concurrent-request count and the next call still gets
-blocked. If this matters, wrap the pair in `select_for_update`
-inside `transaction.atomic`.
+blocked. If this matters, wrap the pair in `select_for_update` inside
+`transaction.atomic`.
 """
 
 from __future__ import annotations
@@ -20,86 +30,101 @@ from django.conf import settings
 from django.db.models import F
 from django.utils import timezone
 
-from origin.models.common.feature_models import UserFeatureAccess
 from origin.models.common.usage_models import ModelUsageCounter
+from origin.models.common.user_models import CustomUser
 
 log = logging.getLogger(__name__)
 
+# Sentinel keys for the cross-dimensional counters in `ModelUsageCounter`.
+# Chosen with leading + trailing underscores so they can never collide
+# with a real model id from `MODEL_CATALOG`.
+LLM_ASK_KEY = "__llm_ask__"
+WEB_SEARCH_KEY = "__web_search__"
+
 
 def get_user_tier(user_id: str) -> str:
-    """Return the user's tier: 'paid' iff they have an active
-    `FEATURE_PAID_TIER` grant, else 'free'.
+    """Return the user's tier ('free' | 'pro' | 'max').
+
+    Falls back to 'free' if the user can't be loaded — defensive
+    against bad input; never raises.
     """
-    if UserFeatureAccess.user_has(user_id, UserFeatureAccess.FEATURE_PAID_TIER):
-        return "paid"
-    return "free"
+    try:
+        tier = CustomUser.objects.filter(id=user_id).values_list("tier", flat=True).first()
+    except Exception:  # noqa: BLE001
+        log.exception("get_user_tier failed for user_id=%s", user_id)
+        return "free"
+    return tier or "free"
 
 
-def get_quota(user_id: str, model_name: str) -> int | None:
-    """Return the daily quota for this user + model, or `None` if
-    unlimited.
+def _tier_cfg(tier: str) -> dict:
+    """Return the TIER_QUOTAS dict for `tier`, or `free`'s if missing."""
+    all_tiers = settings.SEARCH_ENGINE.get("TIER_QUOTAS") or {}
+    return all_tiers.get(tier) or all_tiers.get("free") or {}
 
-    Resolution:
-      - Look up the user's tier ('free' / 'paid') via
-        `UserFeatureAccess`.
-      - Read `SEARCH_ENGINE["MODEL_DAILY_QUOTAS"][tier][model_name]`.
-      - Missing entry → no quota applies (`None`).
+
+def get_quota(user_id: str, key: str) -> int | None:
+    """Return the daily quota for this user + counter key.
+
+    Returns `None` to mean "no quota applies" (treated as unlimited at
+    enforcement sites).
+
+    Dispatch:
+      - `LLM_ASK_KEY`    → `tier_cfg["llm_ask_daily"]`.
+      - `WEB_SEARCH_KEY` → `tier_cfg["web_search_daily"]`.
+      - any model id    → `tier_cfg["model_daily"].get(key)`.
     """
-    tier_quotas = (settings.SEARCH_ENGINE.get("MODEL_DAILY_QUOTAS") or {}).get(
-        get_user_tier(user_id)
-    )
-    if not tier_quotas:
+    cfg = _tier_cfg(get_user_tier(user_id))
+    if key == LLM_ASK_KEY:
+        v = cfg.get("llm_ask_daily")
+    elif key == WEB_SEARCH_KEY:
+        v = cfg.get("web_search_daily")
+    else:
+        v = (cfg.get("model_daily") or {}).get(key)
+    if v is None:
         return None
-    if model_name not in tier_quotas:
-        return None
-    return int(tier_quotas[model_name])
+    return int(v)
 
 
-def get_used_today(user_id: str, model_name: str) -> int:
-    """Today's (UTC) ask count for this user + model. 0 if no row yet."""
+def get_used_today(user_id: str, key: str) -> int:
+    """Today's (UTC) count for this user + key. 0 if no row yet."""
     today = timezone.now().date()
     row = (
-        ModelUsageCounter.objects.filter(user_id=user_id, model_name=model_name, usage_date=today)
+        ModelUsageCounter.objects.filter(user_id=user_id, model_name=key, usage_date=today)
         .only("count")
         .first()
     )
     return int(row.count) if row else 0
 
 
-def check_remaining(user_id: str, model_name: str) -> tuple[bool, int, int | None]:
+def check_remaining(user_id: str, key: str) -> tuple[bool, int, int | None]:
     """Return (allowed, used_today, limit_or_None).
 
     - `allowed=True` when no quota applies (limit is None) or
       `used_today < limit`.
     - `allowed=False` when the quota is exhausted.
     """
-    limit = get_quota(user_id, model_name)
-    used = get_used_today(user_id, model_name)
+    limit = get_quota(user_id, key)
+    used = get_used_today(user_id, key)
     if limit is None:
         return True, used, None
     return used < limit, used, limit
 
 
-def increment_usage(user_id: str, model_name: str) -> None:
-    """Atomically increment today's counter for this user + model.
+def increment_usage(user_id: str, key: str) -> None:
+    """Atomically increment today's counter for (user, key).
 
-    Uses `update_or_create` so concurrent first-of-the-day calls don't
-    race the row's creation, and `F('count') + 1` on subsequent
-    increments so the SQL is a single atomic UPDATE per call.
+    Failures are swallowed and logged — a counter write must never
+    block the user's actual request.
     """
     today = timezone.now().date()
     try:
         obj, created = ModelUsageCounter.objects.get_or_create(
             user_id=user_id,
-            model_name=model_name,
+            model_name=key,
             usage_date=today,
             defaults={"count": 1},
         )
         if not created:
             ModelUsageCounter.objects.filter(pk=obj.pk).update(count=F("count") + 1)
-    except Exception:  # noqa: BLE001 — never fail the user's request on a counter write
-        log.exception(
-            "Failed to increment ModelUsageCounter for user=%s model=%s",
-            user_id,
-            model_name,
-        )
+    except Exception:  # noqa: BLE001
+        log.exception("increment_usage failed for user=%s key=%s", user_id, key)

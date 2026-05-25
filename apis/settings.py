@@ -505,10 +505,6 @@ SEARCH_ENGINE = {
     # Key = (model_name, sha256(text)); value = the float vector.
     # TTL in seconds — set to 0 to disable L2 entirely (L1 LRU stays).
     "RAG_EMBEDDING_CACHE_TTL_S": int(os.environ.get("RAG_EMBEDDING_CACHE_TTL_S", "600")),
-    # Phase 14 — AI agent daily usage limit for free users.
-    # Users with the "unlimited_agent" UserFeatureAccess grant bypass
-    # this cap entirely. Set to 0 to disable the limit for everyone.
-    "AGENT_FREE_DAILY_LIMIT": int(os.environ.get("AGENT_FREE_DAILY_LIMIT", "30")),
     # Phase 14 — live web search via Tavily.
     # Sign up at https://tavily.com to get a free API key (1 000 req/month).
     # Set TAVILY_API_KEY in .env (local) and Railway env vars (production).
@@ -523,18 +519,18 @@ SEARCH_ENGINE = {
     # in llm/choice.py falls back to the server default and logs a
     # warning — no silent SDK error.
     "MODEL_CATALOG": [
-        {
-            "provider": "gemini",
-            "model": "gemini-2.5-flash",
-            "label": "Gemini 2.5 Flash",
-            "note": "Fast responses, good for simple questions.",
-        },
-        {
-            "provider": "gemini",
-            "model": "gemini-2.5-pro",
-            "label": "Gemini 2.5 Pro",
-            "note": "Slower — uses extended thinking for hard questions.",
-        },
+        # {
+        #     "provider": "gemini",
+        #     "model": "gemini-2.5-flash",
+        #     "label": "Gemini 2.5 Flash",
+        #     "note": "Fast responses, good for simple questions.",
+        # },
+        # {
+        #     "provider": "gemini",
+        #     "model": "gemini-2.5-pro",
+        #     "label": "Gemini 2.5 Pro",
+        #     "note": "Slower — uses extended thinking for hard questions.",
+        # },
         {
             "provider": "gemini",
             "model": "gemini-3.5-flash",
@@ -560,27 +556,55 @@ SEARCH_ENGINE = {
             "note": "Higher quality, slower.",
         },
     ],
-    # Daily per-model quota by tier. "free" applies to users without
-    # an active `FEATURE_PAID_TIER` UserFeatureAccess grant; "paid"
-    # applies to those who have one. Resets at UTC midnight. A model
-    # missing from a tier's dict is treated as unlimited for that tier
-    # (e.g. paid users facing a cheap model with no entry → unlimited).
-    "MODEL_DAILY_QUOTAS": {
+    # Daily quotas by user tier. Three tiers — free / pro / max —
+    # resolved from `CustomUser.tier` by `origin.search_engine.quota`.
+    # Each tier sets three independent daily quotas (all reset at
+    # UTC midnight):
+    #   - `llm_ask_daily`: total agent asks per day (counted on first
+    #     answer_delta).
+    #   - `web_search_daily`: Tavily searches per day (counted on
+    #     successful tool execution).
+    #   - `model_daily[<model>]`: per-model asks per day. A model
+    #     missing from a tier's dict is treated as unlimited for that
+    #     tier.
+    # A limit value of `None` means unlimited. Numbers below are
+    # placeholders — tune as needed.
+    "TIER_QUOTAS": {
         "free": {
-            "gemini-2.5-flash": 30,
-            "gemini-3.5-flash": 10,
-            "gemini-2.5-pro": 10,
-            "gemini-3.1-pro-preview": 5,
-            "claude-haiku-4-5": 10,
-            "claude-sonnet-4-6": 5,
+            "llm_ask_daily": 10,
+            "web_search_daily": 5,
+            "model_daily": {
+                # "gemini-2.5-flash": 10,
+                # "gemini-2.5-pro": 5,
+                "gemini-3.5-flash": 10,
+                "gemini-3.1-pro-preview": 5,
+                "claude-haiku-4-5": 10,
+                "claude-sonnet-4-6": 5,
+            },
         },
-        "paid": {
-            "gemini-2.5-flash": 9999,
-            "gemini-2.5-pro": 9999,
-            "gemini-3.5-flash": 9999,
-            "gemini-3.1-pro-preview": 9999,
-            "claude-haiku-4-5": 9999,
-            "claude-sonnet-4-6": 9999,
+        "pro": {
+            "llm_ask_daily": 100,
+            "web_search_daily": 50,
+            "model_daily": {
+                # "gemini-2.5-flash": 100,
+                # "gemini-2.5-pro": 30,
+                "gemini-3.5-flash": 100,
+                "gemini-3.1-pro-preview": 30,
+                "claude-haiku-4-5": 100,
+                "claude-sonnet-4-6": 30,
+            },
+        },
+        "max": {
+            "llm_ask_daily": 1000,
+            "web_search_daily": 500,
+            "model_daily": {
+                # "gemini-2.5-flash": 1000,
+                # "gemini-2.5-pro": 500,
+                "gemini-3.5-flash": 1000,
+                "gemini-3.1-pro-preview": 500,
+                "claude-haiku-4-5": 1000,
+                "claude-sonnet-4-6": 500,
+            },
         },
     },
 }

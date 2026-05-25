@@ -27,8 +27,12 @@ from typing import Any
 
 from django.conf import settings
 
-from origin.models.common.feature_models import UserFeatureAccess
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.quota import (
+    WEB_SEARCH_KEY,
+    check_remaining,
+    increment_usage,
+)
 
 _MAX_CONTENT_CHARS = 600
 _MAX_LIMIT = 10
@@ -45,15 +49,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
         limit = 5
     limit = max(1, min(limit, _MAX_LIMIT))
 
-    # --- Feature gate: only approved users may run web search. ---
-    # Short-term: granted manually via Django admin or the
-    # `feature_access` management command.
-    # Long-term: a billing webhook (Stripe, etc.) creates / reactivates
-    # the UserFeatureAccess row when a user subscribes.
-    if not UserFeatureAccess.user_has(ctx.user_id, UserFeatureAccess.FEATURE_WEB_SEARCH):
+    # --- Per-tier daily quota. ---
+    # Free/Pro/Max each get a different `web_search_daily` cap from
+    # SEARCH_ENGINE["TIER_QUOTAS"]. Pre-flight check; increment after
+    # a successful Tavily response so failed calls don't burn quota.
+    allowed, used, web_limit = check_remaining(ctx.user_id, WEB_SEARCH_KEY)
+    if not allowed:
         raise ToolError(
-            "Web search is available to subscribers only. "
-            "Contact your administrator to request access."
+            f"You've used all {web_limit} web searches for today. "
+            "Upgrade your plan to keep going."
         )
 
     api_key = (settings.SEARCH_ENGINE.get("TAVILY_API_KEY") or "").strip()
@@ -79,6 +83,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
         resp = client.search(query, max_results=limit, search_depth="advanced")
     except Exception as e:  # noqa: BLE001
         raise ToolError(f"Web search failed: {e}")
+
+    # Successful Tavily call → charge one unit against the user's daily
+    # web search quota. The increment is best-effort (logs + swallows
+    # exceptions inside increment_usage), so a counter outage never
+    # blocks the agent from returning results.
+    increment_usage(ctx.user_id, WEB_SEARCH_KEY)
 
     items = [
         {
