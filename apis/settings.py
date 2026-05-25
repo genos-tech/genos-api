@@ -508,7 +508,7 @@ SEARCH_ENGINE = {
     # Phase 14 — AI agent daily usage limit for free users.
     # Users with the "unlimited_agent" UserFeatureAccess grant bypass
     # this cap entirely. Set to 0 to disable the limit for everyone.
-    "AGENT_FREE_DAILY_LIMIT": int(os.environ.get("AGENT_FREE_DAILY_LIMIT", "5")),
+    "AGENT_FREE_DAILY_LIMIT": int(os.environ.get("AGENT_FREE_DAILY_LIMIT", "30")),
     # Phase 14 — live web search via Tavily.
     # Sign up at https://tavily.com to get a free API key (1 000 req/month).
     # Set TAVILY_API_KEY in .env (local) and Railway env vars (production).
