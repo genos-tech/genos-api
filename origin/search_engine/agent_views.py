@@ -508,6 +508,41 @@ class AgentUsageView(AuthenticatedAPIView):
         )
 
 
+class AgentFeaturesView(AuthenticatedAPIView):
+    """GET /api/v2/agent/features/
+
+    Returns the calling user's per-feature access flags so the frontend
+    can surface "you need to request access" warnings BEFORE the user
+    attempts to use a gated tool (web search, etc.) instead of letting
+    the request fail mid-stream with the generic "subscribers only"
+    ToolError.
+
+    Response schema:
+        {
+            "web_search":      bool,
+            "unlimited_agent": bool,
+        }
+
+    Keep the keys aligned with `UserFeatureAccess.FEATURE_*` constants
+    so adding a new gated feature is a one-line change here.
+    """
+
+    def get(self, request):
+        user_id = str(getattr(request.user, "id", ""))
+        if not user_id:
+            return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
+        return Response(
+            {
+                "web_search": UserFeatureAccess.user_has(
+                    user_id, UserFeatureAccess.FEATURE_WEB_SEARCH
+                ),
+                "unlimited_agent": UserFeatureAccess.user_has(
+                    user_id, UserFeatureAccess.FEATURE_UNLIMITED_AGENT
+                ),
+            }
+        )
+
+
 # Cap how many recent sessions the list endpoint returns. Keeps the
 # response small on workspaces with deep history; the UI exposes only
 # this many today (no search / no pagination — see roadmap §11).
