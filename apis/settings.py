@@ -393,7 +393,7 @@ SEARCH_ENGINE = {
     # roadmap recommends 5–8; we default to the conservative end.
     # The controller stops + emits an error if the model hasn't
     # produced a final answer by then.
-    "AGENT_MAX_STEPS": int(os.environ.get("AGENT_MAX_STEPS", "5")),
+    "AGENT_MAX_STEPS": int(os.environ.get("AGENT_MAX_STEPS", "10")),
     # Phase 5 — provider selection. "gemini" (default) or "claude".
     # `get_model_client()` in origin.search_engine.llm reads this at
     # request time; an unknown value raises rather than silently

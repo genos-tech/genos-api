@@ -6,6 +6,11 @@ from origin.serializers.common.inbox_serializers import *
 from origin.models.common.team_models import *
 from origin.models.project.prj_models import *
 from origin.models.chat.gm_models import *
+from origin.views.utils.incremental import (
+    build_delta_response,
+    capture_server_time,
+    check_since,
+)
 
 
 #############################
@@ -30,6 +35,7 @@ class InboxItemView(AuthenticatedAPIView):
             receiver=data["receiver"],
             item_body=data["item_body"],
             item_type=data["item_type"],
+            is_deleted=False,
         ).exists()
 
         serializer = InboxItemsSerializer(data=data)
@@ -90,22 +96,38 @@ class InboxItemView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        myInboxItems = InboxItems.objects.filter(Q(team_id=team_id, receiver=user_id))
+        # Snapshot server time BEFORE the query. See utils/incremental.py.
+        server_time = capture_server_time()
+        since, force_full = check_since(request)
 
-        res = []
-        for item in myInboxItems:
-            res.append(
+        qs = InboxItems.objects.filter(Q(team_id=team_id, receiver=user_id))
+        if since is None:
+            # Full load: hide soft-deleted rows.
+            qs = qs.filter(is_deleted=False)
+        else:
+            # Incremental: include soft-deleted rows so the client can
+            # apply tombstones, and bound to anything that has changed
+            # since the last checkpoint.
+            qs = qs.filter(ts_updated_at__gt=since)
+
+        items = []
+        for item in qs:
+            items.append(
                 {
                     "itemId": item.item_id,
                     "itemBody": item.item_body,
                     "itemType": item.item_type,
                     "isRead": item.is_read,
                     "requestStatus": item.request_status,
+                    "isDeleted": item.is_deleted,
                     "tsSent": item.ts_created_at,
                 }
             )
 
-        return Response(res, status=status.HTTP_200_OK)
+        return Response(
+            build_delta_response({"items": items}, server_time, force_full_reload=force_full),
+            status=status.HTTP_200_OK,
+        )
 
 
 class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
@@ -129,6 +151,7 @@ class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
             sender=data["sender"],
             receiver=data["receiver"],
             item_type=data["item_type"],
+            is_deleted=False,
         ).exists()
 
         serializer = InboxItemsSerializer(data=data)
@@ -178,6 +201,7 @@ class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
             receiver=data["receiver"],
             item_type=data["item_type"],
             item_optionals=data["item_optionals"],
+            is_deleted=False,
         ).exists()
 
         serializer = InboxItemsSerializer(data=data)
@@ -227,6 +251,7 @@ class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
             receiver=data["receiver"],
             item_type=data["item_type"],
             item_optionals=data["item_optionals"],
+            is_deleted=False,
         ).exists()
 
         serializer = InboxItemsSerializer(data=data)

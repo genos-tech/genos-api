@@ -14,6 +14,7 @@ def get(
     chat_type: int,
     chat_ids: list,
     n_days_ago: datetime,
+    is_delta_load: bool = False,
     limit: int = 100,
     offset: int = 0,
 ):
@@ -22,18 +23,26 @@ def get(
     activity_type: 2
     sender: <payload["user_id"]>
     latest_reaction_user: not <payload["user_id"]>
+
+    `is_delta_load`: when True, filter by `ts_updated_at` (catches edits +
+    soft-deletes) and include `is_deleted` rows so the client can apply
+    tombstones.
     """
 
+    base = ActivityFact.objects.filter(
+        team=payload["team_id"],
+        activity_type=ACTIVITY_TYPE,
+        chat_type=chat_type,
+        chat_id__in=chat_ids,
+        sender=payload["user_id"],
+    )
+    if is_delta_load:
+        base = base.filter(ts_updated_at__gt=n_days_ago)
+    else:
+        base = base.filter(ts_created_at__gte=n_days_ago, is_deleted=False)
+
     return list(
-        ActivityFact.objects.filter(
-            team=payload["team_id"],
-            activity_type=ACTIVITY_TYPE,
-            chat_type=chat_type,
-            chat_id__in=chat_ids,
-            sender=payload["user_id"],
-            ts_created_at__gte=n_days_ago,
-        )
-        .filter(
+        base.filter(
             ~Q(latest_reaction_user=payload["user_id"])
         )  # Exclude reactions that the request user did
         .annotate(
@@ -82,6 +91,7 @@ def get(
                 )
             ),
             tsSent=F("ts_created_at"),
+            isDeleted=F("is_deleted"),
         )
         .values(
             "team",
@@ -110,6 +120,7 @@ def get(
             "mentionedUserIds",
             "isRead",
             "tsSent",
+            "isDeleted",
         )
         .order_by("-tsSent")[offset : offset + limit]  # Most recent first  # Pagination slice
     )
