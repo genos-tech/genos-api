@@ -23,6 +23,13 @@ from origin.views.chat.pm_delta_views import (
     PMMessagesDeltaView,
     PMThreadMessagesDeltaView,
 )
+
+# DMHistoryView / GMHistoryView / PMHistoryView were removed by the
+# Phase 5 cleanup — the frontend's bulk history loader uses the Phase 2
+# {chats, messagesDelta, threadMessagesDelta} split now. MDMHistoryView
+# stays because the frontend still uses its single-MDM mode (?mdm_id=X)
+# from useChatRouting / useChatListItem / moveToChat / createMDMChatGroup
+# / addMembersToChat / ModalChatView.
 from origin.views.chat.search_views import *
 from origin.views.chat.reaction_views import *
 from origin.views.chat.activity_views import *
@@ -38,9 +45,8 @@ urlpatterns = [
     path("api/v2/dm/checkExistence/", CheckDMExistsView.as_view(), name="check_dm_existence"),
     path("api/v2/dm/id/", DMIdView.as_view(), name="get_dm_id"),
     path("api/v2/dm/ids/", AllDMIdsView.as_view(), name="get_all_my_dm_ids"),
-    path("api/v2/dm/history/", DMHistoryView.as_view(), name="get_all_my_dm_messages"),
-    # Phase 2 incremental-sync endpoints (replaces /dm/history/ as the
-    # initial-load path; the old endpoint stays for backwards compat).
+    # Phase 2 incremental-sync DM endpoints — replaced the bulk
+    # /dm/history/ endpoint that lived here previously.
     path("api/v2/dm/chats/", DMChatsListView.as_view(), name="dm_chats_list"),
     path(
         "api/v2/dm/messagesDelta/",
@@ -118,8 +124,8 @@ urlpatterns = [
     path("api/v2/gm/ids/", AllGMIdsView.as_view(), name="get_all_my_gm_ids"),
     path("api/v2/gm/join/", GMMembersView.as_view(), name="join_gm"),
     path("api/v2/gm/join/fromInbox/", JoinGMFromInboxView.as_view(), name="join_gm_from_inbox"),
-    path("api/v2/gm/history/", GMHistoryView.as_view(), name="get_all_my_gm_messages"),
-    # Phase 2 incremental-sync GM endpoints.
+    # Phase 2 incremental-sync GM endpoints — replaced the bulk
+    # /gm/history/ endpoint.
     path("api/v2/gm/chats/", GMChatsListView.as_view(), name="gm_chats_list"),
     path(
         "api/v2/gm/messagesDelta/",
@@ -153,8 +159,8 @@ urlpatterns = [
         name="get_gm_thread_messages_by_task_id",
     ),
     # PM urls
-    path("api/v2/pm/history/", PMHistoryView.as_view(), name="pm_history"),
-    # Phase 2 incremental-sync PM endpoints.
+    # Phase 2 incremental-sync PM endpoints — replaced the bulk
+    # /pm/history/ endpoint.
     path("api/v2/pm/chats/", PMChatsListView.as_view(), name="pm_chats_list"),
     path(
         "api/v2/pm/messagesDelta/",

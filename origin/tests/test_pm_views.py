@@ -1,4 +1,5 @@
 """Tests for PM (Project Message) chat endpoints."""
+
 from django.contrib.auth import get_user_model
 from rest_framework import status
 
@@ -26,106 +27,14 @@ class PMTestMixin:
             owner=self.user,
             project_system_user=self.system_user,
         )
-        ProjectMembers.objects.create(
-            team=self.team, project=self.project, attendee=self.user
-        )
-        ProjectMembers.objects.create(
-            team=self.team, project=self.project, attendee=self.user2
-        )
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user)
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
         UserChatMaster.objects.create(
             team=self.team,
             user=self.user,
             pinned_chats=[],
             flagged_messages=[],
         )
-
-
-class PMHistoryViewTests(PMTestMixin, BaseAPITestCase):
-    """GET /api/v2/pm/history/"""
-
-    url = "/api/v2/pm/history/"
-
-    def setUp(self):
-        super().setUp()
-        self.authenticate()
-        self._create_project()
-
-    def test_history_empty(self):
-        resp = self.client.get(self.url, {
-            "team_id": str(self.team.team_id),
-            "team_name": self.team.team_name,
-            "user_id": str(self.user.id),
-        })
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertIn("chat_history", resp.data)
-        self.assertEqual(resp.data["chat_history"], [])
-
-    def test_history_with_messages(self):
-        PMMessages.objects.create(
-            project=self.project,
-            sender=self.user,
-            message_id=1,
-            message_body=[{"type": "text", "text": "Hello project"}],
-        )
-        resp = self.client.get(self.url, {
-            "team_id": str(self.team.team_id),
-            "team_name": self.team.team_name,
-            "user_id": str(self.user.id),
-        })
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertTrue(len(resp.data["chat_history"]) > 0)
-
-    def test_history_specific_project(self):
-        PMMessages.objects.create(
-            project=self.project,
-            sender=self.user,
-            message_id=1,
-            message_body=[{"type": "text", "text": "scoped"}],
-        )
-        resp = self.client.get(self.url, {
-            "team_id": str(self.team.team_id),
-            "team_name": self.team.team_name,
-            "user_id": str(self.user.id),
-            "project_id": str(self.project.project_id),
-        })
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertTrue(len(resp.data["chat_history"]) > 0)
-
-    def test_history_no_membership_returns_empty(self):
-        user3 = User.objects.create_user(
-            username="noproject", email="noproject@example.com", password="p"
-        )
-        UserChatMaster.objects.create(
-            team=self.team,
-            user=user3,
-            pinned_chats=[],
-            flagged_messages=[],
-        )
-        self.authenticate(user3)
-        resp = self.client.get(self.url, {
-            "team_id": str(self.team.team_id),
-            "team_name": self.team.team_name,
-            "user_id": str(user3.id),
-        })
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(resp.data["chat_history"], [])
-
-    def test_history_wrong_user_forbidden(self):
-        resp = self.client.get(self.url, {
-            "team_id": str(self.team.team_id),
-            "team_name": self.team.team_name,
-            "user_id": str(self.user2.id),
-        })
-        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
-
-    def test_history_missing_params(self):
-        resp = self.client.get(self.url, {})
-        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-
-    def test_history_unauthorized(self):
-        self.unauthenticate()
-        resp = self.client.get(self.url)
-        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
 class PMSingleMessagePostViewTests(PMTestMixin, BaseAPITestCase):
@@ -148,11 +57,7 @@ class PMSingleMessagePostViewTests(PMTestMixin, BaseAPITestCase):
         resp = self.client.post(self.url, data, format="json")
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         self.assertEqual(resp.data["message_id"], 1)
-        self.assertTrue(
-            PMMessages.objects.filter(
-                project=self.project, message_id=1
-            ).exists()
-        )
+        self.assertTrue(PMMessages.objects.filter(project=self.project, message_id=1).exists())
 
     def test_send_multiple_messages_increments_id(self):
         base = {
@@ -237,9 +142,7 @@ class PMSingleMessagePutViewTests(PMTestMixin, BaseAPITestCase):
         resp = self.client.put(self.url, data, format="json")
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.msg.refresh_from_db()
-        self.assertEqual(
-            self.msg.message_body, [{"type": "text", "text": "updated via task"}]
-        )
+        self.assertEqual(self.msg.message_body, [{"type": "text", "text": "updated via task"}])
 
     def test_update_missing_both_ids_returns_400(self):
         data = {

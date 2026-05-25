@@ -47,8 +47,7 @@ CHAT_TYPE = 1
 
 
 # ---------------------------------------------------------------------------
-# Shared serializers (also reused by the existing DMHistoryView shape, but
-# we don't import from there to avoid circular dependency on dm_views.py).
+# Shared serializers for the three DM delta endpoints below.
 # ---------------------------------------------------------------------------
 
 

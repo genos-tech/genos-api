@@ -1,4 +1,5 @@
 """Tests for DM (Direct Message) chat endpoints."""
+
 from django.test import TestCase
 from rest_framework import status
 
@@ -89,12 +90,8 @@ class DMMasterViewTests(BaseAPITestCase):
         resp = self.client.post(self.url, data, format="json")
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         dm_id = resp.data["dm_id"]
-        self.assertTrue(
-            UserDMMapping.objects.filter(dm_id=dm_id, user_id=self.user.id).exists()
-        )
-        self.assertTrue(
-            UserDMMapping.objects.filter(dm_id=dm_id, user_id=self.user2.id).exists()
-        )
+        self.assertTrue(UserDMMapping.objects.filter(dm_id=dm_id, user_id=self.user.id).exists())
+        self.assertTrue(UserDMMapping.objects.filter(dm_id=dm_id, user_id=self.user2.id).exists())
 
 
 class CheckDMExistsViewTests(BaseAPITestCase):
@@ -112,21 +109,27 @@ class CheckDMExistsViewTests(BaseAPITestCase):
         )
 
     def test_dm_exists(self):
-        resp = self.client.get(self.url, {
-            "team_id": str(self.team.team_id),
-            "user_1_id": str(self.user.id),
-            "user_2_id": str(self.user2.id),
-        })
+        resp = self.client.get(
+            self.url,
+            {
+                "team_id": str(self.team.team_id),
+                "user_1_id": str(self.user.id),
+                "user_2_id": str(self.user2.id),
+            },
+        )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertTrue(resp.data["dm_exists"])
         self.assertEqual(resp.data["dm_id"], self.dm.dm_id)
 
     def test_dm_exists_reversed(self):
-        resp = self.client.get(self.url, {
-            "team_id": str(self.team.team_id),
-            "user_1_id": str(self.user2.id),
-            "user_2_id": str(self.user.id),
-        })
+        resp = self.client.get(
+            self.url,
+            {
+                "team_id": str(self.team.team_id),
+                "user_1_id": str(self.user2.id),
+                "user_2_id": str(self.user.id),
+            },
+        )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertTrue(resp.data["dm_exists"])
 
@@ -136,11 +139,14 @@ class CheckDMExistsViewTests(BaseAPITestCase):
         user3 = get_user_model().objects.create_user(
             username="user3", email="user3@example.com", password="pass123"
         )
-        resp = self.client.get(self.url, {
-            "team_id": str(self.team.team_id),
-            "user_1_id": str(self.user.id),
-            "user_2_id": str(user3.id),
-        })
+        resp = self.client.get(
+            self.url,
+            {
+                "team_id": str(self.team.team_id),
+                "user_1_id": str(self.user.id),
+                "user_2_id": str(user3.id),
+            },
+        )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertFalse(resp.data["dm_exists"])
         self.assertIsNone(resp.data["dm_id"])
@@ -170,20 +176,26 @@ class DMIdViewTests(BaseAPITestCase):
         )
 
     def test_get_dm_id(self):
-        resp = self.client.get(self.url, {
-            "team_id": str(self.team.team_id),
-            "user_1_id": str(self.user.id),
-            "user_2_id": str(self.user2.id),
-        })
+        resp = self.client.get(
+            self.url,
+            {
+                "team_id": str(self.team.team_id),
+                "user_1_id": str(self.user.id),
+                "user_2_id": str(self.user2.id),
+            },
+        )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data["dm_id"], self.dm.dm_id)
 
     def test_get_dm_id_reversed_users(self):
-        resp = self.client.get(self.url, {
-            "team_id": str(self.team.team_id),
-            "user_1_id": str(self.user2.id),
-            "user_2_id": str(self.user.id),
-        })
+        resp = self.client.get(
+            self.url,
+            {
+                "team_id": str(self.team.team_id),
+                "user_1_id": str(self.user2.id),
+                "user_2_id": str(self.user.id),
+            },
+        )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data["dm_id"], self.dm.dm_id)
 
@@ -193,11 +205,14 @@ class DMIdViewTests(BaseAPITestCase):
         user3 = get_user_model().objects.create_user(
             username="user3", email="u3@example.com", password="p"
         )
-        resp = self.client.get(self.url, {
-            "team_id": str(self.team.team_id),
-            "user_1_id": str(self.user.id),
-            "user_2_id": str(user3.id),
-        })
+        resp = self.client.get(
+            self.url,
+            {
+                "team_id": str(self.team.team_id),
+                "user_1_id": str(self.user.id),
+                "user_2_id": str(user3.id),
+            },
+        )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertIsNone(resp.data["dm_id"])
 
@@ -206,71 +221,6 @@ class DMIdViewTests(BaseAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_get_dm_id_unauthorized(self):
-        self.unauthenticate()
-        resp = self.client.get(self.url)
-        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
-
-
-class DMHistoryViewTests(BaseAPITestCase):
-    """GET /api/v2/dm/history/"""
-
-    url = "/api/v2/dm/history/"
-
-    def setUp(self):
-        super().setUp()
-        self.authenticate()
-        self.dm = DMMaster.objects.create(
-            team=self.team,
-            user_1_id=self.user.id,
-            user_2_id=self.user2.id,
-        )
-        UserChatMaster.objects.create(
-            team=self.team,
-            user=self.user,
-            pinned_chats=[],
-            flagged_messages=[],
-        )
-
-    def test_history_empty(self):
-        resp = self.client.get(self.url, {
-            "team_id": str(self.team.team_id),
-            "team_name": self.team.team_name,
-            "user_id": str(self.user.id),
-        })
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertIn("chat_history", resp.data)
-        self.assertEqual(resp.data["chat_history"], [])
-
-    def test_history_with_messages(self):
-        DMMessages.objects.create(
-            dm=self.dm,
-            sender=self.user,
-            receiver=self.user2,
-            message_id=1,
-            message_body=[{"type": "text", "text": "Hello"}],
-        )
-        resp = self.client.get(self.url, {
-            "team_id": str(self.team.team_id),
-            "team_name": self.team.team_name,
-            "user_id": str(self.user.id),
-        })
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertTrue(len(resp.data["chat_history"]) > 0)
-
-    def test_history_wrong_user_forbidden(self):
-        """Requesting history for a different user should be forbidden."""
-        resp = self.client.get(self.url, {
-            "team_id": str(self.team.team_id),
-            "team_name": self.team.team_name,
-            "user_id": str(self.user2.id),
-        })
-        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
-
-    def test_history_missing_params(self):
-        resp = self.client.get(self.url, {})
-        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-
-    def test_history_unauthorized(self):
         self.unauthenticate()
         resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
