@@ -35,6 +35,10 @@ def get(first_line):
             user = (c.get("props") or {}).get("userName")
             if user:
                 parts.append(f"@{user}")
+        elif c_type == "mentionGroup":
+            group = (c.get("props") or {}).get("groupName")
+            if group:
+                parts.append(f"@{group}")
         elif c_type == "link":
             inner = c.get("content") or []
             if inner and isinstance(inner[0], dict) and inner[0].get("text"):

@@ -32,6 +32,17 @@ class TestGenerateFirstLine(TestCase):
         }
         self.assertEqual(generate_first_line_get(first_line), "@alice")
 
+    def test_mention_group(self):
+        # Group-chip-only message — previously had no inline text, so the
+        # history-modal subtitle fell back to "Message #N". Now renders
+        # as `@<groupName>`.
+        first_line = {
+            "content": [
+                {"type": "mentionGroup", "props": {"groupName": "engineering"}},
+            ]
+        }
+        self.assertEqual(generate_first_line_get(first_line), "@engineering")
+
     def test_link(self):
         first_line = {
             "content": [
