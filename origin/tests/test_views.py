@@ -64,9 +64,58 @@ class TestGenerateFirstLine(TestCase):
         }
         self.assertEqual(generate_first_line_get(first_line), "Hello")
 
-    def test_error_handling(self):
+    def test_none_input(self):
+        # No raised exception, no "Failed to generate..." stub — just
+        # an empty preview that the caller can render however they want.
         result = generate_first_line_get(None)
-        self.assertEqual(result, "Failed to generate the first line...")
+        self.assertEqual(result, "")
+
+    def test_image_block(self):
+        first_line = {
+            "type": "image",
+            "props": {"url": "https://cdn.example.com/img.jpg", "name": "photo.jpg"},
+        }
+        self.assertEqual(generate_first_line_get(first_line), "Image: photo.jpg")
+
+    def test_image_block_without_name(self):
+        first_line = {"type": "image", "props": {"url": "https://cdn.example.com/img.jpg"}}
+        self.assertEqual(generate_first_line_get(first_line), "Image")
+
+    def test_file_block(self):
+        first_line = {
+            "type": "file",
+            "props": {"url": "https://cdn.example.com/doc.pdf", "name": "q3-report.pdf"},
+        }
+        self.assertEqual(generate_first_line_get(first_line), "File: q3-report.pdf")
+
+    def test_table_block(self):
+        first_line = {"type": "table", "content": {"type": "tableContent", "rows": []}}
+        self.assertEqual(generate_first_line_get(first_line), "Table")
+
+    def test_divider_block(self):
+        self.assertEqual(generate_first_line_get({"type": "divider"}), "")
+
+    def test_code_block_with_text(self):
+        first_line = {
+            "type": "codeBlock",
+            "props": {"language": "python"},
+            "content": [{"type": "text", "text": "print('hello')"}],
+        }
+        self.assertEqual(generate_first_line_get(first_line), "print('hello')")
+
+    def test_code_block_empty(self):
+        first_line = {"type": "codeBlock", "props": {"language": "python"}, "content": []}
+        self.assertEqual(generate_first_line_get(first_line), "Code")
+
+    def test_unknown_inline_type_skipped(self):
+        first_line = {
+            "content": [
+                {"type": "text", "text": "Hello"},
+                {"type": "futureInline", "data": "ignored"},
+                {"type": "text", "text": "world"},
+            ]
+        }
+        self.assertEqual(generate_first_line_get(first_line), "Hello world")
 
 
 class TestValidateRequestData(TestCase):
