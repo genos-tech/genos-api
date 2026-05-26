@@ -22,12 +22,37 @@ from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 
+_PARA_PROPS = {
+    "textColor": "default",
+    "textAlignment": "left",
+    "backgroundColor": "default",
+}
+
+
+def _paragraph(text: str) -> dict[str, Any]:
+    return {
+        "type": "paragraph",
+        "props": dict(_PARA_PROPS),
+        "content": ([{"text": text, "type": "text", "styles": {}}] if text else []),
+        "children": [],
+    }
+
 
 def _wrap_blocknote(text: str) -> list[dict[str, Any]]:
-    """Comment bodies use the same BlockNote shape as task content."""
+    """Emit the exact BlockNote shape the chat preview expects.
+
+    Real user-typed comments persist as: one paragraph block per text
+    line, followed by a trailing blank paragraph (BlockNote's editor
+    sentinel). `BnChatPreview` renders comments via
+    `initialContent: content.slice(0, -1)`, so a single-block body
+    becomes an empty array and BlockNote throws "initialContent must
+    be a non-empty array of blocks". We must emit the trailing blank
+    block.
+    """
     if not text:
         return []
-    return [{"type": "paragraph", "content": [{"type": "text", "text": text}]}]
+    lines = text.split("\n")
+    return [_paragraph(line) for line in lines] + [_paragraph("")]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:

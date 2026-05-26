@@ -102,6 +102,28 @@ def _build_tool_declarations(
     ]
 
 
+def _coerce_signature(raw: Any) -> bytes | None:
+    """Normalise a persisted thought_signature back to `bytes | None`.
+
+    `models.BinaryField` may surface as `bytes`, `memoryview`, or
+    `None` depending on the DB driver. The Gemini SDK's `Part`
+    constructor expects `bytes`, so coerce explicitly. Empty buffers
+    become None — an empty signature would still be rejected by the
+    API, so treating it as missing avoids sending a malformed echo.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, memoryview):
+        raw = raw.tobytes()
+    if isinstance(raw, bytes):
+        return raw or None
+    # Anything else (e.g. str under SQLite quirks) — coerce defensively.
+    try:
+        return bytes(raw) or None
+    except (TypeError, ValueError):
+        return None
+
+
 def _user_turn(query: str) -> AgentMessage:
     return AgentMessage(role="user", text=query)
 
@@ -568,7 +590,11 @@ def resume_agent(
     step_index = pending_step.step_index
     call_name = pending_step.tool_name
     call_args = dict(pending_step.arguments_json or {})
-    function_call = FunctionCall(name=call_name, args=call_args)
+    function_call = FunctionCall(
+        name=call_name,
+        args=call_args,
+        thought_signature=_coerce_signature(pending_step.thought_signature),
+    )
 
     # Emit the start event the original run skipped. Same step index so
     # the frontend can correlate the approve/reject card with the row
@@ -810,6 +836,7 @@ def _drive_loop(
                     step_index=step,
                     tool_name=call_name,
                     arguments_json=call_args,
+                    thought_signature=call.thought_signature,
                     error=err,
                 )
                 messages.append(_assistant_function_call_turn(call))
@@ -824,6 +851,7 @@ def _drive_loop(
                     step_index=step,
                     tool_name=call_name,
                     arguments_json=call_args,
+                    thought_signature=call.thought_signature,
                     summary=PENDING_APPROVAL_MARKER,
                 )
                 # `run_id` is included so the frontend has everything it
@@ -874,6 +902,7 @@ def _drive_loop(
                     step_index=step,
                     tool_name=call_name,
                     arguments_json=call_args,
+                    thought_signature=call.thought_signature,
                     error=str(e),
                 )
                 if trace_hook is not None:
@@ -900,6 +929,7 @@ def _drive_loop(
                     step_index=step,
                     tool_name=call_name,
                     arguments_json=call_args,
+                    thought_signature=call.thought_signature,
                     error=err,
                 )
                 if trace_hook is not None:
@@ -925,6 +955,7 @@ def _drive_loop(
                 step_index=step,
                 tool_name=call_name,
                 arguments_json=call_args,
+                thought_signature=call.thought_signature,
                 summary=summary,
                 result_json=result,
             )
@@ -1225,6 +1256,7 @@ def _rebuild_messages(run: AgentRun) -> tuple[list[AgentMessage], AgentStep | No
         fc = FunctionCall(
             name=step.tool_name,
             args=dict(step.arguments_json or {}),
+            thought_signature=_coerce_signature(step.thought_signature),
         )
         messages.append(_assistant_function_call_turn(fc))
         if step.error:

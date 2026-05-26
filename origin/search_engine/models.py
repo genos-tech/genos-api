@@ -126,6 +126,13 @@ class AgentStep(models.Model):
     result_json = models.JSONField(blank=True, null=True)
     answer_text = models.TextField(blank=True, default="")
     error = models.TextField(blank=True, default="")
+    # Opaque Gemini 3+ "thought signature" bytes captured alongside a
+    # function_call part. Must be echoed back when the assistant turn is
+    # replayed (e.g. after a write-tool approval resume) or Gemini 3
+    # rejects with `400 INVALID_ARGUMENT: Function call is missing a
+    # thought_signature in functionCall parts.` See
+    # `FunctionCall.thought_signature` in llm/types.py.
+    thought_signature = models.BinaryField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
