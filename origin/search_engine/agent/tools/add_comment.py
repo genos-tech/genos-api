@@ -14,6 +14,7 @@ proposed comment body in the Approve / Reject card before it lands.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from django.db import transaction
@@ -31,6 +32,7 @@ _PARA_PROPS = {
 
 def _paragraph(text: str) -> dict[str, Any]:
     return {
+        "id": str(uuid.uuid4()),
         "type": "paragraph",
         "props": dict(_PARA_PROPS),
         "content": ([{"text": text, "type": "text", "styles": {}}] if text else []),

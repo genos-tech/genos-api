@@ -16,6 +16,7 @@ and decides whether to execute.
 
 from __future__ import annotations
 
+import uuid
 from datetime import date
 from typing import Any
 
@@ -24,15 +25,37 @@ from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 
 _VALID_STATUSES = {"Open", "WIP", "Pending", "Closed", "Deleted"}
-_VALID_PRIORITIES = {"Low", "Normal", "High", "Critical"}
-_VALID_EFFORTS = {"Low", "Medium", "High", "Extensive"}
+# Canonical enums live in `frontend/.../taskMeta.ts`. Keep in sync —
+# a value outside the set still saves but renders without chip colour.
+_VALID_PRIORITIES = {"Minimal", "Low", "Normal", "High", "Critical"}
+_VALID_EFFORTS = {"Minimal", "Low", "Moderate", "High", "Extensive"}
+
+
+_PARA_PROPS = {
+    "textColor": "default",
+    "textAlignment": "left",
+    "backgroundColor": "default",
+}
+
+
+def _paragraph(text: str) -> dict[str, Any]:
+    return {
+        "id": str(uuid.uuid4()),
+        "type": "paragraph",
+        "props": dict(_PARA_PROPS),
+        "content": ([{"text": text, "type": "text", "styles": {}}] if text else []),
+        "children": [],
+    }
 
 
 def _wrap_blocknote(text: str) -> list[dict[str, Any]]:
-    """Same shape `create_task` produces — keeps the chunker happy on reindex."""
+    """Same shape `create_task` produces — id / props / styles /
+    children on every block, plus the trailing blank sentinel a
+    user-typed body always carries."""
     if not text:
         return []
-    return [{"type": "paragraph", "content": [{"type": "text", "text": text}]}]
+    lines = text.split("\n")
+    return [_paragraph(line) for line in lines] + [_paragraph("")]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -196,12 +219,12 @@ UPDATE_TASK = Tool(
             },
             "priority": {
                 "type": "STRING",
-                "enum": ["Low", "Normal", "High", "Critical"],
+                "enum": ["Minimal", "Low", "Normal", "High", "Critical"],
                 "description": "New priority. Omit to leave unchanged.",
             },
             "effort_level": {
                 "type": "STRING",
-                "enum": ["Low", "Medium", "High", "Extensive"],
+                "enum": ["Minimal", "Low", "Moderate", "High", "Extensive"],
                 "description": "New effort estimate. Omit to leave unchanged.",
             },
             "due_date": {

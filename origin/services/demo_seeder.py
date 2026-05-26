@@ -82,9 +82,12 @@ BOT_PROFILES = [
 # BlockNote body builders
 # ---------------------------------------------------------------------------
 
+# `isToggleable` ships on every heading the frontend writes; include it
+# so seeded blocks match real ones byte-for-byte under diff tools.
 _HEADING_PROPS = {
     "level": 3,
     "textColor": "default",
+    "isToggleable": False,
     "textAlignment": "left",
     "backgroundColor": "default",
 }
@@ -96,8 +99,16 @@ _PARA_PROPS = {
 _PLACEHOLDER_STYLES = {"italic": True, "textColor": "gray"}
 
 
+def _block_id() -> str:
+    """Fresh per-block UUID. BlockNote assigns one to every block in
+    real user-typed documents; the seeded shape was missing this field,
+    making the rows easy to spot as "not user-typed."""
+    return str(uuid.uuid4())
+
+
 def _heading(text: str) -> dict:
     return {
+        "id": _block_id(),
         "type": "heading",
         "props": _HEADING_PROPS,
         "content": [{"text": text, "type": "text", "styles": {}}],
@@ -107,6 +118,7 @@ def _heading(text: str) -> dict:
 
 def _para(text: str) -> dict:
     return {
+        "id": _block_id(),
         "type": "paragraph",
         "props": _PARA_PROPS,
         "content": [{"text": text, "type": "text", "styles": {}}],
@@ -116,6 +128,7 @@ def _para(text: str) -> dict:
 
 def _placeholder(text: str) -> dict:
     return {
+        "id": _block_id(),
         "type": "paragraph",
         "props": _PARA_PROPS,
         "content": [{"text": text, "type": "text", "styles": _PLACEHOLDER_STYLES}],
@@ -124,11 +137,18 @@ def _placeholder(text: str) -> dict:
 
 
 def _blank_para() -> dict:
-    return {"type": "paragraph", "props": _PARA_PROPS, "content": [], "children": []}
+    return {
+        "id": _block_id(),
+        "type": "paragraph",
+        "props": _PARA_PROPS,
+        "content": [],
+        "children": [],
+    }
 
 
 def _bullet(text: str) -> dict:
     return {
+        "id": _block_id(),
         "type": "bulletListItem",
         "props": _PARA_PROPS,
         "content": [{"text": text, "type": "text", "styles": {}}],
@@ -138,6 +158,7 @@ def _bullet(text: str) -> dict:
 
 def _bullet_placeholder(text: str) -> dict:
     return {
+        "id": _block_id(),
         "type": "bulletListItem",
         "props": _PARA_PROPS,
         "content": [{"text": text, "type": "text", "styles": _PLACEHOLDER_STYLES}],
@@ -2348,27 +2369,24 @@ def _create_dms(team, demo_user, bots):
 
         thread_spec = spec.get("thread")
         thread_parent_idx = thread_spec["parent_index"] if thread_spec else None
-        # By convention (see pm_views.py:712 `thread_id = message.message_id`)
-        # a thread's id IS its parent message's message_id. The frontend's
-        # loadSpecificThreadMessages call passes the parent's message_id as
-        # the thread_id query param, so if these don't match the thread
-        # comes back empty and the "X replies" badge looks broken.
+        # The CHILD `DMThreadMessages.thread_id` carries the parent's
+        # `message_id` (see pm_views.py:428 — the reply-count API joins
+        # on this). The parent `DMMessages.thread_id` is NOT set by the
+        # real frontend; reply counts come from a JOIN on the children
+        # table (see dm_views.py:208-212), not from the parent's field.
         thread_id_value = thread_parent_idx + 1 if thread_parent_idx is not None else None
 
         created_msgs = []
         for midx, (who, text) in enumerate(spec["messages"]):
             sender = bot if who == "bot" else demo_user
             receiver = demo_user if who == "bot" else bot
-            kwargs = {
-                "dm": dm,
-                "sender": sender,
-                "receiver": receiver,
-                "message_id": midx + 1,
-                "message_body": _text_body(text),
-            }
-            if midx == thread_parent_idx:
-                kwargs["thread_id"] = thread_id_value
-            msg = DMMessages.objects.create(**kwargs)
+            msg = DMMessages.objects.create(
+                dm=dm,
+                sender=sender,
+                receiver=receiver,
+                message_id=midx + 1,
+                message_body=_text_body(text),
+            )
             created_msgs.append(msg)
 
         if thread_spec:
@@ -2410,19 +2428,18 @@ def _create_group_chat(team, demo_user, members) -> GMMaster:
 
     thread_parent_idx = GM_BLUEPRINT["thread"]["parent_index"]
     # Thread id matches the parent message's message_id by convention.
+    # Stored on the CHILD `GMThreadMessages.thread_id` only — the real
+    # frontend leaves `GMMessages.thread_id` NULL on the parent.
     thread_id_value = thread_parent_idx + 1
 
     created_msgs = []
     for midx, (sender_idx, text) in enumerate(GM_BLUEPRINT["messages"]):
-        kwargs = {
-            "gm": gm,
-            "sender": members[sender_idx],
-            "message_id": midx + 1,
-            "message_body": _text_body(text),
-        }
-        if midx == thread_parent_idx:
-            kwargs["thread_id"] = thread_id_value
-        msg = GMMessages.objects.create(**kwargs)
+        msg = GMMessages.objects.create(
+            gm=gm,
+            sender=members[sender_idx],
+            message_id=midx + 1,
+            message_body=_text_body(text),
+        )
         created_msgs.append(msg)
 
     parent_msg = created_msgs[thread_parent_idx]
@@ -2459,15 +2476,15 @@ def _create_pm_messages(project, members, blueprint):
     created_msgs = []
     for midx, (sender_key, text) in enumerate(pm_messages):
         sender = members[resolve_idx(sender_key)]
-        kwargs = {
-            "project": project,
-            "sender": sender,
-            "message_id": midx + 1,
-            "message_body": _text_body(text),
-        }
-        if midx == thread_parent_idx:
-            kwargs["thread_id"] = thread_id_value
-        msg = PMMessages.objects.create(**kwargs)
+        # Parent `PMMessages.thread_id` is NOT set — see DM helper for
+        # why (the real frontend leaves it NULL; reply counts come from
+        # a JOIN on PMThreadMessages, not from the parent column).
+        msg = PMMessages.objects.create(
+            project=project,
+            sender=sender,
+            message_id=midx + 1,
+            message_body=_text_body(text),
+        )
         created_msgs.append(msg)
 
     parent_msg = created_msgs[thread_parent_idx]

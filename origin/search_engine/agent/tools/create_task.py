@@ -25,6 +25,7 @@ shape natively when the new task gets indexed by the chunker.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from origin.models.project.prj_models import ProjectMaster
@@ -33,27 +34,41 @@ from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 
 _DEFAULT_STATUS = "Open"
-_VALID_PRIORITIES = {"Low", "Normal", "High", "Critical"}
-_VALID_EFFORTS = {"Low", "Medium", "High", "Extensive"}
+# Canonical enum lives on the frontend in `taskMeta.ts`. Keep this in
+# sync — both the priority and effort-level sets are read by chip
+# colour lookups, and an out-of-set value renders without a colour.
+_VALID_PRIORITIES = {"Minimal", "Low", "Normal", "High", "Critical"}
+_VALID_EFFORTS = {"Minimal", "Low", "Moderate", "High", "Extensive"}
+
+
+_PARA_PROPS = {
+    "textColor": "default",
+    "textAlignment": "left",
+    "backgroundColor": "default",
+}
+
+
+def _paragraph(text: str) -> dict[str, Any]:
+    return {
+        "id": str(uuid.uuid4()),
+        "type": "paragraph",
+        "props": dict(_PARA_PROPS),
+        "content": ([{"text": text, "type": "text", "styles": {}}] if text else []),
+        "children": [],
+    }
 
 
 def _wrap_blocknote(text: str) -> list[dict[str, Any]]:
-    """Wrap a plain string into a minimal BlockNote document.
-
-    BlockNote stores content as a list of block objects. The minimum
-    parseable shape is one `paragraph` block whose `content` is a
-    single `text` inline. `extract_text(...)` walks this structure to
-    recover the plain text, so a future search re-index sees the same
-    text the LLM passed in.
+    """Wrap plain text into the same BlockNote shape a user-typed task
+    body produces. One paragraph per line + a trailing blank sentinel,
+    each block carrying `id` / `props` / `children` / inline `styles`
+    so the saved row is byte-equivalent to a user-typed one.
+    `extract_text(...)` still walks this for the chunker on reindex.
     """
     if not text:
         return []
-    return [
-        {
-            "type": "paragraph",
-            "content": [{"type": "text", "text": text}],
-        }
-    ]
+    lines = text.split("\n")
+    return [_paragraph(line) for line in lines] + [_paragraph("")]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -162,12 +177,12 @@ CREATE_TASK = Tool(
             },
             "priority": {
                 "type": "STRING",
-                "enum": ["Low", "Normal", "High", "Critical"],
+                "enum": ["Minimal", "Low", "Normal", "High", "Critical"],
                 "description": "Optional priority.",
             },
             "effort_level": {
                 "type": "STRING",
-                "enum": ["Low", "Medium", "High", "Extensive"],
+                "enum": ["Minimal", "Low", "Moderate", "High", "Extensive"],
                 "description": "Optional effort estimate.",
             },
             "due_date": {
