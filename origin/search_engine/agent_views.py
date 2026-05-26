@@ -462,12 +462,25 @@ def _stream_ndjson(
     answer_parts: list[str] = []
     final_status: str | None = None
     final_error = ""
-    # Quota counter — fired once on the first non-empty answer_delta.
-    # Sub-tool LLM calls and empty-response failures don't charge.
+    # Quota counter — fired once on the first LLM-driven event of value.
+    # Three triggers because a write-tool ask pauses before any
+    # `answer_delta` ever fires (controller emits
+    # `tool_call_pending_approval` and returns), and a read-tool ask
+    # emits `tool_call_start` before the final answer. Watching
+    # `answer_delta` alone would let any write-tool prompt go free.
+    # Empty-response failures still don't charge (they hit `error`).
     # Guarded with a flag so a stream of N tokens still counts as 1.
     # Each key in `quota_keys` is incremented atomically (LLM_ASK total
     # AND the chosen per-model counter both bump together).
     quota_charged = False
+
+    def _charge_once() -> None:
+        nonlocal quota_charged
+        if quota_charged or not user_id_for_quota or not quota_keys:
+            return
+        for key in quota_keys:
+            increment_usage(user_id_for_quota, key)
+        quota_charged = True
 
     while True:
         event = event_q.get()
@@ -478,10 +491,9 @@ def _stream_ndjson(
             text = event.get("text") or ""
             if text:
                 answer_parts.append(text)
-                if not quota_charged and user_id_for_quota and quota_keys:
-                    for key in quota_keys:
-                        increment_usage(user_id_for_quota, key)
-                    quota_charged = True
+                _charge_once()
+        elif event_type in ("tool_call_start", "tool_call_pending_approval"):
+            _charge_once()
         elif event_type == "done":
             final_status = "done"
             # Inject session_id so the frontend can thread the next ask.

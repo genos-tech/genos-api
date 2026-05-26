@@ -103,7 +103,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     return {
         "task_id": task_id,
         "comment_id": comment.comment_id,
-        "__summary__": f"Added comment #{comment.comment_id} to task #{task_id}",
+        "__summary__": (f"Added comment #{comment.comment_id} to task {task.display_id}"),
     }
 
 

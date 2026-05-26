@@ -126,7 +126,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "project_id": project_id,
         "title": task.title,
         "status": task.status,
-        "__summary__": f"Created task #{task.task_id}: {task.title}",
+        "__summary__": f"Created task {task.display_id}: {task.title}",
     }
 
 

@@ -102,6 +102,79 @@ def _build_tool_declarations(
     ]
 
 
+# Tool arguments that are raw DB primary keys. The agent emits these
+# verbatim in `tool_call_start` / `tool_call_pending_approval` events,
+# where they'd surface in the UI's approval card and activity strip as
+# meaningless numbers ("project_id: 46"). `_friendly_arguments` swaps
+# them for human-readable labels before emission. The raw values stay
+# in the persisted `AgentStep.arguments_json` row so the resume path
+# still re-runs the tool with the canonical primary key.
+def _resolve_task_display_id(raw: Any) -> str | None:
+    """Look up `TaskMaster.display_id` ("WRD-5") for a raw task primary key."""
+    try:
+        tid = int(raw)
+    except (TypeError, ValueError):
+        return None
+    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+
+    t = TaskMaster.objects.select_related("project").filter(task_id=tid).first()
+    return t.display_id if t else None
+
+
+def _resolve_project_name(raw: Any) -> str | None:
+    try:
+        pid = int(raw)
+    except (TypeError, ValueError):
+        return None
+    from origin.models.project.prj_models import ProjectMaster  # noqa: PLC0415
+
+    return (
+        ProjectMaster.objects.filter(project_id=pid).values_list("project_name", flat=True).first()
+    )
+
+
+def _resolve_user_name(raw: Any) -> str | None:
+    if not raw:
+        return None
+    from origin.models.common.user_models import CustomUser  # noqa: PLC0415
+
+    return CustomUser.objects.filter(id=str(raw)).values_list("username", flat=True).first()
+
+
+# Argument-key → resolver. Resolvers return None on a miss so we fall
+# back to the raw value (the user sees the ID rather than a blank).
+_FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any], str | None]] = {
+    "task_id": _resolve_task_display_id,
+    "project_id": _resolve_project_name,
+    "assignee_id": _resolve_user_name,
+    "reporter_id": _resolve_user_name,
+    "new_assignee_id": _resolve_user_name,
+}
+
+
+def _friendly_arguments(args: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of `args` with raw IDs replaced by human labels.
+
+    Applied only at the wire-event boundary (the approval card + tool
+    progress strip render this). The persisted `arguments_json` keeps
+    the canonical primary keys so the resume path re-runs the tool
+    correctly.
+    """
+    out: dict[str, Any] = {}
+    for key, value in args.items():
+        resolver = _FRIENDLY_ARG_RESOLVERS.get(key)
+        if resolver is not None:
+            try:
+                friendly = resolver(value)
+            except Exception:  # noqa: BLE001 — labels never break the loop
+                log.exception("Friendly-arg lookup failed for %s=%r", key, value)
+                friendly = None
+            out[key] = friendly if friendly is not None else value
+        else:
+            out[key] = value
+    return out
+
+
 def _coerce_signature(raw: Any) -> bytes | None:
     """Normalise a persisted thought_signature back to `bytes | None`.
 
@@ -604,7 +677,7 @@ def resume_agent(
             "type": "tool_call_start",
             "step": step_index,
             "tool_name": call_name,
-            "arguments": call_args,
+            "arguments": _friendly_arguments(call_args),
         }
     )
 
@@ -819,7 +892,7 @@ def _drive_loop(
                         "type": "tool_call_start",
                         "step": step,
                         "tool_name": call_name,
-                        "arguments": call_args,
+                        "arguments": _friendly_arguments(call_args),
                     }
                 )
                 err = f"Unknown tool: {call_name}"
@@ -862,7 +935,7 @@ def _drive_loop(
                     "type": "tool_call_pending_approval",
                     "step": step,
                     "tool_name": call_name,
-                    "arguments": call_args,
+                    "arguments": _friendly_arguments(call_args),
                     "approval_token": str(approval_token),
                 }
                 if run_id is not None:
@@ -882,7 +955,7 @@ def _drive_loop(
                     "type": "tool_call_start",
                     "step": step,
                     "tool_name": call_name,
-                    "arguments": call_args,
+                    "arguments": _friendly_arguments(call_args),
                 }
             )
 

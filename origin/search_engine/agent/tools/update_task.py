@@ -142,7 +142,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         return {
             "task_id": task_id,
             "changed_fields": [],
-            "__summary__": f"No changes applied to task #{task_id}.",
+            "__summary__": f"No changes applied to task {task.display_id}.",
         }
 
     try:
@@ -155,7 +155,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "changed_fields": changed,
         "status": task.status,
         "title": task.title,
-        "__summary__": f"Updated task #{task_id}: {', '.join(changed)}",
+        "__summary__": f"Updated task {task.display_id}: {', '.join(changed)}",
     }
 
 
