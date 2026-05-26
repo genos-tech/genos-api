@@ -493,6 +493,211 @@ def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list
             return []
         return [_note_source(ntype, nid, result.get("title"), result.get("parent_context"))]
 
+    if call_name in ("list_milestones", "list_sprints"):
+        # Milestones / sprints aren't a Spotlight entity_type today —
+        # emit one project chip per distinct project so the user has at
+        # least a deep-link surface to the right project.
+        rows = result.get("milestones") if call_name == "list_milestones" else result.get(
+            "sprints"
+        )
+        rows = rows or []
+        seen: set[Any] = set()
+        sources: list[dict[str, Any]] = []
+        for r in rows:
+            pid = r.get("project_id")
+            if pid is None or pid in seen:
+                continue
+            seen.add(pid)
+            sources.append(_project_source(pid, r.get("project_name")))
+        return sources
+
+    if call_name in ("get_milestone_summary", "get_sprint_summary"):
+        pid = result.get("project_id")
+        if not pid:
+            return []
+        return [_project_source(pid, result.get("project_name"))]
+
+    if call_name == "get_team_task_summary":
+        return [
+            _project_source(p.get("project_id"), p.get("project_name"))
+            for p in (result.get("per_project") or [])
+            if p.get("project_id")
+        ]
+
+    if call_name == "get_task_blockers":
+        # Emit the target task + each blocker/blocked task as separate
+        # chips so the user can click into any of them. Dedup is by
+        # (entity_type, entity_id) one level up, so emitting them all is
+        # safe even when the graph self-references.
+        sources: list[dict[str, Any]] = []
+        target_tid = result.get("task_id")
+        if target_tid is not None:
+            sources.append(
+                _task_source(
+                    target_tid,
+                    result.get("title"),
+                    None,  # target's project_id isn't echoed — chip stays simple
+                    display_id=result.get("display_id"),
+                )
+            )
+        seen_projects: set[Any] = set()
+        for direction in ("blocked_by", "blocking"):
+            for ref in result.get(direction) or []:
+                tid = ref.get("task_id")
+                if tid is None:
+                    continue
+                sources.append(
+                    _task_source(
+                        tid,
+                        ref.get("title"),
+                        ref.get("project_id"),
+                        display_id=ref.get("display_id"),
+                    )
+                )
+                pid = ref.get("project_id")
+                if pid is not None and pid not in seen_projects:
+                    seen_projects.add(pid)
+                    sources.append(_project_source(pid, ref.get("project_name")))
+        return sources
+
+    # --- Phase 18: me-scoped tools ---
+    # Same chip-shape choices as the workspace-scoped counterparts so the
+    # UI rewriter resolves citations identically whether the model came
+    # in via `list_tasks` or `get_my_focus_tasks`.
+
+    if call_name in ("get_my_focus_tasks", "get_my_schedule"):
+        # Both return task rows (`tasks` / `tasks_due`). Same chip pattern
+        # as `list_tasks`: one task chip per row + one project chip per
+        # distinct project.
+        key = "tasks" if call_name == "get_my_focus_tasks" else "tasks_due"
+        rows = result.get(key) or []
+        out: list[dict[str, Any]] = []
+        seen: set[Any] = set()
+        for t in rows:
+            tid = t.get("task_id")
+            if tid is None:
+                continue
+            out.append(
+                _task_source(
+                    tid,
+                    t.get("title"),
+                    t.get("project_id"),
+                    display_id=t.get("display_id"),
+                )
+            )
+        for t in rows:
+            pid = t.get("project_id")
+            if pid is None or pid in seen:
+                continue
+            seen.add(pid)
+            out.append(_project_source(pid, t.get("project_name")))
+        return out
+
+    if call_name == "get_my_task_summary":
+        return [
+            _project_source(p.get("project_id"), p.get("project_name"))
+            for p in (result.get("per_project") or [])
+            if p.get("project_id")
+        ]
+
+    if call_name == "list_my_milestones":
+        seen: set[Any] = set()
+        out_proj: list[dict[str, Any]] = []
+        for m in result.get("milestones") or []:
+            pid = m.get("project_id")
+            if pid is None or pid in seen:
+                continue
+            seen.add(pid)
+            out_proj.append(_project_source(pid, m.get("project_name")))
+        return out_proj
+
+    if call_name == "get_my_blockers":
+        # Walk both halves; emit a task chip for each of my tasks and
+        # for each edge endpoint, plus one project chip per distinct
+        # project. Mirrors `get_task_blockers` shape choice.
+        out_b: list[dict[str, Any]] = []
+        seen_proj: set[Any] = set()
+        for half_key, edge_key in (
+            ("blocked_on_me", "blocked_by"),
+            ("blocking_others", "blocking"),
+        ):
+            for row in result.get(half_key) or []:
+                tid = row.get("task_id")
+                if tid is not None:
+                    out_b.append(
+                        _task_source(
+                            tid,
+                            row.get("title"),
+                            row.get("project_id"),
+                            display_id=row.get("display_id"),
+                        )
+                    )
+                pid = row.get("project_id")
+                if pid is not None and pid not in seen_proj:
+                    seen_proj.add(pid)
+                    out_b.append(_project_source(pid, row.get("project_name")))
+                for edge in row.get(edge_key) or []:
+                    etid = edge.get("task_id")
+                    if etid is None:
+                        continue
+                    out_b.append(
+                        _task_source(
+                            etid,
+                            edge.get("title"),
+                            edge.get("project_id"),
+                            display_id=edge.get("display_id"),
+                        )
+                    )
+                    epid = edge.get("project_id")
+                    if epid is not None and epid not in seen_proj:
+                        seen_proj.add(epid)
+                        out_b.append(_project_source(epid, edge.get("project_name")))
+        return out_b
+
+    if call_name == "get_my_throughput":
+        out_thr: list[dict[str, Any]] = []
+        seen_thr: set[Any] = set()
+        for t in result.get("recently_closed") or []:
+            tid = t.get("task_id")
+            if tid is None:
+                continue
+            out_thr.append(
+                _task_source(
+                    tid,
+                    t.get("title"),
+                    t.get("project_id"),
+                    display_id=t.get("display_id"),
+                )
+            )
+            pid = t.get("project_id")
+            if pid is not None and pid not in seen_thr:
+                seen_thr.add(pid)
+                out_thr.append(_project_source(pid, t.get("project_name")))
+        return out_thr
+
+    if call_name == "list_my_mentions":
+        # Each mention is addressed at a chat (thread or channel). The
+        # chip lets the user click straight into that chat — same shape
+        # the chunker emits for chat sources.
+        out_m: list[dict[str, Any]] = []
+        seen_m: set[tuple[Any, Any, Any]] = set()
+        for row in result.get("mentions") or []:
+            label = row.get("chat_type_label")
+            cid = row.get("chat_id")
+            tid_chat = row.get("thread_id") if row.get("is_thread") else None
+            if not label or cid is None:
+                continue
+            key = (label, cid, tid_chat)
+            if key in seen_m:
+                continue
+            seen_m.add(key)
+            out_m.append(_chat_source(label, cid, tid_chat))
+        return out_m
+
+    # list_my_inbox: items don't map to a clickable Spotlight entity_type
+    # today (no inbox-deep-link surface). Return [] so the agent has to
+    # describe the items in prose rather than emit broken chips.
+
     return []
 
 

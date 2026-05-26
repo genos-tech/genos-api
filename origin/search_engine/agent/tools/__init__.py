@@ -25,6 +25,19 @@ project has the most notes") without enumerating individual records:
     get_task_throughput_stats, get_top_task_closers,
     get_project_activity_ranking, get_workload_distribution,
     get_stale_tasks
+
+Phase 18 — me-scoped (user-specific) aggregation. Eight read-only
+tools that always operate on `ctx.user_id`, so the agent can answer
+"what kind of WIP tasks do I have?", "what should I handle first?",
+"my schedule this week", "what milestones am I on?", "what's blocking
+me?", "what did I close this week?", "what's in my inbox?", and "who
+@mentioned me?" with a single call:
+  Read (inline):
+    get_my_task_summary, get_my_focus_tasks, get_my_schedule,
+    list_my_milestones, list_my_inbox, list_my_mentions,
+    get_my_blockers, get_my_throughput
+Plus `list_milestones` gains an `assignee_user_id` filter for the
+general "which milestones is Alice on?" case.
 """
 
 from origin.search_engine.agent.tools.add_comment import ADD_COMMENT
@@ -49,6 +62,18 @@ from origin.search_engine.agent.tools.get_task_throughput_stats import (
 )
 from origin.search_engine.agent.tools.get_team_members import GET_TEAM_MEMBERS
 from origin.search_engine.agent.tools.get_top_task_closers import GET_TOP_TASK_CLOSERS
+from origin.search_engine.agent.tools.get_milestone_assignee_counts import (
+    GET_MILESTONE_ASSIGNEE_COUNTS,
+)
+from origin.search_engine.agent.tools.get_milestone_summary import GET_MILESTONE_SUMMARY
+from origin.search_engine.agent.tools.get_my_blockers import GET_MY_BLOCKERS
+from origin.search_engine.agent.tools.get_my_focus_tasks import GET_MY_FOCUS_TASKS
+from origin.search_engine.agent.tools.get_my_schedule import GET_MY_SCHEDULE
+from origin.search_engine.agent.tools.get_my_task_summary import GET_MY_TASK_SUMMARY
+from origin.search_engine.agent.tools.get_my_throughput import GET_MY_THROUGHPUT
+from origin.search_engine.agent.tools.get_sprint_summary import GET_SPRINT_SUMMARY
+from origin.search_engine.agent.tools.get_task_blockers import GET_TASK_BLOCKERS
+from origin.search_engine.agent.tools.get_team_task_summary import GET_TEAM_TASK_SUMMARY
 from origin.search_engine.agent.tools.get_workload_distribution import (
     GET_WORKLOAD_DISTRIBUTION,
 )
@@ -58,7 +83,12 @@ from origin.search_engine.agent.tools.list_pr_comments import LIST_PR_COMMENTS
 from origin.search_engine.agent.tools.list_pr_commits import LIST_PR_COMMITS
 from origin.search_engine.agent.tools.list_pr_files import LIST_PR_FILES
 from origin.search_engine.agent.tools.list_pr_reviews import LIST_PR_REVIEWS
+from origin.search_engine.agent.tools.list_milestones import LIST_MILESTONES
+from origin.search_engine.agent.tools.list_my_inbox import LIST_MY_INBOX
+from origin.search_engine.agent.tools.list_my_mentions import LIST_MY_MENTIONS
+from origin.search_engine.agent.tools.list_my_milestones import LIST_MY_MILESTONES
 from origin.search_engine.agent.tools.list_projects import LIST_PROJECTS
+from origin.search_engine.agent.tools.list_sprints import LIST_SPRINTS
 from origin.search_engine.agent.tools.list_tasks import LIST_TASKS
 from origin.search_engine.agent.tools.search_kb import SEARCH_KNOWLEDGE_BASE
 from origin.search_engine.agent.tools.update_calendar_event import UPDATE_CALENDAR_EVENT
@@ -98,6 +128,14 @@ for _t in (
     GET_PROJECT_ACTIVITY_RANKING,
     GET_WORKLOAD_DISTRIBUTION,
     GET_STALE_TASKS,
+    # --- Read tools (Phase 17) — milestone, sprint & dependency aggregation ---
+    GET_TEAM_TASK_SUMMARY,
+    LIST_MILESTONES,
+    GET_MILESTONE_SUMMARY,
+    GET_MILESTONE_ASSIGNEE_COUNTS,
+    LIST_SPRINTS,
+    GET_SPRINT_SUMMARY,
+    GET_TASK_BLOCKERS,
     # --- Read tools (Phase 16) — GitHub PR introspection ---
     FETCH_PR,
     LIST_PR_COMMENTS,
@@ -111,6 +149,15 @@ for _t in (
     CREATE_CALENDAR_EVENT,
     UPDATE_CALENDAR_EVENT,
     DELETE_CALENDAR_EVENT,
+    # --- Read tools (Phase 18) — me-scoped (user-specific) aggregation ---
+    GET_MY_TASK_SUMMARY,
+    GET_MY_FOCUS_TASKS,
+    GET_MY_SCHEDULE,
+    LIST_MY_MILESTONES,
+    LIST_MY_INBOX,
+    LIST_MY_MENTIONS,
+    GET_MY_BLOCKERS,
+    GET_MY_THROUGHPUT,
 ):
     REGISTRY[_t.name] = _t
 
@@ -127,20 +174,35 @@ __all__ = [
     "FETCH_PR",
     "FETCH_TASK",
     "GET_CURRENT_USER",
+    "GET_MILESTONE_ASSIGNEE_COUNTS",
+    "GET_MILESTONE_SUMMARY",
+    "GET_MY_BLOCKERS",
+    "GET_MY_FOCUS_TASKS",
+    "GET_MY_SCHEDULE",
+    "GET_MY_TASK_SUMMARY",
+    "GET_MY_THROUGHPUT",
     "GET_PROJECT_ACTIVITY_RANKING",
     "GET_PROJECT_SUMMARY",
+    "GET_SPRINT_SUMMARY",
     "GET_STALE_TASKS",
+    "GET_TASK_BLOCKERS",
     "GET_TASK_THROUGHPUT_STATS",
     "GET_TEAM_MEMBERS",
+    "GET_TEAM_TASK_SUMMARY",
     "GET_TOP_TASK_CLOSERS",
     "GET_WORKLOAD_DISTRIBUTION",
     "LIST_CALENDAR_EVENTS",
     "LIST_CALENDARS",
+    "LIST_MILESTONES",
+    "LIST_MY_INBOX",
+    "LIST_MY_MENTIONS",
+    "LIST_MY_MILESTONES",
     "LIST_PR_COMMENTS",
     "LIST_PR_COMMITS",
     "LIST_PR_FILES",
     "LIST_PR_REVIEWS",
     "LIST_PROJECTS",
+    "LIST_SPRINTS",
     "LIST_TASKS",
     "REGISTRY",
     "SEARCH_KNOWLEDGE_BASE",

@@ -32,11 +32,39 @@ from django.db.models import Q
 from django.utils import timezone
 
 from origin.models.project.prj_models import ProjectMembers
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 
 _MAX_LIMIT = 50
 _VALID_STATUSES = {"Open", "WIP", "Pending", "Closed"}
+# Mirror of the canonical frontend enum in `taskMeta.ts` (Minimal/Low/
+# Normal/High/Critical). Invalid values are rejected with a clear error
+# so the model corrects course rather than silently returning [].
+_VALID_PRIORITIES = {"Minimal", "Low", "Normal", "High", "Critical"}
+
+
+def _milestone_task_q(milestone: MilestoneMaster) -> Q:
+    """Predicate for "tasks belonging to this milestone".
+
+    Matches `_serialize_milestone` in milestone_views.py:200-208 verbatim
+    so agent rollups reconcile with the UI:
+      * tasks with a direct FK to this milestone, OR
+      * tasks whose `parent_task_id` is the milestone's backing task
+        (the table renders these as subtasks).
+    Preserves the existing quirk where the FK branch does NOT exclude
+    `is_milestone=True` — the divergence would otherwise break the
+    reconciliation contract.
+    """
+    q = Q(milestone=milestone, is_deleted=False, is_init_task=False)
+    if milestone.task_id is not None:
+        q = q | Q(
+            parent_task_id=milestone.task_id,
+            is_deleted=False,
+            is_init_task=False,
+            is_milestone=False,
+        )
+    return q
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -101,6 +129,39 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # assignee_id itself — it's a filter value, not an auth claim.
         qs = qs.filter(assignee_id=raw_assignee_id)
 
+    raw_priorities = args.get("priority")
+    if raw_priorities is not None:
+        if isinstance(raw_priorities, str):
+            raw_priorities = [raw_priorities]
+        invalid_pri = set(raw_priorities) - _VALID_PRIORITIES
+        if invalid_pri:
+            raise ToolError(
+                f"Invalid priority value(s): {sorted(invalid_pri)}. "
+                f"Must be one of {sorted(_VALID_PRIORITIES)}."
+            )
+        qs = qs.filter(priority__in=raw_priorities)
+
+    raw_milestone_id = args.get("milestone_id")
+    if raw_milestone_id is not None:
+        try:
+            milestone_id = int(raw_milestone_id)
+        except (TypeError, ValueError):
+            raise ToolError(f"`milestone_id` must be an integer (got {raw_milestone_id!r}).")
+        try:
+            milestone = MilestoneMaster.objects.get(milestone_id=milestone_id, is_deleted=False)
+        except MilestoneMaster.DoesNotExist:
+            raise ToolError(f"Milestone {milestone_id} not found.")
+        if str(getattr(milestone, "team_id", "") or "") != ctx.team_id:
+            raise ToolError("Not authorized: milestone is in a different team.")
+        if milestone.project_id not in member_project_ids:
+            raise ToolError(
+                f"Not authorized to list tasks in milestone {milestone_id}. "
+                "You are not a member of that project."
+            )
+        # Use the same Q-union as the milestone UI rollup so subtasks are
+        # included. `.distinct()` because the union can match a row twice.
+        qs = qs.filter(_milestone_task_q(milestone)).distinct()
+
     if args.get("overdue_only"):
         today = timezone.now().date()
         qs = qs.exclude(status__in=["Closed", "Deleted"]).filter(
@@ -143,10 +204,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 LIST_TASKS = Tool(
     name="list_tasks",
     description=(
-        "Structured query for tasks: filter by project, status, assignee, "
-        "or overdue date. Use this instead of search_knowledge_base when "
-        "the user asks a structural question like 'what are my open tasks?', "
-        "'which tasks are overdue in project X?', or 'list all WIP tasks'. "
+        "Structured query for tasks: filter by project, milestone, status, "
+        "priority, assignee, or overdue date. Use this instead of "
+        "search_knowledge_base when the user asks a structural question like "
+        "'what are my open tasks?', 'which Critical tasks are in milestone X?', "
+        "'overdue tasks in project Y', or 'list all WIP tasks assigned to me'. "
         "Returns task_id, title, status, priority, due_date, assignee_id, "
         "project_id, and project_name. Prefer naming projects by their "
         "project_name in prose (e.g. 'In **Website Redesign**: ...') rather "
@@ -164,6 +226,16 @@ LIST_TASKS = Tool(
                     "all accessible projects."
                 ),
             },
+            "milestone_id": {
+                "type": "INTEGER",
+                "description": (
+                    "Restrict to one milestone. Includes both direct-FK tasks "
+                    "AND subtasks (tasks whose `parent_task_id` is the "
+                    "milestone's backing task). Resolve a milestone name to "
+                    "an id with `list_milestones` first. The milestone's "
+                    "project membership is checked just like `project_id`."
+                ),
+            },
             "status": {
                 "type": "ARRAY",
                 "items": {
@@ -172,6 +244,18 @@ LIST_TASKS = Tool(
                 },
                 "description": (
                     "Filter by one or more statuses. Omit to include all " "non-deleted tasks."
+                ),
+            },
+            "priority": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "STRING",
+                    "enum": ["Minimal", "Low", "Normal", "High", "Critical"],
+                },
+                "description": (
+                    "Filter by one or more priorities. Useful for 'show me "
+                    "Critical tasks under milestone X' or 'High-priority "
+                    "open tasks across my projects'."
                 ),
             },
             "assignee_id": {
