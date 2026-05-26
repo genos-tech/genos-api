@@ -742,9 +742,9 @@ def _drive_loop(
                     accumulated_text_parts.append(text_chunk)
                     emit({"type": "answer_delta", "text": text_chunk})
         except Exception as e:  # noqa: BLE001 — surface as stream error
-            log.exception("Agent step %d Gemini call failed", step)
-            emit({"type": "error", "message": f"Gemini call failed: {e}"})
-            _persist_step(run_id, step_index=step, error=f"Gemini call failed: {e}")
+            log.exception("Agent step %d LLM call failed", step)
+            emit({"type": "error", "message": f"LLM call failed: {e}"})
+            _persist_step(run_id, step_index=step, error=f"LLM call failed: {e}")
             return None
 
         any_text_emitted = bool(accumulated_text_parts)

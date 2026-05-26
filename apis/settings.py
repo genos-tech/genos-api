@@ -555,6 +555,12 @@ SEARCH_ENGINE = {
             "label": "Claude Sonnet 4.6",
             "note": "Higher quality, slower.",
         },
+        {
+            "provider": "claude",
+            "model": "claude-opus-4-7",
+            "label": "Claude Opus 4.7",
+            "note": "Very slow, but best for very complex questions.",
+        },
     ],
     # Daily quotas by user tier. Three tiers — free / pro / max —
     # resolved from `CustomUser.tier` by `origin.search_engine.quota`.
@@ -571,15 +577,16 @@ SEARCH_ENGINE = {
     # placeholders — tune as needed.
     "TIER_QUOTAS": {
         "free": {
-            "llm_ask_daily": 10,
-            "web_search_daily": 5,
+            "llm_ask_daily": 20,
+            "web_search_daily": 10,
             "model_daily": {
                 # "gemini-2.5-flash": 10,
                 # "gemini-2.5-pro": 5,
-                "gemini-3.5-flash": 10,
-                "gemini-3.1-pro-preview": 5,
-                "claude-haiku-4-5": 10,
-                "claude-sonnet-4-6": 5,
+                "gemini-3.5-flash": 20,
+                "gemini-3.1-pro-preview": 10,
+                "claude-haiku-4-5": 20,
+                "claude-sonnet-4-6": 10,
+                "claude-opus-4-7": 0,
             },
         },
         "pro": {
@@ -589,9 +596,10 @@ SEARCH_ENGINE = {
                 # "gemini-2.5-flash": 100,
                 # "gemini-2.5-pro": 30,
                 "gemini-3.5-flash": 100,
-                "gemini-3.1-pro-preview": 30,
+                "gemini-3.1-pro-preview": 50,
                 "claude-haiku-4-5": 100,
-                "claude-sonnet-4-6": 30,
+                "claude-sonnet-4-6": 50,
+                "claude-opus-4-7": 20,
             },
         },
         "max": {
@@ -604,6 +612,7 @@ SEARCH_ENGINE = {
                 "gemini-3.1-pro-preview": 500,
                 "claude-haiku-4-5": 1000,
                 "claude-sonnet-4-6": 500,
+                "claude-opus-4-7": 200,
             },
         },
     },

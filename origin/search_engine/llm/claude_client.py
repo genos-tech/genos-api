@@ -86,15 +86,22 @@ class ClaudeClient:
         model = model_override or settings.SEARCH_ENGINE["CLAUDE_MODEL"]
         max_tokens = int(settings.SEARCH_ENGINE.get("CLAUDE_MAX_TOKENS", 4096))
 
+        # Opus 4.7 uses extended thinking and the Anthropic API rejects
+        # `temperature` on it (400 invalid_request_error). Skip the
+        # parameter for that family; the rest of the catalog still
+        # honors the 0.2 deterministic-leaning bias we want.
+        stream_kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system_instruction,
+            "tools": sdk_tools or anthropic.NOT_GIVEN,
+            "messages": sdk_messages,
+        }
+        if not model.startswith("claude-opus-4-7"):
+            stream_kwargs["temperature"] = 0.2
+
         try:
-            with _get_client().messages.stream(
-                model=model,
-                max_tokens=max_tokens,
-                system=system_instruction,
-                tools=sdk_tools or anthropic.NOT_GIVEN,
-                messages=sdk_messages,
-                temperature=0.2,
-            ) as stream:
+            with _get_client().messages.stream(**stream_kwargs) as stream:
                 for event in stream:
                     # Text deltas: one TextEvent per incremental token
                     # batch. (Helper events from `messages.stream` —
