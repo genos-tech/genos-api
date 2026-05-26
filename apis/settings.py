@@ -478,6 +478,17 @@ SEARCH_ENGINE = {
     "RAG_AGENT_SELF_CRITIQUE": (
         os.environ.get("RAG_AGENT_SELF_CRITIQUE", "false").lower() == "true"
     ),
+    # Observability for Gemini implicit-cache hit rate. When True,
+    # gemini_client._log_usage emits one INFO log per `generate_step`
+    # call with `prompt_tokens`, `cached_tokens`, and a cache-hit %.
+    # Flip on (`LLM_LOG_USAGE_METADATA=true`) to verify that the system
+    # prompt + tool declarations are being served from cache after the
+    # first request of a session — Gemini 2.5+/3.x caches stable
+    # prefixes of ≥1024 (Flash) / ≥4096 (Pro) tokens automatically.
+    # Off by default to keep production logs quiet.
+    "LLM_LOG_USAGE_METADATA": (
+        os.environ.get("LLM_LOG_USAGE_METADATA", "false").lower() == "true"
+    ),
     # Phase 3.5 — rolling-summary multi-turn context. When True AND a
     # session has more than `SESSION_MAX_PRIOR_TURNS` prior turns, the
     # earliest turns are condensed into a single short summary that is

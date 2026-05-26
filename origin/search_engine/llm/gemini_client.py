@@ -137,7 +137,16 @@ class GeminiClient:
             # — scope is one `generate_step` call so we never leak a
             # signature from a prior turn.
             last_seen_signature: bytes | None = None
+            # Capture the last `usage_metadata` we see in any chunk —
+            # only the final chunk carries the meaningful totals, but
+            # peeking at every chunk avoids assuming chunk order. Logged
+            # below the stream so we can verify Gemini implicit caching
+            # is actually firing (cached_content_token_count > 0).
+            last_usage_metadata: Any = None
             for chunk in stream:
+                usage = getattr(chunk, "usage_metadata", None)
+                if usage is not None:
+                    last_usage_metadata = usage
                 # A streaming chunk's candidates carry content.parts —
                 # each part is either a text fragment or a function
                 # call. Yield them in order so the controller sees the
@@ -167,9 +176,51 @@ class GeminiClient:
                         text = getattr(part, "text", None)
                         if text:
                             yield (text, None)
+
+            _log_usage(last_usage_metadata, model)
         except Exception:
             log.exception("Gemini generate_step failed")
             raise
+
+
+# --------------------------------------------------------------------------- #
+# Implicit-cache observability                                                #
+# --------------------------------------------------------------------------- #
+
+
+def _log_usage(usage: Any, model: str) -> None:
+    """Log Gemini response usage_metadata so we can see implicit-cache
+    hit rate. Implicit caching is on by default on Gemini 2.5+/3.x; this
+    just makes the savings visible. `cached_content_token_count > 0`
+    means the prompt prefix (system_instruction + tools + earlier turns)
+    was served from cache and billed at the cached rate.
+
+    Gated on `LLM_LOG_USAGE_METADATA` (default off) so production logs
+    stay quiet unless an operator flips it on.
+    """
+    if usage is None:
+        return
+    if not settings.SEARCH_ENGINE.get("LLM_LOG_USAGE_METADATA", False):
+        return
+    prompt_n = getattr(usage, "prompt_token_count", None) or 0
+    cached_n = getattr(usage, "cached_content_token_count", None) or 0
+    cand_n = getattr(usage, "candidates_token_count", None) or 0
+    thought_n = getattr(usage, "thoughts_token_count", None) or 0
+    tool_n = getattr(usage, "tool_use_prompt_token_count", None) or 0
+    total_n = getattr(usage, "total_token_count", None) or 0
+    cache_pct = round((cached_n / prompt_n) * 100) if prompt_n else 0
+    log.info(
+        "gemini usage model=%s prompt=%d cached=%d (%d%%) candidates=%d "
+        "thoughts=%d tool_prompt=%d total=%d",
+        model,
+        prompt_n,
+        cached_n,
+        cache_pct,
+        cand_n,
+        thought_n,
+        tool_n,
+        total_n,
+    )
 
 
 # --------------------------------------------------------------------------- #
