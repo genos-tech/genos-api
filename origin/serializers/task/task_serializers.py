@@ -35,6 +35,13 @@ class MilestoneAssigneesSerializer(serializers.ModelSerializer):
 
 
 class TaskAttachmentsSerializer(serializers.ModelSerializer):
+    # Override the auto-derived FileField so 0-byte files are accepted.
+    # Default DRF FileField rejects empty uploads with "The submitted
+    # file is empty.", which surfaces in the panel as a 400 when the
+    # user attaches an empty .txt placeholder — but the product wants
+    # empty files to be valid attachments.
+    attached_file = serializers.FileField(allow_empty_file=True)
+
     class Meta:
         model = TaskAttachments
         fields = "__all__"

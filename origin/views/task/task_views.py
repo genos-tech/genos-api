@@ -1375,6 +1375,25 @@ class TaskAttachmentsView(AuthenticatedAPIView):
 
         try:
             attachment = TaskAttachments.objects.get(task=task, attachment_id=attachment_id)
+            # Remove the underlying file from MEDIA storage first.
+            # `model.delete()` only drops the DB row; the FileField does
+            # not auto-purge the backing blob on disk, so without this
+            # the upload directory would grow unbounded with orphans.
+            # `save=False` skips re-saving the (about-to-be-deleted)
+            # row. Wrapped so a missing/already-removed file (e.g. an
+            # orphan from a half-finished prior delete) doesn't block
+            # the row deletion.
+            if attachment.attached_file:
+                try:
+                    attachment.attached_file.delete(save=False)
+                except Exception as file_err:
+                    # Don't fail the API call — the DB row deletion is
+                    # the user-facing contract; a missing file is a
+                    # cleanup concern, not a correctness one.
+                    print(
+                        f"[TaskAttachmentsView.delete] file cleanup failed for "
+                        f"task={task} attachment_id={attachment_id}: {file_err}"
+                    )
             attachment.delete()
             return Response(
                 {"message": "Attachment deleted successfully."}, status=status.HTTP_204_NO_CONTENT
