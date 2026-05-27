@@ -66,6 +66,12 @@ class ActivityFact(models.Model):
     )
     reactions = models.JSONField(blank=False, null=False)
     mentioned_user_ids = models.JSONField(blank=False, null=False)
+    # { user_id_str: [group_id_int, ...] } — records which mention-groups
+    # caused each user to be included in `mentioned_user_ids`. Direct
+    # @user mentions don't appear in this map. Used by the sidebar's
+    # "Mention" filter to surface "show me only mentions that came in
+    # through @group-X". Empty `{}` for non-mention activities.
+    mentioned_via_groups = models.JSONField(blank=True, null=True, default=dict)
     is_deleted = models.BooleanField(default=False, db_index=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

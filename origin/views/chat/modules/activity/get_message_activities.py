@@ -85,6 +85,7 @@ def get(
             latestReaction=F("latest_reaction"),
             latestReactionUser=F("latest_reaction_user"),
             mentionedUserIds=F("mentioned_user_ids"),
+            mentionedViaGroups=F("mentioned_via_groups"),
             isRead=Exists(
                 ActivityReadStatus.objects.filter(
                     activity=OuterRef("activity_id"), user=payload["user_id"], is_read=True
@@ -118,6 +119,7 @@ def get(
             "latestReactionUser",
             "reactions",
             "mentionedUserIds",
+            "mentionedViaGroups",
             "isRead",
             "tsSent",
             "isDeleted",
