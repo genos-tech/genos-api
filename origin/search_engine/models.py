@@ -54,10 +54,23 @@ class AgentSession(models.Model):
     user_id = models.CharField(max_length=64, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     last_active_at = models.DateTimeField(default=timezone.now)
+    # ----- Thread Q&A scope (nullable; only set for sessions bound to
+    # a specific chat thread via the "Ask about this thread" feature) -----
+    # When all three are populated, the lookup in `_get_or_create_session`
+    # treats this as a long-lived per-thread session, ignoring TTL — a
+    # user might come back days later and reasonably expect their prior
+    # Q&A to still be there. For regular Spotlight sessions, these stay
+    # null and the existing TTL window applies.
+    chat_type = models.IntegerField(blank=True, null=True)
+    chat_id = models.IntegerField(blank=True, null=True)
+    thread_id = models.IntegerField(blank=True, null=True)
 
     class Meta:
         indexes = [
             models.Index(fields=["team_id", "user_id", "-last_active_at"]),
+            # Per-thread lookup: "do I have an existing thread session
+            # for this user on this thread?" hits this index directly.
+            models.Index(fields=["user_id", "chat_type", "chat_id", "thread_id"]),
         ]
 
 
