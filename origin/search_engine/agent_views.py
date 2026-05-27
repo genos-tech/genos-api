@@ -49,7 +49,13 @@ from origin.search_engine.agent.controller import (
     resume_agent,
     run_agent,
 )
-from origin.search_engine.agent.tools import ToolContext
+from origin.search_engine.agent.thread_summary import (
+    ThreadSummaryError,
+    load_or_generate_for_ask,
+    peek_cached_summary,
+    regenerate_summary,
+)
+from origin.search_engine.agent.tools import REGISTRY, ToolContext
 from origin.search_engine.llm.choice import (
     LlmChoice,
     resolve_user_choice,
@@ -253,6 +259,65 @@ class AgentAskView(AuthenticatedAPIView):
         if data.get("allow_web_search") is False:
             disabled_tools.add("search_web")
 
+        # Thread Q&A branch: when the frontend passes a `thread_context`,
+        # the agent answers questions about that one chat thread. We
+        # load (and cache) a thread summary, inject it into the system
+        # prompt, and hard-disable every tool except `fetch_chat_thread`
+        # so the model can't drift into workspace-wide search or write
+        # operations.
+        system_extra: str | None = None
+        thread_ctx = data.get("thread_context") or None
+        if thread_ctx:
+            try:
+                t_chat_type = int(thread_ctx.get("chat_type"))
+                t_chat_id = int(thread_ctx.get("chat_id"))
+                t_thread_id = int(thread_ctx.get("thread_id"))
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": "thread_context must have integer chat_type, chat_id, thread_id."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                summary_text = load_or_generate_for_ask(
+                    chat_type=t_chat_type,
+                    chat_id=t_chat_id,
+                    thread_id=t_thread_id,
+                    team_id=str(team_id),
+                    user_id=user_id,
+                )
+            except ThreadSummaryError as e:
+                # Three failure flavors with distinct HTTP semantics:
+                #   - ACL denial / chat-not-found  → 403 (don't retry)
+                #   - Empty thread                  → 400 (user-fixable)
+                #   - LLM provider failure          → 503 (transient;
+                #     retry button is appropriate)
+                msg = str(e).lower()
+                if "authorized" in msg or "not found" in msg:
+                    code = status.HTTP_403_FORBIDDEN
+                elif "empty" in msg:
+                    code = status.HTTP_400_BAD_REQUEST
+                else:
+                    code = status.HTTP_503_SERVICE_UNAVAILABLE
+                return Response({"error": str(e)}, status=code)
+            chat_type_label = {1: "dm", 2: "gm", 3: "pm", 4: "mdm"}.get(t_chat_type, "")
+            system_extra = (
+                "You are answering questions about a specific chat thread "
+                f"({chat_type_label}:{t_chat_id} thread {t_thread_id}). "
+                "Here is a summary of the thread:\n\n"
+                f"{summary_text}\n\n"
+                "If you need exact wording or details that the summary "
+                f"omits, call `fetch_chat_thread` with chat_type='{chat_type_label}', "
+                f"chat_id={t_chat_id}, thread_id={t_thread_id}. "
+                "Stay strictly focused on this thread — do not search the "
+                "wider workspace, do not browse the web, and do not perform "
+                "write operations."
+            )
+            # Allow only the one read tool needed to drill into specific
+            # messages. Everything else (workspace search, task/note tools,
+            # write tools, web search) is hidden from the model.
+            allowed_tools = {"fetch_chat_thread"}
+            disabled_tools = set(REGISTRY.keys()) - allowed_tools
+
         # `chosen` is captured in the worker closure so the contextvar
         # is set inside the controller's threading.Thread — a bare
         # thread does NOT inherit contextvars from its parent.
@@ -267,6 +332,7 @@ class AgentAskView(AuthenticatedAPIView):
                     prior_turns=prior_turns,
                     prior_summary=prior_summary,
                     disabled_tools=disabled_tools,
+                    system_extra=system_extra,
                 )
             finally:
                 reset_llm_choice(token)
@@ -550,6 +616,192 @@ def _stream_ndjson(
         )
     except Exception:  # noqa: BLE001
         log.exception("Failed to close AgentRun %s", run.run_id)
+
+
+# --------------------------------------------------------------------------- #
+# /thread-summary/ — generate or fetch a cached chat-thread summary           #
+# --------------------------------------------------------------------------- #
+
+
+class ThreadSummaryView(AuthenticatedAPIView):
+    """POST /api/v2/agent/thread-summary/
+
+    Body:
+        {
+            "team_id":    str,
+            "chat_type":  int (1=DM 2=GM 3=PM 4=MDM),
+            "chat_id":    int,
+            "thread_id":  int,
+            "force_regenerate": bool (optional)
+        }
+
+    Returns JSON (not streaming — the summary is short, no need for chunks):
+        {
+            "summary":          str,    # the markdown summary
+            "generated":        bool,   # True if we just regenerated; False on cache hit
+            "last_updated_iso": str,
+            "message_count":    int,
+            "fingerprint":      str     # opaque cache key; clients use it to detect "stale"
+        }
+
+    Quota: cache hits cost nothing. A regeneration (cache miss OR
+    force_regenerate=True) is gated by the same `LLM_ASK_KEY` quota the
+    /ask/ endpoint uses, and increments the counter on success.
+
+    Errors:
+        400  invalid input
+        403  not authorized to read the thread (or thread/chat not found)
+        429  LLM-ask quota exhausted (only fires when a regeneration was needed)
+    """
+
+    def post(self, request):
+        data = request.data or {}
+        team_id = data.get("team_id")
+        if not team_id:
+            return Response(
+                {"error": "team_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            chat_type = int(data.get("chat_type"))
+            chat_id = int(data.get("chat_id"))
+            thread_id = int(data.get("thread_id"))
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "chat_type, chat_id, thread_id must all be integers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user_id = str(getattr(request.user, "id", "")) or data.get("user_id")
+        if not user_id:
+            return Response(
+                {"error": "Could not determine user_id from the auth token."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        force = bool(data.get("force_regenerate"))
+
+        # Resolve LLM choice up-front so both the quota key and the
+        # actual generation use the same model.
+        chosen = resolve_user_choice(
+            request.user.preferred_llm_provider,
+            request.user.preferred_llm_model,
+        )
+
+        # 1. Cheap path: peek the cache. ACL is enforced here.
+        try:
+            if force:
+                # Skip the cache check; fall straight through to regenerate.
+                from origin.search_engine.agent.thread_summary import (  # noqa: PLC0415
+                    fetch_thread_messages_for_agent,
+                )
+
+                messages = fetch_thread_messages_for_agent(
+                    chat_type=chat_type,
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    user_id=user_id,
+                )
+                if not messages:
+                    return Response(
+                        {"error": "Thread is empty — nothing to summarise yet."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                cached = None
+            else:
+                cached, messages, _fp = peek_cached_summary(
+                    chat_type=chat_type,
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    user_id=user_id,
+                )
+        except ThreadSummaryError as e:
+            msg = str(e)
+            code = (
+                status.HTTP_403_FORBIDDEN
+                if ("authorized" in msg.lower() or "not found" in msg.lower())
+                else status.HTTP_400_BAD_REQUEST
+            )
+            return Response({"error": msg}, status=code)
+
+        if cached is not None:
+            return Response(
+                {
+                    "summary": cached.summary,
+                    "generated": False,
+                    "last_updated_iso": cached.last_updated.isoformat(),
+                    "message_count": cached.message_count,
+                    "fingerprint": cached.fingerprint,
+                }
+            )
+
+        # 2. Regen needed — quota gate first.
+        llm_ok, llm_used, llm_limit = check_remaining(user_id, LLM_ASK_KEY)
+        if not llm_ok:
+            return Response(
+                {
+                    "error": (
+                        f"You've used all {llm_limit} AI asks for today. "
+                        "Upgrade your plan to keep going."
+                    ),
+                    "limit_reached": True,
+                    "used": llm_used,
+                    "limit": llm_limit,
+                    "category": "llm_ask",
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        model_ok, model_used, model_limit = check_remaining(user_id, chosen.model)
+        if not model_ok:
+            return Response(
+                {
+                    "error": (
+                        f"You've used all {model_limit} {chosen.model} asks for today. "
+                        "Switch to another model or upgrade your plan to keep going."
+                    ),
+                    "limit_reached": True,
+                    "used": model_used,
+                    "limit": model_limit,
+                    "category": "model",
+                    "model": chosen.model,
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        # 3. Generate. Set the LLM choice for the duration of the call so
+        # the right provider/model fires.
+        token = set_llm_choice(chosen)
+        try:
+            try:
+                result = regenerate_summary(
+                    chat_type=chat_type,
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    team_id=str(team_id),
+                    user_id=user_id,
+                    messages=messages,
+                )
+            except ThreadSummaryError as e:
+                return Response(
+                    {"error": str(e)},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+        finally:
+            reset_llm_choice(token)
+
+        # 4. Charge quota on success.
+        for key in (LLM_ASK_KEY, chosen.model):
+            increment_usage(user_id, key)
+
+        return Response(
+            {
+                "summary": result.summary,
+                "generated": True,
+                "last_updated_iso": result.last_updated.isoformat(),
+                "message_count": result.message_count,
+                "fingerprint": result.fingerprint,
+            }
+        )
 
 
 # --------------------------------------------------------------------------- #
