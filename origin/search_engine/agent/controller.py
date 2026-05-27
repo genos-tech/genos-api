@@ -38,6 +38,7 @@ from uuid import UUID
 
 from django.conf import settings
 
+from origin.search_engine.agent.citation_resolver import resolve_unresolved_citations
 from origin.search_engine.agent.prompts import (
     AGENT_SELF_CRITIQUE_PROMPT_TEMPLATE,
     AGENT_SELF_CRITIQUE_SYSTEM,
@@ -766,6 +767,7 @@ def run_agent(
     prior_summary: str | None = None,
     disabled_tools: set[str] | None = None,
     system_extra: str | None = None,
+    seed_sources: list[dict[str, Any]] | None = None,
     trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
     """Drive the agent loop from a fresh user query.
@@ -776,6 +778,15 @@ def run_agent(
     resolve references like "that task" or "the note you mentioned".
     Each answer is already truncated to ~400 chars by the view layer
     to keep the context budget bounded.
+
+    `seed_sources` is an optional list of pre-built source dicts to
+    register *before* the loop starts. Used by the note / thread Q&A
+    branches: the agent has the summary in its system prompt and may
+    answer without ever calling a tool, but it can still emit a
+    `[note:...]` or `[chat:...]` citation for the entity the user
+    opened the modal from. Pre-seeding the source lets the frontend
+    citation rewriter resolve those tokens to a titled link instead
+    of rendering the raw bracketed id.
 
     Returns:
         None on clean completion (text answer, error, or step cap).
@@ -789,6 +800,21 @@ def run_agent(
             }
         The view layer reflects the pause back onto the `AgentRun` row.
     """
+    # Pre-populate the live source map and ship the initial chips. The
+    # event MUST be emitted before the first model call so even a zero-
+    # tool answer still gets the seeded sources to the frontend.
+    seeded_map: dict[tuple, dict[str, Any]] = {}
+    if seed_sources:
+        _apply_friendly_titles(seed_sources, ctx)
+        _hydrate_task_display_ids(seed_sources)
+        for src in seed_sources:
+            key = (src.get("entity_type"), src.get("entity_id"))
+            if not all(key) or key in seeded_map:
+                continue
+            seeded_map[key] = src
+        if seeded_map:
+            emit({"type": "sources", "sources": list(seeded_map.values())})
+
     messages: list[AgentMessage] = []
     # Phase 3.5 — rolling summary of earlier turns prepended as an
     # assistant "note to self" so the model can reference topics that
@@ -817,7 +843,7 @@ def run_agent(
             emit=emit,
             run_id=run_id,
             starting_step=0,
-            seen_sources_by_id={},
+            seen_sources_by_id=seeded_map,
             disabled_tools=disabled_tools,
             system_extra=system_extra,
             trace_hook=trace_hook,
@@ -828,7 +854,7 @@ def run_agent(
         emit=emit,
         run_id=run_id,
         starting_step=0,
-        seen_sources_by_id={},
+        seen_sources_by_id=seeded_map,
         disabled_tools=disabled_tools,
         system_extra=system_extra,
         trace_hook=trace_hook,
@@ -1082,6 +1108,42 @@ def _drive_loop(
                 )
                 _persist_step(run_id, step_index=step, error="empty_response")
                 return None
+
+            final_answer = "".join(accumulated_text_parts)
+
+            # Post-process: resolve any `[type:id]` tokens in the final
+            # answer that aren't already in the source registry. Common
+            # causes: agent cited an entity carried over from a prior
+            # turn, mentioned in a pre-injected summary, or otherwise
+            # not retrieved via a tool this turn. Lookups are ACL-gated;
+            # silent failure (raw token) is preferable to leaking titles.
+            late_sources = resolve_unresolved_citations(
+                answer=final_answer,
+                seen_keys=set(seen_sources_by_id.keys()),
+                team_id=ctx.team_id,
+                user_id=ctx.user_id,
+                build_task_source=lambda task_id, title, project_id: _task_source(
+                    task_id, title, project_id
+                ),
+                build_project_source=lambda project_id, project_name: _project_source(
+                    project_id, project_name
+                ),
+                build_chat_source=lambda chat_type, chat_id, thread_id: _chat_source(
+                    chat_type, chat_id, thread_id
+                ),
+                build_note_source=lambda note_type, note_id, title, parent_context: _note_source(
+                    note_type, note_id, title, parent_context
+                ),
+            )
+            if late_sources:
+                _apply_friendly_titles(late_sources, ctx)
+                _hydrate_task_display_ids(late_sources)
+                for src in late_sources:
+                    key = (src.get("entity_type"), src.get("entity_id"))
+                    if not all(key) or key in seen_sources_by_id:
+                        continue
+                    seen_sources_by_id[key] = src
+
             # Phase 4.2 — re-emit the sources list re-sorted by citation
             # density before `done`. Frontend already handles `sources`
             # events by replacing wholesale, so the final emit overrides
@@ -1092,9 +1154,13 @@ def _drive_loop(
                 settings.SEARCH_ENGINE.get("RAG_RANK_SOURCES_BY_CITATION", True)
                 and seen_sources_by_id
             ):
-                final_answer = "".join(accumulated_text_parts)
                 ranked = _rank_sources_by_citation(final_answer, list(seen_sources_by_id.values()))
                 emit({"type": "sources", "sources": ranked})
+            elif late_sources:
+                # Rank flag off but we added sources after the last tool
+                # emit — ship the updated list so the frontend rewriter
+                # has them.
+                emit({"type": "sources", "sources": list(seen_sources_by_id.values())})
             emit({"type": "done"})
             return None
 

@@ -31,6 +31,7 @@ from opensearchpy import helpers as os_helpers
 from origin.search_engine.chunkers.base import Chunk, EntityChunks
 from origin.search_engine.chunkers.chat_chunker import iter_all_chat_chunks
 from origin.search_engine.chunkers.note_chunker import iter_all_note_chunks
+from origin.search_engine.chunkers.note_summary_chunker import iter_note_summary_chunks
 from origin.search_engine.chunkers.task_chunker import iter_task_chunks
 from origin.search_engine.chunkers.thread_summary_chunker import iter_thread_summary_chunks
 from origin.search_engine.embeddings import (
@@ -85,7 +86,7 @@ def ingest_all(
             consuming OpenAI quota or mutating state.
     """
     stats = IngestionStats()
-    entity_types = entity_types or ["chat", "task", "note", "thread_summary"]
+    entity_types = entity_types or ["chat", "task", "note", "thread_summary", "note_summary"]
 
     if "chat" in entity_types:
         log.info("Ingesting chats (since=%s, dry_run=%s)...", since, dry_run)
@@ -99,6 +100,9 @@ def ingest_all(
     if "thread_summary" in entity_types:
         log.info("Ingesting thread summaries (since=%s, dry_run=%s)...", since, dry_run)
         _ingest_stream(iter_thread_summary_chunks(since=since), stats, dry_run=dry_run)
+    if "note_summary" in entity_types:
+        log.info("Ingesting note summaries (since=%s, dry_run=%s)...", since, dry_run)
+        _ingest_stream(iter_note_summary_chunks(since=since), stats, dry_run=dry_run)
 
     log.info("Ingestion done: %s", stats.as_dict())
     return stats

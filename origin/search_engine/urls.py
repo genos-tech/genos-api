@@ -8,6 +8,7 @@ from origin.search_engine.agent_views import (
     AgentSessionDetailView,
     AgentSessionsListView,
     AgentUsageView,
+    NoteSummaryView,
     ThreadSummaryView,
 )
 from origin.search_engine.views import SearchView
@@ -20,6 +21,11 @@ urlpatterns = [
         "api/v2/agent/thread-summary/",
         ThreadSummaryView.as_view(),
         name="agent_thread_summary",
+    ),
+    path(
+        "api/v2/agent/note-summary/",
+        NoteSummaryView.as_view(),
+        name="agent_note_summary",
     ),
     path("api/v2/agent/usage/", AgentUsageView.as_view(), name="agent_usage"),
     path("api/v2/agent/features/", AgentFeaturesView.as_view(), name="agent_features"),
