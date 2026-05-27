@@ -765,6 +765,7 @@ def run_agent(
     prior_turns: list[tuple[str, str]] | None = None,
     prior_summary: str | None = None,
     disabled_tools: set[str] | None = None,
+    system_extra: str | None = None,
     trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
     """Drive the agent loop from a fresh user query.
@@ -818,6 +819,7 @@ def run_agent(
             starting_step=0,
             seen_sources_by_id={},
             disabled_tools=disabled_tools,
+            system_extra=system_extra,
             trace_hook=trace_hook,
         )
     return _drive_loop(
@@ -828,6 +830,7 @@ def run_agent(
         starting_step=0,
         seen_sources_by_id={},
         disabled_tools=disabled_tools,
+        system_extra=system_extra,
         trace_hook=trace_hook,
     )
 
@@ -1018,16 +1021,25 @@ def _drive_loop(
     starting_step: int,
     seen_sources_by_id: dict[tuple, dict[str, Any]],
     disabled_tools: set[str] | None = None,
+    system_extra: str | None = None,
     trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
     """The core agent loop, shared by `run_agent` and `resume_agent`.
 
     Returns `None` on completion, or a pause descriptor on hitting a
     write tool. See `run_agent` for the descriptor shape.
+
+    `system_extra`, when set, is appended to the canonical
+    `AGENT_SYSTEM_PROMPT` before being passed to the model. The thread
+    Q&A flow (AgentAskView's thread_context branch) uses this to inject
+    the thread summary + a "stay scoped to this thread" directive.
     """
     max_steps = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
     client = get_model_client()
     tools = _build_tool_declarations(disabled_tools)
+    system_instruction = AGENT_SYSTEM_PROMPT
+    if system_extra:
+        system_instruction = f"{AGENT_SYSTEM_PROMPT}\n\n{system_extra}"
 
     for step in range(starting_step, max_steps):
         accumulated_function_calls: list[FunctionCall] = []
@@ -1037,7 +1049,7 @@ def _drive_loop(
             stream = client.generate_step(
                 messages=messages,
                 tools=tools,
-                system_instruction=AGENT_SYSTEM_PROMPT,
+                system_instruction=system_instruction,
             )
             for text_chunk, function_call in stream:
                 if function_call is not None:
@@ -1306,6 +1318,7 @@ def _drive_loop_with_critique(
     starting_step: int,
     seen_sources_by_id: dict[tuple, dict[str, Any]],
     disabled_tools: set[str] | None = None,
+    system_extra: str | None = None,
     trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
     """Run `_drive_loop` with captured events, then optionally rewrite
@@ -1354,6 +1367,7 @@ def _drive_loop_with_critique(
         starting_step=starting_step,
         seen_sources_by_id=seen_sources_by_id,
         disabled_tools=disabled_tools,
+        system_extra=system_extra,
         trace_hook=_capture_trace,
     )
 

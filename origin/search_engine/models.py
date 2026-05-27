@@ -54,10 +54,23 @@ class AgentSession(models.Model):
     user_id = models.CharField(max_length=64, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     last_active_at = models.DateTimeField(default=timezone.now)
+    # ----- Thread Q&A scope (nullable; only set for sessions bound to
+    # a specific chat thread via the "Ask about this thread" feature) -----
+    # When all three are populated, the lookup in `_get_or_create_session`
+    # treats this as a long-lived per-thread session, ignoring TTL — a
+    # user might come back days later and reasonably expect their prior
+    # Q&A to still be there. For regular Spotlight sessions, these stay
+    # null and the existing TTL window applies.
+    chat_type = models.IntegerField(blank=True, null=True)
+    chat_id = models.IntegerField(blank=True, null=True)
+    thread_id = models.IntegerField(blank=True, null=True)
 
     class Meta:
         indexes = [
             models.Index(fields=["team_id", "user_id", "-last_active_at"]),
+            # Per-thread lookup: "do I have an existing thread session
+            # for this user on this thread?" hits this index directly.
+            models.Index(fields=["user_id", "chat_type", "chat_id", "thread_id"]),
         ]
 
 
@@ -105,6 +118,49 @@ class AgentRun(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["team_id", "user_id", "-started_at"]),
+        ]
+
+
+class ThreadSummary(models.Model):
+    """Cached LLM-generated summary of a chat thread, shared by all members.
+
+    One row per (chat_type, chat_id, thread_id). The "Ask about this thread"
+    feature checks the stored fingerprint against the live message fingerprint
+    on every request: if they match, the cached summary is returned without
+    re-invoking the LLM; if they differ (new message, edit, or delete), the
+    summary is regenerated and the row updated in place.
+
+    The summary is also indexed in OpenSearch via the thread_summary chunker
+    so that the workspace-wide agent (Spotlight) can retrieve it.
+
+    Fingerprint is `f"{max_thread_message_id}:{count_non_deleted}:{max_ts_updated_at}"`.
+    Single-field timestamp keys miss edits and deletes; the three together catch
+    inserts (bumps id+count), edits (bumps last_edit_ts), and deletes (drops count).
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    team_id = models.CharField(max_length=64, db_index=True)
+    chat_type = models.IntegerField()  # 1=DM 2=GM 3=PM 4=MDM
+    chat_id = models.IntegerField()
+    thread_id = models.IntegerField()
+    summary_text = models.TextField()
+    last_message_id = models.IntegerField(default=0)
+    message_count = models.IntegerField(default=0)
+    last_edit_ts = models.DateTimeField(blank=True, null=True)
+    model_used = models.CharField(max_length=64, blank=True, default="")
+    generated_by_user_id = models.CharField(max_length=64, blank=True, default="")
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["chat_type", "chat_id", "thread_id"],
+                name="uq_thread_summary_scope",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["team_id", "ts_updated_at"]),
         ]
 
 
