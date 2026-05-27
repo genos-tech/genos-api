@@ -451,12 +451,15 @@ def load_or_generate_for_ask(
     note_type: int,
     note_id: int,
     user_id: str,
-) -> tuple[str, str]:
+) -> tuple[str, NoteRecord]:
     """Helper used by AgentAskView's note-context branch.
 
-    Returns `(summary_text, note_title)` so the system prompt has both
-    the short summary and the title for context. ACL errors propagate
-    as `NoteSummaryError`; the caller maps to HTTP.
+    Returns `(summary_text, record)`. The full `NoteRecord` is returned
+    (not just the title) so the view layer can pre-seed a citation
+    source chip with the note's parent context — project / task for
+    task notes, chat / thread for chat notes — without a second DB
+    query. ACL errors propagate as `NoteSummaryError`; the caller
+    maps to HTTP.
     """
     cached, record, _fp = peek_cached_summary(
         note_type=note_type,
@@ -464,14 +467,14 @@ def load_or_generate_for_ask(
         user_id=user_id,
     )
     if cached is not None:
-        return cached.summary, record.title
+        return cached.summary, record
     result = regenerate_summary(
         note_type=note_type,
         note_id=note_id,
         user_id=user_id,
         record=record,
     )
-    return result.summary, record.title
+    return result.summary, record
 
 
 def note_type_label(note_type: int) -> str:
