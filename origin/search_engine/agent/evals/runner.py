@@ -560,6 +560,10 @@ def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
             limit=int(case.get("limit", 10)),
             use_vector=bool(case.get("use_vector", True)),
             rewrite=bool(_settings.SEARCH_ENGINE.get("RAG_USE_QUERY_REWRITE", False)),
+            # `mode="eval"` disables freshness boost + chunk-type
+            # reweighting so the retrieval-quality numbers reflect raw
+            # BM25 + vector + RRF, not the production-tuned overlays.
+            mode="eval",
         )
     except Exception as e:  # noqa: BLE001
         duration_ms = int((time.monotonic() - started) * 1000)

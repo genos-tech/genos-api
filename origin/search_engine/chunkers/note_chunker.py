@@ -113,6 +113,8 @@ def iter_chat_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
             chat_type_label=chat_label,
             chat_id=str(note.chat_id) if note.chat_id else None,
             thread_id=thread_id_str,
+            note_owner_id=str(note.owner_id) if note.owner_id else None,
+            note_parent_id=(str(note.parent_note_id) if note.parent_note_id else None),
         )
         if chunks:
             yield EntityChunks(
@@ -227,6 +229,8 @@ def iter_task_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
             # Surface task_id so Spotlight can deep-link the task note
             # without falling through to /workspace/notes.
             task_id=str(note.task_id) if note.task_id else None,
+            note_owner_id=str(note.owner_id) if note.owner_id else None,
+            note_parent_id=(str(note.parent_note_id) if note.parent_note_id else None),
         )
         if chunks:
             yield EntityChunks(
@@ -272,6 +276,8 @@ def iter_personal_note_chunks(since: Optional[datetime] = None) -> Iterator[Enti
             related=related,
             created_at=note.ts_created_at,
             updated_at=note.ts_updated_at,
+            note_owner_id=str(note.owner_id) if note.owner_id else None,
+            note_parent_id=(str(note.parent_note_id) if note.parent_note_id else None),
         )
         if chunks:
             yield EntityChunks(
@@ -320,6 +326,9 @@ def _note_to_section_chunks(
     chat_type_label: Optional[str] = None,
     chat_id: Optional[str] = None,
     thread_id: Optional[str] = None,
+    # v2 — note overlays.
+    note_owner_id: Optional[str] = None,
+    note_parent_id: Optional[str] = None,
 ) -> list[Chunk]:
     """Split the body into heading-bounded sections; one Chunk per section.
 
@@ -382,6 +391,8 @@ def _note_to_section_chunks(
                 chat_id=chat_id,
                 thread_id=thread_id,
                 related_entity_ids=related,
+                note_owner_id=note_owner_id,
+                note_parent_id=note_parent_id,
                 created_at=iso(created_at),
                 updated_at=iso(updated_at),
             )

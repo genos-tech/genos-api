@@ -361,6 +361,13 @@ SEARCH_ENGINE = {
     "BULK_BATCH_SIZE": int(os.environ.get("SEARCH_BULK_BATCH_SIZE", "200")),
     # Embedding batch size (max items per provider /embeddings request).
     "EMBEDDING_BATCH_SIZE": int(os.environ.get("SEARCH_EMBEDDING_BATCH_SIZE", "100")),
+    # Refresh-policy for bulk writes. When False (the default during
+    # ingestion runs), each `_bulk()` ships without `?refresh`, and
+    # `ingest_all` issues one explicit `indices.refresh()` at the end
+    # of the full run. Cuts ~1s-per-batch refresh overhead during big
+    # reindexes. Switch to True for one-off writes that need to be
+    # searchable immediately (e.g. manual `manage.py shell` upserts).
+    "RAG_BULK_REFRESH": (os.environ.get("RAG_BULK_REFRESH", "false").lower() == "true"),
     # Gemini configuration for the RAG-answer endpoint
     # (POST /api/v2/agent/ask). `gemini-2.5-flash` is the MVP default
     # — fast, cheap, supports streaming + function calling for Phase 3.

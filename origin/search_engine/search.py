@@ -28,7 +28,7 @@ import logging
 import math
 import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from django.conf import settings
 from opensearchpy.exceptions import NotFoundError
@@ -42,6 +42,80 @@ log = logging.getLogger(__name__)
 RRF_K = 60
 DEFAULT_POOL_SIZE = 60
 DEFAULT_LIMIT = 20
+
+
+# Caller-mode dispatch. Each mode tunes the hybrid pipeline for a
+# different consumer:
+#
+#   "typeahead"  → Spotlight UI Cmd-K. Sub-100 ms target. Smaller
+#                  candidate pool, tight HNSW ef_search, precision-
+#                  favoured chunk-type ranking (raw messages outrank
+#                  LLM summaries because the user wants the literal
+#                  hit, not an abstract).
+#   "ai_search"  → agent's `search_knowledge_base` tool. Higher recall
+#                  budget (more chunks to feed the LLM, looser HNSW),
+#                  recall-favoured weights (LLM-curated summaries
+#                  outrank raw concatenations because the agent reads
+#                  abstracts better than walls of text).
+#   "eval"      → offline rag_evals harness. Wide pool, flat weights,
+#                  no freshness boost — pure retrieval quality.
+#
+# Per-mode hyperparameters live in `_MODE_CONFIG` below so a tweak
+# touches one dict, not three call sites.
+SearchMode = Literal["typeahead", "ai_search", "eval"]
+
+_MODE_CONFIG: dict[str, dict] = {
+    "typeahead": {
+        "pool_size": 20,
+        "ef_search": 64,
+        "apply_freshness": True,
+        # Precision-favoured chunk-type weights. Raw chunks (literal
+        # messages, sections, task titles) outrank LLM-curated abstracts
+        # because the typeahead user types verbatim keywords ("Plausible",
+        # "framer-motion") and wants the literal hit. Summaries are
+        # demoted but kept so a question-shaped typeahead still returns
+        # something useful.
+        "chunk_type_weights": {
+            "chat_message": 1.0,
+            "task_title_content": 1.0,
+            "note_section": 1.0,
+            "task_content_chunk": 0.8,
+            "task_comment": 0.7,
+            "thread_summary": 0.6,
+            "note_summary": 0.6,
+            "chat_thread_window": 0.5,
+        },
+    },
+    "ai_search": {
+        "pool_size": 60,
+        "ef_search": 128,
+        "apply_freshness": True,
+        # Recall-favoured chunk-type weights. LLM-curated summaries
+        # outrank raw concatenations because the agent reads abstracts
+        # better than walls of text. Per-message and per-section chunks
+        # stay at parity 1.0 — the agent still wants the exact wording
+        # when its question is targeted.
+        "chunk_type_weights": {
+            "thread_summary": 1.2,
+            "note_summary": 1.2,
+            "chat_message": 1.0,
+            "note_section": 1.0,
+            "task_title_content": 1.0,
+            "task_content_chunk": 1.0,
+            "task_comment": 1.0,
+            "chat_thread_window": 0.8,
+        },
+    },
+    "eval": {
+        "pool_size": 100,
+        "ef_search": 256,
+        "apply_freshness": False,
+        # Flat weights so retrieval-quality numbers reflect the
+        # underlying RRF + BM25 + vector ranking, not the tuned
+        # production weights above.
+        "chunk_type_weights": {},
+    },
+}
 
 # Default relevance threshold relative to the top result's RRF score.
 # Anything below `top_score * MIN_SCORE_RATIO` is treated as a weak
@@ -85,13 +159,14 @@ def search(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     limit: int = DEFAULT_LIMIT,
-    pool_size: int = DEFAULT_POOL_SIZE,
+    pool_size: Optional[int] = None,
     use_vector: bool = True,
     min_score_ratio: float = DEFAULT_MIN_SCORE_RATIO,
     min_score: float = DEFAULT_MIN_SCORE,
     for_agent: bool = False,
     max_chunks_per_entity: int = 3,
     rewrite: bool = False,
+    mode: Optional[SearchMode] = None,
 ) -> dict:
     """Run a hybrid search and return entity-grouped results.
 
@@ -128,9 +203,27 @@ def search(
             `SEARCH_ENGINE["RAG_USE_QUERY_REWRITE"]` and passes it
             through; the Spotlight typeahead endpoint never opts in
             (would cost an LLM call per keystroke).
+        mode: caller-mode selector — one of "typeahead" / "ai_search"
+            / "eval". Picks the right hyperparameter set from
+            `_MODE_CONFIG` (pool_size, HNSW ef_search, freshness on/off,
+            chunk-type weights). When None, infers from `for_agent`:
+            True → ai_search, False → typeahead. Pinning `pool_size`
+            explicitly still wins so callers that know their workload
+            can override.
     """
     if not query or not query.strip():
         return {"query": query, "results": []}
+
+    # Mode resolution. Infer from `for_agent` if caller didn't pin it
+    # — keeps existing call sites working with no signature changes.
+    if mode is None:
+        mode = "ai_search" if for_agent else "typeahead"
+    mode_cfg = _MODE_CONFIG.get(mode, _MODE_CONFIG["typeahead"])
+    if pool_size is None:
+        pool_size = mode_cfg["pool_size"]
+    ef_search = mode_cfg["ef_search"]
+    apply_freshness_flag = mode_cfg["apply_freshness"]
+    chunk_type_weights: dict[str, float] = mode_cfg.get("chunk_type_weights") or {}
 
     # Settings-level override hooks for the threshold knobs. When the
     # caller didn't explicitly pin a value (i.e. left the kwarg at its
@@ -175,14 +268,30 @@ def search(
         pool_size=pool_size,
         use_vector=use_vector,
         for_agent=for_agent,
+        ef_search=ef_search,
     )
+
+    # --- v2: chunk-type-aware reweighting ---
+    # Multiply each chunk's RRF score by its chunk_type's weight
+    # (see `_MODE_CONFIG[mode].chunk_type_weights`). Lets the
+    # typeahead mode favour raw chunks (literal-keyword hits) and the
+    # ai_search mode favour LLM-curated summaries without changing the
+    # underlying schema or requiring a reindex.
+    if chunk_type_weights:
+        for hit in fused:
+            ct = (hit.get("source") or {}).get("chunk_type")
+            weight = chunk_type_weights.get(ct, 1.0) if ct else 1.0
+            if weight != 1.0:
+                hit["score"] *= weight
 
     # --- Phase 6: freshness multiplier + text-hash dedup ---
     # Both are no-ops when their settings are at the disable values
     # (half_life=0, dedup_by_hash=false), so the default path matches
-    # the pre-Phase-6 behavior exactly.
+    # the pre-Phase-6 behavior exactly. `apply_freshness_flag` is the
+    # per-mode kill switch — `mode="eval"` disables it to keep the
+    # offline retrieval-quality harness deterministic.
     half_life = float(settings.SEARCH_ENGINE.get("RAG_FRESHNESS_HALF_LIFE_DAYS", 0) or 0)
-    if half_life > 0:
+    if apply_freshness_flag and half_life > 0:
         fused = _apply_freshness(fused, half_life_days=half_life)
     if settings.SEARCH_ENGINE.get("RAG_DEDUP_BY_HASH"):
         fused = _dedup_by_text_hash(fused)
@@ -282,6 +391,7 @@ def _multi_variant_fuse(
     pool_size: int,
     use_vector: bool,
     for_agent: bool,
+    ef_search: int,
 ) -> list[dict]:
     """Run keyword + vector for each variant and merge into one ranked list.
 
@@ -313,7 +423,13 @@ def _multi_variant_fuse(
             try:
                 qvec = embed_one(variant)
                 vector_hits = _run_vector(
-                    client, index, qvec, base_filter, pool_size, for_agent=for_agent
+                    client,
+                    index,
+                    qvec,
+                    base_filter,
+                    pool_size,
+                    for_agent=for_agent,
+                    ef_search=ef_search,
                 )
             except Exception as e:  # noqa: BLE001 — degrade to keyword-only for this variant
                 log.warning(
@@ -558,7 +674,16 @@ def _run_keyword(
 ) -> list[dict]:
     body = {
         "size": size,
-        "_source": _source_fields(for_agent=for_agent),
+        # `track_total_hits: false` — RRF only needs the top-N; counting
+        # exact total hits is wasted work on every query.
+        "track_total_hits": False,
+        # Allowlist projection: `_source_fields` already excludes the
+        # `embedding` blob, but we add an explicit `excludes` as defence
+        # in depth in case `_source_fields` ever drifts.
+        "_source": {
+            "includes": _source_fields(for_agent=for_agent),
+            "excludes": ["embedding"],
+        },
         "query": {
             "bool": {
                 "must": {
@@ -569,16 +694,26 @@ def _run_keyword(
                         # the verbatim query for "find me this thing"
                         # asks. Snippet_text is the next-densest
                         # (entity-level highlight). Search_text
-                        # carries the full chunk body. The default
-                        # 3 / 2 / 1 ladder was chosen at Phase 3 to
-                        # surface title-verbatim matches over body
-                        # matches with the same term count. Made
-                        # tunable in Phase 2.5 to enable per-deploy
-                        # A/B without code changes.
+                        # carries the full chunk body. v2 added two
+                        # subfields:
+                        #   title.prefix   — edge n-gram, wins on
+                        #                    1-3 char prefixes
+                        #                    ("fra" → "framer-motion")
+                        #                    even before BM25 partial
+                        #                    matching kicks in.
+                        #   search_text.en — English-stemmed copy of
+                        #                    the body; recovers
+                        #                    conjugation variants
+                        #                    ("ruling/ruled/rules").
+                        # Base `search_text` (standard analyzer) stays
+                        # for exact-phrase matching; the .en subfield
+                        # is the recall path.
                         "fields": [
                             f"title^{int(settings.SEARCH_ENGINE.get('RAG_BM25_TITLE_BOOST', 3))}",
+                            "title.prefix^4",
                             f"snippet_text^{int(settings.SEARCH_ENGINE.get('RAG_BM25_SNIPPET_BOOST', 2))}",
                             "search_text",
+                            "search_text.en^0.8",
                         ],
                         "type": "best_fields",
                     }
@@ -591,13 +726,18 @@ def _run_keyword(
         # `number_of_fragments: 0` returns the whole field with markers
         # rather than fragments; we only consume the marked term list,
         # not the marked text itself.
+        #
+        # v2: also highlight `title.prefix` + `search_text.en` so the
+        # frontend's matched-term list picks up stemmed/prefix hits.
         "highlight": {
             "pre_tags": [_HIGHLIGHT_PRE],
             "post_tags": [_HIGHLIGHT_POST],
             "fields": {
                 "title": {"number_of_fragments": 0},
+                "title.prefix": {"number_of_fragments": 0},
                 "snippet_text": {"number_of_fragments": 0},
                 "search_text": {"number_of_fragments": 0},
+                "search_text.en": {"number_of_fragments": 0},
             },
         },
     }
@@ -616,10 +756,19 @@ def _run_vector(
     size: int,
     *,
     for_agent: bool = False,
+    ef_search: int = 128,
 ) -> list[dict]:
+    # `ef_search` controls how many HNSW candidates the engine inspects
+    # before returning `k`. Lucene's default is 512 — overkill at MVP
+    # corpus size. Per-mode tuning (see `_MODE_CONFIG`) drops this to
+    # 64/128 for typeahead/ai_search and saves real wall-clock per query.
     body = {
         "size": size,
-        "_source": _source_fields(for_agent=for_agent),
+        "track_total_hits": False,
+        "_source": {
+            "includes": _source_fields(for_agent=for_agent),
+            "excludes": ["embedding"],
+        },
         "query": {
             "bool": {
                 "must": {
@@ -627,6 +776,7 @@ def _run_vector(
                         "embedding": {
                             "vector": qvec,
                             "k": size,
+                            "method_parameters": {"ef_search": ef_search},
                         }
                     }
                 },

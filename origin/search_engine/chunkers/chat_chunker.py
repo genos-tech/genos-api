@@ -38,16 +38,29 @@ from origin.models.chat.mdm_models import (
     MDMThreadMessages,
 )
 from origin.models.chat.pm_models import PMMessages, PMThreadMessages
+from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 
 from origin.search_engine.chunkers.base import (
+    CHAT_TYPE_DM,
+    CHAT_TYPE_GM,
+    CHAT_TYPE_LABEL,
+    CHAT_TYPE_MDM,
+    CHAT_TYPE_PM,
     Chunk,
     EntityChunks,
     chat_entity_id,
     iso,
     make_snippet,
 )
+from origin.search_engine.models import ThreadSummary
 from origin.search_engine.text_extraction import extract_text
+
+# v2: thread-window chunks are suppressed for any thread that already
+# has an LLM-generated `ThreadSummary` row — the abstract is strictly
+# better than raw concatenation for vector recall. Built once per
+# ingest run via `_load_summarized_threads`.
+_LABEL_TO_CHAT_TYPE_CODE = {v: k for k, v in CHAT_TYPE_LABEL.items()}
 
 
 def iter_dm_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
@@ -79,6 +92,19 @@ def iter_dm_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
     for tm in thread_msg_qs.order_by("dm_id", "thread_id", "thread_message_id"):
         thread_msgs_by_key[(tm.dm_id, tm.thread_id)].append(tm)
 
+    # v2 — pre-resolve sender names + summarized threads in one pass.
+    sender_ids: set = set()
+    for msg_list in msgs_by_dm.values():
+        for msg in msg_list:
+            if msg.sender_id:
+                sender_ids.add(msg.sender_id)
+    for tms in thread_msgs_by_key.values():
+        for tm in tms:
+            if tm.sender_id:
+                sender_ids.add(tm.sender_id)
+    sender_names = _load_sender_names(sender_ids)
+    summarized = _load_summarized_threads()
+
     for dm in dm_qs:
         if not dm.team_id:
             continue
@@ -93,6 +119,8 @@ def iter_dm_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
             thread_msgs_by_thread_id=_group_threads(thread_msgs_by_key, dm.dm_id),
             message_body_attr="message_body",
             thread_body_attr="thread_message_body",
+            sender_names=sender_names,
+            summarized_threads=summarized,
         )
 
 
@@ -131,6 +159,18 @@ def iter_gm_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
     for tm in thread_msg_qs.order_by("gm_id", "thread_id", "thread_message_id"):
         thread_msgs_by_key[(tm.gm_id, tm.thread_id)].append(tm)
 
+    sender_ids: set = set()
+    for msg_list in msgs_by_gm.values():
+        for msg in msg_list:
+            if msg.sender_id:
+                sender_ids.add(msg.sender_id)
+    for tms in thread_msgs_by_key.values():
+        for tm in tms:
+            if tm.sender_id:
+                sender_ids.add(tm.sender_id)
+    sender_names = _load_sender_names(sender_ids)
+    summarized = _load_summarized_threads()
+
     for gm in gm_qs:
         if not gm.owner_team_id:
             continue
@@ -144,6 +184,8 @@ def iter_gm_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
             thread_msgs_by_thread_id=_group_threads(thread_msgs_by_key, gm.gm_id),
             message_body_attr="message_body",
             thread_body_attr="thread_message_body",
+            sender_names=sender_names,
+            summarized_threads=summarized,
         )
 
 
@@ -182,6 +224,18 @@ def iter_mdm_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
     for tm in thread_msg_qs.order_by("mdm_id", "thread_id", "thread_message_id"):
         thread_msgs_by_key[(tm.mdm_id, tm.thread_id)].append(tm)
 
+    sender_ids: set = set()
+    for msg_list in msgs_by_mdm.values():
+        for msg in msg_list:
+            if msg.sender_id:
+                sender_ids.add(msg.sender_id)
+    for tms in thread_msgs_by_key.values():
+        for tm in tms:
+            if tm.sender_id:
+                sender_ids.add(tm.sender_id)
+    sender_names = _load_sender_names(sender_ids)
+    summarized = _load_summarized_threads()
+
     for mdm in mdm_qs:
         if not mdm.owner_team_id:
             continue
@@ -195,6 +249,8 @@ def iter_mdm_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
             thread_msgs_by_thread_id=_group_threads(thread_msgs_by_key, mdm.mdm_id),
             message_body_attr="message_body",
             thread_body_attr="thread_message_body",
+            sender_names=sender_names,
+            summarized_threads=summarized,
         )
 
 
@@ -237,6 +293,18 @@ def iter_pm_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
     for tm in thread_msg_qs.order_by("project_id", "thread_id", "thread_message_id"):
         thread_msgs_by_key[(tm.project_id, tm.thread_id)].append(tm)
 
+    sender_ids: set = set()
+    for msg_list in msgs_by_project.values():
+        for msg in msg_list:
+            if msg.sender_id:
+                sender_ids.add(msg.sender_id)
+    for tms in thread_msgs_by_key.values():
+        for tm in tms:
+            if tm.sender_id:
+                sender_ids.add(tm.sender_id)
+    sender_names = _load_sender_names(sender_ids)
+    summarized = _load_summarized_threads()
+
     for project in project_qs:
         if not project.team_id:
             continue
@@ -251,6 +319,8 @@ def iter_pm_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
             message_body_attr="message_body",
             thread_body_attr="thread_message_body",
             project_id=str(project.project_id),
+            sender_names=sender_names,
+            summarized_threads=summarized,
         )
 
 
@@ -262,6 +332,43 @@ def iter_all_chat_chunks(since: Optional[datetime] = None) -> Iterator[EntityChu
 
 
 # ---------- helpers ----------
+
+
+def _load_summarized_threads() -> set[tuple[str, int, int]]:
+    """Return {(chat_label, chat_id, thread_id)} that already have a
+    `ThreadSummary` row. The chat_chunker uses this to skip emitting
+    a `chat_thread_window` chunk for any thread whose abstract is
+    already in the index (entity_type="thread_summary") — the abstract
+    is strictly better than the raw concatenation for vector recall.
+    """
+    out: set[tuple[str, int, int]] = set()
+    for row in ThreadSummary.objects.all().values("chat_type", "chat_id", "thread_id"):
+        label = CHAT_TYPE_LABEL.get(row["chat_type"])
+        if not label:
+            continue
+        out.add((label, row["chat_id"], row["thread_id"]))
+    return out
+
+
+def _load_sender_names(sender_ids: set) -> dict[str, str]:
+    """Batch-resolve sender_id → display name. Used by the chat-message
+    chunker to denormalize `author_name` onto each focal-message chunk
+    so source chips can render the sender without a DB round-trip at
+    query time.
+
+    Names fall back to "" for users that no longer exist (deleted
+    accounts) — search results will still work, just without a friendly
+    name in the chip.
+    """
+    out: dict[str, str] = {}
+    if not sender_ids:
+        return out
+    clean = [s for s in sender_ids if s]
+    if not clean:
+        return out
+    for u in CustomUser.objects.filter(id__in=clean).values("id", "username"):
+        out[str(u["id"])] = u["username"] or ""
+    return out
 
 
 def _group_threads(thread_msgs_by_key, chat_id):
@@ -282,6 +389,8 @@ def _emit_chat_chunks(
     message_body_attr: str,
     thread_body_attr: str,
     project_id: Optional[str] = None,
+    sender_names: Optional[dict[str, str]] = None,
+    summarized_threads: Optional[set[tuple[str, int, int]]] = None,
 ) -> Iterator[EntityChunks]:
     """Bucket messages by thread and produce one EntityChunks per
     (chat, thread)."""
@@ -295,6 +404,9 @@ def _emit_chat_chunks(
             main_msgs.append(m)
         else:
             thread_anchor_by_thread_id[m.thread_id] = m
+
+    sender_names = sender_names or {}
+    summarized_threads = summarized_threads or set()
 
     # 1) Main-channel entity (non-thread messages).
     main_entity_id = chat_entity_id(chat_label, chat_id_str)
@@ -314,6 +426,7 @@ def _emit_chat_chunks(
         body_attr=message_body_attr,
         project_id=project_id,
         use_task_id_as_msg=use_task_id_as_msg,
+        sender_names=sender_names,
     )
     if main_chunks:
         yield EntityChunks(entity_type="chat", entity_id=main_entity_id, chunks=main_chunks)
@@ -324,6 +437,7 @@ def _emit_chat_chunks(
         thread_msgs = thread_msgs_by_thread_id.get(thread_id, [])
         anchor = thread_anchor_by_thread_id.get(thread_id)
         thread_entity_id = chat_entity_id(chat_label, chat_id_str, thread_id)
+        skip_window = (chat_label, int(chat_id_str), int(thread_id)) in summarized_threads
         chunks = _build_thread_chunks(
             chat_label=chat_label,
             chat_id=chat_id_str,
@@ -337,6 +451,8 @@ def _emit_chat_chunks(
             anchor_body_attr=message_body_attr,
             thread_body_attr=thread_body_attr,
             project_id=project_id,
+            sender_names=sender_names,
+            skip_window=skip_window,
         )
         if chunks:
             yield EntityChunks(entity_type="chat", entity_id=thread_entity_id, chunks=chunks)
@@ -384,10 +500,12 @@ def _build_message_chunks(
     # message_id isn't what the UI exposes). Falls back to message_id
     # for any PM main message that happens to lack a task FK.
     use_task_id_as_msg: bool = False,
+    sender_names: Optional[dict[str, str]] = None,
 ) -> list[Chunk]:
     out = []
     context_size = _context_window_size()
     recent_texts: list[str] = []
+    sender_names = sender_names or {}
     for m in messages:
         text = extract_text(getattr(m, body_attr, None))
         if not text:
@@ -398,6 +516,7 @@ def _build_message_chunks(
         msg_key = (getattr(m, "task_id", None) if use_task_id_as_msg else None) or m.message_id
         chunk_id = f"chat:{chat_label}:{chat_id}:msg:{msg_key}"
         prior = recent_texts[-context_size:] if context_size else []
+        sender_id_str = str(m.sender_id) if getattr(m, "sender_id", None) else None
         out.append(
             Chunk(
                 chunk_id=chunk_id,
@@ -414,6 +533,11 @@ def _build_message_chunks(
                 chat_id=chat_id,
                 thread_id=thread_id,
                 project_id=project_id,
+                # v2 — author identity + per-message PK for deep-link
+                # citation chips.
+                author_id=sender_id_str,
+                author_name=sender_names.get(sender_id_str) if sender_id_str else None,
+                chat_message_id=str(m.message_id),
                 created_at=iso(getattr(m, "ts_sent_at", None)),
                 updated_at=iso(getattr(m, "ts_updated_at", None)),
             )
@@ -436,6 +560,12 @@ def _build_thread_chunks(
     anchor_body_attr,
     thread_body_attr,
     project_id,
+    sender_names: Optional[dict[str, str]] = None,
+    # v2 — when True, skip emitting the `chat_thread_window` chunk
+    # because this thread already has an LLM-curated `ThreadSummary`
+    # row indexed under `entity_type="thread_summary"`. The abstract is
+    # strictly better than raw concatenation for vector recall.
+    skip_window: bool = False,
 ) -> list[Chunk]:
     out = []
     window_parts = []
@@ -443,11 +573,15 @@ def _build_thread_chunks(
     latest_ts = None
     context_size = _context_window_size()
     recent_texts: list[str] = []
+    sender_names = sender_names or {}
 
     if anchor_msg is not None:
         text = extract_text(getattr(anchor_msg, anchor_body_attr, None))
         if text:
             window_parts.append(text)
+            anchor_sender_str = (
+                str(anchor_msg.sender_id) if getattr(anchor_msg, "sender_id", None) else None
+            )
             # Anchor has no preceding messages in the thread by definition.
             out.append(
                 Chunk(
@@ -470,6 +604,11 @@ def _build_thread_chunks(
                     chat_id=chat_id,
                     thread_id=thread_id,
                     project_id=project_id,
+                    author_id=anchor_sender_str,
+                    author_name=(
+                        sender_names.get(anchor_sender_str) if anchor_sender_str else None
+                    ),
+                    chat_message_id=str(anchor_msg.message_id),
                     created_at=iso(getattr(anchor_msg, "ts_sent_at", None)),
                     updated_at=iso(getattr(anchor_msg, "ts_updated_at", None)),
                 )
@@ -485,6 +624,7 @@ def _build_thread_chunks(
             continue
         window_parts.append(text)
         prior = recent_texts[-context_size:] if context_size else []
+        tm_sender_str = str(tm.sender_id) if getattr(tm, "sender_id", None) else None
         out.append(
             Chunk(
                 chunk_id=(
@@ -504,6 +644,9 @@ def _build_thread_chunks(
                 chat_id=chat_id,
                 thread_id=thread_id,
                 project_id=project_id,
+                author_id=tm_sender_str,
+                author_name=sender_names.get(tm_sender_str) if tm_sender_str else None,
+                chat_message_id=str(tm.thread_message_id),
                 created_at=iso(getattr(tm, "ts_sent_at", None)),
                 updated_at=iso(getattr(tm, "ts_updated_at", None)),
             )
@@ -514,7 +657,9 @@ def _build_thread_chunks(
             latest_ts = tm_updated
 
     # Thread-window chunk: concatenated text for semantic search.
-    if window_parts:
+    # v2 — suppressed for threads that already have a `ThreadSummary`
+    # row; the abstract supersedes the raw concatenation.
+    if window_parts and not skip_window:
         window_text = "\n".join(window_parts)
         out.append(
             Chunk(
