@@ -64,6 +64,15 @@ class AgentSession(models.Model):
     chat_type = models.IntegerField(blank=True, null=True)
     chat_id = models.IntegerField(blank=True, null=True)
     thread_id = models.IntegerField(blank=True, null=True)
+    # ----- Note Q&A scope (nullable; mirrors the thread scope above) -----
+    # Set when the session is bound to a specific note via the
+    # "Ask about this note" feature. Mutually exclusive with the chat
+    # scope at the request layer — `_get_or_create_session` rejects
+    # both. Same TTL bypass logic as the thread scope (line 132): a
+    # user reopening a note Q&A days later should still see their prior
+    # turns.
+    note_type = models.IntegerField(blank=True, null=True)
+    note_id = models.IntegerField(blank=True, null=True)
 
     class Meta:
         indexes = [
@@ -71,6 +80,8 @@ class AgentSession(models.Model):
             # Per-thread lookup: "do I have an existing thread session
             # for this user on this thread?" hits this index directly.
             models.Index(fields=["user_id", "chat_type", "chat_id", "thread_id"]),
+            # Per-note lookup: same shape as the thread one.
+            models.Index(fields=["user_id", "note_type", "note_id"]),
         ]
 
 
@@ -157,6 +168,54 @@ class ThreadSummary(models.Model):
             models.UniqueConstraint(
                 fields=["chat_type", "chat_id", "thread_id"],
                 name="uq_thread_summary_scope",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["team_id", "ts_updated_at"]),
+        ]
+
+
+class NoteSummary(models.Model):
+    """Cached LLM-generated summary of a note, shared by all users with ACL.
+
+    One row per (note_type, note_id). The "Ask about this note" feature
+    checks the stored fingerprint against the live note row on every
+    request: if they match, the cached summary is returned without
+    re-invoking the LLM; if they differ (body edit, title edit), the
+    summary is regenerated and the row updated in place.
+
+    The summary is also indexed in OpenSearch via the note_summary
+    chunker so that the workspace-wide agent (Spotlight) can retrieve
+    it alongside the per-section note_chunker output.
+
+    Fingerprint is `f"{ts_updated.isoformat()}:{body_length}:{title}"`.
+    A pure `ts_updated` key would catch any save, but the body-length
+    and title are cheap signals that defend against clock skew (clock
+    going backwards on a master swap) — they both come from the live
+    note row at fingerprint-compute time, so a stale cached row will
+    only match when the title AND the body length AND the timestamp
+    all match.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    team_id = models.CharField(max_length=64, db_index=True)
+    note_type = models.IntegerField()  # 1=Personal, 2=Task, 3=Chat
+    note_id = models.IntegerField()
+    summary_text = models.TextField()
+    # Fingerprint inputs (see compute_fingerprint in note_summary.py).
+    last_edit_ts = models.DateTimeField(blank=True, null=True)
+    body_length = models.IntegerField(default=0)
+    title_at_gen = models.CharField(max_length=512, blank=True, default="")
+    model_used = models.CharField(max_length=64, blank=True, default="")
+    generated_by_user_id = models.CharField(max_length=64, blank=True, default="")
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["note_type", "note_id"],
+                name="uq_note_summary_scope",
             ),
         ]
         indexes = [
