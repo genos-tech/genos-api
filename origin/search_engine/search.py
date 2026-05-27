@@ -709,7 +709,7 @@ def _run_keyword(
                         # for exact-phrase matching; the .en subfield
                         # is the recall path.
                         "fields": [
-                            f"title^{int(settings.SEARCH_ENGINE.get('RAG_BM25_TITLE_BOOST', 3))}",
+                            f"title^{int(settings.SEARCH_ENGINE.get('RAG_BM25_TITLE_BOOST', 4))}",
                             "title.prefix^4",
                             f"snippet_text^{int(settings.SEARCH_ENGINE.get('RAG_BM25_SNIPPET_BOOST', 2))}",
                             "search_text",

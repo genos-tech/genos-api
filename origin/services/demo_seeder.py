@@ -610,18 +610,23 @@ PROJECT_BLUEPRINTS = [
                     (
                         "🧾 Summary",
                         [
-                            "Wire Plausible Analytics into the marketing pages with named "
-                            "custom events for the hero CTA, pricing-toggle, and contact-form-submit. "
-                            "Avoid Google Analytics for privacy reasons.",
+                            "Wire Plausible Analytics into the new marketing pages so we "
+                            "have traffic measurement and page-view counts in place from "
+                            "day one of the redesign launch. Named custom events for the "
+                            "hero CTA, pricing-toggle, and contact-form-submit on top. "
+                            "Plausible is privacy-friendly and GDPR-compliant — Google "
+                            "Analytics is out for that reason.",
                         ],
                     ),
                     (
                         "🪜 Motivation",
                         [
-                            "Marketing wants to measure conversion on the redesign — they "
-                            "specifically need to know which hero CTA wording drives more "
-                            "signups (A/B test queued in v1.1). Plausible is the team-wide "
-                            "standard since the GDPR review last quarter.",
+                            "Marketing needs to measure visitor traffic on the new pages "
+                            "to know what's actually working: which pages get the most "
+                            "page views, where traffic drops off, and which hero CTA "
+                            "wording drives more signups (A/B test queued in v1.1). "
+                            "Plausible is the team-wide standard for site analytics + "
+                            "traffic measurement since the GDPR review last quarter.",
                         ],
                     ),
                     (
@@ -629,7 +634,9 @@ PROJECT_BLUEPRINTS = [
                         [
                             (
                                 "bullet",
-                                "Plausible script loaded on all marketing pages via the site-wide layout.",
+                                "Plausible script loaded on all new marketing pages via the "
+                                "site-wide layout — page views and visitor sessions tracked "
+                                "automatically.",
                             ),
                             (
                                 "bullet",
@@ -637,7 +644,9 @@ PROJECT_BLUEPRINTS = [
                             ),
                             (
                                 "bullet",
-                                "Events fire correctly on the staging deployment — verified in the Plausible dashboard.",
+                                "Traffic numbers (page views, unique visitors, bounce rate) "
+                                "and custom events both visible in the Plausible dashboard "
+                                "on staging.",
                             ),
                             ("bullet", "No PII (email, name, etc.) in event properties."),
                         ],
@@ -646,7 +655,7 @@ PROJECT_BLUEPRINTS = [
                         "🎯 Notes & links",
                         [
                             "Plausible domain is already provisioned: genos-marketing.plausible.io. "
-                            "Marketing has read access; engineering owns the script tag.",
+                            "Marketing has read access for traffic dashboards; engineering owns the script tag.",
                         ],
                     ),
                 ),
