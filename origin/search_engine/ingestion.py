@@ -104,6 +104,22 @@ def ingest_all(
         log.info("Ingesting note summaries (since=%s, dry_run=%s)...", since, dry_run)
         _ingest_stream(iter_note_summary_chunks(since=since), stats, dry_run=dry_run)
 
+    # Refresh-deferred bulk: with `RAG_BULK_REFRESH=false` (the default),
+    # individual `_bulk()` calls skip server-side refresh, leaving the
+    # written segments invisible to search until we call refresh here.
+    # One refresh at the end of the run beats ~N refreshes at one per
+    # entity batch — both for throughput AND for total wall-clock.
+    # Skipped in dry_run since nothing was written.
+    if not dry_run and not settings.SEARCH_ENGINE.get("RAG_BULK_REFRESH", False):
+        try:
+            client = get_client()
+            client.indices.refresh(index=get_index_alias())
+            log.info("Refresh complete (deferred-refresh mode).")
+        except Exception:  # noqa: BLE001 — refresh failure is non-fatal
+            log.exception(
+                "Final refresh failed; documents will become searchable on next refresh."
+            )
+
     log.info("Ingestion done: %s", stats.as_dict())
     return stats
 
@@ -230,12 +246,21 @@ def _bulk_index(actions: list[dict]) -> None:
     client = get_client()
     # `raise_on_error=False` so a single bad doc doesn't abort the
     # whole batch; we log instead.
+    #
+    # `refresh` strategy: default `RAG_BULK_REFRESH=false` means each
+    # batch ships fire-and-forget (no `?refresh`), and `ingest_all`
+    # issues one explicit `indices.refresh()` at the end of the full
+    # run. Switching to `true` triggers per-batch refresh — useful for
+    # one-off writes that need to be visible immediately (e.g. an
+    # ad-hoc `manage.py shell` upsert).
+    refresh_per_batch = settings.SEARCH_ENGINE.get("RAG_BULK_REFRESH", False)
     success, errors = os_helpers.bulk(
         client,
         actions,
         chunk_size=batch_size,
         raise_on_error=False,
         raise_on_exception=False,
+        refresh=bool(refresh_per_batch),
     )
     if errors:
         log.warning("Bulk index reported %d errors (success=%d)", len(errors), success)
@@ -263,7 +288,16 @@ def _delete_stale(
         {"_op_type": "delete", "_index": get_index_alias(), "_id": cid} for cid in stale_ids
     ]
     client = get_client()
-    os_helpers.bulk(client, actions, raise_on_error=False, raise_on_exception=False)
+    # Same deferred-refresh policy as `_bulk_index` — defers to the
+    # end-of-run refresh in `ingest_all` unless RAG_BULK_REFRESH=true.
+    refresh_per_batch = settings.SEARCH_ENGINE.get("RAG_BULK_REFRESH", False)
+    os_helpers.bulk(
+        client,
+        actions,
+        raise_on_error=False,
+        raise_on_exception=False,
+        refresh=bool(refresh_per_batch),
+    )
     RagChunk.objects.filter(chunk_id__in=stale_ids).delete()
     stats.chunks_deleted += len(stale_ids)
 

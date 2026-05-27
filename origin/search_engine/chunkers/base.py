@@ -59,6 +59,26 @@ class Chunk:
     note_type: Optional[str] = None  # "personal" | "task" | "chat"
     project_id: Optional[str] = None
 
+    # v2 chat-message identity (chat_chunker fills these on focal-
+    # message chunks; thread-window chunks leave them None because they
+    # aggregate multiple authors).
+    author_id: Optional[str] = None
+    author_name: Optional[str] = None
+    chat_message_id: Optional[str] = None
+
+    # v2 task overlays (task_chunker fills these on every task chunk
+    # including comments — comment chunks inherit their parent task's
+    # status/assignee so "filter by status" cuts across both).
+    task_status: Optional[str] = None
+    task_priority: Optional[str] = None
+    task_assignee_id: Optional[str] = None
+    task_milestone_id: Optional[str] = None
+    task_sprint_id: Optional[str] = None
+
+    # v2 note overlays (note_chunker + note_summary_chunker).
+    note_owner_id: Optional[str] = None
+    note_parent_id: Optional[str] = None
+
     created_at: Optional[str] = None  # ISO 8601
     updated_at: Optional[str] = None
 

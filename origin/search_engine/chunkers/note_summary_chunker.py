@@ -131,6 +131,14 @@ def iter_note_summary_chunks(since: Optional[datetime] = None) -> Iterator[Entit
             related_ids.append(f"note:personal:{summary.note_id}")
 
         title_for_display = title or f"{note_label.capitalize()} note #{summary.note_id}"
+        owner_id_str = (
+            str(getattr(note, "owner_id", "")) if getattr(note, "owner_id", None) else None
+        )
+        parent_id_str = (
+            str(getattr(note, "parent_note_id", ""))
+            if getattr(note, "parent_note_id", None)
+            else None
+        )
         chunk = Chunk(
             chunk_id=entity_id,
             entity_type="note_summary",
@@ -149,6 +157,8 @@ def iter_note_summary_chunks(since: Optional[datetime] = None) -> Iterator[Entit
             thread_id=thread_id_str,
             project_id=project_id_str,
             task_id=task_id_str,
+            note_owner_id=owner_id_str,
+            note_parent_id=parent_id_str,
             created_at=iso(summary.ts_created_at),
             updated_at=iso(summary.ts_updated_at),
         )
