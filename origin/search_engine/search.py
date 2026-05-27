@@ -57,7 +57,7 @@ DEFAULT_LIMIT = 20
 #                  recall-favoured weights (LLM-curated summaries
 #                  outrank raw concatenations because the agent reads
 #                  abstracts better than walls of text).
-#   "eval"      → offline rag_evals harness. Wide pool, flat weights,
+#   "eval"      → offline `agent_eval --retrieval` harness. Wide pool, flat weights,
 #                  no freshness boost — pure retrieval quality.
 #
 # Per-mode hyperparameters live in `_MODE_CONFIG` below so a tweak
