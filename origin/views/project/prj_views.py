@@ -294,6 +294,55 @@ class JoinProjectView(AuthenticatedAPIView):
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
 
+class LeaveProjectView(AuthenticatedAPIView):
+    """Hard-delete the requester's project membership.
+
+    Project owners cannot leave (would orphan the project). `ProjectMembers`
+    has no soft-delete flag, so removing the row is the canonical exit;
+    re-join goes through the existing `JoinProjectView` which simply
+    inserts a fresh row.
+    """
+
+    def post(self, request):
+        team_id = request.data.get("team_id")
+        project_id = request.data.get("project_id")
+        attendee_id = request.data.get("attendee_id")
+        if not team_id or not project_id or not attendee_id:
+            return Response(
+                {"error": "team_id, project_id, and attendee_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if str(request.user.id) != str(attendee_id):
+            return Response(
+                {"error": "You can only leave a project on your own behalf."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            project = ProjectMaster.objects.get(project_id=project_id, team=team_id)
+        except ProjectMaster.DoesNotExist:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if project.owner and str(project.owner.id) == str(attendee_id):
+            return Response(
+                {"error": "The project owner cannot leave the project."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        deleted, _ = ProjectMembers.objects.filter(
+            team=team_id, project=project_id, attendee=attendee_id
+        ).delete()
+        if deleted == 0:
+            return Response(
+                {"error": "You are not a member of this project."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(
+            {"team_id": team_id, "project_id": project_id, "attendee_id": attendee_id},
+            status=status.HTTP_200_OK,
+        )
+
+
 class JoinProjectFromInboxView(AuthenticatedAPIView):
     def post(self, request):
         team_id = request.data["team_id"]
