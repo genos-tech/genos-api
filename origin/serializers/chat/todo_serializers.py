@@ -18,6 +18,9 @@ class ToDoItemSerializer(serializers.ModelSerializer):
     itemId = serializers.IntegerField(source="item_id", read_only=True)
     groupId = serializers.IntegerField(source="group_id", read_only=True)
     categoryId = serializers.IntegerField(source="category_id", allow_null=True, required=False)
+    parentItemId = serializers.IntegerField(
+        source="parent_item_id", allow_null=True, required=False
+    )
     isCompleted = serializers.BooleanField(source="is_completed", required=False)
     sortOrder = serializers.IntegerField(source="sort_order", required=False)
     tsCreatedAt = serializers.DateTimeField(source="ts_created_at", read_only=True)
@@ -30,6 +33,7 @@ class ToDoItemSerializer(serializers.ModelSerializer):
             "itemId",
             "groupId",
             "categoryId",
+            "parentItemId",
             "title",
             "notes",
             "isCompleted",

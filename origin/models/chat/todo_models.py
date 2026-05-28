@@ -77,6 +77,19 @@ class ToDoItem(models.Model):
         blank=True,
         related_name="items",
     )
+    # Self-referential parent for one-level nesting. CASCADE so deleting
+    # a parent removes its children atomically. The view layer enforces
+    # the "one level only" rule (a child cannot itself be a parent) and
+    # the "same group" rule (a child must live in the same daily group
+    # as its parent). Children inherit the parent's category — the view
+    # cascades category changes from parent to children on write.
+    parent_item = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="subitems",
+    )
     title = models.CharField(max_length=512)
     notes = models.JSONField(null=True, blank=True)
     is_completed = models.BooleanField(default=False)
@@ -88,4 +101,5 @@ class ToDoItem(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["group", "sort_order"], name="todo_item_group_order_idx"),
+            models.Index(fields=["parent_item"], name="todo_item_parent_idx"),
         ]
