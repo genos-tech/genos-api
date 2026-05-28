@@ -2429,8 +2429,8 @@ def _create_dms(team, demo_user, bots):
         "Welcome — this is your personal scratch chat. Drop quick thoughts, links, "
         "and reminders here. Press the ✓ icon in the header to toggle your todo "
         "list (the same data the Spotlight agent reads via `list_today_todos`).",
-        "Spotlight tip: Cmd-K → \"what's on my todo list today?\" reads from the "
-        "ToDoPane on the right. Try \"add a todo: …\" for an approval-gated write.",
+        'Spotlight tip: Cmd-K → "what\'s on my todo list today?" reads from the '
+        'ToDoPane on the right. Try "add a todo: …" for an approval-gated write.',
         "Reminder — review Bob's framer-motion vs CSS spike notes before approving "
         "the responsive nav merge. The perf budget literals (Lighthouse 95, JS "
         "120KB) live in the responsive-nav task body.",
