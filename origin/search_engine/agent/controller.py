@@ -142,6 +142,21 @@ def _resolve_user_name(raw: Any) -> str | None:
     return CustomUser.objects.filter(id=str(raw)).values_list("username", flat=True).first()
 
 
+def _resolve_todo_item_title(raw: Any) -> str | None:
+    """Look up `ToDoItem.title` for a raw item primary key so the
+    approval card surfaces the human-readable todo instead of "73".
+    Returns None when the id doesn't resolve (e.g. a non-todo tool
+    happens to use an `item_id` arg too — the raw value is shown).
+    """
+    try:
+        tid = int(raw)
+    except (TypeError, ValueError):
+        return None
+    from origin.models.chat.todo_models import ToDoItem  # noqa: PLC0415
+
+    return ToDoItem.objects.filter(item_id=tid).values_list("title", flat=True).first()
+
+
 # Argument-key → resolver. Resolvers return None on a miss so we fall
 # back to the raw value (the user sees the ID rather than a blank).
 _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any], str | None]] = {
@@ -150,6 +165,8 @@ _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any], str | None]] = {
     "assignee_id": _resolve_user_name,
     "reporter_id": _resolve_user_name,
     "new_assignee_id": _resolve_user_name,
+    "item_id": _resolve_todo_item_title,
+    "parent_item_id": _resolve_todo_item_title,
 }
 
 
