@@ -412,6 +412,16 @@ def _note_source(
     return s
 
 
+def _todo_source(item_id: Any, title: Any, local_date: Any) -> dict[str, Any]:
+    # entity_id mirrors the chunker shape: `todo:YYYY-MM-DD:item:<id>`.
+    # `related_entity_ids` points at the day-level grouping so a future
+    # daily-summary chunker can co-link.
+    s = _blank_source("todo", f"todo:{local_date}:item:{item_id}")
+    s["title"] = title or ""
+    s["related_entity_ids"] = [f"todo:{local_date}"]
+    return s
+
+
 def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[dict[str, Any]]:
     """Build UI source dicts from a non-search read tool's result.
 
@@ -698,6 +708,33 @@ def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list
     # list_my_inbox: items don't map to a clickable Spotlight entity_type
     # today (no inbox-deep-link surface). Return [] so the agent has to
     # describe the items in prose rather than emit broken chips.
+
+    # --- Todo tools ---
+    if call_name == "list_today_todos":
+        local_date = result.get("local_date")
+        if not local_date:
+            return []
+        return [
+            _todo_source(i.get("item_id"), i.get("title"), local_date)
+            for i in result.get("items") or []
+            if i.get("item_id")
+        ]
+
+    if call_name == "list_uncompleted_todos":
+        return [
+            _todo_source(i.get("item_id"), i.get("title"), i.get("local_date"))
+            for i in result.get("items") or []
+            if i.get("item_id") and i.get("local_date")
+        ]
+
+    if call_name in ("create_todo_item", "update_todo_item"):
+        iid = result.get("item_id")
+        # `update_todo_item` doesn't echo local_date; fall back to the
+        # group-level prefix that's still resolvable on the frontend.
+        ld = result.get("local_date") or ""
+        if iid is None:
+            return []
+        return [_todo_source(iid, result.get("title"), ld)]
 
     return []
 

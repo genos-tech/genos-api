@@ -63,7 +63,7 @@ class Command(BaseCommand):
             "--entity-types",
             nargs="+",
             default=None,
-            choices=["chat", "task", "note", "thread_summary", "note_summary"],
+            choices=["chat", "task", "note", "thread_summary", "note_summary", "todo"],
             help="Subset of entity types to ingest. Default: all.",
         )
         parser.add_argument(
