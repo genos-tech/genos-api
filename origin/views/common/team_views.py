@@ -47,6 +47,89 @@ class TeamMasterView(AuthenticatedAPIView):
         error["hint"] = "Try with different team_name"
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
+    def put(self, request):
+        """Update editable team-master fields: `team_name` and `owner_id`.
+
+        Only the current owner is allowed (lets the existing owner
+        transfer the team to another member before leaving). The new
+        owner must already be an active member of the team — otherwise
+        the team could be handed off to outsiders. `team_name` is unique
+        team-wide; collisions return 409 with a clear error.
+
+        The per-user `team:my_teams:<user_id>` cache has a 60s TTL and
+        will refresh on its own; we don't fan out invalidation here.
+        """
+        team_id = request.data.get("team_id")
+        if not team_id:
+            return Response(
+                {"error": "team_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            team = TeamMaster.objects.get(team_id=team_id)
+        except TeamMaster.DoesNotExist:
+            return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if not team.owner or str(team.owner.id) != str(request.user.id):
+            return Response(
+                {"error": "Only the team owner can edit the team."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        new_name = request.data.get("team_name")
+        new_owner_id = request.data.get("owner_id")
+        update_fields = []
+
+        if new_name is not None:
+            new_name = (new_name or "").strip()
+            if not new_name:
+                return Response(
+                    {"error": "team_name cannot be empty."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            collision = (
+                TeamMaster.objects.filter(team_name=new_name)
+                .exclude(team_id=team.team_id)
+                .exists()
+            )
+            if collision:
+                return Response(
+                    {"error": "Another team already uses that name."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            team.team_name = new_name
+            update_fields.append("team_name")
+
+        if new_owner_id is not None and str(new_owner_id) != str(team.owner.id):
+            is_active_member = TeamMembers.objects.filter(
+                team_id=team_id, attendee_id=new_owner_id, is_deleted=False
+            ).exists()
+            if not is_active_member:
+                return Response(
+                    {"error": "The new owner must already be a member of the team."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            team.owner_id = new_owner_id
+            update_fields.append("owner")
+
+        if not update_fields:
+            return Response(
+                {"error": "No editable fields supplied."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        update_fields.append("ts_updated_at")
+        team.save(update_fields=update_fields)
+        return Response(
+            {
+                "teamId": str(team.team_id),
+                "teamName": team.team_name,
+                "teamOwnerId": str(team.owner.id) if team.owner else None,
+            },
+            status=status.HTTP_200_OK,
+        )
+
 
 class TeamProfileImageView(AuthenticatedAPIView):
     parser_classes = [MultiPartParser]

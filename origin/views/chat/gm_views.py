@@ -56,6 +56,83 @@ class GMMasterView(AuthenticatedAPIView):
         else:
             return Response({"gm_exists": True, "gm_id": exists[0]}, status=status.HTTP_200_OK)
 
+    def put(self, request):
+        """Update editable GM-master fields: `group_name` and `owner_user_id`.
+
+        Only the current owner can edit (lets the existing owner hand
+        off to another member before leaving). The new owner must
+        already be a member of the GM."""
+        gm_id = request.data.get("gm_id")
+        if not gm_id:
+            return Response(
+                {"error": "gm_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            gm = GMMaster.objects.get(gm_id=gm_id)
+        except GMMaster.DoesNotExist:
+            return Response({"error": "Group not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if not gm.owner_user or str(gm.owner_user.id) != str(request.user.id):
+            return Response(
+                {"error": "Only the group owner can edit the group."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        new_name = request.data.get("group_name")
+        new_owner_id = request.data.get("owner_user_id")
+        update_fields = []
+
+        if new_name is not None:
+            new_name = (new_name or "").strip()
+            if not new_name:
+                return Response(
+                    {"error": "group_name cannot be empty."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            collision = (
+                GMMaster.objects.filter(owner_team=gm.owner_team_id, group_name=new_name)
+                .exclude(gm_id=gm.gm_id)
+                .exists()
+            )
+            if collision:
+                return Response(
+                    {"error": "Another group in this team already uses that name."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            gm.group_name = new_name
+            update_fields.append("group_name")
+
+        if new_owner_id is not None and str(new_owner_id) != str(gm.owner_user.id):
+            is_member = GMMembers.objects.filter(
+                gm_id=gm_id, attendee_id=new_owner_id
+            ).exists()
+            if not is_member:
+                return Response(
+                    {"error": "The new owner must already be a member of the group."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            gm.owner_user_id = new_owner_id
+            update_fields.append("owner_user")
+
+        if not update_fields:
+            return Response(
+                {"error": "No editable fields supplied."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # `GMMaster` has no `ts_updated_at`, unlike its siblings — save
+        # only the touched columns.
+        gm.save(update_fields=update_fields)
+        return Response(
+            {
+                "gmId": gm.gm_id,
+                "gmName": gm.group_name,
+                "ownerUserId": str(gm.owner_user.id) if gm.owner_user else None,
+            },
+            status=status.HTTP_200_OK,
+        )
+
     def get(self, request):
 
         data = {

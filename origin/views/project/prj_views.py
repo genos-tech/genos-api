@@ -21,11 +21,15 @@ _PROJECT_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
 
 class ProjectMasterView(AuthenticatedAPIView):
     def put(self, request):
-        """Update editable project fields. MVP scope: just `code` (the
-        display-id prefix). Validates 2-6 uppercase letters/digits and
-        uniqueness within the team."""
+        """Update editable project fields: `code`, `project_name`, and
+        `owner_id`. `code` is open to any caller (display-id prefix);
+        `project_name` and `owner_id` are gated to the project owner so
+        the existing owner can hand off before leaving. The new owner
+        must already be a member of the project."""
         project_id = request.data.get("project_id")
         new_code = request.data.get("code")
+        new_name = request.data.get("project_name")
+        new_owner_id = request.data.get("owner_id")
         if not project_id:
             return Response(
                 {"error": "project_id is required."},
@@ -64,6 +68,55 @@ class ProjectMasterView(AuthenticatedAPIView):
                 )
             project.code = new_code
             project.save(update_fields=["code", "ts_updated_at"])
+
+        # Owner-only edits: project_name + owner transfer. Re-check the
+        # ownership server-side even though the UI hides the inputs —
+        # protects against hand-crafted requests.
+        if new_name is not None or new_owner_id is not None:
+            if not project.owner or str(project.owner.id) != str(request.user.id):
+                return Response(
+                    {"error": "Only the project owner can change name or owner."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            owner_update_fields = []
+            if new_name is not None:
+                new_name = (new_name or "").strip()
+                if not new_name:
+                    return Response(
+                        {"error": "project_name cannot be empty."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                collision = (
+                    ProjectMaster.objects.filter(team=project.team_id, project_name=new_name)
+                    .exclude(project_id=project.project_id)
+                    .exists()
+                )
+                if collision:
+                    return Response(
+                        {"error": "Another project in this team already uses that name."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                project.project_name = new_name
+                owner_update_fields.append("project_name")
+
+            if new_owner_id is not None and str(new_owner_id) != str(project.owner.id):
+                is_member = ProjectMembers.objects.filter(
+                    team=project.team_id,
+                    project=project.project_id,
+                    attendee_id=new_owner_id,
+                ).exists()
+                if not is_member:
+                    return Response(
+                        {"error": "The new owner must already be a member of the project."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                project.owner_id = new_owner_id
+                owner_update_fields.append("owner")
+
+            if owner_update_fields:
+                owner_update_fields.append("ts_updated_at")
+                project.save(update_fields=owner_update_fields)
 
         return Response(ProjectMasterSerializer(project).data, status=status.HTTP_200_OK)
 
