@@ -112,8 +112,11 @@ class PMSingleMessageView(AuthenticatedAPIView):
         else:
             last_read_message_id = -1
 
+        # PM IDB key is task-scoped on the frontend (one bubble per task) —
+        # see message-handlers.ts and pm_delta_views._serialize_message.
+        task_id_for_key = pm.task.task_id if pm.task else -1
         message = {
-            "messageIdWithChatId": f"{project_id}-{message_id}",
+            "messageIdWithChatId": f"{project_id}-{task_id_for_key}",
             "chatType": CHAT_TYPE,
             "chatId": int(project_id),
             "messageId": int(message_id),

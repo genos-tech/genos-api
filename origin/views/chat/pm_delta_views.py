@@ -59,12 +59,17 @@ def _build_reactions_by_key(reaction_rows, *, is_thread):
 
 def _serialize_message(msg, reactions, num_replies, task_comment_counts, flagged_set):
     project_id = msg.project_id
+    # The frontend's WS handler (message-handlers.ts) builds the IDB key
+    # as "{chat_id}-{task_id}" for PM — one bubble per task. The delta
+    # response must match that exact key, otherwise a message that was
+    # already cached via the live socket broadcast gets re-inserted
+    # under a "{chat_id}-{message_id}" key after a reload, and both
+    # rows surface as duplicate bubbles. `-1` mirrors the fallback in
+    # message_handlers.py's activity unique key for taskless rows
+    # (PMMessages.task is SET_NULL on task delete).
+    task_id_for_key = msg.task.task_id if msg.task else -1
     return {
-        # NB: PMSingleMessageView returns "{project_id}-{task_id_or_0}" but
-        # the bulk history endpoint never used that key — it relied on
-        # message_id. Match the existing chat.handlers.ts shape: the IDB
-        # key for PM_MESSAGES is messageIdWithChatId = "{chat_id}-{msg_id}".
-        "messageIdWithChatId": f"{project_id}-{msg.message_id}",
+        "messageIdWithChatId": f"{project_id}-{task_id_for_key}",
         "chatType": CHAT_TYPE,
         "chatId": project_id,
         "systemUserId": msg.project.project_system_user.id if msg.project else None,
