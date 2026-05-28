@@ -155,6 +155,7 @@ urlpatterns = [
     path("api/v2/team/create/", TeamMasterView.as_view(), name="join_team"),
     path("api/v2/team/exist/", CheckTeamExistsView.as_view(), name="exist_team"),
     path("api/v2/team/join/", TeamMembersView.as_view(), name="exist_team"),
+    path("api/v2/team/leave/", LeaveTeamView.as_view(), name="leave_team"),
     path(
         "api/v2/team/join/fromInbox/",
         JoinTeamFromInboxView.as_view(),

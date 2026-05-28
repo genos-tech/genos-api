@@ -123,6 +123,7 @@ urlpatterns = [
     path("api/v2/gm/id/", GMIdView.as_view(), name="get_gm_id"),
     path("api/v2/gm/ids/", AllGMIdsView.as_view(), name="get_all_my_gm_ids"),
     path("api/v2/gm/join/", GMMembersView.as_view(), name="join_gm"),
+    path("api/v2/gm/leave/", LeaveGMView.as_view(), name="leave_gm"),
     path("api/v2/gm/join/fromInbox/", JoinGMFromInboxView.as_view(), name="join_gm_from_inbox"),
     # Phase 2 incremental-sync GM endpoints — replaced the bulk
     # /gm/history/ endpoint.

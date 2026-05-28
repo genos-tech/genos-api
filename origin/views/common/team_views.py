@@ -116,22 +116,81 @@ class CheckTeamExistsView(AuthenticatedAPIView):
 class TeamMembersView(AuthenticatedAPIView):
     def post(self, request):
         data = {"team": request.data["team_id"], "attendee": request.data["attendee_id"]}
-        print(data)
 
-        # Check if a Team exists in any order
-        exists = TeamMembers.objects.filter(
-            Q(team_id=data["team"], attendee_id=data["attendee"])
-        ).exists()
-
-        if exists:
+        # Re-join path: a previously soft-deleted membership row is
+        # un-deleted in place. Without this, the UniqueConstraint on
+        # (team, attendee) would reject the second join attempt and the
+        # left-then-rejoin flow would 4xx silently.
+        existing = TeamMembers.objects.filter(
+            team_id=data["team"], attendee_id=data["attendee"]
+        ).first()
+        if existing is not None:
+            if existing.is_deleted:
+                existing.is_deleted = False
+                existing.save(update_fields=["is_deleted", "ts_updated_at"])
             return Response(data, status=status.HTTP_201_CREATED)
-        else:
-            serializer = TeamMembersSerializer(data=data)
-            if serializer.is_valid():
-                serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        serializer = TeamMembersSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class LeaveTeamView(AuthenticatedAPIView):
+    """Soft-delete the requester's membership in a team.
+
+    Owners cannot leave (would orphan the team); the frontend hides the
+    Leave button when ownerId matches the user, but we re-check here so
+    a hand-crafted request can't bypass that. Soft-delete preserves the
+    rejoin path: `TeamMembersView.post` un-deletes the row instead of
+    inserting a duplicate (which would violate the unique constraint).
+    """
+
+    def post(self, request):
+        team_id = request.data.get("team_id")
+        attendee_id = request.data.get("attendee_id")
+        if not team_id or not attendee_id:
+            return Response(
+                {"error": "team_id and attendee_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Only the requester can leave themselves. Comparing strings
+        # because attendee_id arrives as a JSON string but request.user.id
+        # is an int on the auth model.
+        if str(request.user.id) != str(attendee_id):
+            return Response(
+                {"error": "You can only leave a team on your own behalf."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            team = TeamMaster.objects.get(team_id=team_id)
+        except TeamMaster.DoesNotExist:
+            return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if team.owner and str(team.owner.id) == str(attendee_id):
+            return Response(
+                {"error": "The team owner cannot leave the team."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        member = TeamMembers.objects.filter(
+            team_id=team_id, attendee_id=attendee_id, is_deleted=False
+        ).first()
+        if member is None:
+            return Response(
+                {"error": "You are not a member of this team."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        member.is_deleted = True
+        member.save(update_fields=["is_deleted", "ts_updated_at"])
+        return Response(
+            {"team_id": team_id, "attendee_id": attendee_id},
+            status=status.HTTP_200_OK,
+        )
 
 
 class JoinTeamFromInboxView(AuthenticatedAPIView):
@@ -185,7 +244,9 @@ class GetMyTeamsView(AuthenticatedAPIView):
         # members) — called on every Flask heartbeat per user, so the savings
         # compound across the running fleet.
         raw_my_teams = list(
-            TeamMembers.objects.filter(attendee=user_id, team__is_deleted=False).values_list(
+            TeamMembers.objects.filter(
+                attendee=user_id, is_deleted=False, team__is_deleted=False
+            ).values_list(
                 "team__team_id",
                 "team__team_name",
                 "team__team_email",
