@@ -63,7 +63,7 @@ from origin.models.chat.reaction_models import ReactionFact
 from origin.models.chat.chat_attachment_models import ChatAttachmentFact
 from origin.models.chat.read_status_models import ReadStatus, ActivityReadStatus
 from origin.models.chat.activity_models import ActivityFact
-from origin.models.chat.todo_models import ToDoFact
+from origin.models.chat.todo_models import ToDoGroup
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.chat_note_models import ChatNoteMaster
@@ -2681,7 +2681,7 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
 
         # User-level chat master + per-user todo
         UserChatMaster.objects.filter(team=team_id).delete()
-        ToDoFact.objects.filter(team=team_id).delete()
+        ToDoGroup.objects.filter(team=team_id).delete()
 
         # Notes (permissions first, then masters)
         all_note_pairs = (

@@ -219,7 +219,17 @@ urlpatterns = [
     # Chat attachment
     path("api/v2/chat/attachment/", ChatAttachmentView.as_view(), name="chat_attachment"),
     # To-Do
-    path("api/v2/todo/", ToDoFactView.as_view(), name="chat_todo"),
+    path("api/v2/todo/groups/", ToDoGroupListView.as_view(), name="todo_groups"),
+    path("api/v2/todo/items/", ToDoItemListView.as_view(), name="todo_items"),
+    path(
+        "api/v2/todo/items/<int:item_id>/", ToDoItemDetailView.as_view(), name="todo_item_detail"
+    ),
+    path("api/v2/todo/categories/", ToDoCategoryListView.as_view(), name="todo_categories"),
+    path(
+        "api/v2/todo/categories/<int:category_id>/",
+        ToDoCategoryDetailView.as_view(),
+        name="todo_category_detail",
+    ),
     # Chat master
     path("api/v2/chat/master/", UserChatMasterView.as_view(), name="chat_master"),
     # Flag message

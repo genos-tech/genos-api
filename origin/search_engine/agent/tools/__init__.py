@@ -46,6 +46,7 @@ from origin.search_engine.agent.tools.base import REGISTRY, Tool, ToolContext, T
 from origin.search_engine.agent.tools.create_calendar_event import CREATE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.create_note import CREATE_NOTE
 from origin.search_engine.agent.tools.create_task import CREATE_TASK
+from origin.search_engine.agent.tools.create_todo_item import CREATE_TODO_ITEM
 from origin.search_engine.agent.tools.delete_calendar_event import DELETE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.fetch_chat_thread import FETCH_CHAT_THREAD
 from origin.search_engine.agent.tools.fetch_note import FETCH_NOTE
@@ -90,10 +91,13 @@ from origin.search_engine.agent.tools.list_my_milestones import LIST_MY_MILESTON
 from origin.search_engine.agent.tools.list_projects import LIST_PROJECTS
 from origin.search_engine.agent.tools.list_sprints import LIST_SPRINTS
 from origin.search_engine.agent.tools.list_tasks import LIST_TASKS
+from origin.search_engine.agent.tools.list_today_todos import LIST_TODAY_TODOS
+from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
 from origin.search_engine.agent.tools.search_kb import SEARCH_KNOWLEDGE_BASE
 from origin.search_engine.agent.tools.update_calendar_event import UPDATE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.update_note import UPDATE_NOTE
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
+from origin.search_engine.agent.tools.update_todo_item import UPDATE_TODO_ITEM
 from origin.search_engine.agent.tools.web_search import SEARCH_WEB
 
 # Register at import time so REGISTRY is populated by the time the
@@ -158,6 +162,12 @@ for _t in (
     LIST_MY_MENTIONS,
     GET_MY_BLOCKERS,
     GET_MY_THROUGHPUT,
+    # --- Todo tools ---
+    LIST_TODAY_TODOS,
+    LIST_UNCOMPLETED_TODOS,
+    # --- Todo write tools (requires_approval) ---
+    CREATE_TODO_ITEM,
+    UPDATE_TODO_ITEM,
 ):
     REGISTRY[_t.name] = _t
 
@@ -168,6 +178,7 @@ __all__ = [
     "CREATE_CALENDAR_EVENT",
     "CREATE_NOTE",
     "CREATE_TASK",
+    "CREATE_TODO_ITEM",
     "DELETE_CALENDAR_EVENT",
     "FETCH_CHAT_THREAD",
     "FETCH_NOTE",
@@ -204,6 +215,8 @@ __all__ = [
     "LIST_PROJECTS",
     "LIST_SPRINTS",
     "LIST_TASKS",
+    "LIST_TODAY_TODOS",
+    "LIST_UNCOMPLETED_TODOS",
     "REGISTRY",
     "SEARCH_KNOWLEDGE_BASE",
     "Tool",
@@ -212,5 +225,6 @@ __all__ = [
     "UPDATE_CALENDAR_EVENT",
     "UPDATE_NOTE",
     "UPDATE_TASK",
+    "UPDATE_TODO_ITEM",
     "SEARCH_WEB",
 ]

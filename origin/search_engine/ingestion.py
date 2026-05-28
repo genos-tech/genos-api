@@ -34,6 +34,7 @@ from origin.search_engine.chunkers.note_chunker import iter_all_note_chunks
 from origin.search_engine.chunkers.note_summary_chunker import iter_note_summary_chunks
 from origin.search_engine.chunkers.task_chunker import iter_task_chunks
 from origin.search_engine.chunkers.thread_summary_chunker import iter_thread_summary_chunks
+from origin.search_engine.chunkers.todo_chunker import iter_todo_chunks
 from origin.search_engine.embeddings import (
     embed_texts,
     get_active_embedding_model_name,
@@ -86,7 +87,14 @@ def ingest_all(
             consuming OpenAI quota or mutating state.
     """
     stats = IngestionStats()
-    entity_types = entity_types or ["chat", "task", "note", "thread_summary", "note_summary"]
+    entity_types = entity_types or [
+        "chat",
+        "task",
+        "note",
+        "thread_summary",
+        "note_summary",
+        "todo",
+    ]
 
     if "chat" in entity_types:
         log.info("Ingesting chats (since=%s, dry_run=%s)...", since, dry_run)
@@ -103,6 +111,9 @@ def ingest_all(
     if "note_summary" in entity_types:
         log.info("Ingesting note summaries (since=%s, dry_run=%s)...", since, dry_run)
         _ingest_stream(iter_note_summary_chunks(since=since), stats, dry_run=dry_run)
+    if "todo" in entity_types:
+        log.info("Ingesting todos (since=%s, dry_run=%s)...", since, dry_run)
+        _ingest_stream(iter_todo_chunks(since=since), stats, dry_run=dry_run)
 
     # Refresh-deferred bulk: with `RAG_BULK_REFRESH=false` (the default),
     # individual `_bulk()` calls skip server-side refresh, leaving the

@@ -111,11 +111,11 @@ SEARCH_KNOWLEDGE_BASE = Tool(
     name="search_knowledge_base",
     description=(
         "Hybrid keyword + semantic search over the user's chats, tasks, "
-        "and notes. Call this first when the user's question is vague "
-        "or you don't know which specific entity to fetch. Returns the "
-        "top matches with title, short snippet, and a few full chunks "
-        "of text per match. ACL is enforced automatically — the user "
-        "only sees results from chats/tasks/notes they have access to."
+        "notes, and todos. Call this first when the user's question is "
+        "vague or you don't know which specific entity to fetch. Returns "
+        "the top matches with title, short snippet, and a few full chunks "
+        "of text per match. ACL is enforced automatically — the user only "
+        "sees results they have access to."
     ),
     parameters_schema={
         "type": "OBJECT",
@@ -126,9 +126,9 @@ SEARCH_KNOWLEDGE_BASE = Tool(
             },
             "entity_types": {
                 "type": "ARRAY",
-                "items": {"type": "STRING", "enum": ["chat", "task", "note"]},
+                "items": {"type": "STRING", "enum": ["chat", "task", "note", "todo"]},
                 "description": (
-                    "Optional. Restrict to a subset of entity types. " "Omit to search all three."
+                    "Optional. Restrict to a subset of entity types. Omit to search all."
                 ),
             },
             "limit": {
