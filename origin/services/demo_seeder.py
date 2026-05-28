@@ -2419,16 +2419,38 @@ def _create_dms(team, demo_user, bots):
 
     # Self-DM (personal scratch chat). Mirrors what `moveToTeam` creates
     # on first team entry — without it the workspace lands missing the
-    # user's expected default chat.
+    # user's expected default chat. Seeded with several "notes to self"
+    # messages so the chat actually loads when Spotlight routes a todo
+    # source-chip click to it (an empty chat short-circuits the loader
+    # and the user ends up on the inbox fallback).
     self_dm = DMMaster(team=team, user_1_id=demo_user.id, user_2_id=demo_user.id)
     self_dm.save()
-    DMMessages.objects.create(
-        dm=self_dm,
-        sender=demo_user,
-        receiver=demo_user,
-        message_id=1,
-        message_body=_text_body("Welcome — this is your personal scratch chat."),
-    )
+    self_dm_messages = [
+        "Welcome — this is your personal scratch chat. Drop quick thoughts, links, "
+        "and reminders here. Press the ✓ icon in the header to toggle your todo "
+        "list (the same data the Spotlight agent reads via `list_today_todos`).",
+        "Spotlight tip: Cmd-K → \"what's on my todo list today?\" reads from the "
+        "ToDoPane on the right. Try \"add a todo: …\" for an approval-gated write.",
+        "Reminder — review Bob's framer-motion vs CSS spike notes before approving "
+        "the responsive nav merge. The perf budget literals (Lighthouse 95, JS "
+        "120KB) live in the responsive-nav task body.",
+        "Q3 bets draft is on Alice's desk. She wants a yes/no on the proactive "
+        "surfacing vs search angle by EOW — the customer interview synthesis "
+        "supports both, so the decision is about energy not evidence.",
+        "Plausible dashboard URL: see the *Set up Plausible events tracker* todo "
+        "from 3 days ago for the events spec.",
+        "Carol's hero illustration v3 is in Figma. Need to pick a final variant, "
+        "wire it into the BlockNote intro section, and confirm alt text with "
+        "Alice. Subitems on today's todo track this.",
+    ]
+    for midx, text in enumerate(self_dm_messages):
+        DMMessages.objects.create(
+            dm=self_dm,
+            sender=demo_user,
+            receiver=demo_user,
+            message_id=midx + 1,
+            message_body=_text_body(text),
+        )
 
 
 def _create_group_chat(team, demo_user, members) -> GMMaster:
