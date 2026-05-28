@@ -2289,7 +2289,6 @@ def _create_milestone_with_backing_task(
     MilestoneAssignees.objects.bulk_create(
         [
             MilestoneAssignees(team=team, milestone=milestone, user=demo_user),
-            MilestoneAssignees(team=team, milestone=milestone, user=bots[0]),
         ]
     )
 
