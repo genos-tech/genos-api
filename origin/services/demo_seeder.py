@@ -33,6 +33,7 @@ from typing import List
 
 from django.core.management import call_command
 from django.db import connection, transaction
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ from origin.models.chat.reaction_models import ReactionFact
 from origin.models.chat.chat_attachment_models import ChatAttachmentFact
 from origin.models.chat.read_status_models import ReadStatus, ActivityReadStatus
 from origin.models.chat.activity_models import ActivityFact
-from origin.models.chat.todo_models import ToDoGroup
+from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.chat_note_models import ChatNoteMaster
@@ -2041,6 +2042,9 @@ def create_demo_environment(demo_user: CustomUser, *, short: str | None = None) 
         # 15. Notes (personal + task + chat note with permissions)
         _create_notes(team, demo_user, bots, seeded_projects, gm)
 
+        # 16. Todos (demo user only — todos are personal-scoped)
+        _create_todos(team, demo_user)
+
     return {
         "team_id": str(team.team_id),
         "team_name": team.team_name,
@@ -2596,6 +2600,201 @@ def _create_notes(team, demo_user, bots, seeded_projects, gm):
     NotePermissionMaster.objects.bulk_create(permissions)
 
 
+def _create_todos(team, demo_user):
+    """Seed a few days of todos for the demo user so Spotlight can demo
+    the `list_today_todos` / `list_uncompleted_todos` agent tools and
+    so cross-entity search ("framer-motion", "Plausible", …) lights up
+    todos alongside chats / tasks / notes.
+
+    Topics intentionally overlap with the seeded DMs / tasks / notes so
+    Spotlight queries return mixed-entity results:
+      * "framer-motion" / "perf budget" → Bob's DM + responsive-nav
+        task + a Website Redesign todo
+      * "Plausible" / "customer interview synthesis" → matching todos
+      * "Q3 bets" → Alice's DM + Q2 Roadmap todo
+
+    Calendar layout (all relative to the server-local "today"):
+      * Today        — 7 items, two with subitems, mixed completion
+      * Yesterday    — 4 items, three done + one carryover
+      * 3 days ago   — 3 items, all done (proves the "fully completed
+                       group" UX path)
+    """
+    today = timezone.localdate()
+
+    # Tags. Two project-aligned + a generic "Personal" lane. Sort order
+    # mirrors the project order in PROJECT_BLUEPRINTS so the pane reads
+    # left-to-right like the Spotlight sidebar.
+    cat_web = ToDoCategory.objects.create(
+        team=team, user=demo_user, name="Website Redesign", sort_order=0
+    )
+    cat_q2 = ToDoCategory.objects.create(
+        team=team, user=demo_user, name="Q2 Roadmap", sort_order=1
+    )
+    cat_personal = ToDoCategory.objects.create(
+        team=team, user=demo_user, name="Personal", sort_order=2
+    )
+
+    # --- Today ---
+    grp_today = ToDoGroup.objects.create(
+        team=team, user=demo_user, local_date=today, is_completed=False
+    )
+
+    # Parent with two subitems — exercises the nesting UI + agent
+    # `list_today_todos` rendering.
+    parent_hero = ToDoItem.objects.create(
+        group=grp_today,
+        category=cat_web,
+        title="Ship homepage hero illustration handoff",
+        notes=_text_body(
+            "Carol delivered v3 of the hero SVG yesterday. Need to pick a final variant, "
+            "wire it into the BlockNote intro section, and confirm the alt text with Alice."
+        ),
+        sort_order=0,
+    )
+    ToDoItem.objects.create(
+        group=grp_today,
+        category=cat_web,
+        parent_item=parent_hero,
+        title="Pick final SVG variant from Carol's v3 batch",
+        sort_order=0,
+    )
+    ToDoItem.objects.create(
+        group=grp_today,
+        category=cat_web,
+        parent_item=parent_hero,
+        title="Wire hero into the BlockNote intro section",
+        sort_order=1,
+    )
+
+    ToDoItem.objects.create(
+        group=grp_today,
+        category=cat_web,
+        title="Review framer-motion vs CSS animations spike notes",
+        notes=_text_body(
+            "Bob filed his spike summary in the responsive nav thread. Read it, sign off "
+            "on the recommendation, and link the decision into the Q2 roadmap doc."
+        ),
+        sort_order=1,
+    )
+    ToDoItem.objects.create(
+        group=grp_today,
+        category=cat_q2,
+        title="Synthesize the remaining 3 customer interviews in Dovetail",
+        is_completed=True,
+        ts_completed_at=timezone.now(),
+        sort_order=2,
+    )
+    ToDoItem.objects.create(
+        group=grp_today,
+        category=cat_q2,
+        title="Reply to Alice about the Q3 bets draft",
+        notes=_text_body("She wants a yes/no on the proactive surfacing vs search angle."),
+        sort_order=3,
+    )
+    ToDoItem.objects.create(
+        group=grp_today,
+        category=cat_personal,
+        title="Sign offer letter for the new QA hire",
+        sort_order=4,
+    )
+    ToDoItem.objects.create(
+        group=grp_today,
+        title="Drink 2L water before EOD",
+        is_completed=True,
+        ts_completed_at=timezone.now(),
+        sort_order=5,
+    )
+    _recompute_group_completion_for_demo(grp_today)
+
+    # --- Yesterday ---
+    grp_yesterday = ToDoGroup.objects.create(
+        team=team,
+        user=demo_user,
+        local_date=today - timedelta(days=1),
+        is_completed=False,
+    )
+    ToDoItem.objects.create(
+        group=grp_yesterday,
+        category=cat_web,
+        title="Confirm 320px Storybook stories for responsive nav",
+        is_completed=True,
+        ts_completed_at=timezone.now() - timedelta(hours=18),
+        sort_order=0,
+    )
+    ToDoItem.objects.create(
+        group=grp_yesterday,
+        category=cat_web,
+        title="Approve perf budget thresholds with Bob (Lighthouse 95 / JS 120KB)",
+        is_completed=True,
+        ts_completed_at=timezone.now() - timedelta(hours=22),
+        sort_order=1,
+    )
+    ToDoItem.objects.create(
+        group=grp_yesterday,
+        category=cat_q2,
+        title="Draft customer interview synthesis outline",
+        is_completed=True,
+        ts_completed_at=timezone.now() - timedelta(hours=24),
+        sort_order=2,
+    )
+    # Carryover: shows up in `list_uncompleted_todos` for the past week.
+    ToDoItem.objects.create(
+        group=grp_yesterday,
+        category=cat_q2,
+        title="File spike ticket for in-app animation framework",
+        notes=_text_body(
+            "Bob and I agreed to defer the in-app animation decision until after launch. "
+            "Spike ticket should track the post-launch evaluation."
+        ),
+        sort_order=3,
+    )
+    _recompute_group_completion_for_demo(grp_yesterday)
+
+    # --- 3 days ago (fully completed) ---
+    grp_old = ToDoGroup.objects.create(
+        team=team,
+        user=demo_user,
+        local_date=today - timedelta(days=3),
+        is_completed=False,
+    )
+    ToDoItem.objects.create(
+        group=grp_old,
+        category=cat_web,
+        title="Set up Plausible events tracker on the marketing site",
+        is_completed=True,
+        ts_completed_at=timezone.now() - timedelta(days=3, hours=2),
+        sort_order=0,
+    )
+    ToDoItem.objects.create(
+        group=grp_old,
+        category=cat_q2,
+        title="Run sprint kickoff with Alice + Bob",
+        is_completed=True,
+        ts_completed_at=timezone.now() - timedelta(days=3, hours=5),
+        sort_order=1,
+    )
+    ToDoItem.objects.create(
+        group=grp_old,
+        category=cat_q2,
+        title="Review Q2 milestones in the roadmap doc",
+        is_completed=True,
+        ts_completed_at=timezone.now() - timedelta(days=3, hours=8),
+        sort_order=2,
+    )
+    _recompute_group_completion_for_demo(grp_old)
+
+
+def _recompute_group_completion_for_demo(group):
+    """Mirror of `_recompute_group_completion` in todo_views.py, scoped
+    to one group. Inlined here so the seeder doesn't import the view
+    layer.
+    """
+    has_open = ToDoItem.objects.filter(group=group, is_completed=False).exists()
+    if group.is_completed == has_open:  # truthy when state needs to flip
+        group.is_completed = not has_open
+        group.save(update_fields=["is_completed"])
+
+
 # ---------------------------------------------------------------------------
 # Cleanup
 # ---------------------------------------------------------------------------
@@ -2679,9 +2878,12 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
         PMThreadMessages.objects.filter(project_id__in=project_ids).delete()
         PMMessages.objects.filter(project_id__in=project_ids).delete()
 
-        # User-level chat master + per-user todo
+        # User-level chat master + per-user todo. ToDoGroup CASCADE
+        # removes its items; ToDoCategory rows are user-scoped (not
+        # tied to a group) so they need their own pass.
         UserChatMaster.objects.filter(team=team_id).delete()
         ToDoGroup.objects.filter(team=team_id).delete()
+        ToDoCategory.objects.filter(team=team_id).delete()
 
         # Notes (permissions first, then masters)
         all_note_pairs = (
