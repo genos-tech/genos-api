@@ -203,20 +203,25 @@ class JoinTeamFromInboxView(AuthenticatedAPIView):
             InboxItems.objects.filter(item_id=inbox_item_id).values_list("sender")[0][0]
         )
 
-        # Check if the attendee is not joined yet.
-        exists = TeamMembers.objects.filter(Q(team_id=team_id, attendee_id=attendee_id)).exists()
-
+        # Re-join path: a previously soft-deleted membership row gets
+        # un-deleted in place. Without this, the unique constraint on
+        # (team, attendee) would reject the insert and the user would
+        # stay out of the team after the owner's approve click.
         data = {"team": team_id, "attendee": attendee_id}
-        if exists:
+        existing = TeamMembers.objects.filter(team_id=team_id, attendee_id=attendee_id).first()
+        if existing is not None:
+            if existing.is_deleted:
+                existing.is_deleted = False
+                existing.save(update_fields=["is_deleted", "ts_updated_at"])
             data["teamName"] = team_name
             return Response(data, status=status.HTTP_201_CREATED)
-        else:
-            serializer = TeamMembersSerializer(data=data)
-            if serializer.is_valid():
-                serializer.save()
-                res = serializer.data
-                res["teamName"] = team_name
-                return Response(res, status=status.HTTP_201_CREATED)
+
+        serializer = TeamMembersSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+            res = serializer.data
+            res["teamName"] = team_name
+            return Response(res, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
