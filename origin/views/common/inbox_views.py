@@ -146,11 +146,17 @@ class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
             "is_read": False,
         }
 
+        # Only block on outstanding (pending) requests. After leave →
+        # rejoin, the previous approved row is still present with
+        # is_deleted=False and request_status="approved"; without the
+        # status filter the new request would silently no-op and the
+        # owner would never see a fresh inbox notification.
         is_already_requested = InboxItems.objects.filter(
             team=data["team"],
             sender=data["sender"],
             receiver=data["receiver"],
             item_type=data["item_type"],
+            request_status="pending",
             is_deleted=False,
         ).exists()
 
@@ -195,12 +201,15 @@ class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
             "is_read": False,
         }
 
+        # Only block on outstanding (pending) requests. See the team
+        # equivalent above for the leave-then-rejoin rationale.
         is_already_requested = InboxItems.objects.filter(
             team=data["team"],
             sender=data["sender"],
             receiver=data["receiver"],
             item_type=data["item_type"],
             item_optionals=data["item_optionals"],
+            request_status="pending",
             is_deleted=False,
         ).exists()
 
@@ -245,12 +254,15 @@ class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
             "is_read": False,
         }
 
+        # Only block on outstanding (pending) requests. See the team
+        # equivalent above for the leave-then-rejoin rationale.
         is_already_requested = InboxItems.objects.filter(
             team=data["team"],
             sender=data["sender"],
             receiver=data["receiver"],
             item_type=data["item_type"],
             item_optionals=data["item_optionals"],
+            request_status="pending",
             is_deleted=False,
         ).exists()
 
