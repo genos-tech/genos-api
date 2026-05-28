@@ -192,6 +192,52 @@ class GMMembersView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+class LeaveGMView(AuthenticatedAPIView):
+    """Hard-delete the requester's GM membership.
+
+    Owners can't leave (would orphan the group). `GMMembers` has no
+    soft-delete flag, so the row is removed outright; re-join uses the
+    existing `GMMembersView.post` which idempotently re-inserts.
+    """
+
+    def post(self, request):
+        gm_id = request.data.get("gm_id")
+        attendee_id = request.data.get("attendee_id")
+        if not gm_id or not attendee_id:
+            return Response(
+                {"error": "gm_id and attendee_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if str(request.user.id) != str(attendee_id):
+            return Response(
+                {"error": "You can only leave a group on your own behalf."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            gm = GMMaster.objects.get(gm_id=gm_id)
+        except GMMaster.DoesNotExist:
+            return Response(
+                {"error": "Group not found."}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        if gm.owner_user and str(gm.owner_user.id) == str(attendee_id):
+            return Response(
+                {"error": "The group owner cannot leave the group."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        deleted, _ = GMMembers.objects.filter(gm_id=gm_id, attendee_id=attendee_id).delete()
+        if deleted == 0:
+            return Response(
+                {"error": "You are not a member of this group."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(
+            {"gm_id": gm_id, "attendee_id": attendee_id}, status=status.HTTP_200_OK
+        )
+
+
 class JoinGMFromInboxView(AuthenticatedAPIView):
     def post(self, request):
         inbox_item_id = int(request.data["item_id"])
