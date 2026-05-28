@@ -15,6 +15,7 @@ from .chat.activity_models import *
 from .chat.read_status_models import *
 from .chat.chat_master_models import *
 from .chat.chat_attachment_models import *
+from .chat.unified_models import *
 from .project.prj_models import *
 from .task.sprint_models import *
 from .task.milestone_models import *
