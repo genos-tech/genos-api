@@ -27,7 +27,11 @@ the checkpoint) so the client can apply tombstones without parsing every
 message row.
 """
 
+from django.db import transaction
+from django.db.models import F, Max
 from django.http import Http404
+from django.utils import timezone
+from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.chat.unified_models import (
@@ -79,6 +83,73 @@ def _verify_member_or_404(channel_id, user):
     if not is_member:
         raise Http404("Channel not found.")
     return channel
+
+
+def _resolve_thread_root(parent):
+    """Given a parent Message, return the thread root id.
+
+    If `parent` is itself a thread reply, the root is `parent.thread_root_id`
+    (so the whole thread stays rooted at the original top-level message).
+    Otherwise `parent` IS the root.
+    """
+    if parent.is_thread_reply and parent.thread_root_id is not None:
+        return parent.thread_root_id
+    return parent.id
+
+
+def _allocate_seq_and_create_message(*, channel, sender, body, body_text, parent_id, metadata):
+    """Atomically allocate the next per-channel seq and create the row.
+
+    Uses `select_for_update` on the channel row to serialize concurrent
+    inserts in the same channel. Throughput cap is per-channel; cross-
+    channel inserts run concurrently. For chat workloads this is fine —
+    contention only matters when multiple senders are typing into the
+    same channel within microseconds, which is rare and bounded by
+    typing speed.
+    """
+    with transaction.atomic():
+        # Lock the channel row so two concurrent senders can't race to
+        # allocate the same seq. `select_for_update()` blocks until the
+        # other transaction commits.
+        Channel.objects.select_for_update().filter(pk=channel.pk).first()
+
+        # Compute next seq via Max() over the locked channel.
+        last_seq = Message.objects.filter(channel=channel).aggregate(m=Max("seq"))["m"] or 0
+        next_seq = last_seq + 1
+
+        parent = None
+        thread_root_id = None
+        is_thread_reply = False
+        if parent_id is not None:
+            try:
+                parent = Message.objects.get(id=parent_id, channel=channel)
+            except Message.DoesNotExist:
+                raise Http404("parent_id not found in this channel.")
+            thread_root_id = _resolve_thread_root(parent)
+            is_thread_reply = True
+
+        msg = Message.objects.create(
+            channel=channel,
+            sender=sender,
+            seq=next_seq,
+            body=body,
+            body_text=body_text,
+            parent=parent,
+            thread_root_id=thread_root_id,
+            is_thread_reply=is_thread_reply,
+            metadata=metadata or {},
+        )
+
+        # Bump `reply_count` on the parent if this is a thread reply.
+        # Denormalized to avoid an aggregate query when the chat list
+        # renders reply-count chips. The channel-level select_for_update
+        # above serializes concurrent inserts in this channel, so the
+        # parent's counter doesn't need its own lock.
+        if parent is not None:
+            parent.reply_count += 1
+            parent.save(update_fields=["reply_count", "ts_updated_at"])
+
+        return msg
 
 
 def _prefetched_messages(qs):
@@ -157,6 +228,54 @@ class MessagesDeltaView(AuthenticatedAPIView):
         }
         return Response(build_delta_response(envelope_data, server_time, force_full))
 
+    def post(self, request, channel_id):
+        """POST /api/v3/channels/{channel_id}/messages/
+
+        Send a message (top-level OR thread reply — `parent_id` decides).
+
+        Request body:
+            {
+              "body": [...],             # JSON block array (required)
+              "body_text": "<str>",      # first-line preview (optional, derived if missing)
+              "parent_id": "<uuid>",     # thread reply target (optional)
+              "metadata": {...}          # PM: taskId/displayId/etc. (optional)
+            }
+
+        Server allocates `id` (UUID) and `seq` (monotonic per channel).
+        Returns the full serialized Message.
+        """
+        channel = _verify_member_or_404(channel_id, request.user)
+        body = request.data or {}
+        msg_body = body.get("body")
+        if msg_body is None or not isinstance(msg_body, list):
+            return Response(
+                {"error": "body must be a non-empty list of blocks."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        msg_body_text = body.get("body_text") or ""
+        parent_id = body.get("parent_id") or None
+        metadata = body.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            return Response(
+                {"error": "metadata must be a JSON object."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        msg = _allocate_seq_and_create_message(
+            channel=channel,
+            sender=request.user,
+            body=msg_body,
+            body_text=msg_body_text,
+            parent_id=parent_id,
+            metadata=metadata,
+        )
+
+        # Refresh with prefetches so the response matches what the
+        # delta endpoint and detail endpoint return.
+        msg = _prefetched_messages(Message.objects.filter(pk=msg.pk)).first()
+        return Response(MessageSerializer(msg).data, status=status.HTTP_201_CREATED)
+
 
 class ThreadMessagesDeltaView(AuthenticatedAPIView):
     """GET /api/v3/channels/{channel_id}/threads/?since=ISO
@@ -204,28 +323,102 @@ class ThreadMessagesDeltaView(AuthenticatedAPIView):
 
 
 class MessageDetailView(AuthenticatedAPIView):
-    """GET /api/v3/messages/{message_id}/
-
-    Fetch a single message by id. Used by deep-links (e.g. notification
-    click → load this specific message) and by the test harness.
+    """GET    /api/v3/messages/{message_id}/        fetch by id (deep links / tests).
+    PATCH  /api/v3/messages/{message_id}/        edit body.
+    DELETE /api/v3/messages/{message_id}/        soft-delete.
     """
 
-    def get(self, request, message_id):
+    def _fetch_for_user(self, message_id, user, *, with_prefetch=True):
+        """Get a Message scoped to the user's channel membership.
+
+        404-not-403 for non-members (no existence leak). Returns the
+        Message; raises Http404 otherwise.
+        """
+        qs = Message.objects.select_related("channel", "sender")
+        if with_prefetch:
+            qs = qs.prefetch_related("reactions__user", "mentions", "attachments")
         try:
-            message = (
-                Message.objects.select_related("channel", "sender")
-                .prefetch_related("reactions__user", "mentions", "attachments")
-                .get(id=message_id)
-            )
+            message = qs.get(id=message_id)
         except Message.DoesNotExist:
             raise Http404("Message not found.")
 
-        # Verify the user is a member of the message's channel; 404 (not
-        # 403) so we don't leak the existence of messages they can't see.
         is_member = ChannelMember.objects.filter(
-            channel=message.channel, user=request.user, is_deleted=False
+            channel=message.channel, user=user, is_deleted=False
         ).exists()
         if not is_member:
             raise Http404("Message not found.")
+        return message
 
+    def get(self, request, message_id):
+        message = self._fetch_for_user(message_id, request.user)
         return Response(MessageSerializer(message).data)
+
+    def patch(self, request, message_id):
+        """Edit the body of a message.
+
+        Only the original sender can edit. Request body:
+            {"body": [...], "body_text": "<str>"}
+        Other fields are ignored. Sets `edited_at` to now.
+        """
+        message = self._fetch_for_user(message_id, request.user, with_prefetch=False)
+        if message.sender_id != request.user.id:
+            return Response(
+                {"error": "Only the sender can edit a message."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if message.deleted_at is not None:
+            return Response(
+                {"error": "Cannot edit a deleted message."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        body_json = request.data.get("body") if request.data else None
+        if body_json is None or not isinstance(body_json, list):
+            return Response(
+                {"error": "body must be a non-empty list of blocks."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        body_text = (request.data or {}).get("body_text") or ""
+
+        message.body = body_json
+        message.body_text = body_text
+        message.edited_at = timezone.now()
+        message.save(update_fields=["body", "body_text", "edited_at", "ts_updated_at"])
+
+        # Re-fetch with prefetches for the response.
+        message = _prefetched_messages(Message.objects.filter(pk=message.pk)).first()
+        return Response(MessageSerializer(message).data)
+
+    def delete(self, request, message_id):
+        """Soft-delete a message.
+
+        Authorization: sender always, OR the channel owner. Sets
+        `deleted_at` to now (a tombstone marker — the body is kept so
+        future audit/recovery works, but the FE renders it as deleted).
+
+        Decrements the parent's reply_count if this is a thread reply.
+        """
+        message = self._fetch_for_user(message_id, request.user, with_prefetch=False)
+        is_sender = message.sender_id == request.user.id
+        is_channel_owner = message.channel.owner_id and message.channel.owner_id == request.user.id
+        if not (is_sender or is_channel_owner):
+            return Response(
+                {"error": "Only the sender or channel owner can delete."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if message.deleted_at is not None:
+            # Idempotent — already gone.
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        with transaction.atomic():
+            message.deleted_at = timezone.now()
+            message.save(update_fields=["deleted_at", "ts_updated_at"])
+            if message.parent_id is not None:
+                # Decrement the parent's reply_count via an F-expression so
+                # the read-modify-write happens atomically in SQL. The
+                # `gt=0` filter floors at 0 so a double-delete (e.g. via
+                # two clients) can't underflow.
+                Message.objects.filter(pk=message.parent_id, reply_count__gt=0).update(
+                    reply_count=F("reply_count") - 1
+                )
+        return Response(status=status.HTTP_204_NO_CONTENT)

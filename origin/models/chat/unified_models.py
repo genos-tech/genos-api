@@ -210,11 +210,18 @@ class Message(models.Model):
         on_delete=models.SET_NULL,
         related_name="direct_replies",
     )
+    # CASCADE because the `thread_reply_has_root` CHECK constraint below
+    # enforces that any thread reply has a non-null root — so SET_NULL
+    # would violate the constraint when the root is hard-deleted. The
+    # semantic is also right: a reply with no thread root is meaningless,
+    # so the whole thread goes when the root goes. Soft-delete (deleted_at
+    # = now()) does not trigger cascade — replies stay visible as
+    # tombstones in the parent's thread context.
     thread_root = models.ForeignKey(
         "self",
         null=True,
         blank=True,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         related_name="thread_descendants",
     )
     is_thread_reply = models.BooleanField(default=False)
