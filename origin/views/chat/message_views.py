@@ -34,13 +34,17 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
+from rest_framework.parsers import FormParser, MultiPartParser
+
 from origin.models.chat.unified_models import (
     Channel,
     ChannelMember,
     Message,
+    MessageAttachment,
     MessageReaction,
 )
 from origin.serializers.chat.unified_serializers import (
+    MessageAttachmentSerializer,
     MessageReactionSerializer,
     MessageSerializer,
 )
@@ -422,3 +426,98 @@ class MessageDetailView(AuthenticatedAPIView):
                     reply_count=F("reply_count") - 1
                 )
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# Cap individual uploads. Above this, the server returns 413. Keep in
+# sync with the frontend client-side guard in `useAttachmentDraft` so
+# the user gets a fast error instead of a slow multipart upload that
+# fails at the end.
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024  # 25 MiB
+
+
+class MessageAttachmentsView(AuthenticatedAPIView):
+    """POST /api/v3/messages/{message_id}/attachments/
+
+    Upload one file as a `MessageAttachment` attached to an existing
+    message. The uploader is recorded on the row; the file lives in
+    whichever storage backend the `FileField` is wired to (local disk
+    in dev, S3 in prod).
+
+    Authorization: only the message's sender can attach files to it.
+    This matches the editing rule (`MessageDetailView.patch`) — adding
+    an attachment after the fact is treated as part of the same author
+    intent. Channel owners are NOT granted attach rights because that
+    would let them inject content into someone else's message.
+
+    Bumps the parent message's `ts_updated_at` after the attachment
+    create so the next `?since=` delta sync surfaces the new attachment
+    to other clients without a separate broadcast — the existing socket
+    `message.send` path is the only push channel we keep authoritative
+    on the v3 surface; this REST endpoint is intentionally a polling
+    fallback.
+
+    Multi-file uploads: not supported here. Clients are expected to call
+    this endpoint once per file. The per-file boundary makes the
+    progress UI simpler (one row → one indicator) and lets a partial
+    failure leave the other files attached.
+    """
+
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, message_id):
+        try:
+            message = Message.objects.select_related("channel").get(id=message_id)
+        except Message.DoesNotExist:
+            raise Http404("Message not found.")
+
+        # 404-not-403 for non-members to match the existence-hiding
+        # rule used everywhere else.
+        is_member = ChannelMember.objects.filter(
+            channel=message.channel, user=request.user, is_deleted=False
+        ).exists()
+        if not is_member:
+            raise Http404("Message not found.")
+
+        if message.sender_id != request.user.id:
+            return Response(
+                {"error": "Only the sender can attach files to a message."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if message.deleted_at is not None:
+            return Response(
+                {"error": "Cannot attach to a deleted message."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        file = request.FILES.get("file")
+        if file is None:
+            return Response(
+                {"error": "Missing multipart field 'file'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if file.size > MAX_ATTACHMENT_BYTES:
+            return Response(
+                {"error": f"File exceeds the {MAX_ATTACHMENT_BYTES}-byte limit."},
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
+
+        mime = (request.data.get("mime") or file.content_type or "").strip()
+
+        with transaction.atomic():
+            attachment = MessageAttachment.objects.create(
+                message=message,
+                uploader=request.user,
+                file=file,
+                mime=mime,
+                size_bytes=file.size,
+            )
+            # Touch the parent message so delta sync picks up the new
+            # attachment on the next `?since=` poll. `ts_updated_at`
+            # is auto_now=True so we just need to ensure it's in the
+            # `update_fields` of the save.
+            message.save(update_fields=["ts_updated_at"])
+
+        return Response(
+            MessageAttachmentSerializer(attachment, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )

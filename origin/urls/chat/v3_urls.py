@@ -24,6 +24,9 @@ URL shape (see plan §2):
     PATCH  /api/v3/messages/{id}/                         edit
     DELETE /api/v3/messages/{id}/                         soft-delete
 
+  Attachments
+    POST   /api/v3/messages/{id}/attachments/             upload a file (multipart)
+
   Reactions
     POST   /api/v3/messages/{id}/reactions/               add reaction (body: {emoji})
     DELETE /api/v3/messages/{id}/reactions/               remove reaction
@@ -47,6 +50,7 @@ from origin.views.chat.channel_views import (
     ChannelMembersView,
 )
 from origin.views.chat.message_views import (
+    MessageAttachmentsView,
     MessageDetailView,
     MessagesDeltaView,
     ThreadMessagesDeltaView,
@@ -92,6 +96,12 @@ urlpatterns = [
         "api/v3/messages/<uuid:message_id>/",
         MessageDetailView.as_view(),
         name="v3_message_detail",
+    ),
+    # Attachments
+    path(
+        "api/v3/messages/<uuid:message_id>/attachments/",
+        MessageAttachmentsView.as_view(),
+        name="v3_message_attachments",
     ),
     # Reactions
     path(
