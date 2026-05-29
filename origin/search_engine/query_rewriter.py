@@ -22,6 +22,8 @@ import json
 import logging
 import re
 
+from django.conf import settings
+
 from origin.search_engine.llm import AgentMessage, get_model_client
 
 log = logging.getLogger(__name__)
@@ -70,11 +72,18 @@ def rewrite_query(query: str, *, num_variants: int = 3) -> list[str]:
 
     try:
         client = get_model_client()
+        # Optional fast-model override (RAG_REWRITE_MODEL). The rewrite
+        # task — emit a few keyword variants — is trivial, so operators
+        # can run it on a fast model while the synthesis model stays
+        # heavy. Mirrors the reranker's RAG_RERANKER_MODEL override;
+        # empty/unset → None → the client's default model.
+        model_override = settings.SEARCH_ENGINE.get("RAG_REWRITE_MODEL") or None
         chunks: list[str] = []
         for text, fc in client.generate_step(
             messages=msgs,
             tools=[],
             system_instruction=_SYSTEM_PROMPT,
+            model_override=model_override,
         ):
             if text:
                 chunks.append(text)

@@ -477,12 +477,23 @@ SEARCH_ENGINE = {
     # Enabled by default as of this rollout: measured +2 net pass / 0
     # regressions on the agent eval suite (SPOTLIGHT_OPTIMIZATION_ROADMAP.md
     # §1.1) with the tuned RAG_REWRITE_ORIGINAL_WEIGHT=2.0. The rewriter
-    # currently uses the default ModelClient (no fast-model override), so
-    # it adds ~7s per agent search — a fast-model override
-    # (RAG_REWRITE_MODEL, a mini-B3) is the tracked latency follow-up.
-    # Set RAG_USE_QUERY_REWRITE=false to disable per-deploy.
+    # inherits the active synthesis model unless RAG_REWRITE_MODEL (below)
+    # points it at a faster one. Set RAG_USE_QUERY_REWRITE=false to
+    # disable per-deploy.
     "RAG_USE_QUERY_REWRITE": (os.environ.get("RAG_USE_QUERY_REWRITE", "true").lower() == "true"),
     "RAG_REWRITE_NUM_VARIANTS": int(os.environ.get("RAG_REWRITE_NUM_VARIANTS", "3")),
+    # Optional fast-model override for the query rewriter — decouples it
+    # from the synthesis model (the first concrete piece of the B3
+    # planner/synthesiser tier split). Producing a few keyword variants
+    # is trivial, so on a heavy-synthesis deploy (GEMINI_MODEL=*-pro,
+    # CLAUDE_MODEL=*-sonnet) pointing this at a fast model
+    # ("gemini-2.5-flash", a Haiku) drops the rewrite's latency tax
+    # without changing the answer model. Must name a model of the ACTIVE
+    # provider (same constraint as RAG_RERANKER_MODEL). Empty → client
+    # default (today's GEMINI_MODEL is already flash, so this is inert
+    # until synthesis is upgraded). Changing it changes the measured
+    # config — re-run the §1.1 A/B before relying on a new value.
+    "RAG_REWRITE_MODEL": os.environ.get("RAG_REWRITE_MODEL", ""),
     # Phase 3.2 — self-critique reflection step. When True, after the
     # agent produces its draft final answer, a second LLM call re-reads
     # the draft against the captured tool results and may produce a
