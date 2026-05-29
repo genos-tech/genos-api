@@ -350,7 +350,13 @@ class MessageAttachment(models.Model):
         related_name="uploaded_attachments",
         to_field="id",
     )
-    file = models.FileField(upload_to=_message_attachment_path)
+    # Default `max_length=100` is too short for our path layout —
+    # `chats/<channel-uuid>/messages/<message-uuid>/<filename>` is ~89
+    # chars BEFORE the filename, leaving 11 chars for filename + the
+    # random uniqueness suffix Django appends on collisions, which
+    # blows up as `SuspiciousFileOperation`. 500 leaves room for long
+    # filenames (e.g. user-supplied document names) + suffixes.
+    file = models.FileField(upload_to=_message_attachment_path, max_length=500)
     mime = models.CharField(max_length=128, blank=True, default="")
     size_bytes = models.BigIntegerField(default=0)
     ts_created_at = models.DateTimeField(auto_now_add=True)
