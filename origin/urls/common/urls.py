@@ -10,6 +10,7 @@ from origin.views.common.mention_group_views import (
     MentionGroupResolveView,
 )
 from origin.views.common.notification_views import NotificationPreferenceView
+from origin.views.common.runtime_config_views import RuntimeConfigView
 from origin.views.common.oauth_views import (
     IntegrationsDisconnectView,
     IntegrationsListView,
@@ -130,6 +131,14 @@ urlpatterns = [
         "api/v2/user/notification-preferences/",
         NotificationPreferenceView.as_view(),
         name="user_notification_preferences",
+    ),
+    # Runtime config — per-chat-type rollout flags + panic switch.
+    # Polled by the client every 60s. Source of truth for whether a
+    # given user falls into the v3-chat canary bucket.
+    path(
+        "api/runtime-config/",
+        RuntimeConfigView.as_view(),
+        name="runtime_config",
     ),
     path(
         "api/v2/user/preferences/auto-close-on-pr-merge/",
