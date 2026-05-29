@@ -215,6 +215,30 @@ class Command(BaseCommand):
             f"  Mean latency: A={dur_a:.0f} ms  B={dur_b:.0f} ms  ({delta_pct:+.0f}%)"
         )
 
+        # Continuous retrieval-metric deltas (mrr / recall_at_n). This is
+        # the payoff of the metrics: it surfaces gains that DON'T cross
+        # the binary pass/fail line — e.g. a change that lifts gold from
+        # rank 4 to rank 2 shows as +mrr while "Pass count" stays flat.
+        metric_a = [r for r in a if r.metrics]
+        metric_b = [r for r in b if r.metrics]
+        if metric_a and metric_b:
+            keys = sorted({k for r in metric_a + metric_b for k in r.metrics})
+
+            def _mavg(rs: list[CaseResult], key: str) -> float:
+                vals = [r.metrics[key] for r in rs if key in r.metrics]
+                return sum(vals) / len(vals) if vals else 0.0
+
+            for k in keys:
+                av = _mavg(metric_a, k)
+                bv = _mavg(metric_b, k)
+                delta = bv - av
+                arrow = (
+                    self.style.SUCCESS(f"{delta:+.3f}")
+                    if delta > 0.005
+                    else (self.style.ERROR(f"{delta:+.3f}") if delta < -0.005 else f"{delta:+.3f}")
+                )
+                self.stdout.write(f"  metric.{k:<16} A={av:.3f}  B={bv:.3f}  delta {arrow}")
+
         if run_judge:
             judged_a = [r for r in a if r.judge_scores]
             judged_b = [r for r in b if r.judge_scores]

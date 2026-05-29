@@ -102,6 +102,13 @@ class CaseResult:
     ttft_ms: int = -1
     # Optional LLM-judge scores; only set when `--judge` was on.
     judge_scores: dict[str, Any] | None = None
+    # Continuous quality metrics layered on top of the binary pass/fail
+    # (Q0 of SPOTLIGHT_QUALITY_ARCHITECTURE.md). Retrieval cases populate
+    # rank-based signals (`mrr`, `recall_at_n`); behavior cases leave it
+    # empty today (see `_retrieval_metrics` for why tool-selection is not
+    # yet a continuous metric on this suite). Empty `{}` → no metric for
+    # this case, so aggregators skip it.
+    metrics: dict[str, float] = field(default_factory=dict)
 
 
 def load_cases(path: Path = BEHAVIOR_CASES_PATH) -> list[dict[str, Any]]:
@@ -519,6 +526,91 @@ def _check_behavior_expectations(
 # --------------------------------------------------------------------------- #
 
 
+def _retrieval_metrics(entities: list[dict[str, Any]], expect: dict[str, Any]) -> dict[str, float]:
+    """Continuous retrieval-quality signals on top of the binary pass/fail.
+
+    Why MRR (rank) is the headline rather than recall@n: most gold sets in
+    `retrieval_cases.yaml` are singletons (one entity / one title
+    substring), so a recall@n fraction is just 0.0/1.0 — identical to the
+    existing `must_contain_*` binary, trending nothing new. The *rank* at
+    which the gold item lands distinguishes "surfaced at #1" from
+    "surfaced at #5" — both pass the binary today but are very different
+    retrieval outcomes, and a retrieval change that lifts gold from rank 4
+    to rank 2 is invisible to pass/fail. `recall_at_n` is still reported
+    but is only fractional for the handful of multi-gold cases.
+
+    Scope (do not overclaim): retrieval cases run under `mode="eval"`
+    (freshness + chunk-type overlays OFF — see `run_retrieval_case`), so
+    these measure RAW BM25+vector+RRF recall on fixtures. They are ideal
+    for A/B-ing a retrieval change, but are NOT production recall — that
+    is the online-sampling half of the foundation, which this doesn't
+    touch. Ranks are measured within the returned list (capped at the
+    case's `limit`); gold outside it scores reciprocal rank 0.
+
+    Tool-selection accuracy is intentionally NOT emitted here: every
+    `tools_used_contains` in `cases.yaml` is a singleton, so a "tool
+    recall" number would be purely binary (a fraction in a binary
+    costume). A continuous tool-selection metric is blocked on authoring
+    multi-tool / negative-tool gold cases first.
+
+    Returns `{}` for cases with no rank-checkable gold (e.g. a pure
+    `must_not_contain_title` adversarial case) so the caller skips them.
+    """
+    ranked_titles = [(e.get("title") or "").lower() for e in entities]
+    ranked_ids = [e.get("entity_id") for e in entities]
+
+    def _rank_of_title(needle: str) -> int | None:
+        needle = (needle or "").lower()
+        if not needle:
+            return None
+        for i, t in enumerate(ranked_titles):
+            if needle in t:
+                return i + 1  # 1-indexed
+        return None
+
+    def _rank_of_id(eid: Any) -> int | None:
+        for i, x in enumerate(ranked_ids):
+            if x == eid:
+                return i + 1
+        return None
+
+    # Each gold "slot" contributes (reciprocal_rank, hit_within_declared_n).
+    slots: list[tuple[float, bool]] = []
+
+    needle = expect.get("top_result_title_contains")
+    if isinstance(needle, str) and needle:
+        r = _rank_of_title(needle)
+        slots.append((1.0 / r if r else 0.0, bool(r and r <= 1)))
+
+    spec = expect.get("must_contain_title_in_top_n")
+    if isinstance(spec, dict):
+        n = int(spec.get("n", 0))
+        for s in spec.get("title_substrings") or []:
+            r = _rank_of_title(s)
+            slots.append((1.0 / r if r else 0.0, bool(r and r <= n)))
+
+    spec = expect.get("must_contain_in_top_n")
+    if isinstance(spec, dict):
+        n = int(spec.get("n", 0))
+        for eid in spec.get("entity_ids") or []:
+            r = _rank_of_id(eid)
+            slots.append((1.0 / r if r else 0.0, bool(r and r <= n)))
+
+    # OR matcher: one slot, satisfied by the best-ranked candidate.
+    spec = expect.get("must_contain_any_title_in_top_n")
+    if isinstance(spec, dict):
+        n = int(spec.get("n", 0))
+        ranks = [r for r in (_rank_of_title(s) for s in spec.get("title_substrings") or []) if r]
+        best = min(ranks) if ranks else None
+        slots.append((1.0 / best if best else 0.0, bool(best and best <= n)))
+
+    if not slots:
+        return {}
+    mrr = sum(rr for rr, _ in slots) / len(slots)
+    recall = sum(1.0 for _, hit in slots if hit) / len(slots)
+    return {"mrr": round(mrr, 4), "recall_at_n": round(recall, 4)}
+
+
 def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
     """Execute one retrieval case by calling `search(...)` directly.
 
@@ -583,6 +675,7 @@ def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
         passed=not reasons,
         duration_ms=duration_ms,
         failure_reasons=reasons,
+        metrics=_retrieval_metrics(entities, expect),
     )
 
 
