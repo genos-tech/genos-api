@@ -503,6 +503,15 @@ SEARCH_ENGINE = {
     "RAG_AGENT_SELF_CRITIQUE": (
         os.environ.get("RAG_AGENT_SELF_CRITIQUE", "false").lower() == "true"
     ),
+    # F2 — online judge sampling (SPOTLIGHT_QUALITY_ARCHITECTURE.md §F2).
+    # Fraction (0.0–1.0) of completed agent runs the `agent_judge_sample`
+    # cron command scores with the LLM judge, so production faithfulness /
+    # citation / completeness can be trended vs the fixed offline suite.
+    # 0.0 = off (default). Each judged run costs ~1 LLM call; the command
+    # also caps cost per pass via `--limit`. Sampling is deterministic by
+    # run_id hash, so the effective rate matches this value regardless of
+    # how often the cron fires. Runs OFF the user request path.
+    "RAG_JUDGE_SAMPLE_RATE": float(os.environ.get("RAG_JUDGE_SAMPLE_RATE", "0.0")),
     # Observability for Gemini implicit-cache hit rate. When True,
     # gemini_client._log_usage emits one INFO log per `generate_step`
     # call with `prompt_tokens`, `cached_tokens`, and a cache-hit %.
