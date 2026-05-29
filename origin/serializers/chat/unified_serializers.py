@@ -190,10 +190,17 @@ class ChannelMemberSerializer(serializers.ModelSerializer):
     userId = serializers.UUIDField(source="user_id", read_only=True)
     role = serializers.CharField()
     tsJoined = serializers.DateTimeField(source="ts_joined_at", read_only=True)
+    # User display fields denormalized into the member row so the FE
+    # sidebar / DM partner resolution doesn't need a parallel
+    # `/api/v2/team/getTeamMembers/` fetch to render avatars + names.
+    # The legacy `AllChatProps.dmPartnerUser` shape carried these
+    # inline; keep parity here so the v3 → legacy adapter can populate
+    # them without a join.
+    user = UserLiteSerializer(read_only=True)
 
     class Meta:
         model = ChannelMember
-        fields = ["id", "userId", "role", "tsJoined"]
+        fields = ["id", "userId", "role", "tsJoined", "user"]
 
 
 class ChannelSerializer(serializers.ModelSerializer):
@@ -212,6 +219,16 @@ class ChannelSerializer(serializers.ModelSerializer):
     projectId = serializers.IntegerField(source="project_id", read_only=True, allow_null=True)
     ownerId = serializers.UUIDField(source="owner_id", read_only=True, allow_null=True)
     isPrivate = serializers.BooleanField(source="is_private")
+    # The legacy per-kind integer chat id this channel was backfilled
+    # from. Exposed during the v3 cutover so FE entry points that still
+    # carry legacy ids (Spotlight / ChatSearch / activity & flagged
+    # sidebars whose data still flows through `/api/v2/...`) can resolve
+    # the v3 UUID via a client-side `legacyChatId === N` lookup against
+    # the cached channel list. Null for v3-native channels created
+    # post-cutover.
+    legacyChatId = serializers.IntegerField(
+        source="legacy_chat_id", read_only=True, allow_null=True
+    )
     tsCreated = serializers.DateTimeField(source="ts_created_at", read_only=True)
     tsUpdated = serializers.DateTimeField(source="ts_updated_at", read_only=True)
 
@@ -229,6 +246,7 @@ class ChannelSerializer(serializers.ModelSerializer):
             "projectId",
             "ownerId",
             "isPrivate",
+            "legacyChatId",
             "latestMessage",
             "unreadCount",
             "tsCreated",
