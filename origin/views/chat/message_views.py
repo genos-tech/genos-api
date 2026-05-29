@@ -194,7 +194,16 @@ def _prefetched_messages(qs):
     between `*SingleMessageView` and `*MessagesDeltaView` is exactly the
     class of bug this rewrite eliminates.
     """
-    return qs.select_related("sender", "channel").prefetch_related(
+    return qs.select_related(
+        "sender",
+        "channel",
+        # PM-only `task` FK + nested `task.project` for `displayId`
+        # ("<code>-<n>"). `select_related` is a no-op on rows where
+        # `task_id` is null (DM/GM/MDM) and avoids N+1 on PM channels
+        # where every message references the same TaskMaster.
+        "task",
+        "task__project",
+    ).prefetch_related(
         "reactions__user",
         "mentions",
         "attachments",

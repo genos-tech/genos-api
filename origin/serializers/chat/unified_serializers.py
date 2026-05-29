@@ -146,6 +146,19 @@ class MessageSerializer(serializers.ModelSerializer):
     mentions = MessageMentionSerializer(many=True, read_only=True)
     attachments = MessageAttachmentSerializer(many=True, read_only=True)
     metadata = serializers.JSONField()
+    # PM-only FK to the legacy `TaskMaster` row this message renders.
+    # The FE PM bubble path (MessageBubble.handleOpenTaskClick,
+    # BubbleUnderBar's task-status chip, `cursor: pointer` on the body)
+    # gates on this being non-null. Other kinds leave it null.
+    taskId = serializers.IntegerField(source="task_id", read_only=True, allow_null=True)
+    # PM task display fields derived off the `task` FK. `displayId` is
+    # the human-readable code ("PRJ-42") the legacy PM views also
+    # emit; `taskStatus` mirrors the colored-chip text in the bubble
+    # under-bar ("Open" / "Closed" / etc.). Both null when the message
+    # isn't linked to a task. Use SerializerMethodField so we can
+    # null-coalesce without forcing a DB hit when `task` is unset.
+    displayId = serializers.SerializerMethodField()
+    taskStatus = serializers.SerializerMethodField()
     editedAt = serializers.DateTimeField(source="edited_at", read_only=True, allow_null=True)
     deletedAt = serializers.DateTimeField(source="deleted_at", read_only=True, allow_null=True)
     tsSent = serializers.DateTimeField(source="ts_sent_at", read_only=True)
@@ -169,6 +182,9 @@ class MessageSerializer(serializers.ModelSerializer):
             "mentions",
             "attachments",
             "metadata",
+            "taskId",
+            "displayId",
+            "taskStatus",
             "editedAt",
             "deletedAt",
             "tsSent",
@@ -180,6 +196,16 @@ class MessageSerializer(serializers.ModelSerializer):
         # be ideal, but for now we accept the second column read. Views
         # using select_related("channel") avoid the extra query.
         return obj.channel.kind if obj.channel else None
+
+    def get_displayId(self, obj):
+        # `TaskMaster.display_id` is a property: "<project.code>-<n>"
+        # when both are present, else "#<task_id>". Views serving PM
+        # messages should `select_related("task", "task__project")` so
+        # this doesn't N+1 the project lookup.
+        return obj.task.display_id if getattr(obj, "task", None) else None
+
+    def get_taskStatus(self, obj):
+        return obj.task.status if getattr(obj, "task", None) else None
 
 
 class ChannelMemberSerializer(serializers.ModelSerializer):

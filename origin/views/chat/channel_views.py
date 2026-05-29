@@ -173,7 +173,7 @@ class ChannelListView(AuthenticatedAPIView):
                 q |= Q(channel_id=channel_id, seq=seq)
             latest_messages = (
                 Message.objects.filter(q)
-                .select_related("sender", "channel")
+                .select_related("sender", "channel", "task", "task__project")
                 .prefetch_related("reactions__user", "mentions", "attachments")
             )
             latest_by_channel = {m.channel_id: m for m in latest_messages}
@@ -374,7 +374,7 @@ class ChannelDetailView(AuthenticatedAPIView):
                     channel_id=channel.id,
                     seq=annotated._latest_seq,
                 )
-                .select_related("sender", "channel")
+                .select_related("sender", "channel", "task", "task__project")
                 .prefetch_related("reactions__user", "mentions", "attachments")
                 .first()
             )
