@@ -1,6 +1,7 @@
 from rest_framework.response import Response
 from rest_framework import status
 
+from origin.services import unified_writer
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.mention_models import *
 from origin.serializers.chat.mention_serializers import *
@@ -25,11 +26,20 @@ class ChatMentionView(AuthenticatedAPIView):
                 serializer = MentionFactSerializer(data=data)
                 if serializer.is_valid():
                     serializer.save()
+                    # Track B dual-write: mirror to unified `MessageMention`.
+                    unified_writer.write_mention(
+                        chat_type=int(request.data["chat_type"]),
+                        chat_id=int(request.data["chat_id"]),
+                        message_id=int(request.data["message_id"]),
+                        mentioned_user_id=mentioned_user_id,
+                    )
                     res.append(serializer.data)
                 else:
                     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Exception:
-            return Response({"error": "Failed to create mentions."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Failed to create mentions."}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         return Response(res, status=status.HTTP_201_CREATED)
 
@@ -110,6 +120,13 @@ class ChatMentionView(AuthenticatedAPIView):
                     mentioned_user=mentioned_user_id,
                 )
                 reaction.delete()
+                # Track B dual-write: mirror to unified `MessageMention`.
+                unified_writer.delete_mention(
+                    chat_type=int(chat_type),
+                    chat_id=int(chat_id),
+                    message_id=int(message_id),
+                    mentioned_user_id=mentioned_user_id,
+                )
             return Response(
                 {"message": f"Mention deleted successfully."},
                 status=status.HTTP_204_NO_CONTENT,

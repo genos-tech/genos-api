@@ -5,6 +5,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.response import Response
 from rest_framework import status
 
+from origin.services import unified_writer
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.reaction_models import *
 from origin.models.project.prj_models import ProjectMembers, ProjectMaster
@@ -206,6 +207,19 @@ class PMSingleMessageView(AuthenticatedAPIView):
             serializer = PMMessagesSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
+                # Track B dual-write: mirror PM message to unified.
+                # `task` is set in the unified `task` FK (the PM-specific
+                # metadata fields like displayId/taskStatus live in
+                # `Message.metadata` JSON — populated in a later track
+                # once we have a single PM serializer to compute them).
+                unified_writer.write_message(
+                    chat_type=CHAT_TYPE,
+                    chat_id=request.data["project_id"],
+                    message_id=data["message_id"],
+                    sender_id=request.data["sender_id"],
+                    body=request.data["message_body"],
+                    task_id=request.data.get("task_id"),
+                )
                 res = {**serializer.data, "last_read_message_id": last_read_message_id}
                 return Response(res, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -250,6 +264,15 @@ class PMSingleMessageView(AuthenticatedAPIView):
         serializer = PMMessagesSerializer(message, data=data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            # Track B dual-write: mirror PM message edit / soft-delete.
+            unified_writer.write_message(
+                chat_type=CHAT_TYPE,
+                chat_id=request.data["project_id"],
+                message_id=message.message_id,
+                sender_id=str(message.sender_id) if message.sender_id else None,
+                body=data.get("message_body", message.message_body),
+                is_deleted=bool(request.data.get("is_deleted", False)),
+            )
             res = {**serializer.data, "last_read_message_id": last_read_message_id}
             return Response(res, status=status.HTTP_200_OK)
 
@@ -464,6 +487,15 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
         serializer = PMThreadMessagesSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
+            # Track B dual-write: mirror PM thread reply.
+            unified_writer.write_thread_message(
+                chat_type=CHAT_TYPE,
+                chat_id=request.data["project_id"],
+                thread_id=thread_id,
+                message_id=data["thread_message_id"],
+                sender_id=request.data["sender_id"],
+                body=request.data["message_body"],
+            )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -494,6 +526,16 @@ class PMSingleThreadMessageView(AuthenticatedAPIView):
         serializer = PMThreadMessagesSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            # Track B dual-write: mirror PM thread edit / soft-delete.
+            unified_writer.write_thread_message(
+                chat_type=CHAT_TYPE,
+                chat_id=project_id,
+                thread_id=thread_id,
+                message_id=message_id,
+                sender_id=str(message.sender_id) if message.sender_id else None,
+                body=update_data.get("thread_message_body", message.thread_message_body),
+                is_deleted=bool(update_data.get("is_deleted", False)),
+            )
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

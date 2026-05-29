@@ -82,6 +82,15 @@ class Channel(models.Model):
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
+    # Legacy bridge: integer PK of the originating per-type chat row
+    # (DMMaster.dm_id, GMMaster.gm_id, ProjectMaster.project_id,
+    # MDMMaster.mdm_id). Null for channels created natively by the v3
+    # API. The Phase 1 dual-write helper writes this on every legacy
+    # POST so the reverse lookup (legacy chat_id → Channel.id) is a
+    # single indexed read instead of a fragile heuristic match. Dropped
+    # in Phase 7 alongside the legacy tables.
+    legacy_chat_id = models.BigIntegerField(null=True, blank=True)
+
     class Meta:
         constraints = [
             # PM channels are 1:1 with a project. Partial unique: only
@@ -90,6 +99,16 @@ class Channel(models.Model):
                 fields=["project"],
                 condition=models.Q(kind=ChannelKind.PM),
                 name="uniq_pm_channel_per_project",
+            ),
+            # (kind, legacy_chat_id) is 1:1 within the legacy schema:
+            # one DMMaster row per (team, user pair), one GM/MDMMaster
+            # per id, one ProjectMaster per id. Partial: only enforced
+            # when legacy_chat_id is set, so v3-native channels (where
+            # it stays null) don't collide.
+            models.UniqueConstraint(
+                fields=["kind", "legacy_chat_id"],
+                condition=models.Q(legacy_chat_id__isnull=False),
+                name="uniq_channel_legacy_chat_id",
             ),
         ]
         indexes = [

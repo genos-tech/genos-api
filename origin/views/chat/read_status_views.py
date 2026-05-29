@@ -3,11 +3,26 @@ from django.db import transaction
 from rest_framework.response import Response
 from rest_framework import status
 
+from origin.services import unified_writer
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.activity_models import ActivityFact
 from origin.models.chat.read_status_models import *
 from origin.serializers.chat.read_status_serializers import *
+
+
+def _dual_write_read_cursor(data: dict) -> None:
+    """Track B dual-write helper called from both create and update
+    branches below. Mirrors a legacy ReadStatus upsert into the unified
+    ReadCursor schema. No-op when the flag is off; never raises."""
+    unified_writer.write_read_cursor(
+        chat_type=int(data["chat_type"]),
+        chat_id=int(data["chat_id"]),
+        user_id=data["user"],
+        last_read_message_id=int(data["last_read_message_id"]),
+        is_thread=bool(data["is_thread"]),
+        thread_id=int(data["thread_id"]) if data.get("thread_id") else None,
+    )
 
 
 class ReadStatusView(AuthenticatedAPIView):
@@ -45,11 +60,13 @@ class ReadStatusView(AuthenticatedAPIView):
                 # Update only when the message id is larger than the prev one.
                 if int(prev_status.last_read_message_id) < int(data["last_read_message_id"]):
                     serializer.save()
+                    _dual_write_read_cursor(data)
                 return Response(serializer.data, status=status.HTTP_200_OK)
         except ReadStatus.DoesNotExist:
             serializer = ReadStatusSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
+                _dual_write_read_cursor(data)
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

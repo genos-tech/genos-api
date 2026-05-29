@@ -153,12 +153,18 @@ class Command(BaseCommand):
             .first()
         )
         if existing and not existing.channel.is_deleted:
+            # Backfill legacy_chat_id on an existing row if missing
+            # (re-run after the field was added).
+            if existing.channel.legacy_chat_id is None:
+                existing.channel.legacy_chat_id = dm.dm_id
+                existing.channel.save(update_fields=["legacy_chat_id"])
             return existing.channel, self._ensure_dm_members(existing.channel, dm)
 
         channel = Channel.objects.create(
             team_id=dm.team_id,
             kind=ChannelKind.DM,
             title="",  # DMs use the partner name client-side
+            legacy_chat_id=dm.dm_id,
         )
         ChannelDirectPair.objects.create(channel=channel, user_lo=user_lo, user_hi=user_hi)
         return channel, self._ensure_dm_members(channel, dm)
@@ -196,11 +202,16 @@ class Command(BaseCommand):
             with transaction.atomic():
                 if gm.owner_team_id is None:
                     continue
+                # Key on (kind, legacy_chat_id) for an unambiguous
+                # 1:1 with `GMMaster.gm_id`. `(team, kind, title)` was
+                # the prior heuristic but two GMs with the same title
+                # would collide.
                 channel, created = Channel.objects.update_or_create(
-                    team_id=gm.owner_team_id,
                     kind=ChannelKind.GM,
-                    title=gm.group_name,
+                    legacy_chat_id=gm.gm_id,
                     defaults={
+                        "team_id": gm.owner_team_id,
+                        "title": gm.group_name,
                         "is_private": gm.is_private,
                         "owner_id": gm.owner_user_id,
                         "profile_image_url": getattr(gm, "profile_image_file_name", "") or "",
@@ -259,6 +270,11 @@ class Command(BaseCommand):
                 # But to keep the backfill side-effect-free against
                 # non-channel signals (search-indexer, etc.) we instead
                 # call the channel-creation directly.
+                # PM channels still key on `project` (1:1 via the
+                # partial unique constraint), but populate
+                # `legacy_chat_id` from `project_id` so the dual-write
+                # helper can look it up by `(kind=PM, legacy_chat_id)`
+                # the same way as GM/MDM/DM.
                 channel, created = Channel.objects.update_or_create(
                     project=proj,
                     kind=ChannelKind.PM,
@@ -266,6 +282,7 @@ class Command(BaseCommand):
                         "team_id": proj.team_id,
                         "title": proj.project_name,
                         "owner_id": getattr(proj, "owner_id", None),
+                        "legacy_chat_id": proj.project_id,
                         "is_deleted": False,
                     },
                 )
@@ -310,11 +327,13 @@ class Command(BaseCommand):
             if mdm.owner_team_id is None:
                 continue
             with transaction.atomic():
+                # Same fix as GM: 1:1 via `(kind, legacy_chat_id)`.
                 channel, created = Channel.objects.update_or_create(
-                    team_id=mdm.owner_team_id,
                     kind=ChannelKind.MDM,
-                    title=mdm.display_name or "",
+                    legacy_chat_id=mdm.mdm_id,
                     defaults={
+                        "team_id": mdm.owner_team_id,
+                        "title": mdm.display_name or "",
                         "owner_id": mdm.owner_user_id,
                         "is_deleted": False,
                     },

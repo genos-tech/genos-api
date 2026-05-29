@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 
+from origin.services import unified_writer
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.reaction_models import *
 from origin.models.chat.gm_models import GMMaster, GMMembers, GMMessages, GMThreadMessages
@@ -543,6 +544,14 @@ class GMSingleMessageView(AuthenticatedAPIView):
             serializer = GMMessagesSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
+                # Track B dual-write: mirror GM message to unified.
+                unified_writer.write_message(
+                    chat_type=CHAT_TYPE,
+                    chat_id=request.data["gm_id"],
+                    message_id=data["message_id"],
+                    sender_id=request.data["sender_id"],
+                    body=request.data["message_body"],
+                )
                 res = {**serializer.data, "last_read_message_id": last_read_message_id}
                 return Response(res, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -589,6 +598,15 @@ class GMSingleMessageView(AuthenticatedAPIView):
         serializer = GMMessagesSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            # Track B dual-write: mirror GM message edit / soft-delete.
+            unified_writer.write_message(
+                chat_type=CHAT_TYPE,
+                chat_id=gm_id,
+                message_id=message_id,
+                sender_id=str(message.sender_id) if message.sender_id else None,
+                body=update_data.get("message_body", message.message_body),
+                is_deleted=bool(update_data.get("is_deleted", False)),
+            )
             res = {**serializer.data, "last_read_message_id": last_read_message_id}
             return Response(res, status=status.HTTP_200_OK)
 
@@ -773,6 +791,15 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
         serializer = GMThreadMessagesSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
+            # Track B dual-write: mirror GM thread reply.
+            unified_writer.write_thread_message(
+                chat_type=CHAT_TYPE,
+                chat_id=request.data["gm_id"],
+                thread_id=request.data["thread_id"],
+                message_id=data["thread_message_id"],
+                sender_id=request.data["sender_id"],
+                body=request.data["message_body"],
+            )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -803,6 +830,16 @@ class GMSingleThreadMessageView(AuthenticatedAPIView):
         serializer = GMThreadMessagesSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            # Track B dual-write: mirror GM thread edit / soft-delete.
+            unified_writer.write_thread_message(
+                chat_type=CHAT_TYPE,
+                chat_id=gm_id,
+                thread_id=thread_id,
+                message_id=message_id,
+                sender_id=str(message.sender_id) if message.sender_id else None,
+                body=update_data.get("thread_message_body", message.thread_message_body),
+                is_deleted=bool(update_data.get("is_deleted", False)),
+            )
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
