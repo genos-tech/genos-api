@@ -35,6 +35,7 @@ from typing import Any
 
 import yaml
 
+from origin.search_engine.agent.abstention import is_abstention
 from origin.search_engine.agent.controller import run_agent
 from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.search import search
@@ -238,7 +239,10 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
             sources=list(last_sources),
             tool_results=tool_traces,
             ttft_ms=int(ttft_s * 1000) if ttft_s is not None else -1,
-            metrics=_tool_selection_metrics(events, expect),
+            metrics={
+                **_tool_selection_metrics(events, expect),
+                **_abstention_metric(events, expect),
+            },
         )
     finally:
         for handle in cleanup_handles:
@@ -390,7 +394,10 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
         sources=list(last_sources),
         tool_results=last_tool_traces,
         ttft_ms=int(last_ttft_s * 1000) if last_ttft_s is not None else -1,
-        metrics=_tool_selection_metrics(last_events, final_expect),
+        metrics={
+            **_tool_selection_metrics(last_events, final_expect),
+            **_abstention_metric(last_events, final_expect),
+        },
     )
 
 
@@ -398,6 +405,24 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
 # entity_id pattern matches what the agent uses: `chat:pm:1:thread:3`,
 # `task:42`, `note:personal:7`, etc. — non-greedy, no spaces.
 _CITATION_RE = re.compile(r"\[([a-z][a-z0-9_:\-]+)\]")
+
+
+def _abstention_metric(events: list[dict[str, Any]], expect: dict[str, Any]) -> dict[str, float]:
+    """Continuous abstention-correctness signal (Q0, §4.1).
+
+    Reads the metric-only gold `should_abstain` (true/false). `abstention_correct`
+    is 1.0 when the answer's abstention status matches the gold, else 0.0 —
+    so it catches BOTH error directions: a false answer on an unanswerable
+    query (should_abstain: true, but answered) AND a false abstention on an
+    answerable one, incl. the empty-structured-result case ("no overdue
+    tasks" is an answer, should_abstain: false). Non-gating; `{}` when the
+    case doesn't declare `should_abstain`.
+    """
+    if "should_abstain" not in expect:
+        return {}
+    answer = "".join((e.get("text") or "") for e in events if e.get("type") == "answer_delta")
+    correct = is_abstention(answer) == bool(expect["should_abstain"])
+    return {"abstention_correct": 1.0 if correct else 0.0}
 
 
 def _tool_selection_metrics(

@@ -519,6 +519,21 @@ SEARCH_ENGINE = {
     # read tool call + one final answer. Bounds the latency/cost the
     # critique can add.
     "RAG_CRITIQUE_MAX_STEPS": int(os.environ.get("RAG_CRITIQUE_MAX_STEPS", "2")),
+    # Programmatic abstention gate (SPOTLIGHT_QUALITY_ARCHITECTURE.md §4.1).
+    # When True, a turn that ATTEMPTED retrieval but surfaced no evidence
+    # (a semantic search returned zero matches and no other read tool
+    # succeeded) and did not already abstain has its answer replaced with
+    # an honest "couldn't find it" — a deterministic backstop against
+    # hallucinating from no grounding. An empty STRUCTURED result (no
+    # overdue tasks) counts as evidence ("the answer is zero"), so the
+    # gate does NOT fire on it. Scoped to fresh workspace queries: skipped
+    # when seed_sources or prior_turns are present (thread/note Q&A and
+    # multi-turn carry their own grounding). Buffers the answer (TTFT cost
+    # like self-critique) — off by default; an A/B lever measured by the
+    # `abstention_correct` eval metric.
+    "RAG_ABSTENTION_GATE": (
+        os.environ.get("RAG_ABSTENTION_GATE", "false").lower() == "true"
+    ),
     # F2 — online judge sampling (SPOTLIGHT_QUALITY_ARCHITECTURE.md §F2).
     # Fraction (0.0–1.0) of completed agent runs the `agent_judge_sample`
     # cron command scores with the LLM judge, so production faithfulness /

@@ -117,6 +117,8 @@
   fixture: true
   expect:
     tools_used_contains: ["search_knowledge_base"]
+    # Metric-only (§4.1): out-of-corpus → the agent SHOULD abstain.
+    should_abstain: true
     answer_contains_any:
       - "don't"
       - "do not"
@@ -132,6 +134,8 @@
   fixture: true
   expect:
     tools_used_contains: ["search_knowledge_base"]
+    # Metric-only (§4.1): no such policy in the workspace → should abstain.
+    should_abstain: true
     answer_does_not_contain: ["the policy states", "according to policy"]
 
 # --------------------------------------------------------------------- #
@@ -463,6 +467,11 @@
     # asserts only that the agent uses the right tool and doesn't
     # error. Content-validity is the judge's job.
     no_errors: true
+    # Metric-only (§4.1): an empty list_tasks result is a grounded
+    # "you have no overdue tasks" — a real ANSWER, NOT an abstention. This
+    # is the case that catches an over-eager abstention gate that
+    # mistakes an empty structured result for "no evidence".
+    should_abstain: false
 
 - id: list_high_priority_open
   query: "Show me my high priority open tasks."
@@ -490,6 +499,8 @@
     tools_used_contains: ["get_team_members"]
     answer_contains_any: ["alice", "bob", "carol", "dan"]
     no_errors: true
+    # Metric-only (§4.1): a grounded answer exists → must NOT abstain.
+    should_abstain: false
 
 # --------------------------------------------------------------------- #
 # B (expand). Specific-entity fetch                                     #
