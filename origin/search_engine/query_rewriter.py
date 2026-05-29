@@ -6,7 +6,8 @@ lanes, and the results are RRF-fused across all variants. Chunks
 that surface for multiple variants get extra weight, so the more
 "agreed-upon" a result is, the higher it ranks.
 
-Off by default; flag-gated via `SEARCH_ENGINE["RAG_USE_QUERY_REWRITE"]`.
+Flag-gated via `SEARCH_ENGINE["RAG_USE_QUERY_REWRITE"]` (enabled by
+default on the agent path; never fires on the typeahead path).
 Reuses the Phase-5 `ModelClient` abstraction so it works on both
 Gemini and Claude.
 

@@ -467,14 +467,21 @@ SEARCH_ENGINE = {
     # `opensearch_reindex` after change to take effect on existing
     # chunks.
     "RAG_CHAT_CONTEXT_WINDOW": int(os.environ.get("RAG_CHAT_CONTEXT_WINDOW", "2")),
-    # Phase 10 — LLM query rewriting (opt-in, agent path only).
+    # Phase 10 — LLM query rewriting (agent path only).
     # When on, the agent's `search_knowledge_base` tool expands the
     # query into N variants via the active ModelClient before hitting
     # OpenSearch, then RRF-fuses results across all variants. Adds one
-    # LLM call + N embedding calls per agent search. Off by default
-    # during rollout. Does NOT affect the Spotlight typeahead
-    # endpoint — it never passes `rewrite=True`.
-    "RAG_USE_QUERY_REWRITE": (os.environ.get("RAG_USE_QUERY_REWRITE", "false").lower() == "true"),
+    # LLM call + N embedding calls per agent search. Does NOT affect the
+    # Spotlight typeahead endpoint — it never passes `rewrite=True`.
+    #
+    # Enabled by default as of this rollout: measured +2 net pass / 0
+    # regressions on the agent eval suite (SPOTLIGHT_OPTIMIZATION_ROADMAP.md
+    # §1.1) with the tuned RAG_REWRITE_ORIGINAL_WEIGHT=2.0. The rewriter
+    # currently uses the default ModelClient (no fast-model override), so
+    # it adds ~7s per agent search — a fast-model override
+    # (RAG_REWRITE_MODEL, a mini-B3) is the tracked latency follow-up.
+    # Set RAG_USE_QUERY_REWRITE=false to disable per-deploy.
+    "RAG_USE_QUERY_REWRITE": (os.environ.get("RAG_USE_QUERY_REWRITE", "true").lower() == "true"),
     "RAG_REWRITE_NUM_VARIANTS": int(os.environ.get("RAG_REWRITE_NUM_VARIANTS", "3")),
     # Phase 3.2 — self-critique reflection step. When True, after the
     # agent produces its draft final answer, a second LLM call re-reads
