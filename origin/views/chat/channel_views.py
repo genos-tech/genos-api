@@ -399,6 +399,86 @@ class ChannelDetailView(AuthenticatedAPIView):
             }
         )
 
+    def patch(self, request, channel_id):
+        """Update channel metadata (title, profile image, is_private).
+
+        Authorization: only the channel owner can change metadata.
+        DM channels cannot be renamed/customized (their identity is
+        the user pair). PM channels have their title/avatar mirrored
+        from the underlying ProjectMaster, so updating here would
+        desync; return 400 to make the caller go through the project
+        edit flow instead.
+
+        Body (any subset, all optional):
+            {
+              "title": "<str>",            # max 80 chars
+              "profile_image_url": "<str>",  # max 512 chars
+              "is_private": <bool>
+            }
+
+        Unknown fields are silently ignored. Empty body returns the
+        existing channel unchanged.
+        """
+        channel = _get_channel_for_user(channel_id, request.user)
+        if channel.kind == ChannelKind.DM:
+            return Response(
+                {"error": "DM channels cannot be renamed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if channel.kind == ChannelKind.PM:
+            return Response(
+                {
+                    "error": (
+                        "PM channels mirror the project's title/avatar; "
+                        "edit the project instead."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not channel.owner_id or str(channel.owner_id) != str(request.user.id):
+            return Response(
+                {"error": "Only the channel owner can edit metadata."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Whitelist patchable fields so a misbehaving client can't write
+        # arbitrary columns. `metadata` JSON pass-through would be next
+        # to support if a feature ever needs it; punt for now.
+        body = request.data or {}
+        update_fields = []
+        if "title" in body:
+            title = (body.get("title") or "").strip()
+            if not title:
+                return Response(
+                    {"error": "title must be a non-empty string."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if len(title) > 80:
+                return Response(
+                    {"error": "title exceeds 80 chars."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            channel.title = title
+            update_fields.append("title")
+        if "profile_image_url" in body:
+            url = body.get("profile_image_url") or ""
+            if len(url) > 512:
+                return Response(
+                    {"error": "profile_image_url exceeds 512 chars."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            channel.profile_image_url = url
+            update_fields.append("profile_image_url")
+        if "is_private" in body:
+            channel.is_private = bool(body.get("is_private"))
+            update_fields.append("is_private")
+
+        if update_fields:
+            update_fields.append("ts_updated_at")
+            channel.save(update_fields=update_fields)
+
+        return Response({"channel": ChannelSerializer(channel, context={"request": request}).data})
+
 
 class ChannelMembersView(AuthenticatedAPIView):
     """GET /api/v3/channels/{channel_id}/members/      member roster
