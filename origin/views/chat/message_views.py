@@ -41,6 +41,7 @@ from origin.models.chat.unified_models import (
     ChannelMember,
     Message,
     MessageAttachment,
+    MessageMention,
     MessageReaction,
 )
 from origin.serializers.chat.unified_serializers import (
@@ -48,6 +49,7 @@ from origin.serializers.chat.unified_serializers import (
     MessageReactionSerializer,
     MessageSerializer,
 )
+from origin.services.mention_extractor import extract_mentioned_user_ids
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
     build_delta_response,
@@ -152,6 +154,33 @@ def _allocate_seq_and_create_message(*, channel, sender, body, body_text, parent
         if parent is not None:
             parent.reply_count += 1
             parent.save(update_fields=["reply_count", "ts_updated_at"])
+
+        # Extract direct user mentions from the body and persist them
+        # as `MessageMention` rows so the FE's `@you` indicator + the
+        # inbox "all mentions of me" feed can find them. We intentionally
+        # do this AFTER the message create (and inside the same atomic
+        # block) — the mention rows are FK'd to message.id, so the
+        # message row must exist first; if the bulk_create somehow
+        # fails, the whole transaction rolls back including the
+        # message, which is the right invariant.
+        #
+        # Group mentions (`mentionGroup` nodes) are NOT expanded here.
+        # That requires resolving group_id → user_ids via
+        # `MentionGroupMembers` and a schema fix for the
+        # `MessageMention.via_group_id` UUIDField vs the BigAutoField
+        # group PK — punted to a follow-up. The FE renders the group
+        # chip from the body itself, so the visible UX still works;
+        # only the "mentioned via group" inbox routing is deferred.
+        mentioned_user_ids = extract_mentioned_user_ids(body)
+        if mentioned_user_ids:
+            # `ignore_conflicts=True` makes a duplicate (e.g. the same
+            # user mentioned twice in one body) collapse to one row via
+            # the `uniq_message_mention` unique constraint rather than
+            # raising IntegrityError. Cheap correctness for free.
+            MessageMention.objects.bulk_create(
+                [MessageMention(message=msg, mentioned_user_id=uid) for uid in mentioned_user_ids],
+                ignore_conflicts=True,
+            )
 
         return msg
 
