@@ -503,6 +503,22 @@ SEARCH_ENGINE = {
     "RAG_AGENT_SELF_CRITIQUE": (
         os.environ.get("RAG_AGENT_SELF_CRITIQUE", "false").lower() == "true"
     ),
+    # Critique-with-retrieval (SPOTLIGHT_QUALITY_ARCHITECTURE.md §4.1/§4.2).
+    # Sub-flag of RAG_AGENT_SELF_CRITIQUE: when BOTH are True, the critique
+    # pass may issue ONE more round of read-only retrieval to fix a
+    # *completeness* gap (the shipped precision-only critique can't
+    # re-retrieve), then write an improved final answer. When this is
+    # False the critique behaves exactly as before (precision-tightening
+    # only) — so the measured precision path is untouched. The critique
+    # only replaces the draft if it actually retrieved AND produced an
+    # answer; otherwise the draft is preserved verbatim.
+    "RAG_CRITIQUE_RETRIEVAL": (
+        os.environ.get("RAG_CRITIQUE_RETRIEVAL", "false").lower() == "true"
+    ),
+    # Step budget for the retrieval continuation above: 2 = at most one
+    # read tool call + one final answer. Bounds the latency/cost the
+    # critique can add.
+    "RAG_CRITIQUE_MAX_STEPS": int(os.environ.get("RAG_CRITIQUE_MAX_STEPS", "2")),
     # F2 — online judge sampling (SPOTLIGHT_QUALITY_ARCHITECTURE.md §F2).
     # Fraction (0.0–1.0) of completed agent runs the `agent_judge_sample`
     # cron command scores with the LLM judge, so production faithfulness /

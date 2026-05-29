@@ -40,6 +40,7 @@ from django.conf import settings
 
 from origin.search_engine.agent.citation_resolver import resolve_unresolved_citations
 from origin.search_engine.agent.prompts import (
+    AGENT_CRITIQUE_RETRIEVAL_DIRECTIVE,
     AGENT_SELF_CRITIQUE_PROMPT_TEMPLATE,
     AGENT_SELF_CRITIQUE_SYSTEM,
     AGENT_SYSTEM_PROMPT,
@@ -1103,6 +1104,7 @@ def _drive_loop(
     disabled_tools: set[str] | None = None,
     system_extra: str | None = None,
     trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
+    max_steps: int | None = None,
 ) -> dict[str, Any] | None:
     """The core agent loop, shared by `run_agent` and `resume_agent`.
 
@@ -1113,8 +1115,14 @@ def _drive_loop(
     `AGENT_SYSTEM_PROMPT` before being passed to the model. The thread
     Q&A flow (AgentAskView's thread_context branch) uses this to inject
     the thread summary + a "stay scoped to this thread" directive.
+
+    `max_steps`, when set, overrides the `AGENT_MAX_STEPS` ceiling for
+    this call. The critique-with-retrieval continuation passes a tight
+    budget (`starting_step + RAG_CRITIQUE_MAX_STEPS`) so the critique can
+    fire at most one more retrieval before answering.
     """
-    max_steps = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
+    if max_steps is None:
+        max_steps = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
     client = get_model_client()
     tools = _build_tool_declarations(disabled_tools)
     system_instruction = AGENT_SYSTEM_PROMPT
@@ -1506,6 +1514,27 @@ def _drive_loop_with_critique(
             emit(e)
         return None
 
+    # Critique-with-retrieval path (RAG_CRITIQUE_RETRIEVAL). Runs a short,
+    # read-only continuation of the loop so the critique can re-retrieve to
+    # fix a completeness gap, not just rewrite text. Falls through to the
+    # precision-only path below when the sub-flag is off, leaving that
+    # measured behavior untouched.
+    if bool(settings.SEARCH_ENGINE.get("RAG_CRITIQUE_RETRIEVAL", False)):
+        for e in _critique_with_retrieval(
+            loop1_events=captured_events,
+            draft=draft_answer,
+            messages=messages,
+            ctx=ctx,
+            run_id=run_id,
+            starting_step=starting_step,
+            seen_sources_by_id=seen_sources_by_id,
+            disabled_tools=disabled_tools,
+            system_extra=system_extra,
+            trace_hook=trace_hook,
+        ):
+            emit(e)
+        return None
+
     try:
         revised = _run_self_critique(
             user_query=user_query,
@@ -1580,6 +1609,108 @@ def _run_self_critique(
             chunks.append(text)
     out = "".join(chunks).strip()
     return out or None
+
+
+def _critique_with_retrieval(
+    *,
+    loop1_events: list[dict[str, Any]],
+    draft: str,
+    messages: list[AgentMessage],
+    ctx: ToolContext,
+    run_id: UUID | None,
+    starting_step: int,
+    seen_sources_by_id: dict[tuple, dict[str, Any]],
+    disabled_tools: set[str] | None,
+    system_extra: str | None,
+    trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None,
+) -> list[dict[str, Any]]:
+    """Retrieval-capable critique: re-enter `_drive_loop` for a short,
+    read-only continuation so the model can fix a *completeness* gap with
+    one more retrieval, then merge the result over the draft.
+
+    Returns the event list the caller should emit. The draft is preserved
+    verbatim unless the continuation actually retrieved AND produced an
+    answer — see `_merge_critique_events`.
+
+    Reuses the full loop (tool dispatch, source emission, citation
+    resolution) rather than re-implementing them: the new sources surface
+    as chips and the revised answer's `[type:id]` tokens resolve exactly
+    as in a normal turn, because `seen_sources_by_id` is shared.
+    """
+    # Continuation conversation: show the model its own draft, then the
+    # completeness directive. `messages` already carries loop 1's tool
+    # turns (mutated in place by `_drive_loop`).
+    messages.append(AgentMessage(role="assistant", text=draft))
+    messages.append(AgentMessage(role="user", text=AGENT_CRITIQUE_RETRIEVAL_DIRECTIVE))
+
+    # Read-only continuation: disable write tools (a write would pause for
+    # approval mid-critique) on top of anything the caller already disabled.
+    write_tools = {t.name for t in REGISTRY.values() if getattr(t, "requires_approval", False)}
+    loop2_disabled = (disabled_tools or set()) | write_tools
+
+    # Budget: continue past loop 1's steps (its tool steps + its answer
+    # step), then allow `RAG_CRITIQUE_MAX_STEPS` more (one retrieval + one
+    # answer by default). `last_step + 2` skips loop 1's last tool step and
+    # its answer step.
+    steps_seen = [e["step"] for e in loop1_events if isinstance(e.get("step"), int)]
+    last_step = max(steps_seen) if steps_seen else (starting_step - 1)
+    next_step = last_step + 2
+    crit_steps = max(1, int(settings.SEARCH_ENGINE.get("RAG_CRITIQUE_MAX_STEPS", 2)))
+
+    loop2_events: list[dict[str, Any]] = []
+    try:
+        pause2 = _drive_loop(
+            messages=messages,
+            ctx=ctx,
+            emit=loop2_events.append,
+            run_id=run_id,
+            starting_step=next_step,
+            seen_sources_by_id=seen_sources_by_id,
+            disabled_tools=loop2_disabled,
+            system_extra=system_extra,
+            trace_hook=trace_hook,
+            max_steps=next_step + crit_steps,
+        )
+    except Exception:  # noqa: BLE001 — never lose the draft on a critique fault
+        log.exception("Critique-with-retrieval continuation failed; keeping draft")
+        return list(loop1_events)
+
+    return _merge_critique_events(loop1_events, loop2_events, paused=pause2 is not None)
+
+
+def _merge_critique_events(
+    loop1_events: list[dict[str, Any]],
+    loop2_events: list[dict[str, Any]],
+    *,
+    paused: bool = False,
+) -> list[dict[str, Any]]:
+    """Decide what to stream after a retrieval-capable critique. Pure (no
+    I/O) so it's unit-testable without an LLM.
+
+    Outcomes:
+      * paused / loop 2 errored / loop 2 produced no answer → loop 1
+        verbatim (the draft is never lost).
+      * loop 2 made NO tool call → loop 1 verbatim. No retrieval means no
+        new information, so loop 2's paraphrase is discarded to preserve
+        the draft's exact wording + citations (the verbatim-KEEP
+        guarantee the precision path has).
+      * loop 2 retrieved AND answered → loop 1 events minus its
+        `answer_delta` + final `done`, then all loop 2 events (whose new
+        `sources` + revised answer + `done` supersede on the frontend's
+        wholesale-replace).
+    """
+    loop2_answer = "".join(
+        (e.get("text") or "") for e in loop2_events if e.get("type") == "answer_delta"
+    )
+    loop2_errored = any(e.get("type") == "error" for e in loop2_events)
+    loop2_retrieved = any(e.get("type") == "tool_call_start" for e in loop2_events)
+
+    if paused or loop2_errored or not loop2_answer.strip() or not loop2_retrieved:
+        return list(loop1_events)
+
+    merged = [e for e in loop1_events if e.get("type") not in ("answer_delta", "done")]
+    merged.extend(loop2_events)
+    return merged
 
 
 # Limits for the tool-result blob we hand to the critique LLM. The
