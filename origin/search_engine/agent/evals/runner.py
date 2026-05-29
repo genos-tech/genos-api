@@ -238,6 +238,7 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
             sources=list(last_sources),
             tool_results=tool_traces,
             ttft_ms=int(ttft_s * 1000) if ttft_s is not None else -1,
+            metrics=_tool_selection_metrics(events, expect),
         )
     finally:
         for handle in cleanup_handles:
@@ -389,6 +390,7 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
         sources=list(last_sources),
         tool_results=last_tool_traces,
         ttft_ms=int(last_ttft_s * 1000) if last_ttft_s is not None else -1,
+        metrics=_tool_selection_metrics(last_events, final_expect),
     )
 
 
@@ -396,6 +398,46 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
 # entity_id pattern matches what the agent uses: `chat:pm:1:thread:3`,
 # `task:42`, `note:personal:7`, etc. — non-greedy, no spaces.
 _CITATION_RE = re.compile(r"\[([a-z][a-z0-9_:\-]+)\]")
+
+
+def _tool_selection_metrics(
+    events: list[dict[str, Any]], expect: dict[str, Any]
+) -> dict[str, float]:
+    """Continuous tool-selection signals (Q0) layered on the binary tool
+    assertions.
+
+    Reads ONLY the metric-only gold fields — `expected_tools` and
+    `forbidden_tools` — never the gating `tools_used_contains` /
+    `tools_used_excludes`. That's deliberate: a gating assertion is
+    structurally pinned (a *passing* `tools_used_contains` case always has
+    recall 1.0; a passing `tools_used_excludes` case always has excl_ok
+    1.0), so reading it would inject constant 1.0s that swamp the real
+    signal — the same binary-in-a-costume trap as recall@n on singleton
+    gold. The metric-only fields can actually move:
+
+      * tool_recall  = |expected_tools ∩ used| / |expected_tools|
+        Fractional when the model takes a one-tool shortcut on a
+        genuinely multi-tool question.
+      * tool_excl_ok = |forbidden_tools \\ used| / |forbidden_tools|
+        Drops when the agent over-reaches to a tool it shouldn't (e.g.
+        paid web search on an internal question).
+
+    Both are NON-gating — the case's pass/fail comes from its other
+    assertions — so path-sensitive multi-tool / negative gold can't
+    flaky-fail the CI gate. See the `expected_tools` / `forbidden_tools`
+    cases in cases.yaml. Returns `{}` when neither field is declared.
+    """
+    used = {e.get("tool_name") for e in events if e.get("type") == "tool_call_start"}
+    out: dict[str, float] = {}
+    expected = expect.get("expected_tools") or []
+    if expected:
+        req = set(expected)
+        out["tool_recall"] = round(len(req & used) / len(req), 4)
+    forbidden = expect.get("forbidden_tools") or []
+    if forbidden:
+        forb = set(forbidden)
+        out["tool_excl_ok"] = round(len(forb - used) / len(forb), 4)
+    return out
 
 
 def _check_behavior_expectations(

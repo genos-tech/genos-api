@@ -236,23 +236,19 @@ class Command(BaseCommand):
                     )
                 )
 
-        # Continuous retrieval metrics (eval-mode, fixture-based — not
-        # production recall). Aggregated only over cases that declared
-        # rank-checkable gold, so the mean isn't diluted by cases without.
+        # Continuous metrics (Q0) — retrieval rank quality (mrr /
+        # recall_at_n, eval-mode fixture-based, NOT production recall) and
+        # tool-selection (tool_recall / tool_excl_ok). Each metric is
+        # averaged only over the cases that declared it, so denominators
+        # differ — the per-metric (n=) makes that explicit.
         scored = [r for r in results if r.metrics]
         if scored:
             keys = sorted({k for r in scored for k in r.metrics})
-
-            def _mavg(key: str) -> float:
-                vals = [r.metrics[key] for r in scored if key in r.metrics]
-                return sum(vals) / len(vals) if vals else 0.0
-
-            summary = "  ".join(f"{k}={_mavg(k):.3f}" for k in keys)
-            self.stdout.write(
-                self.style.NOTICE(
-                    f"\nRetrieval metrics ({len(scored)} cases, eval-mode): {summary}"
-                )
-            )
+            parts = []
+            for k in keys:
+                vals = [r.metrics[k] for r in scored if k in r.metrics]
+                parts.append(f"{k}={sum(vals) / len(vals):.3f} (n={len(vals)})")
+            self.stdout.write(self.style.NOTICE("\nContinuous metrics: " + "  ".join(parts)))
 
     def _run_basename(self) -> str:
         """`<timestamp>-<short-sha>` stem shared by persisted run files.
