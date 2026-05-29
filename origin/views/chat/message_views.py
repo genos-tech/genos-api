@@ -52,6 +52,7 @@ from origin.serializers.chat.unified_serializers import (
 from origin.services.mention_extractor import extract_mentioned_user_ids
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
+    apply_row_count_cap,
     build_delta_response,
     capture_server_time,
     check_since,
@@ -214,6 +215,10 @@ class MessagesDeltaView(AuthenticatedAPIView):
     - Catastrophic delta (`since` older than 60 days): respond as a full
       load AND set `force_full_reload=true` so the client clears its
       IDB store before applying.
+    - Row-count cap (`MAX_MESSAGES_PER_DELTA`): if the row count of any
+      of the above branches exceeds the cap, slice to the most recent N
+      and set `force_full_reload=true`. Bounds wire / parse cost for
+      very active channels even when the client's checkpoint is fresh.
     """
 
     def get(self, request, channel_id):
@@ -247,8 +252,16 @@ class MessagesDeltaView(AuthenticatedAPIView):
                     )
                     qs = qs | extra
 
-        qs = _prefetched_messages(qs.distinct().order_by("ts_sent_at"))
+        qs = qs.distinct().order_by("ts_sent_at")
 
+        # Cap the row count so a single delta response is bounded in
+        # size. If the cap trips, `force_full` flips so the client
+        # evicts its store before applying the slice — same semantic as
+        # the 60-day catastrophic-delta path.
+        qs, count_cap_tripped = apply_row_count_cap(qs)
+        force_full = force_full or count_cap_tripped
+
+        qs = _prefetched_messages(qs)
         messages_data = MessageSerializer(qs, many=True).data
         # `deletes` is a separate array per the envelope spec, but since
         # `apply_since_filter` already returns soft-deleted rows in the
@@ -345,7 +358,14 @@ class ThreadMessagesDeltaView(AuthenticatedAPIView):
                     )
                     qs = qs | extra
 
-        qs = _prefetched_messages(qs.distinct().order_by("ts_sent_at"))
+        qs = qs.distinct().order_by("ts_sent_at")
+
+        # Cap row count so an over-active thread can't blow up the wire
+        # response. Flag composes (OR) with the 60-day time cap.
+        qs, count_cap_tripped = apply_row_count_cap(qs)
+        force_full = force_full or count_cap_tripped
+
+        qs = _prefetched_messages(qs)
         return Response(
             build_delta_response(
                 {"messages": MessageSerializer(qs, many=True).data, "deletes": []},

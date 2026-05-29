@@ -29,6 +29,16 @@ from django.utils.dateparse import parse_datetime
 # before applying. Keeps both server CPU and client memory bounded.
 MAX_DELTA_AGE_DAYS = 60
 
+# Row-count cap per delta response. Composes with the 60-day time cap so
+# both axes are bounded: if a channel is very active (e.g. a channel
+# that posts 100 messages/day for 60 days = 6000 rows), the time cap
+# would let it through but the wire/parse cost is unbounded. When this
+# trips, we slice to the most recent N messages (by ts_sent_at DESC),
+# re-order ascending for wire consistency, and signal `force_full_reload`
+# so the client evicts its store before applying — same semantic as the
+# time cap, just driven by row count instead of clock skew.
+MAX_MESSAGES_PER_DELTA = 500
+
 
 def parse_since(request) -> Optional[datetime]:
     """Read `?since=ISO_TIMESTAMP` from a request's query string.
@@ -104,6 +114,43 @@ def is_since_too_old(since: Optional[datetime]) -> bool:
     if since is None:
         return False
     return since < timezone.now() - timedelta(days=MAX_DELTA_AGE_DAYS)
+
+
+def apply_row_count_cap(
+    qs: QuerySet,
+    *,
+    order_field: str = "ts_sent_at",
+    max_n: int = MAX_MESSAGES_PER_DELTA,
+) -> tuple:
+    """Cap the row count of a delta queryset.
+
+    Returns `(qs, force_full_reload)`:
+      - If `qs.count() <= max_n`: returns `(qs, False)` — caller serializes
+        the queryset as-is.
+      - Otherwise: returns `(<most_recent_max_n_qs>, True)` — caller treats
+        the result as a full-reload payload (the client will evict the
+        channel's store before applying the slice).
+
+    The slice is the most recent `max_n` rows by `order_field` DESC,
+    re-queried via `id__in` then re-ordered ASC so the wire shape matches
+    the no-cap case. Re-querying lets the caller re-apply prefetches
+    (`select_related` / `prefetch_related`) without losing them.
+
+    Two queries (`count()` then `values_list().slice()` + `filter(id__in)`)
+    on indexed columns is acceptable here — this path only runs on
+    delta responses that would otherwise be too large to ship, so the
+    extra round trips are cheap relative to the response size they
+    prevent.
+
+    Caller is responsible for re-applying `select_related` / `prefetch_related`
+    after this function returns — the returned queryset is a fresh
+    `id__in` query and won't carry over any annotations from the input.
+    """
+    if qs.count() <= max_n:
+        return qs, False
+    recent_ids = list(qs.order_by(f"-{order_field}").values_list("id", flat=True)[:max_n])
+    capped = qs.model.objects.filter(id__in=recent_ids).order_by(order_field)
+    return capped, True
 
 
 def build_delta_response(
