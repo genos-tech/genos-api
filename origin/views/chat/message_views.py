@@ -413,10 +413,35 @@ class MessageDetailView(AuthenticatedAPIView):
             )
         body_text = (request.data or {}).get("body_text") or ""
 
-        message.body = body_json
-        message.body_text = body_text
-        message.edited_at = timezone.now()
-        message.save(update_fields=["body", "body_text", "edited_at", "ts_updated_at"])
+        # Body change + mention re-sync must be atomic — otherwise a
+        # crash between the body save and the mention delete leaves the
+        # `mentions[]` array on the serialized message disagreeing with
+        # the rendered chips. The transaction wraps both writes.
+        with transaction.atomic():
+            message.body = body_json
+            message.body_text = body_text
+            message.edited_at = timezone.now()
+            message.save(update_fields=["body", "body_text", "edited_at", "ts_updated_at"])
+
+            # Re-sync MessageMention rows from the new body. The simple
+            # wipe-and-recreate approach is correct (set semantics) and
+            # cheap — typical messages have <10 mentions. We could diff
+            # old vs new and only touch the changes, but the row count
+            # makes the optimization not worth the complexity.
+            #
+            # Group mentions (mentionGroup nodes) are NOT expanded —
+            # see the same comment block on `_allocate_seq_and_create_message`
+            # for the schema-mismatch reason.
+            new_mentioned_ids = extract_mentioned_user_ids(body_json)
+            MessageMention.objects.filter(message=message).delete()
+            if new_mentioned_ids:
+                MessageMention.objects.bulk_create(
+                    [
+                        MessageMention(message=message, mentioned_user_id=uid)
+                        for uid in new_mentioned_ids
+                    ],
+                    ignore_conflicts=True,
+                )
 
         # Re-fetch with prefetches for the response.
         message = _prefetched_messages(Message.objects.filter(pk=message.pk)).first()
