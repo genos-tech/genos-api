@@ -9,6 +9,7 @@ from origin.views.common.mention_group_views import (
     MentionGroupMembersView,
     MentionGroupResolveView,
 )
+from origin.views.common.legacy_chat_traffic_views import LegacyChatTrafficView
 from origin.views.common.notification_views import NotificationPreferenceView
 from origin.views.common.runtime_config_views import RuntimeConfigView
 from origin.views.common.oauth_views import (
@@ -139,6 +140,14 @@ urlpatterns = [
         "api/runtime-config/",
         RuntimeConfigView.as_view(),
         name="runtime_config",
+    ),
+    # Phase 1 of the legacy-chat-REST retirement. Exposes the counters
+    # accumulated by `LegacyChatTrafficMiddleware`. Removed alongside
+    # the middleware itself once the legacy URL routes are deleted.
+    path(
+        "api/admin/legacy-chat-traffic/",
+        LegacyChatTrafficView.as_view(),
+        name="legacy_chat_traffic",
     ),
     path(
         "api/v2/user/preferences/auto-close-on-pr-merge/",

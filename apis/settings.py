@@ -95,6 +95,12 @@ MIDDLEWARE = [
     # to the acting user. Must run AFTER AuthenticationMiddleware so
     # `request.user` is already resolved.
     "origin.middleware.current_user.CurrentUserMiddleware",
+    # Phase 1 of the legacy-chat-REST retirement plan. Flags any hit on
+    # `/api/v2/{dm,gm,pm,mdm,chat-master,chat-attachment}/...` —
+    # endpoints that should have zero traffic post chat v3 migration.
+    # The deletion gate (Phases 2+) reads this signal to confirm safety.
+    # Removed once the legacy URL routes themselves are deleted.
+    "origin.middleware.legacy_chat_traffic.LegacyChatTrafficMiddleware",
 ]
 
 # CORS policy.
