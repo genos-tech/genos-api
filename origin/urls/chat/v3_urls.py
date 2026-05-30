@@ -48,6 +48,7 @@ from origin.views.chat.channel_views import (
     ChannelListView,
     ChannelMemberDetailView,
     ChannelMembersView,
+    ChannelProfileImageView,
 )
 from origin.views.chat.message_views import (
     MessageAttachmentsView,
@@ -80,6 +81,11 @@ urlpatterns = [
         "api/v3/channels/<uuid:channel_id>/members/<uuid:user_id>/",
         ChannelMemberDetailView.as_view(),
         name="v3_channel_member_detail",
+    ),
+    path(
+        "api/v3/channels/<uuid:channel_id>/profile/image/",
+        ChannelProfileImageView.as_view(),
+        name="v3_channel_profile_image",
     ),
     # Messages
     path(

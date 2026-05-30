@@ -36,6 +36,10 @@ class ChannelKind(models.IntegerChoices):
     MDM = 4, "mdm"
 
 
+def _channel_profile_image_path(instance, filename):
+    return f"channel_profiles/{instance.id}/{filename}"
+
+
 class Channel(models.Model):
     """Polymorphic chat container. One row per DM/GM/PM/MDM.
 
@@ -57,7 +61,19 @@ class Channel(models.Model):
 
     # Display
     title = models.CharField(max_length=255, blank=True, default="")
+    # `profile_image_url` is the public URL fragment surfaced through
+    # the ChannelSerializer + the v3 `channel.update` payload's
+    # `profile_image_url` field. `profile_image_file` is the underlying
+    # binary upload target — `ChannelProfileImageView` writes the file
+    # via FileField and then sets `profile_image_url` to the resolved
+    # `"channel_profiles/<id>/<file>"` path so callers don't need two
+    # round-trips to render.
     profile_image_url = models.CharField(max_length=512, blank=True, default="")
+    profile_image_file = models.FileField(
+        upload_to=_channel_profile_image_path,
+        blank=True,
+        null=True,
+    )
 
     # PM-only: 1:1 with ProjectMaster.
     project = models.ForeignKey(

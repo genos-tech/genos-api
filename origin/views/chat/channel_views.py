@@ -20,6 +20,7 @@ from django.db import transaction
 from django.db.models import OuterRef, Q, Subquery
 from django.http import Http404
 from rest_framework import status
+from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
 from origin.models.chat.unified_models import (
@@ -653,3 +654,64 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
         member.is_deleted = True
         member.save(update_fields=["is_deleted", "ts_updated_at"])
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ChannelProfileImageView(AuthenticatedAPIView):
+    """PUT /api/v3/channels/{channel_id}/profile/image/
+
+    Upload a new profile image for a GM/MDM channel. Mirrors the legacy
+    `TeamProfileImageView` / `UserProfileImageView` patterns: multipart
+    body with a single `profile_image` file field; on success returns
+    the updated channel row so callers can read `profile_image_url`
+    directly.
+
+    Authorization: only the channel owner can change the avatar. DM
+    channels have no avatar (identity is the user pair). PM channels
+    mirror the project avatar — edit via the project profile flow.
+
+    Cross-tab refresh: this is a REST endpoint, so it doesn't fan out a
+    `channel.updated` socket broadcast. Other open tabs see the new
+    avatar on next `listChannels` or `syncChannel` refresh. The caller's
+    own tab should invalidate `channelService.snapshot.channels` via
+    `syncChannel` after upload — that's the established pattern.
+    """
+
+    parser_classes = [MultiPartParser]
+
+    def put(self, request, channel_id):
+        channel = _get_channel_for_user(channel_id, request.user)
+        if channel.kind == ChannelKind.DM:
+            return Response(
+                {"error": "DM channels have no avatar."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if channel.kind == ChannelKind.PM:
+            return Response(
+                {"error": ("PM channels mirror the project avatar; " "edit the project instead.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not channel.owner_id or str(channel.owner_id) != str(request.user.id):
+            return Response(
+                {"error": "Only the channel owner can change the avatar."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        profile_image = request.FILES.get("profile_image")
+        if profile_image is None:
+            return Response(
+                {"error": "profile_image is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Django's storage layer resolves the final on-disk path and
+        # collision-suffixes the filename if needed. Read `.name` after
+        # save to capture whatever it actually stored.
+        channel.profile_image_file = profile_image
+        channel.save(update_fields=["profile_image_file", "ts_updated_at"])
+        channel.profile_image_url = channel.profile_image_file.name
+        channel.save(update_fields=["profile_image_url", "ts_updated_at"])
+
+        return Response(
+            {"channel": ChannelSerializer(channel, context={"request": request}).data},
+            status=status.HTTP_200_OK,
+        )
