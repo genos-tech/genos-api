@@ -19,6 +19,7 @@ from rest_framework import serializers
 from origin.models.chat.unified_models import (
     Activity,
     Channel,
+    ChannelKind,
     ChannelMember,
     Flag,
     Message,
@@ -262,6 +263,15 @@ class ChannelSerializer(serializers.ModelSerializer):
     # Populated by the view's annotated queryset; see ChannelListView.
     latestMessage = serializers.SerializerMethodField()
     unreadCount = serializers.SerializerMethodField()
+    # DM partner identity + MDM member avatars are resolved client-side
+    # from this roster (FE `resolveDmPartner` / `membersToMdmMembers`).
+    # Without it on the chat-list payload, DM rows can't render the
+    # partner's name/avatar until the channel is opened (which lazily
+    # fetches members). Only emitted for DM/MDM — GM/PM rows render from
+    # `title`, and GM rosters can be large, so they're skipped on this
+    # hot path. The view attaches `active_members` (one batched query for
+    # all DM/MDM rows); falls back to a per-channel query otherwise.
+    members = serializers.SerializerMethodField()
 
     class Meta:
         model = Channel
@@ -276,6 +286,7 @@ class ChannelSerializer(serializers.ModelSerializer):
             "legacyChatId",
             "latestMessage",
             "unreadCount",
+            "members",
             "tsCreated",
             "tsUpdated",
         ]
@@ -285,6 +296,14 @@ class ChannelSerializer(serializers.ModelSerializer):
         if msg is None:
             return None
         return MessageSerializer(msg, context=self.context).data
+
+    def get_members(self, obj):
+        if obj.kind not in (ChannelKind.DM, ChannelKind.MDM):
+            return []
+        members = getattr(obj, "active_members", None)
+        if members is None:
+            members = list(obj.members.filter(is_deleted=False).select_related("user"))
+        return ChannelMemberSerializer(members, many=True, context=self.context).data
 
     def get_unreadCount(self, obj):
         # Annotated by the view as the number of messages whose `seq` is

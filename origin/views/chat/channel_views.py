@@ -206,6 +206,23 @@ class ChannelListView(AuthenticatedAPIView):
         for c in channels:
             c._latest_message = latest_by_channel.get(c.id)
 
+        # Attach members for DM/MDM rows only (DM partner identity + MDM
+        # avatars are resolved client-side from this roster). One batched
+        # query for all such channels — NOT a blanket prefetch, so large
+        # GM rosters never ride this hot path. GM/PM rows render from
+        # `title` and get an empty roster.
+        dm_mdm_ids = [c.id for c in channels if c.kind in (ChannelKind.DM, ChannelKind.MDM)]
+        members_by_channel: dict = {}
+        if dm_mdm_ids:
+            for m in (
+                ChannelMember.objects.filter(channel_id__in=dm_mdm_ids, is_deleted=False)
+                .select_related("user")
+                .order_by("ts_joined_at")
+            ):
+                members_by_channel.setdefault(m.channel_id, []).append(m)
+        for c in channels:
+            c.active_members = members_by_channel.get(c.id, [])
+
         data = ChannelSerializer(channels, many=True, context={"request": request}).data
         return Response({"channels": data})
 
