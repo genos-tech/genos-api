@@ -64,6 +64,7 @@ from origin.views.chat.message_views import (
 from origin.views.chat.pin_flag_views import FlagView, PinView
 from origin.views.chat.reaction_views_v3 import MessageReactionsView
 from origin.views.chat.read_cursor_views import ReadCursorView
+from origin.views.chat.search_views_v3 import SearchTeamMembersAndGroupsView
 
 urlpatterns = [
     # Channels
@@ -152,5 +153,11 @@ urlpatterns = [
         "api/v3/activities/read-all/",
         ActivityReadAllView.as_view(),
         name="v3_activity_read_all",
+    ),
+    # Chat search (replaces legacy /api/v2/search/teamMembersAndGroups/)
+    path(
+        "api/v3/search/teamMembersAndGroups/",
+        SearchTeamMembersAndGroupsView.as_view(),
+        name="v3_search_team_members_and_groups",
     ),
 ]

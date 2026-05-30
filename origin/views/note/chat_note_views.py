@@ -5,10 +5,7 @@ from rest_framework import status
 
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.serializers.note.note_serializers import *
-from origin.models.chat.dm_models import DMMaster, UserDMMapping
-from origin.models.chat.pm_models import PMMessages
-from origin.models.chat.gm_models import GMMaster, GMMembers
-from origin.models.chat.mdm_models import MDMMaster, MDMMembers
+from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.common.user_models import CustomUser
 
@@ -31,19 +28,34 @@ NOTE_TYPE = 3  # Chat Notes
 
 
 def _chat_membership_filters(team_id, user_id):
-    """Build a Q expression matching chat notes the user has implicit access to."""
-    dm_ids = list(
-        UserDMMapping.objects.filter(team_id=team_id, user_id=user_id).values_list(
-            "dm_id", flat=True
-        )
-    )
-    gm_ids = list(GMMembers.objects.filter(attendee=user_id).values_list("gm_id", flat=True))
+    """Build a Q expression matching chat notes the user has implicit access to.
+
+    DM/GM/MDM membership is derived from the user's v3 `ChannelMember`
+    rows, mapped back to the legacy chat ids the notes are keyed on via
+    `Channel.legacy_chat_id`. PM stays on `ProjectMembers`.
+    """
+    dm_ids, gm_ids, mdm_ids = [], [], []
+    member_channels = ChannelMember.objects.filter(
+        user_id=user_id,
+        is_deleted=False,
+        channel__is_deleted=False,
+        channel__team_id=team_id,
+    ).values_list("channel__kind", "channel__legacy_chat_id")
+    for kind, legacy_id in member_channels:
+        if legacy_id is None:
+            continue
+        if kind == ChannelKind.DM:
+            dm_ids.append(legacy_id)
+        elif kind == ChannelKind.GM:
+            gm_ids.append(legacy_id)
+        elif kind == ChannelKind.MDM:
+            mdm_ids.append(legacy_id)
+
     pm_project_ids = list(
         ProjectMembers.objects.filter(team=team_id, attendee=user_id).values_list(
             "project_id", flat=True
         )
     )
-    mdm_ids = list(MDMMembers.objects.filter(attendee=user_id).values_list("mdm_id", flat=True))
 
     q = Q()
     if dm_ids:
@@ -199,72 +211,69 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
         pm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 3]
         mdm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 4]
 
-        # Get DM partner names
+        # Resolve chat display names off the v3 unified schema, keyed by
+        # the legacy chat id via `Channel.legacy_chat_id`: DM partner from
+        # `ChannelMember`; GM/MDM from `Channel.title`. PM keeps using
+        # `ProjectMaster` (not a legacy chat model).
         dm_partner_names = {}
-        if dm_ids:
-            # Get all DM records for the DM IDs
-            dm_records = DMMaster.objects.filter(dm_id__in=dm_ids).values(
-                "dm_id", "user_1_id", "user_2_id"
-            )
+        gm_names = {}
+        mdm_names = {}
 
-            # Find partner user IDs (the user that is NOT the current user)
-            partner_user_ids = set()
-            dm_to_partner = {}  # Maps dm_id to partner_user_id
-            for dm in dm_records:
-                if str(dm["user_1_id"]) == str(request_user_id):
-                    partner_id = dm["user_2_id"]
+        # GM + MDM display names from Channel.title.
+        if gm_ids or mdm_ids:
+            for ch in Channel.objects.filter(
+                kind__in=[ChannelKind.GM, ChannelKind.MDM],
+                legacy_chat_id__in=(gm_ids + mdm_ids),
+                is_deleted=False,
+            ).values("kind", "legacy_chat_id", "title"):
+                if ch["kind"] == ChannelKind.GM:
+                    gm_names[ch["legacy_chat_id"]] = ch["title"]
                 else:
-                    partner_id = dm["user_1_id"]
-                partner_user_ids.add(partner_id)
-                dm_to_partner[dm["dm_id"]] = partner_id
+                    mdm_names[ch["legacy_chat_id"]] = ch["title"]
 
-            # Get partner usernames
-            partner_users = CustomUser.objects.filter(id__in=partner_user_ids).values(
-                "id", "username"
+        # DM partner usernames: the *other* member of each DM channel.
+        if dm_ids:
+            dm_chan_to_legacy = dict(
+                Channel.objects.filter(
+                    kind=ChannelKind.DM, legacy_chat_id__in=dm_ids, is_deleted=False
+                ).values_list("id", "legacy_chat_id")
             )
-            user_id_to_name = {str(u["id"]): u["username"] for u in partner_users}
+            members_by_chan: dict = {}
+            for m in ChannelMember.objects.filter(
+                channel_id__in=dm_chan_to_legacy.keys(), is_deleted=False
+            ).values("channel_id", "user_id"):
+                members_by_chan.setdefault(m["channel_id"], []).append(m["user_id"])
 
-            # Build dm_id to partner name mapping
-            for dm_id, partner_id in dm_to_partner.items():
-                dm_partner_names[dm_id] = user_id_to_name.get(str(partner_id), "Direct Message")
+            partner_by_legacy = {}
+            partner_user_ids = set()
+            for chan_id, uids in members_by_chan.items():
+                legacy_id = dm_chan_to_legacy.get(chan_id)
+                partner = next(
+                    (u for u in uids if str(u) != str(request_user_id)),
+                    uids[0] if uids else None,
+                )
+                if legacy_id is not None and partner:
+                    partner_by_legacy[legacy_id] = partner
+                    partner_user_ids.add(partner)
 
-        # Get project names for PM
+            user_id_to_name = {
+                str(u["id"]): u["username"]
+                for u in CustomUser.objects.filter(id__in=partner_user_ids).values(
+                    "id", "username"
+                )
+            }
+            for legacy_id, partner_id in partner_by_legacy.items():
+                dm_partner_names[legacy_id] = user_id_to_name.get(
+                    str(partner_id), "Direct Message"
+                )
+
+        # Get project names for PM (unchanged — ProjectMaster is not legacy).
         project_names = {}
         if pm_ids:
             projects = ProjectMaster.objects.filter(project_id__in=pm_ids).values(
                 "project_id", "project_name"
             )
             project_names = {p["project_id"]: p["project_name"] for p in projects}
-
-        # Get group names for GM
-        gm_names = {}
-        if gm_ids:
-            groups = GMMaster.objects.filter(gm_id__in=gm_ids).values("gm_id", "group_name")
-            gm_names = {g["gm_id"]: g["group_name"] for g in groups}
-
-        # Get MDM names (display_name or auto-generated from member names)
-        mdm_names = {}
-        if mdm_ids:
-            mdm_records = MDMMaster.objects.filter(mdm_id__in=mdm_ids).values(
-                "mdm_id", "display_name"
-            )
-            mdm_display = {m["mdm_id"]: m["display_name"] for m in mdm_records}
-
-            mdm_ids_needing_members = [mid for mid in mdm_ids if not mdm_display.get(mid)]
-            if mdm_ids_needing_members:
-                members = (
-                    MDMMembers.objects.filter(mdm_id__in=mdm_ids_needing_members)
-                    .select_related("attendee")
-                    .values("mdm_id", "attendee__username")
-                )
-                member_map = {}
-                for m in members:
-                    member_map.setdefault(m["mdm_id"], []).append(m["attendee__username"])
-                for mid in mdm_ids_needing_members:
-                    names = member_map.get(mid, [])
-                    mdm_display[mid] = ", ".join(names) if names else f"DM {mid}"
-
-            mdm_names = mdm_display
 
         # Add chat names to notes
         for note in notes_list:

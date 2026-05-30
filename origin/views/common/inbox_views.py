@@ -5,7 +5,7 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.serializers.common.inbox_serializers import *
 from origin.models.common.team_models import *
 from origin.models.project.prj_models import *
-from origin.models.chat.gm_models import *
+from origin.services.legacy_chat_bridge import resolve_channel
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
@@ -239,15 +239,21 @@ class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
 
 class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
     def post(self, request):
-        gm_owner_id = GMMaster.objects.filter(
-            owner_team=request.data["team_id"],
-            gm_id=request.data["item_optionals"]["gm_id"],
-        ).values_list("owner_user", flat=True)
+        # Resolve the GM's owner via the v3 channel (legacy gm_id bridged
+        # through `Channel.legacy_chat_id`); legacy `GMMaster.owner_user`
+        # maps to `Channel.owner`.
+        gm_channel = resolve_channel(2, request.data["item_optionals"]["gm_id"])  # GM=2
+        if gm_channel is None or not gm_channel.owner_id:
+            return Response(
+                {"error": "GM not found or has no owner."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        gm_owner_id = gm_channel.owner_id
 
         data = {
             "team": request.data["team_id"],
             "sender": request.data["sender_id"],
-            "receiver": gm_owner_id[0],  # Send to the gm owner
+            "receiver": gm_owner_id,  # Send to the gm owner
             "item_body": request.data["item_body"],
             "item_type": request.data["item_type"],  # Must be '3'
             "item_optionals": request.data["item_optionals"],

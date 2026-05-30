@@ -31,12 +31,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from origin.models.chat.dm_models import DMThreadMessages
-from origin.models.chat.gm_models import GMThreadMessages
-from origin.models.chat.mdm_models import MDMThreadMessages
-from origin.models.chat.pm_models import PMThreadMessages
+from origin.models.chat.unified_models import Message
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.acl import chat_acl_user_ids
+from origin.services.legacy_chat_bridge import resolve_channel, resolve_thread_root_id
 from origin.search_engine.chunkers.base import (
     CHAT_TYPE_DM,
     CHAT_TYPE_GM,
@@ -116,16 +114,6 @@ def compute_fingerprint(messages: list[ThreadMessageRecord]) -> str:
 # --------------------------------------------------------------------------- #
 
 
-# (model, chat_id_field_name). `dm_id` / `gm_id` / `mdm_id` / `project_id` per
-# the convention also used by fetch_chat_thread.py.
-_THREAD_TABLES = {
-    CHAT_TYPE_DM: (DMThreadMessages, "dm_id"),
-    CHAT_TYPE_GM: (GMThreadMessages, "gm_id"),
-    CHAT_TYPE_MDM: (MDMThreadMessages, "mdm_id"),
-    CHAT_TYPE_PM: (PMThreadMessages, "project_id"),
-}
-
-
 def fetch_thread_messages_for_agent(
     *,
     chat_type: int,
@@ -147,14 +135,22 @@ def fetch_thread_messages_for_agent(
     if user_id not in allowed:
         raise ThreadSummaryError("Not authorized to read this thread.")
 
-    table = _THREAD_TABLES.get(chat_type)
-    if table is None:
-        raise ThreadSummaryError(f"Unsupported chat_type {chat_type!r}.")
-    model, chat_id_field = table
+    # Resolve the legacy chat ref → v3 channel → thread root, then pull
+    # the thread's replies from the unified `Message` table. v3 `seq`
+    # mirrors the legacy `thread_message_id`; `body` is the same JSONField.
+    channel = resolve_channel(chat_type, chat_id)
+    if channel is None:
+        return []
+    root_id = resolve_thread_root_id(channel, thread_id)
+    if not root_id:
+        return []
 
-    qs = model.objects.filter(
-        **{chat_id_field: chat_id, "thread_id": thread_id, "is_deleted": False}
-    ).order_by("thread_message_id")
+    qs = Message.objects.filter(
+        channel=channel,
+        thread_root_id=root_id,
+        is_thread_reply=True,
+        deleted_at__isnull=True,
+    ).order_by("seq")
 
     rows = list(qs)
     if not rows:
@@ -170,18 +166,18 @@ def fetch_thread_messages_for_agent(
 
     out: list[ThreadMessageRecord] = []
     for r in rows:
-        text = extract_text(getattr(r, "thread_message_body", None))
+        text = extract_text(r.body)
         if not text:
             continue
         sid = str(r.sender_id) if r.sender_id else ""
         out.append(
             ThreadMessageRecord(
-                thread_message_id=r.thread_message_id,
+                thread_message_id=r.seq,
                 sender_id=sid,
                 sender_name=names_by_id.get(sid, sid or "Unknown"),
                 text=text,
                 ts_sent=r.ts_sent_at,
-                ts_updated=getattr(r, "ts_updated_at", None),
+                ts_updated=r.ts_updated_at,
             )
         )
     return out

@@ -49,39 +49,40 @@ def friendly_chat_title(
     label = str(chat_type_label).lower()
 
     # Lazy imports — keep this module dependency-free at import time
-    # and avoid circular-import surprises during Django startup.
+    # and avoid circular-import surprises during Django startup. Chat
+    # identity resolves off the v3 unified schema via the
+    # `Channel.legacy_chat_id` bridge (the legacy DM/GM/MDM master tables
+    # are gone); `cid` is the legacy int the index/search rows carry.
     if label == "dm":
-        from origin.models.chat.dm_models import DMMaster
+        from origin.models.chat.unified_models import ChannelMember
         from origin.models.common.user_models import CustomUser
+        from origin.services.legacy_chat_bridge import resolve_channel
 
-        try:
-            dm = DMMaster.objects.get(dm_id=cid)
-        except DMMaster.DoesNotExist:
+        channel = resolve_channel(1, cid)  # CHAT_TYPE_DM
+        if channel is None:
             return None
-        partner_id = dm.user_2_id if str(dm.user_1_id) == viewer_user_id else dm.user_1_id
+        member_ids = list(
+            ChannelMember.objects.filter(channel=channel, is_deleted=False).values_list(
+                "user_id", flat=True
+            )
+        )
+        # The DM partner is the *other* member; self-DM falls back to self.
+        partner_id = next((uid for uid in member_ids if str(uid) != viewer_user_id), None)
+        if partner_id is None and member_ids:
+            partner_id = member_ids[0]
         if not partner_id:
             return None
         try:
-            user = CustomUser.objects.get(id=partner_id)
+            return CustomUser.objects.get(id=partner_id).username or None
         except CustomUser.DoesNotExist:
             return None
-        return user.username or None
 
-    if label == "gm":
-        from origin.models.chat.gm_models import GMMaster
+    if label == "gm" or label == "mdm":
+        from origin.services.legacy_chat_bridge import resolve_channel
 
-        try:
-            return GMMaster.objects.get(gm_id=cid).group_name or None
-        except GMMaster.DoesNotExist:
-            return None
-
-    if label == "mdm":
-        from origin.models.chat.mdm_models import MDMMaster
-
-        try:
-            return MDMMaster.objects.get(mdm_id=cid).display_name or None
-        except MDMMaster.DoesNotExist:
-            return None
+        # v3 `Channel.title` holds the group / MDM display name.
+        channel = resolve_channel(2 if label == "gm" else 4, cid)
+        return (channel.title or None) if channel else None
 
     if label == "pm":
         from origin.models.project.prj_models import ProjectMaster

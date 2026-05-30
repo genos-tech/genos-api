@@ -6,9 +6,7 @@ from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.project.prj_models import ProjectMembers
-from origin.models.chat.dm_models import UserDMMapping
-from origin.models.chat.gm_models import GMMembers
-from origin.models.chat.mdm_models import MDMMembers
+from origin.services.legacy_chat_bridge import is_chat_member as _bridge_is_chat_member
 
 NOTE_TYPE_PERSONAL = 1
 NOTE_TYPE_TASK = 2
@@ -30,16 +28,10 @@ def get_explicit_role(user_id, note_type, note_id):
 
 
 def _is_chat_member(user_id, chat_type, chat_id):
-    if chat_type == 1:
-        return UserDMMapping.objects.filter(user_id=user_id, dm_id=chat_id).exists()
-    if chat_type == 2:
-        return GMMembers.objects.filter(gm=chat_id, attendee=user_id).exists()
-    if chat_type == 3:
-        # PM (project messaging) is gated by project membership.
-        return ProjectMembers.objects.filter(project=chat_id, attendee=user_id).exists()
-    if chat_type == 4:
-        return MDMMembers.objects.filter(mdm=chat_id, attendee=user_id).exists()
-    return False
+    # Membership resolves off the v3 unified schema (DM/GM/MDM via the
+    # `Channel.legacy_chat_id` bridge → `ChannelMember`; PM via
+    # `ProjectMembers`). See `services.legacy_chat_bridge`.
+    return _bridge_is_chat_member(chat_type, chat_id, user_id)
 
 
 def get_effective_role(user_id, note_type, note_id, team_id=None):

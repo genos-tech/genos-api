@@ -26,11 +26,9 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
 
-from origin.models.chat.dm_models import DMMaster
-from origin.models.chat.gm_models import GMMembers
-from origin.models.chat.mdm_models import MDMMembers
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
+from origin.services.legacy_chat_bridge import member_ids_by_chat
 
 from origin.search_engine.chunkers.base import (
     Chunk,
@@ -126,56 +124,11 @@ def iter_chat_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
 
 def _resolve_chat_acls(notes: list[ChatNoteMaster]) -> dict[tuple[int, int], list[str]]:
     """Map (chat_type, chat_id) → list of user_ids allowed in that chat."""
-    grouped: dict[int, set[int]] = defaultdict(set)
-    for n in notes:
-        if n.chat_type and n.chat_id:
-            grouped[n.chat_type].add(n.chat_id)
-
-    out: dict[tuple[int, int], list[str]] = {}
-
-    # DM ACL = [user_1_id, user_2_id].
-    if grouped.get(CHAT_TYPE_DM):
-        for dm in DMMaster.objects.filter(dm_id__in=grouped[CHAT_TYPE_DM]).values(
-            "dm_id", "user_1_id", "user_2_id"
-        ):
-            out[(CHAT_TYPE_DM, dm["dm_id"])] = [
-                str(uid) for uid in (dm["user_1_id"], dm["user_2_id"]) if uid
-            ]
-
-    # GM ACL = GMMembers.attendee_id for that gm.
-    if grouped.get(CHAT_TYPE_GM):
-        members = defaultdict(list)
-        for row in GMMembers.objects.filter(gm_id__in=grouped[CHAT_TYPE_GM]).values(
-            "gm_id", "attendee_id"
-        ):
-            if row["attendee_id"]:
-                members[row["gm_id"]].append(str(row["attendee_id"]))
-        for gm_id in grouped[CHAT_TYPE_GM]:
-            out[(CHAT_TYPE_GM, gm_id)] = members.get(gm_id, [])
-
-    # MDM ACL = MDMMembers.attendee_id.
-    if grouped.get(CHAT_TYPE_MDM):
-        members = defaultdict(list)
-        for row in MDMMembers.objects.filter(mdm_id__in=grouped[CHAT_TYPE_MDM]).values(
-            "mdm_id", "attendee_id"
-        ):
-            if row["attendee_id"]:
-                members[row["mdm_id"]].append(str(row["attendee_id"]))
-        for mdm_id in grouped[CHAT_TYPE_MDM]:
-            out[(CHAT_TYPE_MDM, mdm_id)] = members.get(mdm_id, [])
-
-    # PM ACL = ProjectMembers.attendee_id (chat_id IS project_id here).
-    if grouped.get(CHAT_TYPE_PM):
-        members = defaultdict(list)
-        for row in ProjectMembers.objects.filter(project_id__in=grouped[CHAT_TYPE_PM]).values(
-            "project_id", "attendee_id"
-        ):
-            if row["attendee_id"]:
-                members[row["project_id"]].append(str(row["attendee_id"]))
-        for project_id in grouped[CHAT_TYPE_PM]:
-            out[(CHAT_TYPE_PM, project_id)] = members.get(project_id, [])
-
-    return out
+    # Resolve membership off the v3 unified schema (DM/GM/MDM via the
+    # `Channel.legacy_chat_id` bridge → `ChannelMember`; PM via
+    # `ProjectMembers`). `member_ids_by_chat` batches the lookups.
+    refs = {(n.chat_type, n.chat_id) for n in notes if n.chat_type and n.chat_id}
+    return member_ids_by_chat(refs)
 
 
 # ----------------------------- TaskNote -----------------------------

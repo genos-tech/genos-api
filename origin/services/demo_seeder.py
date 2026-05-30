@@ -44,21 +44,6 @@ from origin.models.project.prj_models import ProjectMaster, ProjectMembers, Proj
 from origin.models.task.task_models import TaskMaster, TaskComments
 from origin.models.task.sprint_models import Sprint, SprintConfig
 from origin.models.task.milestone_models import MilestoneMaster, MilestoneAssignees
-from origin.models.chat.dm_models import (
-    DMMaster,
-    DMMessages,
-    DMThreadMessages,
-    UserDMMapping,
-)
-from origin.models.chat.gm_models import GMMaster, GMMembers, GMMessages, GMThreadMessages
-from origin.models.chat.mdm_models import (
-    MDMMaster,
-    MDMMembers,
-    MDMMessages,
-    MDMThreadMessages,
-)
-from origin.models.chat.pm_models import PMMessages, PMThreadMessages
-from origin.models.chat.chat_master_models import UserChatMaster
 from origin.models.chat.unified_models import (
     Channel,
     ChannelDirectPair,
@@ -68,8 +53,6 @@ from origin.models.chat.unified_models import (
 )
 from origin.models.chat.mention_models import MentionFact
 from origin.models.chat.reaction_models import ReactionFact
-from origin.models.chat.chat_attachment_models import ChatAttachmentFact
-from origin.models.chat.read_status_models import ReadStatus, ActivityReadStatus
 from origin.models.chat.activity_models import ActivityFact
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.models.note.personal_note_models import PersonalNoteMaster
@@ -2038,13 +2021,9 @@ def create_demo_environment(demo_user: CustomUser, *, short: str | None = None) 
         for seeded in seeded_projects:
             _create_pm_messages(seeded["project"], all_members, seeded["blueprint"])
 
-        # 14. UserChatMaster per (user, team)
-        UserChatMaster.objects.bulk_create(
-            [
-                UserChatMaster(team=team, user=u, flagged_messages=[], pinned_chats=[])
-                for u in all_members
-            ]
-        )
+        # 14. (legacy UserChatMaster seeding removed — the legacy chat
+        #     tables are dropped; chat is seeded on the v3 Channel/Message
+        #     schema above.)
 
         # 15. Notes (personal + task + chat note with permissions)
         _create_notes(team, demo_user, bots, seeded_projects)
@@ -2911,10 +2890,18 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
     with transaction.atomic():
         # Pre-collect parent IDs once so children can be filtered by
         # them without triggering N+1 lookups.
-        dm_ids = list(DMMaster.objects.filter(team=team_id).values_list("dm_id", flat=True))
-        gm_ids = list(GMMaster.objects.filter(owner_team=team_id).values_list("gm_id", flat=True))
-        mdm_ids = list(
-            MDMMaster.objects.filter(owner_team=team_id).values_list("mdm_id", flat=True)
+        # Legacy chat ids (still the key on the kept Mention/Reaction fact
+        # tables) are derived from the v3 channels via `legacy_chat_id` —
+        # the legacy DM/GM master tables are gone.
+        dm_ids = list(
+            Channel.objects.filter(team=team_id, kind=ChannelKind.DM)
+            .exclude(legacy_chat_id=None)
+            .values_list("legacy_chat_id", flat=True)
+        )
+        gm_ids = list(
+            Channel.objects.filter(team=team_id, kind=ChannelKind.GM)
+            .exclude(legacy_chat_id=None)
+            .values_list("legacy_chat_id", flat=True)
         )
         project_ids = list(
             ProjectMaster.objects.filter(team=team_id).values_list("project_id", flat=True)
@@ -2935,40 +2922,21 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
         )
 
         # Fact tables that key off (chat_type, chat_id) with no FK — must
-        # filter explicitly to avoid leaking rows.
+        # filter explicitly to avoid leaking rows. (MentionFact / ReactionFact
+        # are kept analytics tables; the legacy ChatAttachmentFact / ReadStatus
+        # tables are dropped, so they're no longer cleaned here.)
         for chat_type, chat_ids in [(1, dm_ids), (2, gm_ids), (3, project_ids)]:
             if not chat_ids:
                 continue
             MentionFact.objects.filter(chat_type=chat_type, chat_id__in=chat_ids).delete()
             ReactionFact.objects.filter(chat_type=chat_type, chat_id__in=chat_ids).delete()
-            ChatAttachmentFact.objects.filter(chat_type=chat_type, chat_id__in=chat_ids).delete()
-            ReadStatus.objects.filter(chat_type=chat_type, chat_id__in=chat_ids).delete()
 
-        # ActivityFact and its read-status are team-scoped via a proper FK.
-        ActivityReadStatus.objects.filter(team=team_id).delete()
+        # ActivityFact is team-scoped via a proper FK.
         ActivityFact.objects.filter(team=team_id).delete()
 
-        # DM tree
-        DMThreadMessages.objects.filter(dm_id__in=dm_ids).delete()
-        DMMessages.objects.filter(dm_id__in=dm_ids).delete()
-        UserDMMapping.objects.filter(team_id=team_id).delete()
-        DMMaster.objects.filter(team=team_id).delete()
-
-        # GM tree
-        GMThreadMessages.objects.filter(gm_id__in=gm_ids).delete()
-        GMMessages.objects.filter(gm_id__in=gm_ids).delete()
-        GMMembers.objects.filter(gm_id__in=gm_ids).delete()
-        GMMaster.objects.filter(owner_team=team_id).delete()
-
-        # MDM tree
-        MDMThreadMessages.objects.filter(mdm_id__in=mdm_ids).delete()
-        MDMMessages.objects.filter(mdm_id__in=mdm_ids).delete()
-        MDMMembers.objects.filter(mdm_id__in=mdm_ids).delete()
-        MDMMaster.objects.filter(owner_team=team_id).delete()
-
-        # Project channel
-        PMThreadMessages.objects.filter(project_id__in=project_ids).delete()
-        PMMessages.objects.filter(project_id__in=project_ids).delete()
+        # Legacy DM/GM/MDM/PM chat trees + UserChatMaster are gone (their
+        # tables were dropped in the v3 migration); chat lives entirely on
+        # the v3 Channel/Message schema cleaned up just below.
 
         # V3 unified messaging schema. Order matters: Message.channel is
         # PROTECT, so messages must go before channels; Channel.project
@@ -2979,10 +2947,9 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
         Message.objects.filter(channel__team=team_id).delete()
         Channel.objects.filter(team=team_id).delete()
 
-        # User-level chat master + per-user todo. ToDoGroup CASCADE
-        # removes its items; ToDoCategory rows are user-scoped (not
-        # tied to a group) so they need their own pass.
-        UserChatMaster.objects.filter(team=team_id).delete()
+        # Per-user todo. ToDoGroup CASCADE removes its items; ToDoCategory
+        # rows are user-scoped (not tied to a group) so they need their own
+        # pass. (Legacy UserChatMaster is gone — its table was dropped.)
         ToDoGroup.objects.filter(team=team_id).delete()
         ToDoCategory.objects.filter(team=team_id).delete()
 

@@ -17,12 +17,17 @@ from django.core.cache import cache
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
-from origin.models.chat.dm_models import DMMaster
-from origin.models.chat.gm_models import GMMembers
-from origin.models.chat.mdm_models import MDMMembers
 from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMembers
+
+# NOTE: the legacy DM/GM/MDM-member cache-invalidation receivers were
+# removed with the v3 cutover. They invalidated `dm:ids` / `gm:ids` /
+# `mdm:ids` / `mdm:members` keys that no view sets or reads anymore (the
+# legacy chat REST that populated them is gone), so they were dead no-ops
+# keeping the legacy chat models alive. v3 channel membership lives in
+# `ChannelMember`; if a cached v3 surface needs invalidation later, add a
+# `ChannelMember` receiver here.
 
 
 @receiver(post_save, sender=TeamMembers)
@@ -34,36 +39,6 @@ def _invalidate_team_members(sender, instance, **kwargs):
         cache.delete(f"team:my_teams:{attendee_id}")
         if team_id is not None:
             cache.delete(f"team:member_info:{team_id}:{attendee_id}")
-
-
-@receiver(post_save, sender=MDMMembers)
-@receiver(post_delete, sender=MDMMembers)
-def _invalidate_mdm_members(sender, instance, **kwargs):
-    mdm_id = getattr(instance, "mdm_id", None)
-    attendee_id = getattr(instance, "attendee_id", None)
-    if mdm_id is not None:
-        cache.delete(f"mdm:members:{mdm_id}")
-    if attendee_id is not None:
-        cache.delete(f"mdm:ids:{attendee_id}")
-
-
-@receiver(post_save, sender=DMMaster)
-@receiver(post_delete, sender=DMMaster)
-def _invalidate_dm_master(sender, instance, **kwargs):
-    user_1 = getattr(instance, "user_1_id", None)
-    user_2 = getattr(instance, "user_2_id", None)
-    if user_1 is not None:
-        cache.delete(f"dm:ids:{user_1}")
-    if user_2 is not None:
-        cache.delete(f"dm:ids:{user_2}")
-
-
-@receiver(post_save, sender=GMMembers)
-@receiver(post_delete, sender=GMMembers)
-def _invalidate_gm_members(sender, instance, **kwargs):
-    attendee_id = getattr(instance, "attendee_id", None)
-    if attendee_id is not None:
-        cache.delete(f"gm:ids:{attendee_id}")
 
 
 @receiver(post_save, sender=ProjectMembers)

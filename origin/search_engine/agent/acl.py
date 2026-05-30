@@ -15,63 +15,26 @@ the entity. The tools compare `ctx.user_id` to that set and raise
 
 from __future__ import annotations
 
-from origin.models.chat.dm_models import DMMaster
-from origin.models.chat.gm_models import GMMembers
-from origin.models.chat.mdm_models import MDMMembers
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.project.prj_models import ProjectMembers
 from origin.search_engine.chunkers.base import (
-    CHAT_TYPE_DM,
-    CHAT_TYPE_GM,
-    CHAT_TYPE_MDM,
-    CHAT_TYPE_PM,
     NOTE_TYPE_CHAT,
     NOTE_TYPE_PERSONAL,
     NOTE_TYPE_TASK,
 )
+from origin.services.legacy_chat_bridge import chat_member_user_ids
 
 
 def chat_acl_user_ids(chat_type_code: int, chat_id: int) -> set[str]:
     """Users allowed to read a given chat conversation.
 
     `chat_type_code` is the integer (1=DM / 2=GM / 3=PM / 4=MDM),
-    matching the values in `chunkers.base.CHAT_TYPE_*`.
+    matching the values in `chunkers.base.CHAT_TYPE_*`. Membership is
+    resolved off the v3 unified schema (DM/GM/MDM via the
+    `Channel.legacy_chat_id` bridge → `ChannelMember`; PM via
+    `ProjectMembers`) — see `services.legacy_chat_bridge`.
     """
-    if chat_type_code == CHAT_TYPE_DM:
-        dm = DMMaster.objects.filter(dm_id=chat_id).values("user_1_id", "user_2_id").first()
-        if not dm:
-            return set()
-        return {str(uid) for uid in (dm["user_1_id"], dm["user_2_id"]) if uid}
-
-    if chat_type_code == CHAT_TYPE_GM:
-        return {
-            str(uid)
-            for uid in GMMembers.objects.filter(gm_id=chat_id).values_list(
-                "attendee_id", flat=True
-            )
-            if uid
-        }
-
-    if chat_type_code == CHAT_TYPE_MDM:
-        return {
-            str(uid)
-            for uid in MDMMembers.objects.filter(mdm_id=chat_id).values_list(
-                "attendee_id", flat=True
-            )
-            if uid
-        }
-
-    if chat_type_code == CHAT_TYPE_PM:
-        # For PM, chat_id IS the project id.
-        return {
-            str(uid)
-            for uid in ProjectMembers.objects.filter(project_id=chat_id).values_list(
-                "attendee_id", flat=True
-            )
-            if uid
-        }
-
-    return set()
+    return chat_member_user_ids(chat_type_code, chat_id)
 
 
 def task_acl_user_ids(project_id: int | None, assignee_id, reporter_id) -> set[str]:
