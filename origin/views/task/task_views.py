@@ -830,15 +830,15 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        chat_id = int(raw_chat_id)
-        thread_id = int(raw_thread_id)
-
+        # `chat_id` / `thread_id` are CharField post-v3 cutover and
+        # carry the v3 UUIDs; pass them through unchanged. Filters by
+        # exact string match.
         target_task = TaskMaster.objects.filter(
             is_init_task=False,
             team=team_id,
             chat_type=chat_type,
-            chat_id=chat_id,
-            thread_id=thread_id,
+            chat_id=raw_chat_id,
+            thread_id=raw_thread_id,
         ).values_list("project", "task_id")
 
         if len(target_task) > 1:

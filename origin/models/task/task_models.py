@@ -44,8 +44,13 @@ class TaskMaster(models.Model):
         to_field="sprint_id",
     )
     chat_type = models.IntegerField(null=True, blank=True)
-    chat_id = models.IntegerField(null=True, blank=True)
-    thread_id = models.IntegerField(null=True, blank=True)
+    # `chat_id` / `thread_id` carry the v3 `Channel.id` / `Message.id`
+    # (UUID) when the task is created from a chat. Pre-v3 these were the
+    # legacy per-type integer ids; the column type was widened to CharField
+    # so the v3 UUID strings fit. Reads as opaque — TaskMaster doesn't
+    # enforce a FK, the linkage is informational only.
+    chat_id = models.CharField(max_length=64, null=True, blank=True)
+    thread_id = models.CharField(max_length=64, null=True, blank=True)
     task_id = models.BigAutoField(primary_key=True, unique=True)
     root_task_id = models.BigIntegerField(blank=True, null=True)
     parent_task_id = models.BigIntegerField(blank=True, null=True)
