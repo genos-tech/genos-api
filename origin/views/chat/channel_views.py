@@ -104,27 +104,14 @@ def _get_channel_for_user(channel_id, user):
         raise Http404("Channel not found.")
 
 
-def _annotate_latest_and_unread(qs, user):
-    """Attach `_latest_message` and `_unread_count` to each channel in qs
-    so ChannelSerializer can render them without per-row follow-up queries.
-
-    `_latest_message` is set by a separate prefetch (cleaner than Subquery
-    when we need the full Message object for serializer rendering).
-    `_unread_count` is annotated via Subquery against ReadCursor +
-    Message.seq.
+def _annotate_unread(qs, user):
+    """Attach `_unread_count` to each channel in qs: the EXACT count of
+    top-level, non-deleted messages whose seq is beyond the user's
+    main-timeline read cursor. A single correlated COUNT subquery (NOT
+    N+1). `seq` is allocated per channel across thread replies AND
+    soft-deleted rows, so a `latest_seq - read_seq` difference would
+    over-count — hence the explicit COUNT.
     """
-    # Subquery for "highest top-level non-deleted seq in this channel" —
-    # used to resolve `latestMessage`.
-    latest_seq = (
-        Message.objects.filter(
-            channel=OuterRef("pk"),
-            is_thread_reply=False,
-            deleted_at__isnull=True,
-        )
-        .order_by("-seq")
-        .values("seq")[:1]
-    )
-
     # The user's main-timeline read cursor seq for the (inner) message's
     # channel. `OuterRef("channel")` correlates to the unread subquery's
     # Message row (one level out), NOT the Channel (two levels out).
@@ -134,12 +121,6 @@ def _annotate_latest_and_unread(qs, user):
         thread_root__isnull=True,
     ).values("last_read_message__seq")[:1]
 
-    # EXACT unread count: top-level, non-deleted messages whose seq is
-    # beyond the read cursor. The previous `latest_seq - read_seq`
-    # difference OVER-counted — `seq` is allocated per channel across
-    # thread replies AND soft-deleted rows, so those intermediate seqs
-    # inflated the badge on busy channels. A correlated COUNT subquery is
-    # one SQL statement (not N+1).
     unread_count = (
         Message.objects.filter(
             channel=OuterRef("pk"),
@@ -152,12 +133,28 @@ def _annotate_latest_and_unread(qs, user):
         .annotate(c=Count("id"))
         .values("c")[:1]
     )
+    return qs.annotate(_unread_count=Coalesce(Subquery(unread_count), 0))
 
-    qs = qs.annotate(
-        _latest_seq=Subquery(latest_seq),
-        _unread_count=Coalesce(Subquery(unread_count), 0),
+
+def _annotate_latest_and_unread(qs, user):
+    """`_annotate_unread` + `_latest_seq` (the highest top-level
+    non-deleted seq per channel, used to resolve `latestMessage`).
+
+    Only ChannelDetailView needs `_latest_seq`. The LIST view resolves
+    `latestMessage` via a single Postgres DISTINCT ON query (see
+    ChannelListView.get) and so calls `_annotate_unread` directly,
+    skipping this per-channel correlated `_latest_seq` subquery.
+    """
+    latest_seq = (
+        Message.objects.filter(
+            channel=OuterRef("pk"),
+            is_thread_reply=False,
+            deleted_at__isnull=True,
+        )
+        .order_by("-seq")
+        .values("seq")[:1]
     )
-    return qs
+    return _annotate_unread(qs, user).annotate(_latest_seq=Subquery(latest_seq))
 
 
 class ChannelListView(AuthenticatedAPIView):
@@ -173,36 +170,41 @@ class ChannelListView(AuthenticatedAPIView):
 
     def get(self, request):
         user = request.user
-        qs = _annotate_latest_and_unread(_user_channels_qs(user), user)
+        # Only the unread COUNT subquery is needed here — `latestMessage`
+        # is resolved below by a single DISTINCT ON query, so we skip the
+        # per-channel `_latest_seq` correlated subquery entirely.
+        qs = _annotate_unread(_user_channels_qs(user), user)
 
-        # Eager-load the latest non-thread message per channel for the
-        # `latestMessage` serializer slot. We do a follow-up query keyed
-        # by the annotated `_latest_seq` to avoid an N+1.
         channels = list(qs)
         if not channels:
             return Response({"channels": []})
 
-        # Build a (channel_id, latest_seq) lookup, then fetch all the
-        # corresponding Message rows in one query.
-        latest_pairs = [(c.id, c._latest_seq) for c in channels if c._latest_seq is not None]
-        if latest_pairs:
-            from django.db.models import Q
-
-            q = Q()
-            for channel_id, seq in latest_pairs:
-                q |= Q(channel_id=channel_id, seq=seq)
-            latest_messages = (
-                Message.objects.filter(q)
-                .select_related("sender", "channel", "task", "task__project")
-                .prefetch_related("reactions__user", "mentions", "attachments")
+        # Latest non-thread, non-deleted message per channel in ONE query.
+        # Postgres DISTINCT ON (channel_id) ordered by (channel_id, -seq)
+        # keeps the highest-seq row per channel — replacing the previous
+        # N-term `Q(channel_id=, seq=) | …` OR chain (one OR branch per
+        # channel, which degraded linearly with channel count). The
+        # (channel, seq) unique constraint guarantees exactly one row per
+        # channel (no tie ambiguity), and the filters mirror `_latest_seq`
+        # exactly (top-level, non-deleted) so the resolved message is
+        # identical to what the OR chain returned.
+        ids = [c.id for c in channels]
+        latest_messages = (
+            Message.objects.filter(
+                channel_id__in=ids,
+                is_thread_reply=False,
+                deleted_at__isnull=True,
             )
-            latest_by_channel = {m.channel_id: m for m in latest_messages}
-        else:
-            latest_by_channel = {}
+            .order_by("channel_id", "-seq")
+            .distinct("channel_id")
+            .select_related("sender", "channel", "task", "task__project")
+            .prefetch_related("reactions__user", "mentions", "attachments")
+        )
+        latest_by_channel = {m.channel_id: m for m in latest_messages}
 
-        # Attach the latest message. `_unread_count` is annotated exactly
-        # by `_annotate_latest_and_unread` (correlated COUNT subquery), so
-        # the serializer reads it directly — no per-row computation here.
+        # Attach the latest message. `_unread_count` is annotated by
+        # `_annotate_unread` (correlated COUNT subquery), so the serializer
+        # reads it directly — no per-row computation here.
         for c in channels:
             c._latest_message = latest_by_channel.get(c.id)
 
