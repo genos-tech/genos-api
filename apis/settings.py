@@ -531,9 +531,23 @@ SEARCH_ENGINE = {
     # multi-turn carry their own grounding). Buffers the answer (TTFT cost
     # like self-critique) — off by default; an A/B lever measured by the
     # `abstention_correct` eval metric.
-    "RAG_ABSTENTION_GATE": (
-        os.environ.get("RAG_ABSTENTION_GATE", "false").lower() == "true"
-    ),
+    "RAG_ABSTENTION_GATE": (os.environ.get("RAG_ABSTENTION_GATE", "false").lower() == "true"),
+    # Per-context tool subsetting (SPOTLIGHT_QUALITY_ARCHITECTURE.md §4.5).
+    # When True, peripheral tool families (GitHub PRs, calendar, todos,
+    # me-scoped) are dropped from the model's declared tool list for a
+    # query that shows no keyword signal for them — shrinking the ~50-tool
+    # surface (and prompt) to the relevant slice. Core task/note/chat/
+    # project/analytics tools are NEVER dropped. Honest framing: this is a
+    # SURFACE / COST / LATENCY reduction with a *hypothesized*
+    # tool-selection benefit; the offline suite confirms no-regression
+    # (no case needs a peripheral family) but cannot show the quality win
+    # — validate that on production tool-selection via the F2 judge
+    # sampler. Limitation: the decision is made ONCE from the raw query,
+    # one-shot, with no mid-loop re-expansion — so a query that needs a
+    # family it didn't signal (e.g. "prep for next week" needing the
+    # calendar without a calendar keyword) can't reach it. Conservative
+    # keep-direction mitigates; off by default, opt-in.
+    "RAG_TOOL_SUBSETTING": (os.environ.get("RAG_TOOL_SUBSETTING", "false").lower() == "true"),
     # F2 — online judge sampling (SPOTLIGHT_QUALITY_ARCHITECTURE.md §F2).
     # Fraction (0.0–1.0) of completed agent runs the `agent_judge_sample`
     # cron command scores with the LLM judge, so production faithfulness /
