@@ -15,8 +15,6 @@ from origin.models.task.task_models import *
 from origin.serializers.task.task_serializers import *
 from origin.models.project.prj_models import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.models.chat.reaction_models import *
-from origin.serializers.chat.reaction_serializers import *
 
 from origin.services import unified_writer
 from origin.services.github_webhooks import ensure_webhooks_for_links

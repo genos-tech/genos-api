@@ -59,6 +59,13 @@ from origin.models.chat.mdm_models import (
 )
 from origin.models.chat.pm_models import PMMessages, PMThreadMessages
 from origin.models.chat.chat_master_models import UserChatMaster
+from origin.models.chat.unified_models import (
+    Channel,
+    ChannelDirectPair,
+    ChannelKind,
+    ChannelMember,
+    Message,
+)
 from origin.models.chat.mention_models import MentionFact
 from origin.models.chat.reaction_models import ReactionFact
 from origin.models.chat.chat_attachment_models import ChatAttachmentFact
@@ -2025,7 +2032,7 @@ def create_demo_environment(demo_user: CustomUser, *, short: str | None = None) 
         _create_dms(team, demo_user, bots)
 
         # 12. Group chat + thread messages
-        gm = _create_group_chat(team, demo_user, all_members)
+        _create_group_chat(team, demo_user, all_members)
 
         # 13. Project channel messages + thread messages
         for seeded in seeded_projects:
@@ -2040,7 +2047,7 @@ def create_demo_environment(demo_user: CustomUser, *, short: str | None = None) 
         )
 
         # 15. Notes (personal + task + chat note with permissions)
-        _create_notes(team, demo_user, bots, seeded_projects, gm)
+        _create_notes(team, demo_user, bots, seeded_projects)
 
         # 16. Todos (demo user only — todos are personal-scoped)
         _create_todos(team, demo_user)
@@ -2184,9 +2191,13 @@ def _create_project_from_blueprint(team, demo_user, all_members, bots, short, bl
         is_private=False,
     )
 
-    ProjectMembers.objects.bulk_create(
-        [ProjectMembers(team=team, project=project, attendee=u) for u in all_members]
-    )
+    # Per-row `.save()` so the `_sync_pm_channel_member` post_save
+    # signal fires and creates the matching `ChannelMember` rows for
+    # the PM Channel (the signal is skipped by `bulk_create`). Without
+    # this the demo user wouldn't see the PM channels in their v3
+    # chat list, since `_user_channels_qs` filters by membership.
+    for u in all_members:
+        ProjectMembers.objects.create(team=team, project=project, attendee=u)
 
     ProjectTags.objects.bulk_create(
         [
@@ -2369,35 +2380,49 @@ def _create_blueprint_tasks(
 # ---------------------------------------------------------------------------
 
 
+def _canonical_dm_pair(user_a_id, user_b_id):
+    """Return (user_lo, user_hi) in canonical order for ChannelDirectPair.
+    Mirrors `channel_views._canonical_dm_pair` — UUIDs are sorted as
+    strings so the canonicalization is deterministic regardless of which
+    user "creates" the DM.
+    """
+    a, b = str(user_a_id), str(user_b_id)
+    return (a, b) if a < b else (b, a)
+
+
 def _create_dms(team, demo_user, bots):
     """Three multi-turn DMs (demo↔Alice, ↔Bob, ↔Carol), each with one
     thread on a representative message. Plus a self-DM that matches
-    what /jointeam's `moveToTeam` would have created."""
+    what /jointeam's `moveToTeam` would have created.
+
+    V3 schema only: writes to `Channel(kind=DM)` + `ChannelDirectPair`
+    + `ChannelMember` + `Message`. Legacy `DMMessages` / `DMMaster` are
+    no longer written — the frontend reads from `/api/v3/channels/`
+    exclusively.
+    """
     for spec in DM_BLUEPRINTS:
         bot = bots[spec["bot_index"]]
-        dm = DMMaster(team=team, user_1_id=demo_user.id, user_2_id=bot.id)
-        # DMMaster.save() auto-creates UserDMMapping rows.
-        dm.save()
+        channel = Channel.objects.create(team=team, kind=ChannelKind.DM, title="")
+        user_lo, user_hi = _canonical_dm_pair(demo_user.id, bot.id)
+        ChannelDirectPair.objects.create(
+            channel=channel, user_lo=user_lo, user_hi=user_hi
+        )
+        ChannelMember.objects.create(channel=channel, user=demo_user, role="member")
+        ChannelMember.objects.create(channel=channel, user=bot, role="member")
 
         thread_spec = spec.get("thread")
         thread_parent_idx = thread_spec["parent_index"] if thread_spec else None
-        # The CHILD `DMThreadMessages.thread_id` carries the parent's
-        # `message_id` (see pm_views.py:428 — the reply-count API joins
-        # on this). The parent `DMMessages.thread_id` is NOT set by the
-        # real frontend; reply counts come from a JOIN on the children
-        # table (see dm_views.py:208-212), not from the parent's field.
-        thread_id_value = thread_parent_idx + 1 if thread_parent_idx is not None else None
 
         created_msgs = []
         for midx, (who, text) in enumerate(spec["messages"]):
             sender = bot if who == "bot" else demo_user
-            receiver = demo_user if who == "bot" else bot
-            msg = DMMessages.objects.create(
-                dm=dm,
+            msg = Message.objects.create(
+                channel=channel,
                 sender=sender,
-                receiver=receiver,
-                message_id=midx + 1,
-                message_body=_text_body(text),
+                seq=midx + 1,
+                body=_text_body(text),
+                body_text=text,
+                metadata={},
             )
             created_msgs.append(msg)
 
@@ -2405,16 +2430,22 @@ def _create_dms(team, demo_user, bots):
             parent_msg = created_msgs[thread_parent_idx]
             for tidx, (who, text) in enumerate(thread_spec["messages"]):
                 sender = bot if who == "bot" else demo_user
-                receiver = demo_user if who == "bot" else bot
-                DMThreadMessages.objects.create(
-                    dm=dm,
-                    thread_id=thread_id_value,
+                Message.objects.create(
+                    channel=channel,
                     sender=sender,
-                    receiver=receiver,
-                    thread_message_id=tidx + 1,
-                    thread_message_body=_text_body(text),
-                    parent_message_uid=parent_msg,
+                    seq=len(created_msgs) + tidx + 1,
+                    body=_text_body(text),
+                    body_text=text,
+                    is_thread_reply=True,
+                    parent=parent_msg,
+                    thread_root=parent_msg,
+                    metadata={},
                 )
+            # Reply count is denormalized on the parent (the v3 message
+            # serializer reads it without a count query). Bump here
+            # since we bypass `_allocate_seq_and_create_message`.
+            parent_msg.reply_count = len(thread_spec["messages"])
+            parent_msg.save(update_fields=["reply_count", "ts_updated_at"])
 
     # Self-DM (personal scratch chat). Mirrors what `moveToTeam` creates
     # on first team entry — without it the workspace lands missing the
@@ -2422,8 +2453,12 @@ def _create_dms(team, demo_user, bots):
     # messages so the chat actually loads when Spotlight routes a todo
     # source-chip click to it (an empty chat short-circuits the loader
     # and the user ends up on the inbox fallback).
-    self_dm = DMMaster(team=team, user_1_id=demo_user.id, user_2_id=demo_user.id)
-    self_dm.save()
+    self_channel = Channel.objects.create(team=team, kind=ChannelKind.DM, title="")
+    self_id = str(demo_user.id)
+    ChannelDirectPair.objects.create(
+        channel=self_channel, user_lo=self_id, user_hi=self_id
+    )
+    ChannelMember.objects.create(channel=self_channel, user=demo_user, role="member")
     self_dm_messages = [
         "Welcome — this is your personal scratch chat. Drop quick thoughts, links, "
         "and reminders here. Press the ✓ icon in the header to toggle your todo "
@@ -2443,62 +2478,87 @@ def _create_dms(team, demo_user, bots):
         "Alice. Subitems on today's todo track this.",
     ]
     for midx, text in enumerate(self_dm_messages):
-        DMMessages.objects.create(
-            dm=self_dm,
+        Message.objects.create(
+            channel=self_channel,
             sender=demo_user,
-            receiver=demo_user,
-            message_id=midx + 1,
-            message_body=_text_body(text),
+            seq=midx + 1,
+            body=_text_body(text),
+            body_text=text,
+            metadata={},
         )
 
 
-def _create_group_chat(team, demo_user, members) -> GMMaster:
-    gm = GMMaster.objects.create(
-        group_name=f"general · {team.team_name}",
-        owner_user=demo_user,
-        owner_team=team,
+def _create_group_chat(team, demo_user, members) -> Channel:
+    """Single GM with all team members, one threaded message.
+
+    V3 schema only: writes to `Channel(kind=GM)` + `ChannelMember` +
+    `Message`. Legacy `GMMaster` / `GMMembers` / `GMMessages` are no
+    longer written.
+    """
+    channel = Channel.objects.create(
+        team=team,
+        kind=ChannelKind.GM,
+        title=f"general · {team.team_name}",
+        owner=demo_user,
     )
-    GMMembers.objects.bulk_create([GMMembers(gm=gm, attendee=u) for u in members])
+    ChannelMember.objects.bulk_create(
+        [
+            ChannelMember(
+                channel=channel,
+                user=u,
+                role="owner" if u.id == demo_user.id else "member",
+            )
+            for u in members
+        ]
+    )
 
     thread_parent_idx = GM_BLUEPRINT["thread"]["parent_index"]
-    # Thread id matches the parent message's message_id by convention.
-    # Stored on the CHILD `GMThreadMessages.thread_id` only — the real
-    # frontend leaves `GMMessages.thread_id` NULL on the parent.
-    thread_id_value = thread_parent_idx + 1
 
     created_msgs = []
     for midx, (sender_idx, text) in enumerate(GM_BLUEPRINT["messages"]):
-        msg = GMMessages.objects.create(
-            gm=gm,
+        msg = Message.objects.create(
+            channel=channel,
             sender=members[sender_idx],
-            message_id=midx + 1,
-            message_body=_text_body(text),
+            seq=midx + 1,
+            body=_text_body(text),
+            body_text=text,
+            metadata={},
         )
         created_msgs.append(msg)
 
     parent_msg = created_msgs[thread_parent_idx]
     for tidx, (sender_idx, text) in enumerate(GM_BLUEPRINT["thread"]["messages"]):
-        GMThreadMessages.objects.create(
-            gm=gm,
-            thread_id=thread_id_value,
+        Message.objects.create(
+            channel=channel,
             sender=members[sender_idx],
-            thread_message_id=tidx + 1,
-            thread_message_body=_text_body(text),
-            parent_message_uid=parent_msg,
+            seq=len(created_msgs) + tidx + 1,
+            body=_text_body(text),
+            body_text=text,
+            is_thread_reply=True,
+            parent=parent_msg,
+            thread_root=parent_msg,
+            metadata={},
         )
+    parent_msg.reply_count = len(GM_BLUEPRINT["thread"]["messages"])
+    parent_msg.save(update_fields=["reply_count", "ts_updated_at"])
 
-    return gm
+    return channel
 
 
 def _create_pm_messages(project, members, blueprint):
     """Per-project channel: messages + one thread, all driven by the
     project's blueprint. Sender keys here are `(member_index, text)`-
-    style indices into `members` (0 = demo_user, 1-4 = bots)."""
+    style indices into `members` (0 = demo_user, 1-4 = bots).
+
+    V3 schema only: the PM `Channel` was auto-created by the
+    `pm_channel_signals.post_save(ProjectMaster)` receiver when the
+    project was seeded, and `ChannelMember` rows mirror the
+    `ProjectMembers` rows via the same signal module. We only need to
+    locate the existing channel and write `Message` rows.
+    """
     pm_messages = blueprint["pm_messages"]
     thread_spec = blueprint["pm_thread"]
     thread_parent_idx = thread_spec["parent_index"]
-    # Thread id matches the parent message's message_id by convention.
-    thread_id_value = thread_parent_idx + 1
 
     # Map blueprint sender keys to members[] indices: "demo" -> 0,
     # "bot0" -> 1, etc.
@@ -2507,34 +2567,40 @@ def _create_pm_messages(project, members, blueprint):
             return 0
         return int(key[3:]) + 1
 
+    channel = Channel.objects.get(project=project, kind=ChannelKind.PM)
+
     created_msgs = []
     for midx, (sender_key, text) in enumerate(pm_messages):
         sender = members[resolve_idx(sender_key)]
-        # Parent `PMMessages.thread_id` is NOT set — see DM helper for
-        # why (the real frontend leaves it NULL; reply counts come from
-        # a JOIN on PMThreadMessages, not from the parent column).
-        msg = PMMessages.objects.create(
-            project=project,
+        msg = Message.objects.create(
+            channel=channel,
             sender=sender,
-            message_id=midx + 1,
-            message_body=_text_body(text),
+            seq=midx + 1,
+            body=_text_body(text),
+            body_text=text,
+            metadata={},
         )
         created_msgs.append(msg)
 
     parent_msg = created_msgs[thread_parent_idx]
     for tidx, (sender_key, text) in enumerate(thread_spec["messages"]):
         sender = members[resolve_idx(sender_key)]
-        PMThreadMessages.objects.create(
-            project=project,
-            thread_id=thread_id_value,
+        Message.objects.create(
+            channel=channel,
             sender=sender,
-            thread_message_id=tidx + 1,
-            thread_message_body=_text_body(text),
-            parent_message_uid=parent_msg,
+            seq=len(created_msgs) + tidx + 1,
+            body=_text_body(text),
+            body_text=text,
+            is_thread_reply=True,
+            parent=parent_msg,
+            thread_root=parent_msg,
+            metadata={},
         )
+    parent_msg.reply_count = len(thread_spec["messages"])
+    parent_msg.save(update_fields=["reply_count", "ts_updated_at"])
 
 
-def _create_notes(team, demo_user, bots, seeded_projects, gm):
+def _create_notes(team, demo_user, bots, seeded_projects):
     """Rich personal + task + chat notes. Each note gets an explicit
     NotePermissionMaster ROLE_OWNER row (the note APIs 403 without
     one, even for the owner). Note types: 1=Personal, 2=Task, 3=Chat.
@@ -2588,11 +2654,16 @@ def _create_notes(team, demo_user, bots, seeded_projects, gm):
 
     # Chat note on the GM kickoff thread — owner + editors so the bots
     # can see it too. Role IDs: 1=owner, 2=editor, 3=viewer.
+    # NOTE: `ChatNoteMaster.chat_id` is still `IntegerField` in the
+    # schema; the v3 Channel id is a UUID. Until the chat_note table is
+    # migrated to UUID, we seed `chat_id=0` so the note row exists but
+    # is not surfaced in the GM's note list. Re-link once the migration
+    # lands.
     chat_note = ChatNoteMaster.objects.create(
         team=team,
         owner=demo_user,
         chat_type=2,  # GM
-        chat_id=gm.gm_id,
+        chat_id=0,
         is_thread=False,
         thread_id=0,
         title="Sprint 1 kickoff recap",
@@ -2898,6 +2969,15 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
         # Project channel
         PMThreadMessages.objects.filter(project_id__in=project_ids).delete()
         PMMessages.objects.filter(project_id__in=project_ids).delete()
+
+        # V3 unified messaging schema. Order matters: Message.channel is
+        # PROTECT, so messages must go before channels; Channel.project
+        # and Channel.team are both PROTECT, so channels must go before
+        # ProjectMaster / TeamMaster below. Cascades on these deletes
+        # take care of MessageReaction, MessageMention, MessageAttachment,
+        # Flag, ChannelMember, ChannelDirectPair, Pin, and ReadCursor.
+        Message.objects.filter(channel__team=team_id).delete()
+        Channel.objects.filter(team=team_id).delete()
 
         # User-level chat master + per-user todo. ToDoGroup CASCADE
         # removes its items; ToDoCategory rows are user-scoped (not
