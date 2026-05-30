@@ -18,6 +18,7 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.chat.reaction_models import *
 from origin.serializers.chat.reaction_serializers import *
 
+from origin.services import unified_writer
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.task_cache import (
     get_cached_project_tasks,
@@ -1419,6 +1420,18 @@ class TaskCommentsView(AuthenticatedAPIView):
         serializer = TaskCommentsSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
+            # Track B dual-write: mirror the comment as a v3 thread-reply
+            # Message under the PM task header. Lets PM task threads
+            # render comments via the unified message path instead of a
+            # parallel comments-only endpoint. Best-effort — failure
+            # here doesn't roll back the legacy save (the drift cron
+            # catches any divergence).
+            unified_writer.write_task_comment_as_thread_reply(
+                task_id=int(request.data["task_id"]),
+                comment_id=data["comment_id"],
+                sender_id=request.data["sender_id"],
+                body=request.data["comment_body"],
+            )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         error = serializer.errors

@@ -43,6 +43,8 @@ from origin.models.chat.unified_models import (
     Message,
 )
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.task.task_models import TaskComments, TaskMaster
+from origin.services import unified_writer
 from origin.views.chat.modules.common import generate_first_line
 
 
@@ -76,7 +78,11 @@ class Command(BaseCommand):
         parser.add_argument(
             "--kinds",
             default="dm,gm,pm,mdm",
-            help="Comma-separated chat kinds to backfill (dm/gm/pm/mdm).",
+            help=(
+                "Comma-separated chat kinds to backfill (dm/gm/pm/mdm). "
+                "Add 'task_comments' to also mirror legacy TaskComments rows "
+                "as v3 thread-reply Messages under their PM task header."
+            ),
         )
         parser.add_argument(
             "--no-messages",
@@ -101,6 +107,8 @@ class Command(BaseCommand):
             "channels_existing": 0,
             "members_created": 0,
             "messages_created": 0,
+            "task_comments_created": 0,
+            "task_comments_existing": 0,
         }
 
         if "dm" in kinds:
@@ -111,6 +119,8 @@ class Command(BaseCommand):
             self._backfill_pm(stats, dry, skip_messages, max_msgs)
         if "mdm" in kinds:
             self._backfill_mdm(stats, dry, skip_messages, max_msgs)
+        if "task_comments" in kinds:
+            self._backfill_task_comments(stats, dry)
 
         self.stdout.write(self.style.SUCCESS("\n--- backfill summary ---"))
         for k, v in stats.items():
@@ -410,6 +420,58 @@ class Command(BaseCommand):
             if created:
                 n += 1
         return n
+
+    # ---- Task comments → v3 thread replies -----------------------------
+
+    def _backfill_task_comments(self, stats, dry):
+        """Mirror every legacy `TaskComments` row to a v3 thread-reply
+        Message under the PM task header.
+
+        Iterates by project so we can pre-resolve the project_id once
+        per chunk instead of having `unified_writer` walk the FK on
+        every row. Idempotent via the deterministic UUID5 the helper
+        uses for `Message.id` — re-runs collide on the PK and no-op.
+        """
+        self.stdout.write(self.style.HTTP_INFO("Backfilling task comments…"))
+        # `task__project_id` traversal lets us iterate without
+        # pre-loading every TaskMaster in memory. `.select_related`
+        # primes the join so the helper's per-row reads stay cheap.
+        qs = (
+            TaskComments.objects.filter(is_deleted=False)
+            .select_related("task")
+            .order_by("task__project_id", "task_id", "comment_id")
+        )
+        for tc in qs.iterator(chunk_size=500):
+            if dry:
+                stats["task_comments_existing"] += 1
+                continue
+            task = tc.task
+            if task is None or task.project_id is None:
+                # Orphan comment (task deleted via SET_NULL). Skip — no
+                # PM channel to attach to.
+                continue
+            msg = unified_writer.write_task_comment_as_thread_reply(
+                task_id=int(task.task_id),
+                comment_id=int(tc.comment_id),
+                sender_id=str(tc.sender_id) if tc.sender_id else None,
+                body=tc.comment_body or [],
+                project_id=int(task.project_id),
+                bypass_flag=True,
+            )
+            if msg is None:
+                continue
+            # The helper's `get_or_create` doesn't tell us "created vs
+            # existing" so re-check by deterministic id timestamp: if
+            # `ts_sent_at` is within the last few seconds of `now()`,
+            # it was just created on this run; otherwise it already
+            # existed. Cheap enough at backfill scale.
+            from django.utils import timezone
+
+            age = (timezone.now() - msg.ts_sent_at).total_seconds()
+            if age < 5:
+                stats["task_comments_created"] += 1
+            else:
+                stats["task_comments_existing"] += 1
 
 
 # Re-export to silence unused-import warning on the conditional path

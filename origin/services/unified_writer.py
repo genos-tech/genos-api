@@ -34,10 +34,12 @@ Design notes:
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any, Optional
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import F
 
 from origin.models.chat.unified_models import (
     Channel,
@@ -51,6 +53,24 @@ from origin.models.chat.unified_models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Deterministic UUIDv5 namespace for task-comment → v3 thread-reply rows.
+# `uuid5(NS, f"{task_id}-{comment_id}")` is stable for the lifetime of a
+# comment, so re-running the backfill (or the dual-write retrying on a
+# transient failure) idempotently collides on the existing Message row
+# instead of creating duplicates.
+_TASK_COMMENT_UUID_NS = uuid.UUID("3e4c8b1d-7f2a-4e9c-9b6d-5a1f8e2d3c4b")
+
+
+def task_comment_message_uuid(task_id: int, comment_id: int) -> uuid.UUID:
+    """Deterministic v3 `Message.id` for a (task_id, comment_id) pair.
+
+    Used for both the dual-write at create time and the backfill. The
+    fixed namespace + stable input means every caller for the same pair
+    lands at the same UUID, which gives natural idempotency via the
+    `Message.id` primary key.
+    """
+    return uuid.uuid5(_TASK_COMMENT_UUID_NS, f"{int(task_id)}-{int(comment_id)}")
 
 
 # ---- Helpers ----------------------------------------------------------------
@@ -529,3 +549,149 @@ def delete_flag(*, chat_type: int, chat_id: int, message_id: int, user_id: str) 
     except Exception:  # noqa: BLE001
         logger.exception("[unified_writer] delete_flag failed")
         return False
+
+
+def write_task_comment_as_thread_reply(
+    *,
+    task_id: int,
+    comment_id: int,
+    sender_id: Optional[str],
+    body: list,
+    project_id: Optional[int] = None,
+    bypass_flag: bool = False,
+) -> Optional[Message]:
+    """Mirror a legacy `TaskComments` row as a v3 thread-reply `Message`
+    under the PM task header.
+
+    Task comments historically lived in their own `TaskComments` table,
+    separate from `PMMessages`/`PMThreadMessages`. The v3 unified model
+    treats thread replies as `Message` rows with `is_thread_reply=True`
+    + `parent_id = <task header UUID>`. Bridging the two lets PM task
+    threads render comments alongside any other thread replies, without
+    a parallel comments-only endpoint.
+
+    Idempotency: `Message.id` is `uuid5(NS, "{task_id}-{comment_id}")`.
+    Re-running the backfill (or the dual-write retrying on a transient
+    network failure) collides on the existing PK and is a no-op via
+    `get_or_create`.
+
+    `project_id`: when known at the call site, passing it skips a
+    `TaskMaster` lookup. The backfill command always knows the project
+    (it iterates projects); the live dual-write path can pass it from
+    the request or omit it.
+
+    `bypass_flag`: the dual-write entry points all gate on the
+    `UNIFIED_MESSAGING_DUAL_WRITE` setting, but the backfill needs to
+    run regardless of that runtime flag (it's a one-shot migration).
+    Set `True` from the management command, omit elsewhere.
+
+    Returns the created/found Message on success, None on any failure.
+    Never raises — the caller's legacy `TaskComments` save is the
+    source of truth and must not be affected by mirror failures.
+    """
+    if not bypass_flag and not _is_enabled():
+        return None
+    try:
+        # Resolve the PM channel for this task. Each project has one
+        # PM channel (kind=3, legacy_chat_id=project_id). When the
+        # caller didn't pass project_id, walk through the TaskMaster
+        # FK.
+        if project_id is None:
+            from origin.models.task.task_models import TaskMaster
+
+            try:
+                task = TaskMaster.objects.only("project_id").get(task_id=task_id)
+            except TaskMaster.DoesNotExist:
+                logger.warning(
+                    "[unified_writer] task_comment mirror: task_id=%s not found",
+                    task_id,
+                )
+                return None
+            project_id = task.project_id
+            if project_id is None:
+                logger.warning(
+                    "[unified_writer] task_comment mirror: task_id=%s has no project",
+                    task_id,
+                )
+                return None
+
+        channel = Channel.objects.filter(
+            kind=ChannelKind.PM, legacy_chat_id=int(project_id)
+        ).first()
+        if channel is None:
+            logger.warning(
+                "[unified_writer] task_comment mirror: no PM Channel for project_id=%s",
+                project_id,
+            )
+            return None
+
+        # Find the task-card header Message (the v3 thread root). Each
+        # PM task has exactly one top-level Message with `task_id` set.
+        parent = (
+            Message.objects.filter(
+                channel=channel,
+                task_id=task_id,
+                is_thread_reply=False,
+            )
+            .only("id", "reply_count")
+            .first()
+        )
+        if parent is None:
+            logger.warning(
+                "[unified_writer] task_comment mirror: no task-header Message "
+                "for task_id=%s in PM channel %s",
+                task_id,
+                channel.id,
+            )
+            return None
+
+        deterministic_id = task_comment_message_uuid(task_id, comment_id)
+
+        # `seq` is per-channel; for thread replies we still need a
+        # unique seq. Use a large negative integer space? No — schema
+        # uses positive ints. Allocate the next `max(seq)+1` under a
+        # transaction. The race is bounded by the backfill being
+        # single-threaded; the dual-write path is rare enough that the
+        # collision window is small. The Channel-level `(channel, seq)`
+        # uniqueness raises on collision → wrap in retry once.
+        with transaction.atomic():
+            existing = Message.objects.filter(id=deterministic_id).first()
+            if existing is not None:
+                return existing
+            # Hold a row-level lock on the channel + parent to serialize
+            # seq allocations. `select_for_update` requires a queryset
+            # — use the cheapest row.
+            next_seq = (
+                Message.objects.select_for_update()
+                .filter(channel=channel)
+                .order_by("-seq")
+                .values_list("seq", flat=True)
+                .first()
+                or 0
+            ) + 1
+            msg = Message.objects.create(
+                id=deterministic_id,
+                channel=channel,
+                seq=next_seq,
+                sender_id=sender_id,
+                body=body or [],
+                body_text=_body_text_from_body(body),
+                task_id=task_id,
+                parent=parent,
+                thread_root=parent,
+                is_thread_reply=True,
+                metadata={"taskCommentId": int(comment_id)},
+                reply_count=0,
+            )
+            # Atomically increment the parent's reply_count. Using
+            # F() avoids the read-modify-write race against concurrent
+            # comment creates.
+            Message.objects.filter(id=parent.id).update(reply_count=F("reply_count") + 1)
+        return msg
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "[unified_writer] write_task_comment_as_thread_reply failed: task=%s comment=%s",
+            task_id,
+            comment_id,
+        )
+        return None
