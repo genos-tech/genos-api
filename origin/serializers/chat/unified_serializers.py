@@ -272,6 +272,16 @@ class ChannelSerializer(serializers.ModelSerializer):
     # hot path. The view attaches `active_members` (one batched query for
     # all DM/MDM rows); falls back to a per-channel query otherwise.
     members = serializers.SerializerMethodField()
+    # DM partner identity resolved SERVER-SIDE from request.user. The
+    # client-side `resolveDmPartner(members, currentUserId)` needs both a
+    # members snapshot AND a non-null current-user id at the moment the
+    # chat list is built — both racy on first load (the loader fires
+    # before `myself.userId` hydrates, and stale-closure re-fires can
+    # clobber a good result), which left DM rows with a blank name while
+    # GM/PM (title-based) rendered fine. Resolving it here makes the DM
+    # row's name + avatar deterministic regardless of FE timing. Null for
+    # non-DM kinds.
+    dmPartner = serializers.SerializerMethodField()
 
     class Meta:
         model = Channel
@@ -287,9 +297,39 @@ class ChannelSerializer(serializers.ModelSerializer):
             "latestMessage",
             "unreadCount",
             "members",
+            "dmPartner",
             "tsCreated",
             "tsUpdated",
         ]
+
+    def _active_members(self, obj):
+        members = getattr(obj, "active_members", None)
+        if members is None:
+            members = list(obj.members.filter(is_deleted=False).select_related("user"))
+        return members
+
+    def get_dmPartner(self, obj):
+        if obj.kind != ChannelKind.DM:
+            return None
+        members = self._active_members(obj)
+        if not members:
+            return None
+        request = self.context.get("request")
+        me = getattr(request, "user", None) if request else None
+        me_id = str(me.id) if me is not None else None
+        # The partner is the member who isn't the viewer; for a self-DM
+        # (only member is the viewer) it's the viewer themselves, so the
+        # row renders the user's own name + "(you)" badge client-side.
+        partner = next((m for m in members if str(m.user_id) != me_id), None) or members[0]
+        u = partner.user
+        if u is None:
+            return None
+        return {
+            "userId": str(partner.user_id),
+            "userName": u.username or "",
+            "userEmail": u.email or "",
+            "avatarImgPath": getattr(u, "profile_image_file_name", "") or "",
+        }
 
     def get_latestMessage(self, obj):
         msg = getattr(obj, "_latest_message", None)
