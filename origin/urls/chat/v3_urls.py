@@ -43,6 +43,11 @@ URL shape (see plan §2):
 
 from django.urls import path
 
+from origin.views.chat.activity_views_v3 import (
+    ActivityListView,
+    ActivityReadAllView,
+    ActivityReadView,
+)
 from origin.views.chat.channel_views import (
     ChannelDetailView,
     ChannelListView,
@@ -131,5 +136,21 @@ urlpatterns = [
         "api/v3/messages/<uuid:message_id>/flag/",
         FlagView.as_view(),
         name="v3_message_flag",
+    ),
+    # Activity feed
+    path(
+        "api/v3/activities/",
+        ActivityListView.as_view(),
+        name="v3_activity_list",
+    ),
+    path(
+        "api/v3/activities/<uuid:activity_id>/read/",
+        ActivityReadView.as_view(),
+        name="v3_activity_read",
+    ),
+    path(
+        "api/v3/activities/read-all/",
+        ActivityReadAllView.as_view(),
+        name="v3_activity_read_all",
     ),
 ]

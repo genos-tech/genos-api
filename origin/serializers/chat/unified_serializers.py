@@ -17,6 +17,7 @@ DRF default.
 from rest_framework import serializers
 
 from origin.models.chat.unified_models import (
+    Activity,
     Channel,
     ChannelMember,
     Flag,
@@ -330,6 +331,46 @@ class FlagSerializer(serializers.ModelSerializer):
     class Meta:
         model = Flag
         fields = ["id", "messageId", "tsCreated"]
+
+
+class ActivitySerializer(serializers.ModelSerializer):
+    """One activity-feed entry. Surfaces the recipient's view of an
+    event triggered by `actor` (someone reacted / replied / @mentioned).
+
+    Wire fields stay camelCase to match the message/reaction shape the
+    FE already consumes. `message` and `actor` are embedded so the
+    sidebar can render the row without a follow-up fetch.
+    """
+
+    id = serializers.UUIDField(read_only=True)
+    activityType = serializers.IntegerField(source="activity_type", read_only=True)
+    recipientUserId = serializers.UUIDField(source="recipient_id", read_only=True)
+    channelId = serializers.UUIDField(source="channel_id", read_only=True)
+    channelKind = serializers.SerializerMethodField()
+    messageId = serializers.UUIDField(source="message_id", read_only=True)
+    actor = UserLiteSerializer(read_only=True, allow_null=True)
+    message = MessageSerializer(read_only=True)
+    isRead = serializers.BooleanField(source="is_read", read_only=True)
+    tsCreated = serializers.DateTimeField(source="ts_created_at", read_only=True)
+
+    class Meta:
+        model = Activity
+        fields = [
+            "id",
+            "activityType",
+            "recipientUserId",
+            "channelId",
+            "channelKind",
+            "messageId",
+            "actor",
+            "message",
+            "meta",
+            "isRead",
+            "tsCreated",
+        ]
+
+    def get_channelKind(self, obj):
+        return obj.channel.kind if obj.channel else None
 
 
 class DeltaEnvelopeSerializer(serializers.Serializer):

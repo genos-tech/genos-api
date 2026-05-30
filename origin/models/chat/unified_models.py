@@ -505,3 +505,71 @@ class Flag(models.Model):
         indexes = [
             models.Index(fields=["user", "ts_created_at"], name="flag_user_ts_idx"),
         ]
+
+
+class ActivityType(models.IntegerChoices):
+    """Discriminator for `Activity.activity_type`. Mirrors the legacy
+    sidebar's filter chips so the UI can keep the same surface."""
+
+    THREAD_REPLY = 1, "thread_reply"
+    REACTION = 2, "reaction"
+    MENTION = 3, "mention"
+    TASK_ASSIGN = 4, "task_assign"
+
+
+class Activity(models.Model):
+    """One activity-feed entry per (recipient, triggering message).
+
+    Replaces the legacy `ActivityFact` table. Where the legacy schema
+    used integer `chat_type` / `chat_id` / `message_id` composites,
+    this version FKs into the unified `Channel` and `Message` tables.
+
+    `recipient` is the user this entry is FOR — they're the one whose
+    sidebar shows it. `actor` is who performed the action (reacted /
+    replied / mentioned). The two are almost always different; the
+    one exception is self-reactions, which we skip at the producer
+    level so they never reach the table.
+
+    `meta` carries activity-type-specific payload — e.g. reactions
+    store `{"emoji": "👍"}`; mentions carry `{"via_groups": [...]}`
+    when the user was reached via group expansion. Read at render
+    time only; never indexed.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.CASCADE,
+        related_name="activities",
+        to_field="team_id",
+    )
+    recipient = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="received_activities",
+        to_field="id",
+    )
+    actor = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="emitted_activities",
+        to_field="id",
+    )
+    activity_type = models.PositiveSmallIntegerField(choices=ActivityType.choices)
+    channel = models.ForeignKey(Channel, on_delete=models.CASCADE, related_name="activities")
+    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name="activities")
+    meta = models.JSONField(default=dict, blank=True)
+    is_read = models.BooleanField(default=False)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            # The hot read path: the recipient's sidebar, newest-first.
+            models.Index(fields=["recipient", "-ts_created_at"], name="activity_recipient_ts_idx"),
+            # Unread-only filter is the second hot read.
+            models.Index(
+                fields=["recipient", "is_read", "-ts_created_at"],
+                name="activity_recipient_unread_idx",
+            ),
+        ]

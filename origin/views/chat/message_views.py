@@ -104,7 +104,46 @@ def _resolve_thread_root(parent):
     return parent.id
 
 
-def _allocate_seq_and_create_message(*, channel, sender, body, body_text, parent_id, metadata):
+def _allocate_seq_and_create_message_with_activities(
+    *, channel, sender, body, body_text, parent_id, metadata
+):
+    """Wraps `_allocate_seq_and_create_message` and additionally fans out
+    `Activity` rows for the recipients who should see a sidebar entry.
+
+    Returns `(message, activities)` so the caller can include the
+    activities in the wire response — the WS proxy layer reads them and
+    broadcasts `activity.created` to each recipient's `user:{id}` room.
+    """
+
+    from origin.services import v3_activity
+
+    msg, parent = _allocate_seq_and_create_message(
+        channel=channel,
+        sender=sender,
+        body=body,
+        body_text=body_text,
+        parent_id=parent_id,
+        metadata=metadata,
+        return_parent=True,
+    )
+    activities = []
+    activities.extend(
+        v3_activity.create_mention_activities(
+            message=msg,
+            mentioned_user_ids=extract_mentioned_user_ids(body or []),
+            actor=sender,
+        )
+    )
+    if parent is not None:
+        activities.extend(
+            v3_activity.create_thread_reply_activity(reply=msg, parent=parent, actor=sender)
+        )
+    return msg, activities
+
+
+def _allocate_seq_and_create_message(
+    *, channel, sender, body, body_text, parent_id, metadata, return_parent=False
+):
     """Atomically allocate the next per-channel seq and create the row.
 
     Uses `select_for_update` on the channel row to serialize concurrent
@@ -183,6 +222,8 @@ def _allocate_seq_and_create_message(*, channel, sender, body, body_text, parent
                 ignore_conflicts=True,
             )
 
+        if return_parent:
+            return msg, parent
         return msg
 
 
@@ -317,7 +358,7 @@ class MessagesDeltaView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        msg = _allocate_seq_and_create_message(
+        msg, activities = _allocate_seq_and_create_message_with_activities(
             channel=channel,
             sender=request.user,
             body=msg_body,
@@ -329,7 +370,18 @@ class MessagesDeltaView(AuthenticatedAPIView):
         # Refresh with prefetches so the response matches what the
         # delta endpoint and detail endpoint return.
         msg = _prefetched_messages(Message.objects.filter(pk=msg.pk)).first()
-        return Response(MessageSerializer(msg).data, status=status.HTTP_201_CREATED)
+        from origin.serializers.chat.unified_serializers import ActivitySerializer
+
+        response_data = MessageSerializer(msg).data
+        # `_v3_activities` is an internal channel between Django and the
+        # Flask socketio proxy in `socketio_events_v3/message_handlers.py`.
+        # The WS handler reads this, emits `activity.created` to each
+        # recipient's `user:{id}` room, then strips the key before the
+        # broadcast payload is sent to the channel room. FE callers of
+        # the REST endpoint directly (e.g. tests) get the key too —
+        # ignoring it is fine since it's purely additive.
+        response_data["_v3_activities"] = ActivitySerializer(activities, many=True).data
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
 
 class ThreadMessagesDeltaView(AuthenticatedAPIView):

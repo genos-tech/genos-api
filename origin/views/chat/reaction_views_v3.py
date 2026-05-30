@@ -20,7 +20,11 @@ from origin.models.chat.unified_models import (
     Message,
     MessageReaction,
 )
-from origin.serializers.chat.unified_serializers import MessageReactionSerializer
+from origin.serializers.chat.unified_serializers import (
+    ActivitySerializer,
+    MessageReactionSerializer,
+)
+from origin.services import v3_activity
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 
@@ -68,8 +72,22 @@ class MessageReactionsView(AuthenticatedAPIView):
         reaction, created = MessageReaction.objects.get_or_create(
             message=message, user=request.user, emoji=emoji
         )
+        # Fan out an Activity row to the message's sender (skipped when
+        # `actor == sender`, i.e. self-reactions). Only fire on a real
+        # new reaction — re-adding the same emoji is a no-op for the
+        # activity sidebar too.
+        activities = []
+        if created:
+            activities = v3_activity.create_reaction_activity(
+                message=message, emoji=emoji, actor=request.user
+            )
+        response_data = MessageReactionSerializer(reaction).data
+        # Same `_v3_activities` proxy convention as message_views.post —
+        # the WS reaction handler reads this and broadcasts
+        # `activity.created` to the sender's `user:{id}` room.
+        response_data["_v3_activities"] = ActivitySerializer(activities, many=True).data
         status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
-        return Response(MessageReactionSerializer(reaction).data, status=status_code)
+        return Response(response_data, status=status_code)
 
     def delete(self, request, message_id):
         message = _verify_message_member(message_id, request.user)
