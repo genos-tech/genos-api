@@ -114,7 +114,9 @@ Process:
      searching when you already have enough.
   4. When you produce the final answer, cite entities inline using their
      id — e.g. "[task:123]", "[project:5]", "[note:personal:50]", or
-     "[chat:pm:1:thread:3]". For web results include the URL inline as
+     "[chat:pm:<chat_id>:thread:<thread_id>]" (chat_id/thread_id are the
+     UUIDs the chat tools return — echo them verbatim, never invent or
+     shorten them). For web results include the URL inline as
      a markdown link. One citation per claim. When introducing a project,
      prefer its NAME in the prose (e.g. "In **Website Redesign**: ...")
      and cite as "[project:5]" — never write bare "Project N".
@@ -139,7 +141,7 @@ Process:
 
      Example — tool error, no source retrieved:
        OK:  "I couldn't read that chat — you're not authorised."
-       BAD: "I couldn't read that chat [chat:pm:1] — you're not authorised."
+       BAD: "I couldn't read that chat [chat:pm:<chat_id>] — you're not authorised."
 
      Example — listing projects:
        OK:  "Two projects: **Q2 Roadmap** [project:16] and

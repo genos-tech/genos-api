@@ -39,7 +39,7 @@ def iter_thread_summary_chunks(since: Optional[datetime] = None) -> Iterator[Ent
         if not chat_label:
             continue
 
-        acl_user_ids = sorted(chat_acl_user_ids(summary.chat_type, summary.chat_id))
+        acl_user_ids = sorted(chat_acl_user_ids(summary.chat_type, str(summary.chat_id)))
         # An empty ACL would render the chunk unsearchable for everyone.
         # That's actually correct (no members → no readers), but emitting
         # an empty acl_user_ids list lets the indexer's ACL filter accept

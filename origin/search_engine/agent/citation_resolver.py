@@ -112,7 +112,7 @@ def resolve_unresolved_citations(
     task_ids: set[int] = set()
     project_ids: set[int] = set()
     note_lookups: set[tuple[str, int]] = set()
-    chat_lookups: set[tuple[str, int, int | None]] = set()
+    chat_lookups: set[tuple[str, str, str | None]] = set()
 
     for token in tokens:
         parts = token.split(":")
@@ -147,12 +147,14 @@ def resolve_unresolved_citations(
 
         elif etype == "chat" and len(parts) >= 3:
             chat_label = parts[1]
-            chat_id = _safe_int(parts[2])
+            # chat_id / thread_id are v3 UUIDs (opaque strings) — keep
+            # them as-is rather than coercing to int.
+            chat_id = parts[2] or None
             if chat_id is None:
                 continue
-            thread_id: int | None = None
+            thread_id: str | None = None
             if len(parts) >= 5 and parts[3] == "thread":
-                thread_id = _safe_int(parts[4])
+                thread_id = parts[4] or None
                 if thread_id is None:
                     continue
             # Controller convention: chat entity_id has no "chat:"
@@ -420,7 +422,7 @@ def _resolve_chat_notes(
 
 
 def _resolve_chats(
-    chat_lookups: set[tuple[str, int, int | None]],
+    chat_lookups: set[tuple[str, str, str | None]],
     user_id: str,
     build: ChatSourceBuilder,
 ) -> list[dict[str, Any]]:

@@ -41,24 +41,27 @@ def friendly_chat_title(
     """
     if not chat_type_label or not chat_id:
         return None
-    try:
-        cid = int(chat_id)
-    except (TypeError, ValueError):
-        return None
 
     label = str(chat_type_label).lower()
 
-    # Lazy imports — keep this module dependency-free at import time
-    # and avoid circular-import surprises during Django startup. Chat
-    # identity resolves off the v3 unified schema via the
-    # `Channel.legacy_chat_id` bridge (the legacy DM/GM/MDM master tables
-    # are gone); `cid` is the legacy int the index/search rows carry.
+    # Lazy imports — keep this module dependency-free at import time and
+    # avoid circular-import surprises during Django startup. Chat identity
+    # is the v3 `Channel.id` UUID the index/search rows carry; we resolve
+    # the channel directly (the legacy integer bridge no longer applies).
+    from django.core.exceptions import ValidationError
+    from origin.models.chat.unified_models import Channel
+
+    def _channel(kind: int) -> Channel | None:
+        try:
+            return Channel.objects.filter(id=chat_id, kind=kind, is_deleted=False).first()
+        except (ValidationError, ValueError, TypeError):
+            return None
+
     if label == "dm":
         from origin.models.chat.unified_models import ChannelMember
         from origin.models.common.user_models import CustomUser
-        from origin.services.legacy_chat_bridge import resolve_channel
 
-        channel = resolve_channel(1, cid)  # CHAT_TYPE_DM
+        channel = _channel(1)  # CHAT_TYPE_DM
         if channel is None:
             return None
         member_ids = list(
@@ -78,18 +81,19 @@ def friendly_chat_title(
             return None
 
     if label == "gm" or label == "mdm":
-        from origin.services.legacy_chat_bridge import resolve_channel
-
         # v3 `Channel.title` holds the group / MDM display name.
-        channel = resolve_channel(2 if label == "gm" else 4, cid)
+        channel = _channel(2 if label == "gm" else 4)
         return (channel.title or None) if channel else None
 
     if label == "pm":
         from origin.models.project.prj_models import ProjectMaster
 
+        # chat_id is the PM channel's UUID; resolve it to its project.
+        channel = _channel(3)  # CHAT_TYPE_PM
+        if channel is None or not channel.project_id:
+            return None
         try:
-            # For PM chats, chat_id == project_id (see fetch_chat_thread).
-            return ProjectMaster.objects.get(project_id=cid).project_name or None
+            return ProjectMaster.objects.get(project_id=channel.project_id).project_name or None
         except ProjectMaster.DoesNotExist:
             return None
 
