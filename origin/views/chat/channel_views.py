@@ -400,7 +400,7 @@ class ChannelDetailView(AuthenticatedAPIView):
         )
 
     def patch(self, request, channel_id):
-        """Update channel metadata (title, profile image, is_private).
+        """Update channel metadata (title, profile image, visibility, owner).
 
         Authorization: only the channel owner can change metadata.
         DM channels cannot be renamed/customized (their identity is
@@ -411,13 +411,22 @@ class ChannelDetailView(AuthenticatedAPIView):
 
         Body (any subset, all optional):
             {
-              "title": "<str>",            # max 80 chars
+              "title": "<str>",              # max 80 chars
               "profile_image_url": "<str>",  # max 512 chars
-              "is_private": <bool>
+              "is_private": <bool>,
+              "owner_user_id": "<uuid>"      # transfer ownership; the
+                                             # target must be a current
+                                             # non-deleted member.
             }
 
         Unknown fields are silently ignored. Empty body returns the
         existing channel unchanged.
+
+        Owner-transfer semantics: setting `owner_user_id` updates the
+        channel's `owner` FK AND demotes the requester's
+        `ChannelMember.role` to "member" while promoting the target's
+        to "owner". The change is atomic — if any step fails the whole
+        patch rolls back.
         """
         channel = _get_channel_for_user(channel_id, request.user)
         if channel.kind == ChannelKind.DM:
@@ -472,10 +481,58 @@ class ChannelDetailView(AuthenticatedAPIView):
         if "is_private" in body:
             channel.is_private = bool(body.get("is_private"))
             update_fields.append("is_private")
+        new_owner_user_id = body.get("owner_user_id") if "owner_user_id" in body else None
+        if "owner_user_id" in body:
+            if not new_owner_user_id:
+                return Response(
+                    {"error": "owner_user_id must be a non-empty user id."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if str(new_owner_user_id) == str(request.user.id):
+                return Response(
+                    {"error": "owner_user_id matches the current owner — no transfer needed."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                new_owner = User.objects.get(id=new_owner_user_id)
+            except (User.DoesNotExist, ValueError):
+                return Response(
+                    {"error": "owner_user_id not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            # The incoming owner must be a current (non-deleted) member.
+            # We don't auto-add them — the caller should run add-member
+            # first if needed.
+            new_owner_membership = ChannelMember.objects.filter(
+                channel=channel,
+                user=new_owner,
+                is_deleted=False,
+            ).first()
+            if not new_owner_membership:
+                return Response(
+                    {"error": "owner_user_id is not a current member of this channel."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            channel.owner = new_owner
+            update_fields.append("owner")
 
-        if update_fields:
-            update_fields.append("ts_updated_at")
-            channel.save(update_fields=update_fields)
+        with transaction.atomic():
+            if update_fields:
+                update_fields.append("ts_updated_at")
+                channel.save(update_fields=update_fields)
+            # Role swap happens inside the same transaction so the
+            # roster never has two owners (or zero) between writes.
+            if new_owner_user_id and "owner_user_id" in body:
+                ChannelMember.objects.filter(
+                    channel=channel,
+                    user_id=request.user.id,
+                    is_deleted=False,
+                ).update(role="member")
+                ChannelMember.objects.filter(
+                    channel=channel,
+                    user_id=new_owner_user_id,
+                    is_deleted=False,
+                ).update(role="owner")
 
         return Response({"channel": ChannelSerializer(channel, context={"request": request}).data})
 
