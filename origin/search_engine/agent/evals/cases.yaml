@@ -117,6 +117,8 @@
   fixture: true
   expect:
     tools_used_contains: ["search_knowledge_base"]
+    # Metric-only (§4.1): out-of-corpus → the agent SHOULD abstain.
+    should_abstain: true
     answer_contains_any:
       - "don't"
       - "do not"
@@ -132,6 +134,8 @@
   fixture: true
   expect:
     tools_used_contains: ["search_knowledge_base"]
+    # Metric-only (§4.1): no such policy in the workspace → should abstain.
+    should_abstain: true
     answer_does_not_contain: ["the policy states", "according to policy"]
 
 # --------------------------------------------------------------------- #
@@ -463,6 +467,11 @@
     # asserts only that the agent uses the right tool and doesn't
     # error. Content-validity is the judge's job.
     no_errors: true
+    # Metric-only (§4.1): an empty list_tasks result is a grounded
+    # "you have no overdue tasks" — a real ANSWER, NOT an abstention. This
+    # is the case that catches an over-eager abstention gate that
+    # mistakes an empty structured result for "no evidence".
+    should_abstain: false
 
 - id: list_high_priority_open
   query: "Show me my high priority open tasks."
@@ -490,6 +499,8 @@
     tools_used_contains: ["get_team_members"]
     answer_contains_any: ["alice", "bob", "carol", "dan"]
     no_errors: true
+    # Metric-only (§4.1): a grounded answer exists → must NOT abstain.
+    should_abstain: false
 
 # --------------------------------------------------------------------- #
 # B (expand). Specific-entity fetch                                     #
@@ -503,3 +514,102 @@
     tool_calls_at_least: 1
     answer_contains_any: ["spotlight", "cmd-k", "shortcut", "ai search"]
     no_errors: true
+
+# --------------------------------------------------------------------- #
+# P. Tool-selection quality (multi-tool + negative-tool)               #
+# --------------------------------------------------------------------- #
+# Feed the continuous tool-selection metric (runner._tool_selection_metrics
+# → tool_recall / tool_excl_ok). The metric reads ONLY the metric-only
+# gold fields below — `expected_tools` and `forbidden_tools` — which the
+# assertion checker ignores, so they NEVER gate pass/fail. That's
+# deliberate: multi-tool gold is path-sensitive (the model has valid
+# alternate routes), so a hard `tools_used_contains: [A, B]` would
+# flaky-fail the all-must-pass gate. The continuous metric instead
+# degrades gracefully (one-tool shortcut → tool_recall 0.5).
+#
+# The one exception is the write-tool negative (P4): a read query
+# triggering an approval-gated write is near-zero risk and most valuable
+# as a hard gate, so it uses the gating `tools_used_excludes`.
+#
+# NOTE: these were authored against the fixture WITHOUT running the
+# behavior suite (needs LLM creds). Validate the metric-only gold with
+# `python manage.py agent_eval --case <id>` and inspect the printed
+# `metrics:` line before promoting any `expected_tools`/`forbidden_tools`
+# to a gating `tools_used_contains`/`tools_used_excludes`.
+
+# P1–P3: multi-tool — two tools that return NON-OVERLAPPING data, so the
+# question genuinely needs both (no single tool subsumes the other, and
+# search returns neither rollup). Gold is metric-only.
+
+- id: multitool_throughput_and_closers
+  # throughput = created/closed COUNTS over time; top_closers = ranked
+  # WHO leaderboard. Disjoint: neither tool returns the other's half.
+  query: "How many tasks did we close in the last week, and who closed the most?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    answer_contains_any: ["close", "closed", "task"]
+    no_errors: true
+    expected_tools: ["get_task_throughput_stats", "get_top_task_closers"]
+
+- id: multitool_project_health_and_workload
+  # project_summary = per-project status counts; workload_distribution =
+  # open tasks per ASSIGNEE. Disjoint (one is project-scoped status, the
+  # other is per-person load).
+  query: "How is the Q2 Roadmap project going, and who currently has the heaviest workload?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    answer_contains_any: ["q2 roadmap", "open", "wip", "task"]
+    no_errors: true
+    expected_tools: ["get_project_summary", "get_workload_distribution"]
+
+- id: multitool_team_and_status
+  # team_members = names; team_task_summary = cross-project status
+  # rollup. Disjoint (who vs how-many).
+  query: "Who's on the team, and what's our overall task status across all projects?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    answer_contains_any: ["alice", "bob", "carol", "dan"]
+    no_errors: true
+    expected_tools: ["get_team_members", "get_team_task_summary"]
+
+# P4: negative — a READ query must not trigger approval-gated WRITE
+# tools. Near-zero flake risk (no write intent), so this is a real
+# gating assertion, not metric-only. Complements `list_overdue_tasks`
+# by adding the no-write guardrail dimension.
+
+- id: negtool_read_query_no_write
+  query: "Which tasks are overdue right now?"
+  fixture: true
+  expect:
+    tools_used_excludes: ["create_task", "update_task", "assign_task"]
+    no_errors: true
+    # Metric-only — the right read tool, fed to tool_recall (not gated:
+    # "my overdue tasks" could legitimately route via get_my_schedule).
+    expected_tools: ["list_tasks"]
+
+# P5–P6: negative — the agent should answer from internal structured
+# tools, NOT reach for the paid web search (or semantic search) on a
+# question the workspace can answer directly. Lower-confidence than the
+# write case, so metric-only (`forbidden_tools`) — promote to
+# `tools_used_excludes` after a validating run.
+
+- id: negtool_internal_count_no_web
+  query: "How many open tasks does the team have right now?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    no_errors: true
+    forbidden_tools: ["search_web"]
+
+- id: negtool_identity_no_search
+  query: "What's my name and email address?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    answer_contains_any: ["eval fixture", "@genos", "email"]
+    no_errors: true
+    expected_tools: ["get_current_user"]
+    forbidden_tools: ["search_web", "search_knowledge_base"]

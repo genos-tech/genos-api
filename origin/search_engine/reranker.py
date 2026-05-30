@@ -82,6 +82,58 @@ Rules:
 _SNIPPET_TRUNCATE = 200
 
 
+def _fusion_weight() -> float | None:
+    """Reranker's share of the fused score when RAG_RERANK_FUSION is on,
+    else None (no fusion → providers reorder as before)."""
+    if not settings.SEARCH_ENGINE.get("RAG_RERANK_FUSION", False):
+        return None
+    return float(settings.SEARCH_ENGINE.get("RAG_RERANK_FUSION_WEIGHT", 0.5))
+
+
+def _fuse_by_score(
+    candidates: list[dict[str, Any]],
+    relevance_by_index: dict[int, float],
+    weight: float,
+    output_k: int,
+) -> list[dict[str, Any]]:
+    """D2 score fusion: blend each candidate's hybrid (RRF) score with the
+    reranker's relevance, then take the top `output_k`. Pure / no I/O.
+
+    `weight` (the reranker's share, clamped to [0,1]); `(1 - weight)` is
+    RRF's. The RRF `score` is unbounded (~0.01–0.05, a sum of
+    1/(RRF_K+rank)) so it's min-max normalized to [0,1] within the
+    candidate set — otherwise a ~0.9 relevance would swamp it. The
+    reranker relevance is kept ABSOLUTE (Cohere's relevance_score is
+    already calibrated [0,1]; re-normalizing within the set would destroy
+    that; the LLM positional proxy is constructed in [0,1]). We fuse the
+    RRF *score*, not raw rank, to preserve confidence magnitude (a
+    runaway top hit vs a near-tie).
+
+    A candidate the reranker dropped (absent from `relevance_by_index`)
+    contributes relevance 0.0 — so it is NOT removed, it degrades to its
+    weighted RRF share `(1-weight)·rrf_norm`. That lets a high-RRF hit the
+    reranker ignored still rank, though a strongly-reranked paraphrase can
+    still displace it (the intended fusion behavior, not a hard floor).
+
+    Asymmetry to keep in mind: min-max forces the candidate set's
+    lowest-RRF item to 0.0, while the lowest relevance is whatever the
+    reranker returned — an inherent fusion tradeoff, not a neutral blend.
+    """
+    n = len(candidates)
+    if n == 0:
+        return []
+    rrf = [float(c.get("score", 0.0) or 0.0) for c in candidates]
+    lo, hi = min(rrf), max(rrf)
+    span = hi - lo
+    # span == 0 (all-equal RRF) → RRF carries no signal; let relevance
+    # decide by giving every candidate the same RRF contribution.
+    rrf_norm = [((s - lo) / span if span > 0 else 1.0) for s in rrf]
+    w = max(0.0, min(1.0, weight))
+    fused = [(1.0 - w) * rrf_norm[i] + w * float(relevance_by_index.get(i, 0.0)) for i in range(n)]
+    order = sorted(range(n), key=lambda i: fused[i], reverse=True)
+    return [candidates[i] for i in order[: max(output_k, 0)]]
+
+
 def rerank(
     *,
     query: str,
@@ -183,6 +235,17 @@ def _rerank_llm(
         )
         return candidates[:output_k]
 
+    # D2 score fusion: the LLM judge gives only an ORDER (no calibrated
+    # score), so derive a positional relevance — top item ~1.0, last ~0;
+    # dropped items are absent (→ relevance 0 in the fuse, kept at their
+    # RRF share). Then blend with the RRF score instead of replacing it.
+    weight = _fusion_weight()
+    if weight is not None:
+        relevance = (
+            {idx: 1.0 - pos / len(indices) for pos, idx in enumerate(indices)} if indices else {}
+        )
+        return _fuse_by_score(candidates, relevance, weight, output_k)
+
     # Optional "rerank but never drop" mode: the model's order wins,
     # but any input candidate the model omitted is appended in its
     # original (pre-rerank) position so nothing is lost. Useful when
@@ -246,8 +309,7 @@ def _rerank_cohere(
         "top_n": min(output_k, len(documents)),
     }
     url = (
-        settings.SEARCH_ENGINE.get("COHERE_RERANK_BASE_URL")
-        or "https://api.cohere.com/v2/rerank"
+        settings.SEARCH_ENGINE.get("COHERE_RERANK_BASE_URL") or "https://api.cohere.com/v2/rerank"
     )
     timeout = float(settings.SEARCH_ENGINE.get("COHERE_RERANK_TIMEOUT_S") or 10)
 
@@ -266,9 +328,7 @@ def _rerank_cohere(
         # `COHERE_RERANK_MAX_RETRIES` (default 3 = up to ~45s of
         # cumulative wait per failing call).
         max_retries = int(settings.SEARCH_ENGINE.get("COHERE_RERANK_MAX_RETRIES", 3))
-        retry_backoff = float(
-            settings.SEARCH_ENGINE.get("COHERE_RERANK_RETRY_BACKOFF_S", 15)
-        )
+        retry_backoff = float(settings.SEARCH_ENGINE.get("COHERE_RERANK_RETRY_BACKOFF_S", 15))
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -306,6 +366,7 @@ def _rerank_cohere(
     # relevance_score descending; we honor that order.
     raw_results = data.get("results") or []
     indices: list[int] = []
+    relevance: dict[int, float] = {}
     seen: set[int] = set()
     for r in raw_results:
         idx = r.get("index")
@@ -314,6 +375,10 @@ def _rerank_cohere(
         if 0 <= idx < len(candidates) and idx not in seen:
             seen.add(idx)
             indices.append(idx)
+            try:
+                relevance[idx] = float(r.get("relevance_score", 0.0))
+            except (TypeError, ValueError):
+                relevance[idx] = 0.0
 
     if not indices:
         log.warning(
@@ -321,6 +386,13 @@ def _rerank_cohere(
             data,
         )
         return candidates[:output_k]
+
+    # D2 score fusion: Cohere's relevance_score is a real, calibrated
+    # cross-encoder relevance — the faithful "RRF score + cross-encoder
+    # score" blend. Without fusion we honor Cohere's score-desc order.
+    weight = _fusion_weight()
+    if weight is not None:
+        return _fuse_by_score(candidates, relevance, weight, output_k)
 
     return [candidates[i] for i in indices[:output_k]]
 
@@ -335,7 +407,9 @@ def _cohere_doc_text(entity: dict[str, Any]) -> str:
     """
     title = (entity.get("title") or "").strip()
     snippet = (entity.get("snippet") or "").strip()
-    snippet = snippet.replace("<workspace_content>", "").replace("</workspace_content>", "").strip()
+    snippet = (
+        snippet.replace("<workspace_content>", "").replace("</workspace_content>", "").strip()
+    )
     if len(snippet) > _SNIPPET_TRUNCATE:
         snippet = snippet[:_SNIPPET_TRUNCATE].rstrip() + "…"
     if title and snippet:

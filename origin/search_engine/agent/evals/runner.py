@@ -35,8 +35,9 @@ from typing import Any
 
 import yaml
 
-from origin.search_engine.agent.controller import run_agent
-from origin.search_engine.agent.tools import ToolContext
+from origin.search_engine.agent.abstention import is_abstention
+from origin.search_engine.agent.controller import _irrelevant_tool_families, run_agent
+from origin.search_engine.agent.tools import REGISTRY, ToolContext
 from origin.search_engine.search import search
 
 log = logging.getLogger(__name__)
@@ -102,6 +103,13 @@ class CaseResult:
     ttft_ms: int = -1
     # Optional LLM-judge scores; only set when `--judge` was on.
     judge_scores: dict[str, Any] | None = None
+    # Continuous quality metrics layered on top of the binary pass/fail
+    # (Q0 of SPOTLIGHT_QUALITY_ARCHITECTURE.md). Retrieval cases populate
+    # rank-based signals (`mrr`, `recall_at_n`); behavior cases leave it
+    # empty today (see `_retrieval_metrics` for why tool-selection is not
+    # yet a continuous metric on this suite). Empty `{}` → no metric for
+    # this case, so aggregators skip it.
+    metrics: dict[str, float] = field(default_factory=dict)
 
 
 def load_cases(path: Path = BEHAVIOR_CASES_PATH) -> list[dict[str, Any]]:
@@ -231,6 +239,11 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
             sources=list(last_sources),
             tool_results=tool_traces,
             ttft_ms=int(ttft_s * 1000) if ttft_s is not None else -1,
+            metrics={
+                **_tool_selection_metrics(events, expect),
+                **_abstention_metric(events, expect),
+                **_surface_metric(query),
+            },
         )
     finally:
         for handle in cleanup_handles:
@@ -382,6 +395,11 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
         sources=list(last_sources),
         tool_results=last_tool_traces,
         ttft_ms=int(last_ttft_s * 1000) if last_ttft_s is not None else -1,
+        metrics={
+            **_tool_selection_metrics(last_events, final_expect),
+            **_abstention_metric(last_events, final_expect),
+            **_surface_metric(last_query),
+        },
     )
 
 
@@ -389,6 +407,85 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
 # entity_id pattern matches what the agent uses: `chat:pm:1:thread:3`,
 # `task:42`, `note:personal:7`, etc. — non-greedy, no spaces.
 _CITATION_RE = re.compile(r"\[([a-z][a-z0-9_:\-]+)\]")
+
+
+def _abstention_metric(events: list[dict[str, Any]], expect: dict[str, Any]) -> dict[str, float]:
+    """Continuous abstention-correctness signal (Q0, §4.1).
+
+    Reads the metric-only gold `should_abstain` (true/false). `abstention_correct`
+    is 1.0 when the answer's abstention status matches the gold, else 0.0 —
+    so it catches BOTH error directions: a false answer on an unanswerable
+    query (should_abstain: true, but answered) AND a false abstention on an
+    answerable one, incl. the empty-structured-result case ("no overdue
+    tasks" is an answer, should_abstain: false). Non-gating; `{}` when the
+    case doesn't declare `should_abstain`.
+    """
+    if "should_abstain" not in expect:
+        return {}
+    answer = "".join((e.get("text") or "") for e in events if e.get("type") == "answer_delta")
+    correct = is_abstention(answer) == bool(expect["should_abstain"])
+    return {"abstention_correct": 1.0 if correct else 0.0}
+
+
+def _surface_metric(query: str) -> dict[str, float]:
+    """Deterministic tool-surface size under RAG_TOOL_SUBSETTING (§4.5).
+
+    `tools_declared` = how many tools the model would see for this query.
+    A SURFACE / COST signal, NOT a quality score: the A/B diff shows it
+    shrink when subsetting is on. Always emitted so both runs carry it for
+    a clean delta. The tool-selection-*quality* benefit is a hypothesis to
+    validate on production (the F2 judge sampler), not on this fixture
+    suite — no case here exercises the peripheral families subsetting
+    drops, so the suite only confirms no-regression.
+    """
+    from django.conf import settings  # noqa: PLC0415 — lazy: Django app-ready
+
+    excluded = (
+        _irrelevant_tool_families(query)
+        if settings.SEARCH_ENGINE.get("RAG_TOOL_SUBSETTING", False)
+        else set()
+    )
+    return {"tools_declared": float(len(REGISTRY) - len(excluded))}
+
+
+def _tool_selection_metrics(
+    events: list[dict[str, Any]], expect: dict[str, Any]
+) -> dict[str, float]:
+    """Continuous tool-selection signals (Q0) layered on the binary tool
+    assertions.
+
+    Reads ONLY the metric-only gold fields — `expected_tools` and
+    `forbidden_tools` — never the gating `tools_used_contains` /
+    `tools_used_excludes`. That's deliberate: a gating assertion is
+    structurally pinned (a *passing* `tools_used_contains` case always has
+    recall 1.0; a passing `tools_used_excludes` case always has excl_ok
+    1.0), so reading it would inject constant 1.0s that swamp the real
+    signal — the same binary-in-a-costume trap as recall@n on singleton
+    gold. The metric-only fields can actually move:
+
+      * tool_recall  = |expected_tools ∩ used| / |expected_tools|
+        Fractional when the model takes a one-tool shortcut on a
+        genuinely multi-tool question.
+      * tool_excl_ok = |forbidden_tools \\ used| / |forbidden_tools|
+        Drops when the agent over-reaches to a tool it shouldn't (e.g.
+        paid web search on an internal question).
+
+    Both are NON-gating — the case's pass/fail comes from its other
+    assertions — so path-sensitive multi-tool / negative gold can't
+    flaky-fail the CI gate. See the `expected_tools` / `forbidden_tools`
+    cases in cases.yaml. Returns `{}` when neither field is declared.
+    """
+    used = {e.get("tool_name") for e in events if e.get("type") == "tool_call_start"}
+    out: dict[str, float] = {}
+    expected = expect.get("expected_tools") or []
+    if expected:
+        req = set(expected)
+        out["tool_recall"] = round(len(req & used) / len(req), 4)
+    forbidden = expect.get("forbidden_tools") or []
+    if forbidden:
+        forb = set(forbidden)
+        out["tool_excl_ok"] = round(len(forb - used) / len(forb), 4)
+    return out
 
 
 def _check_behavior_expectations(
@@ -519,6 +616,91 @@ def _check_behavior_expectations(
 # --------------------------------------------------------------------------- #
 
 
+def _retrieval_metrics(entities: list[dict[str, Any]], expect: dict[str, Any]) -> dict[str, float]:
+    """Continuous retrieval-quality signals on top of the binary pass/fail.
+
+    Why MRR (rank) is the headline rather than recall@n: most gold sets in
+    `retrieval_cases.yaml` are singletons (one entity / one title
+    substring), so a recall@n fraction is just 0.0/1.0 — identical to the
+    existing `must_contain_*` binary, trending nothing new. The *rank* at
+    which the gold item lands distinguishes "surfaced at #1" from
+    "surfaced at #5" — both pass the binary today but are very different
+    retrieval outcomes, and a retrieval change that lifts gold from rank 4
+    to rank 2 is invisible to pass/fail. `recall_at_n` is still reported
+    but is only fractional for the handful of multi-gold cases.
+
+    Scope (do not overclaim): retrieval cases run under `mode="eval"`
+    (freshness + chunk-type overlays OFF — see `run_retrieval_case`), so
+    these measure RAW BM25+vector+RRF recall on fixtures. They are ideal
+    for A/B-ing a retrieval change, but are NOT production recall — that
+    is the online-sampling half of the foundation, which this doesn't
+    touch. Ranks are measured within the returned list (capped at the
+    case's `limit`); gold outside it scores reciprocal rank 0.
+
+    Tool-selection accuracy is intentionally NOT emitted here: every
+    `tools_used_contains` in `cases.yaml` is a singleton, so a "tool
+    recall" number would be purely binary (a fraction in a binary
+    costume). A continuous tool-selection metric is blocked on authoring
+    multi-tool / negative-tool gold cases first.
+
+    Returns `{}` for cases with no rank-checkable gold (e.g. a pure
+    `must_not_contain_title` adversarial case) so the caller skips them.
+    """
+    ranked_titles = [(e.get("title") or "").lower() for e in entities]
+    ranked_ids = [e.get("entity_id") for e in entities]
+
+    def _rank_of_title(needle: str) -> int | None:
+        needle = (needle or "").lower()
+        if not needle:
+            return None
+        for i, t in enumerate(ranked_titles):
+            if needle in t:
+                return i + 1  # 1-indexed
+        return None
+
+    def _rank_of_id(eid: Any) -> int | None:
+        for i, x in enumerate(ranked_ids):
+            if x == eid:
+                return i + 1
+        return None
+
+    # Each gold "slot" contributes (reciprocal_rank, hit_within_declared_n).
+    slots: list[tuple[float, bool]] = []
+
+    needle = expect.get("top_result_title_contains")
+    if isinstance(needle, str) and needle:
+        r = _rank_of_title(needle)
+        slots.append((1.0 / r if r else 0.0, bool(r and r <= 1)))
+
+    spec = expect.get("must_contain_title_in_top_n")
+    if isinstance(spec, dict):
+        n = int(spec.get("n", 0))
+        for s in spec.get("title_substrings") or []:
+            r = _rank_of_title(s)
+            slots.append((1.0 / r if r else 0.0, bool(r and r <= n)))
+
+    spec = expect.get("must_contain_in_top_n")
+    if isinstance(spec, dict):
+        n = int(spec.get("n", 0))
+        for eid in spec.get("entity_ids") or []:
+            r = _rank_of_id(eid)
+            slots.append((1.0 / r if r else 0.0, bool(r and r <= n)))
+
+    # OR matcher: one slot, satisfied by the best-ranked candidate.
+    spec = expect.get("must_contain_any_title_in_top_n")
+    if isinstance(spec, dict):
+        n = int(spec.get("n", 0))
+        ranks = [r for r in (_rank_of_title(s) for s in spec.get("title_substrings") or []) if r]
+        best = min(ranks) if ranks else None
+        slots.append((1.0 / best if best else 0.0, bool(best and best <= n)))
+
+    if not slots:
+        return {}
+    mrr = sum(rr for rr, _ in slots) / len(slots)
+    recall = sum(1.0 for _, hit in slots if hit) / len(slots)
+    return {"mrr": round(mrr, 4), "recall_at_n": round(recall, 4)}
+
+
 def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
     """Execute one retrieval case by calling `search(...)` directly.
 
@@ -583,6 +765,7 @@ def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
         passed=not reasons,
         duration_ms=duration_ms,
         failure_reasons=reasons,
+        metrics=_retrieval_metrics(entities, expect),
     )
 
 

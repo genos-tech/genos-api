@@ -83,6 +83,16 @@ class Command(BaseCommand):
                 "agent/evals/runs/<timestamp>.jsonl."
             ),
         )
+        parser.add_argument(
+            "--persist-metrics",
+            action="store_true",
+            help=(
+                "Write per-case continuous metrics (mrr / recall_at_n) to "
+                "agent/evals/runs/<timestamp>-metrics.jsonl so retrieval "
+                "quality can be trended across PRs. Opt-in so the fast "
+                "retrieval suite doesn't spam files during iteration."
+            ),
+        )
 
     def handle(self, *args, **options):
         case_id_filter: str | None = options.get("case_id")
@@ -90,6 +100,7 @@ class Command(BaseCommand):
         retrieval_only: bool = options.get("retrieval") or False
         run_all: bool = options.get("run_all") or False
         run_judge: bool = options.get("judge") or False
+        persist_metrics: bool = options.get("persist_metrics") or False
 
         if run_judge and retrieval_only:
             self.stderr.write(
@@ -163,6 +174,9 @@ class Command(BaseCommand):
         if run_judge:
             self._persist_judge_run(all_results)
 
+        if persist_metrics:
+            self._persist_metrics_run(all_results)
+
         if any_failed:
             sys.exit(1)
 
@@ -188,6 +202,9 @@ class Command(BaseCommand):
                 f"cite={j.get('citation_precision', 0):.2f} "
                 f"compl={j.get('completeness', 0):.2f}" + (f"  — {note}" if note else "")
             )
+        if r.metrics:
+            parts = "  ".join(f"{k}={v:.3f}" for k, v in sorted(r.metrics.items()))
+            self.stdout.write(self.style.NOTICE(f"        metrics: {parts}"))
 
     def _print_summary(self, results: list[CaseResult], *, run_judge: bool) -> None:
         total = len(results)
@@ -219,6 +236,75 @@ class Command(BaseCommand):
                     )
                 )
 
+        # Continuous metrics (Q0) — retrieval rank quality (mrr /
+        # recall_at_n, eval-mode fixture-based, NOT production recall) and
+        # tool-selection (tool_recall / tool_excl_ok). Each metric is
+        # averaged only over the cases that declared it, so denominators
+        # differ — the per-metric (n=) makes that explicit.
+        scored = [r for r in results if r.metrics]
+        if scored:
+            keys = sorted({k for r in scored for k in r.metrics})
+            parts = []
+            for k in keys:
+                vals = [r.metrics[k] for r in scored if k in r.metrics]
+                parts.append(f"{k}={sum(vals) / len(vals):.3f} (n={len(vals)})")
+            self.stdout.write(self.style.NOTICE("\nContinuous metrics: " + "  ".join(parts)))
+
+    def _run_basename(self) -> str:
+        """`<timestamp>-<short-sha>` stem shared by persisted run files.
+
+        Suppresses git stderr so "fatal: not a git repository" doesn't
+        leak into eval output when CWD isn't a git checkout; falls back
+        to `unknown` for the sha there.
+        """
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        try:
+            sha = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                text=True,
+                timeout=5,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except Exception:  # noqa: BLE001 — outside git or no git installed
+            sha = "unknown"
+        return f"{ts}-{sha}"
+
+    def _persist_metrics_run(self, results: list[CaseResult]) -> None:
+        """Append one JSONL line per metric-bearing case to
+        `agent/evals/runs/<ts>-metrics.jsonl` for trending retrieval
+        quality (mrr / recall_at_n) across PRs. Only cases that declared
+        rank-checkable gold are written; if none did, nothing is."""
+        scored = [r for r in results if r.metrics]
+        if not scored:
+            self.stdout.write(
+                self.style.WARNING(
+                    "\n--persist-metrics: no case produced metrics (did the run "
+                    "include the retrieval suite?); nothing written."
+                )
+            )
+            return
+
+        RUNS_DIR.mkdir(parents=True, exist_ok=True)
+        out_path = RUNS_DIR / f"{self._run_basename()}-metrics.jsonl"
+        with out_path.open("w") as f:
+            for r in scored:
+                f.write(
+                    json.dumps(
+                        {
+                            "case_id": r.case_id,
+                            "passed": r.passed,
+                            "duration_ms": r.duration_ms,
+                            "metrics": r.metrics,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+
+        self.stdout.write(
+            self.style.SUCCESS(f"\nWrote metrics run to {out_path.relative_to(os.getcwd())}")
+        )
+
     def _persist_judge_run(self, results: list[CaseResult]) -> None:
         """Append one JSONL line per case to `agent/evals/runs/<ts>.jsonl`.
 
@@ -231,22 +317,7 @@ class Command(BaseCommand):
             return
 
         RUNS_DIR.mkdir(parents=True, exist_ok=True)
-        ts = time.strftime("%Y%m%d-%H%M%S")
-        try:
-            # Run from the repo root if we can find it. Suppress
-            # stderr so "fatal: not a git repository" doesn't leak
-            # into the eval output when running inside a container
-            # whose CWD isn't a git checkout.
-            sha = subprocess.check_output(
-                ["git", "rev-parse", "--short", "HEAD"],
-                text=True,
-                timeout=5,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-        except Exception:  # noqa: BLE001 — outside git or no git installed
-            sha = "unknown"
-
-        out_path = RUNS_DIR / f"{ts}-{sha}.jsonl"
+        out_path = RUNS_DIR / f"{self._run_basename()}.jsonl"
         with out_path.open("w") as f:
             for r in judged:
                 f.write(
@@ -274,6 +345,7 @@ class Command(BaseCommand):
                                 for tr in r.tool_results
                             ],
                             "judge": r.judge_scores,
+                            "metrics": r.metrics,
                         },
                         ensure_ascii=False,
                     )
