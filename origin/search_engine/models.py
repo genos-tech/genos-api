@@ -254,3 +254,44 @@ class AgentStep(models.Model):
         indexes = [
             models.Index(fields=["run", "step_index"]),
         ]
+
+
+class AgentRunJudgement(models.Model):
+    """Online quality sample (F2 — SPOTLIGHT_QUALITY_ARCHITECTURE.md §F2).
+
+    One LLM-judge scoring of a completed `AgentRun`, produced
+    ASYNCHRONOUSLY by the `agent_judge_sample` management command — never
+    on the user request path. Lets us trend *production* faithfulness /
+    citation_precision / completeness and alert on drift, which the fixed
+    offline eval suite (37 cases) can't see.
+
+    One run is judged at most once: the sampler excludes runs that
+    already have a judgement, so re-running the cron is idempotent.
+    `error` is non-empty when the judge call itself failed; the three
+    scores are 0.0 in that case (mirrors `judge._error_scores`) so a
+    failed judgement is recorded rather than silently dropped, and the
+    `--report` aggregator filters `error=""` so failures don't drag the
+    mean.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    run = models.ForeignKey(AgentRun, on_delete=models.CASCADE, related_name="judgements")
+    # Denormalized from the run so per-team rollups don't need a join.
+    team_id = models.CharField(max_length=64, db_index=True)
+    faithfulness = models.FloatField(default=0.0)
+    citation_precision = models.FloatField(default=0.0)
+    completeness = models.FloatField(default=0.0)
+    notes = models.TextField(blank=True, default="")
+    # Which model produced this score — recorded for reproducibility when
+    # the active provider/model changes between sampling passes.
+    judge_model = models.CharField(max_length=64, blank=True, default="")
+    error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            # Explicit name (not Django's auto hash) so the hand-authored
+            # migration is deterministically verifiable via
+            # `makemigrations --check`.
+            models.Index(fields=["team_id", "-created_at"], name="se_judge_team_created_idx"),
+        ]

@@ -39,10 +39,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         limit = 10
     limit = max(1, min(limit, _MAX_LIMIT))
 
-    # Phase 10 — query rewriting is opt-in for the agent path only.
-    # The Spotlight typeahead never passes through here, so toggling
-    # `RAG_USE_QUERY_REWRITE` can't accidentally fire an LLM call per
-    # keystroke. Off by default during rollout.
+    # Phase 10 — query rewriting is scoped to the agent path only.
+    # The Spotlight typeahead never passes through here, so the
+    # `RAG_USE_QUERY_REWRITE` flag can't fire an LLM call per keystroke.
+    # Enabled by default (see apis/settings.py) — measured +2 net pass /
+    # 0 regressions on the agent eval suite (roadmap §1.1).
     use_rewrite = bool(settings.SEARCH_ENGINE.get("RAG_USE_QUERY_REWRITE", False))
 
     result = search(

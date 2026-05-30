@@ -250,3 +250,30 @@ TOOL RESULTS (everything the agent actually retrieved this turn):
 DRAFT ANSWER:
 {draft}
 """
+
+
+# Critique-with-retrieval directive (SPOTLIGHT_QUALITY_ARCHITECTURE.md §4.2).
+# Appended as a USER turn after the agent's draft answer (which is added as
+# an assistant turn) when RAG_CRITIQUE_RETRIEVAL is on. Unlike the
+# precision-only critique above, this runs as a real (short, read-only)
+# continuation of the agent loop, so the model CAN call one more retrieval
+# tool to close a completeness gap. The merge logic only swaps in the
+# result if the model actually retrieved — so a complete draft is kept
+# verbatim and never paraphrased.
+AGENT_CRITIQUE_RETRIEVAL_DIRECTIVE = """\
+Before finalising, review your draft answer above against the user's \
+original question and the data you already retrieved.
+
+- If the draft is MISSING information that another workspace lookup could \
+supply (an entity you didn't fetch, a list you didn't enumerate, a fact \
+the question asks for but the draft omits), call ONE more read tool \
+(e.g. search_knowledge_base, list_tasks, fetch_task) to fill that gap, \
+then write the improved FINAL answer that incorporates what you found.
+- If the draft is already complete, accurate, and well-cited, do NOT call \
+any tool — just restate it as your final answer.
+
+Keep the same markdown format and citation discipline ([type:id] for \
+entity-level claims; no citations on aggregate stats or tool errors). \
+Do not add meta-commentary like "I revised this" — output only the \
+answer itself.
+"""

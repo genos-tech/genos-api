@@ -38,8 +38,10 @@ from uuid import UUID
 
 from django.conf import settings
 
+from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
 from origin.search_engine.agent.citation_resolver import resolve_unresolved_citations
 from origin.search_engine.agent.prompts import (
+    AGENT_CRITIQUE_RETRIEVAL_DIRECTIVE,
     AGENT_SELF_CRITIQUE_PROMPT_TEMPLATE,
     AGENT_SELF_CRITIQUE_SYSTEM,
     AGENT_SYSTEM_PROMPT,
@@ -101,6 +103,60 @@ def _build_tool_declarations(
         for t in REGISTRY.values()
         if t.name not in disabled
     ]
+
+
+# Per-context tool subsetting (RAG_TOOL_SUBSETTING — §4.5). Peripheral
+# tool families are dropped from the declared tool list when the query
+# shows no keyword signal for them. Families are derived from tool NAMES
+# (robust to new tools joining a family); keywords use word boundaries so
+# short tokens ("pr", "i") don't match inside unrelated words ("project",
+# "list"). Core task/note/chat/project/analytics tools belong to no
+# family and are never dropped.
+_PERIPHERAL_FAMILY_KEYWORDS: dict[str, "re.Pattern[str]"] = {
+    "pr": re.compile(
+        r"\b(pr|prs|pull requests?|pull-requests?|github|merge|merged|commit|commits|"
+        r"code review|diff)\b"
+    ),
+    "calendar": re.compile(
+        r"\b(calendar|schedule|scheduling|meeting|meetings|event|events|"
+        r"appointment|availability|agenda)\b"
+    ),
+    "todo": re.compile(r"\b(todo|todos|to-do|to do|checklist)\b"),
+    "me": re.compile(r"\b(my|me|mine|i|i'm|im)\b|assigned to me|do i|am i|should i"),
+}
+
+
+def _tool_family(name: str) -> str | None:
+    """Map a tool name to its peripheral family, or None for a core tool
+    (core tools are never subset out)."""
+    if name == "fetch_pr" or name.startswith("list_pr_"):
+        return "pr"
+    if "calendar" in name:
+        return "calendar"
+    if "todo" in name:
+        return "todo"
+    if name.startswith("get_my_") or name.startswith("list_my_"):
+        return "me"
+    return None
+
+
+def _irrelevant_tool_families(query: str) -> set[str]:
+    """Tool names to disable for `query` under RAG_TOOL_SUBSETTING.
+
+    A peripheral family is excluded only when the query contains NONE of
+    its keywords. Errs toward keeping: an over-broad keyword match keeps a
+    possibly-unneeded family (harmless); a missed match would drop a
+    needed family (the failure mode — minimised by conservative keyword
+    lists and the one-shot caveat documented on the setting). Pure (no
+    I/O) — unit-testable.
+    """
+    q = (query or "").lower()
+    triggered = {fam for fam, rx in _PERIPHERAL_FAMILY_KEYWORDS.items() if rx.search(q)}
+    return {
+        t.name
+        for t in REGISTRY.values()
+        if (fam := _tool_family(t.name)) is not None and fam not in triggered
+    }
 
 
 # Tool arguments that are raw DB primary keys. The agent emits these
@@ -886,33 +942,64 @@ def run_agent(
         messages.append(AgentMessage(role="assistant", text=prior_answer))
     messages.append(_user_turn(query))
 
+    # §4.5 — per-context tool subsetting. Drop peripheral families the
+    # query shows no signal for, unioned with anything the caller already
+    # disabled (e.g. the web-search toggle). Cuts the declared tool
+    # surface; never touches core tools. Off by default.
+    if settings.SEARCH_ENGINE.get("RAG_TOOL_SUBSETTING", False):
+        excluded = _irrelevant_tool_families(query)
+        if excluded:
+            disabled_tools = (disabled_tools or set()) | excluded
+            log.info(
+                "Tool subsetting: dropped %d peripheral tool(s); %d declared",
+                len(excluded),
+                len(REGISTRY) - len(disabled_tools),
+            )
+
     # Phase 3.2 — optional self-critique pass. Dispatched here so the
     # resume_agent path (write-tool approval flow) is NOT critiqued;
     # critique only makes sense on a complete, un-paused turn.
-    if settings.SEARCH_ENGINE.get("RAG_AGENT_SELF_CRITIQUE", False):
-        return _drive_loop_with_critique(
-            user_query=query,
+    def _inner(
+        emit_fn: Callable[[dict[str, Any]], None],
+        trace_fn: Callable[[str, dict[str, Any], dict[str, Any]], None] | None,
+    ) -> dict[str, Any] | None:
+        if settings.SEARCH_ENGINE.get("RAG_AGENT_SELF_CRITIQUE", False):
+            return _drive_loop_with_critique(
+                user_query=query,
+                messages=messages,
+                ctx=ctx,
+                emit=emit_fn,
+                run_id=run_id,
+                starting_step=0,
+                seen_sources_by_id=seeded_map,
+                disabled_tools=disabled_tools,
+                system_extra=system_extra,
+                trace_hook=trace_fn,
+            )
+        return _drive_loop(
             messages=messages,
             ctx=ctx,
-            emit=emit,
+            emit=emit_fn,
             run_id=run_id,
             starting_step=0,
             seen_sources_by_id=seeded_map,
             disabled_tools=disabled_tools,
             system_extra=system_extra,
-            trace_hook=trace_hook,
+            trace_hook=trace_fn,
         )
-    return _drive_loop(
-        messages=messages,
-        ctx=ctx,
-        emit=emit,
-        run_id=run_id,
-        starting_step=0,
-        seen_sources_by_id=seeded_map,
-        disabled_tools=disabled_tools,
-        system_extra=system_extra,
-        trace_hook=trace_hook,
+
+    # §4.1 abstention gate — only on a fresh workspace query. With
+    # `seed_sources` (thread/note Q&A) or `prior_turns` (multi-turn) the
+    # answer can be grounded in context this gate can't see, so skip it
+    # there to avoid false abstentions.
+    gate_on = (
+        settings.SEARCH_ENGINE.get("RAG_ABSTENTION_GATE", False)
+        and not seed_sources
+        and not prior_turns
     )
+    if gate_on:
+        return _run_with_abstention_gate(_inner, emit, trace_hook)
+    return _inner(emit, trace_hook)
 
 
 def resume_agent(
@@ -1103,6 +1190,7 @@ def _drive_loop(
     disabled_tools: set[str] | None = None,
     system_extra: str | None = None,
     trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
+    max_steps: int | None = None,
 ) -> dict[str, Any] | None:
     """The core agent loop, shared by `run_agent` and `resume_agent`.
 
@@ -1113,8 +1201,14 @@ def _drive_loop(
     `AGENT_SYSTEM_PROMPT` before being passed to the model. The thread
     Q&A flow (AgentAskView's thread_context branch) uses this to inject
     the thread summary + a "stay scoped to this thread" directive.
+
+    `max_steps`, when set, overrides the `AGENT_MAX_STEPS` ceiling for
+    this call. The critique-with-retrieval continuation passes a tight
+    budget (`starting_step + RAG_CRITIQUE_MAX_STEPS`) so the critique can
+    fire at most one more retrieval before answering.
     """
-    max_steps = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
+    if max_steps is None:
+        max_steps = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
     client = get_model_client()
     tools = _build_tool_declarations(disabled_tools)
     system_instruction = AGENT_SYSTEM_PROMPT
@@ -1506,6 +1600,27 @@ def _drive_loop_with_critique(
             emit(e)
         return None
 
+    # Critique-with-retrieval path (RAG_CRITIQUE_RETRIEVAL). Runs a short,
+    # read-only continuation of the loop so the critique can re-retrieve to
+    # fix a completeness gap, not just rewrite text. Falls through to the
+    # precision-only path below when the sub-flag is off, leaving that
+    # measured behavior untouched.
+    if bool(settings.SEARCH_ENGINE.get("RAG_CRITIQUE_RETRIEVAL", False)):
+        for e in _critique_with_retrieval(
+            loop1_events=captured_events,
+            draft=draft_answer,
+            messages=messages,
+            ctx=ctx,
+            run_id=run_id,
+            starting_step=starting_step,
+            seen_sources_by_id=seen_sources_by_id,
+            disabled_tools=disabled_tools,
+            system_extra=system_extra,
+            trace_hook=trace_hook,
+        ):
+            emit(e)
+        return None
+
     try:
         revised = _run_self_critique(
             user_query=user_query,
@@ -1580,6 +1695,217 @@ def _run_self_critique(
             chunks.append(text)
     out = "".join(chunks).strip()
     return out or None
+
+
+def _critique_with_retrieval(
+    *,
+    loop1_events: list[dict[str, Any]],
+    draft: str,
+    messages: list[AgentMessage],
+    ctx: ToolContext,
+    run_id: UUID | None,
+    starting_step: int,
+    seen_sources_by_id: dict[tuple, dict[str, Any]],
+    disabled_tools: set[str] | None,
+    system_extra: str | None,
+    trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None,
+) -> list[dict[str, Any]]:
+    """Retrieval-capable critique: re-enter `_drive_loop` for a short,
+    read-only continuation so the model can fix a *completeness* gap with
+    one more retrieval, then merge the result over the draft.
+
+    Returns the event list the caller should emit. The draft is preserved
+    verbatim unless the continuation actually retrieved AND produced an
+    answer — see `_merge_critique_events`.
+
+    Reuses the full loop (tool dispatch, source emission, citation
+    resolution) rather than re-implementing them: the new sources surface
+    as chips and the revised answer's `[type:id]` tokens resolve exactly
+    as in a normal turn, because `seen_sources_by_id` is shared.
+    """
+    # Continuation conversation: show the model its own draft, then the
+    # completeness directive. `messages` already carries loop 1's tool
+    # turns (mutated in place by `_drive_loop`).
+    messages.append(AgentMessage(role="assistant", text=draft))
+    messages.append(AgentMessage(role="user", text=AGENT_CRITIQUE_RETRIEVAL_DIRECTIVE))
+
+    # Read-only continuation: disable write tools (a write would pause for
+    # approval mid-critique) on top of anything the caller already disabled.
+    write_tools = {t.name for t in REGISTRY.values() if getattr(t, "requires_approval", False)}
+    loop2_disabled = (disabled_tools or set()) | write_tools
+
+    # Budget: continue past loop 1's steps (its tool steps + its answer
+    # step), then allow `RAG_CRITIQUE_MAX_STEPS` more (one retrieval + one
+    # answer by default). `last_step + 2` skips loop 1's last tool step and
+    # its answer step.
+    steps_seen = [e["step"] for e in loop1_events if isinstance(e.get("step"), int)]
+    last_step = max(steps_seen) if steps_seen else (starting_step - 1)
+    next_step = last_step + 2
+    crit_steps = max(1, int(settings.SEARCH_ENGINE.get("RAG_CRITIQUE_MAX_STEPS", 2)))
+
+    loop2_events: list[dict[str, Any]] = []
+    try:
+        pause2 = _drive_loop(
+            messages=messages,
+            ctx=ctx,
+            emit=loop2_events.append,
+            run_id=run_id,
+            starting_step=next_step,
+            seen_sources_by_id=seen_sources_by_id,
+            disabled_tools=loop2_disabled,
+            system_extra=system_extra,
+            trace_hook=trace_hook,
+            max_steps=next_step + crit_steps,
+        )
+    except Exception:  # noqa: BLE001 — never lose the draft on a critique fault
+        log.exception("Critique-with-retrieval continuation failed; keeping draft")
+        return list(loop1_events)
+
+    return _merge_critique_events(loop1_events, loop2_events, paused=pause2 is not None)
+
+
+def _merge_critique_events(
+    loop1_events: list[dict[str, Any]],
+    loop2_events: list[dict[str, Any]],
+    *,
+    paused: bool = False,
+) -> list[dict[str, Any]]:
+    """Decide what to stream after a retrieval-capable critique. Pure (no
+    I/O) so it's unit-testable without an LLM.
+
+    Outcomes:
+      * paused / loop 2 errored / loop 2 produced no answer → loop 1
+        verbatim (the draft is never lost).
+      * loop 2 made NO tool call → loop 1 verbatim. No retrieval means no
+        new information, so loop 2's paraphrase is discarded to preserve
+        the draft's exact wording + citations (the verbatim-KEEP
+        guarantee the precision path has).
+      * loop 2 retrieved AND answered → loop 1 events minus its
+        `answer_delta` + final `done`, then all loop 2 events (whose new
+        `sources` + revised answer + `done` supersede on the frontend's
+        wholesale-replace).
+    """
+    loop2_answer = "".join(
+        (e.get("text") or "") for e in loop2_events if e.get("type") == "answer_delta"
+    )
+    loop2_errored = any(e.get("type") == "error" for e in loop2_events)
+    loop2_retrieved = any(e.get("type") == "tool_call_start" for e in loop2_events)
+
+    if paused or loop2_errored or not loop2_answer.strip() or not loop2_retrieved:
+        return list(loop1_events)
+
+    merged = [e for e in loop1_events if e.get("type") not in ("answer_delta", "done")]
+    merged.extend(loop2_events)
+    return merged
+
+
+def _should_abstain_gate(
+    tool_results: list[tuple[str, dict[str, Any]]],
+    answer: str,
+    *,
+    paused: bool,
+) -> bool:
+    """Pure decision for the abstention gate (no I/O — unit-testable).
+
+    Fires only when the turn ATTEMPTED retrieval yet surfaced no
+    evidence, and the model didn't already abstain. The evidence rule is
+    the load-bearing part:
+
+        had_evidence = (a search_knowledge_base call returned >=1 match)
+                       OR (any non-search tool completed without error)
+
+    An empty STRUCTURED result (e.g. `list_tasks` -> no overdue tasks) is
+    a grounded "the answer is zero", so a successful non-search tool — even
+    with an empty payload — counts as evidence and suppresses the gate.
+    Only an empty semantic search with nothing else to lean on is treated
+    as "no grounding". Errs toward NOT firing (the safe direction).
+    """
+    if paused or not answer.strip():
+        return False
+    if not tool_results:  # zero-tool answer (from context/seed) — leave it
+        return False
+    had_evidence = any(
+        (name == "search_knowledge_base" and bool((result or {}).get("matches")))
+        or (name != "search_knowledge_base" and not (result or {}).get("error"))
+        for name, result in tool_results
+    )
+    if had_evidence:
+        return False
+    return not is_abstention(answer)
+
+
+def _apply_abstention_to_events(
+    events: list[dict[str, Any]], message: str
+) -> list[dict[str, Any]]:
+    """Rewrite a buffered event stream to replace the answer with `message`.
+
+    Drops the draft `answer_delta`s and any `sources` (there is no genuine
+    grounding on the gate path), then injects `message` as a single
+    `answer_delta` immediately before `done`. Pure — unit-testable.
+    """
+    out: list[dict[str, Any]] = []
+    injected = False
+    for e in events:
+        etype = e.get("type")
+        if etype in ("answer_delta", "sources"):
+            continue
+        if etype == "done" and not injected:
+            out.append({"type": "answer_delta", "text": message})
+            injected = True
+        out.append(e)
+    if not injected:
+        out.append({"type": "answer_delta", "text": message})
+        out.append({"type": "done"})
+    return out
+
+
+def _run_with_abstention_gate(
+    driver: Callable[
+        [
+            Callable[[dict[str, Any]], None],
+            Callable[[str, dict[str, Any], dict[str, Any]], None] | None,
+        ],
+        dict[str, Any] | None,
+    ],
+    emit: Callable[[dict[str, Any]], None],
+    outer_trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None,
+) -> dict[str, Any] | None:
+    """Buffer the inner driver, then drop in an honest abstention if the
+    turn answered with no grounding (`_should_abstain_gate`).
+
+    Buffering (rather than a live stream filter) is deliberate: a step may
+    emit preamble `answer_delta` text *and* still call a tool, so "first
+    delta" isn't reliably the final synthesis — only the complete stream
+    tells us the answer. Costs TTFT like the self-critique wrapper, hence
+    off by default. Composes around either inner driver (plain loop or
+    the critique wrapper); a pause descriptor passes straight through.
+    """
+    captured_events: list[dict[str, Any]] = []
+    tool_results: list[tuple[str, dict[str, Any]]] = []
+
+    def _cap_emit(event: dict[str, Any]) -> None:
+        captured_events.append(event)
+
+    def _cap_trace(name: str, args: dict[str, Any], result: dict[str, Any]) -> None:
+        tool_results.append((name, result))
+        if outer_trace_hook is not None:
+            try:
+                outer_trace_hook(name, args, result)
+            except Exception:  # noqa: BLE001
+                log.exception("Outer trace_hook failed inside abstention gate for %s", name)
+
+    pause = driver(_cap_emit, _cap_trace)
+
+    answer = "".join(
+        (e.get("text") or "") for e in captured_events if e.get("type") == "answer_delta"
+    )
+    if _should_abstain_gate(tool_results, answer, paused=pause is not None):
+        for e in _apply_abstention_to_events(captured_events, ABSTAIN_MESSAGE):
+            emit(e)
+    else:
+        for e in captured_events:
+            emit(e)
+    return pause
 
 
 # Limits for the tool-result blob we hand to the critique LLM. The

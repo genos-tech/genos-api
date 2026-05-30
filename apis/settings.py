@@ -464,6 +464,29 @@ SEARCH_ENGINE = {
     "RAG_RERANK_KEEP_DROPPED": (
         os.environ.get("RAG_RERANK_KEEP_DROPPED", "false").lower() == "true"
     ),
+    # Score fusion (SPOTLIGHT_QUALITY_ARCHITECTURE.md §4.4 / D2). When on
+    # (with RAG_USE_RERANKER), the reranker does NOT replace the hybrid
+    # order — instead each candidate's final score is a weighted blend of
+    # its (min-max normalized) RRF score and the reranker's relevance
+    # (Cohere's real cross-encoder relevance_score; a positional proxy for
+    # the LLM judge). Replacing RRF wholesale was measured net-zero
+    # (roadmap §2.2 — paraphrase wins cancelled by exact-phrase losses);
+    # fusion is the path that keeps RRF's exact-phrase strength while
+    # adding the reranker's paraphrase lift. A reranker-dropped candidate
+    # is NOT removed — it degrades gracefully to its weighted RRF share
+    # (so a high-RRF hit the reranker ignored can still rank, though a
+    # strongly-reranked paraphrase can still displace it). When on, the
+    # hard RAG_RERANK_LOCK_TOP_N split is bypassed (fusion is its soft
+    # form). Off by default.
+    "RAG_RERANK_FUSION": (
+        os.environ.get("RAG_RERANK_FUSION", "false").lower() == "true"
+    ),
+    # Reranker's share of the fused score in [0,1]; (1 - weight) is RRF's.
+    # 0.5 is an UNTUNED placeholder — D2 is "hard to calibrate" and the
+    # per-query-type weight is the actual work: sweep it against the
+    # retrieval-suite MRR/recall_at_n metric. w=0 reproduces pure-RRF
+    # order; w=1 is pure reranker relevance.
+    "RAG_RERANK_FUSION_WEIGHT": float(os.environ.get("RAG_RERANK_FUSION_WEIGHT", "0.5")),
     # Cohere Rerank — used when RAG_RERANKER_PROVIDER=cohere.
     # Get an API key at https://dashboard.cohere.com/api-keys
     # Pricing as of late 2025 is ~$2 / 1k queries.
@@ -490,15 +513,33 @@ SEARCH_ENGINE = {
     # `opensearch_reindex` after change to take effect on existing
     # chunks.
     "RAG_CHAT_CONTEXT_WINDOW": int(os.environ.get("RAG_CHAT_CONTEXT_WINDOW", "2")),
-    # Phase 10 — LLM query rewriting (opt-in, agent path only).
+    # Phase 10 — LLM query rewriting (agent path only).
     # When on, the agent's `search_knowledge_base` tool expands the
     # query into N variants via the active ModelClient before hitting
     # OpenSearch, then RRF-fuses results across all variants. Adds one
-    # LLM call + N embedding calls per agent search. Off by default
-    # during rollout. Does NOT affect the Spotlight typeahead
-    # endpoint — it never passes `rewrite=True`.
-    "RAG_USE_QUERY_REWRITE": (os.environ.get("RAG_USE_QUERY_REWRITE", "false").lower() == "true"),
+    # LLM call + N embedding calls per agent search. Does NOT affect the
+    # Spotlight typeahead endpoint — it never passes `rewrite=True`.
+    #
+    # Enabled by default as of this rollout: measured +2 net pass / 0
+    # regressions on the agent eval suite (SPOTLIGHT_OPTIMIZATION_ROADMAP.md
+    # §1.1) with the tuned RAG_REWRITE_ORIGINAL_WEIGHT=2.0. The rewriter
+    # inherits the active synthesis model unless RAG_REWRITE_MODEL (below)
+    # points it at a faster one. Set RAG_USE_QUERY_REWRITE=false to
+    # disable per-deploy.
+    "RAG_USE_QUERY_REWRITE": (os.environ.get("RAG_USE_QUERY_REWRITE", "true").lower() == "true"),
     "RAG_REWRITE_NUM_VARIANTS": int(os.environ.get("RAG_REWRITE_NUM_VARIANTS", "3")),
+    # Optional fast-model override for the query rewriter — decouples it
+    # from the synthesis model (the first concrete piece of the B3
+    # planner/synthesiser tier split). Producing a few keyword variants
+    # is trivial, so on a heavy-synthesis deploy (GEMINI_MODEL=*-pro,
+    # CLAUDE_MODEL=*-sonnet) pointing this at a fast model
+    # ("gemini-2.5-flash", a Haiku) drops the rewrite's latency tax
+    # without changing the answer model. Must name a model of the ACTIVE
+    # provider (same constraint as RAG_RERANKER_MODEL). Empty → client
+    # default (today's GEMINI_MODEL is already flash, so this is inert
+    # until synthesis is upgraded). Changing it changes the measured
+    # config — re-run the §1.1 A/B before relying on a new value.
+    "RAG_REWRITE_MODEL": os.environ.get("RAG_REWRITE_MODEL", ""),
     # Phase 3.2 — self-critique reflection step. When True, after the
     # agent produces its draft final answer, a second LLM call re-reads
     # the draft against the captured tool results and may produce a
@@ -508,6 +549,60 @@ SEARCH_ENGINE = {
     "RAG_AGENT_SELF_CRITIQUE": (
         os.environ.get("RAG_AGENT_SELF_CRITIQUE", "false").lower() == "true"
     ),
+    # Critique-with-retrieval (SPOTLIGHT_QUALITY_ARCHITECTURE.md §4.1/§4.2).
+    # Sub-flag of RAG_AGENT_SELF_CRITIQUE: when BOTH are True, the critique
+    # pass may issue ONE more round of read-only retrieval to fix a
+    # *completeness* gap (the shipped precision-only critique can't
+    # re-retrieve), then write an improved final answer. When this is
+    # False the critique behaves exactly as before (precision-tightening
+    # only) — so the measured precision path is untouched. The critique
+    # only replaces the draft if it actually retrieved AND produced an
+    # answer; otherwise the draft is preserved verbatim.
+    "RAG_CRITIQUE_RETRIEVAL": (
+        os.environ.get("RAG_CRITIQUE_RETRIEVAL", "false").lower() == "true"
+    ),
+    # Step budget for the retrieval continuation above: 2 = at most one
+    # read tool call + one final answer. Bounds the latency/cost the
+    # critique can add.
+    "RAG_CRITIQUE_MAX_STEPS": int(os.environ.get("RAG_CRITIQUE_MAX_STEPS", "2")),
+    # Programmatic abstention gate (SPOTLIGHT_QUALITY_ARCHITECTURE.md §4.1).
+    # When True, a turn that ATTEMPTED retrieval but surfaced no evidence
+    # (a semantic search returned zero matches and no other read tool
+    # succeeded) and did not already abstain has its answer replaced with
+    # an honest "couldn't find it" — a deterministic backstop against
+    # hallucinating from no grounding. An empty STRUCTURED result (no
+    # overdue tasks) counts as evidence ("the answer is zero"), so the
+    # gate does NOT fire on it. Scoped to fresh workspace queries: skipped
+    # when seed_sources or prior_turns are present (thread/note Q&A and
+    # multi-turn carry their own grounding). Buffers the answer (TTFT cost
+    # like self-critique) — off by default; an A/B lever measured by the
+    # `abstention_correct` eval metric.
+    "RAG_ABSTENTION_GATE": (os.environ.get("RAG_ABSTENTION_GATE", "false").lower() == "true"),
+    # Per-context tool subsetting (SPOTLIGHT_QUALITY_ARCHITECTURE.md §4.5).
+    # When True, peripheral tool families (GitHub PRs, calendar, todos,
+    # me-scoped) are dropped from the model's declared tool list for a
+    # query that shows no keyword signal for them — shrinking the ~50-tool
+    # surface (and prompt) to the relevant slice. Core task/note/chat/
+    # project/analytics tools are NEVER dropped. Honest framing: this is a
+    # SURFACE / COST / LATENCY reduction with a *hypothesized*
+    # tool-selection benefit; the offline suite confirms no-regression
+    # (no case needs a peripheral family) but cannot show the quality win
+    # — validate that on production tool-selection via the F2 judge
+    # sampler. Limitation: the decision is made ONCE from the raw query,
+    # one-shot, with no mid-loop re-expansion — so a query that needs a
+    # family it didn't signal (e.g. "prep for next week" needing the
+    # calendar without a calendar keyword) can't reach it. Conservative
+    # keep-direction mitigates; off by default, opt-in.
+    "RAG_TOOL_SUBSETTING": (os.environ.get("RAG_TOOL_SUBSETTING", "false").lower() == "true"),
+    # F2 — online judge sampling (SPOTLIGHT_QUALITY_ARCHITECTURE.md §F2).
+    # Fraction (0.0–1.0) of completed agent runs the `agent_judge_sample`
+    # cron command scores with the LLM judge, so production faithfulness /
+    # citation / completeness can be trended vs the fixed offline suite.
+    # 0.0 = off (default). Each judged run costs ~1 LLM call; the command
+    # also caps cost per pass via `--limit`. Sampling is deterministic by
+    # run_id hash, so the effective rate matches this value regardless of
+    # how often the cron fires. Runs OFF the user request path.
+    "RAG_JUDGE_SAMPLE_RATE": float(os.environ.get("RAG_JUDGE_SAMPLE_RATE", "0.0")),
     # Observability for Gemini implicit-cache hit rate. When True,
     # gemini_client._log_usage emits one INFO log per `generate_step`
     # call with `prompt_tokens`, `cached_tokens`, and a cache-hit %.
