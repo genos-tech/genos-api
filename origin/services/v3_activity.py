@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from typing import Iterable, List, Optional
 
+import logging
+
 from origin.models.chat.unified_models import (
     Activity,
     ActivityType,
@@ -24,6 +26,8 @@ from origin.models.chat.unified_models import (
     Message,
 )
 from origin.models.common.user_models import CustomUser
+
+logger = logging.getLogger(__name__)
 
 
 def _team_id_for_channel(channel: Channel):
@@ -78,10 +82,20 @@ def create_thread_reply_activity(
       - the parent's sender was hard-deleted (sender FK is null)
     """
     if parent is None or parent.sender_id is None:
+        logger.info(
+            "[v3_activity] thread_reply skipped: parent=%s parent.sender_id=%s",
+            parent and parent.id,
+            parent and parent.sender_id,
+        )
         return []
     actor_id = str(actor.id)
     parent_sender_id = str(parent.sender_id)
     if parent_sender_id == actor_id:
+        logger.info(
+            "[v3_activity] thread_reply skipped (self-reply): parent_sender=%s actor=%s",
+            parent_sender_id,
+            actor_id,
+        )
         return []
     channel = reply.channel
     row = Activity.objects.create(
@@ -92,6 +106,12 @@ def create_thread_reply_activity(
         channel=channel,
         message=reply,
         meta={"parent_message_id": str(parent.id)},
+    )
+    logger.info(
+        "[v3_activity] thread_reply created: id=%s recipient=%s channel_kind=%s",
+        row.id,
+        parent_sender_id,
+        channel.kind,
     )
     return [row]
 
