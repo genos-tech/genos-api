@@ -86,6 +86,13 @@ class MessageReactionsView(AuthenticatedAPIView):
         # the WS reaction handler reads this and broadcasts
         # `activity.created` to the sender's `user:{id}` room.
         response_data["_v3_activities"] = ActivitySerializer(activities, many=True).data
+        # Server-derived channel coordinates so the WS layer broadcasts
+        # `reaction.added` to the message's REAL channel room — never a
+        # client-asserted one (which could misroute the reaction into, or
+        # inject a phantom reaction into, another channel's room). The
+        # Flask handler pops these before forwarding the clean reaction.
+        response_data["channelId"] = str(message.channel_id)
+        response_data["channelKind"] = message.channel.kind
         status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return Response(response_data, status=status_code)
 
@@ -98,4 +105,10 @@ class MessageReactionsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         MessageReaction.objects.filter(message=message, user=request.user, emoji=emoji).delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        # Return the message's channel (instead of 204) so the WS layer
+        # broadcasts `reaction.removed` to the server-derived room rather
+        # than trusting the client-asserted channel coordinates.
+        return Response(
+            {"channelId": str(message.channel_id), "channelKind": message.channel.kind},
+            status=status.HTTP_200_OK,
+        )

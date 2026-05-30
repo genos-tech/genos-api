@@ -60,6 +60,16 @@ def _ensure_pm_channel_for_project(sender, instance, created, **kwargs):
             "title": instance.project_name,
             "owner_id": getattr(instance, "owner_id", None),
             "is_deleted": False,
+            # Bridge the legacy PM chat id. PM's legacy chat id IS the
+            # project id — `unified_writer._resolve_channel` looks the
+            # channel up by `legacy_chat_id=int(project_id)`, and the FE
+            # `resolveV3ChannelId` matches `legacyChatId === projectId`
+            # for kind=PM. Omitting it here (the prior behavior) left
+            # signal-created PM channels unresolvable from every legacy
+            # entry point that still carries a project id (activity /
+            # flagged / search via /api/v2). `project_id` is a
+            # BigAutoField (int), matching the BigIntegerField column.
+            "legacy_chat_id": instance.project_id,
         },
     )
 

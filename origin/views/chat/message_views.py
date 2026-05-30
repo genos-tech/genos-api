@@ -104,8 +104,31 @@ def _resolve_thread_root(parent):
     return parent.id
 
 
+def _valid_mention_user_ids(channel, body):
+    """Mentioned user ids in `body` that are active members of `channel`.
+
+    Intersecting with `ChannelMember` does double duty: it drops mentions
+    of users who aren't in the channel AND guarantees every remaining id
+    is a real `CustomUser`. Both `MessageMention.mentioned_user` and the
+    v3 `Activity.recipient` inserts are FK'd to the user table, and
+    `bulk_create(ignore_conflicts=True)` suppresses only UNIQUE
+    violations — NOT foreign-key ones. Without this filter, a body that
+    @-mentions a since-deleted account or a stale client-cache id raises
+    `IntegrityError`, aborts the atomic send, and 500s the whole message
+    (one bad mention makes the channel unsendable). Returns a set of
+    `str` ids.
+    """
+    mentioned = extract_mentioned_user_ids(body)
+    if not mentioned:
+        return set()
+    valid = ChannelMember.objects.filter(
+        channel=channel, user_id__in=mentioned, is_deleted=False
+    ).values_list("user_id", flat=True)
+    return {str(uid) for uid in valid}
+
+
 def _allocate_seq_and_create_message_with_activities(
-    *, channel, sender, body, body_text, parent_id, metadata
+    *, channel, sender, body, body_text, parent_id, metadata, correlation_id=None
 ):
     """Wraps `_allocate_seq_and_create_message` and additionally fans out
     `Activity` rows for the recipients who should see a sidebar entry.
@@ -117,20 +140,30 @@ def _allocate_seq_and_create_message_with_activities(
 
     from origin.services import v3_activity
 
-    msg, parent = _allocate_seq_and_create_message(
+    msg, parent, created = _allocate_seq_and_create_message(
         channel=channel,
         sender=sender,
         body=body,
         body_text=body_text,
         parent_id=parent_id,
         metadata=metadata,
+        correlation_id=correlation_id,
         return_parent=True,
     )
+    # Idempotent re-send (reconnect flush after a lost ack): the row
+    # already existed, so DON'T re-create activities. Doing so would
+    # re-fire mention / thread-reply notifications to every recipient's
+    # `user:{id}` room (and could duplicate Activity rows). The caller
+    # re-broadcasts `message.created`, which is harmless — clients upsert
+    # by message id — but activities are not idempotent, so we return an
+    # empty set on the dedup path.
+    if not created:
+        return msg, []
     activities = []
     activities.extend(
         v3_activity.create_mention_activities(
             message=msg,
-            mentioned_user_ids=extract_mentioned_user_ids(body or []),
+            mentioned_user_ids=_valid_mention_user_ids(channel, body or []),
             actor=sender,
         )
     )
@@ -142,7 +175,15 @@ def _allocate_seq_and_create_message_with_activities(
 
 
 def _allocate_seq_and_create_message(
-    *, channel, sender, body, body_text, parent_id, metadata, return_parent=False
+    *,
+    channel,
+    sender,
+    body,
+    body_text,
+    parent_id,
+    metadata,
+    correlation_id=None,
+    return_parent=False,
 ):
     """Atomically allocate the next per-channel seq and create the row.
 
@@ -152,12 +193,34 @@ def _allocate_seq_and_create_message(
     contention only matters when multiple senders are typing into the
     same channel within microseconds, which is rare and bounded by
     typing speed.
+
+    Idempotency: when `correlation_id` is supplied, a row already bearing
+    that (channel, correlation_id) is returned as-is instead of inserting
+    a duplicate. This makes the socket `message.send` safe to re-emit on
+    a reconnect flush after a lost ack. The check runs INSIDE the channel
+    lock so two sequential re-sends serialize and the second observes the
+    first's row (the partial unique constraint is defense-in-depth).
+
+    Returns `msg` normally; `(msg, parent, created)` when `return_parent`
+    is set, where `created` is False on the idempotent dedup path.
     """
     with transaction.atomic():
         # Lock the channel row so two concurrent senders can't race to
         # allocate the same seq. `select_for_update()` blocks until the
         # other transaction commits.
         Channel.objects.select_for_update().filter(pk=channel.pk).first()
+
+        # Idempotency short-circuit (inside the lock): a re-emitted send
+        # carrying a correlation_id we've already stored returns the
+        # existing row rather than creating a duplicate.
+        if correlation_id:
+            existing = Message.objects.filter(
+                channel=channel, correlation_id=correlation_id
+            ).first()
+            if existing is not None:
+                if return_parent:
+                    return existing, None, False
+                return existing
 
         # Compute next seq via Max() over the locked channel.
         last_seq = Message.objects.filter(channel=channel).aggregate(m=Max("seq"))["m"] or 0
@@ -184,6 +247,7 @@ def _allocate_seq_and_create_message(
             thread_root_id=thread_root_id,
             is_thread_reply=is_thread_reply,
             metadata=metadata or {},
+            correlation_id=correlation_id,
         )
 
         # Bump `reply_count` on the parent if this is a thread reply.
@@ -211,19 +275,21 @@ def _allocate_seq_and_create_message(
         # group PK — punted to a follow-up. The FE renders the group
         # chip from the body itself, so the visible UX still works;
         # only the "mentioned via group" inbox routing is deferred.
-        mentioned_user_ids = extract_mentioned_user_ids(body)
+        mentioned_user_ids = _valid_mention_user_ids(channel, body)
         if mentioned_user_ids:
             # `ignore_conflicts=True` makes a duplicate (e.g. the same
             # user mentioned twice in one body) collapse to one row via
             # the `uniq_message_mention` unique constraint rather than
-            # raising IntegrityError. Cheap correctness for free.
+            # raising IntegrityError. It does NOT suppress FK violations,
+            # which is why the ids are pre-filtered to real channel
+            # members by `_valid_mention_user_ids` above.
             MessageMention.objects.bulk_create(
                 [MessageMention(message=msg, mentioned_user_id=uid) for uid in mentioned_user_ids],
                 ignore_conflicts=True,
             )
 
         if return_parent:
-            return msg, parent
+            return msg, parent, True
         return msg
 
 
@@ -357,6 +423,10 @@ class MessagesDeltaView(AuthenticatedAPIView):
                 {"error": "metadata must be a JSON object."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Optional idempotency key forwarded by the Flask `/v3` proxy from
+        # the client's socket `correlation_id`. Lets a reconnect re-send
+        # collapse to the existing row instead of duplicating.
+        correlation_id = body.get("correlation_id") or None
 
         msg, activities = _allocate_seq_and_create_message_with_activities(
             channel=channel,
@@ -365,6 +435,7 @@ class MessagesDeltaView(AuthenticatedAPIView):
             body_text=msg_body_text,
             parent_id=parent_id,
             metadata=metadata,
+            correlation_id=correlation_id,
         )
 
         # Refresh with prefetches so the response matches what the
@@ -513,7 +584,7 @@ class MessageDetailView(AuthenticatedAPIView):
             # Group mentions (mentionGroup nodes) are NOT expanded —
             # see the same comment block on `_allocate_seq_and_create_message`
             # for the schema-mismatch reason.
-            new_mentioned_ids = extract_mentioned_user_ids(body_json)
+            new_mentioned_ids = _valid_mention_user_ids(message.channel, body_json)
             MessageMention.objects.filter(message=message).delete()
             if new_mentioned_ids:
                 MessageMention.objects.bulk_create(

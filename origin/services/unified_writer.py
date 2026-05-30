@@ -647,23 +647,25 @@ def write_task_comment_as_thread_reply(
 
         deterministic_id = task_comment_message_uuid(task_id, comment_id)
 
-        # `seq` is per-channel; for thread replies we still need a
-        # unique seq. Use a large negative integer space? No — schema
-        # uses positive ints. Allocate the next `max(seq)+1` under a
-        # transaction. The race is bounded by the backfill being
-        # single-threaded; the dual-write path is rare enough that the
-        # collision window is small. The Channel-level `(channel, seq)`
-        # uniqueness raises on collision → wrap in retry once.
+        # `seq` is per-channel; for thread replies we still need a unique
+        # seq. Allocate the next `max(seq)+1` under a transaction that
+        # locks the CHANNEL row.
         with transaction.atomic():
             existing = Message.objects.filter(id=deterministic_id).first()
             if existing is not None:
                 return existing
-            # Hold a row-level lock on the channel + parent to serialize
-            # seq allocations. `select_for_update` requires a queryset
-            # — use the cheapest row.
+            # Lock the always-present Channel row to serialize seq
+            # allocation. The prior `select_for_update().filter(channel=...)`
+            # locked the matching MESSAGE rows — of which there are NONE on
+            # a channel whose first message is this comment — so two
+            # concurrent first-replies both read seq=0, both inserted seq=1,
+            # and collided on the `(channel, seq)` unique constraint; the
+            # broad `except` below then silently dropped the mirror. Locking
+            # the channel row (as `message_views._allocate_seq_and_create_
+            # message` does) serializes the allocation even when empty.
+            Channel.objects.select_for_update().filter(pk=channel.pk).first()
             next_seq = (
-                Message.objects.select_for_update()
-                .filter(channel=channel)
+                Message.objects.filter(channel=channel)
                 .order_by("-seq")
                 .values_list("seq", flat=True)
                 .first()

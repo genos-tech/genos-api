@@ -266,6 +266,16 @@ class Message(models.Model):
     # Indexed access uses the `task` FK above; metadata is opaque to SQL.
     metadata = models.JSONField(default=dict, blank=True)
 
+    # Idempotency key for socket `message.send`. The Flask `/v3` layer
+    # echoes the client's `correlation_id`; persisting it lets a reconnect
+    # flush — which re-emits the SAME correlation_id after a lost/slow ack
+    # (the server does not auto-dedup otherwise) — collapse to the
+    # already-created row instead of inserting a duplicate Message that
+    # everyone in the channel would see twice. Nullable: REST callers and
+    # the dual-write mirror don't carry one and are exempt from the
+    # partial unique constraint below.
+    correlation_id = models.CharField(max_length=64, null=True, blank=True)
+
     # Denormalized: incremented by a signal on Message.create for thread
     # replies. Read in the chat list to render the reply-count chip
     # without an aggregate query per row.
@@ -280,6 +290,16 @@ class Message(models.Model):
         constraints = [
             # Per-channel monotonic id. Catches double-writes under race.
             models.UniqueConstraint(fields=["channel", "seq"], name="uniq_channel_seq"),
+            # Per-channel idempotency on the socket correlation_id. A
+            # reconnect flush re-emits `message.send` with the same id; the
+            # create path returns the existing row instead of duplicating.
+            # Partial (correlation_id IS NOT NULL) so REST / dual-write rows
+            # without a correlation_id aren't forced unique.
+            models.UniqueConstraint(
+                fields=["channel", "correlation_id"],
+                condition=models.Q(correlation_id__isnull=False),
+                name="uniq_channel_correlation",
+            ),
             # A thread reply must point at a root.
             models.CheckConstraint(
                 check=(models.Q(is_thread_reply=False) | models.Q(thread_root__isnull=False)),
