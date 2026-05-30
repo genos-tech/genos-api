@@ -17,7 +17,8 @@ leak channel existence.
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import OuterRef, Q, Subquery
+from django.db.models import Count, OuterRef, Q, Subquery
+from django.db.models.functions import Coalesce
 from django.http import Http404
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
@@ -112,18 +113,8 @@ def _annotate_latest_and_unread(qs, user):
     `_unread_count` is annotated via Subquery against ReadCursor +
     Message.seq.
     """
-    # Subquery for the user's read cursor seq, per channel.
-    cursor_seq = (
-        ReadCursor.objects.filter(
-            user=user,
-            channel=OuterRef("pk"),
-            thread_root__isnull=True,
-        )
-        .select_related("last_read_message")
-        .values("last_read_message__seq")[:1]
-    )
-
-    # Subquery for "highest seq in this channel".
+    # Subquery for "highest top-level non-deleted seq in this channel" —
+    # used to resolve `latestMessage`.
     latest_seq = (
         Message.objects.filter(
             channel=OuterRef("pk"),
@@ -134,9 +125,37 @@ def _annotate_latest_and_unread(qs, user):
         .values("seq")[:1]
     )
 
+    # The user's main-timeline read cursor seq for the (inner) message's
+    # channel. `OuterRef("channel")` correlates to the unread subquery's
+    # Message row (one level out), NOT the Channel (two levels out).
+    read_cursor_seq = ReadCursor.objects.filter(
+        user=user,
+        channel=OuterRef("channel"),
+        thread_root__isnull=True,
+    ).values("last_read_message__seq")[:1]
+
+    # EXACT unread count: top-level, non-deleted messages whose seq is
+    # beyond the read cursor. The previous `latest_seq - read_seq`
+    # difference OVER-counted — `seq` is allocated per channel across
+    # thread replies AND soft-deleted rows, so those intermediate seqs
+    # inflated the badge on busy channels. A correlated COUNT subquery is
+    # one SQL statement (not N+1).
+    unread_count = (
+        Message.objects.filter(
+            channel=OuterRef("pk"),
+            is_thread_reply=False,
+            deleted_at__isnull=True,
+            seq__gt=Coalesce(Subquery(read_cursor_seq), 0),
+        )
+        .order_by()
+        .values("channel")
+        .annotate(c=Count("id"))
+        .values("c")[:1]
+    )
+
     qs = qs.annotate(
         _latest_seq=Subquery(latest_seq),
-        _read_seq=Subquery(cursor_seq),
+        _unread_count=Coalesce(Subquery(unread_count), 0),
     )
     return qs
 
@@ -181,19 +200,11 @@ class ChannelListView(AuthenticatedAPIView):
         else:
             latest_by_channel = {}
 
-        # Attach the latest message + compute unread count for the serializer.
+        # Attach the latest message. `_unread_count` is annotated exactly
+        # by `_annotate_latest_and_unread` (correlated COUNT subquery), so
+        # the serializer reads it directly — no per-row computation here.
         for c in channels:
             c._latest_message = latest_by_channel.get(c.id)
-            if c._latest_seq is None:
-                c._unread_count = 0
-            elif c._read_seq is None:
-                # Never read this channel — all non-thread messages count.
-                # Cheap upper bound is (latest_seq - 0); for an exact count
-                # we'd need a second query. Use the upper bound to avoid
-                # the N+1; the FE shows "N+" if the count gets large.
-                c._unread_count = c._latest_seq
-            else:
-                c._unread_count = max(0, c._latest_seq - c._read_seq)
 
         data = ChannelSerializer(channels, many=True, context={"request": request}).data
         return Response({"channels": data})
@@ -277,21 +288,28 @@ class ChannelListView(AuthenticatedAPIView):
                 .filter(user_lo=user_lo, user_hi=user_hi)
                 .first()
             )
-            if existing and not existing.channel.is_deleted:
+            if existing:
+                # `uniq_dm_pair` makes (user_lo, user_hi) map to exactly
+                # ONE channel for the pair's lifetime. Reuse it — REGARDLESS
+                # of `is_deleted` — instead of creating a second channel: a
+                # `ChannelDirectPair.create` for the same pair would violate
+                # the unique constraint (→ 500), and even without it the DM
+                # history would split across two channel UUIDs. Reactivating
+                # the existing channel preserves the conversation.
+                channel = existing.channel
+                if channel.is_deleted:
+                    channel.is_deleted = False
+                    channel.save(update_fields=["is_deleted"])
                 # Re-activate the requester's membership if they had
                 # left/been removed. The other side's membership is left
                 # as-is; if they removed themselves it stays removed.
                 ChannelMember.objects.update_or_create(
-                    channel=existing.channel,
+                    channel=channel,
                     user=request.user,
                     defaults={"is_deleted": False, "role": "member"},
                 )
                 return Response(
-                    {
-                        "channel": ChannelSerializer(
-                            existing.channel, context={"request": request}
-                        ).data
-                    },
+                    {"channel": ChannelSerializer(channel, context={"request": request}).data},
                     status=status.HTTP_200_OK,
                 )
 
@@ -380,11 +398,9 @@ class ChannelDetailView(AuthenticatedAPIView):
                 .first()
             )
             channel._latest_message = latest
-            channel._unread_count = (
-                annotated._latest_seq
-                if annotated._read_seq is None
-                else max(0, annotated._latest_seq - annotated._read_seq)
-            )
+            # `_unread_count` is the exact correlated-COUNT annotation from
+            # `_annotate_latest_and_unread` (no longer a seq difference).
+            channel._unread_count = annotated._unread_count
         else:
             channel._latest_message = None
             channel._unread_count = 0

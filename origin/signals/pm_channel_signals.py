@@ -59,7 +59,11 @@ def _ensure_pm_channel_for_project(sender, instance, created, **kwargs):
             "team_id": instance.team_id,
             "title": instance.project_name,
             "owner_id": getattr(instance, "owner_id", None),
-            "is_deleted": False,
+            # Mirror the project's soft-delete state. Hardcoding False
+            # resurrected a soft-deleted project's PM channel on the next
+            # save (e.g. a metadata edit) — `ProjectMaster.is_deleted`
+            # exists, so track it so the channel hides/unhides in lockstep.
+            "is_deleted": getattr(instance, "is_deleted", False),
             # Bridge the legacy PM chat id. PM's legacy chat id IS the
             # project id — `unified_writer._resolve_channel` looks the
             # channel up by `legacy_chat_id=int(project_id)`, and the FE

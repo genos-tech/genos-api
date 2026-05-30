@@ -81,6 +81,13 @@ class MessageReactionsView(AuthenticatedAPIView):
             activities = v3_activity.create_reaction_activity(
                 message=message, emoji=emoji, actor=request.user
             )
+            # Bump the parent message's ts_updated_at so the reaction
+            # change propagates through the `?since=` delta sync, which
+            # keys on Message.ts_updated_at. (The delta also unions rows
+            # by recent MessageReaction.ts_updated_at, but a REMOVE
+            # deletes that row — see delete() — so bumping the message is
+            # the reliable, symmetric signal for both add and remove.)
+            message.save(update_fields=["ts_updated_at"])
         response_data = MessageReactionSerializer(reaction).data
         # Same `_v3_activities` proxy convention as message_views.post —
         # the WS reaction handler reads this and broadcasts
@@ -104,7 +111,17 @@ class MessageReactionsView(AuthenticatedAPIView):
                 {"error": "emoji must be a non-empty string."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        MessageReaction.objects.filter(message=message, user=request.user, emoji=emoji).delete()
+        deleted_count, _ = MessageReaction.objects.filter(
+            message=message, user=request.user, emoji=emoji
+        ).delete()
+        # Bump the parent message so the removal propagates via the
+        # `?since=` delta sync. The delta unions rows by recent
+        # MessageReaction.ts_updated_at, but a remove DELETES that row, so
+        # an offline client would otherwise never catch up the removal
+        # (stale chip until a full reload). Bumping Message.ts_updated_at
+        # is the reliable signal. Only when something was actually removed.
+        if deleted_count:
+            message.save(update_fields=["ts_updated_at"])
         # Return the message's channel (instead of 204) so the WS layer
         # broadcasts `reaction.removed` to the server-derived room rather
         # than trusting the client-asserted channel coordinates.
