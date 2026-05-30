@@ -117,3 +117,69 @@ class ActivityReadAllView(AuthenticatedAPIView):
             qs = qs.filter(channel_id=channel_id)
         updated = qs.update(is_read=True)
         return Response({"updated": updated}, status=status.HTTP_200_OK)
+
+
+class ActivitySurfaceView(AuthenticatedAPIView):
+    """Create / delete channel-less "surface" mention activities — task
+    body + note @-mentions (legacy chat_type 5=task body, 6=personal
+    note, 7=task note, 8=chat note).
+
+    Replaces the deleted `PUT /api/v2/chat/activity/` persist that the
+    Flask `task_body_mention` / `note_mention` handlers used to call
+    (which wrote the now-dropped `ActivityFact`). This writes v3
+    `Activity` rows instead and returns the created rows so the WS layer
+    can broadcast `activity.created`.
+
+    Delta-driven: `newly_mentioned_user_ids` each get a row;
+    `removed_user_ids` have theirs deleted (so clearing a mention from a
+    body removes the recipient's feed entry). The mentioner is the
+    authenticated `request.user`.
+
+    Body:
+      surface_type:             5|6|7|8
+      team_id:                  uuid
+      entity_key:               stable per-entity key, e.g. "task:123" / "note:2:45"
+      newly_mentioned_user_ids: [uuid]
+      removed_user_ids:         [uuid]
+      meta:                     routing fields the FE reads (taskId/projectId/noteId/chatId/…)
+    """
+
+    def post(self, request):
+        from origin.services import v3_activity
+
+        data = request.data or {}
+        surface_type = data.get("surface_type")
+        team_id = data.get("team_id")
+        entity_key = data.get("entity_key")
+        if surface_type is None or not team_id or not entity_key:
+            return Response(
+                {"error": "surface_type, team_id and entity_key are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # The caller (the mentioner / `actor`) must belong to the team
+        # they're creating activities in — otherwise an authenticated user
+        # could fabricate sidebar entries for any member of any team whose
+        # id they know. (Recipient ids are separately validated against
+        # team membership inside the producer.)
+        from origin.models.common.team_models import TeamMembers
+
+        if not TeamMembers.objects.filter(
+            team_id=team_id, attendee=request.user, is_deleted=False
+        ).exists():
+            return Response(
+                {"error": "Not a member of this team."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        rows = v3_activity.create_surface_mention_activities(
+            team_id=team_id,
+            actor=request.user,
+            surface_type=int(surface_type),
+            entity_key=str(entity_key),
+            newly_mentioned_user_ids=data.get("newly_mentioned_user_ids") or [],
+            removed_user_ids=data.get("removed_user_ids") or [],
+            meta=data.get("meta") or {},
+        )
+        return Response(
+            {"activities": ActivitySerializer(rows, many=True).data},
+            status=status.HTTP_201_CREATED,
+        )

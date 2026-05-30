@@ -47,6 +47,7 @@ from origin.views.chat.activity_views_v3 import (
     ActivityListView,
     ActivityReadAllView,
     ActivityReadView,
+    ActivitySurfaceView,
 )
 from origin.views.chat.channel_views import (
     ChannelDetailView,
@@ -153,6 +154,11 @@ urlpatterns = [
         "api/v3/activities/read-all/",
         ActivityReadAllView.as_view(),
         name="v3_activity_read_all",
+    ),
+    path(
+        "api/v3/activities/surface/",
+        ActivitySurfaceView.as_view(),
+        name="v3_activity_surface",
     ),
     # Chat search (replaces legacy /api/v2/search/teamMembersAndGroups/)
     path(

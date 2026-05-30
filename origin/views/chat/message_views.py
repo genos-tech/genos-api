@@ -171,6 +171,11 @@ def _allocate_seq_and_create_message_with_activities(
         activities.extend(
             v3_activity.create_thread_reply_activity(reply=msg, parent=parent, actor=sender)
         )
+    # Self-assigned task: the task-card body @-mentions the assignee
+    # (== sender), which the mention fan-out above skips. Surface it so a
+    # self-assigned task still pings the sidebar. No-op for non-task
+    # messages and for tasks assigned to someone else.
+    activities.extend(v3_activity.create_self_assign_activity(message=msg, actor=sender))
     return msg, activities
 
 
@@ -237,6 +242,27 @@ def _allocate_seq_and_create_message(
             thread_root_id = _resolve_thread_root(parent)
             is_thread_reply = True
 
+        # Link the task FK on task-card messages. The task-create flow
+        # posts the card with the task id in `metadata.taskId` (after
+        # creating the task). Historically only the metadata was stored
+        # and `Message.task` stayed null, which forced a metadata
+        # fallback in `MessageSerializer.taskId` and — worse — broke the
+        # task-comment thread mirror (`write_task_comment_as_thread_reply`
+        # locates the header by `task_id`). Resolve + set it here; leave
+        # it null if the id is missing / non-numeric / unknown so a stale
+        # client id can never 500 a send.
+        task_obj = None
+        meta_task_id = (metadata or {}).get("taskId")
+        if meta_task_id is not None:
+            from origin.models.task.task_models import TaskMaster
+
+            try:
+                task_obj = (
+                    TaskMaster.objects.filter(task_id=int(meta_task_id)).only("task_id").first()
+                )
+            except (TypeError, ValueError):
+                task_obj = None
+
         msg = Message.objects.create(
             channel=channel,
             sender=sender,
@@ -246,6 +272,7 @@ def _allocate_seq_and_create_message(
             parent=parent,
             thread_root_id=thread_root_id,
             is_thread_reply=is_thread_reply,
+            task=task_obj,
             metadata=metadata or {},
             correlation_id=correlation_id,
         )

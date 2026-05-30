@@ -577,8 +577,21 @@ class Activity(models.Model):
         to_field="id",
     )
     activity_type = models.PositiveSmallIntegerField(choices=ActivityType.choices)
-    channel = models.ForeignKey(Channel, on_delete=models.CASCADE, related_name="activities")
-    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name="activities")
+    # `channel` / `message` are null for "surface" activities that aren't
+    # backed by a chat message — task-body and note @-mentions. Those carry
+    # `surface_type` (the legacy chat_type namespace: 5=task body,
+    # 6=personal note, 7=task note, 8=chat note) and stash their routing
+    # ids (task_id / project_id / note_id / chat_id …) in `meta`. Channel-
+    # backed activities (mention / reaction / thread-reply on a real
+    # Message) leave `surface_type` null and the FE derives chat_type from
+    # `channel.kind` (1-4) as before.
+    channel = models.ForeignKey(
+        Channel, on_delete=models.CASCADE, related_name="activities", null=True, blank=True
+    )
+    message = models.ForeignKey(
+        Message, on_delete=models.CASCADE, related_name="activities", null=True, blank=True
+    )
+    surface_type = models.PositiveSmallIntegerField(null=True, blank=True)
     meta = models.JSONField(default=dict, blank=True)
     is_read = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)

@@ -1424,13 +1424,50 @@ class TaskCommentsView(AuthenticatedAPIView):
             # parallel comments-only endpoint. Best-effort — failure
             # here doesn't roll back the legacy save (the drift cron
             # catches any divergence).
-            unified_writer.write_task_comment_as_thread_reply(
+            # `bypass_flag=True`: task comments live in the legacy
+            # `TaskComments` table; the v3 PM task thread renders them
+            # ONLY through this mirror. With the legacy chat tables
+            # dropped, v3 is the sole chat backend, so the mirror must run
+            # unconditionally — not gated on the (now-vestigial)
+            # `UNIFIED_MESSAGING_DUAL_WRITE` flag, which would otherwise
+            # leave live comments invisible in the PM thread and produce
+            # no comment-mention activity.
+            mirror = unified_writer.write_task_comment_as_thread_reply(
                 task_id=int(request.data["task_id"]),
                 comment_id=data["comment_id"],
                 sender_id=request.data["sender_id"],
                 body=request.data["comment_body"],
+                bypass_flag=True,
             )
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            # Create v3 mention activities on the mirrored comment Message
+            # (the legacy `chat/activity/` persist these used to hit was
+            # deleted). Channel-scoped — the mirror lives in the PM
+            # channel — so they ride the normal activity feed + WS path.
+            # `skip_actor=False`: tagging yourself in a comment still
+            # pings (consistent with task-body / note mentions).
+            # Returned under `_v3_activities` so the Flask task_comment
+            # handler can broadcast `activity.created` (mirrors the
+            # message-send proxy contract).
+            activities_wire = []
+            if mirror is not None:
+                from origin.services import mention_extractor, v3_activity
+                from origin.serializers.chat.unified_serializers import ActivitySerializer
+
+                sender = mirror.sender
+                if sender is not None:
+                    acts = v3_activity.create_mention_activities(
+                        message=mirror,
+                        mentioned_user_ids=mention_extractor.extract_mentioned_user_ids(
+                            request.data["comment_body"] or []
+                        ),
+                        actor=sender,
+                        skip_actor=False,
+                    )
+                    activities_wire = ActivitySerializer(acts, many=True).data
+            return Response(
+                {**serializer.data, "_v3_activities": activities_wire},
+                status=status.HTTP_201_CREATED,
+            )
 
         error = serializer.errors
         return Response(error, status=status.HTTP_400_BAD_REQUEST)

@@ -193,6 +193,143 @@ def _body(*sections):
 
 
 # ---------------------------------------------------------------------------
+# PM task-card header body — port of `taskMessageTemplate` in
+# `frontend/weikiy/src/features/tasks/utils/TaskMessageTemplate.ts`.
+#
+# The v3 PM pane renders ONE top-level "task card" Message per task (the
+# composer is disabled for PM — only task lifecycle writes there). The
+# card bubble is keyed off the linked `task` FK; the body below mirrors
+# the live shape byte-for-byte (no block ids, heading without
+# `isToggleable`) so seeded cards are indistinguishable from real ones.
+# ---------------------------------------------------------------------------
+
+# BlockNote ships a fixed `textColor` palette; map taskMeta hex codes to
+# the closest named slot, same table as the frontend template.
+_TASK_STATUS_COLOR = {
+    "Open": "blue",
+    "WIP": "orange",
+    "Pending": "purple",
+    "Closed": "green",
+    "Deleted": "red",
+}
+_TASK_PRIORITY_COLOR = {
+    "Minimal": "gray",
+    "Low": "green",
+    "Normal": "blue",
+    "High": "orange",
+    "Critical": "red",
+}
+# Card blocks match the frontend template exactly: a level-3 heading
+# WITHOUT `isToggleable` (the seeded note headings carry it; the card
+# headings do not) and no per-block `id`.
+_CARD_HEADING_PROPS = {
+    "level": 3,
+    "textColor": "default",
+    "textAlignment": "left",
+    "backgroundColor": "default",
+}
+
+
+def _card_label(text: str) -> dict:
+    return {"text": text, "type": "text", "styles": {"bold": True}}
+
+
+def _card_chip(text: str, color: str | None) -> dict:
+    return {"text": text, "type": "text", "styles": {"bold": True, "textColor": color or "gray"}}
+
+
+def _neutral_chip() -> dict:
+    return {"text": "—", "type": "text", "styles": {"bold": True, "textColor": "gray"}}
+
+
+def _card_mention(user: CustomUser, team_id) -> dict:
+    """Inline `mention` node matching the frontend `mentionNode` shape so
+    the card's assignee / reporter rows render as click-through mentions."""
+    return {
+        "type": "mention",
+        "props": {
+            "avatarImgPath": [""],
+            "customStatus": "N/A",
+            "teamId": str(team_id),
+            "teamName": "N/A",
+            "userEmail": user.email,
+            "userId": str(user.id),
+            "userName": user.username,
+        },
+    }
+
+
+def _task_card_body(
+    *,
+    title: str,
+    status: str,
+    priority: str,
+    assignee: CustomUser | None,
+    reporter: CustomUser,
+    due_date,
+    team_id,
+    is_milestone: bool = False,
+) -> list:
+    """Build the PM task-card header body. Effort isn't seeded, so the
+    Effort row shows the neutral em-dash chip (matching an unset value)."""
+    title_prefix = "🚩" if is_milestone else "🧾"
+    due_str = due_date.isoformat() if due_date else "—"
+    assignee_node = (
+        _card_mention(assignee, team_id)
+        if assignee is not None
+        else {"text": "Unassigned", "type": "text", "styles": {"italic": True, "textColor": "gray"}}
+    )
+    return [
+        {
+            "type": "heading",
+            "props": _CARD_HEADING_PROPS,
+            "content": [{"text": f"{title_prefix} {title}", "type": "text", "styles": {}}],
+            "children": [],
+        },
+        {
+            "type": "paragraph",
+            "props": _PARA_PROPS,
+            "content": [_card_label("Status: "), _card_chip(status, _TASK_STATUS_COLOR.get(status))],
+            "children": [],
+        },
+        {
+            "type": "paragraph",
+            "props": _PARA_PROPS,
+            "content": [
+                _card_label("Priority: "),
+                _card_chip(priority, _TASK_PRIORITY_COLOR.get(priority)),
+            ],
+            "children": [],
+        },
+        {
+            "type": "paragraph",
+            "props": _PARA_PROPS,
+            "content": [_card_label("Effort: "), _neutral_chip()],
+            "children": [],
+        },
+        {
+            "type": "paragraph",
+            "props": _PARA_PROPS,
+            "content": [_card_label("Assignee: "), assignee_node],
+            "children": [],
+        },
+        {
+            "type": "paragraph",
+            "props": _PARA_PROPS,
+            "content": [_card_label("Reporter: "), _card_mention(reporter, team_id)],
+            "children": [],
+        },
+        {
+            "type": "paragraph",
+            "props": _PARA_PROPS,
+            "content": [_card_label("Due: "), {"text": f"📅 {due_str}", "type": "text", "styles": {}}],
+            "children": [],
+        },
+        {"type": "paragraph", "props": _PARA_PROPS, "content": [], "children": []},
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Task body templates — port of `TASK_TEMPLATES` in
 # `frontend/weikiy/src/features/tasks/components/contents/CreateTaskForm.tsx`.
 # Empty (placeholder-text) variants the picker reads from. The demo
@@ -2017,9 +2154,16 @@ def create_demo_environment(demo_user: CustomUser, *, short: str | None = None) 
         # 12. Group chat + thread messages
         _create_group_chat(team, demo_user, all_members)
 
-        # 13. Project channel messages + thread messages
+        # 13. Project (PM) channel: one task-card header per task + each
+        #     task's comment thread mirrored as v3 thread replies.
         for seeded in seeded_projects:
-            _create_pm_messages(seeded["project"], all_members, seeded["blueprint"])
+            _create_pm_messages(
+                seeded["project"],
+                all_members,
+                seeded["blueprint"],
+                seeded["tasks"],
+                seeded["backing_task"],
+            )
 
         # 14. (legacy UserChatMaster seeding removed — the legacy chat
         #     tables are dropped; chat is seeded on the v3 Channel/Message
@@ -2208,7 +2352,12 @@ def _create_project_from_blueprint(team, demo_user, all_members, bots, short, bl
         blueprint["tasks"],
     )
 
-    return {"project": project, "blueprint": blueprint, "tasks": tasks}
+    return {
+        "project": project,
+        "blueprint": blueprint,
+        "tasks": tasks,
+        "backing_task": backing_task,
+    }
 
 
 def _create_sprint(team, project) -> Sprint:
@@ -2524,59 +2673,93 @@ def _create_group_chat(team, demo_user, members) -> Channel:
     return channel
 
 
-def _create_pm_messages(project, members, blueprint):
-    """Per-project channel: messages + one thread, all driven by the
-    project's blueprint. Sender keys here are `(member_index, text)`-
-    style indices into `members` (0 = demo_user, 1-4 = bots).
+def _create_pm_messages(project, members, blueprint, tasks, backing_task):
+    """Seed the PM channel the way the v3 model actually works.
 
-    V3 schema only: the PM `Channel` was auto-created by the
-    `pm_channel_signals.post_save(ProjectMaster)` receiver when the
-    project was seeded, and `ChannelMember` rows mirror the
-    `ProjectMembers` rows via the same signal module. We only need to
-    locate the existing channel and write `Message` rows.
+    The v3 PM pane renders ONE top-level "task-card" `Message` per task
+    (FK-linked via `Message.task`); anything without a task FK is hidden
+    by the frontend filter (`v3ToLegacy.v3MessagesToLegacy`). The PM
+    composer is disabled, so free-form project chatter has no home in
+    the v3 model. Each task's comments are mirrored under its card as v3
+    thread replies — exactly what the live task-create + task-comment
+    paths produce.
+
+    Mapping from the blueprint:
+      * Every task (milestone backing task + blueprint tasks/subtasks)
+        gets a task-card header Message.
+      * The curated `pm_messages` / `pm_thread` discussion — which used
+        to be seeded as standalone PM messages that the v3 filter now
+        drops — is folded into comments on the milestone backing task so
+        the content stays searchable and surfaces under that card.
+
+    The PM `Channel` + `ChannelMember` rows were already created by the
+    `pm_channel_signals.post_save(ProjectMaster)` receiver; we only
+    locate the channel and write `Message` / `TaskComments` rows.
     """
-    pm_messages = blueprint["pm_messages"]
-    thread_spec = blueprint["pm_thread"]
-    thread_parent_idx = thread_spec["parent_index"]
-
-    # Map blueprint sender keys to members[] indices: "demo" -> 0,
-    # "bot0" -> 1, etc.
-    def resolve_idx(key: str) -> int:
-        if key == "demo":
-            return 0
-        return int(key[3:]) + 1
+    # Local import avoids any import-time cycle (unified_writer imports
+    # the chat models this module also pulls in).
+    from origin.services.unified_writer import write_task_comment_as_thread_reply
 
     channel = Channel.objects.get(project=project, kind=ChannelKind.PM)
+    team = project.team
+    all_tasks = [backing_task] + list(tasks)
 
-    created_msgs = []
-    for midx, (sender_key, text) in enumerate(pm_messages):
-        sender = members[resolve_idx(sender_key)]
-        msg = Message.objects.create(
-            channel=channel,
-            sender=sender,
-            seq=midx + 1,
-            body=_text_body(text),
-            body_text=text,
-            metadata={},
-        )
-        created_msgs.append(msg)
-
-    parent_msg = created_msgs[thread_parent_idx]
-    for tidx, (sender_key, text) in enumerate(thread_spec["messages"]):
-        sender = members[resolve_idx(sender_key)]
+    # 1. One task-card header per task. `seq` is per-channel; the channel
+    #    starts empty, so headers take seq 1..N and the comment mirror
+    #    (below) allocates seq N+1.. for the thread replies.
+    for seq, task in enumerate(all_tasks, start=1):
         Message.objects.create(
             channel=channel,
-            sender=sender,
-            seq=len(created_msgs) + tidx + 1,
-            body=_text_body(text),
-            body_text=text,
-            is_thread_reply=True,
-            parent=parent_msg,
-            thread_root=parent_msg,
+            sender=task.reporter,
+            seq=seq,
+            body=_task_card_body(
+                title=task.title,
+                status=task.status,
+                priority=task.priority,
+                assignee=task.assignee,
+                reporter=task.reporter,
+                due_date=task.due_date,
+                team_id=team.team_id,
+                is_milestone=task.is_milestone,
+            ),
+            body_text=f"{'🚩' if task.is_milestone else '🧾'} {task.title}",
+            task=task,
             metadata={},
         )
-    parent_msg.reply_count = len(thread_spec["messages"])
-    parent_msg.save(update_fields=["reply_count", "ts_updated_at"])
+
+    # 2. Fold the curated project discussion into comments on the
+    #    milestone backing task (mirrored under its card in step 3).
+    def resolve_member(key: str) -> CustomUser:
+        return members[0] if key == "demo" else members[int(key[3:]) + 1]
+
+    discussion = list(blueprint["pm_messages"]) + list(blueprint["pm_thread"]["messages"])
+    discussion_comments = [
+        TaskComments(
+            task=backing_task,
+            sender=resolve_member(sender_key),
+            comment_id=cidx + 1,
+            comment_body=_text_body(text),
+        )
+        for cidx, (sender_key, text) in enumerate(discussion)
+    ]
+    if discussion_comments:
+        TaskComments.objects.bulk_create(discussion_comments)
+
+    # 3. Mirror every task's comments (each blueprint task's seeded
+    #    comments + the discussion now on the backing task) as v3 thread
+    #    replies under the matching header, via the same writer the live
+    #    dual-write path uses. `bypass_flag=True` runs it regardless of
+    #    the runtime UNIFIED_MESSAGING_DUAL_WRITE setting.
+    for task in all_tasks:
+        for c in TaskComments.objects.filter(task=task).order_by("comment_id"):
+            write_task_comment_as_thread_reply(
+                task_id=task.task_id,
+                comment_id=c.comment_id,
+                sender_id=str(c.sender_id),
+                body=c.comment_body,
+                project_id=project.project_id,
+                bypass_flag=True,
+            )
 
 
 def _create_notes(team, demo_user, bots, seeded_projects):

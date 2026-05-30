@@ -348,8 +348,15 @@ class ActivitySerializer(serializers.ModelSerializer):
     channelId = serializers.UUIDField(source="channel_id", read_only=True)
     channelKind = serializers.SerializerMethodField()
     messageId = serializers.UUIDField(source="message_id", read_only=True)
+    # Null for channel-backed activities; the legacy chat_type namespace
+    # (5=task body, 6/7/8=notes) for channel-less surface mentions. The
+    # FE derives the row's chat_type from `surfaceType ?? channelKind`,
+    # and reads the routing ids (taskId / projectId / noteId / chatId)
+    # from `meta`.
+    surfaceType = serializers.IntegerField(source="surface_type", read_only=True, allow_null=True)
     actor = UserLiteSerializer(read_only=True, allow_null=True)
-    message = MessageSerializer(read_only=True)
+    # `allow_null`: surface activities have no backing Message.
+    message = MessageSerializer(read_only=True, allow_null=True)
     isRead = serializers.BooleanField(source="is_read", read_only=True)
     tsCreated = serializers.DateTimeField(source="ts_created_at", read_only=True)
 
@@ -362,6 +369,7 @@ class ActivitySerializer(serializers.ModelSerializer):
             "channelId",
             "channelKind",
             "messageId",
+            "surfaceType",
             "actor",
             "message",
             "meta",
