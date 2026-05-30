@@ -941,6 +941,15 @@ def _group_by_entity(
             chunk_type = src.get("chunk_type")
             if chunk_type and chunk_type not in existing["matched_chunk_types"]:
                 existing["matched_chunk_types"].append(chunk_type)
+            # Backfill the deep-link target: if the top (highest-scoring)
+            # chunk for this entity was a thread-window / anchor (no single
+            # message id), a lower-ranked per-message chunk can still supply
+            # one so the chip deep-links to a concrete bubble instead of
+            # landing at the chat/thread top.
+            if not existing.get("message_id"):
+                mid = _extract_chat_message_id(c["chunk_id"], src.get("chunk_type"))
+                if mid:
+                    existing["message_id"] = mid
             if for_agent and len(existing.get("chunks", [])) < max_chunks_per_entity:
                 existing["chunks"].append(_chunk_for_agent(c))
             # Merge analyzer-matched terms across chunks of the same

@@ -1490,10 +1490,25 @@ def _drive_loop(
             added = False
             for src in new_sources:
                 key = (src.get("entity_type"), src.get("entity_id"))
-                if not all(key) or key in seen_sources_by_id:
+                if not all(key):
                     continue
-                seen_sources_by_id[key] = src
-                added = True
+                existing = seen_sources_by_id.get(key)
+                if existing is None:
+                    seen_sources_by_id[key] = src
+                    added = True
+                    continue
+                # Same entity surfaced by two tools (e.g. fetch_chat_thread
+                # then search_knowledge_base). First-writer-wins on the chip
+                # itself, but upgrade the chat deep-link target if a later
+                # source pinned the exact matched message/thread the first
+                # one lacked — otherwise a message_id-less chip (fetch_*)
+                # would suppress a message_id-bearing one (search) and the
+                # click could only land at the chat top.
+                if src.get("message_id") and not existing.get("message_id"):
+                    existing["message_id"] = src.get("message_id")
+                    if src.get("thread_id") and not existing.get("thread_id"):
+                        existing["thread_id"] = src.get("thread_id")
+                    added = True
 
             if added:
                 emit(
