@@ -340,7 +340,14 @@ def search(
         lock_top_n = int(settings.SEARCH_ENGINE.get("RAG_RERANK_LOCK_TOP_N", 0))
         lock_top_n = max(0, min(lock_top_n, len(grouped)))
 
-        if lock_top_n > 0 and len(grouped) > lock_top_n:
+        # Score fusion (D2) is the SOFT form of the hard top-N lock —
+        # it blends RRF + reranker relevance across the whole candidate
+        # set rather than freezing a head. When fusion is on, bypass the
+        # lock and fuse the whole set (the reranker module does the blend
+        # internally; see RAG_RERANK_FUSION).
+        fusion_on = settings.SEARCH_ENGINE.get("RAG_RERANK_FUSION", False)
+
+        if lock_top_n > 0 and not fusion_on and len(grouped) > lock_top_n:
             # Lock the top-N RRF hits; rerank only the tail. Final
             # output = locked head + reranked tail (deduped, capped
             # at output_k).

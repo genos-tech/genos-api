@@ -441,6 +441,29 @@ SEARCH_ENGINE = {
     "RAG_RERANK_KEEP_DROPPED": (
         os.environ.get("RAG_RERANK_KEEP_DROPPED", "false").lower() == "true"
     ),
+    # Score fusion (SPOTLIGHT_QUALITY_ARCHITECTURE.md §4.4 / D2). When on
+    # (with RAG_USE_RERANKER), the reranker does NOT replace the hybrid
+    # order — instead each candidate's final score is a weighted blend of
+    # its (min-max normalized) RRF score and the reranker's relevance
+    # (Cohere's real cross-encoder relevance_score; a positional proxy for
+    # the LLM judge). Replacing RRF wholesale was measured net-zero
+    # (roadmap §2.2 — paraphrase wins cancelled by exact-phrase losses);
+    # fusion is the path that keeps RRF's exact-phrase strength while
+    # adding the reranker's paraphrase lift. A reranker-dropped candidate
+    # is NOT removed — it degrades gracefully to its weighted RRF share
+    # (so a high-RRF hit the reranker ignored can still rank, though a
+    # strongly-reranked paraphrase can still displace it). When on, the
+    # hard RAG_RERANK_LOCK_TOP_N split is bypassed (fusion is its soft
+    # form). Off by default.
+    "RAG_RERANK_FUSION": (
+        os.environ.get("RAG_RERANK_FUSION", "false").lower() == "true"
+    ),
+    # Reranker's share of the fused score in [0,1]; (1 - weight) is RRF's.
+    # 0.5 is an UNTUNED placeholder — D2 is "hard to calibrate" and the
+    # per-query-type weight is the actual work: sweep it against the
+    # retrieval-suite MRR/recall_at_n metric. w=0 reproduces pure-RRF
+    # order; w=1 is pure reranker relevance.
+    "RAG_RERANK_FUSION_WEIGHT": float(os.environ.get("RAG_RERANK_FUSION_WEIGHT", "0.5")),
     # Cohere Rerank — used when RAG_RERANKER_PROVIDER=cohere.
     # Get an API key at https://dashboard.cohere.com/api-keys
     # Pricing as of late 2025 is ~$2 / 1k queries.
