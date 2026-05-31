@@ -6,7 +6,6 @@ from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.serializers.note.note_serializers import *
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
-from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.common.user_models import CustomUser
 
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
@@ -30,43 +29,24 @@ NOTE_TYPE = 3  # Chat Notes
 def _chat_membership_filters(team_id, user_id):
     """Build a Q expression matching chat notes the user has implicit access to.
 
-    DM/GM/MDM membership is derived from the user's v3 `ChannelMember`
-    rows, mapped back to the legacy chat ids the notes are keyed on via
-    `Channel.legacy_chat_id`. PM stays on `ProjectMembers`.
+    Chat notes are keyed on the v3 `Channel` UUID (`channel_id`). A user
+    can see a note implicitly iff they're an active member of its channel,
+    so we match every channel the user belongs to in this team — one query
+    covering all four kinds (DM/GM/PM/MDM). PM channels carry a
+    `ChannelMember` per `ProjectMembers` row via
+    `pm_channel_signals._sync_pm_channel_member`, so they're covered here
+    too; the channel UUID is the single source of truth (no defensive
+    ProjectMembers UNION).
     """
-    dm_ids, gm_ids, mdm_ids = [], [], []
-    member_channels = ChannelMember.objects.filter(
-        user_id=user_id,
-        is_deleted=False,
-        channel__is_deleted=False,
-        channel__team_id=team_id,
-    ).values_list("channel__kind", "channel__legacy_chat_id")
-    for kind, legacy_id in member_channels:
-        if legacy_id is None:
-            continue
-        if kind == ChannelKind.DM:
-            dm_ids.append(legacy_id)
-        elif kind == ChannelKind.GM:
-            gm_ids.append(legacy_id)
-        elif kind == ChannelKind.MDM:
-            mdm_ids.append(legacy_id)
-
-    pm_project_ids = list(
-        ProjectMembers.objects.filter(team=team_id, attendee=user_id).values_list(
-            "project_id", flat=True
-        )
+    member_channel_ids = list(
+        ChannelMember.objects.filter(
+            user_id=user_id,
+            is_deleted=False,
+            channel__is_deleted=False,
+            channel__team_id=team_id,
+        ).values_list("channel_id", flat=True)
     )
-
-    q = Q()
-    if dm_ids:
-        q |= Q(chat_type=1, chat_id__in=dm_ids)
-    if gm_ids:
-        q |= Q(chat_type=2, chat_id__in=gm_ids)
-    if pm_project_ids:
-        q |= Q(chat_type=3, chat_id__in=pm_project_ids)
-    if mdm_ids:
-        q |= Q(chat_type=4, chat_id__in=mdm_ids)
-    return q
+    return Q(channel_id__in=member_channel_ids)
 
 
 def _accessible_chat_note_ids(team_id, user_id):
@@ -123,9 +103,9 @@ class AllChatNotesView(AuthenticatedAPIView):
                 noteId=F("note_id"),
                 parentNoteId=F("parent_note_id"),
                 chatType=F("chat_type"),
-                chatId=F("chat_id"),
+                chatId=F("channel_id"),
                 isThread=F("is_thread"),
-                threadId=F("thread_id"),
+                threadId=F("thread_root_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
             )
@@ -174,9 +154,9 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                 noteId=F("note_id"),
                 parentNoteId=F("parent_note_id"),
                 chatType=F("chat_type"),
-                chatId=F("chat_id"),
+                chatId=F("channel_id"),
                 isThread=F("is_thread"),
-                threadId=F("thread_id"),
+                threadId=F("thread_root_id"),
                 tsUpdated=F("ts_updated_at"),
                 chatTypeName=Case(
                     When(chat_type=1, then=Value("DM")),
@@ -205,55 +185,51 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
         # Convert to list and add chat names based on chat type
         notes_list = list(chat_notes)
 
-        # Build lookup dictionaries for chat names
+        # `note["chatId"]` is now the v3 `Channel` UUID for every kind, so
+        # all four name maps are keyed directly by channel UUID. No legacy
+        # `legacy_chat_id` indirection — the channel id IS the key.
         dm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 1]
         gm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 2]
         pm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 3]
         mdm_ids = [n["chatId"] for n in notes_list if n["chatType"] == 4]
 
         # Resolve chat display names off the v3 unified schema, keyed by
-        # the legacy chat id via `Channel.legacy_chat_id`: DM partner from
-        # `ChannelMember`; GM/MDM from `Channel.title`. PM keeps using
-        # `ProjectMaster` (not a legacy chat model).
+        # `Channel.id`: DM partner from `ChannelMember`; GM/MDM from
+        # `Channel.title`; PM from the channel's `project__project_name`.
         dm_partner_names = {}
         gm_names = {}
         mdm_names = {}
 
-        # GM + MDM display names from Channel.title.
+        # GM + MDM display names from Channel.title, keyed by Channel.id.
         if gm_ids or mdm_ids:
             for ch in Channel.objects.filter(
+                id__in=(gm_ids + mdm_ids),
                 kind__in=[ChannelKind.GM, ChannelKind.MDM],
-                legacy_chat_id__in=(gm_ids + mdm_ids),
                 is_deleted=False,
-            ).values("kind", "legacy_chat_id", "title"):
+            ).values("id", "kind", "title"):
                 if ch["kind"] == ChannelKind.GM:
-                    gm_names[ch["legacy_chat_id"]] = ch["title"]
+                    gm_names[ch["id"]] = ch["title"]
                 else:
-                    mdm_names[ch["legacy_chat_id"]] = ch["title"]
+                    mdm_names[ch["id"]] = ch["title"]
 
-        # DM partner usernames: the *other* member of each DM channel.
+        # DM partner usernames: the *other* member of each DM channel,
+        # keyed by Channel.id.
         if dm_ids:
-            dm_chan_to_legacy = dict(
-                Channel.objects.filter(
-                    kind=ChannelKind.DM, legacy_chat_id__in=dm_ids, is_deleted=False
-                ).values_list("id", "legacy_chat_id")
-            )
             members_by_chan: dict = {}
             for m in ChannelMember.objects.filter(
-                channel_id__in=dm_chan_to_legacy.keys(), is_deleted=False
+                channel_id__in=dm_ids, is_deleted=False
             ).values("channel_id", "user_id"):
                 members_by_chan.setdefault(m["channel_id"], []).append(m["user_id"])
 
-            partner_by_legacy = {}
+            partner_by_chan = {}
             partner_user_ids = set()
             for chan_id, uids in members_by_chan.items():
-                legacy_id = dm_chan_to_legacy.get(chan_id)
                 partner = next(
                     (u for u in uids if str(u) != str(request_user_id)),
                     uids[0] if uids else None,
                 )
-                if legacy_id is not None and partner:
-                    partner_by_legacy[legacy_id] = partner
+                if partner:
+                    partner_by_chan[chan_id] = partner
                     partner_user_ids.add(partner)
 
             user_id_to_name = {
@@ -262,18 +238,20 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                     "id", "username"
                 )
             }
-            for legacy_id, partner_id in partner_by_legacy.items():
-                dm_partner_names[legacy_id] = user_id_to_name.get(
+            for chan_id, partner_id in partner_by_chan.items():
+                dm_partner_names[chan_id] = user_id_to_name.get(
                     str(partner_id), "Direct Message"
                 )
 
-        # Get project names for PM (unchanged — ProjectMaster is not legacy).
+        # PM project names resolved THROUGH the PM channel's project FK
+        # (pm_ids are channel UUIDs, not project ids).
         project_names = {}
         if pm_ids:
-            projects = ProjectMaster.objects.filter(project_id__in=pm_ids).values(
-                "project_id", "project_name"
+            project_names = dict(
+                Channel.objects.filter(
+                    id__in=pm_ids, kind=ChannelKind.PM, is_deleted=False
+                ).values_list("id", "project__project_name")
             )
-            project_names = {p["project_id"]: p["project_name"] for p in projects}
 
         # Add chat names to notes
         for note in notes_list:
@@ -310,24 +288,37 @@ class ChatNoteMasterView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["owner"])):
             return res
 
+        # `chat_id` is the v3 `Channel` UUID; `thread_id` is the thread-root
+        # `Message` UUID. The FE sends `is_thread` as the literal string
+        # "True"/"False" in the querystring, so coerce it explicitly —
+        # Python's `bool("False")` is True. Only filter `thread_root_id`
+        # against the UUID on the thread branch; non-thread notes match
+        # `thread_root_id IS NULL` (never filter a UUIDField against
+        # "0"/"False"/"null").
+        is_thread_bool = str(data["is_thread"]).lower() in ("true", "1")
+
+        chat_notes = ChatNoteMaster.objects.filter(
+            team=data["team"],
+            owner=data["owner"],
+            chat_type=data["chat_type"],
+            channel_id=data["chat_id"],
+            is_thread=is_thread_bool,
+        )
+        if is_thread_bool:
+            chat_notes = chat_notes.filter(thread_root_id=data["thread_id"])
+        else:
+            chat_notes = chat_notes.filter(thread_root_id__isnull=True)
+
         chat_notes = (
-            ChatNoteMaster.objects.filter(
-                team=data["team"],
-                owner=data["owner"],
-                chat_type=data["chat_type"],
-                chat_id=data["chat_id"],
-                is_thread=data["is_thread"],
-                thread_id=data["thread_id"],
-            )
-            .annotate(
+            chat_notes.annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 teamId=F("team"),
                 ownerId=F("owner"),
                 noteId=F("note_id"),
                 chatType=F("chat_type"),
-                chatId=F("chat_id"),
+                chatId=F("channel_id"),
                 isThread=F("is_thread"),
-                threadId=F("thread_id"),
+                threadId=F("thread_root_id"),
                 parentNoteId=F("parent_note_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
@@ -355,13 +346,15 @@ class ChatNoteMasterView(AuthenticatedAPIView):
     def post(self, request, *args, **kwargs):
         request_user_id = request.user.id
 
+        # `chat_id` (request) is the v3 `Channel` UUID; DRF's
+        # PrimaryKeyRelatedField on the `channel` FK accepts the UUID
+        # string. `channel` stays in the validated dict because a missing
+        # channel would silently save NULL and create an invisible note.
         data = {
             "team": request.data.get("team_id"),
             "owner": request.data.get("user_id"),
             "chat_type": request.data.get("chat_type"),
-            "chat_id": request.data.get("chat_id"),
-            "is_thread": request.data.get("is_thread"),
-            "thread_id": request.data.get("thread_id"),
+            "channel": request.data.get("chat_id"),
             "title": request.data.get("title"),
             "body": request.data.get("body"),
         }
@@ -372,6 +365,22 @@ class ChatNoteMasterView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["owner"])):
             return res
 
+        # Assigned AFTER validate_request_data: `is_thread` coerces to a
+        # Python bool and `thread_root_id` is None for non-thread notes —
+        # validate_request_data 400s on any None value, so these must not
+        # be in the validated dict (same pattern as parent_note_id below).
+        is_thread_bool = str(request.data.get("is_thread")).lower() in ("true", "1")
+        thread_id_raw = request.data.get("thread_id")
+        data["is_thread"] = is_thread_bool
+        data["thread_root_id"] = (
+            thread_id_raw
+            if (
+                is_thread_bool
+                and str(thread_id_raw).lower()
+                not in ("0", "false", "null", "none", "undefined", "")
+            )
+            else None
+        )
         data["parent_note_id"] = request.data.get("parent_note_id")
 
         serializer = ChatNoteMasterSerializer(data=data)
@@ -390,9 +399,9 @@ class ChatNoteMasterView(AuthenticatedAPIView):
                         "noteId": serializer.data["note_id"],
                         "parentNoteId": serializer.data["parent_note_id"],
                         "chatType": serializer.data["chat_type"],
-                        "chatId": serializer.data["chat_id"],
+                        "chatId": serializer.data["channel"],
                         "isThread": serializer.data["is_thread"],
-                        "threadId": serializer.data["thread_id"],
+                        "threadId": serializer.data["thread_root_id"],
                         "title": serializer.data["title"],
                         "body": serializer.data["body"],
                         "tsCreated": serializer.data["ts_created_at"],
@@ -560,9 +569,9 @@ class SingleChatNoteView(AuthenticatedAPIView):
                 ownerId=F("owner"),
                 noteId=F("note_id"),
                 chatType=F("chat_type"),
-                chatId=F("chat_id"),
+                chatId=F("channel_id"),
                 isThread=F("is_thread"),
-                threadId=F("thread_id"),
+                threadId=F("thread_root_id"),
                 parentNoteId=F("parent_note_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
@@ -598,22 +607,21 @@ class ChatNoteAttachmentView(AuthenticatedAPIView):
     def post(self, request):
         request_user_id = request.user.id
 
-        # ChatNoteAttachmentFact stores the chat-routing tuple
-        # (chat_type / chat_id / is_thread / thread_id) as NOT NULL
-        # columns alongside the FK to the note, so the serializer
-        # rejects payloads that omit them. The frontend now sends
-        # these from `currentChatNote`; we forward them through here
-        # rather than re-derive from the chat note row to keep the
-        # write path symmetrical with how chat notes themselves are
-        # created.
+        # ChatNoteAttachmentFact mirrors the chat note's v3 routing
+        # (chat_type / channel UUID / is_thread / thread-root UUID)
+        # alongside the FK to the note. The frontend sends these from
+        # `currentChatNote` (chat_id = channel UUID, thread_id = thread-
+        # root Message UUID); we forward them through here with the SAME
+        # coercion as the parent-note create so the attachment row is
+        # routing-symmetric with its note. `channel` stays in the
+        # validated dict; `is_thread`/`thread_root_id` are assigned after
+        # validate_request_data (it 400s on any None value).
         data = {
             "note": request.data.get("note_id"),
             "uploader": request.data.get("uploader"),
             "note_attachment_url": request.FILES.get("note_attachment_file"),
             "chat_type": request.data.get("chat_type"),
-            "chat_id": request.data.get("chat_id"),
-            "is_thread": request.data.get("is_thread"),
-            "thread_id": request.data.get("thread_id"),
+            "channel": request.data.get("chat_id"),
         }
 
         if res := validate_request_data(data):
@@ -624,6 +632,19 @@ class ChatNoteAttachmentView(AuthenticatedAPIView):
 
         if res := require_write_role(request_user_id, NOTE_TYPE, data["note"]):
             return res
+
+        is_thread_bool = str(request.data.get("is_thread")).lower() in ("true", "1")
+        thread_id_raw = request.data.get("thread_id")
+        data["is_thread"] = is_thread_bool
+        data["thread_root_id"] = (
+            thread_id_raw
+            if (
+                is_thread_bool
+                and str(thread_id_raw).lower()
+                not in ("0", "false", "null", "none", "undefined", "")
+            )
+            else None
+        )
 
         serializer = ChatNoteAttachmentFactSerializer(data=data)
         if serializer.is_valid():
@@ -677,9 +698,9 @@ class ChatSubNotesView(AuthenticatedAPIView):
                 ownerId=F("owner"),
                 noteId=F("note_id"),
                 chatType=F("chat_type"),
-                chatId=F("chat_id"),
+                chatId=F("channel_id"),
                 isThread=F("is_thread"),
-                threadId=F("thread_id"),
+                threadId=F("thread_root_id"),
                 parentNoteId=F("parent_note_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),

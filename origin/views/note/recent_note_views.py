@@ -9,7 +9,6 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
-
 # Maximum number of recent-note rows kept per (user, team). Older rows are
 # trimmed on every record-open so the table stays small and the meta
 # endpoint never has to consider more than this many candidates.
@@ -181,9 +180,9 @@ class AllRecentNotesMetaView(AuthenticatedAPIView):
                     noteId=F("note_id"),
                     parentNoteId=F("parent_note_id"),
                     chatType=F("chat_type"),
-                    chatId=F("chat_id"),
+                    chatId=F("channel_id"),
                     isThread=F("is_thread"),
-                    threadId=F("thread_id"),
+                    threadId=F("thread_root_id"),
                     tsUpdated=F("ts_updated_at"),
                 )
                 .values(

@@ -25,7 +25,7 @@ and we don't want N duplicate Channel rows.
 
 from __future__ import annotations
 
-from django.db.models.signals import post_save
+from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
 from origin.models.chat.unified_models import (
@@ -105,4 +105,32 @@ def _sync_pm_channel_member(sender, instance, created, **kwargs):
             "is_deleted": bool(getattr(instance, "is_deleted", False)),
             "role": "member",
         },
+    )
+
+
+@receiver(post_delete, sender=ProjectMembers)
+def _remove_pm_channel_member(sender, instance, **kwargs):
+    """When a project member is removed, soft-delete the matching PM
+    `ChannelMember` row so PM channel membership tracks project
+    membership on removal too.
+
+    `ProjectMembers` has no `is_deleted` column — member removal is a
+    HARD delete (see `prj_views.leave/remove`). Without this receiver the
+    stale `ChannelMember(is_deleted=False)` row would survive and keep the
+    removed user seeing the PM channel's chat notes (the list/meta filter
+    and `get_effective_role` are now `ChannelMember`-only). `QuerySet
+    .delete()` fires `post_delete` per row, so the bulk
+    `ProjectMembers.objects.filter(...).delete()` removal path is covered.
+    """
+    project = instance.project_id
+    attendee = instance.attendee_id
+    if project is None or attendee is None:
+        return
+    try:
+        channel = Channel.objects.get(project_id=project, kind=ChannelKind.PM)
+    except Channel.DoesNotExist:
+        return
+
+    ChannelMember.objects.filter(channel=channel, user_id=attendee).update(
+        is_deleted=True
     )

@@ -6,7 +6,7 @@ from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.project.prj_models import ProjectMembers
-from origin.services.legacy_chat_bridge import is_chat_member as _bridge_is_chat_member
+from origin.models.chat.unified_models import ChannelMember
 
 NOTE_TYPE_PERSONAL = 1
 NOTE_TYPE_TASK = 2
@@ -25,13 +25,6 @@ def get_explicit_role(user_id, note_type, note_id):
         .first()
     )
     return row
-
-
-def _is_chat_member(user_id, chat_type, chat_id):
-    # Membership resolves off the v3 unified schema (DM/GM/MDM via the
-    # `Channel.legacy_chat_id` bridge → `ChannelMember`; PM via
-    # `ProjectMembers`). See `services.legacy_chat_bridge`.
-    return _bridge_is_chat_member(chat_type, chat_id, user_id)
 
 
 def get_effective_role(user_id, note_type, note_id, team_id=None):
@@ -69,10 +62,15 @@ def get_effective_role(user_id, note_type, note_id, team_id=None):
 
     if note_type == NOTE_TYPE_CHAT:
         try:
-            note = ChatNoteMaster.objects.only("chat_type", "chat_id").get(note_id=note_id)
+            note = ChatNoteMaster.objects.only("channel_id").get(note_id=note_id)
         except ChatNoteMaster.DoesNotExist:
             return None
-        if _is_chat_member(user_id, note.chat_type, note.chat_id):
+        # Chat notes are keyed on the v3 `Channel` UUID; an active
+        # `ChannelMember` row grants implicit Viewer (PM members included
+        # via pm_channel_signals).
+        if ChannelMember.objects.filter(
+            channel_id=note.channel_id, user=user_id, is_deleted=False
+        ).exists():
             return ROLE_VIEWER
         return None
 

@@ -382,9 +382,9 @@ def _resolve_chat_notes(
                 "title",
                 "owner_id",
                 "chat_type",
-                "chat_id",
+                "channel_id",
                 "is_thread",
-                "thread_id",
+                "thread_root_id",
             )
         )
     except Exception:  # noqa: BLE001
@@ -395,19 +395,22 @@ def _resolve_chat_notes(
         allowed = chat_note_acl_user_ids(
             owner_id=r["owner_id"],
             chat_type_code=r["chat_type"],
-            chat_id=r["chat_id"],
+            channel_id=r["channel_id"],
             note_id=r["note_id"],
         )
         if user_id not in allowed:
             continue
+        # The parent_context dict KEY names stay chat_id / thread_id
+        # (opaque deep-link feed-through); only the source VALUE changes
+        # to the v3 channel / thread-root UUID.
         parent_context: dict[str, Any] = {}
         chat_label = CHAT_TYPE_LABEL.get(r["chat_type"])
         if chat_label:
             parent_context["chat_type"] = chat_label
-        if r["chat_id"]:
-            parent_context["chat_id"] = str(r["chat_id"])
-        if r["thread_id"]:
-            parent_context["thread_id"] = str(r["thread_id"])
+        if r["channel_id"]:
+            parent_context["chat_id"] = str(r["channel_id"])
+        if r["thread_root_id"]:
+            parent_context["thread_id"] = str(r["thread_root_id"])
         if r["is_thread"]:
             parent_context["is_thread"] = True
         out.append(

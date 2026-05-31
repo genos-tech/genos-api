@@ -26,7 +26,6 @@ from origin.search_engine.chunkers.base import (
     NOTE_TYPE_PERSONAL,
     NOTE_TYPE_TASK,
 )
-from origin.services.legacy_chat_bridge import chat_member_user_ids
 
 
 def chat_acl_user_ids(chat_type_code: int, chat_id) -> set[str]:
@@ -40,11 +39,6 @@ def chat_acl_user_ids(chat_type_code: int, chat_id) -> set[str]:
 
     Returns an empty set for an unknown or malformed channel id (never
     raises) so callers can treat "no members" as "not authorized".
-
-    NOTE: chat *notes* still reference their parent chat by the legacy
-    integer id (`ChatNoteMaster.chat_id`); that path uses
-    `chat_member_user_ids` (the legacy bridge) directly — see
-    `chat_note_acl_user_ids`. This function is UUID-only.
     """
     try:
         channel = Channel.objects.filter(id=chat_id, kind=chat_type_code, is_deleted=False).first()
@@ -99,20 +93,18 @@ def note_grants_user_ids(note_type_code: int, note_id: int) -> set[str]:
     }
 
 
-def chat_note_acl_user_ids(
-    *, owner_id, chat_type_code: int, chat_id: int, note_id: int
-) -> set[str]:
-    """Chat-note ACL: owner + chat members + explicit grants.
+def chat_note_acl_user_ids(*, owner_id, chat_type_code: int, channel_id, note_id: int) -> set[str]:
+    """Chat-note ACL: owner + channel members + explicit grants.
 
-    Chat notes (`ChatNoteMaster`) still key their parent chat by the
-    legacy integer id, so membership is resolved via the legacy
-    `chat_member_user_ids` bridge here — NOT the UUID-native
-    `chat_acl_user_ids`, which would reject an integer chat_id.
+    Chat notes (`ChatNoteMaster`) are keyed on the v3 `Channel` UUID
+    (`channel_id`), so membership resolves via the UUID-native
+    `chat_acl_user_ids` (DM/GM/MDM via `ChannelMember`; PM via the
+    channel's `project_id`).
     """
     out: set[str] = set()
     if owner_id:
         out.add(str(owner_id))
-    out |= chat_member_user_ids(chat_type_code, chat_id)
+    out |= chat_acl_user_ids(chat_type_code, channel_id)
     out |= note_grants_user_ids(NOTE_TYPE_CHAT, note_id)
     return out
 

@@ -2814,20 +2814,21 @@ def _create_notes(team, demo_user, bots, seeded_projects):
         )
     )
 
-    # Chat note on the GM kickoff thread — owner + editors so the bots
-    # can see it too. Role IDs: 1=owner, 2=editor, 3=viewer.
-    # NOTE: `ChatNoteMaster.chat_id` is still `IntegerField` in the
-    # schema; the v3 Channel id is a UUID. Until the chat_note table is
-    # migrated to UUID, we seed `chat_id=0` so the note row exists but
-    # is not surfaced in the GM's note list. Re-link once the migration
-    # lands.
+    # Chat note on the GM channel — owner + editors so the bots can see
+    # it too. Role IDs: 1=owner, 2=editor, 3=viewer. The chat note is now
+    # keyed on the v3 `Channel` UUID; link it to the team's GM channel so
+    # it surfaces in the GM's note list (thread_root_id None = a
+    # channel-level, non-thread note).
+    gm_channel = Channel.objects.filter(
+        team=team, kind=ChannelKind.GM, is_deleted=False
+    ).first()
     chat_note = ChatNoteMaster.objects.create(
         team=team,
         owner=demo_user,
         chat_type=2,  # GM
-        chat_id=0,
+        channel=gm_channel,
         is_thread=False,
-        thread_id=0,
+        thread_root_id=None,
         title="Sprint 1 kickoff recap",
         body=CHAT_NOTE_GM_KICKOFF_RECAP_BODY,
     )
