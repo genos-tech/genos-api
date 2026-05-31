@@ -134,7 +134,7 @@ urlpatterns = [
     # Polled by the client every 60s. Source of truth for whether a
     # given user falls into the v3-chat canary bucket.
     path(
-        "api/runtime-config/",
+        "api/v2/runtime-config/",
         RuntimeConfigView.as_view(),
         name="runtime_config",
     ),
