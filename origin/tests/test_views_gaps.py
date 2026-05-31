@@ -94,17 +94,13 @@ class ReadCursorViewTests(_ChannelMixin, BaseAPITestCase):
 
     # ----- auth --------------------------------------------------------
     def test_unauthenticated_returns_401(self):
-        resp = self.client.put(
-            self.url, {"last_read_message_id": str(self.m1.id)}, format="json"
-        )
+        resp = self.client.put(self.url, {"last_read_message_id": str(self.m1.id)}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
 
     # ----- happy path --------------------------------------------------
     def test_advance_cursor_creates_row(self):
         self.authenticate()
-        resp = self.client.put(
-            self.url, {"last_read_message_id": str(self.m1.id)}, format="json"
-        )
+        resp = self.client.put(self.url, {"last_read_message_id": str(self.m1.id)}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data["lastReadMessageId"], str(self.m1.id))
         self.assertIsNone(resp.data["threadRootId"])
@@ -119,13 +115,9 @@ class ReadCursorViewTests(_ChannelMixin, BaseAPITestCase):
         server-side truth wins (forward-only)."""
         self.authenticate()
         # Advance to m2 (seq=2) first.
-        self.client.put(
-            self.url, {"last_read_message_id": str(self.m2.id)}, format="json"
-        )
+        self.client.put(self.url, {"last_read_message_id": str(self.m2.id)}, format="json")
         # Now try to rewind to m1 (seq=1).
-        resp = self.client.put(
-            self.url, {"last_read_message_id": str(self.m1.id)}, format="json"
-        )
+        resp = self.client.put(self.url, {"last_read_message_id": str(self.m1.id)}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         # Cursor should still point at m2, not be rewound to m1.
         self.assertEqual(resp.data["lastReadMessageId"], str(self.m2.id))
@@ -165,9 +157,7 @@ class ReadCursorViewTests(_ChannelMixin, BaseAPITestCase):
     def test_non_member_returns_404(self):
         """user2 is not a ChannelMember → 404 (existence hidden)."""
         self.authenticate(self.user2)
-        resp = self.client.put(
-            self.url, {"last_read_message_id": str(self.m1.id)}, format="json"
-        )
+        resp = self.client.put(self.url, {"last_read_message_id": str(self.m1.id)}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
 
@@ -217,9 +207,7 @@ class PinViewTests(_ChannelMixin, BaseAPITestCase):
 
     def test_pin_nonexistent_channel_returns_404(self):
         self.authenticate()
-        url = reverse(
-            "v3_channel_pin", args=["00000000-0000-0000-0000-000000000000"]
-        )
+        url = reverse("v3_channel_pin", args=["00000000-0000-0000-0000-000000000000"])
         resp = self.client.post(url)
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
@@ -243,24 +231,18 @@ class FlagViewTests(_ChannelMixin, BaseAPITestCase):
         resp = self.client.post(self.url)
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         self.assertEqual(resp.data["messageId"], str(self.message.id))
-        self.assertEqual(
-            Flag.objects.filter(user=self.user, message=self.message).count(), 1
-        )
+        self.assertEqual(Flag.objects.filter(user=self.user, message=self.message).count(), 1)
 
         resp2 = self.client.post(self.url)
         self.assertEqual(resp2.status_code, status.HTTP_200_OK)
-        self.assertEqual(
-            Flag.objects.filter(user=self.user, message=self.message).count(), 1
-        )
+        self.assertEqual(Flag.objects.filter(user=self.user, message=self.message).count(), 1)
 
     def test_unflag_returns_204(self):
         self.authenticate()
         Flag.objects.create(user=self.user, message=self.message)
         resp = self.client.delete(self.url)
         self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertFalse(
-            Flag.objects.filter(user=self.user, message=self.message).exists()
-        )
+        self.assertFalse(Flag.objects.filter(user=self.user, message=self.message).exists())
 
     def test_unflag_when_not_flagged_still_204(self):
         self.authenticate()
@@ -275,9 +257,7 @@ class FlagViewTests(_ChannelMixin, BaseAPITestCase):
 
     def test_flag_nonexistent_message_returns_404(self):
         self.authenticate()
-        url = reverse(
-            "v3_message_flag", args=["00000000-0000-0000-0000-000000000000"]
-        )
+        url = reverse("v3_message_flag", args=["00000000-0000-0000-0000-000000000000"])
         resp = self.client.post(url)
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
@@ -345,9 +325,7 @@ class MessageReactionsViewTests(_ChannelMixin, BaseAPITestCase):
         resp = self.client.post(self.url, {"emoji": "🎉"}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         self.assertEqual(resp.data["_v3_activities"], [])
-        self.assertEqual(
-            Activity.objects.filter(activity_type=ActivityType.REACTION).count(), 0
-        )
+        self.assertEqual(Activity.objects.filter(activity_type=ActivityType.REACTION).count(), 0)
 
     def test_remove_reaction_returns_200_with_channel_coords(self):
         """DELETE returns 200 with {channelId, channelKind} (NOT 204) so
@@ -384,24 +362,20 @@ class MessageReactionsViewTests(_ChannelMixin, BaseAPITestCase):
         """A user with no membership on the message's channel → 404."""
         # Remove user from the channel so they are no longer a member,
         # but keep user2. Authenticate as the now-removed user.
-        ChannelMember.objects.filter(channel=self.channel, user=self.user).update(
-            is_deleted=True
-        )
+        ChannelMember.objects.filter(channel=self.channel, user=self.user).update(is_deleted=True)
         self.authenticate()
         resp = self.client.post(self.url, {"emoji": "👍"}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_reaction_nonexistent_message_returns_404(self):
         self.authenticate()
-        url = reverse(
-            "v3_message_reactions", args=["00000000-0000-0000-0000-000000000000"]
-        )
+        url = reverse("v3_message_reactions", args=["00000000-0000-0000-0000-000000000000"])
         resp = self.client.post(url, {"emoji": "👍"}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
 
 # ---------------------------------------------------------------------------
-# RuntimeConfigView — GET /api/runtime-config/
+# RuntimeConfigView — GET /api/v2/runtime-config/
 # ---------------------------------------------------------------------------
 class RuntimeConfigViewTests(BaseAPITestCase):
     def setUp(self):
@@ -419,9 +393,7 @@ class RuntimeConfigViewTests(BaseAPITestCase):
         resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data["version"], 1)
-        self.assertEqual(
-            resp.data["use_new_chat"], {"dm": 0, "gm": 0, "mdm": 0, "pm": 0}
-        )
+        self.assertEqual(resp.data["use_new_chat"], {"dm": 0, "gm": 0, "mdm": 0, "pm": 0})
         self.assertFalse(resp.data["panic_switch"])
 
     @override_settings(
@@ -438,9 +410,7 @@ class RuntimeConfigViewTests(BaseAPITestCase):
         resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data["version"], 1)
-        self.assertEqual(
-            resp.data["use_new_chat"], {"dm": 5000, "gm": 0, "mdm": 0, "pm": 0}
-        )
+        self.assertEqual(resp.data["use_new_chat"], {"dm": 5000, "gm": 0, "mdm": 0, "pm": 0})
         self.assertTrue(resp.data["panic_switch"])
 
 
@@ -457,9 +427,7 @@ class NotificationPreferenceViewTests(BaseAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_get_lazily_creates_row_with_defaults(self):
-        self.assertFalse(
-            NotificationPreference.objects.filter(user=self.user).exists()
-        )
+        self.assertFalse(NotificationPreference.objects.filter(user=self.user).exists())
         self.authenticate()
         resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
@@ -469,9 +437,7 @@ class NotificationPreferenceViewTests(BaseAPITestCase):
         self.assertTrue(resp.data["enable_mentions"])
         self.assertEqual(resp.data["muted_chats"], [])
         # Row was created lazily.
-        self.assertTrue(
-            NotificationPreference.objects.filter(user=self.user).exists()
-        )
+        self.assertTrue(NotificationPreference.objects.filter(user=self.user).exists())
 
     def test_put_partial_update_persists(self):
         self.authenticate()
@@ -487,9 +453,7 @@ class NotificationPreferenceViewTests(BaseAPITestCase):
         self.assertFalse(resp.data["enable_chats"])
         # Untouched fields keep their defaults (partial update).
         self.assertTrue(resp.data["master_enabled"])
-        self.assertEqual(
-            resp.data["muted_chats"], [{"chat_type": 2, "chat_id": "abc"}]
-        )
+        self.assertEqual(resp.data["muted_chats"], [{"chat_type": 2, "chat_id": "abc"}])
         prefs = NotificationPreference.objects.get(user=self.user)
         self.assertFalse(prefs.enable_chats)
         self.assertEqual(prefs.muted_chats, [{"chat_type": 2, "chat_id": "abc"}])
@@ -527,7 +491,5 @@ class NotificationPreferenceViewTests(BaseAPITestCase):
 
     def test_put_muted_chats_not_a_list_returns_400(self):
         self.authenticate()
-        resp = self.client.put(
-            self.url, {"muted_chats": "nope"}, format="json"
-        )
+        resp = self.client.put(self.url, {"muted_chats": "nope"}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)

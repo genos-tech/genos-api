@@ -7,7 +7,7 @@ future kill switches all flow through here.
 
 Contract:
 
-    GET /api/runtime-config
+    GET /api/v2/runtime-config
 
     Response (200):
         {
@@ -80,7 +80,7 @@ def _read_config() -> dict:
 
 
 class RuntimeConfigView(AuthenticatedAPIView):
-    """GET /api/runtime-config — return the current rollout config.
+    """GET /api/v2/runtime-config — return the current rollout config.
 
     Idempotent, cheap, and authoritative. The client polls every 60s;
     a network failure leaves it on its previous cached config rather
