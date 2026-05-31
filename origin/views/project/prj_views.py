@@ -1,20 +1,17 @@
+import re
 from collections import defaultdict
 
 from django.core.cache import cache
 from django.db.models import Exists, OuterRef, Q
-
-from rest_framework.parsers import MultiPartParser
-from rest_framework.response import Response
-from rest_framework import status
-from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.models.project.prj_models import *
 from origin.models.common.inbox_models import InboxItems
+from origin.models.project.prj_models import *
 from origin.serializers.project.prj_serializers import *
 from origin.services.project_code import derive_project_code
+from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data
-
-
-import re
+from rest_framework import status
+from rest_framework.parsers import MultiPartParser
+from rest_framework.response import Response
 
 _PROJECT_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
 
@@ -248,7 +245,7 @@ class ProjectMasterView(AuthenticatedAPIView):
                 )
             else:
                 return Response(
-                    {"message": f"Only project owner can delete the project."},
+                    {"message": "Only project owner can delete the project."},
                     status=status.HTTP_200_OK,
                 )
         except ProjectMaster.DoesNotExist:

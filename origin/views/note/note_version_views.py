@@ -1,23 +1,22 @@
 from django.db import transaction
-from rest_framework.response import Response
-from rest_framework import status
-
-from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.models.note.version_note_models import NoteVersionMaster
+from origin.models.common.team_models import TeamMaster
+from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
-from origin.models.note.chat_note_models import ChatNoteMaster
-from origin.models.common.team_models import TeamMaster
+from origin.models.note.version_note_models import NoteVersionMaster
 from origin.serializers.note.note_serializers import (
-    NoteVersionListItemSerializer,
     NoteVersionDetailSerializer,
+    NoteVersionListItemSerializer,
 )
-from origin.views.utils.request_validators import validate_request_data
+from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_role import (
     require_read_role,
     require_write_role,
 )
 from origin.views.utils.note_version import snapshot_note_version
+from origin.views.utils.request_validators import validate_request_data
+from rest_framework import status
+from rest_framework.response import Response
 
 VALID_NOTE_TYPES = {1, 2, 3}
 

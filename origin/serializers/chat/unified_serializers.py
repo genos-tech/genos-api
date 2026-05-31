@@ -14,8 +14,6 @@ calls were a regression that this rewrite eliminates by going back to the
 DRF default.
 """
 
-from rest_framework import serializers
-
 from origin.models.chat.unified_models import (
     Activity,
     Channel,
@@ -29,6 +27,7 @@ from origin.models.chat.unified_models import (
     Pin,
     ReadCursor,
 )
+from rest_framework import serializers
 
 
 class UserLiteSerializer(serializers.Serializer):

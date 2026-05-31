@@ -5,7 +5,7 @@ import uuid
 from django.contrib.auth import get_user_model
 from rest_framework import status
 
-from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.models.common.team_models import TeamMembers
 from origin.tests.test_base import BaseAPITestCase
 
 User = get_user_model()

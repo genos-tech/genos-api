@@ -9,6 +9,8 @@ class OriginConfig(AppConfig):
         # Importing the module is enough — the @receiver decorators in
         # task_signals.py / cache_invalidation.py register the handlers as a
         # side effect.
-        from origin.signals import task_signals  # noqa: F401
-        from origin.signals import cache_invalidation  # noqa: F401
-        from origin.signals import pm_channel_signals  # noqa: F401
+        from origin.signals import (
+            cache_invalidation,  # noqa: F401
+            pm_channel_signals,  # noqa: F401
+            task_signals,  # noqa: F401
+        )

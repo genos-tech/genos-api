@@ -49,6 +49,7 @@ def friendly_chat_title(
     # is the v3 `Channel.id` UUID the index/search rows carry; we resolve
     # the channel directly (the legacy integer bridge no longer applies).
     from django.core.exceptions import ValidationError
+
     from origin.models.chat.unified_models import Channel
 
     def _channel(kind: int) -> Channel | None:

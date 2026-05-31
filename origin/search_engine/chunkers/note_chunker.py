@@ -22,25 +22,18 @@ from datetime import datetime
 from typing import Iterator, Optional
 
 from origin.models.note.chat_note_models import ChatNoteMaster
-from origin.models.note.task_note_models import TaskNoteMaster
-from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
-
+from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMembers
-from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import chat_acl_user_ids
-
 from origin.search_engine.chunkers.base import (
-    Chunk,
-    EntityChunks,
-    CHAT_TYPE_DM,
-    CHAT_TYPE_GM,
-    CHAT_TYPE_MDM,
-    CHAT_TYPE_PM,
     CHAT_TYPE_LABEL,
+    NOTE_TYPE_CHAT,
     NOTE_TYPE_PERSONAL,
     NOTE_TYPE_TASK,
-    NOTE_TYPE_CHAT,
+    Chunk,
+    EntityChunks,
     chat_entity_id,
     iso,
     make_snippet,

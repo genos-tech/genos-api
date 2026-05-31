@@ -2,19 +2,18 @@ from collections import defaultdict
 
 from django.core.cache import cache
 from django.db.models import F, Q
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.parsers import MultiPartParser
-
-from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.inbox_models import InboxItems
+from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.serializers.common.team_serializers import TeamMasterSerializer, TeamMembersSerializer
+from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
     check_since,
 )
+from rest_framework import status
+from rest_framework.parsers import MultiPartParser
+from rest_framework.response import Response
 
 
 #############################

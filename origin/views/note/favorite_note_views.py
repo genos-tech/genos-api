@@ -1,16 +1,13 @@
-from django.db.models import F, Value, IntegerField
-from rest_framework.response import Response
-from rest_framework import status
-
-from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.serializers.note.note_serializers import NoteFavoriteMasterSerializer
+from django.db.models import F, IntegerField, Value
+from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.favorite_note_models import NoteFavoriteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
-from origin.models.note.chat_note_models import ChatNoteMaster
-from origin.models.common.team_models import TeamMaster
-from origin.models.common.user_models import CustomUser
+from origin.serializers.note.note_serializers import NoteFavoriteMasterSerializer
+from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from rest_framework import status
+from rest_framework.response import Response
 
 
 class AllFavoriteNotesMetaView(AuthenticatedAPIView):

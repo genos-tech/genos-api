@@ -24,11 +24,8 @@ from django.utils import timezone
 
 from origin.models.chat.unified_models import Channel, ChannelMember
 from origin.models.common.usage_models import ModelUsageCounter
-from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster
-from origin.search_engine import quota
-from origin.search_engine import reranker
-from origin.search_engine import query_rewriter
+from origin.search_engine import query_rewriter, quota, reranker
 from origin.search_engine.friendly_titles import (
     apply_friendly_titles,
     friendly_chat_title,
@@ -36,7 +33,6 @@ from origin.search_engine.friendly_titles import (
 from origin.search_engine.llm.choice import LlmChoice, resolve_user_choice
 from origin.search_engine.llm.types import FunctionCall
 from origin.tests.test_base import BaseAPITestCase
-
 
 # Deterministic, self-contained tier-quota config so the assertions don't
 # depend on the placeholder numbers in apis/settings.py drifting over time.

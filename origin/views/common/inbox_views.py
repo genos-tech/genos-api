@@ -1,18 +1,18 @@
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
-from rest_framework.response import Response
-from rest_framework import status
-from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.serializers.common.inbox_serializers import *
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.team_models import *
 from origin.models.project.prj_models import *
+from origin.serializers.common.inbox_serializers import *
+from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
     check_since,
 )
+from rest_framework import status
+from rest_framework.response import Response
 
 
 #############################

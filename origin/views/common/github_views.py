@@ -21,18 +21,17 @@ import re
 import requests
 from django.conf import settings
 from django.core.cache import cache
-from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
-from rest_framework import permissions, status
-from rest_framework.response import Response
-from rest_framework.request import Request
-from rest_framework.views import APIView
-
+from django.views.decorators.csrf import csrf_exempt
 from origin.models.common.user_models import ConnectedAccount, GithubWebhookRegistration
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
 from origin.services.github_webhooks import parse_pr_url, parse_pr_url_full
 from origin.services.oauth.tokens import get_valid_access_token
+from rest_framework import permissions, status
+from rest_framework.request import Request
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 logger = logging.getLogger(__name__)
 

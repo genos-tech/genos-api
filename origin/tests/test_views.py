@@ -13,8 +13,8 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from origin.views.chat.modules.common.generate_first_line import get as generate_first_line_get
-from origin.views.utils.request_validators import validate_request_data, validate_request_user
 from origin.views.utils.mention_handler import extractMentionedUsers
+from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 User = get_user_model()
 

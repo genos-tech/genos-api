@@ -21,7 +21,7 @@ from __future__ import annotations
 from django.core.management.base import BaseCommand, CommandError
 
 from origin.models.common.feature_models import UserFeatureAccess
-from origin.models.common.user_models import CustomUser, TIER_CHOICES
+from origin.models.common.user_models import TIER_CHOICES, CustomUser
 
 _KNOWN_FEATURES = [f for f, _ in UserFeatureAccess.FEATURE_CHOICES]
 _KNOWN_TIERS = [t for t, _ in TIER_CHOICES]

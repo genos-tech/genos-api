@@ -1,6 +1,5 @@
-from rest_framework import serializers
-
 from origin.models.common.notification_models import NotificationPreference
+from rest_framework import serializers
 
 
 class NotificationPreferenceSerializer(serializers.ModelSerializer):

@@ -1,11 +1,12 @@
 from collections import defaultdict
 
-from django.db.models import Count, Q
-from rest_framework.response import Response
-from rest_framework import status
-from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from django.db.models import Q
 from origin.models.project.prj_models import *
 from origin.models.task.task_models import *
+from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from rest_framework import status
+from rest_framework.response import Response
+
 from .common_color import STATUS_COLOR_MAP
 
 STATUS_MAP = {

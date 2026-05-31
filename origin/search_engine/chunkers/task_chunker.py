@@ -35,13 +35,12 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Iterator, Optional
 
-from origin.models.task.task_models import TaskMaster, TaskComments
 from origin.models.project.prj_models import ProjectMembers
-
+from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.chunkers.base import (
+    CHAT_TYPE_LABEL,
     Chunk,
     EntityChunks,
-    CHAT_TYPE_LABEL,
     chat_entity_id,
     iso,
     make_snippet,

@@ -1,18 +1,17 @@
 from django.urls import path
-
-from origin.views.task.task_views import *
+from origin.views.task.milestone_views import (
+    MilestoneAssigneesView,
+    MilestoneView,
+    ProjectMilestonesView,
+)
 from origin.views.task.search_views import *
 from origin.views.task.sprint_views import (
     ProjectSprintsView,
     SprintConfigView,
     SprintView,
 )
-from origin.views.task.milestone_views import (
-    MilestoneAssigneesView,
-    MilestoneView,
-    ProjectMilestonesView,
-)
 from origin.views.task.task_activity_views import MilestoneBurndownView, TaskActivityListView
+from origin.views.task.task_views import *
 
 urlpatterns = [
     path("api/v2/task/", TaskMasterView.as_view(), name="task_create"),

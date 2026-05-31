@@ -1,21 +1,14 @@
+import base64
 import logging
 import os
-import base64
 from collections import defaultdict
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 from django.db.models import Case, F, IntegerField, Max, Q, Value, When
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.parsers import MultiPartParser
-
-from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.models.project.prj_models import *
 from origin.models.task.task_models import *
 from origin.serializers.task.task_serializers import *
-from origin.models.project.prj_models import *
-from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-
 from origin.services import unified_writer
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.task_cache import (
@@ -24,15 +17,19 @@ from origin.services.task_cache import (
     invalidate_project_tasks_cache,
     set_cached_project_tasks,
 )
+from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
     check_since,
 )
-from origin.views.utils.request_validators import validate_request_data, validate_request_user
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
+from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from rest_framework import status
+from rest_framework.parsers import MultiPartParser
+from rest_framework.response import Response
 
-from .common_color import STATUS_COLOR_MAP, PRIORITY_COLOR_MAP, EFFORT_LEVEL_COLOR_MAP
+from .common_color import EFFORT_LEVEL_COLOR_MAP, PRIORITY_COLOR_MAP, STATUS_COLOR_MAP
 
 
 def _bridge_milestone_to_parent(task, requested_milestone_id, parent_task_id):
@@ -1450,8 +1447,8 @@ class TaskCommentsView(AuthenticatedAPIView):
             # message-send proxy contract).
             activities_wire = []
             if mirror is not None:
-                from origin.services import mention_extractor, v3_activity
                 from origin.serializers.chat.unified_serializers import ActivitySerializer
+                from origin.services import mention_extractor, v3_activity
 
                 sender = mirror.sender
                 if sender is not None:
@@ -1632,7 +1629,7 @@ class TaskCommentReactionView(AuthenticatedAPIView):
             )
             reaction.delete()
             return Response(
-                {"message": f"Reaction deleted successfully."},
+                {"message": "Reaction deleted successfully."},
                 status=status.HTTP_204_NO_CONTENT,
             )
         except TaskCommentReactionFact.DoesNotExist:
@@ -1714,7 +1711,7 @@ class TaskCommentMentionView(AuthenticatedAPIView):
                 )
                 reaction.delete()
             return Response(
-                {"message": f"Mention deleted successfully."},
+                {"message": "Mention deleted successfully."},
                 status=status.HTTP_204_NO_CONTENT,
             )
         except TaskCommentMentionFact.DoesNotExist:

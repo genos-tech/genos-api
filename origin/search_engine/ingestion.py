@@ -20,8 +20,7 @@ command and (later) any Kafka-style indexer worker should call.
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Iterable, Optional
 
 from django.conf import settings

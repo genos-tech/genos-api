@@ -1,22 +1,5 @@
 from django.urls import path
-
 from origin.views.common.auth_views import *
-from origin.views.common.user_views import *
-from origin.views.common.team_views import *
-from origin.views.common.inbox_views import *
-from origin.views.common.mention_group_views import (
-    MentionGroupView,
-    MentionGroupMembersView,
-    MentionGroupResolveView,
-)
-from origin.views.common.notification_views import NotificationPreferenceView
-from origin.views.common.runtime_config_views import RuntimeConfigView
-from origin.views.common.oauth_views import (
-    IntegrationsDisconnectView,
-    IntegrationsListView,
-    OAuthCallbackView,
-    OAuthInitiateView,
-)
 from origin.views.common.calendar_views import (
     CalendarEventDetailView,
     CalendarEventsView,
@@ -29,6 +12,22 @@ from origin.views.common.github_views import (
     GithubPullsForTaskView,
     GithubWebhookView,
 )
+from origin.views.common.inbox_views import *
+from origin.views.common.mention_group_views import (
+    MentionGroupMembersView,
+    MentionGroupResolveView,
+    MentionGroupView,
+)
+from origin.views.common.notification_views import NotificationPreferenceView
+from origin.views.common.oauth_views import (
+    IntegrationsDisconnectView,
+    IntegrationsListView,
+    OAuthCallbackView,
+    OAuthInitiateView,
+)
+from origin.views.common.runtime_config_views import RuntimeConfigView
+from origin.views.common.team_views import *
+from origin.views.common.user_views import *
 from origin.views.utils.extract_page_title_view import get_page_title
 
 user_list = UserViewSet.as_view({"post": "create"})

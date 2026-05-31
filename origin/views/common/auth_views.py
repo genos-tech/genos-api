@@ -4,14 +4,6 @@ import secrets
 import uuid
 from datetime import timedelta
 
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.throttling import AnonRateThrottle
-from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.authentication import JWTAuthentication
-
-from rest_framework import viewsets, permissions
-from rest_framework.views import APIView
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
@@ -19,17 +11,23 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
-from rest_framework.request import Request
-from rest_framework_simplejwt.serializers import TokenRefreshSerializer
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
-from .base_auth_api_view import AuthenticatedAPIView
-
 from origin.services.demo_seeder import (
     create_demo_environment,
     delete_demo_environment,
     kick_off_demo_reindex,
 )
+from rest_framework import permissions, status, viewsets
+from rest_framework.request import Request
+from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
+from rest_framework.views import APIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+
+from .base_auth_api_view import AuthenticatedAPIView
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +47,12 @@ def _set_refresh_cookie(response, refresh_value: str) -> None:
 
 
 from origin.serializers.common.user_serializers import (
-    UserSerializer,
-    UserCreateSerializer,
     CustomTokenObtainPairSerializer,
-    PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
     ResendVerificationSerializer,
+    UserCreateSerializer,
+    UserSerializer,
 )
 from origin.services.email import send_templated_email
 

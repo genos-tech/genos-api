@@ -33,7 +33,6 @@ from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
 from django.test import TestCase
-from django.utils import timezone
 
 from origin.models.chat.mention_models import MentionFact
 from origin.models.chat.reaction_models import ReactionFact
@@ -55,7 +54,6 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.usage_models import ModelUsageCounter
 from origin.models.common.user_models import (
     ConnectedAccount,
-    CustomUser,
     GithubWebhookRegistration,
 )
 from origin.models.project.prj_models import ProjectMaster
