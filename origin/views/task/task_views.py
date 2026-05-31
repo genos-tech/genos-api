@@ -231,32 +231,42 @@ class TaskMasterView(AuthenticatedAPIView):
             except MilestoneMaster.DoesNotExist:
                 sprint_id = None
 
-        data = {
-            "team": request.data["team"],
-            "project": request.data["project"],
-            "chat_type": request.data.get("chat_type", None),
-            "chat_id": request.data.get("chat_id", None),
-            "thread_id": request.data.get("thread_id", None),
-            "milestone": milestone_id,
-            "sprint": sprint_id,
-            "parent_task_id": parent_task_id,
-            "root_task_id": request.data.get("root_task_id", None),
-            "assignee": request.data["assignee"],
-            "reporter": request.data["reporter"],
-            "title": request.data["title"],
-            "priority": request.data["priority"],
-            "priority_code": 0,
-            "effort_level": request.data["effort_level"],
-            "effort_level_code": 0,
-            "status": request.data["status"],
-            "status_code": 0,
-            "content": request.data["content"],
-            "due_date": request.data["due_date"],
-            "start_date": request.data.get("start_date"),
-            "links": request.data["links"],
-            "tags": request.data["tags"],
-            "is_init_task": request.data["is_init_task"] == True,
-        }
+        # Build the create payload. Required fields are read with bare
+        # `[...]`; a missing one raises KeyError, which we convert to a
+        # clean 400 rather than letting it 500 the request (a missing
+        # required field is client error, not server error).
+        try:
+            data = {
+                "team": request.data["team"],
+                "project": request.data["project"],
+                "chat_type": request.data.get("chat_type", None),
+                "chat_id": request.data.get("chat_id", None),
+                "thread_id": request.data.get("thread_id", None),
+                "milestone": milestone_id,
+                "sprint": sprint_id,
+                "parent_task_id": parent_task_id,
+                "root_task_id": request.data.get("root_task_id", None),
+                "assignee": request.data["assignee"],
+                "reporter": request.data["reporter"],
+                "title": request.data["title"],
+                "priority": request.data["priority"],
+                "priority_code": 0,
+                "effort_level": request.data["effort_level"],
+                "effort_level_code": 0,
+                "status": request.data["status"],
+                "status_code": 0,
+                "content": request.data["content"],
+                "due_date": request.data["due_date"],
+                "start_date": request.data.get("start_date"),
+                "links": request.data["links"],
+                "tags": request.data["tags"],
+                "is_init_task": request.data["is_init_task"] == True,
+            }
+        except KeyError as exc:
+            return Response(
+                {"error": f"Missing required field: {exc.args[0]}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         newly_mentioned_user_ids = []
         if "content" in request.data and request.data["content"] is not None:
