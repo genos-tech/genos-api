@@ -277,7 +277,11 @@ def _task_card_body(
     assignee_node = (
         _card_mention(assignee, team_id)
         if assignee is not None
-        else {"text": "Unassigned", "type": "text", "styles": {"italic": True, "textColor": "gray"}}
+        else {
+            "text": "Unassigned",
+            "type": "text",
+            "styles": {"italic": True, "textColor": "gray"},
+        }
     )
     return [
         {
@@ -289,7 +293,10 @@ def _task_card_body(
         {
             "type": "paragraph",
             "props": _PARA_PROPS,
-            "content": [_card_label("Status: "), _card_chip(status, _TASK_STATUS_COLOR.get(status))],
+            "content": [
+                _card_label("Status: "),
+                _card_chip(status, _TASK_STATUS_COLOR.get(status)),
+            ],
             "children": [],
         },
         {
@@ -322,7 +329,10 @@ def _task_card_body(
         {
             "type": "paragraph",
             "props": _PARA_PROPS,
-            "content": [_card_label("Due: "), {"text": f"📅 {due_str}", "type": "text", "styles": {}}],
+            "content": [
+                _card_label("Due: "),
+                {"text": f"📅 {due_str}", "type": "text", "styles": {}},
+            ],
             "children": [],
         },
         {"type": "paragraph", "props": _PARA_PROPS, "content": [], "children": []},
@@ -2532,9 +2542,7 @@ def _create_dms(team, demo_user, bots):
         bot = bots[spec["bot_index"]]
         channel = Channel.objects.create(team=team, kind=ChannelKind.DM, title="")
         user_lo, user_hi = _canonical_dm_pair(demo_user.id, bot.id)
-        ChannelDirectPair.objects.create(
-            channel=channel, user_lo=user_lo, user_hi=user_hi
-        )
+        ChannelDirectPair.objects.create(channel=channel, user_lo=user_lo, user_hi=user_hi)
         ChannelMember.objects.create(channel=channel, user=demo_user, role="member")
         ChannelMember.objects.create(channel=channel, user=bot, role="member")
 
@@ -2583,9 +2591,7 @@ def _create_dms(team, demo_user, bots):
     # and the user ends up on the inbox fallback).
     self_channel = Channel.objects.create(team=team, kind=ChannelKind.DM, title="")
     self_id = str(demo_user.id)
-    ChannelDirectPair.objects.create(
-        channel=self_channel, user_lo=self_id, user_hi=self_id
-    )
+    ChannelDirectPair.objects.create(channel=self_channel, user_lo=self_id, user_hi=self_id)
     ChannelMember.objects.create(channel=self_channel, user=demo_user, role="member")
     self_dm_messages = [
         "Welcome — this is your personal scratch chat. Drop quick thoughts, links, "
@@ -2815,20 +2821,36 @@ def _create_notes(team, demo_user, bots, seeded_projects):
     )
 
     # Chat note on the GM channel — owner + editors so the bots can see
-    # it too. Role IDs: 1=owner, 2=editor, 3=viewer. The chat note is now
-    # keyed on the v3 `Channel` UUID; link it to the team's GM channel so
-    # it surfaces in the GM's note list (thread_root_id None = a
-    # channel-level, non-thread note).
-    gm_channel = Channel.objects.filter(
-        team=team, kind=ChannelKind.GM, is_deleted=False
-    ).first()
+    # it too. Role IDs: 1=owner, 2=editor, 3=viewer. The chat note is
+    # keyed on the v3 `Channel` UUID and attached to the GM standup
+    # thread: chat notes are thread-scoped (every chat-note URL is
+    # `…/thread/{threadId}/note/{noteId}`, and "Open related chat" opens
+    # `currentChatNote.threadId`), so a `thread_root_id=None` note has no
+    # thread to open. `thread_root_id` is the standup thread's root
+    # `Message.id` — the single top-level GM row that has replies
+    # (`is_thread_reply=False, reply_count > 0`), seeded just above by
+    # `_create_group_chat`. Falls back to a channel-level note only if the
+    # thread root can't be located (defensive; the GM thread is always
+    # seeded).
+    gm_channel = Channel.objects.filter(team=team, kind=ChannelKind.GM, is_deleted=False).first()
+    gm_thread_root = (
+        Message.objects.filter(
+            channel=gm_channel,
+            is_thread_reply=False,
+            reply_count__gt=0,
+        )
+        .order_by("seq")
+        .first()
+        if gm_channel
+        else None
+    )
     chat_note = ChatNoteMaster.objects.create(
         team=team,
         owner=demo_user,
         chat_type=2,  # GM
         channel=gm_channel,
-        is_thread=False,
-        thread_root_id=None,
+        is_thread=gm_thread_root is not None,
+        thread_root_id=gm_thread_root.id if gm_thread_root else None,
         title="Sprint 1 kickoff recap",
         body=CHAT_NOTE_GM_KICKOFF_RECAP_BODY,
     )
