@@ -78,13 +78,13 @@ class TestTaskViews(TestCase):
         self.assertIn("newly_mentioned_user_ids", response.data)
 
     def test_create_task_missing_required_field(self):
+        # A missing required field is a client error: a clean 400, not a
+        # 500 from an unguarded request.data[...] KeyError.
         payload = self._task_payload()
         del payload["title"]
-        try:
-            response = self.client.post("/api/v2/task/", payload, format="json")
-            self.assertIn(response.status_code, [400, 500])
-        except KeyError:
-            pass
+        response = self.client.post("/api/v2/task/", payload, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("title", str(response.data).lower())
 
     # ── Task Update ────────────────────────────────────────────────
 
