@@ -29,7 +29,7 @@ import requests
 
 from origin.models.common.user_models import ConnectedAccount, CustomUser
 from origin.search_engine.agent.tools.base import ToolError, wrap_workspace_content
-from origin.services.oauth.tokens import get_valid_access_token
+from origin.services.oauth.tokens import ReauthRequired, get_valid_access_token
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,17 @@ def google_calendar_request(
     **kwargs: Any,
 ) -> requests.Response:
     """`requests` wrapper that injects the auto-refreshed access token."""
-    token = get_valid_access_token(account)
+    try:
+        token = get_valid_access_token(account)
+    except ReauthRequired as exc:
+        # Refresh token is revoked/expired — same actionable shape as the
+        # not-connected / scope-missing ToolErrors in
+        # `resolve_google_calendar_account`, so raise the same kind of
+        # message rather than leaking a stack trace into the agent.
+        raise ToolError(
+            "Google Calendar access has expired. Direct the user to "
+            "Settings → Integrations to reconnect Google."
+        ) from exc
     headers = kwargs.pop("headers", {}) or {}
     headers["Authorization"] = f"Bearer {token}"
     headers.setdefault("Accept", "application/json")
