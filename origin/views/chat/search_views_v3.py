@@ -57,7 +57,13 @@ class SearchTeamMembersAndGroupsView(AuthenticatedAPIView):
                     "userId": str(u.id),
                     "name": u.username,
                     "email": u.email,
-                    "profileImageUrl": u.profile_image_url or None,
+                    # `CustomUser.profile_image_url` is a FileField, so the
+                    # attribute is a `FieldFile` — emit its storage path
+                    # (`.name`) string, not the object (DRF's JSON encoder
+                    # would try to `.decode()` the raw file bytes → 500).
+                    # Mirrors the Channel branch below, whose
+                    # `profile_image_url` is already a CharField path.
+                    "profileImageUrl": u.profile_image_url.name or None,
                     "isJoined": True,
                 }
             )
