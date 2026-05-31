@@ -278,18 +278,28 @@ class ChannelListView(AuthenticatedAPIView):
 
     @staticmethod
     def _create_dm(request, team, body):
-        """DM-specific create. Idempotent via ChannelDirectPair."""
+        """DM-specific create. Idempotent via ChannelDirectPair.
+
+        Supports the **self-DM** (``other_user_id == requester``): the
+        personal scratch channel that backs the todo / calendar panes. It
+        is normally created on team join, but this path must return /
+        recreate it idempotently so that searching your own name in the
+        chat search opens it — the frontend can't reliably locate a
+        single-member channel in its snapshot. A self-DM has one
+        ``ChannelMember`` and a ``ChannelDirectPair`` with
+        ``user_lo == user_hi``.
+        """
         other_user_id = body.get("other_user_id")
         if not other_user_id:
             return Response(
                 {"error": "other_user_id is required for DM creation."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if str(other_user_id) == str(request.user.id):
-            return Response(
-                {"error": "Cannot create a DM with yourself."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        # A self-DM is allowed (not rejected). `_canonical_dm_pair(self,
+        # self)` collapses to (self, self), so the idempotent lookup below
+        # finds the existing self-DM, and the create branch makes a
+        # single-member channel.
+        is_self_dm = str(other_user_id) == str(request.user.id)
         try:
             other = User.objects.get(id=other_user_id)
         except User.DoesNotExist:
@@ -336,7 +346,11 @@ class ChannelListView(AuthenticatedAPIView):
             channel = Channel.objects.create(team=team, kind=ChannelKind.DM, title="")
             ChannelDirectPair.objects.create(channel=channel, user_lo=user_lo, user_hi=user_hi)
             ChannelMember.objects.create(channel=channel, user=request.user, role="member")
-            ChannelMember.objects.create(channel=channel, user=other, role="member")
+            # Self-DM has a single member — a second
+            # ChannelMember(channel, request.user) would duplicate the
+            # requester's row (and trip the per-channel member uniqueness).
+            if not is_self_dm:
+                ChannelMember.objects.create(channel=channel, user=other, role="member")
 
         return Response(
             {"channel": ChannelSerializer(channel, context={"request": request}).data},
