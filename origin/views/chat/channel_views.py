@@ -15,13 +15,16 @@ if the user isn't a member, the response is 404 (not 403) so we don't
 leak channel existence.
 """
 
+import uuid
+
 from django.contrib.auth import get_user_model
+from django.core.files.storage import default_storage
 from django.db import transaction
 from django.db.models import Count, OuterRef, Q, Subquery
 from django.db.models.functions import Coalesce
 from django.http import Http404
 from rest_framework import status
-from rest_framework.parsers import MultiPartParser
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
 from origin.models.chat.unified_models import (
@@ -750,3 +753,57 @@ class ChannelProfileImageView(AuthenticatedAPIView):
             {"channel": ChannelSerializer(channel, context={"request": request}).data},
             status=status.HTTP_200_OK,
         )
+
+
+# Cap inline editor uploads. Mirrors `MAX_ATTACHMENT_BYTES` in
+# `message_views`; kept as a local constant to avoid a cross-view import.
+MAX_INLINE_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MiB
+
+
+class ChannelInlineUploadView(AuthenticatedAPIView):
+    """POST /api/v3/channels/{channel_id}/uploads/
+
+    Compose-time generic file uploader for the chat editors. BlockNote's
+    `uploadFile` callback fires while the user is still composing — before
+    any Message exists — so the message-scoped
+    `/api/v3/messages/{id}/attachments/` route cannot serve it. This
+    stores the file via the default storage backend (local disk in dev,
+    S3 in prod — the same backend the FileField attachments use) WITHOUT
+    creating a `MessageAttachment` row, and returns an absolute URL that
+    the editor embeds as an image/file block in `Message.body` (a
+    JSONField, so the URL round-trips verbatim). Restores the pre-v3
+    behavior of the deleted `/api/v2/chat/attachment/` endpoint.
+
+    Authorization: 404 (not 403) for non-members, matching the
+    existence-hiding rule in `_get_channel_for_user`. Any channel member
+    may upload (unlike the message-scoped endpoint, which is sender-only)
+    because the file isn't yet tied to a message.
+
+    Orphan files (the user abandons the draft) are possible and accepted —
+    the legacy compose-time uploader had the same property.
+    """
+
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, channel_id):
+        channel = _get_channel_for_user(channel_id, request.user)
+
+        file = request.FILES.get("file")
+        if file is None:
+            return Response(
+                {"error": "Missing multipart field 'file'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if file.size > MAX_INLINE_UPLOAD_BYTES:
+            return Response(
+                {"error": f"File exceeds the {MAX_INLINE_UPLOAD_BYTES}-byte limit."},
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
+
+        # default_storage sanitises the name and collision-suffixes it; the
+        # channel-scoped prefix keeps inline uploads grouped per chat.
+        stored_name = default_storage.save(
+            f"chats/{channel.id}/inline/{uuid.uuid4()}-{file.name}", file
+        )
+        url = request.build_absolute_uri(default_storage.url(stored_name))
+        return Response({"url": url}, status=status.HTTP_201_CREATED)
