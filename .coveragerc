@@ -1,0 +1,15 @@
+[run]
+source = origin
+# Migrations and tests should not count toward coverage; the 147 migration
+# files would otherwise inflate the number when run to build the test DB.
+omit =
+    */migrations/*
+    */tests/*
+    origin/tests/*
+    apis/settings.py
+    apis/wsgi.py
+    apis/asgi.py
+    manage.py
+
+[report]
+show_missing = True
