@@ -186,17 +186,19 @@ def _fetch_chat_note(note_id: int, user_id: str) -> NoteRecord:
         raise NoteSummaryError(f"Chat note {note_id} not found.")
     owner_id = str(getattr(note, "owner_id", "") or "")
     chat_type_code = note.chat_type
-    chat_id = note.chat_id
+    channel_id = note.channel_id
     allowed = chat_note_acl_user_ids(
         owner_id=owner_id or None,
         chat_type_code=chat_type_code,
-        chat_id=chat_id,
+        channel_id=channel_id,
         note_id=note_id,
     )
     if not allowed:
         raise NoteSummaryError("Note not found or has no readers.")
     if user_id not in allowed:
         raise NoteSummaryError("Not authorized to read this note.")
+    # NoteRecord KEY names chat_id / thread_id are opaque deep-link feed-
+    # through; the source values are now the v3 channel / thread-root UUID.
     return NoteRecord(
         note_type=NOTE_TYPE_CHAT,
         note_id=note_id,
@@ -206,8 +208,8 @@ def _fetch_chat_note(note_id: int, user_id: str) -> NoteRecord:
         ts_updated=getattr(note, "ts_updated_at", None),
         owner_id=owner_id,
         chat_type=chat_type_code,
-        chat_id=chat_id,
-        thread_id=note.thread_id if note.is_thread else None,
+        chat_id=channel_id,
+        thread_id=note.thread_root_id if note.is_thread else None,
     )
 
 

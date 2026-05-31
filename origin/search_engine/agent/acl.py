@@ -15,15 +15,12 @@ the entity. The tools compare `ctx.user_id` to that set and raise
 
 from __future__ import annotations
 
-from origin.models.chat.dm_models import DMMaster
-from origin.models.chat.gm_models import GMMembers
-from origin.models.chat.mdm_models import MDMMembers
+from django.core.exceptions import ValidationError
+
+from origin.models.chat.unified_models import Channel, ChannelMember
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.project.prj_models import ProjectMembers
 from origin.search_engine.chunkers.base import (
-    CHAT_TYPE_DM,
-    CHAT_TYPE_GM,
-    CHAT_TYPE_MDM,
     CHAT_TYPE_PM,
     NOTE_TYPE_CHAT,
     NOTE_TYPE_PERSONAL,
@@ -31,47 +28,40 @@ from origin.search_engine.chunkers.base import (
 )
 
 
-def chat_acl_user_ids(chat_type_code: int, chat_id: int) -> set[str]:
-    """Users allowed to read a given chat conversation.
+def chat_acl_user_ids(chat_type_code: int, chat_id) -> set[str]:
+    """Users allowed to read a v3 chat channel.
 
-    `chat_type_code` is the integer (1=DM / 2=GM / 3=PM / 4=MDM),
-    matching the values in `chunkers.base.CHAT_TYPE_*`.
+    `chat_type_code` is the integer kind (1=DM / 2=GM / 3=PM / 4=MDM),
+    matching the values in `chunkers.base.CHAT_TYPE_*`. `chat_id` is the
+    `Channel.id` UUID (str or UUID). Membership is resolved off the
+    unified schema: DM/GM/MDM via `ChannelMember`; PM via
+    `ProjectMembers` keyed on the channel's `project_id`.
+
+    Returns an empty set for an unknown or malformed channel id (never
+    raises) so callers can treat "no members" as "not authorized".
     """
-    if chat_type_code == CHAT_TYPE_DM:
-        dm = DMMaster.objects.filter(dm_id=chat_id).values("user_1_id", "user_2_id").first()
-        if not dm:
-            return set()
-        return {str(uid) for uid in (dm["user_1_id"], dm["user_2_id"]) if uid}
-
-    if chat_type_code == CHAT_TYPE_GM:
-        return {
-            str(uid)
-            for uid in GMMembers.objects.filter(gm_id=chat_id).values_list(
-                "attendee_id", flat=True
-            )
-            if uid
-        }
-
-    if chat_type_code == CHAT_TYPE_MDM:
-        return {
-            str(uid)
-            for uid in MDMMembers.objects.filter(mdm_id=chat_id).values_list(
-                "attendee_id", flat=True
-            )
-            if uid
-        }
-
+    try:
+        channel = Channel.objects.filter(id=chat_id, kind=chat_type_code, is_deleted=False).first()
+    except (ValidationError, ValueError, TypeError):
+        # Malformed UUID — treat as not found rather than raising.
+        return set()
+    if channel is None:
+        return set()
     if chat_type_code == CHAT_TYPE_PM:
-        # For PM, chat_id IS the project id.
         return {
             str(uid)
-            for uid in ProjectMembers.objects.filter(project_id=chat_id).values_list(
+            for uid in ProjectMembers.objects.filter(project_id=channel.project_id).values_list(
                 "attendee_id", flat=True
             )
             if uid
         }
-
-    return set()
+    return {
+        str(uid)
+        for uid in ChannelMember.objects.filter(channel=channel, is_deleted=False).values_list(
+            "user_id", flat=True
+        )
+        if uid
+    }
 
 
 def task_acl_user_ids(project_id: int | None, assignee_id, reporter_id) -> set[str]:
@@ -103,14 +93,18 @@ def note_grants_user_ids(note_type_code: int, note_id: int) -> set[str]:
     }
 
 
-def chat_note_acl_user_ids(
-    *, owner_id, chat_type_code: int, chat_id: int, note_id: int
-) -> set[str]:
-    """Chat-note ACL: owner + chat members + explicit grants."""
+def chat_note_acl_user_ids(*, owner_id, chat_type_code: int, channel_id, note_id: int) -> set[str]:
+    """Chat-note ACL: owner + channel members + explicit grants.
+
+    Chat notes (`ChatNoteMaster`) are keyed on the v3 `Channel` UUID
+    (`channel_id`), so membership resolves via the UUID-native
+    `chat_acl_user_ids` (DM/GM/MDM via `ChannelMember`; PM via the
+    channel's `project_id`).
+    """
     out: set[str] = set()
     if owner_id:
         out.add(str(owner_id))
-    out |= chat_acl_user_ids(chat_type_code, chat_id)
+    out |= chat_acl_user_ids(chat_type_code, channel_id)
     out |= note_grants_user_ids(NOTE_TYPE_CHAT, note_id)
     return out
 

@@ -10,6 +10,7 @@ from origin.views.common.mention_group_views import (
     MentionGroupResolveView,
 )
 from origin.views.common.notification_views import NotificationPreferenceView
+from origin.views.common.runtime_config_views import RuntimeConfigView
 from origin.views.common.oauth_views import (
     IntegrationsDisconnectView,
     IntegrationsListView,
@@ -28,7 +29,6 @@ from origin.views.common.github_views import (
     GithubPullsForTaskView,
     GithubWebhookView,
 )
-from origin.views.chat.reaction_views import *
 from origin.views.utils.extract_page_title_view import get_page_title
 
 user_list = UserViewSet.as_view({"post": "create"})
@@ -131,6 +131,14 @@ urlpatterns = [
         NotificationPreferenceView.as_view(),
         name="user_notification_preferences",
     ),
+    # Runtime config — per-chat-type rollout flags + panic switch.
+    # Polled by the client every 60s. Source of truth for whether a
+    # given user falls into the v3-chat canary bucket.
+    path(
+        "api/runtime-config/",
+        RuntimeConfigView.as_view(),
+        name="runtime_config",
+    ),
     path(
         "api/v2/user/preferences/auto-close-on-pr-merge/",
         AutoCloseOnPrMergePreferenceView.as_view(),
@@ -203,6 +211,11 @@ urlpatterns = [
         "api/v2/inbox/joinGMRequest/",
         InboxItemForJoinGMRequestView.as_view(),
         name="inbox_join_gm_request_item",
+    ),
+    path(
+        "api/v2/gm/join/fromInbox/",
+        JoinGMFromInboxView.as_view(),
+        name="join_gm_from_inbox",
     ),
     path("api/v2/getPageTitle/", get_page_title, name="get_page_title"),
 ]

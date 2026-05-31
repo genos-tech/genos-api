@@ -40,6 +40,23 @@ ALLOWED_HOSTS = [
 ]
 
 
+# -- Unified messaging dual-write (Track B Phase 1) --------------------------
+#
+# When True, every legacy `(dm|gm|pm|mdm)/message/` write path also inserts
+# a matching row into the unified `Message` / `Channel` schema via
+# `origin.services.unified_writer`. Default off: requires the Phase 2 backfill
+# to have run first (so `Channel.legacy_chat_id` is populated for every
+# existing legacy row), otherwise dual-write would silently lazy-create
+# channels for pre-backfill rows and the drift cron would surface spurious
+# divergence between old and new tables.
+#
+# Flip on via env: `UNIFIED_MESSAGING_DUAL_WRITE=true`. See Track B in
+# /Users/kamikenpro/.claude/plans/chat-rewrite-remaining-phases.md.
+UNIFIED_MESSAGING_DUAL_WRITE = (
+    os.environ.get("UNIFIED_MESSAGING_DUAL_WRITE", "false").lower() == "true"
+)
+
+
 # Application definition
 
 INSTALLED_APPS = [

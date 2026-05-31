@@ -25,7 +25,7 @@ from typing import Literal, Optional
 import requests
 
 from origin.models.common.user_models import ConnectedAccount
-from origin.services.oauth.tokens import get_valid_access_token
+from origin.services.oauth.tokens import ReauthRequired, get_valid_access_token
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +175,13 @@ def sync_task_event(account: ConnectedAccount, task) -> SyncOutcome:
         task.linked_calendar_event_id = event.get("id")
         task.linked_calendar_id = calendar_id
         return "created"
+    except ReauthRequired as exc:
+        # Dead refresh token. Nothing this background path can do —
+        # the user has to reconnect from the UI. Swallow so we honour
+        # the "never raise into the request transaction" contract; the
+        # interactive Calendar endpoints surface the reconnect prompt.
+        logger.warning("calendar_sync reauth required task=%s err=%s", task.pk, exc)
+        return "failed"
     except requests.RequestException as exc:
         logger.warning("calendar_sync transport error task=%s err=%s", task.pk, exc)
         return "failed"
@@ -211,6 +218,11 @@ def delete_task_event(account: ConnectedAccount, task) -> bool:
         task.linked_calendar_event_id = None
         task.linked_calendar_id = None
         return True
+    except ReauthRequired as exc:
+        # See sync_task_event: swallow so the post_save/on_commit path
+        # never raises; reconnect is surfaced by the Calendar endpoints.
+        logger.warning("calendar_sync delete reauth required task=%s err=%s", task.pk, exc)
+        return False
     except requests.RequestException as exc:
         logger.warning("calendar_sync delete transport error task=%s err=%s", task.pk, exc)
         return False

@@ -62,8 +62,11 @@ class AgentSession(models.Model):
     # Q&A to still be there. For regular Spotlight sessions, these stay
     # null and the existing TTL window applies.
     chat_type = models.IntegerField(blank=True, null=True)
-    chat_id = models.IntegerField(blank=True, null=True)
-    thread_id = models.IntegerField(blank=True, null=True)
+    # v3 unified chat identity: `chat_id` is the `Channel.id` UUID and
+    # `thread_id` is the thread-root `Message.id` UUID (was the legacy
+    # integer chat_id / per-channel seq).
+    chat_id = models.UUIDField(blank=True, null=True)
+    thread_id = models.UUIDField(blank=True, null=True)
     # ----- Note Q&A scope (nullable; mirrors the thread scope above) -----
     # Set when the session is bound to a specific note via the
     # "Ask about this note" feature. Mutually exclusive with the chat
@@ -152,8 +155,12 @@ class ThreadSummary(models.Model):
     id = models.BigAutoField(primary_key=True)
     team_id = models.CharField(max_length=64, db_index=True)
     chat_type = models.IntegerField()  # 1=DM 2=GM 3=PM 4=MDM
-    chat_id = models.IntegerField()
-    thread_id = models.IntegerField()
+    # v3 unified chat identity: `chat_id` is the `Channel.id` UUID and
+    # `thread_id` is the thread-root `Message.id` UUID. `last_message_id`
+    # stays an integer — it's the max per-channel `Message.seq` (still a
+    # monotonic int) used in the fingerprint.
+    chat_id = models.UUIDField()
+    thread_id = models.UUIDField()
     summary_text = models.TextField()
     last_message_id = models.IntegerField(default=0)
     message_count = models.IntegerField(default=0)

@@ -26,11 +26,9 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
 
-from origin.models.chat.dm_models import DMMaster
-from origin.models.chat.gm_models import GMMembers
-from origin.models.chat.mdm_models import MDMMembers
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.agent.acl import chat_acl_user_ids
 
 from origin.search_engine.chunkers.base import (
     Chunk,
@@ -64,7 +62,7 @@ def iter_chat_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
     # Pre-load NotePermissionMaster grants for these note ids.
     grants_by_note = _load_grants(NOTE_TYPE_CHAT, [n.note_id for n in notes])
 
-    # Pre-resolve chat ACLs in batches per chat_type.
+    # Pre-resolve chat ACLs in batches keyed by channel UUID.
     acl_by_chat = _resolve_chat_acls(notes)
 
     for note in notes:
@@ -74,25 +72,23 @@ def iter_chat_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
         acl = set()
         if note.owner_id:
             acl.add(str(note.owner_id))
-        acl.update(acl_by_chat.get((note.chat_type, note.chat_id), []))
+        acl.update(acl_by_chat.get(note.channel_id, []))
         acl.update(grants_by_note.get(note.note_id, []))
 
         related = []
         chat_label = CHAT_TYPE_LABEL.get(note.chat_type)
-        # ChatNoteMaster.thread_id is `null=False` on the model — every
-        # chat note has one, regardless of `is_thread`. We surface it
-        # unconditionally so Spotlight always has the coordinates it
-        # needs to build a `/workspace/notes/chat/.../thread/X/note/Y`
-        # deep link. `related_entity_ids` mirrors the value with the
-        # same shape used for chat entities, so the frontend can fall
-        # back to parsing it for pre-fix chunks.
-        thread_id_str = str(note.thread_id) if note.thread_id else None
-        if chat_label and note.chat_id:
+        # `thread_root_id` is the v3 thread-root Message UUID; null for
+        # non-thread notes. We surface it (when present) so Spotlight has
+        # the coordinates to build a `/workspace/notes/chat/.../thread/X/
+        # note/Y` deep link. `related_entity_ids` mirrors the value with
+        # the same shape used for chat entities.
+        thread_id_str = str(note.thread_root_id) if note.thread_root_id else None
+        if chat_label and note.channel_id:
             related.append(
                 chat_entity_id(
                     chat_label,
-                    note.chat_id,
-                    note.thread_id if note.thread_id else None,
+                    note.channel_id,
+                    note.thread_root_id if note.thread_root_id else None,
                 )
             )
         if note.parent_note_id:
@@ -111,7 +107,7 @@ def iter_chat_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
             # Surface chat coordinates on the chunk so Spotlight can
             # build the proper /workspace/notes/chat/... URL.
             chat_type_label=chat_label,
-            chat_id=str(note.chat_id) if note.chat_id else None,
+            chat_id=str(note.channel_id) if note.channel_id else None,
             thread_id=thread_id_str,
             note_owner_id=str(note.owner_id) if note.owner_id else None,
             note_parent_id=(str(note.parent_note_id) if note.parent_note_id else None),
@@ -124,57 +120,20 @@ def iter_chat_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
             )
 
 
-def _resolve_chat_acls(notes: list[ChatNoteMaster]) -> dict[tuple[int, int], list[str]]:
-    """Map (chat_type, chat_id) → list of user_ids allowed in that chat."""
-    grouped: dict[int, set[int]] = defaultdict(set)
+def _resolve_chat_acls(notes: list[ChatNoteMaster]) -> dict:
+    """Map `channel_id` (UUID) → list of user_ids allowed in that channel."""
+    # Chat notes are keyed on the v3 `Channel` UUID; resolve membership
+    # per distinct channel via the UUID-native `chat_acl_user_ids`
+    # (DM/GM/MDM via `ChannelMember`; PM via the channel's `project_id`).
+    out: dict = {}
+    seen: dict = {}
     for n in notes:
-        if n.chat_type and n.chat_id:
-            grouped[n.chat_type].add(n.chat_id)
-
-    out: dict[tuple[int, int], list[str]] = {}
-
-    # DM ACL = [user_1_id, user_2_id].
-    if grouped.get(CHAT_TYPE_DM):
-        for dm in DMMaster.objects.filter(dm_id__in=grouped[CHAT_TYPE_DM]).values(
-            "dm_id", "user_1_id", "user_2_id"
-        ):
-            out[(CHAT_TYPE_DM, dm["dm_id"])] = [
-                str(uid) for uid in (dm["user_1_id"], dm["user_2_id"]) if uid
-            ]
-
-    # GM ACL = GMMembers.attendee_id for that gm.
-    if grouped.get(CHAT_TYPE_GM):
-        members = defaultdict(list)
-        for row in GMMembers.objects.filter(gm_id__in=grouped[CHAT_TYPE_GM]).values(
-            "gm_id", "attendee_id"
-        ):
-            if row["attendee_id"]:
-                members[row["gm_id"]].append(str(row["attendee_id"]))
-        for gm_id in grouped[CHAT_TYPE_GM]:
-            out[(CHAT_TYPE_GM, gm_id)] = members.get(gm_id, [])
-
-    # MDM ACL = MDMMembers.attendee_id.
-    if grouped.get(CHAT_TYPE_MDM):
-        members = defaultdict(list)
-        for row in MDMMembers.objects.filter(mdm_id__in=grouped[CHAT_TYPE_MDM]).values(
-            "mdm_id", "attendee_id"
-        ):
-            if row["attendee_id"]:
-                members[row["mdm_id"]].append(str(row["attendee_id"]))
-        for mdm_id in grouped[CHAT_TYPE_MDM]:
-            out[(CHAT_TYPE_MDM, mdm_id)] = members.get(mdm_id, [])
-
-    # PM ACL = ProjectMembers.attendee_id (chat_id IS project_id here).
-    if grouped.get(CHAT_TYPE_PM):
-        members = defaultdict(list)
-        for row in ProjectMembers.objects.filter(project_id__in=grouped[CHAT_TYPE_PM]).values(
-            "project_id", "attendee_id"
-        ):
-            if row["attendee_id"]:
-                members[row["project_id"]].append(str(row["attendee_id"]))
-        for project_id in grouped[CHAT_TYPE_PM]:
-            out[(CHAT_TYPE_PM, project_id)] = members.get(project_id, [])
-
+        if not n.channel_id or not n.chat_type:
+            continue
+        if n.channel_id in seen:
+            continue
+        seen[n.channel_id] = True
+        out[n.channel_id] = sorted(chat_acl_user_ids(n.chat_type, n.channel_id))
     return out
 
 

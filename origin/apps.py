@@ -11,3 +11,4 @@ class OriginConfig(AppConfig):
         # side effect.
         from origin.signals import task_signals  # noqa: F401
         from origin.signals import cache_invalidation  # noqa: F401
+        from origin.signals import pm_channel_signals  # noqa: F401

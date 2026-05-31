@@ -44,25 +44,15 @@ from origin.models.project.prj_models import ProjectMaster, ProjectMembers, Proj
 from origin.models.task.task_models import TaskMaster, TaskComments
 from origin.models.task.sprint_models import Sprint, SprintConfig
 from origin.models.task.milestone_models import MilestoneMaster, MilestoneAssignees
-from origin.models.chat.dm_models import (
-    DMMaster,
-    DMMessages,
-    DMThreadMessages,
-    UserDMMapping,
+from origin.models.chat.unified_models import (
+    Channel,
+    ChannelDirectPair,
+    ChannelKind,
+    ChannelMember,
+    Message,
 )
-from origin.models.chat.gm_models import GMMaster, GMMembers, GMMessages, GMThreadMessages
-from origin.models.chat.mdm_models import (
-    MDMMaster,
-    MDMMembers,
-    MDMMessages,
-    MDMThreadMessages,
-)
-from origin.models.chat.pm_models import PMMessages, PMThreadMessages
-from origin.models.chat.chat_master_models import UserChatMaster
 from origin.models.chat.mention_models import MentionFact
 from origin.models.chat.reaction_models import ReactionFact
-from origin.models.chat.chat_attachment_models import ChatAttachmentFact
-from origin.models.chat.read_status_models import ReadStatus, ActivityReadStatus
 from origin.models.chat.activity_models import ActivityFact
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.models.note.personal_note_models import PersonalNoteMaster
@@ -200,6 +190,143 @@ def _body(*sections):
                 blocks.append(_para(item))
         blocks.append(_blank_para())
     return blocks
+
+
+# ---------------------------------------------------------------------------
+# PM task-card header body — port of `taskMessageTemplate` in
+# `frontend/weikiy/src/features/tasks/utils/TaskMessageTemplate.ts`.
+#
+# The v3 PM pane renders ONE top-level "task card" Message per task (the
+# composer is disabled for PM — only task lifecycle writes there). The
+# card bubble is keyed off the linked `task` FK; the body below mirrors
+# the live shape byte-for-byte (no block ids, heading without
+# `isToggleable`) so seeded cards are indistinguishable from real ones.
+# ---------------------------------------------------------------------------
+
+# BlockNote ships a fixed `textColor` palette; map taskMeta hex codes to
+# the closest named slot, same table as the frontend template.
+_TASK_STATUS_COLOR = {
+    "Open": "blue",
+    "WIP": "orange",
+    "Pending": "purple",
+    "Closed": "green",
+    "Deleted": "red",
+}
+_TASK_PRIORITY_COLOR = {
+    "Minimal": "gray",
+    "Low": "green",
+    "Normal": "blue",
+    "High": "orange",
+    "Critical": "red",
+}
+# Card blocks match the frontend template exactly: a level-3 heading
+# WITHOUT `isToggleable` (the seeded note headings carry it; the card
+# headings do not) and no per-block `id`.
+_CARD_HEADING_PROPS = {
+    "level": 3,
+    "textColor": "default",
+    "textAlignment": "left",
+    "backgroundColor": "default",
+}
+
+
+def _card_label(text: str) -> dict:
+    return {"text": text, "type": "text", "styles": {"bold": True}}
+
+
+def _card_chip(text: str, color: str | None) -> dict:
+    return {"text": text, "type": "text", "styles": {"bold": True, "textColor": color or "gray"}}
+
+
+def _neutral_chip() -> dict:
+    return {"text": "—", "type": "text", "styles": {"bold": True, "textColor": "gray"}}
+
+
+def _card_mention(user: CustomUser, team_id) -> dict:
+    """Inline `mention` node matching the frontend `mentionNode` shape so
+    the card's assignee / reporter rows render as click-through mentions."""
+    return {
+        "type": "mention",
+        "props": {
+            "avatarImgPath": [""],
+            "customStatus": "N/A",
+            "teamId": str(team_id),
+            "teamName": "N/A",
+            "userEmail": user.email,
+            "userId": str(user.id),
+            "userName": user.username,
+        },
+    }
+
+
+def _task_card_body(
+    *,
+    title: str,
+    status: str,
+    priority: str,
+    assignee: CustomUser | None,
+    reporter: CustomUser,
+    due_date,
+    team_id,
+    is_milestone: bool = False,
+) -> list:
+    """Build the PM task-card header body. Effort isn't seeded, so the
+    Effort row shows the neutral em-dash chip (matching an unset value)."""
+    title_prefix = "🚩" if is_milestone else "🧾"
+    due_str = due_date.isoformat() if due_date else "—"
+    assignee_node = (
+        _card_mention(assignee, team_id)
+        if assignee is not None
+        else {"text": "Unassigned", "type": "text", "styles": {"italic": True, "textColor": "gray"}}
+    )
+    return [
+        {
+            "type": "heading",
+            "props": _CARD_HEADING_PROPS,
+            "content": [{"text": f"{title_prefix} {title}", "type": "text", "styles": {}}],
+            "children": [],
+        },
+        {
+            "type": "paragraph",
+            "props": _PARA_PROPS,
+            "content": [_card_label("Status: "), _card_chip(status, _TASK_STATUS_COLOR.get(status))],
+            "children": [],
+        },
+        {
+            "type": "paragraph",
+            "props": _PARA_PROPS,
+            "content": [
+                _card_label("Priority: "),
+                _card_chip(priority, _TASK_PRIORITY_COLOR.get(priority)),
+            ],
+            "children": [],
+        },
+        {
+            "type": "paragraph",
+            "props": _PARA_PROPS,
+            "content": [_card_label("Effort: "), _neutral_chip()],
+            "children": [],
+        },
+        {
+            "type": "paragraph",
+            "props": _PARA_PROPS,
+            "content": [_card_label("Assignee: "), assignee_node],
+            "children": [],
+        },
+        {
+            "type": "paragraph",
+            "props": _PARA_PROPS,
+            "content": [_card_label("Reporter: "), _card_mention(reporter, team_id)],
+            "children": [],
+        },
+        {
+            "type": "paragraph",
+            "props": _PARA_PROPS,
+            "content": [_card_label("Due: "), {"text": f"📅 {due_str}", "type": "text", "styles": {}}],
+            "children": [],
+        },
+        {"type": "paragraph", "props": _PARA_PROPS, "content": [], "children": []},
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -2025,22 +2152,25 @@ def create_demo_environment(demo_user: CustomUser, *, short: str | None = None) 
         _create_dms(team, demo_user, bots)
 
         # 12. Group chat + thread messages
-        gm = _create_group_chat(team, demo_user, all_members)
+        _create_group_chat(team, demo_user, all_members)
 
-        # 13. Project channel messages + thread messages
+        # 13. Project (PM) channel: one task-card header per task + each
+        #     task's comment thread mirrored as v3 thread replies.
         for seeded in seeded_projects:
-            _create_pm_messages(seeded["project"], all_members, seeded["blueprint"])
+            _create_pm_messages(
+                seeded["project"],
+                all_members,
+                seeded["blueprint"],
+                seeded["tasks"],
+                seeded["backing_task"],
+            )
 
-        # 14. UserChatMaster per (user, team)
-        UserChatMaster.objects.bulk_create(
-            [
-                UserChatMaster(team=team, user=u, flagged_messages=[], pinned_chats=[])
-                for u in all_members
-            ]
-        )
+        # 14. (legacy UserChatMaster seeding removed — the legacy chat
+        #     tables are dropped; chat is seeded on the v3 Channel/Message
+        #     schema above.)
 
         # 15. Notes (personal + task + chat note with permissions)
-        _create_notes(team, demo_user, bots, seeded_projects, gm)
+        _create_notes(team, demo_user, bots, seeded_projects)
 
         # 16. Todos (demo user only — todos are personal-scoped)
         _create_todos(team, demo_user)
@@ -2184,9 +2314,13 @@ def _create_project_from_blueprint(team, demo_user, all_members, bots, short, bl
         is_private=False,
     )
 
-    ProjectMembers.objects.bulk_create(
-        [ProjectMembers(team=team, project=project, attendee=u) for u in all_members]
-    )
+    # Per-row `.save()` so the `_sync_pm_channel_member` post_save
+    # signal fires and creates the matching `ChannelMember` rows for
+    # the PM Channel (the signal is skipped by `bulk_create`). Without
+    # this the demo user wouldn't see the PM channels in their v3
+    # chat list, since `_user_channels_qs` filters by membership.
+    for u in all_members:
+        ProjectMembers.objects.create(team=team, project=project, attendee=u)
 
     ProjectTags.objects.bulk_create(
         [
@@ -2218,7 +2352,12 @@ def _create_project_from_blueprint(team, demo_user, all_members, bots, short, bl
         blueprint["tasks"],
     )
 
-    return {"project": project, "blueprint": blueprint, "tasks": tasks}
+    return {
+        "project": project,
+        "blueprint": blueprint,
+        "tasks": tasks,
+        "backing_task": backing_task,
+    }
 
 
 def _create_sprint(team, project) -> Sprint:
@@ -2369,35 +2508,49 @@ def _create_blueprint_tasks(
 # ---------------------------------------------------------------------------
 
 
+def _canonical_dm_pair(user_a_id, user_b_id):
+    """Return (user_lo, user_hi) in canonical order for ChannelDirectPair.
+    Mirrors `channel_views._canonical_dm_pair` — UUIDs are sorted as
+    strings so the canonicalization is deterministic regardless of which
+    user "creates" the DM.
+    """
+    a, b = str(user_a_id), str(user_b_id)
+    return (a, b) if a < b else (b, a)
+
+
 def _create_dms(team, demo_user, bots):
     """Three multi-turn DMs (demo↔Alice, ↔Bob, ↔Carol), each with one
     thread on a representative message. Plus a self-DM that matches
-    what /jointeam's `moveToTeam` would have created."""
+    what /jointeam's `moveToTeam` would have created.
+
+    V3 schema only: writes to `Channel(kind=DM)` + `ChannelDirectPair`
+    + `ChannelMember` + `Message`. Legacy `DMMessages` / `DMMaster` are
+    no longer written — the frontend reads from `/api/v3/channels/`
+    exclusively.
+    """
     for spec in DM_BLUEPRINTS:
         bot = bots[spec["bot_index"]]
-        dm = DMMaster(team=team, user_1_id=demo_user.id, user_2_id=bot.id)
-        # DMMaster.save() auto-creates UserDMMapping rows.
-        dm.save()
+        channel = Channel.objects.create(team=team, kind=ChannelKind.DM, title="")
+        user_lo, user_hi = _canonical_dm_pair(demo_user.id, bot.id)
+        ChannelDirectPair.objects.create(
+            channel=channel, user_lo=user_lo, user_hi=user_hi
+        )
+        ChannelMember.objects.create(channel=channel, user=demo_user, role="member")
+        ChannelMember.objects.create(channel=channel, user=bot, role="member")
 
         thread_spec = spec.get("thread")
         thread_parent_idx = thread_spec["parent_index"] if thread_spec else None
-        # The CHILD `DMThreadMessages.thread_id` carries the parent's
-        # `message_id` (see pm_views.py:428 — the reply-count API joins
-        # on this). The parent `DMMessages.thread_id` is NOT set by the
-        # real frontend; reply counts come from a JOIN on the children
-        # table (see dm_views.py:208-212), not from the parent's field.
-        thread_id_value = thread_parent_idx + 1 if thread_parent_idx is not None else None
 
         created_msgs = []
         for midx, (who, text) in enumerate(spec["messages"]):
             sender = bot if who == "bot" else demo_user
-            receiver = demo_user if who == "bot" else bot
-            msg = DMMessages.objects.create(
-                dm=dm,
+            msg = Message.objects.create(
+                channel=channel,
                 sender=sender,
-                receiver=receiver,
-                message_id=midx + 1,
-                message_body=_text_body(text),
+                seq=midx + 1,
+                body=_text_body(text),
+                body_text=text,
+                metadata={},
             )
             created_msgs.append(msg)
 
@@ -2405,16 +2558,22 @@ def _create_dms(team, demo_user, bots):
             parent_msg = created_msgs[thread_parent_idx]
             for tidx, (who, text) in enumerate(thread_spec["messages"]):
                 sender = bot if who == "bot" else demo_user
-                receiver = demo_user if who == "bot" else bot
-                DMThreadMessages.objects.create(
-                    dm=dm,
-                    thread_id=thread_id_value,
+                Message.objects.create(
+                    channel=channel,
                     sender=sender,
-                    receiver=receiver,
-                    thread_message_id=tidx + 1,
-                    thread_message_body=_text_body(text),
-                    parent_message_uid=parent_msg,
+                    seq=len(created_msgs) + tidx + 1,
+                    body=_text_body(text),
+                    body_text=text,
+                    is_thread_reply=True,
+                    parent=parent_msg,
+                    thread_root=parent_msg,
+                    metadata={},
                 )
+            # Reply count is denormalized on the parent (the v3 message
+            # serializer reads it without a count query). Bump here
+            # since we bypass `_allocate_seq_and_create_message`.
+            parent_msg.reply_count = len(thread_spec["messages"])
+            parent_msg.save(update_fields=["reply_count", "ts_updated_at"])
 
     # Self-DM (personal scratch chat). Mirrors what `moveToTeam` creates
     # on first team entry — without it the workspace lands missing the
@@ -2422,8 +2581,12 @@ def _create_dms(team, demo_user, bots):
     # messages so the chat actually loads when Spotlight routes a todo
     # source-chip click to it (an empty chat short-circuits the loader
     # and the user ends up on the inbox fallback).
-    self_dm = DMMaster(team=team, user_1_id=demo_user.id, user_2_id=demo_user.id)
-    self_dm.save()
+    self_channel = Channel.objects.create(team=team, kind=ChannelKind.DM, title="")
+    self_id = str(demo_user.id)
+    ChannelDirectPair.objects.create(
+        channel=self_channel, user_lo=self_id, user_hi=self_id
+    )
+    ChannelMember.objects.create(channel=self_channel, user=demo_user, role="member")
     self_dm_messages = [
         "Welcome — this is your personal scratch chat. Drop quick thoughts, links, "
         "and reminders here. Press the ✓ icon in the header to toggle your todo "
@@ -2443,98 +2606,163 @@ def _create_dms(team, demo_user, bots):
         "Alice. Subitems on today's todo track this.",
     ]
     for midx, text in enumerate(self_dm_messages):
-        DMMessages.objects.create(
-            dm=self_dm,
+        Message.objects.create(
+            channel=self_channel,
             sender=demo_user,
-            receiver=demo_user,
-            message_id=midx + 1,
-            message_body=_text_body(text),
+            seq=midx + 1,
+            body=_text_body(text),
+            body_text=text,
+            metadata={},
         )
 
 
-def _create_group_chat(team, demo_user, members) -> GMMaster:
-    gm = GMMaster.objects.create(
-        group_name=f"general · {team.team_name}",
-        owner_user=demo_user,
-        owner_team=team,
+def _create_group_chat(team, demo_user, members) -> Channel:
+    """Single GM with all team members, one threaded message.
+
+    V3 schema only: writes to `Channel(kind=GM)` + `ChannelMember` +
+    `Message`. Legacy `GMMaster` / `GMMembers` / `GMMessages` are no
+    longer written.
+    """
+    channel = Channel.objects.create(
+        team=team,
+        kind=ChannelKind.GM,
+        title=f"general · {team.team_name}",
+        owner=demo_user,
     )
-    GMMembers.objects.bulk_create([GMMembers(gm=gm, attendee=u) for u in members])
+    ChannelMember.objects.bulk_create(
+        [
+            ChannelMember(
+                channel=channel,
+                user=u,
+                role="owner" if u.id == demo_user.id else "member",
+            )
+            for u in members
+        ]
+    )
 
     thread_parent_idx = GM_BLUEPRINT["thread"]["parent_index"]
-    # Thread id matches the parent message's message_id by convention.
-    # Stored on the CHILD `GMThreadMessages.thread_id` only — the real
-    # frontend leaves `GMMessages.thread_id` NULL on the parent.
-    thread_id_value = thread_parent_idx + 1
 
     created_msgs = []
     for midx, (sender_idx, text) in enumerate(GM_BLUEPRINT["messages"]):
-        msg = GMMessages.objects.create(
-            gm=gm,
+        msg = Message.objects.create(
+            channel=channel,
             sender=members[sender_idx],
-            message_id=midx + 1,
-            message_body=_text_body(text),
+            seq=midx + 1,
+            body=_text_body(text),
+            body_text=text,
+            metadata={},
         )
         created_msgs.append(msg)
 
     parent_msg = created_msgs[thread_parent_idx]
     for tidx, (sender_idx, text) in enumerate(GM_BLUEPRINT["thread"]["messages"]):
-        GMThreadMessages.objects.create(
-            gm=gm,
-            thread_id=thread_id_value,
+        Message.objects.create(
+            channel=channel,
             sender=members[sender_idx],
-            thread_message_id=tidx + 1,
-            thread_message_body=_text_body(text),
-            parent_message_uid=parent_msg,
+            seq=len(created_msgs) + tidx + 1,
+            body=_text_body(text),
+            body_text=text,
+            is_thread_reply=True,
+            parent=parent_msg,
+            thread_root=parent_msg,
+            metadata={},
+        )
+    parent_msg.reply_count = len(GM_BLUEPRINT["thread"]["messages"])
+    parent_msg.save(update_fields=["reply_count", "ts_updated_at"])
+
+    return channel
+
+
+def _create_pm_messages(project, members, blueprint, tasks, backing_task):
+    """Seed the PM channel the way the v3 model actually works.
+
+    The v3 PM pane renders ONE top-level "task-card" `Message` per task
+    (FK-linked via `Message.task`); anything without a task FK is hidden
+    by the frontend filter (`v3ToLegacy.v3MessagesToLegacy`). The PM
+    composer is disabled, so free-form project chatter has no home in
+    the v3 model. Each task's comments are mirrored under its card as v3
+    thread replies — exactly what the live task-create + task-comment
+    paths produce.
+
+    Mapping from the blueprint:
+      * Every task (milestone backing task + blueprint tasks/subtasks)
+        gets a task-card header Message.
+      * The curated `pm_messages` / `pm_thread` discussion — which used
+        to be seeded as standalone PM messages that the v3 filter now
+        drops — is folded into comments on the milestone backing task so
+        the content stays searchable and surfaces under that card.
+
+    The PM `Channel` + `ChannelMember` rows were already created by the
+    `pm_channel_signals.post_save(ProjectMaster)` receiver; we only
+    locate the channel and write `Message` / `TaskComments` rows.
+    """
+    # Local import avoids any import-time cycle (unified_writer imports
+    # the chat models this module also pulls in).
+    from origin.services.unified_writer import write_task_comment_as_thread_reply
+
+    channel = Channel.objects.get(project=project, kind=ChannelKind.PM)
+    team = project.team
+    all_tasks = [backing_task] + list(tasks)
+
+    # 1. One task-card header per task. `seq` is per-channel; the channel
+    #    starts empty, so headers take seq 1..N and the comment mirror
+    #    (below) allocates seq N+1.. for the thread replies.
+    for seq, task in enumerate(all_tasks, start=1):
+        Message.objects.create(
+            channel=channel,
+            sender=task.reporter,
+            seq=seq,
+            body=_task_card_body(
+                title=task.title,
+                status=task.status,
+                priority=task.priority,
+                assignee=task.assignee,
+                reporter=task.reporter,
+                due_date=task.due_date,
+                team_id=team.team_id,
+                is_milestone=task.is_milestone,
+            ),
+            body_text=f"{'🚩' if task.is_milestone else '🧾'} {task.title}",
+            task=task,
+            metadata={},
         )
 
-    return gm
+    # 2. Fold the curated project discussion into comments on the
+    #    milestone backing task (mirrored under its card in step 3).
+    def resolve_member(key: str) -> CustomUser:
+        return members[0] if key == "demo" else members[int(key[3:]) + 1]
 
-
-def _create_pm_messages(project, members, blueprint):
-    """Per-project channel: messages + one thread, all driven by the
-    project's blueprint. Sender keys here are `(member_index, text)`-
-    style indices into `members` (0 = demo_user, 1-4 = bots)."""
-    pm_messages = blueprint["pm_messages"]
-    thread_spec = blueprint["pm_thread"]
-    thread_parent_idx = thread_spec["parent_index"]
-    # Thread id matches the parent message's message_id by convention.
-    thread_id_value = thread_parent_idx + 1
-
-    # Map blueprint sender keys to members[] indices: "demo" -> 0,
-    # "bot0" -> 1, etc.
-    def resolve_idx(key: str) -> int:
-        if key == "demo":
-            return 0
-        return int(key[3:]) + 1
-
-    created_msgs = []
-    for midx, (sender_key, text) in enumerate(pm_messages):
-        sender = members[resolve_idx(sender_key)]
-        # Parent `PMMessages.thread_id` is NOT set — see DM helper for
-        # why (the real frontend leaves it NULL; reply counts come from
-        # a JOIN on PMThreadMessages, not from the parent column).
-        msg = PMMessages.objects.create(
-            project=project,
-            sender=sender,
-            message_id=midx + 1,
-            message_body=_text_body(text),
+    discussion = list(blueprint["pm_messages"]) + list(blueprint["pm_thread"]["messages"])
+    discussion_comments = [
+        TaskComments(
+            task=backing_task,
+            sender=resolve_member(sender_key),
+            comment_id=cidx + 1,
+            comment_body=_text_body(text),
         )
-        created_msgs.append(msg)
+        for cidx, (sender_key, text) in enumerate(discussion)
+    ]
+    if discussion_comments:
+        TaskComments.objects.bulk_create(discussion_comments)
 
-    parent_msg = created_msgs[thread_parent_idx]
-    for tidx, (sender_key, text) in enumerate(thread_spec["messages"]):
-        sender = members[resolve_idx(sender_key)]
-        PMThreadMessages.objects.create(
-            project=project,
-            thread_id=thread_id_value,
-            sender=sender,
-            thread_message_id=tidx + 1,
-            thread_message_body=_text_body(text),
-            parent_message_uid=parent_msg,
-        )
+    # 3. Mirror every task's comments (each blueprint task's seeded
+    #    comments + the discussion now on the backing task) as v3 thread
+    #    replies under the matching header, via the same writer the live
+    #    dual-write path uses. `bypass_flag=True` runs it regardless of
+    #    the runtime UNIFIED_MESSAGING_DUAL_WRITE setting.
+    for task in all_tasks:
+        for c in TaskComments.objects.filter(task=task).order_by("comment_id"):
+            write_task_comment_as_thread_reply(
+                task_id=task.task_id,
+                comment_id=c.comment_id,
+                sender_id=str(c.sender_id),
+                body=c.comment_body,
+                project_id=project.project_id,
+                bypass_flag=True,
+            )
 
 
-def _create_notes(team, demo_user, bots, seeded_projects, gm):
+def _create_notes(team, demo_user, bots, seeded_projects):
     """Rich personal + task + chat notes. Each note gets an explicit
     NotePermissionMaster ROLE_OWNER row (the note APIs 403 without
     one, even for the owner). Note types: 1=Personal, 2=Task, 3=Chat.
@@ -2586,15 +2814,21 @@ def _create_notes(team, demo_user, bots, seeded_projects, gm):
         )
     )
 
-    # Chat note on the GM kickoff thread — owner + editors so the bots
-    # can see it too. Role IDs: 1=owner, 2=editor, 3=viewer.
+    # Chat note on the GM channel — owner + editors so the bots can see
+    # it too. Role IDs: 1=owner, 2=editor, 3=viewer. The chat note is now
+    # keyed on the v3 `Channel` UUID; link it to the team's GM channel so
+    # it surfaces in the GM's note list (thread_root_id None = a
+    # channel-level, non-thread note).
+    gm_channel = Channel.objects.filter(
+        team=team, kind=ChannelKind.GM, is_deleted=False
+    ).first()
     chat_note = ChatNoteMaster.objects.create(
         team=team,
         owner=demo_user,
         chat_type=2,  # GM
-        chat_id=gm.gm_id,
+        channel=gm_channel,
         is_thread=False,
-        thread_id=0,
+        thread_root_id=None,
         title="Sprint 1 kickoff recap",
         body=CHAT_NOTE_GM_KICKOFF_RECAP_BODY,
     )
@@ -2840,10 +3074,18 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
     with transaction.atomic():
         # Pre-collect parent IDs once so children can be filtered by
         # them without triggering N+1 lookups.
-        dm_ids = list(DMMaster.objects.filter(team=team_id).values_list("dm_id", flat=True))
-        gm_ids = list(GMMaster.objects.filter(owner_team=team_id).values_list("gm_id", flat=True))
-        mdm_ids = list(
-            MDMMaster.objects.filter(owner_team=team_id).values_list("mdm_id", flat=True)
+        # Legacy chat ids (still the key on the kept Mention/Reaction fact
+        # tables) are derived from the v3 channels via `legacy_chat_id` —
+        # the legacy DM/GM master tables are gone.
+        dm_ids = list(
+            Channel.objects.filter(team=team_id, kind=ChannelKind.DM)
+            .exclude(legacy_chat_id=None)
+            .values_list("legacy_chat_id", flat=True)
+        )
+        gm_ids = list(
+            Channel.objects.filter(team=team_id, kind=ChannelKind.GM)
+            .exclude(legacy_chat_id=None)
+            .values_list("legacy_chat_id", flat=True)
         )
         project_ids = list(
             ProjectMaster.objects.filter(team=team_id).values_list("project_id", flat=True)
@@ -2864,45 +3106,34 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
         )
 
         # Fact tables that key off (chat_type, chat_id) with no FK — must
-        # filter explicitly to avoid leaking rows.
+        # filter explicitly to avoid leaking rows. (MentionFact / ReactionFact
+        # are kept analytics tables; the legacy ChatAttachmentFact / ReadStatus
+        # tables are dropped, so they're no longer cleaned here.)
         for chat_type, chat_ids in [(1, dm_ids), (2, gm_ids), (3, project_ids)]:
             if not chat_ids:
                 continue
             MentionFact.objects.filter(chat_type=chat_type, chat_id__in=chat_ids).delete()
             ReactionFact.objects.filter(chat_type=chat_type, chat_id__in=chat_ids).delete()
-            ChatAttachmentFact.objects.filter(chat_type=chat_type, chat_id__in=chat_ids).delete()
-            ReadStatus.objects.filter(chat_type=chat_type, chat_id__in=chat_ids).delete()
 
-        # ActivityFact and its read-status are team-scoped via a proper FK.
-        ActivityReadStatus.objects.filter(team=team_id).delete()
+        # ActivityFact is team-scoped via a proper FK.
         ActivityFact.objects.filter(team=team_id).delete()
 
-        # DM tree
-        DMThreadMessages.objects.filter(dm_id__in=dm_ids).delete()
-        DMMessages.objects.filter(dm_id__in=dm_ids).delete()
-        UserDMMapping.objects.filter(team_id=team_id).delete()
-        DMMaster.objects.filter(team=team_id).delete()
+        # Legacy DM/GM/MDM/PM chat trees + UserChatMaster are gone (their
+        # tables were dropped in the v3 migration); chat lives entirely on
+        # the v3 Channel/Message schema cleaned up just below.
 
-        # GM tree
-        GMThreadMessages.objects.filter(gm_id__in=gm_ids).delete()
-        GMMessages.objects.filter(gm_id__in=gm_ids).delete()
-        GMMembers.objects.filter(gm_id__in=gm_ids).delete()
-        GMMaster.objects.filter(owner_team=team_id).delete()
+        # V3 unified messaging schema. Order matters: Message.channel is
+        # PROTECT, so messages must go before channels; Channel.project
+        # and Channel.team are both PROTECT, so channels must go before
+        # ProjectMaster / TeamMaster below. Cascades on these deletes
+        # take care of MessageReaction, MessageMention, MessageAttachment,
+        # Flag, ChannelMember, ChannelDirectPair, Pin, and ReadCursor.
+        Message.objects.filter(channel__team=team_id).delete()
+        Channel.objects.filter(team=team_id).delete()
 
-        # MDM tree
-        MDMThreadMessages.objects.filter(mdm_id__in=mdm_ids).delete()
-        MDMMessages.objects.filter(mdm_id__in=mdm_ids).delete()
-        MDMMembers.objects.filter(mdm_id__in=mdm_ids).delete()
-        MDMMaster.objects.filter(owner_team=team_id).delete()
-
-        # Project channel
-        PMThreadMessages.objects.filter(project_id__in=project_ids).delete()
-        PMMessages.objects.filter(project_id__in=project_ids).delete()
-
-        # User-level chat master + per-user todo. ToDoGroup CASCADE
-        # removes its items; ToDoCategory rows are user-scoped (not
-        # tied to a group) so they need their own pass.
-        UserChatMaster.objects.filter(team=team_id).delete()
+        # Per-user todo. ToDoGroup CASCADE removes its items; ToDoCategory
+        # rows are user-scoped (not tied to a group) so they need their own
+        # pass. (Legacy UserChatMaster is gone — its table was dropped.)
         ToDoGroup.objects.filter(team=team_id).delete()
         ToDoCategory.objects.filter(team=team_id).delete()
 

@@ -1,11 +1,13 @@
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Q
 from rest_framework.response import Response
 from rest_framework import status
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.serializers.common.inbox_serializers import *
+from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.team_models import *
 from origin.models.project.prj_models import *
-from origin.models.chat.gm_models import *
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
@@ -237,17 +239,104 @@ class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
 
+def _gm_channel_by_uuid(gm_id):
+    """Resolve a v3 GM `Channel` by its UUID.
+
+    The GM-join flow carries the v3 channel UUID as `gm_id`: v3 GMs are
+    created natively and have no legacy chat id, so the old
+    `resolve_channel(2, <legacy int>)` bridge can never find them.
+    Returns the GM Channel, or None on a miss / malformed id / non-GM.
+    """
+    if not gm_id:
+        return None
+    try:
+        return Channel.objects.filter(id=gm_id, kind=ChannelKind.GM, is_deleted=False).first()
+    except (ValueError, ValidationError):
+        return None
+
+
+class JoinGMFromInboxView(AuthenticatedAPIView):
+    """POST /api/v2/gm/join/fromInbox/ — approve a GM-join request.
+
+    Replaces the legacy `gm/join/fromInbox/` route deleted in the v3
+    cutover. The inbox item (item_type=3) carries the requester in
+    `sender` and the target GM's v3 channel UUID + display name in
+    `item_optionals.gm_id` / `gm_name`. Resolves the GM by UUID, verifies
+    the approver (request.user) is a member of that GM (404 otherwise — no
+    existence leak), then idempotently adds the requester as a
+    `ChannelMember`. Returns the camelCase shape the Flask
+    `approve_join_gm_request` handler expects: `{attendee, gmName, gmId}`.
+    """
+
+    def post(self, request):
+        inbox_item_id = int(request.data["item_id"])
+        try:
+            sender_id, optionals = InboxItems.objects.values_list("sender", "item_optionals").get(
+                item_id=inbox_item_id
+            )
+        except InboxItems.DoesNotExist:
+            return Response(
+                {"error": f"Inbox item {inbox_item_id} not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        optionals = optionals or {}
+        gm_id = optionals.get("gm_id")
+        gm_name = optionals.get("gm_name")
+
+        gm_channel = _gm_channel_by_uuid(gm_id)
+        if gm_channel is None:
+            return Response(
+                {"error": "GM channel not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        # The approver must be the GM owner or an active member (the
+        # request is delivered to the GM owner; the owner-id check also
+        # covers any GM whose owner lacks an explicit member row). 404 —
+        # don't leak existence.
+        is_authorized = str(gm_channel.owner_id) == str(request.user.id) or (
+            ChannelMember.objects.filter(
+                channel=gm_channel, user=request.user, is_deleted=False
+            ).exists()
+        )
+        if not is_authorized:
+            return Response(
+                {"error": "GM channel not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Idempotent: re-activate a soft-deleted membership rather than
+        # duplicating (mirrors ChannelMembersView.post).
+        with transaction.atomic():
+            ChannelMember.objects.update_or_create(
+                channel=gm_channel,
+                user_id=sender_id,
+                defaults={"is_deleted": False, "role": "member"},
+            )
+
+        return Response(
+            {"attendee": str(sender_id), "gmName": gm_name, "gmId": str(gm_id)},
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
     def post(self, request):
-        gm_owner_id = GMMaster.objects.filter(
-            owner_team=request.data["team_id"],
-            gm_id=request.data["item_optionals"]["gm_id"],
-        ).values_list("owner_user", flat=True)
+        # Resolve the GM's owner via its v3 channel. The FE sends the v3
+        # channel UUID as `gm_id` (v3 GMs have no legacy chat id);
+        # `Channel.owner` is the GM owner who should receive the request.
+        gm_channel = _gm_channel_by_uuid(request.data["item_optionals"]["gm_id"])
+        if gm_channel is None or not gm_channel.owner_id:
+            return Response(
+                {"error": "GM not found or has no owner."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        gm_owner_id = gm_channel.owner_id
 
         data = {
             "team": request.data["team_id"],
             "sender": request.data["sender_id"],
-            "receiver": gm_owner_id[0],  # Send to the gm owner
+            "receiver": gm_owner_id,  # Send to the gm owner
             "item_body": request.data["item_body"],
             "item_type": request.data["item_type"],  # Must be '3'
             "item_optionals": request.data["item_optionals"],

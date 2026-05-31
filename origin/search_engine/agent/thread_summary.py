@@ -31,10 +31,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from origin.models.chat.dm_models import DMThreadMessages
-from origin.models.chat.gm_models import GMThreadMessages
-from origin.models.chat.mdm_models import MDMThreadMessages
-from origin.models.chat.pm_models import PMThreadMessages
+from django.core.exceptions import ValidationError
+
+from origin.models.chat.unified_models import Channel, Message
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.acl import chat_acl_user_ids
 from origin.search_engine.chunkers.base import (
@@ -116,28 +115,19 @@ def compute_fingerprint(messages: list[ThreadMessageRecord]) -> str:
 # --------------------------------------------------------------------------- #
 
 
-# (model, chat_id_field_name). `dm_id` / `gm_id` / `mdm_id` / `project_id` per
-# the convention also used by fetch_chat_thread.py.
-_THREAD_TABLES = {
-    CHAT_TYPE_DM: (DMThreadMessages, "dm_id"),
-    CHAT_TYPE_GM: (GMThreadMessages, "gm_id"),
-    CHAT_TYPE_MDM: (MDMThreadMessages, "mdm_id"),
-    CHAT_TYPE_PM: (PMThreadMessages, "project_id"),
-}
-
-
 def fetch_thread_messages_for_agent(
     *,
     chat_type: int,
-    chat_id: int,
-    thread_id: int,
+    chat_id: str,
+    thread_id: str,
     user_id: str,
 ) -> list[ThreadMessageRecord]:
     """Load every non-deleted message in `(chat_type, chat_id, thread_id)`.
 
-    Raises `ThreadSummaryError` if the requesting user is not a member
-    of the underlying chat. Empty list (vs error) means: the user has
-    access but the thread is empty.
+    `chat_id` is the `Channel.id` UUID; `thread_id` is the thread-root
+    `Message.id` UUID. Raises `ThreadSummaryError` if the requesting user
+    is not a member of the underlying chat. Empty list (vs error) means:
+    the user has access but the thread is empty.
     """
     allowed = chat_acl_user_ids(chat_type, chat_id)
     if not allowed:
@@ -147,14 +137,30 @@ def fetch_thread_messages_for_agent(
     if user_id not in allowed:
         raise ThreadSummaryError("Not authorized to read this thread.")
 
-    table = _THREAD_TABLES.get(chat_type)
-    if table is None:
-        raise ThreadSummaryError(f"Unsupported chat_type {chat_type!r}.")
-    model, chat_id_field = table
+    # Resolve the channel + thread root by UUID, then pull the thread's
+    # replies from the unified `Message` table. `thread_id` IS the
+    # thread-root Message.id; `body` is the JSONField.
+    try:
+        channel = Channel.objects.filter(id=chat_id, kind=chat_type, is_deleted=False).first()
+    except (ValidationError, ValueError, TypeError):
+        return []
+    if channel is None:
+        return []
+    try:
+        root_exists = Message.objects.filter(
+            channel=channel, id=thread_id, is_thread_reply=False
+        ).exists()
+    except (ValidationError, ValueError, TypeError):
+        return []
+    if not root_exists:
+        return []
 
-    qs = model.objects.filter(
-        **{chat_id_field: chat_id, "thread_id": thread_id, "is_deleted": False}
-    ).order_by("thread_message_id")
+    qs = Message.objects.filter(
+        channel=channel,
+        thread_root_id=thread_id,
+        is_thread_reply=True,
+        deleted_at__isnull=True,
+    ).order_by("seq")
 
     rows = list(qs)
     if not rows:
@@ -170,18 +176,18 @@ def fetch_thread_messages_for_agent(
 
     out: list[ThreadMessageRecord] = []
     for r in rows:
-        text = extract_text(getattr(r, "thread_message_body", None))
+        text = extract_text(r.body)
         if not text:
             continue
         sid = str(r.sender_id) if r.sender_id else ""
         out.append(
             ThreadMessageRecord(
-                thread_message_id=r.thread_message_id,
+                thread_message_id=r.seq,
                 sender_id=sid,
                 sender_name=names_by_id.get(sid, sid or "Unknown"),
                 text=text,
                 ts_sent=r.ts_sent_at,
-                ts_updated=getattr(r, "ts_updated_at", None),
+                ts_updated=r.ts_updated_at,
             )
         )
     return out
@@ -286,8 +292,8 @@ def summarise_thread(messages: list[ThreadMessageRecord]) -> tuple[str, str]:
 def peek_cached_summary(
     *,
     chat_type: int,
-    chat_id: int,
-    thread_id: int,
+    chat_id: str,
+    thread_id: str,
     user_id: str,
 ) -> tuple[ThreadSummaryResult | None, list[ThreadMessageRecord], str]:
     """Cache check WITHOUT calling the LLM.
@@ -333,8 +339,8 @@ def peek_cached_summary(
 def regenerate_summary(
     *,
     chat_type: int,
-    chat_id: int,
-    thread_id: int,
+    chat_id: str,
+    thread_id: str,
     team_id: str,
     user_id: str,
     messages: list[ThreadMessageRecord],
@@ -378,8 +384,8 @@ def regenerate_summary(
 def get_or_generate_thread_summary(
     *,
     chat_type: int,
-    chat_id: int,
-    thread_id: int,
+    chat_id: str,
+    thread_id: str,
     team_id: str,
     user_id: str,
     force_regenerate: bool = False,
@@ -442,8 +448,8 @@ def _fingerprint_from_row(row: ThreadSummary) -> str:
 def load_or_generate_for_ask(
     *,
     chat_type: int,
-    chat_id: int,
-    thread_id: int,
+    chat_id: str,
+    thread_id: str,
     team_id: str,
     user_id: str,
 ) -> str:

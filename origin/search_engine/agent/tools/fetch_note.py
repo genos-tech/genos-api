@@ -122,16 +122,19 @@ def _fetch_chat_note(note_id: int, ctx: ToolContext) -> dict[str, Any]:
     _check_team(note.team_id, ctx.team_id)
 
     chat_type_code = note.chat_type
-    chat_id = note.chat_id
+    channel_id = note.channel_id
     allowed = chat_note_acl_user_ids(
         owner_id=getattr(note, "owner_id", None),
         chat_type_code=chat_type_code,
-        chat_id=chat_id,
+        channel_id=channel_id,
         note_id=note_id,
     )
     if ctx.user_id not in allowed:
         raise ToolError(f"Not authorized to read chat note {note_id}.")
 
+    # parent_context KEY names chat_id / thread_id are opaque deep-link
+    # feed-through; the source values are now the v3 channel / thread-root
+    # UUID.
     return _shape_note(
         note_id=note_id,
         note_type="chat",
@@ -143,9 +146,9 @@ def _fetch_chat_note(note_id: int, ctx: ToolContext) -> dict[str, Any]:
         parent_context={
             "owner_id": str(note.owner_id) if note.owner_id else None,
             "chat_type": CHAT_TYPE_LABEL.get(chat_type_code),
-            "chat_id": str(chat_id) if chat_id else None,
+            "chat_id": str(channel_id) if channel_id else None,
             "is_thread": bool(note.is_thread),
-            "thread_id": str(note.thread_id) if note.thread_id else None,
+            "thread_id": str(note.thread_root_id) if note.thread_root_id else None,
         },
     )
 

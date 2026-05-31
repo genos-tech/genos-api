@@ -41,54 +41,59 @@ def friendly_chat_title(
     """
     if not chat_type_label or not chat_id:
         return None
-    try:
-        cid = int(chat_id)
-    except (TypeError, ValueError):
-        return None
 
     label = str(chat_type_label).lower()
 
-    # Lazy imports — keep this module dependency-free at import time
-    # and avoid circular-import surprises during Django startup.
+    # Lazy imports — keep this module dependency-free at import time and
+    # avoid circular-import surprises during Django startup. Chat identity
+    # is the v3 `Channel.id` UUID the index/search rows carry; we resolve
+    # the channel directly (the legacy integer bridge no longer applies).
+    from django.core.exceptions import ValidationError
+    from origin.models.chat.unified_models import Channel
+
+    def _channel(kind: int) -> Channel | None:
+        try:
+            return Channel.objects.filter(id=chat_id, kind=kind, is_deleted=False).first()
+        except (ValidationError, ValueError, TypeError):
+            return None
+
     if label == "dm":
-        from origin.models.chat.dm_models import DMMaster
+        from origin.models.chat.unified_models import ChannelMember
         from origin.models.common.user_models import CustomUser
 
-        try:
-            dm = DMMaster.objects.get(dm_id=cid)
-        except DMMaster.DoesNotExist:
+        channel = _channel(1)  # CHAT_TYPE_DM
+        if channel is None:
             return None
-        partner_id = dm.user_2_id if str(dm.user_1_id) == viewer_user_id else dm.user_1_id
+        member_ids = list(
+            ChannelMember.objects.filter(channel=channel, is_deleted=False).values_list(
+                "user_id", flat=True
+            )
+        )
+        # The DM partner is the *other* member; self-DM falls back to self.
+        partner_id = next((uid for uid in member_ids if str(uid) != viewer_user_id), None)
+        if partner_id is None and member_ids:
+            partner_id = member_ids[0]
         if not partner_id:
             return None
         try:
-            user = CustomUser.objects.get(id=partner_id)
+            return CustomUser.objects.get(id=partner_id).username or None
         except CustomUser.DoesNotExist:
             return None
-        return user.username or None
 
-    if label == "gm":
-        from origin.models.chat.gm_models import GMMaster
-
-        try:
-            return GMMaster.objects.get(gm_id=cid).group_name or None
-        except GMMaster.DoesNotExist:
-            return None
-
-    if label == "mdm":
-        from origin.models.chat.mdm_models import MDMMaster
-
-        try:
-            return MDMMaster.objects.get(mdm_id=cid).display_name or None
-        except MDMMaster.DoesNotExist:
-            return None
+    if label == "gm" or label == "mdm":
+        # v3 `Channel.title` holds the group / MDM display name.
+        channel = _channel(2 if label == "gm" else 4)
+        return (channel.title or None) if channel else None
 
     if label == "pm":
         from origin.models.project.prj_models import ProjectMaster
 
+        # chat_id is the PM channel's UUID; resolve it to its project.
+        channel = _channel(3)  # CHAT_TYPE_PM
+        if channel is None or not channel.project_id:
+            return None
         try:
-            # For PM chats, chat_id == project_id (see fetch_chat_thread).
-            return ProjectMaster.objects.get(project_id=cid).project_name or None
+            return ProjectMaster.objects.get(project_id=channel.project_id).project_name or None
         except ProjectMaster.DoesNotExist:
             return None
 

@@ -324,12 +324,19 @@ class AgentAskView(AuthenticatedAPIView):
             try:
                 thread_ctx_parsed = {
                     "chat_type": int(thread_ctx_raw.get("chat_type")),
-                    "chat_id": int(thread_ctx_raw.get("chat_id")),
-                    "thread_id": int(thread_ctx_raw.get("thread_id")),
+                    "chat_id": str(thread_ctx_raw.get("chat_id") or "").strip(),
+                    "thread_id": str(thread_ctx_raw.get("thread_id") or "").strip(),
                 }
+                if not thread_ctx_parsed["chat_id"] or not thread_ctx_parsed["thread_id"]:
+                    raise ValueError("chat_id and thread_id are required")
             except (TypeError, ValueError):
                 return Response(
-                    {"error": "thread_context must have integer chat_type, chat_id, thread_id."},
+                    {
+                        "error": (
+                            "thread_context must have an integer chat_type and "
+                            "UUID-string chat_id and thread_id."
+                        )
+                    },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         note_ctx_parsed: dict | None = None
@@ -1155,11 +1162,18 @@ class ThreadSummaryView(AuthenticatedAPIView):
             )
         try:
             chat_type = int(data.get("chat_type"))
-            chat_id = int(data.get("chat_id"))
-            thread_id = int(data.get("thread_id"))
+            chat_id = str(data.get("chat_id") or "").strip()
+            thread_id = str(data.get("thread_id") or "").strip()
+            if not chat_id or not thread_id:
+                raise ValueError("chat_id and thread_id are required")
         except (TypeError, ValueError):
             return Response(
-                {"error": "chat_type, chat_id, thread_id must all be integers."},
+                {
+                    "error": (
+                        "chat_type must be an integer; chat_id and thread_id "
+                        "must be UUID strings."
+                    )
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

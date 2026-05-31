@@ -15,9 +15,8 @@ from origin.models.task.task_models import *
 from origin.serializers.task.task_serializers import *
 from origin.models.project.prj_models import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.models.chat.reaction_models import *
-from origin.serializers.chat.reaction_serializers import *
 
+from origin.services import unified_writer
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.task_cache import (
     get_cached_project_tasks,
@@ -831,15 +830,15 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        chat_id = int(raw_chat_id)
-        thread_id = int(raw_thread_id)
-
+        # `chat_id` / `thread_id` are CharField post-v3 cutover and
+        # carry the v3 UUIDs; pass them through unchanged. Filters by
+        # exact string match.
         target_task = TaskMaster.objects.filter(
             is_init_task=False,
             team=team_id,
             chat_type=chat_type,
-            chat_id=chat_id,
-            thread_id=thread_id,
+            chat_id=raw_chat_id,
+            thread_id=raw_thread_id,
         ).values_list("project", "task_id")
 
         if len(target_task) > 1:
@@ -1419,7 +1418,56 @@ class TaskCommentsView(AuthenticatedAPIView):
         serializer = TaskCommentsSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            # Track B dual-write: mirror the comment as a v3 thread-reply
+            # Message under the PM task header. Lets PM task threads
+            # render comments via the unified message path instead of a
+            # parallel comments-only endpoint. Best-effort — failure
+            # here doesn't roll back the legacy save (the drift cron
+            # catches any divergence).
+            # `bypass_flag=True`: task comments live in the legacy
+            # `TaskComments` table; the v3 PM task thread renders them
+            # ONLY through this mirror. With the legacy chat tables
+            # dropped, v3 is the sole chat backend, so the mirror must run
+            # unconditionally — not gated on the (now-vestigial)
+            # `UNIFIED_MESSAGING_DUAL_WRITE` flag, which would otherwise
+            # leave live comments invisible in the PM thread and produce
+            # no comment-mention activity.
+            mirror = unified_writer.write_task_comment_as_thread_reply(
+                task_id=int(request.data["task_id"]),
+                comment_id=data["comment_id"],
+                sender_id=request.data["sender_id"],
+                body=request.data["comment_body"],
+                bypass_flag=True,
+            )
+            # Create v3 mention activities on the mirrored comment Message
+            # (the legacy `chat/activity/` persist these used to hit was
+            # deleted). Channel-scoped — the mirror lives in the PM
+            # channel — so they ride the normal activity feed + WS path.
+            # `skip_actor=False`: tagging yourself in a comment still
+            # pings (consistent with task-body / note mentions).
+            # Returned under `_v3_activities` so the Flask task_comment
+            # handler can broadcast `activity.created` (mirrors the
+            # message-send proxy contract).
+            activities_wire = []
+            if mirror is not None:
+                from origin.services import mention_extractor, v3_activity
+                from origin.serializers.chat.unified_serializers import ActivitySerializer
+
+                sender = mirror.sender
+                if sender is not None:
+                    acts = v3_activity.create_mention_activities(
+                        message=mirror,
+                        mentioned_user_ids=mention_extractor.extract_mentioned_user_ids(
+                            request.data["comment_body"] or []
+                        ),
+                        actor=sender,
+                        skip_actor=False,
+                    )
+                    activities_wire = ActivitySerializer(acts, many=True).data
+            return Response(
+                {**serializer.data, "_v3_activities": activities_wire},
+                status=status.HTTP_201_CREATED,
+            )
 
         error = serializer.errors
         return Response(error, status=status.HTTP_400_BAD_REQUEST)

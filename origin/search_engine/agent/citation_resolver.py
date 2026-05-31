@@ -112,7 +112,7 @@ def resolve_unresolved_citations(
     task_ids: set[int] = set()
     project_ids: set[int] = set()
     note_lookups: set[tuple[str, int]] = set()
-    chat_lookups: set[tuple[str, int, int | None]] = set()
+    chat_lookups: set[tuple[str, str, str | None]] = set()
 
     for token in tokens:
         parts = token.split(":")
@@ -147,12 +147,14 @@ def resolve_unresolved_citations(
 
         elif etype == "chat" and len(parts) >= 3:
             chat_label = parts[1]
-            chat_id = _safe_int(parts[2])
+            # chat_id / thread_id are v3 UUIDs (opaque strings) — keep
+            # them as-is rather than coercing to int.
+            chat_id = parts[2] or None
             if chat_id is None:
                 continue
-            thread_id: int | None = None
+            thread_id: str | None = None
             if len(parts) >= 5 and parts[3] == "thread":
-                thread_id = _safe_int(parts[4])
+                thread_id = parts[4] or None
                 if thread_id is None:
                     continue
             # Controller convention: chat entity_id has no "chat:"
@@ -380,9 +382,9 @@ def _resolve_chat_notes(
                 "title",
                 "owner_id",
                 "chat_type",
-                "chat_id",
+                "channel_id",
                 "is_thread",
-                "thread_id",
+                "thread_root_id",
             )
         )
     except Exception:  # noqa: BLE001
@@ -393,19 +395,22 @@ def _resolve_chat_notes(
         allowed = chat_note_acl_user_ids(
             owner_id=r["owner_id"],
             chat_type_code=r["chat_type"],
-            chat_id=r["chat_id"],
+            channel_id=r["channel_id"],
             note_id=r["note_id"],
         )
         if user_id not in allowed:
             continue
+        # The parent_context dict KEY names stay chat_id / thread_id
+        # (opaque deep-link feed-through); only the source VALUE changes
+        # to the v3 channel / thread-root UUID.
         parent_context: dict[str, Any] = {}
         chat_label = CHAT_TYPE_LABEL.get(r["chat_type"])
         if chat_label:
             parent_context["chat_type"] = chat_label
-        if r["chat_id"]:
-            parent_context["chat_id"] = str(r["chat_id"])
-        if r["thread_id"]:
-            parent_context["thread_id"] = str(r["thread_id"])
+        if r["channel_id"]:
+            parent_context["chat_id"] = str(r["channel_id"])
+        if r["thread_root_id"]:
+            parent_context["thread_id"] = str(r["thread_root_id"])
         if r["is_thread"]:
             parent_context["is_thread"] = True
         out.append(
@@ -420,7 +425,7 @@ def _resolve_chat_notes(
 
 
 def _resolve_chats(
-    chat_lookups: set[tuple[str, int, int | None]],
+    chat_lookups: set[tuple[str, str, str | None]],
     user_id: str,
     build: ChatSourceBuilder,
 ) -> list[dict[str, Any]]:

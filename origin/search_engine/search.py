@@ -627,13 +627,17 @@ def _build_filter(
 
 # Trailing `:msg:<id>` on a chat_message chunk's id. Used to surface
 # the matched message id to the frontend so Spotlight can deep-link to
-# the exact message bubble. Matches both main-channel (`chat:dm:5:msg:42`)
-# and in-thread (`chat:dm:5:thread:3:msg:42`) message chunks; anchor
-# chunks (`...:anchor:<id>`) and thread-window chunks (`...:window`)
-# don't match, which is what we want — an anchor id refers to a main-
-# channel message id that doesn't map cleanly to a thread-message URL,
-# and windows aggregate many messages.
-_CHAT_MSG_ID_RE = re.compile(r":msg:(\d+)$")
+# the exact message bubble. Matches both main-channel
+# (`chat:dm:<uuid>:msg:<uuid>`) and in-thread
+# (`chat:dm:<uuid>:thread:<uuid>:msg:<uuid>`) message chunks; anchor
+# chunks (`...:anchor:<uuid>`) and thread-window chunks (`...:window`)
+# don't match, which is what we want — an anchor id refers to the
+# thread-root message which doesn't map cleanly to a reply URL, and
+# windows aggregate many messages.
+#
+# The id is the v3 `Message.id` UUID ([0-9a-fA-F-]); the legacy numeric
+# form is a subset of this class, so the pattern stays back-compatible.
+_CHAT_MSG_ID_RE = re.compile(r":msg:([0-9a-fA-F-]+)$")
 
 
 def _extract_chat_message_id(chunk_id: str | None, chunk_type: str | None) -> str | None:
@@ -937,6 +941,15 @@ def _group_by_entity(
             chunk_type = src.get("chunk_type")
             if chunk_type and chunk_type not in existing["matched_chunk_types"]:
                 existing["matched_chunk_types"].append(chunk_type)
+            # Backfill the deep-link target: if the top (highest-scoring)
+            # chunk for this entity was a thread-window / anchor (no single
+            # message id), a lower-ranked per-message chunk can still supply
+            # one so the chip deep-links to a concrete bubble instead of
+            # landing at the chat/thread top.
+            if not existing.get("message_id"):
+                mid = _extract_chat_message_id(c["chunk_id"], src.get("chunk_type"))
+                if mid:
+                    existing["message_id"] = mid
             if for_agent and len(existing.get("chunks", [])) < max_chunks_per_entity:
                 existing["chunks"].append(_chunk_for_agent(c))
             # Merge analyzer-matched terms across chunks of the same

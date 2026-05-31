@@ -6,9 +6,7 @@ from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.project.prj_models import ProjectMembers
-from origin.models.chat.dm_models import UserDMMapping
-from origin.models.chat.gm_models import GMMembers
-from origin.models.chat.mdm_models import MDMMembers
+from origin.models.chat.unified_models import ChannelMember
 
 NOTE_TYPE_PERSONAL = 1
 NOTE_TYPE_TASK = 2
@@ -27,19 +25,6 @@ def get_explicit_role(user_id, note_type, note_id):
         .first()
     )
     return row
-
-
-def _is_chat_member(user_id, chat_type, chat_id):
-    if chat_type == 1:
-        return UserDMMapping.objects.filter(user_id=user_id, dm_id=chat_id).exists()
-    if chat_type == 2:
-        return GMMembers.objects.filter(gm=chat_id, attendee=user_id).exists()
-    if chat_type == 3:
-        # PM (project messaging) is gated by project membership.
-        return ProjectMembers.objects.filter(project=chat_id, attendee=user_id).exists()
-    if chat_type == 4:
-        return MDMMembers.objects.filter(mdm=chat_id, attendee=user_id).exists()
-    return False
 
 
 def get_effective_role(user_id, note_type, note_id, team_id=None):
@@ -77,10 +62,15 @@ def get_effective_role(user_id, note_type, note_id, team_id=None):
 
     if note_type == NOTE_TYPE_CHAT:
         try:
-            note = ChatNoteMaster.objects.only("chat_type", "chat_id").get(note_id=note_id)
+            note = ChatNoteMaster.objects.only("channel_id").get(note_id=note_id)
         except ChatNoteMaster.DoesNotExist:
             return None
-        if _is_chat_member(user_id, note.chat_type, note.chat_id):
+        # Chat notes are keyed on the v3 `Channel` UUID; an active
+        # `ChannelMember` row grants implicit Viewer (PM members included
+        # via pm_channel_signals).
+        if ChannelMember.objects.filter(
+            channel_id=note.channel_id, user=user_id, is_deleted=False
+        ).exists():
             return ROLE_VIEWER
         return None
 

@@ -73,7 +73,7 @@ def _resolve_note_for_summary(summary: NoteSummary):
         acl = chat_note_acl_user_ids(
             owner_id=owner_id,
             chat_type_code=note.chat_type,
-            chat_id=note.chat_id,
+            channel_id=note.channel_id,
             note_id=summary.note_id,
         )
         return note, acl
@@ -116,10 +116,10 @@ def iter_note_summary_chunks(since: Optional[datetime] = None) -> Iterator[Entit
 
         if summary.note_type == NOTE_TYPE_CHAT:
             chat_label = CHAT_TYPE_LABEL.get(getattr(note, "chat_type", 0))
-            if chat_label and note.chat_id:
-                chat_id_str = str(note.chat_id)
-            if getattr(note, "thread_id", None):
-                thread_id_str = str(note.thread_id)
+            if chat_label and note.channel_id:
+                chat_id_str = str(note.channel_id)
+            if getattr(note, "thread_root_id", None):
+                thread_id_str = str(note.thread_root_id)
             related_ids.append(f"note:chat:{summary.note_id}")
         elif summary.note_type == NOTE_TYPE_TASK:
             if getattr(note, "project_id", None):

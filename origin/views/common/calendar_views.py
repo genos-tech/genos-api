@@ -24,7 +24,7 @@ from rest_framework.request import Request
 from rest_framework.views import APIView
 
 from origin.models.common.user_models import ConnectedAccount
-from origin.services.oauth.tokens import get_valid_access_token
+from origin.services.oauth.tokens import ReauthRequired, get_valid_access_token
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,19 @@ def _scope_missing() -> Response:
     return Response({"detail": "calendar_scope_missing"}, status=status.HTTP_403_FORBIDDEN)
 
 
+def _reauth_required() -> Response:
+    # 400, mirroring `_not_connected`: the account row exists (and may
+    # still carry the calendar scope), but its stored Google credential
+    # can no longer be refreshed — the refresh token was revoked or
+    # expired. Same `detail`-discriminator contract lets the frontend
+    # render a "Reconnect Google Calendar" button that re-runs the
+    # connect-intent OAuth flow (minting a fresh refresh token). Kept
+    # distinct from `google_not_connected` so the UI can say "reconnect"
+    # rather than "connect", and from `calendar_scope_missing` so it
+    # doesn't mislead the user into thinking a scope was dropped.
+    return Response({"detail": "google_reauth_required"}, status=status.HTTP_400_BAD_REQUEST)
+
+
 def _resolve_account(user) -> tuple[ConnectedAccount | None, Response | None]:
     """Centralised gate for every Calendar endpoint. Returns either
     `(account, None)` on success, or `(None, error_response)` so the
@@ -79,6 +92,16 @@ def _resolve_account(user) -> tuple[ConnectedAccount | None, Response | None]:
         return None, _not_connected()
     if not _has_calendar_scope(account):
         return None, _scope_missing()
+    # Warm the access token up front so a dead refresh token surfaces as
+    # a clean `google_reauth_required` on every endpoint, rather than as
+    # an uncaught 500 from deep inside `_google_request`. This only hits
+    # the network when the cached token is near expiry, and it persists
+    # the refreshed token on the row — so the later `get_valid_access_token`
+    # call in `_google_request` is just a cheap decrypt.
+    try:
+        get_valid_access_token(account)
+    except ReauthRequired:
+        return None, _reauth_required()
     return account, None
 
 
