@@ -1,11 +1,9 @@
-from datetime import datetime, timedelta, date as date_cls
+from datetime import date as date_cls
+from datetime import datetime, timedelta
 
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from rest_framework import status
-from rest_framework.response import Response
-
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.serializers.chat.todo_serializers import (
     ToDoCategorySerializer,
@@ -14,6 +12,8 @@ from origin.serializers.chat.todo_serializers import (
 )
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data
+from rest_framework import status
+from rest_framework.response import Response
 
 # Default look-back when no `from` is supplied — matches the prior 365-day
 # window the old GET /todo/ used.

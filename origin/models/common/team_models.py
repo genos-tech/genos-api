@@ -2,7 +2,6 @@ import os
 import uuid
 
 from django.db import models
-
 from origin.models.common.user_models import CustomUser
 
 

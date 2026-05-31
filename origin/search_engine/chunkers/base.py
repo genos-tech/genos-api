@@ -6,7 +6,7 @@ entity at a time so that stale-chunk deletion can be scoped to that
 entity's existing rag_chunks rows.
 """
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Optional
 

@@ -1,24 +1,22 @@
 from django.db import transaction
-from django.db.models import F, Value, IntegerField
-from rest_framework.response import Response
-from rest_framework import status
-
-from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from django.db.models import F, IntegerField, Value
 from origin.serializers.note.note_serializers import *
-
-from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 from origin.views.utils.note_role import (
+    ROLE_OWNER,
+    delete_note_permissions,
     get_effective_role,
     require_read_role,
     require_write_role,
-    delete_note_permissions,
-    ROLE_OWNER,
 )
 from origin.views.utils.note_version import (
-    snapshot_note_version,
     delete_note_versions,
+    snapshot_note_version,
 )
-from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
+from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from rest_framework import status
+from rest_framework.response import Response
 
 NOTE_TYPE = 1  # Personal Notes
 

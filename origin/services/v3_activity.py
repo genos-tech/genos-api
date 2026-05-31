@@ -15,10 +15,9 @@ so their sidebar updates without a refresh.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Iterable, List, Optional
-
-import logging
 
 from origin.models.chat.unified_models import (
     Activity,

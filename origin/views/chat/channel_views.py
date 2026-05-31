@@ -20,13 +20,9 @@ import uuid
 from django.contrib.auth import get_user_model
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Count, OuterRef, Q, Subquery
+from django.db.models import Count, OuterRef, Subquery
 from django.db.models.functions import Coalesce
 from django.http import Http404
-from rest_framework import status
-from rest_framework.parsers import FormParser, MultiPartParser
-from rest_framework.response import Response
-
 from origin.models.chat.unified_models import (
     Channel,
     ChannelDirectPair,
@@ -39,9 +35,11 @@ from origin.models.common.team_models import TeamMaster
 from origin.serializers.chat.unified_serializers import (
     ChannelMemberSerializer,
     ChannelSerializer,
-    MessageSerializer,
 )
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from rest_framework import status
+from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.response import Response
 
 User = get_user_model()
 

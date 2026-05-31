@@ -1,12 +1,6 @@
-import os
-from datetime import date
 import time
+from datetime import date
 
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.parsers import MultiPartParser
-
-from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.models.common.user_models import CustomUser
 from origin.models.task.task_models import TaskMaster
 from origin.serializers.common.user_serializers import UserSerializer
@@ -15,6 +9,10 @@ from origin.services.calendar_sync import (
     get_google_connected_account,
     sync_task_event,
 )
+from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from rest_framework import status
+from rest_framework.parsers import MultiPartParser
+from rest_framework.response import Response
 
 
 #############################

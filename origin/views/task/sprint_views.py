@@ -2,22 +2,15 @@ from datetime import date, datetime, timedelta
 
 from django.db import transaction
 from django.db.models import Q
-from rest_framework import status
-from rest_framework.response import Response
-
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint, SprintConfig
-from origin.serializers.task.task_serializers import (
-    SprintConfigSerializer,
-    SprintSerializer,
-)
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import (
     validate_request_data,
-    validate_request_user,
 )
-
+from rest_framework import status
+from rest_framework.response import Response
 
 SPRINT_STATUS_UPCOMING = "upcoming"
 SPRINT_STATUS_ACTIVE = "active"

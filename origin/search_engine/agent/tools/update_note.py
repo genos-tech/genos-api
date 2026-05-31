@@ -28,8 +28,8 @@ from typing import Any
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
-from origin.search_engine.chunkers.base import NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.chunkers.base import NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
 
 _VALID_TYPES = {"personal", "task"}
 _NOTE_TYPE_CODE = {"personal": NOTE_TYPE_PERSONAL, "task": NOTE_TYPE_TASK}

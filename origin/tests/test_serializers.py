@@ -18,8 +18,7 @@ its serializer.
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 
-from origin.tests.test_base import BaseAPITestCase
-
+from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.models.chat.unified_models import (
     Channel,
     ChannelKind,
@@ -27,12 +26,10 @@ from origin.models.chat.unified_models import (
     Message,
     MessageReaction,
 )
-from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
-
 from origin.serializers.chat.todo_serializers import (
     ToDoCategorySerializer,
     ToDoGroupSerializer,
@@ -48,6 +45,10 @@ from origin.serializers.chat.unified_serializers import (
 from origin.serializers.common.notification_serializers import (
     NotificationPreferenceSerializer,
 )
+from origin.serializers.common.team_serializers import (
+    TeamMasterSerializer,
+    TeamMembersSerializer,
+)
 from origin.serializers.common.user_serializers import (
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
@@ -61,10 +62,7 @@ from origin.serializers.note.note_serializers import (
 )
 from origin.serializers.project.prj_serializers import ProjectMasterSerializer
 from origin.serializers.task.task_serializers import TaskMasterSerializer
-from origin.serializers.common.team_serializers import (
-    TeamMasterSerializer,
-    TeamMembersSerializer,
-)
+from origin.tests.test_base import BaseAPITestCase
 
 
 # ======================================================================

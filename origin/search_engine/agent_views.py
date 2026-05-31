@@ -53,9 +53,15 @@ from origin.search_engine.agent.controller import (
 )
 from origin.search_engine.agent.note_summary import (
     NoteSummaryError,
-    load_or_generate_for_ask as load_or_generate_note_for_ask,
     note_type_label,
+)
+from origin.search_engine.agent.note_summary import (
+    load_or_generate_for_ask as load_or_generate_note_for_ask,
+)
+from origin.search_engine.agent.note_summary import (
     peek_cached_summary as peek_cached_note_summary,
+)
+from origin.search_engine.agent.note_summary import (
     regenerate_summary as regenerate_note_summary,
 )
 from origin.search_engine.agent.thread_summary import (
@@ -67,8 +73,8 @@ from origin.search_engine.agent.thread_summary import (
 from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.llm.choice import (
     LlmChoice,
-    resolve_user_choice,
     reset_llm_choice,
+    resolve_user_choice,
     set_llm_choice,
 )
 from origin.search_engine.models import AgentRun, AgentSession, AgentStep

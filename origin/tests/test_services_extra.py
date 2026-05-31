@@ -41,8 +41,7 @@ from origin.models.common.user_models import (
     ConnectedAccount,
     GithubWebhookRegistration,
 )
-from origin.services import crypto
-from origin.services import task_cache
+from origin.services import crypto, task_cache
 from origin.services.email import send_templated_email
 from origin.services.github_webhooks import (
     _webhook_payload_url,

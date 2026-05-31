@@ -15,7 +15,6 @@ in by calling `set_current_user(user)` and clearing it in `finally`.
 
 import threading
 
-
 _state = threading.local()
 
 

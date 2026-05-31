@@ -1,7 +1,7 @@
-from rest_framework import serializers
+from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
+from origin.models.task.sprint_models import Sprint, SprintConfig
 from origin.models.task.task_models import *
-from origin.models.task.sprint_models import SprintConfig, Sprint
-from origin.models.task.milestone_models import MilestoneMaster, MilestoneAssignees
+from rest_framework import serializers
 
 
 class TaskMasterSerializer(serializers.ModelSerializer):

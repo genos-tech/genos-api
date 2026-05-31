@@ -7,7 +7,8 @@ free-form text — get_or_create on (team, user, name).
 
 from __future__ import annotations
 
-from datetime import date as date_cls, datetime
+from datetime import date as date_cls
+from datetime import datetime
 from typing import Any
 
 from django.db import transaction

@@ -1,11 +1,10 @@
-from rest_framework import status
-from rest_framework.response import Response
-
 from origin.models.common.notification_models import NotificationPreference
 from origin.serializers.common.notification_serializers import (
     NotificationPreferenceSerializer,
 )
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from rest_framework import status
+from rest_framework.response import Response
 
 
 class NotificationPreferenceView(AuthenticatedAPIView):

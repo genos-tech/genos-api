@@ -1,11 +1,8 @@
-from django.db.models import F, Value, IntegerField
-from rest_framework.response import Response
-from rest_framework import status
-
-from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.serializers.note.note_serializers import *
-
+from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from rest_framework import status
+from rest_framework.response import Response
 
 
 class NotePermissionView(AuthenticatedAPIView):
@@ -105,7 +102,7 @@ class NotePermissionView(AuthenticatedAPIView):
             note = ChatNoteMaster.objects.get(team=data["team"], note_id=data["note_id"])
             note.delete()
             return Response(
-                {"message": f"Note deleted successfully."},
+                {"message": "Note deleted successfully."},
                 status=status.HTTP_204_NO_CONTENT,
             )
         except ChatNoteMaster.DoesNotExist:

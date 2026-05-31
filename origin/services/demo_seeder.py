@@ -37,13 +37,10 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-from origin.models.common.user_models import CustomUser
-from origin.models.common.team_models import TeamMaster, TeamMembers
-from origin.models.common.notification_models import NotificationPreference
-from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
-from origin.models.task.task_models import TaskMaster, TaskComments
-from origin.models.task.sprint_models import Sprint, SprintConfig
-from origin.models.task.milestone_models import MilestoneMaster, MilestoneAssignees
+from origin.models.chat.activity_models import ActivityFact
+from origin.models.chat.mention_models import MentionFact
+from origin.models.chat.reaction_models import ReactionFact
+from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.models.chat.unified_models import (
     Channel,
     ChannelDirectPair,
@@ -51,14 +48,17 @@ from origin.models.chat.unified_models import (
     ChannelMember,
     Message,
 )
-from origin.models.chat.mention_models import MentionFact
-from origin.models.chat.reaction_models import ReactionFact
-from origin.models.chat.activity_models import ActivityFact
-from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
-from origin.models.note.personal_note_models import PersonalNoteMaster
-from origin.models.note.task_note_models import TaskNoteMaster
+from origin.models.common.notification_models import NotificationPreference
+from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.models.common.user_models import CustomUser
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
+from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.task_note_models import TaskNoteMaster
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
+from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
+from origin.models.task.sprint_models import Sprint, SprintConfig
+from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.models import RagChunk
 
 BOT_PROFILES = [

@@ -1,13 +1,12 @@
-from django.db.models import F, Value, IntegerField
-from rest_framework.response import Response
-from rest_framework import status
-
-from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.models.note.recent_note_models import NoteRecentMaster
-from origin.models.note.personal_note_models import PersonalNoteMaster
-from origin.models.note.task_note_models import TaskNoteMaster
+from django.db.models import F, IntegerField, Value
 from origin.models.note.chat_note_models import ChatNoteMaster
+from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.recent_note_models import NoteRecentMaster
+from origin.models.note.task_note_models import TaskNoteMaster
+from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from rest_framework import status
+from rest_framework.response import Response
 
 # Maximum number of recent-note rows kept per (user, team). Older rows are
 # trimmed on every record-open so the table stays small and the meta

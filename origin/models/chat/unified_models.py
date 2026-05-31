@@ -22,7 +22,6 @@ duplication bug structurally impossible to recur.
 import uuid
 
 from django.db import models
-
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster

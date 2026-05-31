@@ -4,9 +4,8 @@ from django.db import models, transaction
 from django.db.models import Max
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-
-from origin.models.common.user_models import CustomUser
 from origin.models.common.team_models import TeamMaster
+from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint

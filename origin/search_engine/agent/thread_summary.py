@@ -29,19 +29,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 
 from django.core.exceptions import ValidationError
 
 from origin.models.chat.unified_models import Channel, Message
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.acl import chat_acl_user_ids
-from origin.search_engine.chunkers.base import (
-    CHAT_TYPE_DM,
-    CHAT_TYPE_GM,
-    CHAT_TYPE_MDM,
-    CHAT_TYPE_PM,
-)
 from origin.search_engine.llm import AgentMessage, get_model_client
 from origin.search_engine.models import ThreadSummary
 from origin.search_engine.text_extraction import extract_text

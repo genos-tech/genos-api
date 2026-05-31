@@ -1,5 +1,5 @@
-from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.response import Response
 
 """
 HTTP_200_OK
@@ -57,7 +57,7 @@ def validate_request_data(params: dict) -> None:
 def validate_request_user(requested_user_id: str, target_user_id: str) -> None:
     if requested_user_id != target_user_id:
         return Response(
-            {"message": f"Only the data owner can request."},
+            {"message": "Only the data owner can request."},
             status=status.HTTP_403_FORBIDDEN,
         )
     return None

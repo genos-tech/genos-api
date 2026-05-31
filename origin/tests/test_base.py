@@ -1,5 +1,4 @@
 """Shared test base class with common fixtures and auth helpers."""
-import uuid
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase

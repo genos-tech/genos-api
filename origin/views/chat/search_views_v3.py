@@ -16,13 +16,12 @@ client-supplied `user_id` query param — an IDOR; here `request.user`
 is authoritative).
 """
 
-from rest_framework import status
-from rest_framework.response import Response
-
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.team_models import TeamMembers
 from origin.views.chat.channel_views import _verify_team_member
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from rest_framework import status
+from rest_framework.response import Response
 
 
 class SearchTeamMembersAndGroupsView(AuthenticatedAPIView):

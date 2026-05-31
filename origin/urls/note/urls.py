@@ -1,21 +1,20 @@
 from django.urls import path
-
-from origin.views.note.personal_note_views import *
 from origin.views.note.chat_note_views import *
-from origin.views.note.task_note_views import *
 from origin.views.note.favorite_note_views import *
-from origin.views.note.recent_note_views import *
 from origin.views.note.note_role_views import (
-    NoteRoleView,
-    NoteRoleListView,
     NoteRoleCheckView,
+    NoteRoleListView,
+    NoteRoleView,
     SharedPersonalNoteMetaView,
 )
 from origin.views.note.note_version_views import (
-    NoteVersionListView,
     NoteVersionDetailView,
+    NoteVersionListView,
     NoteVersionRestoreView,
 )
+from origin.views.note.personal_note_views import *
+from origin.views.note.recent_note_views import *
+from origin.views.note.task_note_views import *
 
 urlpatterns = [
     path("api/v2/note/personal/", PersonalNoteMasterView.as_view(), name="personal_note"),

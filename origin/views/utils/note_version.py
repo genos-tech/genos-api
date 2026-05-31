@@ -1,6 +1,5 @@
 from django.db import IntegrityError, transaction
 from django.utils import timezone
-
 from origin.models.note.version_note_models import NoteVersionMaster
 
 COALESCE_SECONDS = 300  # 5 minutes — one autosave burst becomes one row.

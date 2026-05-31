@@ -44,7 +44,6 @@ from django.conf import settings
 from origin.models.chat.unified_models import Channel, ChannelMember, Message
 from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMembers
-
 from origin.search_engine.chunkers.base import (
     CHAT_TYPE_DM,
     CHAT_TYPE_GM,

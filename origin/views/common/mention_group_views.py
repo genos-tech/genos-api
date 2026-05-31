@@ -1,15 +1,13 @@
 from collections import defaultdict
 
 from django.db import transaction
-from django.db.models import Count
-from rest_framework import status
-from rest_framework.response import Response
-
 from origin.models.common.mention_group_models import (
     MentionGroupMaster,
     MentionGroupMembers,
 )
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from rest_framework import status
+from rest_framework.response import Response
 
 
 def _serialize_group(group: MentionGroupMaster, member_user_ids: list) -> dict:

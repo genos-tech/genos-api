@@ -14,18 +14,15 @@ truth wins). This matches the legacy behaviour and prevents a stale
 client from rewinding the user's read state.
 """
 
-from django.http import Http404
-from rest_framework import status
-from rest_framework.response import Response
-
 from origin.models.chat.unified_models import (
-    ChannelMember,
     Message,
     ReadCursor,
 )
 from origin.serializers.chat.unified_serializers import ReadCursorSerializer
-from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.chat.message_views import _verify_member_or_404
+from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from rest_framework import status
+from rest_framework.response import Response
 
 
 class ReadCursorView(AuthenticatedAPIView):

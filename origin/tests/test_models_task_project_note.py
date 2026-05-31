@@ -19,33 +19,32 @@ from datetime import date
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
-from origin.tests.test_base import BaseAPITestCase
-
+from origin.models.chat.unified_models import Channel
+from origin.models.note.chat_note_models import ChatNoteMaster
+from origin.models.note.common_note_models import NotePermissionMaster
+from origin.models.note.favorite_note_models import NoteFavoriteMaster
+from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.recent_note_models import NoteRecentMaster
+from origin.models.note.task_note_models import TaskNoteMaster
+from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import (
     ProjectMaster,
     ProjectMembers,
     ProjectTags,
 )
-from origin.models.task.task_models import (
-    TaskMaster,
-    TaskDependency,
-    TaskCommentReactionFact,
-    TaskCommentMentionFact,
-)
-from origin.models.task.milestone_models import MilestoneMaster, MilestoneAssignees
+from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.sprint_models import Sprint, SprintConfig
 from origin.models.task.task_activity_models import (
     TaskActivity,
     TaskActivityActionType,
 )
-from origin.models.note.personal_note_models import PersonalNoteMaster
-from origin.models.note.task_note_models import TaskNoteMaster
-from origin.models.note.chat_note_models import ChatNoteMaster
-from origin.models.note.favorite_note_models import NoteFavoriteMaster
-from origin.models.note.recent_note_models import NoteRecentMaster
-from origin.models.note.version_note_models import NoteVersionMaster
-from origin.models.note.common_note_models import NotePermissionMaster
-from origin.models.chat.unified_models import Channel
+from origin.models.task.task_models import (
+    TaskCommentMentionFact,
+    TaskCommentReactionFact,
+    TaskDependency,
+    TaskMaster,
+)
+from origin.tests.test_base import BaseAPITestCase
 
 
 def _detach_project_channels(project):

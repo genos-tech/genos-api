@@ -1,9 +1,8 @@
-from rest_framework import serializers
-
 from origin.models.common.mention_group_models import (
     MentionGroupMaster,
     MentionGroupMembers,
 )
+from rest_framework import serializers
 
 
 class MentionGroupMasterSerializer(serializers.ModelSerializer):

@@ -1,6 +1,4 @@
 from django.db import models
-
-
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
 from origin.models.task.task_models import *

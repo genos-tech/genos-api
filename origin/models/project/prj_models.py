@@ -1,8 +1,8 @@
 import os
-from django.db import models
 
-from origin.models.common.user_models import CustomUser
+from django.db import models
 from origin.models.common.team_models import TeamMaster
+from origin.models.common.user_models import CustomUser
 
 
 def profile_image_path(instance, filename):

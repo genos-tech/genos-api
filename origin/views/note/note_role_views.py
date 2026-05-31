@@ -1,21 +1,19 @@
 from django.db import transaction
-from django.db.models import F
-from rest_framework.response import Response
-from rest_framework import status
-
-from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.models.common.user_models import CustomUser
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
-from origin.models.common.user_models import CustomUser
-from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.serializers.note.note_serializers import NoteRoleMemberSerializer
-from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_role import (
-    get_explicit_role,
-    get_effective_role,
-    note_exists,
     ROLE_OWNER,
+    get_effective_role,
+    get_explicit_role,
+    note_exists,
 )
+from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from rest_framework import status
+from rest_framework.response import Response
 
 VALID_NOTE_TYPES = {1, 2, 3}
 VALID_ROLE_IDS = {1, 2, 3}

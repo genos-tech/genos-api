@@ -24,39 +24,30 @@ import uuid
 
 from django.test import TestCase, override_settings
 
-from origin.tests.test_base import BaseAPITestCase
-
+from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.models.chat.unified_models import Channel, ChannelMember, Message
-from origin.models.chat.todo_models import ToDoGroup, ToDoCategory, ToDoItem
 from origin.models.note.chat_note_models import ChatNoteMaster
+from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
-from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
-from origin.models.task.task_models import TaskMaster, TaskComments
-
+from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent import acl as acl_mod
 from origin.search_engine.agent import citation_resolver as cr
-from origin.search_engine.chunkers import base as base_mod
 from origin.search_engine.chunkers.base import (
     CHAT_TYPE_DM,
     CHAT_TYPE_GM,
-    CHAT_TYPE_PM,
     CHAT_TYPE_MDM,
+    CHAT_TYPE_PM,
+    NOTE_TYPE_CHAT,
     NOTE_TYPE_PERSONAL,
     NOTE_TYPE_TASK,
-    NOTE_TYPE_CHAT,
     Chunk,
     chat_entity_id,
     iso,
     make_snippet,
 )
 from origin.search_engine.chunkers.chat_chunker import iter_dm_chunks, iter_pm_chunks
-from origin.search_engine.chunkers.task_chunker import iter_task_chunks
-from origin.search_engine.chunkers.todo_chunker import iter_todo_chunks
-from origin.search_engine.chunkers.thread_summary_chunker import (
-    iter_thread_summary_chunks,
-)
 from origin.search_engine.chunkers.note_chunker import (
     iter_chat_note_chunks,
     iter_personal_note_chunks,
@@ -65,8 +56,13 @@ from origin.search_engine.chunkers.note_chunker import (
 from origin.search_engine.chunkers.note_summary_chunker import (
     iter_note_summary_chunks,
 )
+from origin.search_engine.chunkers.task_chunker import iter_task_chunks
+from origin.search_engine.chunkers.thread_summary_chunker import (
+    iter_thread_summary_chunks,
+)
+from origin.search_engine.chunkers.todo_chunker import iter_todo_chunks
 from origin.search_engine.models import NoteSummary, ThreadSummary
-
+from origin.tests.test_base import BaseAPITestCase
 
 # --------------------------------------------------------------------------- #
 # Helpers                                                                      #
