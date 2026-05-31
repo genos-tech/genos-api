@@ -212,5 +212,10 @@ urlpatterns = [
         InboxItemForJoinGMRequestView.as_view(),
         name="inbox_join_gm_request_item",
     ),
+    path(
+        "api/v2/gm/join/fromInbox/",
+        JoinGMFromInboxView.as_view(),
+        name="join_gm_from_inbox",
+    ),
     path("api/v2/getPageTitle/", get_page_title, name="get_page_title"),
 ]
