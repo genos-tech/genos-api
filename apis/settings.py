@@ -499,6 +499,21 @@ SEARCH_ENGINE = {
     "RAG_RERANK_FUSION_WEIGHT_PARAPHRASE": (
         os.environ.get("RAG_RERANK_FUSION_WEIGHT_PARAPHRASE", "") or ""
     ),
+    # Q2.4 — GraphRAG ranking-fusion (SPOTLIGHT_QUALITY_ARCHITECTURE.md §4.3 / A1).
+    # After hybrid retrieval, inject one-hop TaskDependency neighbours of the top
+    # task hits into the result set with a decayed score, so a relational query
+    # ("what's blocked by the framer-motion spike?") surfaces the graph-related
+    # task even when it shares no text with the query. NEVER runs on typeahead
+    # (search.py mode guard). Cost: one extra DB query + one OpenSearch fetch on
+    # the agent retrieval path. ACL is inherited (neighbours fetched through the
+    # same acl_user_ids filter).
+    "RAG_GRAPH_EXPANSION": (os.environ.get("RAG_GRAPH_EXPANSION", "true").lower() == "true"),
+    # Injected neighbour score = source-hit score × this decay (keeps the
+    # pulled-in task just below the hit that pulled it).
+    "RAG_GRAPH_WEIGHT": float(os.environ.get("RAG_GRAPH_WEIGHT", "0.9")),
+    # Bound the work: expand at most N top task hits, inject at most M neighbours.
+    "RAG_GRAPH_MAX_SOURCES": int(os.environ.get("RAG_GRAPH_MAX_SOURCES", "5")),
+    "RAG_GRAPH_MAX_NEIGHBORS": int(os.environ.get("RAG_GRAPH_MAX_NEIGHBORS", "5")),
     # Cohere Rerank — used when RAG_RERANKER_PROVIDER=cohere.
     # Get an API key at https://dashboard.cohere.com/api-keys
     # Pricing as of late 2025 is ~$2 / 1k queries.

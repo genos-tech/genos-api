@@ -382,6 +382,28 @@ def search(
                 output_k=min(output_k, limit),
             )
 
+    # --- GraphRAG: fuse the relationship graph into ranking (Q2.4 / A1). ---
+    # After hybrid retrieval, pull in one-hop TaskDependency neighbors of the
+    # top task hits and inject them with a decayed score, so a relational
+    # query ("what's blocked by the framer-motion spike?") surfaces the
+    # graph-related task even when it shares no text with the query. Skipped
+    # on typeahead (its sub-100 ms budget can't afford the extra DB+OS round
+    # trip); flag-gated. ACL is automatic — neighbors are fetched through the
+    # same acl_user_ids filter as everything else.
+    if (
+        settings.SEARCH_ENGINE.get("RAG_GRAPH_EXPANSION")
+        and mode != "typeahead"
+        and grouped
+    ):
+        grouped = _graph_expand(
+            grouped,
+            team_id=team_id,
+            user_id=user_id,
+            for_agent=for_agent,
+            client=client,
+            index=index,
+        )
+
     # --- Final pass: friendly chat titles. ---
     # OpenSearch stores a viewer-agnostic placeholder for chats ("DM 9")
     # because a DM's name depends on who's looking. Resolve here so
@@ -987,3 +1009,132 @@ def _chunk_for_agent(c: dict) -> dict:
         "text": src.get("search_text") or src.get("snippet_text") or "",
         "score": c["score"],
     }
+
+
+def _graph_expand(
+    grouped: list[dict],
+    *,
+    team_id: str,
+    user_id: str,
+    for_agent: bool,
+    client,
+    index: str,
+) -> list[dict]:
+    """GraphRAG ranking-fusion (A1 / Q2.4).
+
+    Walk one hop of the `TaskDependency` graph out from the top retrieved
+    TASK hits and inject the graph-adjacent tasks into the result set with a
+    score decayed from the source hit's score. This surfaces a related task
+    the lexical/vector lanes can't reach (the relation lives in a FK table,
+    not in the text) — e.g. "what's blocked by the framer-motion spike?"
+    surfaces the blocked Hero build even though that task never mentions
+    framer-motion.
+
+    Bounded + cheap: at most `RAG_GRAPH_MAX_SOURCES` source tasks → ONE
+    `TaskDependency` query (both directions) → ONE OpenSearch fetch for the
+    neighbours, capped at `RAG_GRAPH_MAX_NEIGHBORS`. ACL is inherited: the
+    neighbour fetch goes through `_build_filter` (team + acl_user_ids), so a
+    task the user can't see is never injected. Neighbours already present in
+    `grouped` are skipped (no dup, no double-count).
+    """
+    from django.db.models import Q  # noqa: PLC0415
+    from origin.models.task.task_models import TaskDependency  # noqa: PLC0415
+
+    se = settings.SEARCH_ENGINE
+    weight = float(se.get("RAG_GRAPH_WEIGHT", 0.6))
+    max_sources = int(se.get("RAG_GRAPH_MAX_SOURCES", 5))
+    max_neighbors = int(se.get("RAG_GRAPH_MAX_NEIGHBORS", 5))
+
+    # Source task ids = the top task hits (graph edges are task↔task). Only
+    # expand from a LEXICALLY-anchored hit (keyword_rank present): a real
+    # topical query hits the keyword lane, whereas gibberish / vague-vector
+    # noise matches nothing lexically — so this gate stops graph expansion
+    # from inflating the result set on a query that should return ~nothing
+    # (e.g. the `gibberish_returns_few_or_nothing` case), while still firing
+    # on genuine relational queries.
+    src_score: dict[int, float] = {}
+    present_ids: set = {e.get("entity_id") for e in grouped}
+    for e in grouped:
+        if e.get("entity_type") != "task" or not e.get("task_id"):
+            continue
+        if e.get("keyword_rank") is None:
+            continue
+        try:
+            tid = int(e["task_id"])
+        except (TypeError, ValueError):
+            continue
+        src_score.setdefault(tid, float(e.get("score") or 0.0))
+        if len(src_score) >= max_sources:
+            break
+    if not src_score:
+        return grouped
+
+    ids = list(src_score)
+    edges = TaskDependency.objects.filter(team_id=team_id).filter(
+        Q(blocker_task_id__in=ids) | Q(blocked_task_id__in=ids)
+    ).values_list("blocker_task_id", "blocked_task_id")
+
+    # Neighbour task id → best (max) decayed score across the sources that
+    # reach it. A neighbour already in `grouped` is left alone.
+    neigh_score: dict[int, float] = {}
+    for blocker, blocked in edges:
+        for end, other in ((blocker, blocked), (blocked, blocker)):
+            if end in src_score and other not in src_score and f"task:{other}" not in present_ids:
+                neigh_score[other] = max(neigh_score.get(other, 0.0), src_score[end] * weight)
+    if not neigh_score:
+        return grouped
+
+    neigh_ids = sorted(neigh_score, key=lambda t: -neigh_score[t])[:max_neighbors]
+    entity_ids = [f"task:{t}" for t in neigh_ids]
+
+    # ACL-filtered fetch of the neighbour task chunks (same filter as search).
+    flt = _build_filter(team_id, user_id, ["task"], None, None)
+    flt.append({"terms": {"entity_id": entity_ids}})
+    try:
+        resp = client.search(
+            index=index,
+            body={"size": max(len(entity_ids) * 4, 8), "query": {"bool": {"filter": flt}}},
+            _source_excludes=["embedding"],
+        )
+        hits = resp.get("hits", {}).get("hits", [])
+    except Exception:  # noqa: BLE001 — graph expansion is best-effort, never fatal
+        log.exception("graph expansion: neighbour fetch failed")
+        return grouped
+    if not hits:
+        return grouped
+
+    fused: list[dict] = []
+    for h in hits:
+        src = h.get("_source") or {}
+        try:
+            tid = int(src.get("task_id"))
+        except (TypeError, ValueError):
+            continue
+        fused.append(
+            {
+                "chunk_id": src.get("chunk_id") or h.get("_id"),
+                "source": src,
+                "score": neigh_score.get(tid, 0.0),
+                "keyword_rank": None,
+                "vector_rank": None,
+                "matched_terms": [],
+            }
+        )
+    if not fused:
+        return grouped
+
+    neighbours = _group_by_entity(fused, for_agent=for_agent)
+    for e in neighbours:
+        try:
+            tid = int(e.get("task_id"))
+        except (TypeError, ValueError):
+            tid = None
+        e["score"] = neigh_score.get(tid, 0.0) if tid is not None else 0.0
+        # Mark provenance so the chip-row / agent can tell a graph-pulled
+        # result from a lexical/vector hit.
+        e["matched_terms"] = list(dict.fromkeys((e.get("matched_terms") or []) + ["graph:dependency"]))
+        e["graph_related"] = True
+
+    grouped = grouped + neighbours
+    grouped.sort(key=lambda e: float(e.get("score") or 0.0), reverse=True)
+    return grouped
