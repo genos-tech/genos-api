@@ -5,10 +5,18 @@ from origin.models.common.user_models import CustomUser
 class NotificationPreference(models.Model):
     """Per-user web-notification preferences.
 
-    Five master toggles map 1:1 to the categories the frontend
-    `NotificationManager` knows about. `muted_chats` is a JSON list of
-    `{"chat_type": int, "chat_id": str}` entries that suppress every
-    category for messages originating from that chat.
+    The five boolean toggles are the coarse *group* masters that the
+    frontend `NotificationManager` hard-gates on. `category_settings`
+    is a free-form `{fine_category_key: bool}` map layered on top of the
+    coarse groups so finer sub-categories (e.g. the per-surface mention
+    splits) can be added without a schema migration; an absent key
+    inherits the category's built-in default. `muted_chats` is a JSON
+    list of `{"chat_type": int, "chat_id": str}` entries that suppress
+    every category for messages originating from that chat.
+    `muted_targets` is a more general per-object mute list — entries of
+    `{"target_type", "target_id", "chat_type"?, "categories"?, "label"?}`
+    that suppress a specific thread/task/note (optionally only for the
+    listed categories).
     """
 
     user = models.OneToOneField(
@@ -24,7 +32,13 @@ class NotificationPreference(models.Model):
     enable_task_comments = models.BooleanField(default=True)
     enable_inbox = models.BooleanField(default=True)
 
+    # Fine-grained per-category overrides layered on the coarse groups.
+    # `{fine_key: bool}`; absent key => use the category's default.
+    category_settings = models.JSONField(default=dict, blank=True)
+
     muted_chats = models.JSONField(default=list, blank=True)
+    # Per-object mutes (thread/task/note), optionally category-scoped.
+    muted_targets = models.JSONField(default=list, blank=True)
 
     ts_updated_at = models.DateTimeField(auto_now=True)
 

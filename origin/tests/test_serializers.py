@@ -202,12 +202,130 @@ class NotificationPreferenceSerializerTests(BaseAPITestCase):
                 "enable_mentions",
                 "enable_task_comments",
                 "enable_inbox",
+                "category_settings",
                 "muted_chats",
+                "muted_targets",
                 "ts_updated_at",
             },
         )
         self.assertTrue(data["master_enabled"])
         self.assertEqual(data["muted_chats"], [])
+        self.assertEqual(data["category_settings"], {})
+        self.assertEqual(data["muted_targets"], [])
+
+
+# ======================================================================
+# NotificationPreferenceSerializer.validate_category_settings
+# ======================================================================
+class NotificationPreferenceCategorySettingsTests(BaseAPITestCase):
+    def _serializer(self, category_settings):
+        return NotificationPreferenceSerializer(
+            data={"category_settings": category_settings}
+        )
+
+    def test_valid_map_normalizes(self):
+        s = self._serializer({"mention_task_body": False, "mention_chat": True})
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertEqual(
+            s.validated_data["category_settings"],
+            {"mention_task_body": False, "mention_chat": True},
+        )
+
+    def test_unknown_keys_tolerated_forward_compat(self):
+        # No allowlist — a newer client key must not 400 an older backend.
+        s = self._serializer({"some_future_category": True})
+        self.assertTrue(s.is_valid(), s.errors)
+
+    def test_non_dict_rejected(self):
+        s = self._serializer([("mention_chat", True)])
+        self.assertFalse(s.is_valid())
+        self.assertIn("category_settings", s.errors)
+
+    def test_non_bool_value_rejected(self):
+        s = self._serializer({"mention_chat": "yes"})
+        self.assertFalse(s.is_valid())
+        self.assertIn("category_settings", s.errors)
+
+
+# ======================================================================
+# NotificationPreferenceSerializer.validate_muted_targets
+# ======================================================================
+class NotificationPreferenceMutedTargetsTests(BaseAPITestCase):
+    def _serializer(self, muted_targets):
+        return NotificationPreferenceSerializer(data={"muted_targets": muted_targets})
+
+    def test_valid_minimal_entry(self):
+        s = self._serializer([{"target_type": "task", "target_id": "7"}])
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertEqual(
+            s.validated_data["muted_targets"],
+            [{"target_type": "task", "target_id": "7"}],
+        )
+
+    def test_valid_full_entry(self):
+        s = self._serializer(
+            [
+                {
+                    "target_type": "thread",
+                    "target_id": "t-9",
+                    "chat_type": 2,
+                    "categories": ["mention_thread"],
+                    "label": "Standup",
+                }
+            ]
+        )
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertEqual(
+            s.validated_data["muted_targets"][0],
+            {
+                "target_type": "thread",
+                "target_id": "t-9",
+                "chat_type": 2,
+                "categories": ["mention_thread"],
+                "label": "Standup",
+            },
+        )
+
+    def test_dedup_same_key_collapses(self):
+        s = self._serializer(
+            [
+                {"target_type": "task", "target_id": "7", "label": "First"},
+                {"target_type": "task", "target_id": "7", "label": "Second"},
+            ]
+        )
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertEqual(len(s.validated_data["muted_targets"]), 1)
+        self.assertEqual(s.validated_data["muted_targets"][0]["label"], "First")
+
+    def test_empty_list_is_valid(self):
+        s = self._serializer([])
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertEqual(s.validated_data["muted_targets"], [])
+
+    def test_bad_target_type_rejected(self):
+        s = self._serializer([{"target_type": "project", "target_id": "1"}])
+        self.assertFalse(s.is_valid())
+        self.assertIn("muted_targets", s.errors)
+
+    def test_missing_target_id_rejected(self):
+        s = self._serializer([{"target_type": "task"}])
+        self.assertFalse(s.is_valid())
+        self.assertIn("muted_targets", s.errors)
+
+    def test_chat_type_bool_rejected(self):
+        # bool is excluded explicitly (unlike muted_chats).
+        s = self._serializer(
+            [{"target_type": "thread", "target_id": "t", "chat_type": True}]
+        )
+        self.assertFalse(s.is_valid())
+        self.assertIn("muted_targets", s.errors)
+
+    def test_categories_non_string_rejected(self):
+        s = self._serializer(
+            [{"target_type": "task", "target_id": "7", "categories": [1, 2]}]
+        )
+        self.assertFalse(s.is_valid())
+        self.assertIn("muted_targets", s.errors)
 
 
 # ======================================================================
