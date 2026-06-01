@@ -58,7 +58,15 @@ class ToDoGroupListView(AuthenticatedAPIView):
         date_from = _parse_date(
             request.GET.get("from"), today - timedelta(days=DEFAULT_LOOKBACK_DAYS)
         )
-        date_to = _parse_date(request.GET.get("to"), today)
+        # Default the upper bound to today+1, not today. The server runs in
+        # UTC but groups are keyed by the *client's* local date, which can be
+        # up to one calendar day ahead of UTC (max offset is +14:00). A user
+        # in e.g. UTC+9 who creates "today's" group in their early-morning
+        # hours produces a local_date equal to the server's tomorrow;
+        # clamping `to` to the server's localdate() would hide that
+        # just-created group until UTC caught up, making it vanish on the
+        # next fetch. One day of slack covers every real timezone.
+        date_to = _parse_date(request.GET.get("to"), today + timedelta(days=1))
 
         groups = (
             ToDoGroup.objects.filter(
