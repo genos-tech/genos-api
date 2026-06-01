@@ -29,6 +29,7 @@ from opensearchpy import helpers as os_helpers
 
 from origin.search_engine.chunkers.base import Chunk, EntityChunks
 from origin.search_engine.chunkers.chat_chunker import iter_all_chat_chunks
+from origin.search_engine.chunkers.conversation_chunker import iter_conversation_chunks
 from origin.search_engine.chunkers.note_chunker import iter_all_note_chunks
 from origin.search_engine.chunkers.note_summary_chunker import iter_note_summary_chunks
 from origin.search_engine.chunkers.task_chunker import iter_task_chunks
@@ -93,6 +94,7 @@ def ingest_all(
         "thread_summary",
         "note_summary",
         "todo",
+        "conversation",
     ]
 
     if "chat" in entity_types:
@@ -113,6 +115,9 @@ def ingest_all(
     if "todo" in entity_types:
         log.info("Ingesting todos (since=%s, dry_run=%s)...", since, dry_run)
         _ingest_stream(iter_todo_chunks(since=since), stats, dry_run=dry_run)
+    if "conversation" in entity_types:
+        log.info("Ingesting conversations (since=%s, dry_run=%s)...", since, dry_run)
+        _ingest_stream(iter_conversation_chunks(since=since), stats, dry_run=dry_run)
 
     # Refresh-deferred bulk: with `RAG_BULK_REFRESH=false` (the default),
     # individual `_bulk()` calls skip server-side refresh, leaving the

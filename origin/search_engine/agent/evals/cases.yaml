@@ -613,3 +613,47 @@
     no_errors: true
     expected_tools: ["get_current_user"]
     forbidden_tools: ["search_web", "search_knowledge_base"]
+
+# ============================================================ #
+# Q. Cross-session conversation memory (Q2.3 / C1)              #
+# ============================================================ #
+# Each case SEEDS a prior, ended conversation into the per-user
+# `conversation` lane (setup.seed_conversation → OpenSearch), then asks
+# a FRESH-session question whose answer lives ONLY in that past
+# conversation (the fact is deliberately absent from the WRD/QRD
+# workspace fixture). Passing requires the model to call
+# `search_past_conversations` and ground its answer in the recalled Q&A
+# — the cross-session recall the last-N-turns window can't provide.
+# On a build WITHOUT the tool/lane these fail (the fact is unreachable),
+# which is exactly the gap C1 closes.
+
+- id: convmem_recall_staging_rotation
+  fixture: true
+  setup:
+    seed_conversation:
+      question: "What did we settle on for staging database password rotation?"
+      answer: |
+        We decided to rotate the staging database password every 14 days,
+        automated by the rotate-staging-creds script that Priya owns. The
+        current secret lives in 1Password under "staging-db-rot-2026".
+  query: "What did we decide earlier about staging DB password rotation — how often, and who owns it?"
+  expect:
+    tools_used_contains: ["search_past_conversations"]
+    answer_contains_any: ["14", "Priya", "rotate-staging-creds"]
+    no_errors: true
+    expected_tools: ["search_past_conversations"]
+
+- id: convmem_recall_experiment_name
+  fixture: true
+  setup:
+    seed_conversation:
+      question: "What did we name the new onboarding cohort experiment, and who runs it?"
+      answer: |
+        We named the onboarding cohort experiment "Project Northwind" and
+        agreed that Dana would run the A/B test for 3 weeks before we review.
+  query: "Remind me what we called the onboarding cohort experiment and who's running it."
+  expect:
+    tools_used_contains: ["search_past_conversations"]
+    answer_contains_any: ["Northwind", "Dana"]
+    no_errors: true
+    expected_tools: ["search_past_conversations"]

@@ -72,6 +72,17 @@ here fits):
   Fetch a known entity by id:
   - fetch_task / fetch_note / fetch_chat_thread / fetch_pr
 
+  Recall something from an EARLIER conversation with you (not a
+  workspace entity) — the user refers back to a past chat/decision/answer:
+  - "what did we decide / settle on / agree" / "remind me what we
+    called / named" / "the plan you gave me earlier" / "like I asked
+    last week" / "what was that thing we discussed"
+                            → search_past_conversations
+    (searches the user's own prior agent conversations across sessions;
+    try it BEFORE search_knowledge_base when the question points at a
+    past discussion rather than a workspace item, and as a fallback when
+    search_knowledge_base finds nothing for a "what did we…" question.)
+
   Open-ended natural-language questions over the workspace:
   - search_knowledge_base (hybrid keyword + semantic over chats /
     tasks / notes / projects). Start here for vague questions.
