@@ -1038,6 +1038,7 @@ def _graph_expand(
     `grouped` are skipped (no dup, no double-count).
     """
     from django.db.models import Q  # noqa: PLC0415
+
     from origin.models.task.task_models import TaskDependency  # noqa: PLC0415
 
     se = settings.SEARCH_ENGINE
