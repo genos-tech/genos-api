@@ -625,11 +625,17 @@ SEARCH_ENGINE = {
     # Fraction (0.0–1.0) of completed agent runs the `agent_judge_sample`
     # cron command scores with the LLM judge, so production faithfulness /
     # citation / completeness can be trended vs the fixed offline suite.
-    # 0.0 = off (default). Each judged run costs ~1 LLM call; the command
-    # also caps cost per pass via `--limit`. Sampling is deterministic by
-    # run_id hash, so the effective rate matches this value regardless of
-    # how often the cron fires. Runs OFF the user request path.
-    "RAG_JUDGE_SAMPLE_RATE": float(os.environ.get("RAG_JUDGE_SAMPLE_RATE", "0.0")),
+    # **Default 0.1 (ENABLED)** — this is the data-collection surface the
+    # built-but-OFF levers (critique, tool-subsetting, per-class fusion) need
+    # for a real verdict; the offline suite can't see their payoff. Each judged
+    # run costs ~1 LLM call and the command caps cost per pass via `--limit`,
+    # so 10% is a low, bounded spend; set 0.0 to disable. Sampling is
+    # deterministic by run_id hash, so the effective rate matches this value
+    # regardless of how often the cron fires. Runs OFF the user request path —
+    # it does nothing until a scheduler actually invokes the command:
+    #     0 * * * *  cd /app/backend_django && python manage.py agent_judge_sample
+    # Trend / drift: `agent_judge_sample --report [--alert]` (see Q0.5).
+    "RAG_JUDGE_SAMPLE_RATE": float(os.environ.get("RAG_JUDGE_SAMPLE_RATE", "0.1")),
     # Q0.4 — tool-selection north-star (SPOTLIGHT_QUALITY_ARCHITECTURE.md §4.5,
     # roadmap §1: ">=0.90"). The agent_eval harness REPORTS the aggregate
     # continuous tool-selection scalars (tool_recall / tool_excl_ok) against
