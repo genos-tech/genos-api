@@ -178,6 +178,11 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
         if "inject_note" in setup:
             handle = _setup_inject_note(setup["inject_note"], team_id=team_id, user_id=user_id)
             cleanup_handles.append(handle)
+        if "seed_conversation" in setup:
+            handle = _setup_seed_conversation(
+                setup["seed_conversation"], team_id=team_id, user_id=user_id
+            )
+            cleanup_handles.append(handle)
 
         events: list[dict[str, Any]] = []
         tool_traces: list[dict[str, Any]] = []
@@ -1184,5 +1189,58 @@ def _setup_inject_note(spec: dict[str, Any], *, team_id: str, user_id: str):
             client.delete(index=index, id=chunk_id, refresh="wait_for")
         except Exception:  # noqa: BLE001
             log.exception("Failed to delete eval-injected note %s", chunk_id)
+
+    return cleanup
+
+
+def _setup_seed_conversation(spec: dict[str, Any], *, team_id: str, user_id: str):
+    """Index a transient PAST conversation into the per-user `conversation`
+    lane for cross-session-memory cases (Q2.3). Pushed straight to OpenSearch
+    (like `_setup_inject_note`) so the case is self-contained — it simulates a
+    prior, ended AgentRun the `search_past_conversations` tool should recall.
+
+    `spec` keys:
+        question (str): the earlier question the user asked.
+        answer   (str): the answer — should carry a DISTINCTIVE fact that is
+                        NOT present anywhere in the indexed workspace, so the
+                        only way to surface it is the conversation lane.
+    """
+    from origin.search_engine.embeddings import embed_one  # noqa: PLC0415
+    from origin.search_engine.opensearch_client import (  # noqa: PLC0415
+        get_client,
+        get_index_alias,
+    )
+
+    question = (spec.get("question") or "").strip()
+    answer = (spec.get("answer") or "").strip()
+    if not answer:
+        raise ValueError("seed_conversation.answer is required")
+
+    client = get_client()
+    index = get_index_alias()
+    chunk_id = f"eval-conversation:{uuid.uuid4()}"
+    search_text = f"Q: {question}\nA: {answer}"
+
+    doc = {
+        "chunk_id": chunk_id,
+        "entity_type": "conversation",
+        "entity_id": chunk_id,
+        "chunk_type": "conversation",
+        "team_id": team_id,
+        "user_id": user_id,
+        "acl_user_ids": [user_id],
+        "title": question or "(past conversation)",
+        "snippet_text": answer[:200],
+        "search_text": search_text,
+        "embedding": embed_one(search_text),
+        "index_schema_version": "v1",
+    }
+    client.index(index=index, id=chunk_id, body=doc, refresh="wait_for")
+
+    def cleanup() -> None:
+        try:
+            client.delete(index=index, id=chunk_id, refresh="wait_for")
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to delete eval-seeded conversation %s", chunk_id)
 
     return cleanup

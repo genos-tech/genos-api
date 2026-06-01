@@ -94,6 +94,9 @@ from origin.search_engine.agent.tools.list_tasks import LIST_TASKS
 from origin.search_engine.agent.tools.list_today_todos import LIST_TODAY_TODOS
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
 from origin.search_engine.agent.tools.search_kb import SEARCH_KNOWLEDGE_BASE
+from origin.search_engine.agent.tools.search_past_conversations import (
+    SEARCH_PAST_CONVERSATIONS,
+)
 from origin.search_engine.agent.tools.update_calendar_event import UPDATE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.update_note import UPDATE_NOTE
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
@@ -107,6 +110,8 @@ from origin.search_engine.agent.tools.web_search import SEARCH_WEB
 for _t in (
     # --- Read tools (Phase 1–11) ---
     SEARCH_KNOWLEDGE_BASE,
+    # --- Conversation memory (Q2.3 / C1) ---
+    SEARCH_PAST_CONVERSATIONS,
     FETCH_TASK,
     FETCH_CHAT_THREAD,
     FETCH_NOTE,

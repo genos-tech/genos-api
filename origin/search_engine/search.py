@@ -621,6 +621,12 @@ def _build_filter(
     ]
     if entity_types:
         filt.append({"terms": {"entity_type": entity_types}})
+    else:
+        # Private lanes (Q2.3 conversation memory) are reachable ONLY when
+        # explicitly requested via entity_types — never from default
+        # workspace search — so a user's past Q&A doesn't leak into ordinary
+        # results. The `search_past_conversations` tool opts in explicitly.
+        filt.append({"bool": {"must_not": [{"term": {"entity_type": "conversation"}}]}})
     if date_from or date_to:
         rng: dict = {}
         if date_from:
