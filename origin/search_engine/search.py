@@ -332,7 +332,13 @@ def search(
     # hits get displaced by semantically-richer-but-less-precise
     # candidates). Locking the top-N from RRF preserves those wins
     # while still letting the reranker fix the noisy tail.
-    if settings.SEARCH_ENGINE.get("RAG_USE_RERANKER") and grouped:
+    # Mode guard: NEVER rerank in typeahead mode. The reranker makes an LLM
+    # call (seconds), which is incompatible with typeahead's sub-100 ms Cmd-K
+    # budget. Reranking/fusion is an ai_search (agent path) + eval (offline
+    # measurement) concern only — so flipping RAG_USE_RERANKER on by default
+    # (Q2.1, backed by measured +0.118 recall on the agent path) doesn't
+    # silently tax the as-you-type surface.
+    if settings.SEARCH_ENGINE.get("RAG_USE_RERANKER") and grouped and mode != "typeahead":
         from origin.search_engine.reranker import rerank  # noqa: PLC0415
 
         input_k = int(settings.SEARCH_ENGINE.get("RAG_RERANK_INPUT_K", 20))
