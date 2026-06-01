@@ -657,3 +657,31 @@
     answer_contains_any: ["Northwind", "Dana"]
     no_errors: true
     expected_tools: ["search_past_conversations"]
+
+# ============================================================ #
+# R. Relationship-graph queries (Q2.4 / GraphRAG foundation)   #
+# ============================================================ #
+# These exercise the seeded TaskDependency edges (demo_seeder:
+# _seed_task_dependencies). They pass TODAY via the reactive
+# `get_task_blockers` tool — validating the edges + the graph relation are
+# reachable. GraphRAG (A1) would additionally make the relation
+# retrieval-NATIVE (see the `graph_native_*` retrieval case); these behavior
+# cases are the regression baseline for that work.
+
+- id: graph_blockers_of_hero_build
+  fixture: true
+  query: "What's blocking the 'Build Hero + FeatureGrid' task? List the blockers."
+  expect:
+    tools_used_contains: ["get_task_blockers"]
+    answer_contains_any: ["framer-motion", "Migrate marketing pages", "design system"]
+    no_errors: true
+    expected_tools: ["get_task_blockers"]
+
+- id: graph_downstream_of_framer_spike
+  fixture: true
+  query: "What work is blocked by the framer-motion vs CSS animations spike?"
+  expect:
+    tools_used_contains: ["get_task_blockers"]
+    answer_contains_any: ["Hero", "FeatureGrid"]
+    no_errors: true
+    expected_tools: ["get_task_blockers"]

@@ -58,7 +58,7 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.sprint_models import Sprint, SprintConfig
-from origin.models.task.task_models import TaskComments, TaskMaster
+from origin.models.task.task_models import TaskComments, TaskDependency, TaskMaster
 from origin.search_engine.models import RagChunk
 
 BOT_PROFILES = [
@@ -2362,12 +2362,53 @@ def _create_project_from_blueprint(team, demo_user, all_members, bots, short, bl
         blueprint["tasks"],
     )
 
+    # Seed a few realistic blocker→blocked edges so the relationship graph
+    # has data: powers `get_task_blockers` and is the substrate the GraphRAG
+    # eval cases (Q2.4) measure against.
+    _seed_task_dependencies(team, demo_user, tasks)
+
     return {
         "project": project,
         "blueprint": blueprint,
         "tasks": tasks,
         "backing_task": backing_task,
     }
+
+
+# Realistic within-project dependencies, matched by title substring so they
+# survive blueprint edits. Each pair is (blocker_substring, blocked_substring)
+# meaning "blocker blocks blocked". Pairs whose endpoints aren't both in the
+# given project's task list are skipped — so the same list is safe to apply to
+# every project.
+_DEPENDENCY_EDGES = [
+    # Website Redesign: the spike decision and the design-system migration both
+    # gate the Hero build.
+    ("framer-motion", "Hero + FeatureGrid"),
+    ("Migrate marketing pages", "Hero + FeatureGrid"),
+    # Q2 Roadmap: interview synthesis and competitor analysis feed the proposal.
+    ("Synthesize 12 customer interviews", "Roadmap proposal"),
+    ("Competitor analysis", "Roadmap proposal"),
+]
+
+
+def _seed_task_dependencies(team, demo_user, tasks: List[TaskMaster]) -> None:
+    def _find(substr: str):
+        s = substr.lower()
+        for t in tasks:
+            if s in (t.title or "").lower():
+                return t
+        return None
+
+    for blocker_sub, blocked_sub in _DEPENDENCY_EDGES:
+        blocker = _find(blocker_sub)
+        blocked = _find(blocked_sub)
+        if not blocker or not blocked or blocker.task_id == blocked.task_id:
+            continue
+        TaskDependency.objects.get_or_create(
+            blocker_task=blocker,
+            blocked_task=blocked,
+            defaults={"team": team, "created_by": demo_user},
+        )
 
 
 def _create_sprint(team, project) -> Sprint:

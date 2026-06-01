@@ -651,3 +651,23 @@
       n: 5
       title_substrings: ["Q3 OKRs", "top 5 bets for Q3"]
     must_not_contain_title: ["stakeholder map"]
+
+# ============================================================ #
+# K. Graph-native relational recall (Q2.4 / GraphRAG TARGET)   #
+# ============================================================ #
+# The framer-motion spike BLOCKS the Hero build (seeded TaskDependency),
+# but the Hero task's TEXT need not mention framer-motion — so today's
+# BM25 + vector retrieval cannot connect them. This case asserts the
+# blocked task surfaces for a relational query. It is EXPECTED TO FAIL on
+# the current pipeline (no graph fusion at ranking time) and is the
+# measurable target GraphRAG (A1, §4.3) would turn green — i.e. a red
+# baseline here quantifies the GraphRAG gap. (The reactive get_task_blockers
+# path already covers this relation; see the graph_* behavior cases.)
+
+- id: graph_native_blocked_by_framer_spike
+  fixture: true
+  query: "Which tasks are blocked by the framer-motion spike decision?"
+  expect:
+    must_contain_title_in_top_n:
+      n: 5
+      title_substrings: ["Hero + FeatureGrid"]
