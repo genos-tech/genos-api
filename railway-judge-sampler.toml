@@ -1,0 +1,41 @@
+# Railway config for the `agent-judge-sampler` cron service (F2 — online
+# judge sampling, SPOTLIGHT_QUALITY_ARCHITECTURE.md §F2).
+#
+# Same Docker image as the `backend-django` service (built from the
+# same Dockerfile), but Railway runs it as a cron job: the container
+# starts on each tick, runs the start command to completion, and
+# exits. No gunicorn, no long-running process.
+#
+# What this does:
+#   Every hour, samples a deterministic fraction (RAG_JUDGE_SAMPLE_RATE,
+#   default 0.1 = 10%) of recently-completed, grounded `AgentRun`s that
+#   haven't been judged yet, scores each with the LLM judge, and stores
+#   the faithfulness / citation_precision / completeness scores in
+#   `AgentRunJudgement`. This is the production quality trend the fixed
+#   offline eval suite can't see. Idempotent: a run is judged at most
+#   once; cost is bounded by `--limit` (default 50) per pass and by the
+#   sample rate. Runs OFF the user request path.
+#
+# To read the trend / page on drift (from a Railway shell or another
+# scheduled tick):
+#   python /app/backend_django/manage.py agent_judge_sample --report [--alert]
+#
+# ENV: needs the SAME LLM-provider creds as backend-django (the judge
+# calls `get_model_client()` → GEMINI_API_KEY or the Vertex set, and
+# GEMINI_MODEL / LLM_PROVIDER) plus DATABASE_URL. It does NOT touch
+# OpenSearch (sources are reconstructed from persisted AgentStep rows)
+# and does NOT embed, so OPENSEARCH_* / OPENAI_API_KEY are not required.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "backend_django/Dockerfile"
+
+[deploy]
+# Hourly. The effective sample rate is fixed by RAG_JUDGE_SAMPLE_RATE
+# (deterministic by run_id hash), so a denser schedule only shortens
+# the lag before a new run gets judged — it does not raise the rate.
+# Absolute path avoids any ambiguity about the working directory when
+# Railway executes the startCommand override.
+cronSchedule = "0 * * * *"
+startCommand = "python /app/backend_django/manage.py agent_judge_sample"
+restartPolicyType = "NEVER"
