@@ -1,6 +1,11 @@
 from origin.models.common.notification_models import NotificationPreference
 from rest_framework import serializers
 
+# Recognised per-object mute target types. Kept here (not imported from
+# the frontend) so the backend can reject obviously malformed entries
+# without coupling to the FE category registry.
+_MUTED_TARGET_TYPES = {"chat", "thread", "task", "note"}
+
 
 class NotificationPreferenceSerializer(serializers.ModelSerializer):
     class Meta:
@@ -12,10 +17,88 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
             "enable_mentions",
             "enable_task_comments",
             "enable_inbox",
+            "category_settings",
             "muted_chats",
+            "muted_targets",
             "ts_updated_at",
         ]
         read_only_fields = ["ts_updated_at"]
+
+    def validate_category_settings(self, value):
+        # Free-form `{fine_category_key: bool}` map. Keys are intentionally
+        # NOT validated against a fixed allowlist so a newer client can add
+        # a category key without 400ing against an older backend; only the
+        # shape (str -> bool) is enforced.
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("category_settings must be an object.")
+        normalized = {}
+        for key, enabled in value.items():
+            if not isinstance(key, str) or not key:
+                raise serializers.ValidationError(
+                    "category_settings keys must be non-empty strings."
+                )
+            if not isinstance(enabled, bool):
+                raise serializers.ValidationError("category_settings values must be booleans.")
+            normalized[key] = enabled
+        return normalized
+
+    def validate_muted_targets(self, value):
+        if not isinstance(value, list):
+            raise serializers.ValidationError("muted_targets must be a list.")
+
+        normalized = []
+        seen = set()
+        for entry in value:
+            if not isinstance(entry, dict):
+                raise serializers.ValidationError("Each muted_targets entry must be an object.")
+
+            target_type = entry.get("target_type")
+            target_id = entry.get("target_id")
+            chat_type = entry.get("chat_type")
+            categories = entry.get("categories")
+            label = entry.get("label")
+
+            if target_type not in _MUTED_TARGET_TYPES:
+                raise serializers.ValidationError(
+                    "muted_targets[].target_type must be one of " f"{sorted(_MUTED_TARGET_TYPES)}."
+                )
+            if not isinstance(target_id, str) or not target_id:
+                raise serializers.ValidationError(
+                    "muted_targets[].target_id must be a non-empty string."
+                )
+            # bool is a subclass of int — exclude it explicitly.
+            if chat_type is not None and (
+                not isinstance(chat_type, int) or isinstance(chat_type, bool)
+            ):
+                raise serializers.ValidationError(
+                    "muted_targets[].chat_type must be an integer when provided."
+                )
+            if categories is not None:
+                if not isinstance(categories, list) or not all(
+                    isinstance(c, str) and c for c in categories
+                ):
+                    raise serializers.ValidationError(
+                        "muted_targets[].categories must be a list of non-empty strings."
+                    )
+            if label is not None and not isinstance(label, str):
+                raise serializers.ValidationError(
+                    "muted_targets[].label must be a string when provided."
+                )
+
+            key = (target_type, target_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            item = {"target_type": target_type, "target_id": target_id}
+            if chat_type is not None:
+                item["chat_type"] = chat_type
+            if categories:
+                item["categories"] = list(categories)
+            if label:
+                item["label"] = label
+            normalized.append(item)
+
+        return normalized
 
     def validate_muted_chats(self, value):
         if not isinstance(value, list):

@@ -1456,21 +1456,66 @@ class TaskCommentsView(AuthenticatedAPIView):
             # handler can broadcast `activity.created` (mirrors the
             # message-send proxy contract).
             activities_wire = []
-            if mirror is not None:
-                from origin.serializers.chat.unified_serializers import ActivitySerializer
-                from origin.services import mention_extractor, v3_activity
+            if mirror is not None and mirror.sender is not None:
+                # Best-effort, mirroring the dual-write philosophy above: a
+                # failure building comment activities must NOT 500 the
+                # already-saved comment. On error we just skip the live
+                # broadcast — the activity feed reconciles on next load.
+                try:
+                    # TaskComments / TaskMaster come from the module-level
+                    # `import *` (line ~10) — do NOT re-import them locally or
+                    # they become function-locals and the earlier
+                    # `TaskComments.objects...` use above raises UnboundLocalError.
+                    from origin.serializers.chat.unified_serializers import ActivitySerializer
+                    from origin.services import mention_extractor, v3_activity
 
-                sender = mirror.sender
-                if sender is not None:
+                    sender = mirror.sender
+                    mentioned_ids = mention_extractor.extract_mentioned_user_ids(
+                        request.data["comment_body"] or []
+                    )
                     acts = v3_activity.create_mention_activities(
                         message=mirror,
-                        mentioned_user_ids=mention_extractor.extract_mentioned_user_ids(
-                            request.data["comment_body"] or []
-                        ),
+                        mentioned_user_ids=mentioned_ids,
                         actor=sender,
                         skip_actor=False,
                     )
-                    activities_wire = ActivitySerializer(acts, many=True).data
+
+                    # Plain-comment fan-out: a comment with no @mention
+                    # otherwise pings nobody. Notify the task's assignee +
+                    # everyone who has previously commented (thread
+                    # participants), minus the commenter (skipped inside the
+                    # helper) and anyone already @-mentioned above (they get
+                    # the more-specific MENTION activity).
+                    task_id_int = int(request.data["task_id"])
+                    mentioned_set = {str(u) for u in (mentioned_ids or []) if u}
+                    participant_ids = set()
+                    assignee_id = (
+                        TaskMaster.objects.filter(task_id=task_id_int)
+                        .values_list("assignee_id", flat=True)
+                        .first()
+                    )
+                    if assignee_id is not None:
+                        participant_ids.add(str(assignee_id))
+                    for cid in (
+                        TaskComments.objects.filter(task=task_id_int, is_deleted=False)
+                        .values_list("sender_id", flat=True)
+                        .distinct()
+                    ):
+                        if cid is not None:
+                            participant_ids.add(str(cid))
+                    participant_ids -= mentioned_set
+                    comment_acts = v3_activity.create_comment_participant_activities(
+                        message=mirror,
+                        recipient_ids=participant_ids,
+                        actor=sender,
+                    )
+
+                    activities_wire = ActivitySerializer(
+                        list(acts) + list(comment_acts), many=True
+                    ).data
+                except Exception as exc:  # never break the saved comment
+                    logger.warning("task-comment activity fan-out failed: %s", exc)
+                    activities_wire = []
             return Response(
                 {**serializer.data, "_v3_activities": activities_wire},
                 status=status.HTTP_201_CREATED,
