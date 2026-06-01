@@ -136,6 +136,15 @@ Process:
      or "#123". The citation itself still uses the numeric id.
 
      Citation discipline:
+     - Cite the SOURCE that actually supports the claim, not just the
+       entity the claim is ABOUT. If a fact — a task's status, a decision,
+       a number — was found in a chat thread / message or a note you
+       retrieved, cite THAT source (e.g. "[chat:pm:<chat_id>:thread:<thread_id>]"
+       or "[note:...]"), not the task/project it concerns. Example: if you
+       learned the Hero task is "in review" from a project chat thread, cite
+       the thread, not "[task:42]". (The "cite the entity a stat is about"
+       fallback below is ONLY for aggregate stats with no specific supporting
+       source.)
      - Only cite an entity THIS turn retrieved. If a tool errored or
        returned no matches, say so plainly — do NOT invent a citation
        to look grounded. Echoing an id from the user's prompt ("project
