@@ -46,6 +46,8 @@ Scope (sample validity — stated so the metric is honestly labelled):
 from __future__ import annotations
 
 import hashlib
+import logging
+import sys
 from datetime import timedelta
 from typing import Any
 
@@ -58,6 +60,8 @@ from django.utils import timezone
 from origin.search_engine.agent.evals.judge import judge_answer
 from origin.search_engine.agent_views import _reconstruct_sources_for_run
 from origin.search_engine.models import AgentRun, AgentRunJudgement
+
+log = logging.getLogger(__name__)
 
 # Fine-grained bucketing for the deterministic hash sampler — gives the
 # nominal rate ~6 significant figures of resolution.
@@ -111,10 +115,25 @@ class Command(BaseCommand):
             default=7,
             help="Lookback window for --report (default 7 days).",
         )
+        parser.add_argument(
+            "--alert",
+            action="store_true",
+            help=(
+                "With --report: exit non-zero if drift is detected (the recent "
+                "half of the window dropped more than RAG_JUDGE_DRIFT_THRESHOLD "
+                "below the prior half on any axis). For cron/CI paging."
+            ),
+        )
 
     def handle(self, *args, **options):
         if options.get("report"):
-            self._report(days=options["report_days"], team_id=options.get("team_id"))
+            drift = self._report(
+                days=options["report_days"],
+                team_id=options.get("team_id"),
+                alert=options.get("alert") or False,
+            )
+            if options.get("alert") and drift:
+                sys.exit(1)
             return
 
         rate = options["rate"]
@@ -259,7 +278,10 @@ class Command(BaseCommand):
         model = se.get("GEMINI_MODEL") if provider == "gemini" else se.get("CLAUDE_MODEL")
         return f"{provider}:{model or '?'}"
 
-    def _report(self, *, days: int, team_id: str | None) -> None:
+    def _report(self, *, days: int, team_id: str | None, alert: bool = False) -> bool:
+        """Print the judgement trend; return True if drift was detected
+        (recent-half mean dropped > RAG_JUDGE_DRIFT_THRESHOLD below prior-half
+        on any axis). The bool drives the `--alert` exit code."""
         cutoff = timezone.now() - timedelta(days=days)
         qs = AgentRunJudgement.objects.filter(created_at__gte=cutoff)
         if team_id:
@@ -274,7 +296,7 @@ class Command(BaseCommand):
                     + ". Run sampling first (RAG_JUDGE_SAMPLE_RATE>0)."
                 )
             )
-            return
+            return False
 
         # Means over successful judgements only (error="") so failed judge
         # calls (scored 0.0) don't drag the trend down.
@@ -316,3 +338,73 @@ class Command(BaseCommand):
                     f"faith={agg['faith']:.2f}  cite={agg['cite']:.2f}  compl={agg['compl']:.2f}"
                 )
             )
+
+        return self._check_drift(ok, days=days, team_id=team_id)
+
+    # Axes the drift check watches, mapped to their model field.
+    _DRIFT_AXES = (
+        ("faith", "faithfulness"),
+        ("cite", "citation_precision"),
+        ("compl", "completeness"),
+    )
+    # Both windows need at least this many scored runs for the comparison to
+    # be meaningful (a 2-run window swings on noise, not drift).
+    _DRIFT_MIN_PER_WINDOW = 5
+
+    def _check_drift(self, ok_qs, *, days: int, team_id: str | None) -> bool:
+        """Compare the recent half of the lookback against the prior half and
+        flag any axis that regressed beyond the threshold (F2 'alert on
+        regression'). `ok_qs` is the error-free judgement queryset."""
+        threshold = float(settings.SEARCH_ENGINE.get("RAG_JUDGE_DRIFT_THRESHOLD", 0.05))
+        recent_days = max(1, days // 2)
+        split = timezone.now() - timedelta(days=recent_days)
+
+        recent = ok_qs.filter(created_at__gte=split).aggregate(
+            n=Count("id"),
+            faith=Avg("faithfulness"),
+            cite=Avg("citation_precision"),
+            compl=Avg("completeness"),
+        )
+        prior = ok_qs.filter(created_at__lt=split).aggregate(
+            n=Count("id"),
+            faith=Avg("faithfulness"),
+            cite=Avg("citation_precision"),
+            compl=Avg("completeness"),
+        )
+
+        self.stdout.write(
+            f"\n=== Drift check — recent {recent_days}d (n={recent['n']}) "
+            f"vs prior {days - recent_days}d (n={prior['n']}), "
+            f"threshold {threshold:.2f} ==="
+        )
+        if recent["n"] < self._DRIFT_MIN_PER_WINDOW or prior["n"] < self._DRIFT_MIN_PER_WINDOW:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"  insufficient data (need >= {self._DRIFT_MIN_PER_WINDOW} scored "
+                    "runs per window); skipping drift verdict."
+                )
+            )
+            return False
+
+        drifted: list[str] = []
+        for short, _field in self._DRIFT_AXES:
+            r = recent[short] or 0.0
+            p = prior[short] or 0.0
+            delta = r - p
+            regressed = delta < -threshold
+            mark = self.style.ERROR("DRIFT") if regressed else self.style.SUCCESS("ok   ")
+            self.stdout.write(f"  {mark} {short:<6} prior={p:.2f} → recent={r:.2f}  Δ={delta:+.2f}")
+            if regressed:
+                drifted.append(f"{short} {p:.2f}→{r:.2f} (Δ{delta:+.2f})")
+
+        if drifted:
+            msg = (
+                "judge drift detected"
+                + (f" for team {team_id}" if team_id else "")
+                + ": "
+                + "; ".join(drifted)
+            )
+            log.warning("F2 %s", msg)
+            self.stdout.write(self.style.ERROR(f"\n  → {msg}"))
+            return True
+        return False

@@ -302,3 +302,42 @@ class AgentRunJudgement(models.Model):
             # `makemigrations --check`.
             models.Index(fields=["team_id", "-created_at"], name="se_judge_team_created_idx"),
         ]
+
+
+class AgentRunFeedback(models.Model):
+    """Human 👍/👎 on an agent answer (F1 — SPOTLIGHT_QUALITY_ARCHITECTURE.md
+    §Q0). The doc flags this signal as "genuinely absent — no model, no
+    endpoint, no UI"; it is the reward signal D5 (inline-citation preference),
+    D4 (RLHF/DPO), and F3 (bandit config selection) all gate on.
+
+    One row per (run, user): a given user's verdict on a given answer.
+    Recorded on POST /api/v2/agent/runs/<run_id>/feedback/ — NEVER on the
+    answer path. `rating` is +1 (👍) / -1 (👎); 0 is the explicit "cleared"
+    state (the UI toggles a vote back off). `comment` is optional free text
+    for a future "tell us why" affordance.
+    """
+
+    RATING_UP = 1
+    RATING_DOWN = -1
+    RATING_CLEARED = 0
+
+    id = models.BigAutoField(primary_key=True)
+    run = models.ForeignKey(AgentRun, on_delete=models.CASCADE, related_name="feedback")
+    # Denormalized from the run so per-team rollups don't need a join
+    # (mirrors AgentRunJudgement.team_id).
+    team_id = models.CharField(max_length=64, db_index=True)
+    user_id = models.CharField(max_length=64, db_index=True)
+    rating = models.SmallIntegerField()  # -1 | 0 | +1
+    comment = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["run", "user_id"], name="uq_agent_feedback_run_user"
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["team_id", "-created_at"], name="se_feedback_team_created_idx"),
+        ]

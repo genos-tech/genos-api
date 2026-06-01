@@ -436,11 +436,15 @@ SEARCH_ENGINE = {
     "RAG_FRESHNESS_HALF_LIFE_DAYS": float(os.environ.get("RAG_FRESHNESS_HALF_LIFE_DAYS", "90")),
     # Drop duplicate chunks (same text_hash) before entity grouping.
     "RAG_DEDUP_BY_HASH": (os.environ.get("RAG_DEDUP_BY_HASH", "true").lower() == "true"),
-    # LLM-as-judge reranker. OFF by default during rollout; enable per
-    # request via the env var. When on, after hybrid retrieval the top
-    # INPUT_K entities are sent to the active ModelClient for reranking
-    # and only the reranked OUTPUT_K are returned.
-    "RAG_USE_RERANKER": (os.environ.get("RAG_USE_RERANKER", "false").lower() == "true"),
+    # LLM-as-judge reranker. ON by default (Q2.1) for the agent / ai_search
+    # path: score-fusion measured +0.118 recall / +5 behavior cases / ZERO
+    # regressions on gemini-3.1-pro-preview (SPOTLIGHT_Q0_Q2_PROGRESS.md).
+    # NEVER runs in typeahead mode (search.py guards it — typeahead's
+    # sub-100 ms budget can't afford an LLM rerank call). Cost: ~+50%
+    # retrieval latency on the agent path. Set RAG_USE_RERANKER=false to
+    # disable; point RAG_RERANKER_MODEL at a faster model to cut the tax
+    # (the strong result used the main pro model as the reranker).
+    "RAG_USE_RERANKER": (os.environ.get("RAG_USE_RERANKER", "true").lower() == "true"),
     "RAG_RERANK_INPUT_K": int(os.environ.get("RAG_RERANK_INPUT_K", "20")),
     "RAG_RERANK_OUTPUT_K": int(os.environ.get("RAG_RERANK_OUTPUT_K", "10")),
     # Reranker provider — "llm" (default, uses the configured LLM
@@ -473,14 +477,28 @@ SEARCH_ENGINE = {
     # hard RAG_RERANK_LOCK_TOP_N split is bypassed (fusion is its soft
     # form). Off by default.
     "RAG_RERANK_FUSION": (
-        os.environ.get("RAG_RERANK_FUSION", "false").lower() == "true"
+        os.environ.get("RAG_RERANK_FUSION", "true").lower() == "true"
     ),
     # Reranker's share of the fused score in [0,1]; (1 - weight) is RRF's.
     # 0.5 is an UNTUNED placeholder — D2 is "hard to calibrate" and the
     # per-query-type weight is the actual work: sweep it against the
     # retrieval-suite MRR/recall_at_n metric. w=0 reproduces pure-RRF
     # order; w=1 is pure reranker relevance.
-    "RAG_RERANK_FUSION_WEIGHT": float(os.environ.get("RAG_RERANK_FUSION_WEIGHT", "0.5")),
+    "RAG_RERANK_FUSION_WEIGHT": float(os.environ.get("RAG_RERANK_FUSION_WEIGHT", "0.6")),
+    # Q2.1 — per-query-type fusion weights (the "actual work" the comment
+    # above names). An empty string means "fall back to RAG_RERANK_FUSION_WEIGHT"
+    # so the mechanism is INERT until calibrated. Rationale (roadmap §2.2 +
+    # §4.4): exact-phrase queries are RRF/keyword's strength — give the
+    # reranker a SMALL share so it can't displace an exact hit; paraphrase
+    # queries are where the cross-encoder lifts recall — give it a LARGER
+    # share. `_classify_query_type` (reranker.py) picks the lane from the raw
+    # query (quoted / short / title-cased ⇒ exact; longer NL ⇒ paraphrase).
+    # Calibrate by sweeping each against the retrieval-suite precision_at_k /
+    # mrr / recall_at_n, then set the winners here.
+    "RAG_RERANK_FUSION_WEIGHT_EXACT": (os.environ.get("RAG_RERANK_FUSION_WEIGHT_EXACT", "") or ""),
+    "RAG_RERANK_FUSION_WEIGHT_PARAPHRASE": (
+        os.environ.get("RAG_RERANK_FUSION_WEIGHT_PARAPHRASE", "") or ""
+    ),
     # Cohere Rerank — used when RAG_RERANKER_PROVIDER=cohere.
     # Get an API key at https://dashboard.cohere.com/api-keys
     # Pricing as of late 2025 is ~$2 / 1k queries.
@@ -597,6 +615,26 @@ SEARCH_ENGINE = {
     # run_id hash, so the effective rate matches this value regardless of
     # how often the cron fires. Runs OFF the user request path.
     "RAG_JUDGE_SAMPLE_RATE": float(os.environ.get("RAG_JUDGE_SAMPLE_RATE", "0.0")),
+    # Q0.4 — tool-selection north-star (SPOTLIGHT_QUALITY_ARCHITECTURE.md §4.5,
+    # roadmap §1: ">=0.90"). The agent_eval harness REPORTS the aggregate
+    # continuous tool-selection scalars (tool_recall / tool_excl_ok) against
+    # this floor on every run, turning the previously-orphaned scalar
+    # ("measures but nothing gates on it") into a tracked metric with a named
+    # target. Enforcement (exit 1 on a miss) is opt-in via `agent_eval
+    # --metric-gate` — observe-only by default, because the fixture gold for
+    # the multi-tool cases is still being validated and enforcing-by-default
+    # would regress a suite the team runs green. Per-case tool gold stays
+    # non-gating (path-sensitive); only the aggregate is checked.
+    "RAG_TOOL_SELECTION_NORTH_STAR": float(
+        os.environ.get("RAG_TOOL_SELECTION_NORTH_STAR", "0.90")
+    ),
+    # Q0.5 — F2 drift alert threshold (SPOTLIGHT_QUALITY_ARCHITECTURE.md §F2:
+    # "sample N%, score async, alert on regression"). `agent_judge_sample
+    # --report` compares the recent half of the window against the prior half;
+    # if any axis (faith / cite / compl) drops by more than this absolute
+    # delta it flags drift, and with `--alert` exits non-zero so a cron/CI
+    # wrapper can page. Default 0.05 (a 5-point drop on the 0-1 scale).
+    "RAG_JUDGE_DRIFT_THRESHOLD": float(os.environ.get("RAG_JUDGE_DRIFT_THRESHOLD", "0.05")),
     # Observability for Gemini implicit-cache hit rate. When True,
     # gemini_client._log_usage emits one INFO log per `generate_step`
     # call with `prompt_tokens`, `cached_tokens`, and a cache-hit %.

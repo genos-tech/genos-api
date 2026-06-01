@@ -82,12 +82,60 @@ Rules:
 _SNIPPET_TRUNCATE = 200
 
 
-def _fusion_weight() -> float | None:
+def _classify_query_type(query: str) -> str:
+    """Q2.1 — lightweight, LLM-free query-type signal for per-type fusion
+    weighting. Returns "exact" or "paraphrase".
+
+    "exact" = the user is reaching for a specific named thing where the
+    keyword/RRF lane is strongest: a quoted phrase, a very short query
+    (<= 3 tokens), or a title-cased noun phrase (>= 2 Capitalized words and
+    no question word). "paraphrase" = a longer natural-language ask where
+    the cross-encoder's semantic lift pays off. Deliberately conservative —
+    it only needs to separate the two populations the doc calibrates on, not
+    be a general intent classifier.
+    """
+    q = (query or "").strip()
+    if not q:
+        return "paraphrase"
+    if '"' in q or "'" in q:
+        return "exact"
+    tokens = q.split()
+    if len(tokens) <= 3:
+        return "exact"
+    qlower = q.lower()
+    question_words = ("what", "why", "how", "who", "where", "when", "which", "summar", "explain")
+    if not any(qlower.startswith(w) or f" {w}" in qlower for w in question_words):
+        capitalized = sum(1 for t in tokens if t[:1].isupper())
+        if capitalized >= 2:
+            return "exact"
+    return "paraphrase"
+
+
+def _fusion_weight(query: str | None = None) -> float | None:
     """Reranker's share of the fused score when RAG_RERANK_FUSION is on,
-    else None (no fusion → providers reorder as before)."""
-    if not settings.SEARCH_ENGINE.get("RAG_RERANK_FUSION", False):
+    else None (no fusion → providers reorder as before).
+
+    Q2.1: when a per-query-type weight is configured (non-empty
+    RAG_RERANK_FUSION_WEIGHT_EXACT / _PARAPHRASE) and a `query` is provided,
+    pick the lane via `_classify_query_type`; otherwise fall back to the
+    single global RAG_RERANK_FUSION_WEIGHT (so the mechanism is inert until
+    calibrated).
+    """
+    se = settings.SEARCH_ENGINE
+    if not se.get("RAG_RERANK_FUSION", False):
         return None
-    return float(settings.SEARCH_ENGINE.get("RAG_RERANK_FUSION_WEIGHT", 0.5))
+    default = float(se.get("RAG_RERANK_FUSION_WEIGHT", 0.5))
+    if query is None:
+        return default
+    key = "RAG_RERANK_FUSION_WEIGHT_EXACT" if _classify_query_type(query) == "exact" \
+        else "RAG_RERANK_FUSION_WEIGHT_PARAPHRASE"
+    raw = se.get(key, "")
+    if raw == "" or raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
 
 
 def _fuse_by_score(
@@ -239,7 +287,7 @@ def _rerank_llm(
     # score), so derive a positional relevance — top item ~1.0, last ~0;
     # dropped items are absent (→ relevance 0 in the fuse, kept at their
     # RRF share). Then blend with the RRF score instead of replacing it.
-    weight = _fusion_weight()
+    weight = _fusion_weight(query)
     if weight is not None:
         relevance = (
             {idx: 1.0 - pos / len(indices) for pos, idx in enumerate(indices)} if indices else {}
@@ -390,7 +438,7 @@ def _rerank_cohere(
     # D2 score fusion: Cohere's relevance_score is a real, calibrated
     # cross-encoder relevance — the faithful "RRF score + cross-encoder
     # score" blend. Without fusion we honor Cohere's score-desc order.
-    weight = _fusion_weight()
+    weight = _fusion_weight(query)
     if weight is not None:
         return _fuse_by_score(candidates, relevance, weight, output_k)
 

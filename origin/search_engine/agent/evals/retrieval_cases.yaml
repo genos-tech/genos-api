@@ -583,3 +583,71 @@
     must_contain_title_in_top_n:
       n: 5
       title_substrings: ["framer-motion"]
+
+# ============================================================ #
+# J. Precision / noise (Q0.1 — §4.4)                            #
+# ============================================================ #
+# Recall (above) asks "did the gold surface?"; these ask "is the
+# top-k free of noise?" — the opposite pull. They give the
+# continuous `precision_at_k` / `labeled_precision` metric a real
+# population: CLUSTER cases (>=2 relevant titles → the top-k
+# should be packed with the cluster) and DISTRACTOR cases (a known
+# near-neighbour that must NOT crowd in → labeled_precision). The
+# gating assertion stays loose (any-one / a single clear negative)
+# so the pass/fail is stable; the metric carries the real signal.
+
+- id: precision_q2_discovery_cluster
+  fixture: true
+  query: "What discovery work is on the Q2 roadmap?"
+  limit: 8
+  expect:
+    precision_k: 5
+    # Five QRD discovery tasks SHOULD pack the top-5; WRD build
+    # tasks crowding in pulls precision_at_k down.
+    must_contain_any_title_in_top_n:
+      n: 8
+      title_substrings:
+        - "customer interviews"
+        - "themes"
+        - "Discovery Sprint"
+        - "Competitor analysis"
+        - "Onboarding funnel"
+
+- id: precision_design_system_cluster
+  fixture: true
+  query: "Which redesign tasks involve the design system v3 migration?"
+  limit: 8
+  expect:
+    precision_k: 5
+    must_contain_any_title_in_top_n:
+      n: 8
+      title_substrings:
+        - "design system v3"
+        - "Hero + FeatureGrid"
+        - "Migrate marketing pages"
+        - "responsive navigation"
+
+- id: precision_analytics_not_competitor
+  fixture: true
+  # "analytics" shares vocabulary with "Competitor analysis"; the
+  # right hit is the Plausible setup task. If the competitor-analysis
+  # task crowds the top-5, labeled_precision drops.
+  query: "How are we setting up analytics on the new marketing pages?"
+  limit: 8
+  expect:
+    precision_k: 5
+    must_contain_any_title_in_top_n:
+      n: 5
+      title_substrings: ["Plausible"]
+    must_not_contain_title: ["Competitor analysis"]
+
+- id: precision_q3_okrs_focused
+  fixture: true
+  query: "Where is the Q3 OKRs draft?"
+  limit: 8
+  expect:
+    precision_k: 5
+    must_contain_any_title_in_top_n:
+      n: 5
+      title_substrings: ["Q3 OKRs", "top 5 bets for Q3"]
+    must_not_contain_title: ["stakeholder map"]

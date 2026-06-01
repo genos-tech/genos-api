@@ -37,6 +37,7 @@ from datetime import timedelta
 from typing import Any, Callable, Iterator
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db.models import Prefetch
 from django.http import StreamingHttpResponse
 from django.utils import timezone
@@ -77,7 +78,7 @@ from origin.search_engine.llm.choice import (
     resolve_user_choice,
     set_llm_choice,
 )
-from origin.search_engine.models import AgentRun, AgentSession, AgentStep
+from origin.search_engine.models import AgentRun, AgentRunFeedback, AgentSession, AgentStep
 from origin.search_engine.quota import (
     LLM_ASK_KEY,
     WEB_SEARCH_KEY,
@@ -811,6 +812,13 @@ def _stream_ndjson(
             # Inject session_id so the frontend can thread the next ask.
             if session_id is not None:
                 event = {**event, "session_id": str(session_id)}
+            # Inject run_id so the frontend can attach 👍/👎 feedback to
+            # this turn (F1 — SPOTLIGHT_QUALITY_ARCHITECTURE.md §Q0). The
+            # run row is persisted with this id; the feedback endpoint keys
+            # on it. (The approval path already exposes run_id via the
+            # pending-approval event.)
+            if run is not None:
+                event = {**event, "run_id": str(run.run_id)}
         elif event_type == "error":
             msg = event.get("message") or ""
             final_error = msg
@@ -1731,3 +1739,71 @@ def _build_turns_payload(session: AgentSession) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+class AgentRunFeedbackView(AuthenticatedAPIView):
+    """POST /api/v2/agent/runs/<run_id>/feedback/ — record 👍/👎 on an answer.
+
+    F1 (SPOTLIGHT_QUALITY_ARCHITECTURE.md §Q0): the reward signal that was
+    "genuinely absent". Body: `{"rating": 1 | -1 | 0, "comment"?: str}` where
+    +1 = 👍, -1 = 👎, 0 = cleared (toggle a vote back off). Idempotent
+    upsert keyed on (run, user): re-posting overwrites the prior verdict, so
+    the UI can flip 👍→👎 freely. Only the run's original asker may rate it
+    (it's "was MY answer good?") — a light ACL on top of auth.
+    """
+
+    _VALID_RATINGS = {AgentRunFeedback.RATING_UP, AgentRunFeedback.RATING_DOWN,
+                      AgentRunFeedback.RATING_CLEARED}
+
+    def post(self, request, run_id: str):
+        data = request.data or {}
+
+        try:
+            rating = int(data.get("rating"))
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "rating is required and must be an integer in {-1, 0, 1}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if rating not in self._VALID_RATINGS:
+            return Response(
+                {"error": "rating must be one of -1 (👎), 0 (cleared), 1 (👍)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user_id = str(getattr(request.user, "id", "")) or (data.get("user_id") or "")
+        if not user_id:
+            return Response(
+                {"error": "Could not determine user_id from the auth token."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            run = AgentRun.objects.get(run_id=run_id)
+        except (AgentRun.DoesNotExist, ValueError, ValidationError):
+            return Response(
+                {"error": "No such agent run."}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Light ACL: you can only rate an answer to your own question.
+        if str(run.user_id) != user_id:
+            return Response(
+                {"error": "You can only give feedback on your own agent runs."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        comment = (data.get("comment") or "").strip()
+        feedback, _created = AgentRunFeedback.objects.update_or_create(
+            run=run,
+            user_id=user_id,
+            defaults={
+                "team_id": str(run.team_id),
+                "rating": rating,
+                "comment": comment,
+            },
+        )
+
+        return Response(
+            {"run_id": str(run.run_id), "rating": feedback.rating, "comment": feedback.comment},
+            status=status.HTTP_200_OK,
+        )

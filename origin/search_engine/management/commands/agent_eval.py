@@ -37,10 +37,12 @@ from origin.search_engine.agent.evals.judge import judge_answer
 from origin.search_engine.agent.evals.runner import (
     BEHAVIOR_CASES_PATH,
     RETRIEVAL_CASES_PATH,
+    SUMMARY_CASES_PATH,
     CaseResult,
     load_cases,
     run_behavior_case,
     run_retrieval_case,
+    run_summary_case,
 )
 
 RUNS_DIR = Path(__file__).resolve().parents[3] / "agent" / "evals" / "runs"
@@ -68,10 +70,21 @@ class Command(BaseCommand):
             help="Run only the retrieval suite (fast, no LLM calls).",
         )
         suite_group.add_argument(
+            "--summary",
+            dest="summary_only",
+            action="store_true",
+            help=(
+                "Run only the summary-fidelity suite (Q0.3): summarise each "
+                "source with the production summary prompt, then score "
+                "summary-vs-source fidelity / coverage / entity-preservation. "
+                "Source: agent/evals/summary_cases.yaml."
+            ),
+        )
+        suite_group.add_argument(
             "--all",
             dest="run_all",
             action="store_true",
-            help="Run both behavior and retrieval suites.",
+            help="Run behavior, retrieval, and summary suites.",
         )
         parser.add_argument(
             "--judge",
@@ -93,19 +106,36 @@ class Command(BaseCommand):
                 "retrieval suite doesn't spam files during iteration."
             ),
         )
+        parser.add_argument(
+            "--metric-gate",
+            action="store_true",
+            help=(
+                "ENFORCE the tool-selection north-star (Q0.4): exit 1 when the "
+                "aggregate tool_recall / tool_excl_ok is below "
+                "RAG_TOOL_SELECTION_NORTH_STAR. Default is observe-only — the "
+                "north-star line is always reported, but the run only fails on "
+                "it when this flag is set (the fixture gold for the multi-tool "
+                "cases is still being validated, so enforcing-by-default would "
+                "regress a suite the team runs green)."
+            ),
+        )
 
     def handle(self, *args, **options):
         case_id_filter: str | None = options.get("case_id")
         fail_fast: bool = options.get("fail_fast") or False
         retrieval_only: bool = options.get("retrieval") or False
+        summary_only: bool = options.get("summary_only") or False
         run_all: bool = options.get("run_all") or False
         run_judge: bool = options.get("judge") or False
         persist_metrics: bool = options.get("persist_metrics") or False
+        metric_gate: bool = options.get("metric_gate") or False
 
-        if run_judge and retrieval_only:
+        if run_judge and (retrieval_only or summary_only):
             self.stderr.write(
                 self.style.ERROR(
-                    "--judge only applies to behavior cases (retrieval cases have no answer to judge)."
+                    "--judge only applies to behavior cases (retrieval/summary cases "
+                    "have no answer-vs-sources to judge; the summary suite runs its own "
+                    "summary-fidelity judge automatically)."
                 )
             )
             sys.exit(2)
@@ -113,10 +143,13 @@ class Command(BaseCommand):
         # Decide which suite(s) to run.
         if retrieval_only:
             suites = [("retrieval", RETRIEVAL_CASES_PATH, run_retrieval_case)]
+        elif summary_only:
+            suites = [("summary", SUMMARY_CASES_PATH, run_summary_case)]
         elif run_all:
             suites = [
                 ("behavior", BEHAVIOR_CASES_PATH, run_behavior_case),
                 ("retrieval", RETRIEVAL_CASES_PATH, run_retrieval_case),
+                ("summary", SUMMARY_CASES_PATH, run_summary_case),
             ]
         else:
             suites = [("behavior", BEHAVIOR_CASES_PATH, run_behavior_case)]
@@ -171,14 +204,77 @@ class Command(BaseCommand):
 
         self._print_summary(all_results, run_judge=run_judge)
 
+        # Q0.4 — tool-selection north-star. The aggregate tool-selection
+        # scalars are always reported against the floor; enforcement (exit 1
+        # on a miss) is opt-in via --metric-gate (observe-only by default).
+        gate_failed = self._check_metric_gate(all_results, enforce=metric_gate)
+
         if run_judge:
             self._persist_judge_run(all_results)
 
         if persist_metrics:
             self._persist_metrics_run(all_results)
 
-        if any_failed:
+        if any_failed or gate_failed:
             sys.exit(1)
+
+    # Aggregate continuous metrics that have a published north-star floor
+    # (SPOTLIGHT_QUALITY_ARCHITECTURE.md §4.5 / roadmap §1). Each maps to the
+    # settings key holding its threshold.
+    _NORTH_STAR_METRICS = {
+        "tool_recall": "RAG_TOOL_SELECTION_NORTH_STAR",
+        "tool_excl_ok": "RAG_TOOL_SELECTION_NORTH_STAR",
+    }
+
+    def _check_metric_gate(self, results: list[CaseResult], *, enforce: bool) -> bool:
+        """Gate the aggregate tool-selection scalars against their north-star.
+
+        Returns True when the gate FAILED (a metric mean is below its floor)
+        and `enforce` is set — the caller turns that into exit 1. When
+        `enforce` is False this only reports (observe-only). Metrics with no
+        case population this run are skipped (you can't gate what you didn't
+        measure).
+        """
+        from django.conf import settings  # noqa: PLC0415 — Django app-ready
+
+        scored = [r for r in results if r.metrics]
+        if not scored:
+            return False
+
+        violations: list[str] = []
+        reported = False
+        for metric, setting_key in self._NORTH_STAR_METRICS.items():
+            vals = [r.metrics[metric] for r in scored if metric in r.metrics]
+            if not vals:
+                continue
+            floor = float(settings.SEARCH_ENGINE.get(setting_key, 0.90))
+            mean = sum(vals) / len(vals)
+            ok = mean >= floor
+            if not reported:
+                self.stdout.write("\nNorth-star gate (Q0.4):")
+                reported = True
+            status = self.style.SUCCESS("OK  ") if ok else self.style.ERROR("FAIL")
+            self.stdout.write(
+                f"  {status} {metric}={mean:.3f} (n={len(vals)}) vs floor {floor:.2f}"
+            )
+            if not ok:
+                violations.append(f"{metric}={mean:.3f} < {floor:.2f}")
+
+        if violations:
+            if enforce:
+                self.stdout.write(
+                    self.style.ERROR(
+                        "  → north-star gate FAILED: " + "; ".join(violations)
+                    )
+                )
+                return True
+            self.stdout.write(
+                self.style.WARNING(
+                    "  → below north-star (observe-only; pass --metric-gate to enforce): "
+                    + "; ".join(violations)
+                )
+            )
+        return False
 
     def _print_one(self, r: CaseResult) -> None:
         label = self.style.SUCCESS("PASS") if r.passed else self.style.ERROR("FAIL")
