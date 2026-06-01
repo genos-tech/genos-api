@@ -95,9 +95,7 @@ def create_surface_mention_activities(
     if surface_task_id and not meta.get("displayId"):
         from origin.models.task.task_models import TaskMaster
 
-        task = (
-            TaskMaster.objects.select_related("project").filter(task_id=surface_task_id).first()
-        )
+        task = TaskMaster.objects.select_related("project").filter(task_id=surface_task_id).first()
         if task is not None:
             meta["displayId"] = task.display_id
 
@@ -178,9 +176,7 @@ def create_mention_activities(
     """
     actor_id = str(actor.id)
     targets = [
-        str(uid)
-        for uid in mentioned_user_ids
-        if uid and (not skip_actor or str(uid) != actor_id)
+        str(uid) for uid in mentioned_user_ids if uid and (not skip_actor or str(uid) != actor_id)
     ]
     if not targets:
         return []
@@ -292,6 +288,54 @@ def create_thread_reply_activity(
         channel.kind,
     )
     return [row]
+
+
+def create_comment_participant_activities(
+    *,
+    message: Message,
+    recipient_ids: Iterable[str],
+    actor: CustomUser,
+) -> List[Activity]:
+    """`Activity(type=THREAD_REPLY)` per task-comment participant.
+
+    A plain (no-@mention) task comment otherwise notifies nobody — only
+    `create_mention_activities` runs on the comment mirror. This fans the
+    comment out to the resolved participant set (the caller passes the
+    task's assignee + prior commenters). The recipients ride the normal
+    THREAD_REPLY activity path; because the mirror message carries
+    `metadata.taskCommentId`, the web client routes them to the
+    `task_comments` notification category.
+
+    Skips the actor and falsy ids and dedupes. The caller is responsible
+    for excluding @-mentioned users (they receive the more specific
+    MENTION activity instead).
+    """
+    actor_id = str(actor.id)
+    seen = set()
+    targets = []
+    for uid in recipient_ids:
+        s = str(uid) if uid is not None else ""
+        if not s or s == actor_id or s in seen:
+            continue
+        seen.add(s)
+        targets.append(s)
+    if not targets:
+        return []
+    channel = message.channel
+    rows = [
+        Activity(
+            team_id=_team_id_for_channel(channel),
+            recipient_id=uid,
+            actor=actor,
+            activity_type=ActivityType.THREAD_REPLY,
+            channel=channel,
+            message=message,
+            meta={},
+        )
+        for uid in targets
+    ]
+    Activity.objects.bulk_create(rows)
+    return rows
 
 
 def create_reaction_activity(*, message: Message, emoji: str, actor: CustomUser) -> List[Activity]:
