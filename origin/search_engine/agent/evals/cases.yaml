@@ -685,3 +685,40 @@
     answer_contains_any: ["Hero", "FeatureGrid"]
     no_errors: true
     expected_tools: ["get_task_blockers"]
+
+# ============================================================ #
+# S. Fact-level completeness (Q2.2 / plan-then-execute target) #
+# ============================================================ #
+# Harder than the `compound_*` cases above: each asserts only the SUBJECTS
+# are addressed (stable gate), but the real measure is the LLM judge's
+# `completeness` score (run with --judge) — does the answer actually carry
+# each sub-question's FACT, or did the reactive loop drop one? This is the
+# "passes != complete" distinction §4.2 calls out and the measurable target
+# a planner (plan-then-execute) would have to beat.
+
+- id: complete_four_part_wrd
+  fixture: true
+  query: >
+    For the Website Redesign project, give me all four, each explicitly:
+    (1) the status of the 'Build Hero + FeatureGrid' task,
+    (2) the status of the 'Set up Plausible analytics' task,
+    (3) what the team decided about framer-motion, and
+    (4) what is blocking the accessibility audit from starting.
+  expect:
+    tool_calls_at_least: 1
+    answer_contains_all: ["hero", "plausible", "framer", "accessibility"]
+    has_citations: true
+    no_errors: true
+
+- id: complete_cross_project_five_facts
+  fixture: true
+  query: >
+    Pull together five things for me, each stated explicitly: the status of the
+    'Build Hero + FeatureGrid' task, the status of the 'Set up Plausible
+    analytics' task, the status of the 'Synthesize 12 customer interviews' task,
+    what blocks the 'Roadmap proposal', and what the framer-motion spike decided.
+  expect:
+    tool_calls_at_least: 1
+    answer_contains_all: ["hero", "plausible", "interview", "roadmap", "framer"]
+    has_citations: true
+    no_errors: true
