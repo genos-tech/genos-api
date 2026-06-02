@@ -47,8 +47,7 @@ from rest_framework.response import Response
 from origin.search_engine.agent.controller import (
     _chat_source,
     _note_source,
-    _ui_source_for_match,
-    _ui_sources_from_tool_result,
+    reconstruct_sources_for_run,
     resume_agent,
     run_agent,
 )
@@ -1512,38 +1511,9 @@ class AgentModelsView(AuthenticatedAPIView):
 _HISTORY_LIST_LIMIT = 20
 
 
-def _reconstruct_sources_for_run(run: AgentRun) -> list[dict[str, Any]]:
-    """Rebuild the same source list the live `/ask/` flow emitted for
-    this run, replaying against persisted `AgentStep.result_json`.
-
-    Walks the run's steps in `step_index` order and dispatches each
-    one through the same per-tool source builders the live controller
-    uses (`_ui_source_for_match` for `search_knowledge_base` matches,
-    `_ui_sources_from_tool_result` for structured reads). Dedupes by
-    `entity_id` so a task touched by both `list_tasks` and a
-    follow-up `fetch_task` produces a single source row — matches the
-    live `seen_sources_by_id` behavior in `_drive_loop`.
-
-    Used by the History detail endpoint so inline citation tokens
-    (e.g. `[task:200]`) in archived answers can resolve back to a
-    clickable preview, the same way they do in the live conversation.
-    """
-    seen_by_id: dict[str, dict[str, Any]] = {}
-    # `.steps` is already prefetched on the run by the caller; iterating
-    # `.all()` here doesn't trigger another query.
-    for step in run.steps.all():
-        if not step.tool_name or step.result_json is None:
-            continue
-        result = step.result_json
-        if step.tool_name == "search_knowledge_base":
-            new_sources = [_ui_source_for_match(m) for m in (result.get("matches") or [])]
-        else:
-            new_sources = _ui_sources_from_tool_result(step.tool_name, result)
-        for s in new_sources:
-            eid = s.get("entity_id")
-            if eid and eid not in seen_by_id:
-                seen_by_id[eid] = s
-    return list(seen_by_id.values())
+# `reconstruct_sources_for_run` now lives in `agent.controller` (next to the
+# `_ui_*` source builders it depends on) so the `spotlight_answer` chunker can
+# reuse it without importing this views module. Imported at the top of the file.
 
 
 class AgentSessionsListView(AuthenticatedAPIView):
@@ -1705,7 +1675,7 @@ def _build_turns_payload(session: AgentSession) -> list[dict[str, Any]]:
 
     Shared between the session-detail endpoint (history archive view)
     and the thread-summary endpoint (which restores per-thread Q&A on
-    modal open). Prefetches `steps` so `_reconstruct_sources_for_run`
+    modal open). Prefetches `steps` so `reconstruct_sources_for_run`
     runs without N+1 queries.
 
     Skips runs with neither a final answer nor an error — those are
@@ -1735,7 +1705,7 @@ def _build_turns_payload(session: AgentSession) -> list[dict[str, Any]]:
                 "status": r.status,
                 "error": error or None,
                 "started_at": r.started_at.isoformat(),
-                "sources": _reconstruct_sources_for_run(r),
+                "sources": reconstruct_sources_for_run(r),
             }
         )
     return out

@@ -32,6 +32,7 @@ from origin.search_engine.chunkers.chat_chunker import iter_all_chat_chunks
 from origin.search_engine.chunkers.conversation_chunker import iter_conversation_chunks
 from origin.search_engine.chunkers.note_chunker import iter_all_note_chunks
 from origin.search_engine.chunkers.note_summary_chunker import iter_note_summary_chunks
+from origin.search_engine.chunkers.spotlight_answer_chunker import iter_spotlight_answer_chunks
 from origin.search_engine.chunkers.task_chunker import iter_task_chunks
 from origin.search_engine.chunkers.thread_summary_chunker import iter_thread_summary_chunks
 from origin.search_engine.chunkers.todo_chunker import iter_todo_chunks
@@ -95,6 +96,7 @@ def ingest_all(
         "note_summary",
         "todo",
         "conversation",
+        "spotlight_answer",
     ]
 
     if "chat" in entity_types:
@@ -118,6 +120,9 @@ def ingest_all(
     if "conversation" in entity_types:
         log.info("Ingesting conversations (since=%s, dry_run=%s)...", since, dry_run)
         _ingest_stream(iter_conversation_chunks(since=since), stats, dry_run=dry_run)
+    if "spotlight_answer" in entity_types:
+        log.info("Ingesting spotlight answers (since=%s, dry_run=%s)...", since, dry_run)
+        _ingest_stream(iter_spotlight_answer_chunks(since=since), stats, dry_run=dry_run)
 
     # Refresh-deferred bulk: with `RAG_BULK_REFRESH=false` (the default),
     # individual `_bulk()` calls skip server-side refresh, leaving the

@@ -79,6 +79,10 @@ _MODE_CONFIG: dict[str, dict] = {
             "chat_message": 1.0,
             "task_title_content": 1.0,
             "note_section": 1.0,
+            # A collected past answer that matches the typed question is highly
+            # relevant — parity with raw chunks (not boosted above them, so the
+            # live source still wins when both match equally).
+            "spotlight_answer": 1.0,
             "task_content_chunk": 0.8,
             "task_comment": 0.7,
             "thread_summary": 0.6,
@@ -240,7 +244,7 @@ def search(
     client = get_client()
     index = get_index_alias()
 
-    base_filter = _build_filter(team_id, user_id, entity_types, date_from, date_to)
+    base_filter = _build_filter(team_id, user_id, entity_types, date_from, date_to, mode=mode)
 
     # --- Phase 10: query rewriting (optional) ---
     # `variants` always starts with the original query; the rewriter
@@ -636,6 +640,7 @@ def _build_filter(
     entity_types: Optional[list[str]],
     date_from: Optional[str],
     date_to: Optional[str],
+    mode: Optional[SearchMode] = None,
 ) -> list[dict]:
     filt: list[dict] = [
         {"term": {"team_id": team_id}},
@@ -644,11 +649,20 @@ def _build_filter(
     if entity_types:
         filt.append({"terms": {"entity_type": entity_types}})
     else:
-        # Private lanes (Q2.3 conversation memory) are reachable ONLY when
-        # explicitly requested via entity_types — never from default
-        # workspace search — so a user's past Q&A doesn't leak into ordinary
-        # results. The `search_past_conversations` tool opts in explicitly.
-        filt.append({"bool": {"must_not": [{"term": {"entity_type": "conversation"}}]}})
+        # Default-search exclusions. Both are reachable only when a caller
+        # opts in explicitly via `entity_types`:
+        #   * conversation     — the per-user Q2.3 memory lane (private; the
+        #                         `search_past_conversations` tool opts in).
+        #   * spotlight_answer  — collected team answers. Surfaced in Spotlight
+        #                         typeahead, but kept OUT of agent grounding
+        #                         (ai_search / eval) so a past answer can't feed
+        #                         back into a new answer (answer→grounding loop).
+        excluded = ["conversation"]
+        if mode != "typeahead":
+            excluded.append("spotlight_answer")
+        filt.append(
+            {"bool": {"must_not": [{"term": {"entity_type": et}} for et in excluded]}}
+        )
     if date_from or date_to:
         rng: dict = {}
         if date_from:
@@ -854,6 +868,11 @@ def _source_fields(*, for_agent: bool = False) -> list[str]:
         "related_entity_ids",
         "updated_at",
         "created_at",
+        # spotlight_answer lane — stored-only provenance projected so the
+        # frontend "Previous answer" card can render the past answer and its
+        # clickable source chips. Absent (and so omitted) on every other lane.
+        "answer_text",
+        "answer_sources",
         # Phase 6 — pulled into projection so `_dedup_by_text_hash` can
         # collapse near-duplicates. SHA-256 of the chunk's search_text
         # written by the chunker; identical text → identical hash.
@@ -961,6 +980,11 @@ def _group_by_entity(
                 "project_id": src.get("project_id"),
                 "related_entity_ids": src.get("related_entity_ids") or [],
                 "matched_terms": list(c.get("matched_terms") or []),
+                # spotlight_answer lane provenance — present only on
+                # spotlight_answer hits (None elsewhere). Lets the frontend
+                # render the stored answer + clickable source chips.
+                "answer_text": src.get("answer_text"),
+                "answer_sources": src.get("answer_sources"),
                 # Surfaced for chat_message chunks so the frontend can
                 # deep-link straight to the matched message bubble.
                 # None for chat_thread_window / anchor chunks and for

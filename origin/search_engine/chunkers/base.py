@@ -79,6 +79,14 @@ class Chunk:
     note_owner_id: Optional[str] = None
     note_parent_id: Optional[str] = None
 
+    # spotlight_answer lane only (spotlight_answer_chunker). Stored-only
+    # provenance the frontend "Previous answer" card renders — never analyzed
+    # for search (search_text already carries Q+A). `answer_text` is the full
+    # answer with inline `[type:id]` citation tokens; `answer_sources` is the
+    # list of SpotlightResult-shaped source dicts the answer cited.
+    answer_text: Optional[str] = None
+    answer_sources: Optional[list] = None
+
     created_at: Optional[str] = None  # ISO 8601
     updated_at: Optional[str] = None
 
