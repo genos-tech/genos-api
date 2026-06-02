@@ -29,7 +29,8 @@ RUN pip install \
     anthropic==0.102.0 \
     PyYAML==6.0.2 \
     tavily-python \
-    'django-anymail[resend]'
+    'django-anymail[resend]' \
+    pywebpush==2.3.0
 
 COPY backend_django ./backend_django
 

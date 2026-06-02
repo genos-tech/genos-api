@@ -202,6 +202,7 @@ class NotificationPreferenceSerializerTests(BaseAPITestCase):
                 "enable_mentions",
                 "enable_task_comments",
                 "enable_inbox",
+                "push_enabled",
                 "category_settings",
                 "muted_chats",
                 "muted_targets",

@@ -18,7 +18,11 @@ from origin.views.common.mention_group_views import (
     MentionGroupResolveView,
     MentionGroupView,
 )
-from origin.views.common.notification_views import NotificationPreferenceView
+from origin.views.common.notification_views import (
+    NotificationPreferenceView,
+    PresenceHeartbeatView,
+    PushSubscriptionView,
+)
 from origin.views.common.oauth_views import (
     IntegrationsDisconnectView,
     IntegrationsListView,
@@ -129,6 +133,16 @@ urlpatterns = [
         "api/v2/user/notification-preferences/",
         NotificationPreferenceView.as_view(),
         name="user_notification_preferences",
+    ),
+    path(
+        "api/v2/user/push-subscriptions/",
+        PushSubscriptionView.as_view(),
+        name="user_push_subscriptions",
+    ),
+    path(
+        "api/v2/user/presence/heartbeat/",
+        PresenceHeartbeatView.as_view(),
+        name="user_presence_heartbeat",
     ),
     # Runtime config — per-chat-type rollout flags + panic switch.
     # Polled by the client every 60s. Source of truth for whether a
