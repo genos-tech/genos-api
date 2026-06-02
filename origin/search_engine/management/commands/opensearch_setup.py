@@ -3,7 +3,7 @@ import time
 from django.core.management.base import BaseCommand
 from opensearchpy.exceptions import ConnectionError as OSConnectionError
 
-from origin.search_engine.index_config import build_index_settings
+from origin.search_engine.index_config import build_index_settings, build_mappings
 from origin.search_engine.models import RagChunk
 from origin.search_engine.opensearch_client import (
     get_client,
@@ -32,6 +32,18 @@ class Command(BaseCommand):
                 "changes."
             ),
         )
+        parser.add_argument(
+            "--update-mapping",
+            action="store_true",
+            help=(
+                "Additively apply build_mappings() to the existing index via "
+                "put_mapping (no delete, no re-embed). Use after adding new "
+                "fields that don't change existing-doc retrieval — e.g. the "
+                "stored-only spotlight_answer provenance fields. Adding a NEW "
+                "field is allowed; changing an existing field's type is not "
+                "and OpenSearch will reject it (run --recreate for that)."
+            ),
+        )
 
     def handle(self, *args, **options):
         client = get_client()
@@ -40,7 +52,9 @@ class Command(BaseCommand):
 
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                self._setup(client, physical, alias, options["recreate"])
+                self._setup(
+                    client, physical, alias, options["recreate"], options["update_mapping"]
+                )
                 return
             except OSConnectionError as exc:
                 if attempt < _MAX_RETRIES:
@@ -57,7 +71,7 @@ class Command(BaseCommand):
                     )
                     # Exit 0 so the Dockerfile CMD continues to gunicorn.
 
-    def _setup(self, client, physical, alias, recreate):
+    def _setup(self, client, physical, alias, recreate, update_mapping=False):
         if recreate and client.indices.exists(index=physical):
             self.stdout.write(f"Deleting existing index {physical}…")
             client.indices.delete(index=physical)
@@ -82,6 +96,31 @@ class Command(BaseCommand):
                         "run opensearch_reindex to repopulate the index."
                     )
                 )
+
+        # Additive mapping update for an already-existing index. We diff the
+        # desired mapping against the live one and put ONLY fields that don't
+        # exist yet — so we never re-send the embedding / existing fields
+        # (which could error on any benign divergence, e.g. an embedding-dim
+        # mismatch). Adding a brand-new field is always safe; changing an
+        # existing field's type still requires --recreate.
+        if update_mapping and client.indices.exists(index=physical):
+            desired = build_mappings()["properties"]
+            live = (
+                client.indices.get_mapping(index=physical)
+                .get(physical, {})
+                .get("mappings", {})
+                .get("properties", {})
+            )
+            new_props = {k: v for k, v in desired.items() if k not in live}
+            if new_props:
+                self.stdout.write(
+                    f"Adding {len(new_props)} new field(s) to {physical}: "
+                    f"{', '.join(sorted(new_props))}…"
+                )
+                client.indices.put_mapping(index=physical, body={"properties": new_props})
+                self.stdout.write(self.style.SUCCESS("Mapping updated (additive)."))
+            else:
+                self.stdout.write("Mapping already up to date — no new fields to add.")
 
         # Point alias at the physical index. If the alias already exists
         # but points elsewhere, atomically swap it.

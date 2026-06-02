@@ -170,6 +170,14 @@ def build_mappings():
                 },
             },
             "snippet_text": {"type": "text"},
+            # spotlight_answer lane only — stored-only provenance for the
+            # "Previous answer" card. Not analyzed (search_text already carries
+            # the Q+A); `index: false` keeps them out of the inverted index,
+            # and `enabled: false` stops OpenSearch from parsing the nested
+            # source objects. Additive fields: applied to a live index via
+            # `opensearch_setup --update-mapping` (no recreate / re-embed).
+            "answer_text": {"type": "text", "index": False},
+            "answer_sources": {"type": "object", "enabled": False},
             # Vector for k-NN
             "embedding": {
                 "type": "knn_vector",

@@ -812,6 +812,40 @@ def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list
     return []
 
 
+def reconstruct_sources_for_run(run) -> list[dict[str, Any]]:
+    """Rebuild the same source list the live `/ask/` flow emitted for
+    this run, replaying against persisted `AgentStep.result_json`.
+
+    Walks the run's steps in insertion order and dispatches each one
+    through the same per-tool source builders the live loop uses
+    (`_ui_source_for_match` for `search_knowledge_base` matches,
+    `_ui_sources_from_tool_result` for structured reads). Dedupes by
+    `entity_id` so a task touched by both `list_tasks` and a follow-up
+    `fetch_task` produces a single source row — matching the live
+    `seen_sources_by_id` behavior in `_drive_loop`.
+
+    Used by the History detail endpoint (so archived citation tokens
+    resolve to clickable previews) AND by the `spotlight_answer`
+    chunker (to derive each collected answer's provenance + ACL).
+    The caller is responsible for prefetching `run.steps` if it wants
+    to avoid an extra query.
+    """
+    seen_by_id: dict[str, dict[str, Any]] = {}
+    for step in run.steps.all():
+        if not step.tool_name or step.result_json is None:
+            continue
+        result = step.result_json
+        if step.tool_name == "search_knowledge_base":
+            new_sources = [_ui_source_for_match(m) for m in (result.get("matches") or [])]
+        else:
+            new_sources = _ui_sources_from_tool_result(step.tool_name, result)
+        for s in new_sources:
+            eid = s.get("entity_id")
+            if eid and eid not in seen_by_id:
+                seen_by_id[eid] = s
+    return list(seen_by_id.values())
+
+
 # --------------------------------------------------------------------------- #
 # Phase 4.2 — source-chip ranking by citation density                         #
 # --------------------------------------------------------------------------- #
