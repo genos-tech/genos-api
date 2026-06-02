@@ -265,6 +265,20 @@ CACHES = {
 }
 DJANGO_REDIS_IGNORE_EXCEPTIONS = True
 
+# Web Push (VAPID). Generate a keypair with
+# `python manage.py generate_vapid_keys` (or `npx web-push
+# generate-vapid-keys`). The PRIVATE key is a secret — set it via env,
+# never commit it. The PUBLIC key is also handed to the frontend as
+# `VITE_VAPID_PUBLIC_KEY` (identical value). When unset, push delivery is
+# simply skipped (the in-app notification path is unaffected).
+WEBPUSH_VAPID_PUBLIC_KEY = os.environ.get("WEBPUSH_VAPID_PUBLIC_KEY", "")
+WEBPUSH_VAPID_PRIVATE_KEY = os.environ.get("WEBPUSH_VAPID_PRIVATE_KEY", "")
+WEBPUSH_VAPID_ADMIN_EMAIL = os.environ.get("WEBPUSH_VAPID_ADMIN_EMAIL", "admin@example.com")
+# Optional absolute base URL for push-notification icons (the sender's
+# avatar). Same value as the frontend's VITE_MEDIA_ROOT_DJANGO, e.g.
+# "http://localhost:8890/media". When unset, push cards use the app icon.
+WEBPUSH_MEDIA_BASE_URL = os.environ.get("WEBPUSH_MEDIA_BASE_URL", "")
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -476,9 +490,7 @@ SEARCH_ENGINE = {
     # strongly-reranked paraphrase can still displace it). When on, the
     # hard RAG_RERANK_LOCK_TOP_N split is bypassed (fusion is its soft
     # form). Off by default.
-    "RAG_RERANK_FUSION": (
-        os.environ.get("RAG_RERANK_FUSION", "true").lower() == "true"
-    ),
+    "RAG_RERANK_FUSION": (os.environ.get("RAG_RERANK_FUSION", "true").lower() == "true"),
     # Reranker's share of the fused score in [0,1]; (1 - weight) is RRF's.
     # 0.5 is an UNTUNED placeholder — D2 is "hard to calibrate" and the
     # per-query-type weight is the actual work: sweep it against the

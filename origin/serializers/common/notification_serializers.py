@@ -1,4 +1,7 @@
-from origin.models.common.notification_models import NotificationPreference
+from origin.models.common.notification_models import (
+    NotificationPreference,
+    PushSubscription,
+)
 from rest_framework import serializers
 
 # Recognised per-object mute target types. Kept here (not imported from
@@ -17,6 +20,7 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
             "enable_mentions",
             "enable_task_comments",
             "enable_inbox",
+            "push_enabled",
             "category_settings",
             "muted_chats",
             "muted_targets",
@@ -137,3 +141,31 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
             normalized.append(item)
 
         return normalized
+
+
+class PushSubscriptionSerializer(serializers.ModelSerializer):
+    """Validates an incoming Web Push subscription.
+
+    The client flattens the browser `PushSubscription` (`{endpoint,
+    keys:{p256dh, auth}}`) into `{endpoint, p256dh, auth, user_agent?}`.
+    `user` is taken from `request.user` in the view, never the payload.
+    """
+
+    class Meta:
+        model = PushSubscription
+        fields = ["endpoint", "p256dh", "auth", "user_agent"]
+
+    def validate_endpoint(self, value):
+        if not isinstance(value, str) or not value.startswith(("http://", "https://")):
+            raise serializers.ValidationError("endpoint must be an http(s) URL.")
+        return value
+
+    def validate_p256dh(self, value):
+        if not isinstance(value, str) or not value:
+            raise serializers.ValidationError("p256dh is required.")
+        return value
+
+    def validate_auth(self, value):
+        if not isinstance(value, str) or not value:
+            raise serializers.ValidationError("auth is required.")
+        return value
