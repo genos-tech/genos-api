@@ -219,6 +219,10 @@ def task_capture_original(sender, instance: TaskMaster, **kwargs):
     snapshot = {field: getattr(previous, field) for field in _TRACKED_TASK_FIELDS}
     snapshot["is_deleted"] = previous.is_deleted
     snapshot["content"] = previous.content
+    # Captured so post_save can recognise the init→real "finalize" save
+    # (the moment CreateTaskForm's draft becomes a real task) and treat
+    # it as a single creation event instead of a diff of every field.
+    snapshot["is_init_task"] = previous.is_init_task
     instance._activity_original = snapshot
 
 
@@ -247,6 +251,34 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
 
     original = getattr(instance, "_activity_original", None)
     if original is None:
+        return
+
+    # Finalize transition: the draft row CreateTaskForm has been editing
+    # (is_init_task=True) just became a real task. The submit PUT writes
+    # every field at once, which would otherwise spam the feed with a
+    # "changed X from None" row per field — none of which the user did
+    # *after* creating the task. Treat the whole transition as a single
+    # creation: emit one CREATED (the init insert was skipped by the
+    # guard above, so the task has no CREATED row yet) and stop.
+    #
+    # The submit PUT also runs follow-up saves on this same instance
+    # (the due-date clear, and `_bridge_milestone_to_parent` for
+    # milestone/sub-task creation) AFTER is_init_task is already False,
+    # so the snapshot check alone can't catch them. Flag the instance so
+    # those trailing saves within this request are suppressed too.
+    if original.get("is_init_task"):
+        _record(
+            task=instance,
+            action_type=TaskActivityActionType.CREATED,
+            new_value={
+                "title": instance.title,
+                "status": instance.status,
+                "is_milestone": instance.is_milestone,
+            },
+        )
+        instance._activity_finalized_creation = True
+        return
+    if getattr(instance, "_activity_finalized_creation", False):
         return
 
     # Soft-delete / restore takes precedence over a plain status diff.
