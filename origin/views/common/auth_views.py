@@ -84,6 +84,35 @@ class UserViewSet(viewsets.ModelViewSet):
 
         user = serializer.save()
 
+        # Invite-signup path. The token was validated in the serializer
+        # (live + invited_email matches this signup), so receiving it proves
+        # inbox ownership: skip the verification email and mint a JWT so the
+        # client is authenticated immediately. The actual team-join is left
+        # to the frontend consume funnel (POST /team/invite/accept/ from
+        # /jointeam), so the new-account and existing-account paths are
+        # identical post-auth (sign in → /jointeam → accept → /workspace).
+        invite_token = (request.data.get("invite_token") or "").strip()
+        if invite_token and user.primary_auth_provider == "email" and not user.is_system_user:
+            if not user.is_email_verified:
+                user.is_email_verified = True
+                user.save(update_fields=["is_email_verified"])
+            refresh = RefreshToken.for_user(user)
+            response = JsonResponse(
+                {
+                    "access": str(refresh.access_token),
+                    "refresh": str(refresh),
+                    "user": {
+                        "username": user.username,
+                        "email": user.email,
+                        "id": str(user.id),
+                    },
+                    "message": "invite_signup_complete",
+                },
+                status=status.HTTP_201_CREATED,
+            )
+            _set_refresh_cookie(response, str(refresh))
+            return response
+
         # System users (created internally for project automations) are
         # not real humans with a real inbox — they're pre-verified and
         # still get a JWT so the caller can drive the rest of the flow.

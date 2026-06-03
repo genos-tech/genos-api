@@ -1,0 +1,12 @@
+Hi,
+
+{{ inviter_name }} has invited you to join the team "{{ team_name }}" on Genos.
+
+Open this link in your browser to accept the invitation:
+
+{{ invite_url }}
+
+This invite is tied to this email address and expires in {{ expiry_days }} days.
+If you weren't expecting this, you can safely ignore this email.
+
+— The Genos team

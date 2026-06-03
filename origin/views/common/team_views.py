@@ -1,19 +1,34 @@
+import hashlib
+import logging
+import secrets
 from collections import defaultdict
+from datetime import timedelta
 
+from django.conf import settings
 from django.core.cache import cache
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.validators import validate_email
 from django.db.models import F, Q
+from django.utils import timezone
 from origin.models.common.inbox_models import InboxItems
+from origin.models.common.invite_models import TeamInvite
 from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.models.common.user_models import CustomUser
 from origin.serializers.common.team_serializers import TeamMasterSerializer, TeamMembersSerializer
+from origin.services.email import send_templated_email
+from origin.services.team_membership import InviteAcceptError, accept_invite
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
     check_since,
 )
-from rest_framework import status
+from rest_framework import permissions, status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
+from rest_framework.views import APIView
+
+logger = logging.getLogger(__name__)
 
 
 #############################
@@ -306,6 +321,167 @@ class JoinTeamFromInboxView(AuthenticatedAPIView):
             return Response(res, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+#############################
+# Team invite views
+#############################
+class InviteTeamMembersView(AuthenticatedAPIView):
+    """Owner-only: email-invite one or more people to a team.
+
+    Returns a per-email result so the modal can show what happened to
+    each address. A send failure for one address doesn't abort the batch.
+    """
+
+    def post(self, request):
+        team_id = request.data.get("team_id")
+        emails = request.data.get("emails") or []
+        if not team_id or not isinstance(emails, list):
+            return Response(
+                {"error": "team_id and a list of emails are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            team = TeamMaster.objects.get(team_id=team_id, is_deleted=False)
+        except TeamMaster.DoesNotExist:
+            return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Owner-only — mirrors TeamMasterView.put. The codebase has no
+        # "admin" role, so the owner is the only one who can grow the team.
+        if not team.owner or str(team.owner.id) != str(request.user.id):
+            return Response(
+                {"error": "Only the team owner can invite members."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Captured once so a later-nulled invited_by FK can't break the
+        # email body, and to avoid re-reading per address.
+        inviter_name = request.user.username
+        expiry_days = max(1, settings.TEAM_INVITE_TOKEN_EXPIRY_MINUTES // 1440)
+
+        results = []
+        seen = set()
+        for raw in emails:
+            email = (raw or "").strip().lower()
+            if not email or email in seen:
+                continue
+            seen.add(email)
+
+            try:
+                validate_email(email)
+            except DjangoValidationError:
+                results.append({"email": email, "status": "invalid_email"})
+                continue
+
+            # Already an active member of this team? Skip, send nothing.
+            member_user = CustomUser.objects.filter(email__iexact=email, is_deleted=False).first()
+            if (
+                member_user
+                and TeamMembers.objects.filter(
+                    team_id=team_id, attendee_id=member_user.id, is_deleted=False
+                ).exists()
+            ):
+                results.append({"email": email, "status": "already_member"})
+                continue
+
+            # Re-invite: refresh token + expiry on an existing pending
+            # invite rather than inserting a duplicate row.
+            invite = TeamInvite.objects.filter(
+                team=team, invited_email=email, status="pending"
+            ).first()
+            resent = invite is not None
+            raw_token = secrets.token_urlsafe(32)
+            if invite is None:
+                invite = TeamInvite(team=team, invited_email=email)
+            invite.invited_by = request.user
+            invite.token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+            invite.expires_at = timezone.now() + timedelta(
+                minutes=settings.TEAM_INVITE_TOKEN_EXPIRY_MINUTES
+            )
+            invite.status = "pending"
+            invite.save()
+
+            invite_url = f"{settings.FRONTEND_BASE_URL}/accept-invite?token={raw_token}"
+            try:
+                send_templated_email(
+                    to=email,
+                    subject=f"You're invited to join {team.team_name} on Genos",
+                    template_base="team_invitation",
+                    context={
+                        "inviter_name": inviter_name,
+                        "team_name": team.team_name,
+                        "invite_url": invite_url,
+                        "expiry_days": expiry_days,
+                    },
+                )
+            except Exception as exc:
+                logger.exception("Invite email send failed for %s: %s", email, exc)
+                results.append({"email": email, "status": "failed"})
+                continue
+
+            results.append(
+                {"email": email, "status": "already_invited_resent" if resent else "sent"}
+            )
+
+        return Response({"results": results}, status=status.HTTP_200_OK)
+
+
+class InvitePreviewView(APIView):
+    """Public: describe an invite token so the frontend can route the
+    visitor (sign up vs sign in vs accept). Reveals nothing about
+    invalid/expired tokens beyond the status."""
+
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        token = request.query_params.get("token") or ""
+        invalid = {"valid": False, "status": "invalid"}
+        if not token:
+            return Response(invalid, status=status.HTTP_200_OK)
+
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        invite = TeamInvite.objects.filter(token_hash=token_hash).first()
+        if invite is None or invite.status != "pending":
+            return Response(invalid, status=status.HTTP_200_OK)
+        if invite.expires_at <= timezone.now():
+            return Response({"valid": False, "status": "expired"}, status=status.HTTP_200_OK)
+        if invite.team is None or invite.team.is_deleted:
+            return Response(invalid, status=status.HTTP_200_OK)
+
+        account_exists = CustomUser.objects.filter(
+            email__iexact=invite.invited_email, is_deleted=False
+        ).exists()
+        return Response(
+            {
+                "valid": True,
+                "status": "account_exists" if account_exists else "no_account",
+                "team_name": invite.team.team_name,
+                "invited_email": invite.invited_email,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class InviteAcceptView(AuthenticatedAPIView):
+    """Authenticated: consume an invite for the current user. The user's
+    email must match the invited address — enforced in accept_invite, so
+    a forwarded link can't pull a different account into the team."""
+
+    def post(self, request):
+        token = request.data.get("token") or ""
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        invite = TeamInvite.objects.filter(token_hash=token_hash).first()
+        if invite is None:
+            return Response({"detail": "invalid"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            team = accept_invite(invite, request.user)
+        except InviteAcceptError as exc:
+            return Response({"detail": exc.code}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"team_id": str(team.team_id), "team_name": team.team_name},
+            status=status.HTTP_200_OK,
+        )
 
 
 class GetMyTeamsView(AuthenticatedAPIView):
