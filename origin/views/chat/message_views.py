@@ -191,9 +191,28 @@ def _allocate_seq_and_create_message_with_activities(
     # on_commit so a rollback never pushes a message that didn't persist.
     # The shared helper is the single wiring point every activity producer
     # uses (mentions, thread replies, self-assign — see webpush_dispatch).
-    from origin.services.webpush_dispatch import schedule_push_for_activities
+    from origin.services.webpush_dispatch import (
+        schedule_push_for_activities,
+        schedule_push_for_message,
+    )
 
     schedule_push_for_activities(activities)
+
+    # Plain-message fan-out: every TOP-LEVEL message web-pushes the other
+    # channel members (presence + per-chat mute gated) — push only, NO
+    # activity-feed rows. Thread replies are excluded (their participants
+    # are covered by the thread-reply activity above). Members who already
+    # got a more-specific activity (a mention) for THIS message are
+    # excluded so they aren't double-notified.
+    if parent is None:
+        already_notified = {str(a.recipient_id) for a in activities}
+        member_ids = (
+            ChannelMember.objects.filter(channel=channel, is_deleted=False)
+            .exclude(user_id=sender.id)
+            .values_list("user_id", flat=True)
+        )
+        msg_recipients = [str(m) for m in member_ids if str(m) not in already_notified]
+        schedule_push_for_message(msg, msg_recipients)
     return msg, activities
 
 
