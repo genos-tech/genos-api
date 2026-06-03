@@ -28,7 +28,7 @@ from origin.services.v3_activity import (
     SURFACE_TASK_BODY,
     SURFACE_TASK_NOTE,
 )
-from origin.services.webpush_gating import should_push
+from origin.services.webpush_gating import is_chat_muted, should_push
 from origin.services.webpush_sender import send_web_push, vapid_configured
 
 logger = logging.getLogger(__name__)
@@ -318,3 +318,50 @@ def schedule_push_to_user(*, recipient_id, category, title, url, actor=None, tag
             logger.warning("[webpush] user push error for %s: %s", rid, exc)
 
     transaction.on_commit(_run)
+
+
+def dispatch_push_for_message(message, recipient_ids) -> None:
+    """Plain-message web push to away channel members. PUSH ONLY — no
+    Activity rows (plain messages aren't added to the activity feed; that
+    stays focused on mentions / reactions / comments). Gated by the
+    `chats` category (coarse `enable_chats`), per-chat mute, and presence.
+    The push `tag` is the channel id, so a burst of messages in one chat
+    collapses into a single (updating) notification rather than N cards.
+    """
+    if message is None or not recipient_ids or not vapid_configured():
+        return
+    channel = message.channel
+    if channel is None:
+        return
+    sender_name = getattr(message.sender, "username", None) or "Someone"
+    if channel.kind == ChannelKind.DM:
+        title = sender_name
+    else:
+        title = f"{sender_name} in {getattr(channel, 'title', '') or 'a chat'}"
+    body = _truncate(getattr(message, "body_text", ""))
+    url = _chat_url(channel)
+    tag = f"chats:{channel.id}"
+    for rid in recipient_ids:
+        try:
+            rid = str(rid)
+            if is_chat_muted(rid, channel.id):
+                continue
+            _queue_push(
+                recipient_id=rid,
+                category="chats",
+                title=title,
+                body=body,
+                url=url,
+                tag=tag,
+                actor=message.sender,
+            )
+        except Exception as exc:  # noqa: BLE001 — never break the caller
+            logger.warning("[webpush] message push error for %s: %s", rid, exc)
+
+
+def schedule_push_for_message(message, recipient_ids) -> None:
+    """Defer a plain-message fan-out push until the transaction commits."""
+    ids = [str(r) for r in (recipient_ids or [])]
+    if message is None or not ids:
+        return
+    transaction.on_commit(lambda: dispatch_push_for_message(message, ids))

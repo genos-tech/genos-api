@@ -28,6 +28,10 @@ _PUSH_DEFAULTS = {
     "task_comments": True,
     "reactions": True,
     "inbox": True,
+    # Plain (non-mention) messages in any chat. Default ON per the product
+    # decision to notify on all messages; presence + per-chat mute
+    # (`muted_chats`) + the `enable_chats` coarse toggle keep it in check.
+    "chats": True,
 }
 
 # Fine category -> the coarse-group boolean column that hard-gates it
@@ -44,6 +48,7 @@ _COARSE_FIELD = {
     "thread_replies": "enable_thread_replies",
     "task_comments": "enable_task_comments",
     "inbox": "enable_inbox",
+    "chats": "enable_chats",
 }
 
 
@@ -59,3 +64,18 @@ def should_push(user_id, category: str) -> bool:
     if coarse_field and not getattr(prefs, coarse_field):
         return False
     return prefs.category_settings.get(category, _PUSH_DEFAULTS.get(category, True))
+
+
+def is_chat_muted(user_id, channel_id) -> bool:
+    """True when the user has muted the given channel (so no plain-message
+    push fires for it). `muted_chats` entries are
+    `{"chat_type": int, "chat_id": str}`; the v3 channel UUID is globally
+    unique, so matching on `chat_id` alone is sufficient."""
+    prefs = NotificationPreference.objects.filter(user_id=user_id).first()
+    if prefs is None:
+        return False
+    cid = str(channel_id)
+    for entry in prefs.muted_chats or []:
+        if isinstance(entry, dict) and str(entry.get("chat_id")) == cid:
+            return True
+    return False
