@@ -183,6 +183,18 @@ urlpatterns = [
         JoinTeamFromInboxView.as_view(),
         name="join_team_from_inbox",
     ),
+    # Invite by email (owner-only send; public preview; authed accept).
+    path("api/v2/team/invite/", InviteTeamMembersView.as_view(), name="team_invite"),
+    path(
+        "api/v2/team/invite/preview/",
+        InvitePreviewView.as_view(),
+        name="team_invite_preview",
+    ),
+    path(
+        "api/v2/team/invite/accept/",
+        InviteAcceptView.as_view(),
+        name="team_invite_accept",
+    ),
     path(
         "api/v2/team/profile/image/",
         TeamProfileImageView.as_view(),

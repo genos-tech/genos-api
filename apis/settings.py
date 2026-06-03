@@ -857,6 +857,11 @@ EMAIL_VERIFICATION_TOKEN_EXPIRY_MINUTES = int(
     os.environ.get("EMAIL_VERIFICATION_TOKEN_EXPIRY_MINUTES", "1440")
 )
 
+# How long a team-invite URL is valid for, in minutes. Default 7 days —
+# generous since the invitee may not check their inbox right away and an
+# invite is lower-risk than a password-reset link.
+TEAM_INVITE_TOKEN_EXPIRY_MINUTES = int(os.environ.get("TEAM_INVITE_TOKEN_EXPIRY_MINUTES", "10080"))
+
 # --- OAuth (Google, GitHub) ---
 # Fernet key used to encrypt third-party access / refresh tokens at
 # rest in the ConnectedAccount table. Generate one with:

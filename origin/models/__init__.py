@@ -5,6 +5,7 @@ from .chat.todo_models import *
 from .chat.unified_models import *
 from .common.feature_models import *
 from .common.inbox_models import *
+from .common.invite_models import *
 from .common.notification_models import *
 from .common.team_models import *
 from .common.usage_models import *
