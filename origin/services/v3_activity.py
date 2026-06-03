@@ -135,17 +135,29 @@ def create_surface_mention_activities(
     ]
     if not rows:
         return []
+    # Which deterministic PKs already exist? `ignore_conflicts=True` makes
+    # bulk_create silently skip them, but it can't tell the caller which
+    # rows were genuinely inserted vs collapsed onto an existing row. A
+    # task/note body is re-saved repeatedly, so without this distinction
+    # every save would re-broadcast + re-PUSH an unchanged mention. We
+    # diff against the pre-existing ids and return ONLY the new rows, so
+    # callers (WS broadcast + web push) act on first-mention only.
+    existing_ids = set(
+        Activity.objects.filter(id__in=[r.id for r in rows]).values_list("id", flat=True)
+    )
     # `ignore_conflicts=True`: a re-save re-mentioning the same user
     # collapses onto the existing deterministic PK rather than raising.
     Activity.objects.bulk_create(rows, ignore_conflicts=True)
+    new_rows = [r for r in rows if r.id not in existing_ids]
     logger.info(
-        "[v3_activity] surface mentions: surface=%s entity=%s created=%s removed=%s",
+        "[v3_activity] surface mentions: surface=%s entity=%s new=%s existing=%s removed=%s",
         surface_type,
         entity_key,
-        len(rows),
+        len(new_rows),
+        len(existing_ids),
         len(removed),
     )
-    return rows
+    return new_rows
 
 
 def _team_id_for_channel(channel: Channel):

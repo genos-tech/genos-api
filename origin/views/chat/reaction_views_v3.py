@@ -87,6 +87,10 @@ class MessageReactionsView(AuthenticatedAPIView):
             # deletes that row — see delete() — so bumping the message is
             # the reliable, symmetric signal for both add and remove.)
             message.save(update_fields=["ts_updated_at"])
+            # Web Push the away message sender that someone reacted.
+            from origin.services.webpush_dispatch import schedule_push_for_activities
+
+            schedule_push_for_activities(activities)
         response_data = MessageReactionSerializer(reaction).data
         # Same `_v3_activities` proxy convention as message_views.post —
         # the WS reaction handler reads this and broadcasts

@@ -13,21 +13,35 @@ specific differences:
 
 from origin.models.common.notification_models import NotificationPreference
 
-# Push-specific defaults when the user has no explicit override. Slice
-# scope = mentions + thread replies ON. (DMs ON / group chats OFF arrive
-# with the plain-`chats` fan-out in a later phase.)
+# Push-specific defaults when the user has no explicit override. Every
+# activity-feed category defaults ON (the product intent is "all
+# activities web-notify"); presence + the per-category opt-out below are
+# what keep it from being noise. `reactions` has no coarse-group column
+# yet (no `enable_reactions` on NotificationPreference), so it is
+# fine-category-only — still default ON.
 _PUSH_DEFAULTS = {
     "mention_chat": True,
     "mention_thread": True,
+    "mention_task": True,
+    "mention_note": True,
     "thread_replies": True,
+    "task_comments": True,
+    "reactions": True,
 }
 
 # Fine category -> the coarse-group boolean column that hard-gates it
 # (back-compat with an older client that flipped the whole group off).
+# Surface mentions (task body / notes) are still "mentions" and ride the
+# same `enable_mentions` coarse toggle. `reactions` is intentionally
+# absent — no coarse column exists, so it falls through to the
+# fine-category / default check only.
 _COARSE_FIELD = {
     "mention_chat": "enable_mentions",
     "mention_thread": "enable_mentions",
+    "mention_task": "enable_mentions",
+    "mention_note": "enable_mentions",
     "thread_replies": "enable_thread_replies",
+    "task_comments": "enable_task_comments",
 }
 
 

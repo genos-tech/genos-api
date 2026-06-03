@@ -1510,6 +1510,14 @@ class TaskCommentsView(AuthenticatedAPIView):
                         actor=sender,
                     )
 
+                    # Web Push for away recipients: @mention rows route to
+                    # the mention category, the plain participant fan-out
+                    # (THREAD_REPLY on the mirror, which carries
+                    # metadata.taskCommentId) to the task_comments category.
+                    from origin.services.webpush_dispatch import schedule_push_for_activities
+
+                    schedule_push_for_activities(list(acts) + list(comment_acts))
+
                     activities_wire = ActivitySerializer(
                         list(acts) + list(comment_acts), many=True
                     ).data

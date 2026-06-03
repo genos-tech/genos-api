@@ -178,6 +178,12 @@ class ActivitySurfaceView(AuthenticatedAPIView):
             removed_user_ids=data.get("removed_user_ids") or [],
             meta=data.get("meta") or {},
         )
+        # Web Push for the away recipients of these surface (task-body /
+        # note) mentions. `rows` is only the genuinely-new mentions, so a
+        # repeated body save doesn't re-push.
+        from origin.services.webpush_dispatch import schedule_push_for_activities
+
+        schedule_push_for_activities(rows)
         return Response(
             {"activities": ActivitySerializer(rows, many=True).data},
             status=status.HTTP_201_CREATED,
