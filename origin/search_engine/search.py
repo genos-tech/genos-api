@@ -78,6 +78,7 @@ _MODE_CONFIG: dict[str, dict] = {
         "chunk_type_weights": {
             "chat_message": 1.0,
             "task_title_content": 1.0,
+            "milestone_title_content": 1.0,
             "note_section": 1.0,
             # A collected past answer that matches the typed question is highly
             # relevant — parity with raw chunks (not boosted above them, so the
@@ -105,6 +106,7 @@ _MODE_CONFIG: dict[str, dict] = {
             "chat_message": 1.0,
             "note_section": 1.0,
             "task_title_content": 1.0,
+            "milestone_title_content": 1.0,
             "task_content_chunk": 1.0,
             "task_comment": 1.0,
             "chat_thread_window": 0.8,
