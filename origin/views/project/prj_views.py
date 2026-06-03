@@ -1,4 +1,5 @@
 import re
+import time
 from collections import defaultdict
 
 from django.core.cache import cache
@@ -659,8 +660,20 @@ class ProjectProfileImageView(AuthenticatedAPIView):
             # At this point, Django has stored the file, possibly renamed
             # Now get the actual stored filename
             stored_file_name = saved_user.profile_image_url.name.split("/")[-1]
+            # Append `?v=<ms-timestamp>` so the served URL is unique per
+            # upload — mirrors UserProfileImageView. Today's storage is
+            # FileSystemStorage, which collision-suffixes filenames, so the
+            # path already changes per upload; but if media moves to S3/R2
+            # (see settings — `AWS_S3_FILE_OVERWRITE` defaults True there),
+            # the FE's fixed `profile.jpg` name would reuse the same path
+            # and the browser would serve the stale cached avatar. The
+            # query string is ignored by media path-matching, and the
+            # `profile_image_url` FileField keeps the clean path. The
+            # `_ensure_pm_channel_for_project` signal then carries this
+            # busted string onto the PM `Channel.profile_image_url`.
+            cache_buster = int(time.time() * 1000)
             saved_user.profile_image_file_name = (
-                f"project_profiles/{project_id}/{stored_file_name}"
+                f"project_profiles/{project_id}/{stored_file_name}?v={cache_buster}"
             )
             saved_user.save(update_fields=["profile_image_file_name"])
 
