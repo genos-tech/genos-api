@@ -288,7 +288,9 @@ def _bulk_index(actions: list[dict]) -> None:
         refresh=bool(refresh_per_batch),
     )
     if errors:
-        log.warning("Bulk index reported %d errors (success=%d)", len(errors), success)
+        # ERROR (not WARNING) so a CronCommand-based reindex fails the run —
+        # a bulk that wrote nothing must not leave the cron green.
+        log.error("Bulk index reported %d errors (success=%d)", len(errors), success)
         for err in errors[:5]:
             log.warning("  %s", err)
 
@@ -316,13 +318,15 @@ def _delete_stale(
     # Same deferred-refresh policy as `_bulk_index` — defers to the
     # end-of-run refresh in `ingest_all` unless RAG_BULK_REFRESH=true.
     refresh_per_batch = settings.SEARCH_ENGINE.get("RAG_BULK_REFRESH", False)
-    os_helpers.bulk(
+    _, del_errors = os_helpers.bulk(
         client,
         actions,
         raise_on_error=False,
         raise_on_exception=False,
         refresh=bool(refresh_per_batch),
     )
+    if del_errors:
+        log.error("Stale-chunk delete reported %d errors", len(del_errors))
     RagChunk.objects.filter(chunk_id__in=stale_ids).delete()
     stats.chunks_deleted += len(stale_ids)
 
