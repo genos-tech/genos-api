@@ -38,8 +38,11 @@ dockerfilePath = "backend_django/Dockerfile"
 # than calling manage.py directly: the cron's startCommand REPLACES the
 # Dockerfile CMD, so the Vertex service-account-key decode baked into the
 # CMD never runs here. The wrapper repeats that decode (no-op unless
-# $GEMINI_SA_BASE64 is set) before running the reindex. `--since-minutes`
-# stays here next to cronSchedule — bump both together to change cadence.
+# $GEMINI_SA_BASE64 is set) and runs `opensearch_setup` to create the
+# index + alias with the correct mapping before any write — so a wiped
+# OpenSearch can't auto-create a dynamically-mapped index — then runs the
+# reindex. `--since-minutes` stays here next to cronSchedule — bump both
+# together to change cadence.
 cronSchedule = "*/10 * * * *"
 startCommand = "sh /app/backend_django/railway-reindexer-entrypoint.sh --since-minutes 11"
 restartPolicyType = "NEVER"
