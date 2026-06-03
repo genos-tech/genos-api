@@ -174,15 +174,13 @@ def _allocate_seq_and_create_message_with_activities(
     # messages and for tasks assigned to someone else.
     activities.extend(v3_activity.create_self_assign_activity(message=msg, actor=sender))
 
-    # Web Push: notify recipients who are away (no visible tab). Fires
-    # AFTER commit so a rollback never pushes for a message that didn't
-    # persist; if we're not in a transaction here, on_commit runs the
-    # callback immediately (activities are already committed). Slice scope:
-    # MENTION activities only — see webpush_dispatch.
-    if activities:
-        from origin.services.webpush_dispatch import dispatch_push_for_activities
+    # Web Push: notify away recipients (no visible tab). Deferred to
+    # on_commit so a rollback never pushes a message that didn't persist.
+    # The shared helper is the single wiring point every activity producer
+    # uses (mentions, thread replies, self-assign — see webpush_dispatch).
+    from origin.services.webpush_dispatch import schedule_push_for_activities
 
-        transaction.on_commit(lambda acts=list(activities): dispatch_push_for_activities(acts))
+    schedule_push_for_activities(activities)
     return msg, activities
 
 
