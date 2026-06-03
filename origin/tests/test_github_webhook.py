@@ -20,6 +20,7 @@ from rest_framework.test import APIClient
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskMaster
 
 User = get_user_model()
@@ -198,6 +199,46 @@ class TestGithubWebhook(TestCase):
         self.assertEqual(response.data["updated"], 1)
         task.refresh_from_db()
         self.assertEqual(task.status, "Closed")
+
+    def test_merged_pr_close_tags_activity_with_pr_merge_metadata(self):
+        """The auto-close audit row must be distinguishable from a manual
+        status edit: the unauthenticated webhook has no actor, so the feed
+        relies on `closedByPrMerge` + `prUrl` metadata to attribute the
+        close to the merged PR instead of an anonymous "Someone"."""
+        task = self._create_task(project_task_number=42)
+        url = "https://github.com/owner/repo/pull/42"
+        response = self._post_webhook(
+            _pr_payload(action="closed", merged=True, head_ref="HK-42", html_url=url)
+        )
+        self.assertEqual(response.data["updated"], 1)
+
+        row = (
+            TaskActivity.objects.filter(task=task, action_type="status_changed")
+            .order_by("-ts_created_at")
+            .first()
+        )
+        self.assertIsNotNone(row)
+        # Actor is null (webhook is unauthenticated) — the metadata flag,
+        # not the actor, is what marks this as a PR-merge close.
+        self.assertIsNone(row.actor)
+        self.assertEqual(row.new_value, "Closed")
+        self.assertTrue(row.metadata.get("closedByPrMerge"))
+        self.assertEqual(row.metadata.get("prUrl"), url)
+
+    def test_manual_status_change_is_not_tagged_as_pr_merge(self):
+        """A plain status edit (no webhook) must NOT carry the PR-merge
+        flag, so the feed only specialises genuine auto-closes."""
+        task = self._create_task(project_task_number=77)
+        task.status = "Closed"
+        task.save(update_fields=["status", "ts_updated_at"])
+
+        row = (
+            TaskActivity.objects.filter(task=task, action_type="status_changed")
+            .order_by("-ts_created_at")
+            .first()
+        )
+        self.assertIsNotNone(row)
+        self.assertNotIn("closedByPrMerge", row.metadata)
 
     def test_merged_pr_matches_case_insensitive(self):
         task = self._create_task(project_task_number=42)

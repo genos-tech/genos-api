@@ -174,7 +174,7 @@ def _verify_signature(raw_body: bytes, signature_header: str | None) -> bool:
     return hmac.compare_digest(expected, received)
 
 
-def _close_tasks_for_merged_pr(head_ref: str) -> int:
+def _close_tasks_for_merged_pr(head_ref: str, pr_url: str = "") -> int:
     """Auto-close tasks referenced by a merged PR's head branch name.
 
     Resolution path: walk every task that has a project-scoped display
@@ -182,6 +182,12 @@ def _close_tasks_for_merged_pr(head_ref: str) -> int:
     head branch name contains that ID with the same word-boundary regex
     used for branch auto-linking. Tasks that match AND whose assignee
     has opted in via `auto_close_on_pr_merge` get bumped to DONE_STATUS.
+
+    `pr_url` is stashed on each task before the save so the
+    `task_record_changes` signal can tag the resulting status-change
+    activity as a PR-merge auto-close (the webhook is unauthenticated,
+    so the row's `actor` is null and would otherwise render as an
+    anonymous "Someone changed status" edit). See `task_signals.py`.
 
     Returns the count of tasks actually closed.
 
@@ -225,6 +231,10 @@ def _close_tasks_for_merged_pr(head_ref: str) -> int:
         if assignee is None or not getattr(assignee, "auto_close_on_pr_merge", False):
             continue
         task.status = DONE_STATUS
+        # Tag the upcoming status-change audit row as a PR-merge close so
+        # the activity feed can attribute it to the merged PR instead of
+        # a null actor. Read back in `task_record_changes`.
+        task._pr_merge_close = {"prUrl": pr_url or None}
         task.save(update_fields=["status", "ts_updated_at"])
         updated += 1
     return updated
@@ -408,7 +418,7 @@ class GithubWebhookView(APIView):
             # (opened, ready_for_review, closed-unmerged, etc.) are
             # acknowledged but not acted on.
             if action == "closed" and merged and head_ref:
-                updated = _close_tasks_for_merged_pr(head_ref)
+                updated = _close_tasks_for_merged_pr(head_ref, html_url)
                 logger.info(
                     "GitHub webhook: PR merged %s (head=%s) → updated %d task(s)",
                     html_url,
