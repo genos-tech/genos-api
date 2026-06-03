@@ -19,6 +19,8 @@ import logging
 import uuid
 from typing import Iterable, List, Optional
 
+from django.db.models import Q
+
 from origin.models.chat.unified_models import (
     Activity,
     ActivityType,
@@ -258,48 +260,56 @@ def create_self_assign_activity(*, message: Message, actor: CustomUser) -> List[
 def create_thread_reply_activity(
     *, reply: Message, parent: Optional[Message], actor: CustomUser
 ) -> List[Activity]:
-    """Single `Activity(type=THREAD_REPLY)` for the thread root's sender
-    when a different user posts a reply.
+    """`Activity(type=THREAD_REPLY)` for every prior participant of the
+    thread when a user posts a reply — the thread root's author plus
+    everyone who already replied (a "thread participant" fan-out, matching
+    the task-comment participant fan-out). Previously only the immediate
+    parent's author was notified, so earlier repliers were silently
+    dropped from their own threads.
 
-    Returns `[]` when:
-      - `parent` is null (the reply has no parent — shouldn't happen
-        for a thread reply, but defend against the caller)
-      - the parent's sender is the same user posting the reply
-      - the parent's sender was hard-deleted (sender FK is null)
+    Recipients = distinct senders of the thread root + all its replies,
+    minus the actor (no self-ping) and any hard-deleted (null) sender.
+    Returns `[]` when `parent` is null or the actor is the only
+    participant.
     """
-    if parent is None or parent.sender_id is None:
-        logger.info(
-            "[v3_activity] thread_reply skipped: parent=%s parent.sender_id=%s",
-            parent and parent.id,
-            parent and parent.sender_id,
-        )
+    if parent is None:
+        logger.info("[v3_activity] thread_reply skipped: parent is None")
         return []
+    # The reply is already persisted with `thread_root` set; fall back to
+    # the parent id for a direct reply to a top-level message.
+    root_id = reply.thread_root_id or parent.id
     actor_id = str(actor.id)
-    parent_sender_id = str(parent.sender_id)
-    if parent_sender_id == actor_id:
-        logger.info(
-            "[v3_activity] thread_reply skipped (self-reply): parent_sender=%s actor=%s",
-            parent_sender_id,
-            actor_id,
-        )
+    participant_ids = (
+        Message.objects.filter(Q(id=root_id) | Q(thread_root_id=root_id))
+        .exclude(sender_id=None)
+        .values_list("sender_id", flat=True)
+        .distinct()
+    )
+    recipients = {str(s) for s in participant_ids if str(s) != actor_id}
+    if not recipients:
+        logger.info("[v3_activity] thread_reply skipped: no other participants")
         return []
     channel = reply.channel
-    row = Activity.objects.create(
-        team_id=_team_id_for_channel(channel),
-        recipient_id=parent_sender_id,
-        actor=actor,
-        activity_type=ActivityType.THREAD_REPLY,
-        channel=channel,
-        message=reply,
-        meta={"parent_message_id": str(parent.id)},
-    )
+    rows = [
+        Activity(
+            team_id=_team_id_for_channel(channel),
+            recipient_id=uid,
+            actor=actor,
+            activity_type=ActivityType.THREAD_REPLY,
+            channel=channel,
+            message=reply,
+            meta={"parent_message_id": str(parent.id)},
+        )
+        for uid in recipients
+    ]
+    Activity.objects.bulk_create(rows)
     logger.info(
-        "[v3_activity] thread_reply created: id=%s recipient=%s channel_kind=%s",
-        row.id,
-        parent_sender_id,
+        "[v3_activity] thread_reply created: count=%s root=%s channel_kind=%s",
+        len(rows),
+        root_id,
         channel.kind,
     )
-    return [row]
+    return rows
 
 
 def create_comment_participant_activities(

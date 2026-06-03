@@ -1662,6 +1662,33 @@ class TaskCommentReactionView(AuthenticatedAPIView):
         serializer = TaskCommentReactionFactSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
+            # Mirror the reaction onto the v3 PM comment message so the
+            # comment author gets an activity-feed row + web push. The
+            # legacy TaskCommentReactionFact alone writes NO v3 activity,
+            # so reacting to a task comment used to notify nobody. The
+            # comment's mirror Message carries `metadata.taskCommentId`.
+            try:
+                from origin.models.chat.unified_models import Message
+                from origin.models.common.user_models import CustomUser
+                from origin.services import v3_activity
+                from origin.services.webpush_dispatch import schedule_push_for_activities
+
+                reactor = CustomUser.objects.filter(id=data["sender"]).first()
+                mirror = (
+                    Message.objects.filter(
+                        task_id=int(data["task"]),
+                        metadata__taskCommentId=int(data["comment_id"]),
+                    )
+                    .order_by("-ts_sent_at")
+                    .first()
+                )
+                if mirror is not None and reactor is not None:
+                    acts = v3_activity.create_reaction_activity(
+                        message=mirror, emoji=data["reaction_emoji"], actor=reactor
+                    )
+                    schedule_push_for_activities(acts)
+            except Exception as exc:  # never break the saved reaction
+                logger.warning("task-comment reaction v3 fan-out failed: %s", exc)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

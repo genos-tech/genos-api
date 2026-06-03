@@ -43,7 +43,10 @@ from origin.serializers.chat.unified_serializers import (
     MessageAttachmentSerializer,
     MessageSerializer,
 )
-from origin.services.mention_extractor import extract_mentioned_user_ids
+from origin.services.mention_extractor import (
+    extract_mention_group_ids,
+    extract_mentioned_user_ids,
+)
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
     apply_row_count_cap,
@@ -51,6 +54,7 @@ from origin.views.utils.incremental import (
     capture_server_time,
     check_since,
 )
+from origin.views.utils.mention_handler import resolve_group_members
 from rest_framework import status
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
@@ -115,7 +119,16 @@ def _valid_mention_user_ids(channel, body):
     (one bad mention makes the channel unsendable). Returns a set of
     `str` ids.
     """
+    # Direct @user mentions PLUS @group mentions expanded to their member
+    # user ids — the note / task save paths already expand groups via
+    # `resolve_group_members`; chat messages used to drop group mentions
+    # entirely (a group @-mention notified nobody). The channel-membership
+    # intersection below then drops any group member who isn't in the
+    # channel, so a group mention only pings members who can see the chat.
     mentioned = extract_mentioned_user_ids(body)
+    group_ids = extract_mention_group_ids(body)
+    if group_ids:
+        mentioned = mentioned | resolve_group_members(group_ids)
     if not mentioned:
         return set()
     valid = ChannelMember.objects.filter(
