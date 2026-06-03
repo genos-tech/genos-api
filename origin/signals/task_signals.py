@@ -137,14 +137,40 @@ def _resolve_relation_label(field: str, value: Any) -> Optional[str]:
     return None
 
 
+def _resolve_task_display_id(value: Any) -> Optional[str]:
+    """Return a parent task's human-readable display id ("PRF-123"), or
+    None. Snapshotted into a `parent_task_id`-change row's metadata so
+    the feed can show the ticket-style id instead of a raw "#<pk>" that
+    means nothing to a human skimming the activity log. `select_related`
+    keeps the `display_id` property's `project.code` lookup to one query.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        row = TaskMaster.objects.select_related("project").filter(pk=value).first()
+    except (ValueError, TypeError):
+        return None
+    return row.display_id if row else None
+
+
 def _metadata_for_change(field: str, old: Any, new: Any) -> Optional[dict]:
     """Build the optional metadata payload for a tracked-field diff.
 
-    Currently only relation-id fields participate (so the feed can
-    show `Old title (#oldId) → New title (#newId)`). Returns None
+    Relation-id fields participate so the feed can show
+    `Old title (#oldId) → New title (#newId)`. Parent-task changes
+    additionally carry the related task's display id ("PRF-123") so the
+    feed renders the ticket-style id instead of the raw pk — milestones
+    and sprints have no such id and keep the bare "#id". Returns None
     for fields that don't need extra context.
     """
-    if field in ("parent_task_id", "milestone_id", "sprint_id"):
+    if field == "parent_task_id":
+        return {
+            "oldLabel": _resolve_relation_label(field, old),
+            "newLabel": _resolve_relation_label(field, new),
+            "oldDisplayId": _resolve_task_display_id(old),
+            "newDisplayId": _resolve_task_display_id(new),
+        }
+    if field in ("milestone_id", "sprint_id"):
         return {
             "oldLabel": _resolve_relation_label(field, old),
             "newLabel": _resolve_relation_label(field, new),
@@ -313,13 +339,26 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
         action = _FIELD_TO_ACTION.get(field)
         if action is None:
             continue
+        metadata = _metadata_for_change(field, old, new)
+        # PR-merge auto-close: the GitHub webhook stashes `_pr_merge_close`
+        # on the instance before flipping status to Closed. Tag the status
+        # row so the feed attributes it to the merged PR rather than the
+        # null actor the unauthenticated webhook produces.
+        if field == "status":
+            pr_close = getattr(instance, "_pr_merge_close", None)
+            if pr_close is not None:
+                metadata = {
+                    **(metadata or {}),
+                    "closedByPrMerge": True,
+                    "prUrl": pr_close.get("prUrl"),
+                }
         _record(
             task=instance,
             action_type=action,
             field_name=field,
             old_value=old,
             new_value=new,
-            metadata=_metadata_for_change(field, old, new),
+            metadata=metadata,
         )
 
 

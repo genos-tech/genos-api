@@ -20,6 +20,7 @@ from rest_framework.test import APIClient
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskMaster
 
 User = get_user_model()
@@ -162,7 +163,9 @@ class TestGithubWebhook(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["detail"], "ignored")
 
-    def test_pr_opened_does_nothing(self):
+    def test_pr_opened_does_not_change_status(self):
+        # Opening a PR records a link activity (see the link tests below)
+        # but must NOT transition the task — only a merge closes it.
         task = self._create_task(project_task_number=42)
         response = self._post_webhook(
             _pr_payload(action="opened", merged=False, head_ref="feature/HK-42-foo")
@@ -198,6 +201,46 @@ class TestGithubWebhook(TestCase):
         self.assertEqual(response.data["updated"], 1)
         task.refresh_from_db()
         self.assertEqual(task.status, "Closed")
+
+    def test_merged_pr_close_tags_activity_with_pr_merge_metadata(self):
+        """The auto-close audit row must be distinguishable from a manual
+        status edit: the unauthenticated webhook has no actor, so the feed
+        relies on `closedByPrMerge` + `prUrl` metadata to attribute the
+        close to the merged PR instead of an anonymous "Someone"."""
+        task = self._create_task(project_task_number=42)
+        url = "https://github.com/owner/repo/pull/42"
+        response = self._post_webhook(
+            _pr_payload(action="closed", merged=True, head_ref="HK-42", html_url=url)
+        )
+        self.assertEqual(response.data["updated"], 1)
+
+        row = (
+            TaskActivity.objects.filter(task=task, action_type="status_changed")
+            .order_by("-ts_created_at")
+            .first()
+        )
+        self.assertIsNotNone(row)
+        # Actor is null (webhook is unauthenticated) — the metadata flag,
+        # not the actor, is what marks this as a PR-merge close.
+        self.assertIsNone(row.actor)
+        self.assertEqual(row.new_value, "Closed")
+        self.assertTrue(row.metadata.get("closedByPrMerge"))
+        self.assertEqual(row.metadata.get("prUrl"), url)
+
+    def test_manual_status_change_is_not_tagged_as_pr_merge(self):
+        """A plain status edit (no webhook) must NOT carry the PR-merge
+        flag, so the feed only specialises genuine auto-closes."""
+        task = self._create_task(project_task_number=77)
+        task.status = "Closed"
+        task.save(update_fields=["status", "ts_updated_at"])
+
+        row = (
+            TaskActivity.objects.filter(task=task, action_type="status_changed")
+            .order_by("-ts_created_at")
+            .first()
+        )
+        self.assertIsNotNone(row)
+        self.assertNotIn("closedByPrMerge", row.metadata)
 
     def test_merged_pr_matches_case_insensitive(self):
         task = self._create_task(project_task_number=42)
@@ -310,6 +353,69 @@ class TestGithubWebhook(TestCase):
         self.assertEqual(response.data["updated"], 0)
         orphan.refresh_from_db()
         self.assertEqual(orphan.status, "Open")
+
+    # ── PR opened → "PR linked" activity (branch carries display id) ──
+
+    def _linked_rows(self, task):
+        return TaskActivity.objects.filter(task=task, action_type="pr_linked")
+
+    def test_pr_opened_records_link_activity_when_branch_matches(self):
+        task = self._create_task(project_task_number=42)
+        url = "https://github.com/owner/repo/pull/7"
+        response = self._post_webhook(
+            _pr_payload(
+                action="opened", merged=False, head_ref="feature/HK-42-thing", html_url=url
+            )
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["linked"], 1)
+
+        rows = self._linked_rows(task)
+        self.assertEqual(rows.count(), 1)
+        row = rows.first()
+        self.assertIsNone(row.actor)
+        self.assertEqual(row.metadata.get("pr_url"), url)
+        self.assertEqual(row.metadata.get("branch"), "feature/HK-42-thing")
+        self.assertEqual(row.metadata.get("pr_number"), 42)
+
+    def test_pr_reopened_also_records_link_activity(self):
+        task = self._create_task(project_task_number=42)
+        response = self._post_webhook(
+            _pr_payload(action="reopened", merged=False, head_ref="HK-42")
+        )
+        self.assertEqual(response.data["linked"], 1)
+        self.assertEqual(self._linked_rows(task).count(), 1)
+
+    def test_pr_opened_does_not_link_when_branch_has_no_matching_id(self):
+        task = self._create_task(project_task_number=42)
+        response = self._post_webhook(
+            _pr_payload(action="opened", merged=False, head_ref="feature/no-task-here")
+        )
+        self.assertEqual(response.data["linked"], 0)
+        self.assertEqual(self._linked_rows(task).count(), 0)
+
+    def test_pr_opened_does_not_link_prefix_id_collision(self):
+        # Branch "HK-420" must not link task HK-42 (word-boundary regex).
+        task = self._create_task(project_task_number=42)
+        response = self._post_webhook(
+            _pr_payload(action="opened", merged=False, head_ref="feature/HK-420-foo")
+        )
+        self.assertEqual(response.data["linked"], 0)
+        self.assertEqual(self._linked_rows(task).count(), 0)
+
+    def test_pr_open_link_is_idempotent_across_redeliveries(self):
+        task = self._create_task(project_task_number=42)
+        payload = _pr_payload(
+            action="opened",
+            merged=False,
+            head_ref="HK-42",
+            html_url="https://github.com/owner/repo/pull/7",
+        )
+        first = self._post_webhook(payload)
+        second = self._post_webhook(payload)
+        self.assertEqual(first.data["linked"], 1)
+        self.assertEqual(second.data["linked"], 0)
+        self.assertEqual(self._linked_rows(task).count(), 1)
 
 
 @override_settings(GITHUB_WEBHOOK_SECRET=WEBHOOK_SECRET)

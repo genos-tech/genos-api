@@ -117,3 +117,51 @@ class TaskFinalizeActivityTests(TestCase):
             self._actions(task),
             [TaskActivityActionType.CREATED, TaskActivityActionType.STATUS],
         )
+
+
+class TaskParentDisplayIdMetadataTests(TestCase):
+    """A `parent_task_id` change records the parent task's human-readable
+    display id ("PRF-7") in metadata so the activity feed can render the
+    ticket-style id instead of a raw "#<pk>"."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="parentmeta", email="parentmeta@test.com", password="pass12345"
+        )
+        self.team = TeamMaster.objects.create(
+            team_name="Meta Team", team_email="metateam@test.com", owner=self.user
+        )
+        self.project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Meta Project",
+            owner=self.user,
+            project_system_user=self.user,
+            code="PRF",
+        )
+
+    def _task(self, *, title: str, number: int) -> TaskMaster:
+        return TaskMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            title=title,
+            status="Open",
+            project_task_number=number,
+        )
+
+    def test_parent_change_records_parent_display_id(self):
+        parent = self._task(title="Parent task", number=7)
+        child = self._task(title="Child task", number=8)
+
+        child.parent_task_id = parent.task_id
+        child.save(update_fields=["parent_task_id", "ts_updated_at"])
+
+        row = (
+            TaskActivity.objects.filter(task=child, action_type=TaskActivityActionType.PARENT)
+            .order_by("-ts_created_at")
+            .first()
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(row.metadata.get("newLabel"), "Parent task")
+        self.assertEqual(row.metadata.get("newDisplayId"), "PRF-7")
+        # No previous parent → old side is empty.
+        self.assertIsNone(row.metadata.get("oldDisplayId"))
