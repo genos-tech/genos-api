@@ -57,8 +57,8 @@ from django.db.models import Avg, Count, Q
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 
-from origin.search_engine.agent.evals.judge import judge_answer
 from origin.search_engine.agent.controller import reconstruct_sources_for_run
+from origin.search_engine.agent.evals.judge import judge_answer
 from origin.search_engine.models import AgentRun, AgentRunJudgement
 
 log = logging.getLogger(__name__)
