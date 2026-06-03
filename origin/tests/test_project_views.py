@@ -1,8 +1,10 @@
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from origin.models.chat.unified_models import Channel, ChannelKind
 from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
 
@@ -124,9 +126,7 @@ class TestProjectViews(TestCase):
         )
         self.assertEqual(response.status_code, 201)
         self.assertTrue(
-            ProjectMembers.objects.filter(
-                project=project, attendee=self.user
-            ).exists()
+            ProjectMembers.objects.filter(project=project, attendee=self.user).exists()
         )
 
     def test_join_project_duplicate(self):
@@ -136,9 +136,7 @@ class TestProjectViews(TestCase):
             owner=self.user,
             project_system_user=self.user,
         )
-        ProjectMembers.objects.create(
-            team=self.team, project=project, attendee=self.user
-        )
+        ProjectMembers.objects.create(team=self.team, project=project, attendee=self.user)
         response = self.client.post(
             "/api/v2/project/join/",
             {
@@ -159,9 +157,7 @@ class TestProjectViews(TestCase):
             owner=self.user,
             project_system_user=self.user,
         )
-        ProjectMembers.objects.create(
-            team=self.team, project=project, attendee=self.user
-        )
+        ProjectMembers.objects.create(team=self.team, project=project, attendee=self.user)
         response = self.client.get(
             "/api/v2/project/projects/",
             {
@@ -240,3 +236,51 @@ class TestProjectViews(TestCase):
         client = APIClient()
         response = client.get("/api/v2/project/projects/")
         self.assertEqual(response.status_code, 401)
+
+    # ── Project Profile Image → PM Channel mirror ──────────────────
+
+    def _png(self, name="profile.jpg"):
+        png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+            b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+            b"\x00\x00\x00\rIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        return SimpleUploadedFile(name, png, content_type="image/png")
+
+    def test_project_image_upload_mirrors_to_pm_channel(self):
+        """Uploading a project avatar must propagate to the PM channel.
+
+        Regression guard: the v3 chat UI reads a PM chat's avatar ONLY
+        from `Channel.profile_image_url`, but `ProjectProfileImageView`
+        writes `ProjectMaster`. The `_ensure_pm_channel_for_project`
+        signal bridges the two. Drive the REAL endpoint (not a synthetic
+        save) so the view's two-step save ordering — file save, then the
+        `profile_image_file_name` recompute that the signal mirrors from —
+        is actually exercised.
+        """
+        project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Avatar Project",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        # The signal auto-creates the PM channel with no avatar yet.
+        channel = Channel.objects.get(project_id=project.project_id, kind=ChannelKind.PM)
+        self.assertEqual(channel.profile_image_url, "")
+
+        response = self.client.put(
+            "/api/v2/project/profile/image/",
+            {"project_id": str(project.project_id), "profile_image": self._png()},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        project.refresh_from_db()
+        channel.refresh_from_db()
+        # Channel avatar now mirrors the project's stored media path.
+        self.assertTrue(project.profile_image_file_name)
+        self.assertEqual(channel.profile_image_url, project.profile_image_file_name)
+        self.assertTrue(channel.profile_image_url.startswith("project_profiles/"))
+        # Carries the per-upload cache-buster so a future overwrite-storage
+        # switch can't serve a stale cached avatar (mirrors the user flow).
+        self.assertIn("?v=", channel.profile_image_url)

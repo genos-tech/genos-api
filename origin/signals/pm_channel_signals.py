@@ -59,6 +59,19 @@ def _ensure_pm_channel_for_project(sender, instance, created, **kwargs):
             "team_id": instance.team_id,
             "title": instance.project_name,
             "owner_id": getattr(instance, "owner_id", None),
+            # Mirror the project avatar onto the PM channel. The PM
+            # avatar shown across the v3 chat UI (sidebar `ProjectAvatar`,
+            # the project-profile modal) reads `Channel.profile_image_url`
+            # exclusively — `ProjectProfileImageView` writes only
+            # `ProjectMaster`, and the v3 `ChannelProfileImageView`
+            # rejects PM channels ("edit the project instead"). Without
+            # this line a project image upload never reaches the channel,
+            # so the avatar silently never changes. `profile_image_file_name`
+            # is the FE-canonical media path (`project_profiles/<id>/<file>`,
+            # matching the legacy sidebar); `or ""` because the channel
+            # column is a non-nullable CharField while the project field
+            # is nullable.
+            "profile_image_url": getattr(instance, "profile_image_file_name", "") or "",
             # Mirror the project's soft-delete state. Hardcoding False
             # resurrected a soft-deleted project's PM channel on the next
             # save (e.g. a metadata edit) — `ProjectMaster.is_deleted`
@@ -131,6 +144,4 @@ def _remove_pm_channel_member(sender, instance, **kwargs):
     except Channel.DoesNotExist:
         return
 
-    ChannelMember.objects.filter(channel=channel, user_id=attendee).update(
-        is_deleted=True
-    )
+    ChannelMember.objects.filter(channel=channel, user_id=attendee).update(is_deleted=True)
