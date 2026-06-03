@@ -355,6 +355,57 @@ def _record_pr_comment_activity(
     return created
 
 
+def _record_pr_link_activity(head_ref: str, pr_url: str, number, title: str) -> int:
+    """For each task whose `display_id` is contained in `head_ref`, create
+    a `PR_LINKED` activity row recording that this PR (opened on a branch
+    carrying the task's display id) is linked to the task. PRs whose head
+    branch does NOT contain a task's display id are ignored — that's the
+    same auto-link rule used for branch chips and PR-comment activity.
+
+    Idempotent by `(action_type, metadata.pr_url, task)`: re-deliveries and
+    reopen events don't duplicate. `pr_url` (not the per-repo PR number) is
+    the dedup key because the number collides across repos. Returns the
+    count of rows actually created."""
+    if not head_ref or not pr_url:
+        return 0
+    candidates = TaskMaster.objects.select_related("project", "team").filter(
+        is_deleted=False,
+        project__code__isnull=False,
+        project_task_number__isnull=False,
+    )
+    metadata = {
+        "pr_url": pr_url,
+        "pr_number": number,
+        "pr_title": title or "",
+        # The head branch that established the link — surfaced as a chip
+        # so the activity reads "linked PR … (branch feature/GEN-42-x)".
+        "branch": head_ref,
+    }
+    created = 0
+    for task in candidates:
+        display_id = task.display_id
+        if not display_id or display_id.startswith("#"):
+            continue
+        if not _branch_match_re(display_id).search(head_ref):
+            continue
+        if TaskActivity.objects.filter(
+            task=task,
+            action_type=TaskActivityActionType.PR_LINKED,
+            metadata__pr_url=pr_url,
+        ).exists():
+            continue
+        TaskActivity.objects.create(
+            team=task.team,
+            project=task.project,
+            task=task,
+            actor=None,
+            action_type=TaskActivityActionType.PR_LINKED,
+            metadata=metadata,
+        )
+        created += 1
+    return created
+
+
 @method_decorator(csrf_exempt, name="dispatch")
 class GithubWebhookView(APIView):
     """Receive GitHub repo webhooks (`pull_request` events).
@@ -426,6 +477,22 @@ class GithubWebhookView(APIView):
                     updated,
                 )
                 return Response({"detail": "ok", "updated": updated}, status=status.HTTP_200_OK)
+
+            # Record a link activity when a PR is opened (or reopened) on a
+            # branch whose name carries a task's display id. Idempotent, so
+            # a reopen after this already fired won't duplicate the row.
+            if action in ("opened", "reopened") and head_ref:
+                pr_number = pr.get("number")
+                pr_title = pr.get("title") or ""
+                linked = _record_pr_link_activity(head_ref, html_url, pr_number, pr_title)
+                logger.info(
+                    "GitHub webhook: PR %s %s (head=%s) → linked %d task(s)",
+                    action,
+                    html_url,
+                    head_ref,
+                    linked,
+                )
+                return Response({"detail": "ok", "linked": linked}, status=status.HTTP_200_OK)
 
             return Response({"detail": "noop"}, status=status.HTTP_200_OK)
 

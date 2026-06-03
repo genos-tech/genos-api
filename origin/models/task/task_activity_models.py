@@ -46,6 +46,14 @@ class TaskActivityActionType(models.TextChoices):
     # actor=None — GitHub commenters are not Genos users; the GitHub
     # login + avatar URL are stored in metadata.
     PR_COMMENT_ADDED = "pr_comment_added", "PR comment added"
+    # GitHub PR auto-linked to the task because its head branch name
+    # contains the task's display_id (e.g. branch `feature/GEN-42-x`
+    # links PR → task GEN-42). Populated by `GithubWebhookView` on
+    # `pull_request` opened / reopened events; PRs whose branch does NOT
+    # contain a task's display_id are ignored. actor=None — the PR opener
+    # may not be a Genos user; the PR url / number / branch / title are
+    # stored in metadata for rendering.
+    PR_LINKED = "pr_linked", "PR linked"
 
 
 class TaskActivity(models.Model):
