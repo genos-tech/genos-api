@@ -44,6 +44,22 @@ class UserProfileView(AuthenticatedAPIView):
             if val is None:
                 update_data.pop(key)
 
+        # Display-name edits: trim and reject empty / whitespace-only so a
+        # hand-crafted request can't blank out or pad the visible name. The
+        # `partial=True` serializer below already enforces `max_length=50`
+        # and rejects an empty string, but it would happily store "   ";
+        # this mirrors the server-side non-empty guard on team / project
+        # rename. `username` is intentionally NOT unique, so no collision
+        # check (unlike team_name / project_name).
+        if "username" in update_data:
+            cleaned = (update_data.get("username") or "").strip()
+            if not cleaned:
+                return Response(
+                    {"error": "username cannot be empty."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            update_data["username"] = cleaned
+
         serializer = UserSerializer(user, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
