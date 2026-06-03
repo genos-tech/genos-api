@@ -58,7 +58,7 @@ from django.db.models.functions import TruncDate
 from django.utils import timezone
 
 from origin.search_engine.agent.evals.judge import judge_answer
-from origin.search_engine.agent_views import _reconstruct_sources_for_run
+from origin.search_engine.agent.controller import reconstruct_sources_for_run
 from origin.search_engine.models import AgentRun, AgentRunJudgement
 
 log = logging.getLogger(__name__)
@@ -205,7 +205,7 @@ class Command(BaseCommand):
         score_sums = {"faithfulness": 0.0, "citation_precision": 0.0, "completeness": 0.0}
 
         for run in sampled:
-            sources = _reconstruct_sources_for_run(run)
+            sources = reconstruct_sources_for_run(run)
             tool_results = [
                 {
                     "tool_name": s.tool_name,
