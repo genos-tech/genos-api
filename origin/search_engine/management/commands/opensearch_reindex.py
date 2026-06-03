@@ -66,6 +66,7 @@ class Command(BaseCommand):
             choices=[
                 "chat",
                 "task",
+                "milestone",
                 "note",
                 "thread_summary",
                 "note_summary",

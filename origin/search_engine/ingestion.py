@@ -30,6 +30,7 @@ from opensearchpy import helpers as os_helpers
 from origin.search_engine.chunkers.base import Chunk, EntityChunks
 from origin.search_engine.chunkers.chat_chunker import iter_all_chat_chunks
 from origin.search_engine.chunkers.conversation_chunker import iter_conversation_chunks
+from origin.search_engine.chunkers.milestone_chunker import iter_milestone_chunks
 from origin.search_engine.chunkers.note_chunker import iter_all_note_chunks
 from origin.search_engine.chunkers.note_summary_chunker import iter_note_summary_chunks
 from origin.search_engine.chunkers.spotlight_answer_chunker import iter_spotlight_answer_chunks
@@ -91,6 +92,7 @@ def ingest_all(
     entity_types = entity_types or [
         "chat",
         "task",
+        "milestone",
         "note",
         "thread_summary",
         "note_summary",
@@ -105,6 +107,9 @@ def ingest_all(
     if "task" in entity_types:
         log.info("Ingesting tasks (since=%s, dry_run=%s)...", since, dry_run)
         _ingest_stream(iter_task_chunks(since=since), stats, dry_run=dry_run)
+    if "milestone" in entity_types:
+        log.info("Ingesting milestones (since=%s, dry_run=%s)...", since, dry_run)
+        _ingest_stream(iter_milestone_chunks(since=since), stats, dry_run=dry_run)
     if "note" in entity_types:
         log.info("Ingesting notes (since=%s, dry_run=%s)...", since, dry_run)
         _ingest_stream(iter_all_note_chunks(since=since), stats, dry_run=dry_run)

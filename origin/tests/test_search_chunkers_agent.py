@@ -31,6 +31,7 @@ from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent import acl as acl_mod
 from origin.search_engine.agent import citation_resolver as cr
@@ -48,6 +49,7 @@ from origin.search_engine.chunkers.base import (
     make_snippet,
 )
 from origin.search_engine.chunkers.chat_chunker import iter_dm_chunks, iter_pm_chunks
+from origin.search_engine.chunkers.milestone_chunker import iter_milestone_chunks
 from origin.search_engine.chunkers.note_chunker import (
     iter_chat_note_chunks,
     iter_personal_note_chunks,
@@ -550,6 +552,70 @@ class TestTaskChunker(BaseAPITestCase):
         since = dt.datetime(2025, 1, 1, tzinfo=dt.timezone.utc)
         ids = {b.entity_id for b in iter_task_chunks(since=since)}
         self.assertIn(f"task:{t.task_id}", ids)
+
+
+class TestMilestoneChunker(BaseAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectMaster.objects.create(
+            team=self.team, project_name="MS Proj", owner=self.user
+        )
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user)
+
+    def _ms(self, **kw):
+        defaults = dict(team=self.team, project=self.project, title="Milestone title")
+        defaults.update(kw)
+        return MilestoneMaster.objects.create(**defaults)
+
+    def test_milestone_title_and_description_chunk(self):
+        backing = TaskMaster.objects.create(
+            team=self.team, project=self.project, title="backing", status="open"
+        )
+        m = self._ms(title="Q3 launch", description=_bn("ship the new search"), task=backing)
+        batches = list(iter_milestone_chunks())
+        self.assertEqual(len(batches), 1)
+        batch = batches[0]
+        self.assertEqual(batch.entity_type, "milestone")
+        self.assertEqual(batch.entity_id, f"milestone:{m.milestone_id}")
+        self.assertEqual(len(batch.chunks), 1)
+        c = batch.chunks[0]
+        self.assertEqual(c.chunk_type, "milestone_title_content")
+        self.assertEqual(c.chunk_id, f"milestone:{m.milestone_id}:title_content")
+        self.assertEqual(c.search_text, "Q3 launch\nship the new search")
+        self.assertEqual(c.title, "Q3 launch")
+        # Backing task surfaced so Spotlight deep-links via the task view.
+        self.assertEqual(c.task_id, str(backing.task_id))
+        self.assertEqual(c.project_id, str(self.project.project_id))
+        self.assertIn(str(self.user.id), c.acl_user_ids)  # project member
+
+    def test_milestone_acl_includes_assignee_and_reporter(self):
+        m = self._ms(title="Assigned MS", reporter=self.user2)
+        MilestoneAssignees.objects.create(team=self.team, milestone=m, user=self.user2)
+        c = list(iter_milestone_chunks())[0].chunks[0]
+        self.assertIn(str(self.user.id), c.acl_user_ids)  # project member
+        self.assertIn(str(self.user2.id), c.acl_user_ids)  # assignee + reporter
+
+    def test_deleted_milestone_skipped(self):
+        self._ms(title="Gone", is_deleted=True)
+        self.assertEqual(list(iter_milestone_chunks()), [])
+
+    def test_title_only_milestone_emits_chunk_without_backing_task(self):
+        self._ms(title="Only title", description=None)
+        c = list(iter_milestone_chunks())[0].chunks[0]
+        self.assertEqual(c.search_text, "Only title")
+        self.assertIsNone(c.task_id)
+
+    def test_since_filters_stale_milestones(self):
+        old = self._ms(title="Old MS")
+        new = self._ms(title="New MS")
+        stale_ts = dt.datetime(2020, 1, 1, tzinfo=dt.timezone.utc)
+        MilestoneMaster.objects.filter(milestone_id=old.milestone_id).update(
+            ts_updated_at=stale_ts
+        )
+        since = dt.datetime(2025, 1, 1, tzinfo=dt.timezone.utc)
+        ids = {b.entity_id for b in iter_milestone_chunks(since=since)}
+        self.assertIn(f"milestone:{new.milestone_id}", ids)
+        self.assertNotIn(f"milestone:{old.milestone_id}", ids)
 
 
 # --------------------------------------------------------------------------- #
