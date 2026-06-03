@@ -157,6 +157,50 @@ def _push_spec(act) -> dict | None:
     return None
 
 
+def _queue_push(*, recipient_id, category, title, body, url, tag, actor=None) -> bool:
+    """Core fan-out for ONE recipient: preference gate + presence skip +
+    active-subscription lookup + queue the HTTP send. Returns True when at
+    least one send was queued. The single place this gating lives so every
+    push surface (activities, inbox, …) stays consistent — duplicating it
+    per-path is what produced the original notification gaps.
+    """
+    recipient_id = str(recipient_id)
+    if not should_push(recipient_id, category):
+        return False
+    # Don't push to someone actively looking at the app.
+    if presence.has_visible_tab(recipient_id):
+        return False
+    subs = list(
+        PushSubscription.objects.filter(user_id=recipient_id, is_active=True).values(
+            "id", "endpoint", "p256dh", "auth"
+        )
+    )
+    if not subs:
+        return False
+    payload = {
+        "title": title,
+        "body": body,
+        "url": url,
+        "tag": tag,
+        # Card customizations (SW reads these). icon = sender avatar when
+        # WEBPUSH_MEDIA_BASE_URL is set, else app icon.
+        "icon": _avatar_url(actor),
+        "requireInteraction": True,
+        "actions": [{"action": "open", "title": "Open"}],
+    }
+    logger.info("[webpush] queue push user=%s category=%s subs=%d", recipient_id, category, len(subs))
+    for sub in subs:
+        _executor.submit(
+            send_web_push,
+            subscription_id=sub["id"],
+            endpoint=sub["endpoint"],
+            p256dh=sub["p256dh"],
+            auth=sub["auth"],
+            payload=payload,
+        )
+    return True
+
+
 def dispatch_push_for_activities(activities) -> None:
     """Send a Web Push for each eligible activity. Never raises.
 
@@ -175,51 +219,15 @@ def dispatch_push_for_activities(activities) -> None:
             spec = _push_spec(act)
             if spec is None:
                 continue
-
-            recipient_id = str(act.recipient_id)
-            if not should_push(recipient_id, spec["category"]):
-                continue
-            # Don't push to someone actively looking at the app.
-            if presence.has_visible_tab(recipient_id):
-                continue
-
-            subs = list(
-                PushSubscription.objects.filter(user_id=recipient_id, is_active=True).values(
-                    "id", "endpoint", "p256dh", "auth"
-                )
+            _queue_push(
+                recipient_id=act.recipient_id,
+                category=spec["category"],
+                title=spec["title"],
+                body=spec["body"],
+                url=spec["url"],
+                tag=f"{spec['category']}:{act.id}",
+                actor=act.actor,
             )
-            if not subs:
-                continue
-
-            payload = {
-                "title": spec["title"],
-                "body": spec["body"],
-                "url": spec["url"],
-                "tag": f"{spec['category']}:{act.id}",
-                # Card customizations (SW reads these). icon = sender avatar
-                # when WEBPUSH_MEDIA_BASE_URL is set, else app icon.
-                "icon": _avatar_url(act.actor),
-                "requireInteraction": True,
-                "actions": [{"action": "open", "title": "Open"}],
-            }
-
-            logger.info(
-                "[webpush] queue push user=%s category=%s activity=%s msg=%s subs=%d",
-                recipient_id,
-                spec["category"],
-                str(act.id)[:8],
-                str(getattr(act, "message_id", ""))[:8],
-                len(subs),
-            )
-            for sub in subs:
-                _executor.submit(
-                    send_web_push,
-                    subscription_id=sub["id"],
-                    endpoint=sub["endpoint"],
-                    p256dh=sub["p256dh"],
-                    auth=sub["auth"],
-                    payload=payload,
-                )
         except Exception as exc:  # noqa: BLE001 — never break the caller
             logger.warning(
                 "[webpush] dispatch error for activity %s: %s",
@@ -241,3 +249,72 @@ def schedule_push_for_activities(activities) -> None:
     if not acts:
         return
     transaction.on_commit(lambda: dispatch_push_for_activities(acts))
+
+
+# item_type -> push title builder. Inbox items are their own surface (not
+# the Activity feed), so they push under the `inbox` category (coarse
+# `enable_inbox`). `approved` is a synthetic key for the GM-join approval
+# notification sent back to the requester.
+def _inbox_title(item, sender_name: str) -> str:
+    titles = {
+        0: f"{sender_name} sent you a message",
+        1: f"{sender_name} asked to join your team",
+        2: f"{sender_name} asked to join your project",
+        3: f"{sender_name} asked to join your group chat",
+    }
+    return titles.get(item.item_type, "New inbox item")
+
+
+def dispatch_push_for_inbox_item(item, *, title: str | None = None) -> None:
+    """Web-push the inbox item's receiver. Never raises. `title` overrides
+    the item_type-derived default (used for the GM-join approval notice)."""
+    if item is None or not vapid_configured():
+        return
+    try:
+        sender_name = getattr(item.sender, "username", None) or "Someone"
+        _queue_push(
+            recipient_id=item.receiver_id,
+            category="inbox",
+            title=title or _inbox_title(item, sender_name),
+            body="",
+            url="/workspace/inbox",
+            tag=f"inbox:{item.item_id}",
+            actor=item.sender,
+        )
+    except Exception as exc:  # noqa: BLE001 — never break the caller
+        logger.warning("[webpush] inbox dispatch error for item %s: %s", getattr(item, "item_id", "?"), exc)
+
+
+def schedule_push_for_inbox_item(item, *, title: str | None = None) -> None:
+    """Defer an inbox web-push until the current transaction commits."""
+    if item is None:
+        return
+    transaction.on_commit(lambda: dispatch_push_for_inbox_item(item, title=title))
+
+
+def schedule_push_to_user(*, recipient_id, category, title, url, actor=None, tag=None) -> None:
+    """Defer a one-off web push to a single user not backed by an Activity
+    or InboxItems row (e.g. the GM-join approval notice to the requester).
+    Fires after commit; never raises."""
+    if not recipient_id:
+        return
+    rid = str(recipient_id)
+    resolved_tag = tag or f"{category}:{rid}"
+
+    def _run():
+        if not vapid_configured():
+            return
+        try:
+            _queue_push(
+                recipient_id=rid,
+                category=category,
+                title=title,
+                body="",
+                url=url,
+                tag=resolved_tag,
+                actor=actor,
+            )
+        except Exception as exc:  # noqa: BLE001 — never break the caller
+            logger.warning("[webpush] user push error for %s: %s", rid, exc)
+
+    transaction.on_commit(_run)

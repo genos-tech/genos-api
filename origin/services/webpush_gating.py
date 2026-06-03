@@ -27,6 +27,7 @@ _PUSH_DEFAULTS = {
     "thread_replies": True,
     "task_comments": True,
     "reactions": True,
+    "inbox": True,
 }
 
 # Fine category -> the coarse-group boolean column that hard-gates it
@@ -42,6 +43,7 @@ _COARSE_FIELD = {
     "mention_note": "enable_mentions",
     "thread_replies": "enable_thread_replies",
     "task_comments": "enable_task_comments",
+    "inbox": "enable_inbox",
 }
 
 
