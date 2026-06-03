@@ -52,11 +52,11 @@ from datetime import timedelta
 from typing import Any
 
 from django.conf import settings
-from django.core.management.base import BaseCommand
 from django.db.models import Avg, Count, Q
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 
+from origin.management.cron_command import CronCommand
 from origin.search_engine.agent.controller import reconstruct_sources_for_run
 from origin.search_engine.agent.evals.judge import judge_answer
 from origin.search_engine.models import AgentRun, AgentRunJudgement
@@ -68,7 +68,7 @@ log = logging.getLogger(__name__)
 _HASH_BUCKETS = 1_000_000
 
 
-class Command(BaseCommand):
+class Command(CronCommand):
     help = "Sample completed AgentRuns and score them with the LLM judge (F2 online eval)."
 
     def add_arguments(self, parser):
@@ -250,6 +250,10 @@ class Command(BaseCommand):
                 f"({errors} judge error(s), {skipped_ungrounded} skipped — no grounding)."
             )
         )
+        if errors:
+            # Surface at ERROR so the CronCommand tripwire marks the cron run
+            # failed instead of green when judge calls erred.
+            log.error("agent_judge_sample: %d judge error(s) out of %d judged", errors, judged)
         if ok:
             self.stdout.write(
                 self.style.NOTICE(

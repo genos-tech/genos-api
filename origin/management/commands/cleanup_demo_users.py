@@ -15,16 +15,19 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 
-from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+from origin.management.cron_command import CronCommand
 from origin.models.common.user_models import CustomUser
 from origin.services.demo_seeder import delete_demo_environment
 
+log = logging.getLogger(__name__)
 
-class Command(BaseCommand):
+
+class Command(CronCommand):
     help = "Delete is_demo users older than --hours along with their teams and data."
 
     def add_arguments(self, parser):
@@ -73,9 +76,11 @@ class Command(BaseCommand):
             try:
                 delete_demo_environment(user)
                 deleted += 1
-            except Exception as exc:
+            except Exception:
                 failed += 1
-                self.stderr.write(f"  failed to delete {user.id} ({user.email}): {exc}")
+                # ERROR-level so the CronCommand tripwire fails the run; a
+                # swallowed delete failure used to leave the cron green.
+                log.exception("cleanup_demo_users: failed to delete %s (%s)", user.id, user.email)
 
         if dry_run:
             self.stdout.write(self.style.SUCCESS(f"Dry-run complete. {count} would be deleted."))

@@ -28,15 +28,16 @@ warning. The fix is to recreate the index:
 import json
 from datetime import datetime, timedelta, timezone
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import CommandError
 from opensearchpy.exceptions import NotFoundError
 
+from origin.management.cron_command import CronCommand
 from origin.search_engine.index_config import INDEX_SCHEMA_VERSION
 from origin.search_engine.ingestion import ingest_all
 from origin.search_engine.opensearch_client import get_client, get_index_alias
 
 
-class Command(BaseCommand):
+class Command(CronCommand):
     help = (
         "Re-index chats, tasks, and notes into OpenSearch. By default "
         "runs a full reindex; pass --since-minutes for an incremental "
@@ -92,6 +93,13 @@ class Command(BaseCommand):
         # absent from the live mappings), but the operator should know
         # to recreate so the new keyword fields / subfields work.
         self._warn_on_schema_mismatch()
+
+        # Preflight: fail fast (and before spending any embedding budget)
+        # if OpenSearch is unreachable. Otherwise the run would embed the
+        # whole corpus, fail every bulk write, and rely on the CronCommand
+        # tripwire to catch it only after the wasted work.
+        if not options.get("dry_run") and not get_client().ping():
+            raise CommandError("OpenSearch is unreachable (ping failed); aborting reindex.")
 
         since = None
         if options.get("since"):
