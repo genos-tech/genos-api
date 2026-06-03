@@ -265,6 +265,58 @@ class TestAuthEndpoints(TestCase):
         )
         self.assertEqual(response.status_code, 200)
 
+    def test_user_profile_update_rejects_blank_username(self):
+        # A whitespace-only name slips past the serializer's allow_blank
+        # check (the string is non-empty), so the view's trim guard must
+        # reject it — otherwise a hand-crafted request could blank out
+        # the visible name.
+        refresh = RefreshToken.for_user(self.user)
+        access = str(refresh.access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+        response = self.client.put(
+            "/api/v2/user/profile/",
+            {"user_id": str(self.user.id), "username": "   "},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.username, "testuser")
+
+    def test_user_profile_update_trims_username(self):
+        # Surrounding whitespace is stripped before persisting.
+        refresh = RefreshToken.for_user(self.user)
+        access = str(refresh.access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+        response = self.client.put(
+            "/api/v2/user/profile/",
+            {"user_id": str(self.user.id), "username": "  Trimmed Name  "},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.username, "Trimmed Name")
+
+    def test_user_profile_update_rejects_other_user(self):
+        # Self-only: editing another user's profile is forbidden even
+        # with a valid token.
+        other = User.objects.create_user(
+            username="other",
+            email="other@example.com",
+            password="otherpass123",
+            is_email_verified=True,
+        )
+        refresh = RefreshToken.for_user(self.user)
+        access = str(refresh.access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+        response = self.client.put(
+            "/api/v2/user/profile/",
+            {"user_id": str(other.id), "username": "hacked"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        other.refresh_from_db()
+        self.assertEqual(other.username, "other")
+
     def test_user_profile_unauthenticated(self):
         response = self.client.put(
             "/api/v2/user/profile/",
