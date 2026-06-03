@@ -56,6 +56,60 @@ class ShouldPushTests(BaseAPITestCase):
         self.assertTrue(should_push(self.user2.id, "mention_chat"))
 
 
+class PushSubscriptionEndpointTests(BaseAPITestCase):
+    """POST /api/v2/user/push-subscriptions/ is an upsert keyed on endpoint.
+
+    Regression guard: the model's `endpoint` column is `unique=True`, which
+    makes DRF's ModelSerializer auto-attach a UniqueValidator. That validator
+    would 400 every re-registration of the same browser (the FE re-POSTs on
+    each mount), defeating the view's deliberate `update_or_create`.
+    """
+
+    URL = "/api/v2/user/push-subscriptions/"
+
+    def _payload(self, endpoint, p256dh="p256", auth="auth"):
+        return {
+            "endpoint": endpoint,
+            "p256dh": p256dh,
+            "auth": auth,
+            "user_agent": "pytest",
+        }
+
+    def test_register_then_reregister_same_endpoint_upserts(self):
+        self.authenticate(self.user)
+        endpoint = "https://push.example.com/sub-abc"
+
+        first = self.client.post(self.URL, self._payload(endpoint), format="json")
+        self.assertEqual(first.status_code, 204)
+
+        # Same browser re-subscribing (rotated keys) must upsert, not 400.
+        second = self.client.post(
+            self.URL,
+            self._payload(endpoint, p256dh="p256-new", auth="auth-new"),
+            format="json",
+        )
+        self.assertEqual(second.status_code, 204)
+
+        subs = PushSubscription.objects.filter(endpoint=endpoint)
+        self.assertEqual(subs.count(), 1)
+        self.assertEqual(subs.first().p256dh, "p256-new")
+        self.assertTrue(subs.first().is_active)
+
+    def test_missing_keys_rejected(self):
+        self.authenticate(self.user)
+        resp = self.client.post(
+            self.URL,
+            {"endpoint": "https://push.example.com/x"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_non_http_endpoint_rejected(self):
+        self.authenticate(self.user)
+        resp = self.client.post(self.URL, self._payload("not-a-url"), format="json")
+        self.assertEqual(resp.status_code, 400)
+
+
 @override_settings(CACHES=LOCMEM)
 class PresenceTests(BaseAPITestCase):
     def test_mark_then_read(self):

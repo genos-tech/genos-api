@@ -243,3 +243,50 @@ class ChannelProfileImageViewTests(BaseAPITestCase):
             format="multipart",
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class ChannelInlineUploadViewTests(BaseAPITestCase):
+    """POST /api/v3/channels/{id}/uploads/.
+
+    The returned URL is persisted verbatim into Message.body, so its scheme
+    matters: behind a TLS-terminating proxy `request.scheme` is "http" even
+    though the public origin is "https", and an http:// URL is later blocked
+    as Mixed Content by the https SPA (download fails, image warns). The view
+    trusts `X-Forwarded-Proto` to stamp the correct scheme.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.channel = Channel.objects.create(
+            team=self.team,
+            kind=ChannelKind.GM,
+            title="Inline Upload Test GM",
+            owner=self.user,
+        )
+        ChannelMember.objects.create(channel=self.channel, user=self.user, role="owner")
+        self.url = reverse("v3_channel_inline_upload", args=[self.channel.id])
+
+    def _file(self, name="note.txt"):
+        return SimpleUploadedFile(name, b"hello", content_type="text/plain")
+
+    def test_forwarded_proto_https_yields_https_url(self):
+        self.authenticate()
+        resp = self.client.post(
+            self.url,
+            {"file": self._file()},
+            format="multipart",
+            HTTP_X_FORWARDED_PROTO="https",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(
+            resp.data["url"].startswith("https://"),
+            f"expected https URL, got {resp.data['url']}",
+        )
+
+    def test_no_forwarded_proto_leaves_scheme_untouched(self):
+        # Without the proxy header the test request stays http — the fix must
+        # not force https blindly (would break local-dev http://localhost).
+        self.authenticate()
+        resp = self.client.post(self.url, {"file": self._file()}, format="multipart")
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(resp.data["url"].startswith("http://"))

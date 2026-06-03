@@ -154,6 +154,13 @@ class PushSubscriptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = PushSubscription
         fields = ["endpoint", "p256dh", "auth", "user_agent"]
+        # `endpoint` is `unique=True` on the model, so DRF auto-attaches a
+        # UniqueValidator — which would 400 every re-registration of the same
+        # browser (the FE re-POSTs on each mount). The view deliberately
+        # upserts via `update_or_create`, so drop the auto validators here.
+        # The `validate_endpoint` method below still runs (method-level
+        # validators are independent of the field's `validators` list).
+        extra_kwargs = {"endpoint": {"validators": []}}
 
     def validate_endpoint(self, value):
         if not isinstance(value, str) or not value.startswith(("http://", "https://")):

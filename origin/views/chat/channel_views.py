@@ -818,4 +818,14 @@ class ChannelInlineUploadView(AuthenticatedAPIView):
             f"chats/{channel.id}/inline/{uuid.uuid4()}-{file.name}", file
         )
         url = request.build_absolute_uri(default_storage.url(stored_name))
+        # Behind Railway's TLS-terminating proxy `request.scheme` is "http"
+        # even though the public origin is "https", so build_absolute_uri
+        # stamps an http:// URL. That URL is persisted verbatim into
+        # Message.body, and the https SPA then can't fetch it (download) or
+        # load it without a Mixed-Content warning (image). Trust the proxy's
+        # forwarded scheme to fix it here, scoped to this one call site
+        # rather than flipping request.is_secure() app-wide via
+        # SECURE_PROXY_SSL_HEADER.
+        if request.headers.get("X-Forwarded-Proto") == "https" and url.startswith("http://"):
+            url = "https://" + url[len("http://") :]
         return Response({"url": url}, status=status.HTTP_201_CREATED)
