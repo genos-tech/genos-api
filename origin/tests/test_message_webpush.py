@@ -14,7 +14,7 @@ from django.core.cache import cache
 from django.test import override_settings
 from django.urls import reverse
 
-from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember, Message
+from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.notification_models import NotificationPreference, PushSubscription
 from origin.services import presence, webpush_dispatch
 from origin.services.webpush_gating import is_chat_muted
