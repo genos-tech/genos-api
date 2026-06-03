@@ -43,7 +43,11 @@ class InboxItemView(AuthenticatedAPIView):
         serializer = InboxItemsSerializer(data=data)
         if serializer.is_valid():
             if already_exist == False:
-                serializer.save()
+                item = serializer.save()
+                # Web-push the receiver that a new inbox item arrived.
+                from origin.services.webpush_dispatch import schedule_push_for_inbox_item
+
+                schedule_push_for_inbox_item(item)
             return Response(
                 {
                     "wsType": "inbox",
@@ -165,7 +169,11 @@ class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
         serializer = InboxItemsSerializer(data=data)
         if serializer.is_valid():
             if is_already_requested == False:
-                serializer.save()
+                item = serializer.save()
+                # Web-push the request recipient (team / project / GM owner).
+                from origin.services.webpush_dispatch import schedule_push_for_inbox_item
+
+                schedule_push_for_inbox_item(item)
             return Response(
                 {
                     "wsType": "inbox",
@@ -218,7 +226,11 @@ class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
         serializer = InboxItemsSerializer(data=data)
         if serializer.is_valid():
             if is_already_requested == False:
-                serializer.save()
+                item = serializer.save()
+                # Web-push the request recipient (team / project / GM owner).
+                from origin.services.webpush_dispatch import schedule_push_for_inbox_item
+
+                schedule_push_for_inbox_item(item)
             return Response(
                 {
                     "wsType": "inbox",
@@ -313,6 +325,21 @@ class JoinGMFromInboxView(AuthenticatedAPIView):
                 user_id=sender_id,
                 defaults={"is_deleted": False, "role": "member"},
             )
+            # Settle the consumed request so it stops showing as pending in
+            # the approver's inbox (previously never flipped).
+            InboxItems.objects.filter(item_id=inbox_item_id).update(request_status="approved")
+
+        # Notify the requester they were approved (push only — there's no
+        # inbox item addressed to them).
+        from origin.services.webpush_dispatch import schedule_push_to_user
+
+        schedule_push_to_user(
+            recipient_id=sender_id,
+            category="inbox",
+            title=f"Your request to join {gm_name or 'a group chat'} was approved",
+            url="/workspace/inbox",
+            actor=request.user,
+        )
 
         return Response(
             {"attendee": str(sender_id), "gmName": gm_name, "gmId": str(gm_id)},
@@ -358,7 +385,11 @@ class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
         serializer = InboxItemsSerializer(data=data)
         if serializer.is_valid():
             if is_already_requested == False:
-                serializer.save()
+                item = serializer.save()
+                # Web-push the request recipient (team / project / GM owner).
+                from origin.services.webpush_dispatch import schedule_push_for_inbox_item
+
+                schedule_push_for_inbox_item(item)
             return Response(
                 {
                     "wsType": "inbox",
