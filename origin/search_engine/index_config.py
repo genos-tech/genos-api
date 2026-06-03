@@ -29,13 +29,45 @@ v2 (2026-05) added:
     `OPENSEARCH_REPLICAS`, `OPENSEARCH_REFRESH_INTERVAL`) — production
     can tune via env without code changes.
   * Dropped `source_version` (never written by any chunker).
+
+v3 (2026-06) — multilingual BM25 (7 UI languages: en/ja/es/fr/zh/ar/hi):
+  * Requires the OpenSearch `analysis-icu` + `analysis-kuromoji`
+    plugins (baked into docker/opensearch/Dockerfile; bundled free on
+    AWS managed OpenSearch).
+  * New analyzers in `_build_analysis`:
+      - `multilingual_icu` (icu_tokenizer + icu_folding) — dictionary
+        word-segmentation for ja/zh and accent/Unicode folding for
+        es/fr/ar/hi. The default `standard` analyzer shatters CJK into
+        per-character unigrams; ICU segments into words.
+      - `icu_prefix_index` / `icu_prefix_search` — CJK/JA-aware
+        typeahead (edge n-gram over ICU tokens).
+      - `japanese_kuromoji` — Japanese morphology ICU can't do:
+        base-form/inflection match (走った/走って → 走る), cjk_width,
+        ja_stop particle removal.
+  * New ADDITIVE subfields (base fields + `.en`/`.prefix` untouched, so
+    English/exact-phrase behaviour is byte-for-byte preserved):
+      - `search_text.icu`, `snippet_text.icu`, `title.icu` (multilingual_icu)
+      - `search_text.ja`, `snippet_text.ja`, `title.ja` (japanese_kuromoji)
+      - `title.icu_prefix` (CJK/JA typeahead)
+  * Rollout — two equivalent paths (both reach the same retrieval
+    quality; embeddings are NOT affected by analyzer changes):
+      A) recreate (simplest; re-embeds the corpus):
+           opensearch_setup --recreate && opensearch_reindex
+      B) zero-re-embed (large prod corpus): _close → PUT _settings
+         (add the analyzers) → _open → PUT _mapping (add subfields) →
+         POST _update_by_query with an inline script stamping
+         index_schema_version="v3". Rebuilds each doc from `_source`,
+         preserving the stored embedding vectors.
+    NOTE: `--update-mapping` alone is INSUFFICIENT — analyzers live in
+    index settings (need close/open) and put_mapping does not
+    re-analyze existing documents.
 """
 
 import os
 
 from origin.search_engine.embeddings import get_active_embedding_dimensions
 
-INDEX_SCHEMA_VERSION = "v2"
+INDEX_SCHEMA_VERSION = "v3"
 
 
 def build_index_settings():
@@ -70,8 +102,37 @@ def _build_analysis():
     `search_text` so the BM25 lane has stemming/synonym recall
     without losing the exact-phrase match path (the base field stays
     on the default standard analyzer).
+
+    v3 multilingual analyzers (require analysis-icu + analysis-kuromoji):
+      * `multilingual_icu` — icu_tokenizer does dictionary-based word
+        segmentation (Japanese/Chinese have no spaces; the default
+        `standard` analyzer would emit one token per CJK character).
+        `icu_folding` normalises Unicode + folds accents (café→cafe),
+        helping es/fr/ar/hi. `icu_normalizer` (NFKC, char_filter) runs
+        first so full-width/compatibility forms are unified.
+      * `icu_prefix_index` / `icu_prefix_search` — the typeahead pair
+        rebuilt on icu_tokenizer so CJK/JA titles produce real prefix
+        tokens. BOTH sides must use ICU or CJK typeahead matches
+        nothing. icu_tokenizer is a superset of `standard` on Latin
+        text, so English typeahead is unchanged.
+      * `japanese_kuromoji` — morphological analysis ICU can't do:
+        `kuromoji_baseform` collapses inflections (走った/走って→走る),
+        `cjk_width` normalises half/full-width kana, `ja_stop` drops
+        particles. `mode: search` decompounds long compounds for
+        recall. Degrades gracefully on non-Japanese text (splits Latin
+        on whitespace), so it can join the multi_match fan-out without
+        any per-request language signal.
     """
     return {
+        "char_filter": {
+            # NFKC normalisation + case-fold BEFORE tokenization, so the
+            # tokenizer sees unified forms (full-width →half-width, etc.).
+            "icu_normalizer": {
+                "type": "icu_normalizer",
+                "name": "nfkc_cf",
+                "mode": "compose",
+            },
+        },
         "filter": {
             "edge_ngram_2_12": {
                 "type": "edge_ngram",
@@ -80,6 +141,9 @@ def _build_analysis():
             },
             "english_stop": {"type": "stop", "stopwords": "_english_"},
             "english_stemmer": {"type": "stemmer", "language": "english"},
+            # Unicode case-fold + accent/diacritic folding (café→cafe,
+            # Arabic presentation-form normalisation, etc.).
+            "icu_folding": {"type": "icu_folding"},
         },
         "analyzer": {
             "title_prefix_index": {
@@ -96,6 +160,38 @@ def _build_analysis():
             "english_basic": {
                 "tokenizer": "standard",
                 "filter": ["lowercase", "english_stop", "english_stemmer"],
+            },
+            # v3 — universal multilingual analyzer (all 7 languages).
+            "multilingual_icu": {
+                "char_filter": ["icu_normalizer"],
+                "tokenizer": "icu_tokenizer",
+                "filter": ["lowercase", "icu_folding"],
+            },
+            # v3 — CJK/JA-aware typeahead. Index side edge-ngrams over
+            # ICU word tokens; search side must mirror it WITHOUT the
+            # edge-ngram (same rule as title_prefix_search).
+            "icu_prefix_index": {
+                "char_filter": ["icu_normalizer"],
+                "tokenizer": "icu_tokenizer",
+                "filter": ["lowercase", "icu_folding", "edge_ngram_2_12"],
+            },
+            "icu_prefix_search": {
+                "char_filter": ["icu_normalizer"],
+                "tokenizer": "icu_tokenizer",
+                "filter": ["lowercase", "icu_folding"],
+            },
+            # v3 — dedicated Japanese morphological analyzer.
+            "japanese_kuromoji": {
+                "char_filter": ["icu_normalizer"],
+                "tokenizer": "kuromoji_tokenizer",
+                "filter": [
+                    "kuromoji_baseform",
+                    "kuromoji_part_of_speech",
+                    "cjk_width",
+                    "ja_stop",
+                    "kuromoji_stemmer",
+                    "lowercase",
+                ],
             },
         },
     }
@@ -158,6 +254,14 @@ def build_mappings():
                         "analyzer": "title_prefix_index",
                         "search_analyzer": "title_prefix_search",
                     },
+                    # v3 multilingual subfields (additive).
+                    "icu": {"type": "text", "analyzer": "multilingual_icu"},
+                    "ja": {"type": "text", "analyzer": "japanese_kuromoji"},
+                    "icu_prefix": {
+                        "type": "text",
+                        "analyzer": "icu_prefix_index",
+                        "search_analyzer": "icu_prefix_search",
+                    },
                 },
             },
             "search_text": {
@@ -167,9 +271,20 @@ def build_mappings():
                         "type": "text",
                         "analyzer": "english_basic",
                     },
+                    # v3 multilingual subfields (additive).
+                    "icu": {"type": "text", "analyzer": "multilingual_icu"},
+                    "ja": {"type": "text", "analyzer": "japanese_kuromoji"},
                 },
             },
-            "snippet_text": {"type": "text"},
+            # snippet_text is boosted ^2 (highest-weight body field) — it
+            # must not stay on the default standard analyzer for CJK.
+            "snippet_text": {
+                "type": "text",
+                "fields": {
+                    "icu": {"type": "text", "analyzer": "multilingual_icu"},
+                    "ja": {"type": "text", "analyzer": "japanese_kuromoji"},
+                },
+            },
             # spotlight_answer lane only — stored-only provenance for the
             # "Previous answer" card. Not analyzed (search_text already carries
             # the Q+A); `index: false` keeps them out of the inverted index,

@@ -394,11 +394,7 @@ def search(
     # on typeahead (its sub-100 ms budget can't afford the extra DB+OS round
     # trip); flag-gated. ACL is automatic — neighbors are fetched through the
     # same acl_user_ids filter as everything else.
-    if (
-        settings.SEARCH_ENGINE.get("RAG_GRAPH_EXPANSION")
-        and mode != "typeahead"
-        and grouped
-    ):
+    if settings.SEARCH_ENGINE.get("RAG_GRAPH_EXPANSION") and mode != "typeahead" and grouped:
         grouped = _graph_expand(
             grouped,
             team_id=team_id,
@@ -660,9 +656,7 @@ def _build_filter(
         excluded = ["conversation"]
         if mode != "typeahead":
             excluded.append("spotlight_answer")
-        filt.append(
-            {"bool": {"must_not": [{"term": {"entity_type": et}} for et in excluded]}}
-        )
+        filt.append({"bool": {"must_not": [{"term": {"entity_type": et}} for et in excluded]}})
     if date_from or date_to:
         rng: dict = {}
         if date_from:
@@ -767,12 +761,27 @@ def _run_keyword(
                         # Base `search_text` (standard analyzer) stays
                         # for exact-phrase matching; the .en subfield
                         # is the recall path.
+                        # v3 multilingual subfields (analysis-icu +
+                        # analysis-kuromoji). `.icu` segments CJK into
+                        # words + folds accents for all 7 languages;
+                        # `.ja` adds Japanese base-form/inflection
+                        # recall (走った/走って → 走る). `.ja` is weighted
+                        # just above `.icu` (higher-precision JA lane);
+                        # all sit under the base/`standard` boosts so an
+                        # exact-phrase hit still wins ties.
                         "fields": [
                             f"title^{int(settings.SEARCH_ENGINE.get('RAG_BM25_TITLE_BOOST', 4))}",
                             "title.prefix^4",
+                            "title.icu^3",
+                            "title.ja^3.2",
+                            "title.icu_prefix^3",
                             f"snippet_text^{int(settings.SEARCH_ENGINE.get('RAG_BM25_SNIPPET_BOOST', 2))}",
+                            "snippet_text.icu^1.6",
+                            "snippet_text.ja^1.7",
                             "search_text",
                             "search_text.en^0.8",
+                            "search_text.icu^0.9",
+                            "search_text.ja^1.0",
                         ],
                         "type": "best_fields",
                     }
@@ -794,9 +803,16 @@ def _run_keyword(
             "fields": {
                 "title": {"number_of_fragments": 0},
                 "title.prefix": {"number_of_fragments": 0},
+                "title.icu": {"number_of_fragments": 0},
+                "title.ja": {"number_of_fragments": 0},
+                "title.icu_prefix": {"number_of_fragments": 0},
                 "snippet_text": {"number_of_fragments": 0},
+                "snippet_text.icu": {"number_of_fragments": 0},
+                "snippet_text.ja": {"number_of_fragments": 0},
                 "search_text": {"number_of_fragments": 0},
                 "search_text.en": {"number_of_fragments": 0},
+                "search_text.icu": {"number_of_fragments": 0},
+                "search_text.ja": {"number_of_fragments": 0},
             },
         },
     }
@@ -1095,9 +1111,11 @@ def _graph_expand(
         return grouped
 
     ids = list(src_score)
-    edges = TaskDependency.objects.filter(team_id=team_id).filter(
-        Q(blocker_task_id__in=ids) | Q(blocked_task_id__in=ids)
-    ).values_list("blocker_task_id", "blocked_task_id")
+    edges = (
+        TaskDependency.objects.filter(team_id=team_id)
+        .filter(Q(blocker_task_id__in=ids) | Q(blocked_task_id__in=ids))
+        .values_list("blocker_task_id", "blocked_task_id")
+    )
 
     # Neighbour task id → best (max) decayed score across the sources that
     # reach it. A neighbour already in `grouped` is left alone.
@@ -1157,7 +1175,9 @@ def _graph_expand(
         e["score"] = neigh_score.get(tid, 0.0) if tid is not None else 0.0
         # Mark provenance so the chip-row / agent can tell a graph-pulled
         # result from a lexical/vector hit.
-        e["matched_terms"] = list(dict.fromkeys((e.get("matched_terms") or []) + ["graph:dependency"]))
+        e["matched_terms"] = list(
+            dict.fromkeys((e.get("matched_terms") or []) + ["graph:dependency"])
+        )
         e["graph_related"] = True
 
     grouped = grouped + neighbours

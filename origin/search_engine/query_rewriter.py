@@ -42,6 +42,10 @@ Rules:
     the query.
   - Variants must stay on the same topic. Don't drift to a different
     question.
+  - Write every variant in the SAME language and script as the user's
+    query (e.g. a Japanese query gets Japanese variants, not English).
+    The corpus is indexed in the user's language, so off-language
+    variants retrieve nothing and only add noise.
   - Prefer short, keyword-style variants (3–6 words) over long
     natural-language ones.
   - Do not include prose, explanations, code fences, or markdown.

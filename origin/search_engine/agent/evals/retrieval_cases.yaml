@@ -671,3 +671,81 @@
     must_contain_title_in_top_n:
       n: 5
       title_substrings: ["Hero + FeatureGrid"]
+
+# ============================================================ #
+# MULTI. Multilingual BM25 (v3 — ICU + kuromoji)               #
+# ============================================================ #
+# These exercise the non-English keyword lane against the dedicated
+# multilingual fixture notes (see agent/evals/fixture.py). Every case
+# pins `use_vector: false` so a PASS proves the BM25/keyword lane — not
+# the already-multilingual vector lane — found the document.
+#
+# REGRESSION-GUARD vs DISCRIMINATOR: the CJK *recall* cases below
+# (ml_ja_keyword / ml_ja_inflection / ml_zh) also pass on a v2 index,
+# because the standard analyzer's per-character unigrams happen to
+# share characters (機械学習 → 機/械/学/習; 走った/走る share 走). They
+# are regression GUARDS — they confirm the multilingual lane keeps
+# returning the right doc, and would catch a future break. The genuine
+# v2→v3 improvement is (a) precision/ranking (v2 unigrams are noisy)
+# and (b) accent folding: `ml_es_accent_folding_cafe` queries the bare
+# "cafe" with no other shared word, so it ONLY passes via icu_folding
+# (café→cafe) and fails on v2. The `_analyze` proofs (unigram→word,
+# 走った→走る base-form, café→cafe) are the definitive evidence.
+
+- id: ml_ja_keyword_kikai_gakushu
+  fixture: true
+  # 機械学習 ("machine learning") has no spaces; icu_tokenizer /
+  # kuromoji segment it into a real term. The JA fixture note's title
+  # carries it verbatim.
+  query: "機械学習"
+  use_vector: false
+  expect:
+    top_result_title_contains: "機械学習"
+
+- id: ml_ja_inflection_hashiru
+  fixture: true
+  # The JA note body says 走った (past tense); the query is the
+  # dictionary form 走る. kuromoji_baseform collapses both to 走る so
+  # the kuromoji `.ja` lane recalls the note.
+  query: "走る"
+  use_vector: false
+  expect:
+    must_contain_title_in_top_n:
+      n: 5
+      title_substrings: ["東京マラソン"]
+
+- id: ml_zh_keyword_nlp
+  fixture: true
+  # Chinese, no spaces. icu_tokenizer segments 自然语言处理 into words;
+  # the ZH fixture note carries it in title + body.
+  query: "自然语言处理"
+  use_vector: false
+  expect:
+    must_contain_title_in_top_n:
+      n: 5
+      title_substrings: ["自然语言处理"]
+
+- id: ml_es_accent_folding_cafe
+  fixture: true
+  # The ES note title contains the accented "café"; the query is the
+  # bare "cafe" (no other shared word). Only the icu_folding `.icu`
+  # field folds the accent, so a PASS proves folding works — the base
+  # standard field lowercases but does NOT strip the accent, so café
+  # would not match cafe without ICU.
+  query: "cafe"
+  use_vector: false
+  expect:
+    must_contain_title_in_top_n:
+      n: 5
+      title_substrings: ["café"]
+
+- id: ml_ar_keyword_cafe
+  fixture: true
+  # Arabic is space-delimited but benefits from ICU normalisation.
+  # المقهى ("the café") appears in the AR fixture note title.
+  query: "المقهى"
+  use_vector: false
+  expect:
+    must_contain_title_in_top_n:
+      n: 5
+      title_substrings: ["المقهى"]
