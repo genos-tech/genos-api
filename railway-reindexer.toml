@@ -33,6 +33,13 @@ dockerfilePath = "backend_django/Dockerfile"
 # both together if you want a different incremental window.
 # Absolute path avoids any ambiguity about the working directory when
 # Railway executes the startCommand override.
+#
+# The startCommand goes through `railway-reindexer-entrypoint.sh` rather
+# than calling manage.py directly: the cron's startCommand REPLACES the
+# Dockerfile CMD, so the Vertex service-account-key decode baked into the
+# CMD never runs here. The wrapper repeats that decode (no-op unless
+# $GEMINI_SA_BASE64 is set) before running the reindex. `--since-minutes`
+# stays here next to cronSchedule — bump both together to change cadence.
 cronSchedule = "*/10 * * * *"
-startCommand = "python /app/backend_django/manage.py opensearch_reindex --since-minutes 11"
+startCommand = "sh /app/backend_django/railway-reindexer-entrypoint.sh --since-minutes 11"
 restartPolicyType = "NEVER"
