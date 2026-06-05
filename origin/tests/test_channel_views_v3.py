@@ -12,12 +12,17 @@ We create a fresh GM channel per test so each suite's assertions stay
 focused on the view under test, not the create view.
 """
 
+import uuid
+
+from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from rest_framework import status
 
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.tests.test_base import BaseAPITestCase
+
+User = get_user_model()
 
 
 class ChannelDetailViewPatchOwnerTransferTests(BaseAPITestCase):
@@ -290,3 +295,111 @@ class ChannelInlineUploadViewTests(BaseAPITestCase):
         resp = self.client.post(self.url, {"file": self._file()}, format="multipart")
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         self.assertTrue(resp.data["url"].startswith("http://"))
+
+
+class ChannelJoinViewTests(BaseAPITestCase):
+    """`POST /api/v3/channels/{id}/join/` — self-service join for a PUBLIC
+    GM. See `ChannelJoinView` for the rules under test:
+
+      - a team member can self-join an open GM (idempotent, re-activates);
+      - private GM → 403, non-GM → 400;
+      - a non-team-member (or unknown channel) → 404 (no existence leak).
+    """
+
+    def setUp(self):
+        super().setUp()
+        # A PUBLIC GM owned by self.user. self.user2 is a team member but
+        # NOT a channel member yet — the canonical self-join candidate.
+        self.gm = Channel.objects.create(
+            team=self.team,
+            kind=ChannelKind.GM,
+            title="Public Join Test GM",
+            is_private=False,
+            owner=self.user,
+        )
+        ChannelMember.objects.create(channel=self.gm, user=self.user, role="owner")
+        self.url = reverse("v3_channel_join", args=[self.gm.id])
+
+    # ----- happy path --------------------------------------------------
+
+    def test_team_member_can_self_join_public_gm(self):
+        self.authenticate(self.user2)
+        resp = self.client.post(self.url, {}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["channel"]["id"], str(self.gm.id))
+        self.assertTrue(resp.data["member"])
+        self.assertTrue(
+            ChannelMember.objects.filter(
+                channel=self.gm, user=self.user2, is_deleted=False
+            ).exists()
+        )
+
+    def test_self_join_is_idempotent(self):
+        self.authenticate(self.user2)
+        first = self.client.post(self.url, {}, format="json")
+        second = self.client.post(self.url, {}, format="json")
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        # No duplicate membership row.
+        self.assertEqual(
+            ChannelMember.objects.filter(channel=self.gm, user=self.user2).count(),
+            1,
+        )
+
+    def test_self_join_reactivates_soft_deleted_membership(self):
+        # User had previously left (soft-deleted membership). Re-joining
+        # flips the row back to active rather than creating a duplicate.
+        ChannelMember.objects.create(
+            channel=self.gm, user=self.user2, role="member", is_deleted=True
+        )
+        self.authenticate(self.user2)
+        resp = self.client.post(self.url, {}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        member = ChannelMember.objects.get(channel=self.gm, user=self.user2)
+        self.assertFalse(member.is_deleted)
+        self.assertEqual(
+            ChannelMember.objects.filter(channel=self.gm, user=self.user2).count(),
+            1,
+        )
+
+    # ----- rejections --------------------------------------------------
+
+    def test_private_gm_rejects_self_join(self):
+        self.gm.is_private = True
+        self.gm.save(update_fields=["is_private"])
+        self.authenticate(self.user2)
+        resp = self.client.post(self.url, {}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(
+            ChannelMember.objects.filter(
+                channel=self.gm, user=self.user2, is_deleted=False
+            ).exists()
+        )
+
+    def test_non_gm_channel_rejects_self_join(self):
+        mdm = Channel.objects.create(team=self.team, kind=ChannelKind.MDM, owner=self.user)
+        ChannelMember.objects.create(channel=mdm, user=self.user, role="owner")
+        url = reverse("v3_channel_join", args=[mdm.id])
+        self.authenticate(self.user2)
+        resp = self.client.post(url, {}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(ChannelMember.objects.filter(channel=mdm, user=self.user2).exists())
+
+    def test_non_team_member_gets_404(self):
+        # An outsider (no TeamMembers row) must not be able to join — and
+        # gets 404, not 403, so we don't leak the channel's existence.
+        outsider = User.objects.create_user(
+            username="outsider",
+            email="outsider@example.com",
+            password="outsiderpass123",
+        )
+        self.authenticate(outsider)
+        resp = self.client.post(self.url, {}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(ChannelMember.objects.filter(channel=self.gm, user=outsider).exists())
+
+    def test_unknown_channel_gets_404(self):
+        url = reverse("v3_channel_join", args=[uuid.uuid4()])
+        self.authenticate(self.user2)
+        resp = self.client.post(url, {}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
