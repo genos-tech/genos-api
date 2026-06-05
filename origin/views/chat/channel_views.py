@@ -660,6 +660,70 @@ class ChannelMembersView(AuthenticatedAPIView):
         )
 
 
+class ChannelJoinView(AuthenticatedAPIView):
+    """POST /api/v3/channels/{channel_id}/join/
+
+    Self-service join for a PUBLIC GM. Lets any member of the channel's
+    team add *themselves* to an open (non-private) group message — the
+    path the chat-search box uses when a user clicks a public GM they
+    aren't a member of yet.
+
+    Deliberately separate from `ChannelMembersView.post` (which adds
+    *other* users and is membership-gated via `_get_channel_for_user`,
+    so it 404s for the very caller here — a non-member). This view scopes
+    by *team* membership instead and is constrained to public GMs:
+
+      - kind != GM            -> 400 (DMs/MDMs/PMs aren't open-join).
+      - is_private == True    -> 403 (private GMs require the owner-
+                                 approval request flow, not self-join).
+      - requester not in team -> 404 (don't leak channel existence).
+
+    Idempotent: re-joining (or re-activating a previously-removed
+    membership) returns 200 with the existing row rather than erroring.
+    """
+
+    def post(self, request, channel_id):
+        # Team-scoped lookup (NOT membership-scoped): the whole point is
+        # to let a non-member join. 404 hides existence on any miss.
+        try:
+            channel = Channel.objects.select_related("team", "owner").get(
+                id=channel_id, is_deleted=False
+            )
+        except Channel.DoesNotExist:
+            raise Http404("Channel not found.")
+
+        # Requester must belong to the channel's team. Raises Http404 on miss
+        # so we don't leak the channel's existence to outsiders.
+        _verify_team_member(request.user, channel.team_id)
+
+        if channel.kind != ChannelKind.GM:
+            return Response(
+                {"error": "Only group messages support self-join."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if channel.is_private:
+            return Response(
+                {"error": "This group is private; request access from the owner."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Idempotent: a brand-new join creates the row; a user who had
+        # previously left (soft-deleted membership) gets it re-activated.
+        member, _created = ChannelMember.objects.update_or_create(
+            channel=channel,
+            user=request.user,
+            defaults={"is_deleted": False, "role": "member"},
+        )
+
+        return Response(
+            {
+                "channel": ChannelSerializer(channel, context={"request": request}).data,
+                "member": ChannelMemberSerializer(member).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class ChannelMemberDetailView(AuthenticatedAPIView):
     """DELETE /api/v3/channels/{channel_id}/members/{user_id}/
 

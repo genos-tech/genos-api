@@ -15,6 +15,7 @@ URL shape (see plan §2):
     GET    /api/v3/channels/{id}/members/                 member roster
     POST   /api/v3/channels/{id}/members/                 add member(s) (GM/MDM only)
     DELETE /api/v3/channels/{id}/members/{user_id}/       remove a member
+    POST   /api/v3/channels/{id}/join/                    self-join a public GM
 
   Messages
     GET    /api/v3/channels/{id}/messages/?since=ISO      delta sync
@@ -51,6 +52,7 @@ from origin.views.chat.activity_views_v3 import (
 from origin.views.chat.channel_views import (
     ChannelDetailView,
     ChannelInlineUploadView,
+    ChannelJoinView,
     ChannelListView,
     ChannelMemberDetailView,
     ChannelMembersView,
@@ -88,6 +90,11 @@ urlpatterns = [
         "api/v3/channels/<uuid:channel_id>/members/<uuid:user_id>/",
         ChannelMemberDetailView.as_view(),
         name="v3_channel_member_detail",
+    ),
+    path(
+        "api/v3/channels/<uuid:channel_id>/join/",
+        ChannelJoinView.as_view(),
+        name="v3_channel_join",
     ),
     path(
         "api/v3/channels/<uuid:channel_id>/profile/image/",
