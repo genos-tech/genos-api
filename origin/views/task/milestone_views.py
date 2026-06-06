@@ -7,9 +7,9 @@ from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
+from origin.services import mention_extractor
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.services import mention_extractor
 from origin.views.utils.mention_handler import resolve_group_members
 from origin.views.utils.request_validators import validate_request_data
 from rest_framework import status
