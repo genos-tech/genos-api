@@ -534,6 +534,12 @@ class ActivityType(models.IntegerChoices):
     REACTION = 2, "reaction"
     MENTION = 3, "mention"
     TASK_ASSIGN = 4, "task_assign"
+    # Plain top-level chat message (no @mention / reaction / thread / task
+    # card). Lets a DM/GM/MDM message show in the recipient's activity feed
+    # instead of being a web-push only. The FE renders it as a content row
+    # with just the chat-type chip (no action chip); `create_message_activities`
+    # is the sole producer and scopes it to DM/GM/MDM, never PM.
+    MESSAGE = 5, "message"
 
 
 class Activity(models.Model):

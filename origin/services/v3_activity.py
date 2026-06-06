@@ -25,6 +25,8 @@ from origin.models.chat.unified_models import (
     Activity,
     ActivityType,
     Channel,
+    ChannelKind,
+    ChannelMember,
     Message,
 )
 from origin.models.common.user_models import CustomUser
@@ -47,6 +49,13 @@ SURFACE_TASK_BODY = 5
 SURFACE_PERSONAL_NOTE = 6
 SURFACE_TASK_NOTE = 7
 SURFACE_CHAT_NOTE = 8
+
+# Channel kinds whose plain (non-mention / non-thread) top-level messages
+# produce a per-recipient MESSAGE activity. PM (kind=3) is deliberately
+# excluded: a project channel's feed is driven by task cards / mentions /
+# comments, and a per-member row on every PM message would be noise (the
+# product decision behind the chat-activity feedback round).
+_MESSAGE_ACTIVITY_KINDS = (ChannelKind.DM, ChannelKind.GM, ChannelKind.MDM)
 
 
 def surface_activity_id(*, surface_type: int, entity_key: str, recipient_id: str) -> uuid.UUID:
@@ -258,7 +267,11 @@ def create_self_assign_activity(*, message: Message, actor: CustomUser) -> List[
 
 
 def create_thread_reply_activity(
-    *, reply: Message, parent: Optional[Message], actor: CustomUser
+    *,
+    reply: Message,
+    parent: Optional[Message],
+    actor: CustomUser,
+    exclude_recipient_ids: Iterable[str] = (),
 ) -> List[Activity]:
     """`Activity(type=THREAD_REPLY)` for every prior participant of the
     thread when a user posts a reply — the thread root's author plus
@@ -268,9 +281,17 @@ def create_thread_reply_activity(
     dropped from their own threads.
 
     Recipients = distinct senders of the thread root + all its replies,
-    minus the actor (no self-ping) and any hard-deleted (null) sender.
+    minus the actor (no self-ping), any hard-deleted (null) sender, and
+    `exclude_recipient_ids`. The exclude set is how the caller enforces
+    "mention beats reply": a thread reply that also @-mentions a
+    participant produces a MENTION activity for them, so they're excluded
+    here to avoid a duplicate THREAD_REPLY row in the same feed (the
+    user-reported double-activity on thread mentions). Mirrors the
+    already-@mentioned exclusion the plain-message push and the
+    task-comment participant fan-out already apply.
+
     Returns `[]` when `parent` is null or the actor is the only
-    participant.
+    remaining participant.
     """
     if parent is None:
         logger.info("[v3_activity] thread_reply skipped: parent is None")
@@ -279,17 +300,38 @@ def create_thread_reply_activity(
     # the parent id for a direct reply to a top-level message.
     root_id = reply.thread_root_id or parent.id
     actor_id = str(actor.id)
-    participant_ids = (
-        Message.objects.filter(Q(id=root_id) | Q(thread_root_id=root_id))
-        .exclude(sender_id=None)
-        .values_list("sender_id", flat=True)
-        .distinct()
-    )
-    recipients = {str(s) for s in participant_ids if str(s) != actor_id}
+    excluded = {str(u) for u in exclude_recipient_ids if u}
+    channel = reply.channel
+
+    # DM / MDM: notify every non-actor channel member, regardless of whether
+    # they have sent a message in the thread yet.  The participant-tracking
+    # approach (sender-based lookup below) silently produces an empty set when
+    # the actor is also the only prior sender — e.g. User A sends a DM, then
+    # User A replies to their own message before User B has written anything.
+    # In a two-person DM that means nobody is notified.  Using the member list
+    # directly is both correct (the other party must always be told) and cheap
+    # (DM/MDM channels are small).
+    if channel.kind in (ChannelKind.DM, ChannelKind.MDM):
+        member_ids = (
+            ChannelMember.objects.filter(channel=channel, is_deleted=False)
+            .exclude(user_id=actor_id)
+            .values_list("user_id", flat=True)
+        )
+        recipients = {str(uid) for uid in member_ids if str(uid) not in excluded}
+    else:
+        participant_ids = (
+            Message.objects.filter(Q(id=root_id) | Q(thread_root_id=root_id))
+            .exclude(sender_id=None)
+            .values_list("sender_id", flat=True)
+            .distinct()
+        )
+        recipients = {
+            str(s) for s in participant_ids if str(s) != actor_id and str(s) not in excluded
+        }
+
     if not recipients:
         logger.info("[v3_activity] thread_reply skipped: no other participants")
         return []
-    channel = reply.channel
     rows = [
         Activity(
             team_id=_team_id_for_channel(channel),
@@ -307,6 +349,69 @@ def create_thread_reply_activity(
         "[v3_activity] thread_reply created: count=%s root=%s channel_kind=%s",
         len(rows),
         root_id,
+        channel.kind,
+    )
+    return rows
+
+
+def create_message_activities(
+    *,
+    message: Message,
+    recipient_ids: Iterable[str],
+    actor: CustomUser,
+) -> List[Activity]:
+    """`Activity(type=MESSAGE)` per recipient for a plain TOP-LEVEL message
+    so a DM/GM/MDM message appears in the recipient's activity feed instead
+    of being a web-push only.
+
+    Scoped and de-duped:
+      - Only DM/GM/MDM channels (`_MESSAGE_ACTIVITY_KINDS`); PM is excluded.
+      - System-user (project bot) senders produce nothing — task-create /
+        status cards aren't user "messages" (mirrors the bot-suppression in
+        the FE notification router).
+      - The actor and falsy ids are skipped; the caller is expected to pass
+        `recipient_ids` already minus anyone who got a more-specific MENTION
+        activity for this message (mention beats a plain-message row).
+
+    The caller appends the returned rows to the broadcast list so each
+    recipient's sidebar updates live via `activity.created`. These rows are
+    intentionally NOT routed through `schedule_push_for_activities` — the
+    plain-message web push is sent separately via `schedule_push_for_message`,
+    so pushing here too would double-notify. (`_push_spec` also returns None
+    for the MESSAGE type, so it's a no-op there as defense-in-depth.)
+    """
+    channel = message.channel
+    if channel is None or channel.kind not in _MESSAGE_ACTIVITY_KINDS:
+        return []
+    if getattr(message.sender, "is_system_user", False):
+        return []
+    actor_id = str(actor.id)
+    seen = set()
+    targets = []
+    for uid in recipient_ids:
+        s = str(uid) if uid is not None else ""
+        if not s or s == actor_id or s in seen:
+            continue
+        seen.add(s)
+        targets.append(s)
+    if not targets:
+        return []
+    rows = [
+        Activity(
+            team_id=_team_id_for_channel(channel),
+            recipient_id=uid,
+            actor=actor,
+            activity_type=ActivityType.MESSAGE,
+            channel=channel,
+            message=message,
+            meta={},
+        )
+        for uid in targets
+    ]
+    Activity.objects.bulk_create(rows)
+    logger.info(
+        "[v3_activity] message activities created: count=%s channel_kind=%s",
+        len(rows),
         channel.kind,
     )
     return rows

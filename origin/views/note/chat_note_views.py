@@ -6,6 +6,7 @@ from origin.serializers.note.note_serializers import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 from origin.views.utils.note_role import (
+    ROLE_EDITOR,
     ROLE_OWNER,
     ROLE_VIEWER,
     delete_note_permissions,
@@ -214,9 +215,9 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
         # keyed by Channel.id.
         if dm_ids:
             members_by_chan: dict = {}
-            for m in ChannelMember.objects.filter(
-                channel_id__in=dm_ids, is_deleted=False
-            ).values("channel_id", "user_id"):
+            for m in ChannelMember.objects.filter(channel_id__in=dm_ids, is_deleted=False).values(
+                "channel_id", "user_id"
+            ):
                 members_by_chan.setdefault(m["channel_id"], []).append(m["user_id"])
 
             partner_by_chan = {}
@@ -237,9 +238,7 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                 )
             }
             for chan_id, partner_id in partner_by_chan.items():
-                dm_partner_names[chan_id] = user_id_to_name.get(
-                    str(partner_id), "Direct Message"
-                )
+                dm_partner_names[chan_id] = user_id_to_name.get(str(partner_id), "Direct Message")
 
         # PM project names resolved THROUGH the PM channel's project FK
         # (pm_ids are channel UUIDs, not project ids).
@@ -406,15 +405,67 @@ class ChatNoteMasterView(AuthenticatedAPIView):
                         "tsUpdated": serializer.data["ts_updated_at"],
                     }
 
-                    # Second, create the associated role for that note
+                    # Second, fan out note roles to the chat's members. A
+                    # chat note is shared per-channel (every member sees it
+                    # in the notes panel), so a creator-only OWNER row left
+                    # every other member at the implicit VIEWER fallback
+                    # (note_role.get_effective_role) — which 403s the moment
+                    # they edit the shared note, e.g. adding an @mention.
+                    # That was the "You don't have permission to do that"
+                    # chat-note-mention bug. Role matrix, by chat kind:
+                    #   DM / MDM (1 / 4): every active member is an OWNER.
+                    #   GM (2):           the GM owner is OWNER; every other
+                    #                     active member is an EDITOR.
+                    #   other (e.g. PM):  only the creator is an OWNER
+                    #                     (unchanged default).
                     team_obj = TeamMaster.objects.get(team_id=data["team"])
-                    NotePermissionMaster.objects.create(
-                        team=team_obj,
-                        user=CustomUser.objects.get(id=request_user_id),
-                        note_id=note["noteId"],
-                        note_type=NOTE_TYPE,
-                        role_id=ROLE_OWNER,
+                    note_id = note["noteId"]
+                    chat_type = serializer.data["chat_type"]
+                    channel_id = serializer.data["channel"]
+
+                    member_ids = list(
+                        ChannelMember.objects.filter(
+                            channel_id=channel_id, is_deleted=False
+                        ).values_list("user_id", flat=True)
                     )
+                    role_by_user: dict[str, int] = {}
+                    if chat_type in (ChannelKind.DM, ChannelKind.MDM):
+                        for uid in member_ids:
+                            role_by_user[str(uid)] = ROLE_OWNER
+                    elif chat_type == ChannelKind.GM:
+                        owner_id = (
+                            Channel.objects.filter(id=channel_id)
+                            .values_list("owner_id", flat=True)
+                            .first()
+                        )
+                        if owner_id is None:
+                            # Legacy-bridged GMs may have a null Channel.owner;
+                            # fall back to the member flagged role="owner".
+                            owner_id = (
+                                ChannelMember.objects.filter(
+                                    channel_id=channel_id, role="owner", is_deleted=False
+                                )
+                                .values_list("user_id", flat=True)
+                                .first()
+                            )
+                        for uid in member_ids:
+                            role_by_user[str(uid)] = (
+                                ROLE_OWNER if str(uid) == str(owner_id) else ROLE_EDITOR
+                            )
+                    # Guarantee the creator always has at least an OWNER row:
+                    # covers the PM / unknown fallback (preserving the old
+                    # creator-only behaviour) and never downgrades a creator
+                    # who is already an OWNER above. A GM creator who isn't the
+                    # GM owner keeps their EDITOR role (set above), as intended.
+                    role_by_user.setdefault(str(request_user_id), ROLE_OWNER)
+
+                    for uid, role_id in role_by_user.items():
+                        NotePermissionMaster.objects.update_or_create(
+                            user_id=uid,
+                            note_type=NOTE_TYPE,
+                            note_id=note_id,
+                            defaults={"team": team_obj, "role_id": role_id},
+                        )
 
                     # Third, write the initial version snapshot (v1).
                     snapshot_note_version(

@@ -1470,12 +1470,16 @@ class TaskCommentsView(AuthenticatedAPIView):
                     from origin.services import mention_extractor, v3_activity
 
                     sender = mirror.sender
-                    mentioned_ids = mention_extractor.extract_mentioned_user_ids(
-                        request.data["comment_body"] or []
+                    comment_body = request.data["comment_body"] or []
+                    mentioned_ids = set(
+                        mention_extractor.extract_mentioned_user_ids(comment_body)
                     )
+                    group_ids = mention_extractor.extract_mention_group_ids(comment_body)
+                    if group_ids:
+                        mentioned_ids |= resolve_group_members(group_ids)
                     acts = v3_activity.create_mention_activities(
                         message=mirror,
-                        mentioned_user_ids=mentioned_ids,
+                        mentioned_user_ids=list(mentioned_ids),
                         actor=sender,
                         skip_actor=False,
                     )

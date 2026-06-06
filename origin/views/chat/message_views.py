@@ -170,16 +170,24 @@ def _allocate_seq_and_create_message_with_activities(
     if not created:
         return msg, []
     activities = []
-    activities.extend(
-        v3_activity.create_mention_activities(
-            message=msg,
-            mentioned_user_ids=_valid_mention_user_ids(channel, body or []),
-            actor=sender,
-        )
+    mention_acts = v3_activity.create_mention_activities(
+        message=msg,
+        mentioned_user_ids=_valid_mention_user_ids(channel, body or []),
+        actor=sender,
     )
+    activities.extend(mention_acts)
+    # Recipients who got the more-specific MENTION activity for THIS message.
+    # Used to suppress a duplicate THREAD_REPLY row (mention beats reply) and,
+    # below, to keep them out of the plain-message activity fan-out too.
+    mentioned_recipient_ids = {str(a.recipient_id) for a in mention_acts}
     if parent is not None:
         activities.extend(
-            v3_activity.create_thread_reply_activity(reply=msg, parent=parent, actor=sender)
+            v3_activity.create_thread_reply_activity(
+                reply=msg,
+                parent=parent,
+                actor=sender,
+                exclude_recipient_ids=mentioned_recipient_ids,
+            )
         )
     # Self-assigned task: the task-card body @-mentions the assignee
     # (== sender), which the mention fan-out above skips. Surface it so a
@@ -199,11 +207,10 @@ def _allocate_seq_and_create_message_with_activities(
     schedule_push_for_activities(activities)
 
     # Plain-message fan-out: every TOP-LEVEL message web-pushes the other
-    # channel members (presence + per-chat mute gated) — push only, NO
-    # activity-feed rows. Thread replies are excluded (their participants
-    # are covered by the thread-reply activity above). Members who already
-    # got a more-specific activity (a mention) for THIS message are
-    # excluded so they aren't double-notified.
+    # channel members (presence + per-chat mute gated). Thread replies are
+    # excluded (their participants are covered by the thread-reply activity
+    # above). Members who already got a more-specific activity (a mention)
+    # for THIS message are excluded so they aren't double-notified.
     if parent is None:
         already_notified = {str(a.recipient_id) for a in activities}
         member_ids = (
@@ -212,6 +219,18 @@ def _allocate_seq_and_create_message_with_activities(
             .values_list("user_id", flat=True)
         )
         msg_recipients = [str(m) for m in member_ids if str(m) not in already_notified]
+        # Activity-feed rows for the plain message so DM/GM/MDM messages show
+        # in the recipient's sidebar (not just a web push). Scoped to DM/GM/MDM
+        # and bot-suppressed inside the producer; PM is excluded. APPENDED AFTER
+        # `schedule_push_for_activities` (above) on purpose: these rows ride the
+        # `activity.created` broadcast (live sidebar update) but the push is
+        # handled by `schedule_push_for_message` below — appending earlier would
+        # double-push them.
+        activities.extend(
+            v3_activity.create_message_activities(
+                message=msg, recipient_ids=msg_recipients, actor=sender
+            )
+        )
         schedule_push_for_message(msg, msg_recipients)
     return msg, activities
 

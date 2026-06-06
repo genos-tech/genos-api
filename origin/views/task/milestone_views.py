@@ -9,6 +9,8 @@ from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.services import mention_extractor
+from origin.views.utils.mention_handler import resolve_group_members
 from origin.views.utils.request_validators import validate_request_data
 from rest_framework import status
 from rest_framework.response import Response
@@ -423,10 +425,40 @@ class MilestoneView(AuthenticatedAPIView):
         # every milestone-linked task. Drop the project-tasks cache so
         # the table reflects the changes on next read.
         invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
-        return Response(
-            {"milestone": _serialize_milestone(milestone)},
-            status=status.HTTP_200_OK,
-        )
+
+        # Compute @mention delta for the description so the FE can emit
+        # `task_body_mention` and Flask can broadcast live activity rows.
+        # Milestones share the task-body (surface_type=5) mention path: the
+        # backing TaskMaster is the authoritative task row, so we use its
+        # `task_id` and `display_id`. We compute the delta from the backing
+        # task's previously stored `mentioned_user_ids` vs the new body —
+        # avoiding a separate `mentioned_user_ids` column on MilestoneMaster.
+        newly_mentioned: list[str] = []
+        all_mentioned: list[str] = []
+        removed_mentioned: list[str] = []
+        if "description" in request.data and milestone.task_id is not None:
+            new_body = request.data.get("description") or []
+            new_set: set[str] = set(mention_extractor.extract_mentioned_user_ids(new_body))
+            grp_ids = mention_extractor.extract_mention_group_ids(new_body)
+            if grp_ids:
+                new_set |= resolve_group_members(grp_ids)
+            backing = milestone.task
+            prev_set: set[str] = set(backing.mentioned_user_ids or []) if backing else set()
+            newly_mentioned = list(new_set - prev_set)
+            removed_mentioned = list(prev_set - new_set)
+            all_mentioned = list(new_set)
+            # Mirror the new mention set onto the backing task so future edits
+            # compute the correct delta (matching the task PUT path).
+            if backing is not None and new_set != prev_set:
+                backing.mentioned_user_ids = list(new_set)
+                backing.save(update_fields=["mentioned_user_ids", "ts_updated_at"])
+
+        response_data = {"milestone": _serialize_milestone(milestone)}
+        if newly_mentioned or removed_mentioned:
+            response_data["newly_mentioned_user_ids"] = newly_mentioned
+            response_data["all_mentioned_user_ids"] = all_mentioned
+            response_data["removed_user_ids"] = removed_mentioned
+        return Response(response_data, status=status.HTTP_200_OK)
 
     def delete(self, request, milestone_id: int):
         try:
