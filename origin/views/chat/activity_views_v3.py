@@ -8,7 +8,11 @@ v3 activity feed endpoints.
                                                     omitted ⇒ last 30 days.
   PUT    /api/v3/activities/{id}/read/             — mark one entry read.
   PUT    /api/v3/activities/read-all/              — mark every entry the
-                                                    user can see read.
+                                                    user can see read
+                                                    (optionally scoped to
+                                                    one channel).
+  PUT    /api/v3/activities/read-batch/            — mark a specific set of
+                                                    activity ids read.
 
 Replaces the legacy `/api/v2/chat/activity/...` surface that lived on
 the `ActivityFact` model (now deleted). FE reads from this directly
@@ -115,6 +119,34 @@ class ActivityReadAllView(AuthenticatedAPIView):
         if channel_id:
             qs = qs.filter(channel_id=channel_id)
         updated = qs.update(is_read=True)
+        return Response({"updated": updated}, status=status.HTTP_200_OK)
+
+
+class ActivityReadBatchView(AuthenticatedAPIView):
+    """Mark a specific SET of activities read in one request.
+
+    Powers the sidebar's "mark all *currently-filtered* activities read"
+    action, where the visible set is a client-side filter (chip / instance
+    / mention-group / unread) that spans multiple channels — and
+    channel-less surfaces like note mentions — so neither the per-id
+    `read/` nor the per-channel `read-all/` endpoint can express it.
+
+    Requires a non-empty `activity_ids` list and 400s otherwise, so it can
+    never silently degrade into the "mark every unread entry" default of
+    `read-all/`. Scoped to the requesting user so a stray id can't flip
+    someone else's row.
+    """
+
+    def put(self, request):
+        activity_ids = (request.data or {}).get("activity_ids")
+        if not activity_ids or not isinstance(activity_ids, list):
+            return Response(
+                {"error": "activity_ids must be a non-empty list."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        updated = Activity.objects.filter(
+            id__in=activity_ids, recipient=request.user, is_read=False
+        ).update(is_read=True)
         return Response({"updated": updated}, status=status.HTTP_200_OK)
 
 

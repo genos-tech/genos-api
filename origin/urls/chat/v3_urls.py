@@ -46,6 +46,7 @@ from django.urls import path
 from origin.views.chat.activity_views_v3 import (
     ActivityListView,
     ActivityReadAllView,
+    ActivityReadBatchView,
     ActivityReadView,
     ActivitySurfaceView,
 )
@@ -166,6 +167,11 @@ urlpatterns = [
         "api/v3/activities/read-all/",
         ActivityReadAllView.as_view(),
         name="v3_activity_read_all",
+    ),
+    path(
+        "api/v3/activities/read-batch/",
+        ActivityReadBatchView.as_view(),
+        name="v3_activity_read_batch",
     ),
     path(
         "api/v3/activities/surface/",
