@@ -26,7 +26,7 @@
 
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "backend_django/Dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 # 10-minute cadence matches the `--since-minutes` value below; bump
@@ -44,5 +44,5 @@ dockerfilePath = "backend_django/Dockerfile"
 # reindex. `--since-minutes` stays here next to cronSchedule — bump both
 # together to change cadence.
 cronSchedule = "*/10 * * * *"
-startCommand = "sh /app/backend_django/railway-reindexer-entrypoint.sh --since-minutes 11"
+startCommand = "sh /app/railway-reindexer-entrypoint.sh --since-minutes 11"
 restartPolicyType = "NEVER"

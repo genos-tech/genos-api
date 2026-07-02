@@ -10,7 +10,7 @@
 #      /tmp/gemini-sa.json). Without it, EMBEDDING_PROVIDER=vertex dies
 #      with `FileNotFoundError: /tmp/gemini-sa.json`. No-op when unset
 #      (the OpenAI / AI-Studio paths need no key file). Keep in sync with
-#      backend_django/Dockerfile.
+#      the Dockerfile.
 #
 #   2. `opensearch_setup` BEFORE any write. After an OpenSearch restart
 #      the index is gone (ephemeral storage); if the reindex bulk is the
@@ -32,7 +32,7 @@ if [ -n "$GEMINI_SA_BASE64" ]; then
 fi
 
 # Ensure the index + alias exist with the correct mapping before writing.
-python /app/backend_django/manage.py opensearch_setup
+python /app/manage.py opensearch_setup
 
 # Forward any args (e.g. --since-minutes 11) from the toml startCommand.
-exec python /app/backend_django/manage.py opensearch_reindex "$@"
+exec python /app/manage.py opensearch_reindex "$@"

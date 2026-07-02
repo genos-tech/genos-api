@@ -14,17 +14,17 @@
 #   were abandoned (closed tab, expired refresh token, etc.).
 #
 # To dry-run from a Railway shell (no DB changes):
-#   python /app/backend_django/manage.py cleanup_demo_users --dry-run
+#   python /app/manage.py cleanup_demo_users --dry-run
 #
 # To purge older windows (e.g. emergency cleanup):
-#   python /app/backend_django/manage.py cleanup_demo_users --hours 1
+#   python /app/manage.py cleanup_demo_users --hours 1
 #
 # All env vars from `backend-django` (DATABASE_URL, etc.) must also be
 # set on this service.
 
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "backend_django/Dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 # Daily at 03:00 UTC. Pick a low-traffic time so the row-deletion
@@ -32,5 +32,5 @@ dockerfilePath = "backend_django/Dockerfile"
 # Absolute path avoids any ambiguity about the working directory when
 # Railway executes the startCommand override.
 cronSchedule = "0 3 * * *"
-startCommand = "python /app/backend_django/manage.py cleanup_demo_users"
+startCommand = "python /app/manage.py cleanup_demo_users"
 restartPolicyType = "NEVER"
