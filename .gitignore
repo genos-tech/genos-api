@@ -20,8 +20,8 @@ samples
 frontend/sandbox-app
 
 # Django
-backend_django/uploads
-backend_django/docs/db-schema
+uploads
+docs/db-schema
 
 # Infra
 infra/cp-helm-charts
