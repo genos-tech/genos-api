@@ -12,6 +12,9 @@ keeps working until we delete the v2 surface.
 """
 
 from django.http import Http404
+from rest_framework import status
+from rest_framework.response import Response
+
 from origin.models.chat.unified_models import (
     ChannelMember,
     Message,
@@ -23,8 +26,6 @@ from origin.serializers.chat.unified_serializers import (
 )
 from origin.services import v3_activity
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from rest_framework import status
-from rest_framework.response import Response
 
 
 def _verify_message_member(message_id, user):

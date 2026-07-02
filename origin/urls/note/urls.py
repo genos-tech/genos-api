@@ -1,4 +1,5 @@
 from django.urls import path
+
 from origin.views.note.chat_note_views import *
 from origin.views.note.favorite_note_views import *
 from origin.views.note.note_role_views import (

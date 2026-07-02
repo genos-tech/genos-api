@@ -18,12 +18,13 @@ import logging
 import uuid
 
 import requests
-from origin.models.common.user_models import ConnectedAccount
-from origin.services.oauth.tokens import ReauthRequired, get_valid_access_token
 from rest_framework import permissions, status
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from origin.models.common.user_models import ConnectedAccount
+from origin.services.oauth.tokens import ReauthRequired, get_valid_access_token
 
 logger = logging.getLogger(__name__)
 

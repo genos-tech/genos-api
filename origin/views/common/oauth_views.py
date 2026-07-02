@@ -30,15 +30,16 @@ from django.core import signing
 from django.db import transaction
 from django.http import HttpResponseRedirect
 from django.utils import timezone
-from origin.models.common.user_models import ConnectedAccount
-from origin.services import crypto
-from origin.services.oauth.base import FlowIntent, OAuthProvider, ProviderProfile, TokenResponse
-from origin.services.oauth.registry import get_provider, supported_provider_names
 from rest_framework import permissions, status
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+
+from origin.models.common.user_models import ConnectedAccount
+from origin.services import crypto
+from origin.services.oauth.base import FlowIntent, OAuthProvider, ProviderProfile, TokenResponse
+from origin.services.oauth.registry import get_provider, supported_provider_names
 
 from .auth_views import _set_refresh_cookie
 

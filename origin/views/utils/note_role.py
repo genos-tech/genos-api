@@ -1,11 +1,12 @@
+from rest_framework import status
+from rest_framework.response import Response
+
 from origin.models.chat.unified_models import ChannelMember
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMembers
-from rest_framework import status
-from rest_framework.response import Response
 
 NOTE_TYPE_PERSONAL = 1
 NOTE_TYPE_TASK = 2

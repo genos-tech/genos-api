@@ -1,4 +1,7 @@
 from django.db import transaction
+from rest_framework import status
+from rest_framework.response import Response
+
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.note.common_note_models import NotePermissionMaster
@@ -12,8 +15,6 @@ from origin.views.utils.note_role import (
     note_exists,
 )
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
-from rest_framework import status
-from rest_framework.response import Response
 
 VALID_NOTE_TYPES = {1, 2, 3}
 VALID_ROLE_IDS = {1, 2, 3}

@@ -6,6 +6,10 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 from django.db.models import Case, F, IntegerField, Max, Q, Value, When
+from rest_framework import status
+from rest_framework.parsers import MultiPartParser
+from rest_framework.response import Response
+
 from origin.models.project.prj_models import *
 from origin.models.task.task_models import *
 from origin.serializers.task.task_serializers import *
@@ -25,9 +29,6 @@ from origin.views.utils.incremental import (
 )
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
-from rest_framework import status
-from rest_framework.parsers import MultiPartParser
-from rest_framework.response import Response
 
 from .common_color import EFFORT_LEVEL_COLOR_MAP, PRIORITY_COLOR_MAP, STATUS_COLOR_MAP
 

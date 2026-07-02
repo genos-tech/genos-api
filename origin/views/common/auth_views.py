@@ -11,11 +11,6 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
-from origin.services.demo_seeder import (
-    create_demo_environment,
-    delete_demo_environment,
-    kick_off_demo_reindex,
-)
 from rest_framework import permissions, status, viewsets
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -26,6 +21,12 @@ from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+
+from origin.services.demo_seeder import (
+    create_demo_environment,
+    delete_demo_environment,
+    kick_off_demo_reindex,
+)
 
 from .base_auth_api_view import AuthenticatedAPIView
 

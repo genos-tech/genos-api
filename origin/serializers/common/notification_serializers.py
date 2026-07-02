@@ -1,8 +1,9 @@
+from rest_framework import serializers
+
 from origin.models.common.notification_models import (
     NotificationPreference,
     PushSubscription,
 )
-from rest_framework import serializers
 
 # Recognised per-object mute target types. Kept here (not imported from
 # the frontend) so the backend can reject obviously malformed entries

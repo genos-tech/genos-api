@@ -1,8 +1,9 @@
+from rest_framework import status
+from rest_framework.response import Response
+
 from origin.serializers.note.note_serializers import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
-from rest_framework import status
-from rest_framework.response import Response
 
 
 class NotePermissionView(AuthenticatedAPIView):

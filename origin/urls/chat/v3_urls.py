@@ -43,6 +43,7 @@ URL shape (see plan §2):
 """
 
 from django.urls import path
+
 from origin.views.chat.activity_views_v3 import (
     ActivityListView,
     ActivityReadAllView,

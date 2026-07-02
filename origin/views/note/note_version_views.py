@@ -1,4 +1,7 @@
 from django.db import transaction
+from rest_framework import status
+from rest_framework.response import Response
+
 from origin.models.common.team_models import TeamMaster
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
@@ -15,8 +18,6 @@ from origin.views.utils.note_role import (
 )
 from origin.views.utils.note_version import snapshot_note_version
 from origin.views.utils.request_validators import validate_request_data
-from rest_framework import status
-from rest_framework.response import Response
 
 VALID_NOTE_TYPES = {1, 2, 3}
 

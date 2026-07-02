@@ -1,5 +1,8 @@
 from django.db import transaction
 from django.db.models import F, IntegerField, Value
+from rest_framework import status
+from rest_framework.response import Response
+
 from origin.serializers.note.note_serializers import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
@@ -15,8 +18,6 @@ from origin.views.utils.note_version import (
     snapshot_note_version,
 )
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
-from rest_framework import status
-from rest_framework.response import Response
 
 NOTE_TYPE = 1  # Personal Notes
 

@@ -1,3 +1,5 @@
+from rest_framework import serializers
+
 from origin.models.note.chat_note_models import *
 from origin.models.note.common_note_models import *
 from origin.models.note.favorite_note_models import *
@@ -5,7 +7,6 @@ from origin.models.note.personal_note_models import *
 from origin.models.note.recent_note_models import *
 from origin.models.note.task_note_models import *
 from origin.models.note.version_note_models import NoteVersionMaster
-from rest_framework import serializers
 
 
 class PersonalNoteMasterSerializer(serializers.ModelSerializer):

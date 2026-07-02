@@ -1,10 +1,11 @@
 import hashlib
 
 from django.utils import timezone
-from origin.models.common import user_models
-from origin.models.common.invite_models import TeamInvite
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
+from origin.models.common import user_models
+from origin.models.common.invite_models import TeamInvite
 
 
 class UserSerializer(serializers.ModelSerializer):
