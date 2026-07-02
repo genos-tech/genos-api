@@ -2,11 +2,12 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 from django.db.models import Q
+from rest_framework import status
+from rest_framework.response import Response
+
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from rest_framework import status
-from rest_framework.response import Response
 
 # Mirrors `milestone_views.CLOSED_STATUSES` — kept duplicated here on
 # purpose so the burndown view doesn't import from the milestone view

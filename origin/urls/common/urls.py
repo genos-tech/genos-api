@@ -1,4 +1,5 @@
 from django.urls import path
+
 from origin.views.common.auth_views import *
 from origin.views.common.calendar_views import (
     CalendarEventDetailView,

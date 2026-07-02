@@ -1,4 +1,5 @@
 from django.urls import path
+
 from origin.views.task.milestone_views import (
     MilestoneAssigneesView,
     MilestoneView,

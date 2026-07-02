@@ -1,5 +1,6 @@
-from origin.models.common.team_models import TeamMaster, TeamMembers
 from rest_framework import serializers
+
+from origin.models.common.team_models import TeamMaster, TeamMembers
 
 
 class TeamMasterSerializer(serializers.ModelSerializer):

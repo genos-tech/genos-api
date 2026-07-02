@@ -1,5 +1,8 @@
 from django.db import transaction
 from django.db.models import Case, CharField, F, IntegerField, Q, Value, When
+from rest_framework import status
+from rest_framework.response import Response
+
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.user_models import CustomUser
 from origin.serializers.note.note_serializers import *
@@ -19,8 +22,6 @@ from origin.views.utils.note_version import (
     snapshot_note_version,
 )
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
-from rest_framework import status
-from rest_framework.response import Response
 
 NOTE_TYPE = 3  # Chat Notes
 

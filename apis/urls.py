@@ -21,6 +21,7 @@ from urllib.parse import quote
 from django.conf import settings
 from django.urls import re_path
 from django.views.static import serve as _serve_static
+
 from origin.search_engine import urls as search_engine_urls
 from origin.urls.chat import urls as chat_urls
 from origin.urls.chat import v3_urls as chat_v3_urls

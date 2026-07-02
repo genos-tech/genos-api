@@ -1,5 +1,6 @@
-from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from rest_framework import serializers
+
+from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 
 
 class ToDoCategorySerializer(serializers.ModelSerializer):

@@ -16,6 +16,9 @@ JSON lists), so a deleted channel's pins are auto-removed on cascade.
 `DELETE /api/v3/messages/{message_id}/flag/`    unflag
 """
 
+from rest_framework import status
+from rest_framework.response import Response
+
 from origin.models.chat.unified_models import (
     Flag,
     Pin,
@@ -24,8 +27,6 @@ from origin.serializers.chat.unified_serializers import FlagSerializer, PinSeria
 from origin.views.chat.message_views import _verify_member_or_404
 from origin.views.chat.reaction_views_v3 import _verify_message_member
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from rest_framework import status
-from rest_framework.response import Response
 
 
 class PinView(AuthenticatedAPIView):

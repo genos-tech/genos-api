@@ -1,6 +1,9 @@
 from django.db import transaction
 from django.db.models import Case, CharField, F, IntegerField, Q, Value, When
 from django.db.models.functions import Concat
+from rest_framework import status
+from rest_framework.response import Response
+
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.serializers.note.note_serializers import *
@@ -19,8 +22,6 @@ from origin.views.utils.note_version import (
     snapshot_note_version,
 )
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
-from rest_framework import status
-from rest_framework.response import Response
 
 NOTE_TYPE = 2  # Task Notes
 

@@ -1,5 +1,6 @@
-from origin.models.project.prj_models import *
 from rest_framework import serializers
+
+from origin.models.project.prj_models import *
 
 
 class ProjectMasterSerializer(serializers.ModelSerializer):

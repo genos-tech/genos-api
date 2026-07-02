@@ -22,11 +22,12 @@ and also receives live `activity.created` events over the v3 WS.
 from datetime import timedelta
 
 from django.utils import timezone
+from rest_framework import status
+from rest_framework.response import Response
+
 from origin.models.chat.unified_models import Activity
 from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from rest_framework import status
-from rest_framework.response import Response
 
 _DEFAULT_SINCE_DAYS = 30
 _MAX_ROWS = 200

@@ -41,9 +41,10 @@ config (which initially is "all flags off").
 """
 
 from django.conf import settings
-from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from rest_framework import status
 from rest_framework.response import Response
+
+from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 # Defaults wire into the wire contract when settings.RUNTIME_CONFIG is
 # absent or missing keys. Keep these conservative ("everything off") so
