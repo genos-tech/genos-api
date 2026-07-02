@@ -1,0 +1,39 @@
+# python
+**/__pycache__/**
+**/node_modules/**
+**/infinityScroll/**
+
+# System
+.env
+.venv
+
+# Test / coverage artifacts
+**/.coverage
+**/coverage.xml
+**/.pytest_cache/
+**/.ruff_cache/
+
+test.py
+samples
+
+# React
+frontend/sandbox-app
+
+# Django
+backend_django/uploads
+backend_django/docs/db-schema
+
+# Infra
+infra/cp-helm-charts
+infra/kafdrop
+infra/deployments/kafka-connect-custom
+
+# Terraform
+*.tfstate
+*.tfstate.backup
+*.tfstate.lock.info
+*.terraform/
+*state.json
+
+# Secrets
+secrets

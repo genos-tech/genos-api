@@ -1,0 +1,30 @@
+# Shared ruff config for the two Python services (backend/, backend_django/).
+# Lint is wired into CI as REPORT-ONLY (non-required) to start: the codebase
+# has never been linted, so expect many findings. Tighten/auto-fix in a
+# dedicated cleanup pass, then consider flipping the lint checks to required.
+# ruff is a standalone binary and parses 3.12+ syntax regardless of this
+# target-version, so the Flask service's PEP 701 f-strings lint fine here.
+target-version = "py311"
+line-length = 100
+
+extend-exclude = [
+    "**/migrations/**",
+    ".venv",
+    "node_modules",
+    "**/__pycache__/**",
+]
+
+[lint]
+# Start conservative: pyflakes (F) + a subset of pycodestyle (E) + import
+# sorting (I). Expand the rule set in the cleanup pass.
+select = ["E", "F", "W", "I"]
+# Relaxed baseline for a previously-unlinted codebase. Re-enable these in a
+# follow-up cleanup pass once the noise is burned down.
+ignore = [
+    "E501", # line-too-long
+    "F403", # star import — Django settings do `from .settings import *`
+    "F405", # name may be undefined / from star import — same Django pattern
+    "E402", # import-not-at-top — Django settings + conditional imports
+    "F841", # unused local variable (minor; revisit)
+    "E712", # `== True` / `== False` comparisons (minor; revisit)
+]

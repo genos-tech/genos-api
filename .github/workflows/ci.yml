@@ -1,0 +1,98 @@
+name: CI
+
+# Single-service repo: no path filters (every push/PR builds this repo).
+# Deps come from this repo's own Pipfile/Pipfile.lock (finalize via Step 2 of the
+# split runbook: swap in the real Pipfile, then `pipenv lock`).
+# Rollout: `backend-django` (tests) is the check to mark *required* first;
+# `backend-django-lint` (ruff) stays report-only until a lint cleanup pass.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: backend-django-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-django:
+    name: backend-django (required-first)
+    runs-on: ubuntu-latest
+    # Dockerfile is python:3.11-slim and the code has no 3.12+ syntax, so 3.11
+    # is the correct prod-parity version here.
+    env:
+      PIPENV_PIPFILE: ${{ github.workspace }}/Pipfile
+      PIPENV_VENV_IN_PROJECT: "1"
+      # Only DATABASE_URL is truly required (else settings fall back to an
+      # unreachable hardcoded host). API keys default to "" and clients are
+      # mocked, so they are intentionally NOT set.
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/origin
+      DJANGO_SETTINGS_MODULE: apis.settings_test
+      DJANGO_SECRET_KEY: ci-test-secret-key
+      JWT_SECRET_KEY: ci-test-secret-key
+    services:
+      postgres:
+        # Match the local/Railway Postgres major (local docker-compose uses
+        # postgres:15).
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: origin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --upgrade pip pipenv
+      - name: Cache venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: ${{ runner.os }}-py311-pipenv-${{ hashFiles('Pipfile.lock') }}
+      - name: Install deps (locked prod deps + test tooling)
+        run: |
+          pipenv sync
+          # Belt-and-suspenders: INSTALLED_APPS has "anymail". Once Step 2's
+          # `pipenv lock` bakes django-anymail into Pipfile.lock, `pipenv sync`
+          # covers it and this line becomes a no-op.
+          pipenv run pip install 'django-anymail[resend]'
+          pipenv run pip install -r requirements-dev.txt
+      - name: Django system check
+        run: pipenv run python manage.py check --settings=apis.settings_test
+      - name: Migration drift check
+        run: pipenv run python manage.py makemigrations --check --dry-run --settings=apis.settings_test
+      - name: Tests + coverage
+        # No --parallel: keeps coverage capture simple/correct. The migrations
+        # dominate cold-start; revisit --parallel + multiprocessing coverage if
+        # wall time becomes a problem.
+        run: |
+          pipenv run coverage run manage.py test origin.tests --settings=apis.settings_test
+          pipenv run coverage xml
+          pipenv run coverage report
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: django-coverage
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  backend-django-lint:
+    name: backend-django-lint (report-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # ruff is a standalone binary; no project deps or DB needed.
+      - run: pip install ruff
+      - run: ruff check origin apis

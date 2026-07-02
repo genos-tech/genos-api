@@ -5,7 +5,7 @@ Aggregates every task in the workspace where the caller is the assignee,
 across every project the caller is a member of.
 
 Mirrors the `myStats` calculation in
-`frontend/weikiy/src/features/tasks/components/dashboard/TaskHomeContent.tsx`
+`genos-frontend/src/features/tasks/components/dashboard/TaskHomeContent.tsx`
 (lines 476-516) so the agent's numbers reconcile with the dashboard's
 "My Tasks" KPI strip exactly: `openCount`, `wipCount`, `pendingCount`,
 `closedCount`, `overdueCount`, `dueThisWeekCount`, `completionPct`.

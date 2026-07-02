@@ -19,22 +19,8 @@ WORKDIR /app
 
 COPY Pipfile Pipfile.lock ./
 RUN pipenv sync
-# AI / search packages that are not yet in the root Pipfile.lock.
-# These mirror docs/requirements.txt — install them directly until
-# the lock file is regenerated to include them.
-RUN pip install \
-    opensearch-py==3.0.0 \
-    openai==2.5.0 \
-    google-genai==2.3.0 \
-    anthropic==0.102.0 \
-    PyYAML==6.0.2 \
-    tavily-python \
-    'django-anymail[resend]' \
-    pywebpush==2.3.0
 
-COPY backend_django ./backend_django
-
-WORKDIR /app/backend_django
+COPY . .
 
 EXPOSE 8000
 

@@ -194,7 +194,7 @@ def _body(*sections):
 
 # ---------------------------------------------------------------------------
 # PM task-card header body — port of `taskMessageTemplate` in
-# `frontend/weikiy/src/features/tasks/utils/TaskMessageTemplate.ts`.
+# `genos-frontend/src/features/tasks/utils/TaskMessageTemplate.ts`.
 #
 # The v3 PM pane renders ONE top-level "task card" Message per task (the
 # composer is disabled for PM — only task lifecycle writes there). The
@@ -341,7 +341,7 @@ def _task_card_body(
 
 # ---------------------------------------------------------------------------
 # Task body templates — port of `TASK_TEMPLATES` in
-# `frontend/weikiy/src/features/tasks/components/contents/CreateTaskForm.tsx`.
+# `genos-frontend/src/features/tasks/components/contents/CreateTaskForm.tsx`.
 # Empty (placeholder-text) variants the picker reads from. The demo
 # seeds project-specific *filled* variants below.
 # ---------------------------------------------------------------------------

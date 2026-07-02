@@ -1,11 +1,40 @@
+# genos-api (Django + DRF + Genos/search_engine) — verified from backend_django/** imports.
+# Merges the root Pipfile's Django+Genos deps WITH the extras currently pip-installed in
+# backend_django/Dockerfile, so there's ONE manifest. `django` is pinned explicitly (today it
+# is only pulled transitively via DRF). Boots: collectstatic -> migrate -> opensearch_setup
+# -> gunicorn apis.wsgi:application  (preserve this CMD sequence).
 [[source]]
 url = "https://pypi.org/simple"
 verify_ssl = true
 name = "pypi"
 
 [packages]
+# --- Django core / web ---
+django = "*"                                # pin explicitly; was transitive-only before
+djangorestframework = "==3.15.2"
+djangorestframework-simplejwt = "==5.4.0"
+django-cors-headers = "==4.7.0"
+dj-database-url = "*"
+psycopg2-binary = "*"
+django-redis = "*"
+whitenoise = "*"
+gunicorn = "*"
+requests = "==2.32.3"
+cryptography = "*"                          # imported directly in backend_django/**
+pyyaml = "==6.0.2"
+# --- email / push (from Dockerfile pip installs) ---
+"django-anymail" = {extras = ["resend"], version = "*"}
+pywebpush = "==2.3.0"
+# --- Genos / Spotlight (LLM + search) ---
+opensearch-py = "==3.0.0"
+openai = "==2.5.0"
+google-genai = "==2.3.0"
+anthropic = "==0.102.0"
+tavily-python = "*"
+# NOTE: `trino` is imported in backend_django/** but absent from the current Pipfile.
+# Confirm whether it's actually reachable before adding:  trino = "*"
 
 [dev-packages]
 
 [requires]
-python_version = "3.14"
+python_version = "3.11"

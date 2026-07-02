@@ -1,0 +1,14 @@
+# Test/lint tooling for CI and local test runs.
+#
+# Installed ON TOP OF `pipenv sync` (which installs the locked production deps
+# from Pipfile.lock). This mirrors the Dockerfile's "extra pip install" pattern
+# and deliberately avoids regenerating Pipfile.lock — re-locking would
+# re-resolve the many "*"-pinned prod deps and could silently bump production
+# dependency versions, which is out of scope for adding CI.
+#
+# Used by .github/workflows/backend-flask.yml and backend-django.yml.
+pytest>=8,<10
+pytest-cov>=5
+pytest-timeout>=2
+coverage>=7
+ruff>=0.6

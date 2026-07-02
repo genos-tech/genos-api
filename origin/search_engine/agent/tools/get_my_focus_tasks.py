@@ -2,7 +2,7 @@
 
 Returns the caller's most-important active tasks, sorted with the same
 comparator the dashboard's "Up Next" card uses
-(`frontend/weikiy/src/features/tasks/components/dashboard/TaskHomeContent.tsx`
+(`genos-frontend/src/features/tasks/components/dashboard/TaskHomeContent.tsx`
 lines 523-558). Sorting tiers, in order:
 
   1. Overdue float to top — tasks past due_date come first; among the
