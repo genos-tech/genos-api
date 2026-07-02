@@ -18,7 +18,7 @@
 #
 # To read the trend / page on drift (from a Railway shell or another
 # scheduled tick):
-#   python /app/backend_django/manage.py agent_judge_sample --report [--alert]
+#   python /app/manage.py agent_judge_sample --report [--alert]
 #
 # ENV: needs the SAME LLM-provider creds as backend-django (the judge
 # calls `get_model_client()` → GEMINI_API_KEY or the Vertex set, and
@@ -28,7 +28,7 @@
 
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "backend_django/Dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 # Hourly. The effective sample rate is fixed by RAG_JUDGE_SAMPLE_RATE
@@ -37,5 +37,5 @@ dockerfilePath = "backend_django/Dockerfile"
 # Absolute path avoids any ambiguity about the working directory when
 # Railway executes the startCommand override.
 cronSchedule = "0 * * * *"
-startCommand = "python /app/backend_django/manage.py agent_judge_sample"
+startCommand = "python /app/manage.py agent_judge_sample"
 restartPolicyType = "NEVER"
