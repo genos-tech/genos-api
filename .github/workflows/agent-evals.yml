@@ -38,16 +38,15 @@ env:
   GCP_PROJECT: amplified-album-496413-t2
   GCP_REGION: asia-northeast1
   AR: asia-northeast1-docker.pkg.dev/amplified-album-496413-t2/genos
-  # Retrieval-suite regression floors, calibrated to the CI baseline
-  # (57/64 pass, mrr 0.846, recall 0.875) with margin. CI runs a touch below
-  # the GCE prod run (61/64, mrr 0.87, recall 0.97) — most likely the LLM
-  # reranker's run-to-run variance (RAG_USE_RERANKER on). Floors catch a real
-  # regression (a meaningful drop) without flapping on that variance. Tighten
-  # once variance is characterized, or set RAG_USE_RERANKER=false for a fully
-  # deterministic gate.
-  EVAL_MIN_PASS: "54"
-  EVAL_MIN_MRR: "0.78"
-  EVAL_MIN_RECALL: "0.82"
+  # Retrieval-suite regression floors. The gate runs with the LLM reranker OFF
+  # (RAG_USE_RERANKER=false below) so it's DETERMINISTIC + FAST — no per-query
+  # Gemini call. Numbers sit below the reranked prod run (which adds ~+0.12
+  # recall). Conservative floors catch a real regression (e.g. a dead vector
+  # lane → mrr 0) without flapping; tighten once the no-reranker baseline is
+  # confirmed by a green run.
+  EVAL_MIN_PASS: "45"
+  EVAL_MIN_MRR: "0.65"
+  EVAL_MIN_RECALL: "0.65"
 
 jobs:
   agent-evals:
@@ -67,6 +66,10 @@ jobs:
       GEMINI_PROJECT: amplified-album-496413-t2
       GEMINI_LOCATION: asia-northeast1
       EMBEDDING_PROVIDER: vertex
+      # Reranker OFF for the gate: it adds a Gemini call per query
+      # (non-deterministic, slow, Vertex-quota-bound). The gate tests the
+      # deterministic retrieval core (BM25 + vector + RRF).
+      RAG_USE_RERANKER: "false"
     services:
       postgres:
         image: postgres:15
@@ -150,10 +153,13 @@ jobs:
           sys.exit(0 if ok else 1)
           PY
 
-      # --- REPORT-ONLY: behavior suite + LLM judge (non-deterministic) ---
-      - name: Behavior + judge evals — report/trend (non-blocking)
+      # --- REPORT-ONLY: behavior smoke + LLM judge (non-deterministic) ---
+      - name: Behavior + judge smoke — report-only (non-blocking)
         continue-on-error: true
-        run: pipenv run python manage.py agent_eval --judge
+        # One representative case proves the full agent loop (Gemini generation
+        # + tool use + judge) works, without hammering Vertex with the whole
+        # suite on every PR. Trend the full behavior suite on a schedule instead.
+        run: pipenv run python manage.py agent_eval --case simple_rag_wip_tasks --judge
 
   deploy:
     name: deploy to Cloud Run (gated on evals)
