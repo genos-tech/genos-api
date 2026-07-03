@@ -33,6 +33,15 @@ EXPOSE 8000
 # `GEMINI_SERVICE_ACCOUNT_FILE` env var should then point at the same
 # path (see docs/RAILWAY_DEPLOY.md). Missing var = no-op (the
 # AI-Studio-API-key code path runs instead).
+#
+# Gunicorn concurrency is env-tunable so it can be sized to the Railway
+# instance's memory without a code change. Defaults raised from the old
+# 1 worker / 4 threads / 30s: gthread workers are I/O-bound (Postgres +
+# OpenSearch), so the app-boot request burst was serializing behind only
+# 4 slots. `--threads` is memory-cheap (shared process); raise
+# `WEB_CONCURRENCY` (each worker ≈ a full Django process) only if RAM
+# headroom allows. `GUNICORN_TIMEOUT` is bumped so a request queued
+# behind a slow one during the boot burst isn't killed mid-flight.
 CMD ["sh", "-c", "\
   if [ -n \"$GEMINI_SA_BASE64\" ]; then \
     mkdir -p /tmp && echo \"$GEMINI_SA_BASE64\" | base64 -d > /tmp/gemini-sa.json && chmod 600 /tmp/gemini-sa.json; \
@@ -42,11 +51,11 @@ CMD ["sh", "-c", "\
   python manage.py opensearch_setup || echo 'Warning: opensearch_setup failed — search features unavailable until OpenSearch is ready.' && \
   gunicorn apis.wsgi:application \
     --bind 0.0.0.0:$PORT \
-    --workers 1 \
+    --workers ${WEB_CONCURRENCY:-1} \
     --worker-class gthread \
-    --threads 4 \
+    --threads ${GUNICORN_THREADS:-8} \
     --worker-tmp-dir /dev/shm \
-    --timeout 30 \
+    --timeout ${GUNICORN_TIMEOUT:-60} \
     --graceful-timeout 30 \
     --keep-alive 5 \
     --max-requests 1000 \
