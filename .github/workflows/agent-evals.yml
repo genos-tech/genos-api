@@ -108,9 +108,14 @@ jobs:
           pipenv sync
           pipenv run pip install -r requirements-dev.txt
 
-      - name: Migrate + seed deterministic eval fixture (Vertex reindex)
+      - name: Migrate + set up OpenSearch index + seed fixture (Vertex reindex)
         run: |
           pipenv run python manage.py migrate --noinput
+          # MUST run before any write: creates knowledge_chunks_* with the
+          # knn_vector mapping. Skipping it lets the first reindex auto-create
+          # the index with a default mapping, so `embedding` isn't a knn_vector
+          # and every vector search 400s (silent keyword-only fallback → mrr=0).
+          pipenv run python manage.py opensearch_setup
           pipenv run python manage.py agent_eval_setup --reseed
 
       # --- HARD GATE: deterministic retrieval suite ---
