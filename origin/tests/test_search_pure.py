@@ -384,6 +384,51 @@ class ResolveUserChoiceTests(SimpleTestCase):
 
 
 # --------------------------------------------------------------------------- #
+# settings.py — shipped model defaults must stay in the catalog               #
+# --------------------------------------------------------------------------- #
+
+
+class DefaultModelsInCatalogTests(SimpleTestCase):
+    """Guard against drift between the server default models and the picker.
+
+    `_server_default_choice()` (llm/choice.py) is an intentional operator
+    escape hatch — it does NOT catalog-validate the env-configured default.
+    So a stale `GEMINI_MODEL` / `CLAUDE_MODEL` default in settings.py ships
+    silently: the agent loop runs it while the Settings picker (AgentModelsView,
+    fed by MODEL_CATALOG) never offers it — and it may be retired on the
+    provider, 404-ing every default user's ask. This pins the committed
+    defaults to the catalog. It runs under CI's default config (no model env
+    overrides), so it validates what we ship, not any per-deploy override.
+    """
+
+    def test_default_models_are_in_catalog(self):
+        from django.conf import settings
+
+        cfg = settings.SEARCH_ENGINE
+        catalog = cfg.get("MODEL_CATALOG") or []
+
+        def in_catalog(provider, model):
+            return any(
+                e.get("provider") == provider and e.get("model") == model
+                for e in catalog
+            )
+
+        gemini_default = cfg.get("GEMINI_MODEL")
+        claude_default = cfg.get("CLAUDE_MODEL")
+
+        self.assertTrue(
+            in_catalog("gemini", gemini_default),
+            f"Default GEMINI_MODEL={gemini_default!r} is not in MODEL_CATALOG; "
+            "users with no saved preference would run a model the Settings "
+            "picker never offers (and that may be retired on the provider).",
+        )
+        self.assertTrue(
+            in_catalog("claude", claude_default),
+            f"Default CLAUDE_MODEL={claude_default!r} is not in MODEL_CATALOG.",
+        )
+
+
+# --------------------------------------------------------------------------- #
 # reranker.py — _fuse_by_score math (pure)                                    #
 # --------------------------------------------------------------------------- #
 

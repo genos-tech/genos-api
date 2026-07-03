@@ -423,7 +423,13 @@ SEARCH_ENGINE = {
     "GEMINI_PROJECT": os.environ.get("GEMINI_PROJECT", ""),
     "GEMINI_LOCATION": os.environ.get("GEMINI_LOCATION", "us-central1"),
     "GEMINI_SERVICE_ACCOUNT_FILE": os.environ.get("GEMINI_SERVICE_ACCOUNT_FILE", ""),
-    "GEMINI_MODEL": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+    # Default agent model for users with no saved preference. MUST be a
+    # model present in MODEL_CATALOG below — `_server_default_choice()` in
+    # llm/choice.py intentionally does NOT catalog-validate the server
+    # default (it's an operator escape hatch), so a stale default here ships
+    # silently: the loop runs it while the Settings picker only offers the
+    # catalog. `test_default_models_are_in_catalog` guards against that drift.
+    "GEMINI_MODEL": os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
     # How many retrieved chunks to stuff into the Gemini prompt as
     # grounding. Larger = better recall, more cost / latency.
     "AGENT_CONTEXT_CHUNKS": int(os.environ.get("AGENT_CONTEXT_CHUNKS", "12")),
