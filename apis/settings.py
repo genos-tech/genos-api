@@ -667,6 +667,19 @@ SEARCH_ENGINE = {
     #     0 * * * *  cd /app/backend_django && python manage.py agent_judge_sample
     # Trend / drift: `agent_judge_sample --report [--alert]` (see Q0.5).
     "RAG_JUDGE_SAMPLE_RATE": float(os.environ.get("RAG_JUDGE_SAMPLE_RATE", "0.1")),
+    # C1 near-real-time conversation memory (§4.7 / Q2.3). When True, a run
+    # saved as `done` is immediately indexed into the per-user conversation
+    # lane (`ingestion.ingest_conversation_run`) instead of waiting up to 10
+    # minutes for the incremental reindex cron — so "what did we just discuss
+    # about X?" works seconds after the answer, even in a fresh session.
+    # **Default true**: the hook runs after the stream's last byte (zero
+    # user-visible latency, ~1 embed call), is best-effort (failure only
+    # logs; the run stays `done`), and the cron remains the backstop — the
+    # RagChunk hash-diff makes the overlap a no-op. Set false to fall back
+    # to cron-only indexing (e.g. to shed embed calls from web workers).
+    "RAG_CONVERSATION_INDEX_ON_COMPLETE": (
+        os.environ.get("RAG_CONVERSATION_INDEX_ON_COMPLETE", "true").lower() == "true"
+    ),
     # Q0.4 — tool-selection north-star (SPOTLIGHT_QUALITY_ARCHITECTURE.md §4.5,
     # roadmap §1: ">=0.90"). The agent_eval harness REPORTS the aggregate
     # continuous tool-selection scalars (tool_recall / tool_excl_ok) against
