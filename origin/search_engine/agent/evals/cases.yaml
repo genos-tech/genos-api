@@ -722,3 +722,52 @@
     answer_contains_all: ["hero", "plausible", "interview", "roadmap", "framer"]
     has_citations: true
     no_errors: true
+
+# --------------------------------------------------------------------- #
+# T. D5 natural-prose inline citations (§4.6)                           #
+# --------------------------------------------------------------------- #
+# These cases force multi-source, grounded answers with citation
+# expectations so both D5 metrics have a population:
+#   - prose_citation_rate (deterministic): link-form / all citations —
+#     is the model actually adopting `[descriptive prose](type:id)`?
+#   - prose_faithfulness (judge, nullable): does the link text honestly
+#     describe the cited source? Scored only when link-form citations
+#     exist; run with --judge to populate it.
+# The existing L-section cases assert citation *discipline* (when to
+# cite); this section measures citation *style and honesty*.
+
+- id: prose_cite_project_status
+  # Multi-entity project rollup — plenty of concrete entities to cite,
+  # so a compliant answer should carry several link-form citations.
+  query: "How is the Website Redesign project going, and what's the biggest risk right now?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    answer_contains_any: ["hero", "accessibility", "plausible", "redesign"]
+    has_citations: true
+    no_errors: true
+
+- id: prose_cite_decision_from_thread
+  # The framer-motion decision lives in a CHAT THREAD, not the task —
+  # exercises prose-faithfulness grading against a title-only chat
+  # source (structured-tool sources carry no snippet), and the §4.6
+  # discipline rule that the *thread* is the citable source.
+  query: "What did the team decide about framer-motion, and why?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    answer_contains_any: ["css", "framer"]
+    has_citations: true
+    no_errors: true
+
+- id: prose_cite_multi_source_summary
+  # Cross-project multi-fact answer → several distinct sources cited in
+  # one answer; the adoption rate is most meaningful here because a
+  # partial fallback (some prose links, some bare tokens) lands between
+  # 0 and 1 instead of being all-or-nothing.
+  query: "Summarize what's in progress across my projects and who is waiting on what."
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    citations_count_at_least: 2
+    no_errors: true
