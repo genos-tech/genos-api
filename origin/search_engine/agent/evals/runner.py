@@ -409,10 +409,13 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
     )
 
 
-# `_CITATION_RE` finds `[entity_id]` references in answer text. The
-# entity_id pattern matches what the agent uses: `chat:pm:1:thread:3`,
-# `task:42`, `note:personal:7`, etc. — non-greedy, no spaces.
-_CITATION_RE = re.compile(r"\[([a-z][a-z0-9_:\-]+)\]")
+# `_CITATION_RE` finds entity-id references in answer text, in BOTH forms
+# the agent emits (§4.6 D5): the natural-prose link `[prose](type:id)` (id in
+# group 1, link alternative FIRST so it consumes the whole `[label](id)`) and
+# the bare `[type:id]` fallback (id in group 2). The id pattern matches what
+# the agent uses: `chat:pm:1:thread:3`, `task:42`, `note:personal:7`, etc.
+# Keep in sync with `_INLINE_CITATION_RE` in controller.py.
+_CITATION_RE = re.compile(r"\[[^\]]*\]\(([a-z][a-z0-9_:\-]+)\)|\[([a-z][a-z0-9_:\-]+)\]")
 
 
 def _abstention_metric(events: list[dict[str, Any]], expect: dict[str, Any]) -> dict[str, float]:
@@ -505,7 +508,9 @@ def _check_behavior_expectations(
     tool_errors = [e for e in events if e.get("type") == "tool_call_error"]
     fatal_errors = [e for e in events if e.get("type") == "error"]
     answer = "".join(e.get("text") or "" for e in events if e.get("type") == "answer_delta")
-    citations_seen = {m.lower() for m in _CITATION_RE.findall(answer.lower())}
+    citations_seen = {
+        (m.group(1) or m.group(2)).lower() for m in _CITATION_RE.finditer(answer.lower())
+    }
     step_count = (
         max(
             (e.get("step", -1) for e in events if "step" in e),

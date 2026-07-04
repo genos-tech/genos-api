@@ -22,7 +22,7 @@ is touched (chunkers don't embed; they only read the DB).
 import datetime as dt
 import uuid
 
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.models.chat.unified_models import Channel, ChannelMember, Message
@@ -983,6 +983,21 @@ class TestCitationResolver(BaseAPITestCase):
         self.assertEqual(out[0]["kind"], "task")
         self.assertEqual(out[0]["args"], (task.task_id, "Cited task", project.project_id))
 
+    def test_resolves_visible_task_link_form(self):
+        # §4.6 natural-prose link `[prose](task:id)` — the resolver must
+        # extract the id from the URL, not the single-word prose label.
+        project = ProjectMaster.objects.create(
+            team=self.team, project_name="CitProj", owner=self.user
+        )
+        ProjectMembers.objects.create(team=self.team, project=project, attendee=self.user)
+        task = TaskMaster.objects.create(
+            team=self.team, project=project, title="Cited task", status="open"
+        )
+        out = self._resolve(f"the team [ruled it out](task:{task.task_id}) early")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["kind"], "task")
+        self.assertEqual(out[0]["args"], (task.task_id, "Cited task", project.project_id))
+
     def test_task_not_visible_filtered_out(self):
         # Task with a project the user is NOT a member of, and not
         # assignee/reporter -> ACL denies -> no source.
@@ -1240,3 +1255,35 @@ class TestCitationResolver(BaseAPITestCase):
         )
         out = self._resolve(f"[milestone:{m.milestone_id}]")
         self.assertEqual(out, [])
+
+
+# --------------------------------------------------------------------------- #
+# controller._INLINE_CITATION_RE — link-aware cited-id extraction (§4.6 D5)    #
+# --------------------------------------------------------------------------- #
+
+
+class TestInlineCitationScanner(SimpleTestCase):
+    """The chip-ranking scanner must extract ids from BOTH citation forms:
+    the natural-prose link `[prose](type:id)` and the bare `[type:id]`."""
+
+    def test_extracts_id_from_both_forms(self):
+        from origin.search_engine.agent.controller import _iter_cited_ids
+
+        text = (
+            "team [ruled out framer](task:42), the [spike](task:7), "
+            "[note:personal:9], and the [MDN docs](https://mdn.dev)."
+        )
+        # Link form yields the URL id (not the prose label); bare form
+        # yields the token; a real external link is ignored.
+        self.assertEqual(set(_iter_cited_ids(text)), {"task:42", "task:7", "note:personal:9"})
+
+    def test_ranks_link_form_cited_source_first(self):
+        from origin.search_engine.agent.controller import _rank_sources_by_citation
+
+        sources = [
+            {"entity_type": "note", "entity_id": "note:personal:9"},
+            {"entity_type": "task", "entity_id": "task:42"},
+        ]
+        # Only task:42 is cited (via a link) — it must sort ahead of the note.
+        ranked = _rank_sources_by_citation("the team [ruled it out](task:42).", sources)
+        self.assertEqual(ranked[0]["entity_id"], "task:42")
