@@ -248,6 +248,7 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
             metrics={
                 **_tool_selection_metrics(events, expect),
                 **_abstention_metric(events, expect),
+                **_citation_style_metric(events, expect),
                 **_surface_metric(query),
             },
         )
@@ -404,6 +405,7 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
         metrics={
             **_tool_selection_metrics(last_events, final_expect),
             **_abstention_metric(last_events, final_expect),
+            **_citation_style_metric(last_events, final_expect),
             **_surface_metric(last_query),
         },
     )
@@ -416,6 +418,48 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
 # the agent uses: `chat:pm:1:thread:3`, `task:42`, `note:personal:7`, etc.
 # Keep in sync with `_INLINE_CITATION_RE` in controller.py.
 _CITATION_RE = re.compile(r"\[[^\]]*\]\(([a-z][a-z0-9_:\-]+)\)|\[([a-z][a-z0-9_:\-]+)\]")
+
+# Bare-form-only counterpart of `judge.CITATION_LINK_RE`, for the D5
+# adoption metric below: the bracket content must itself be a typed
+# entity id (a link's prose label never matches). Same entity-type
+# vocabulary as the link regex — ordinary bracketed text ("[sic]",
+# "[reminder: …]") never counts.
+_CITATION_BARE_RE = re.compile(
+    r"\[((?:chat|task|note|project|todo|milestone)(?::[a-z0-9_\-]+)+)\](?!\()"
+)
+
+
+def _citation_style_metric(events: list[dict[str, Any]], expect: dict[str, Any]) -> dict[str, float]:
+    """D5 prose-citation adoption rate (§4.6).
+
+    `prose_citation_rate` = link-form citations / all citations — how
+    often the model cites in the natural-prose `[prose](type:id)` form
+    the D5 prompt asks for, vs falling back to the bare `[type:id]`
+    token (which the frontend strips to a chip). This is the ADOPTION
+    half of D5 measurement; the QUALITY half (is the prose truthful?)
+    is the judge's nullable `prose_faithfulness` axis.
+
+    Skip-when-immovable: emitted only for cases that positively expect
+    citations (`has_citations` / `citations_contain` /
+    `citations_count_at_least`) — on any other case the metric can't
+    move and would just dilute the aggregate. 0.0 means "citations
+    expected, none emitted in link form" (including the none-at-all
+    case, which the binary assertion already fails separately).
+    """
+    positively_expects = any(
+        k in expect for k in ("has_citations", "citations_contain", "citations_count_at_least")
+    ) and not expect.get("no_citations")
+    if not positively_expects:
+        return {}
+    from origin.search_engine.agent.evals.judge import CITATION_LINK_RE  # noqa: PLC0415
+
+    answer = "".join((e.get("text") or "") for e in events if e.get("type") == "answer_delta")
+    link_count = len(CITATION_LINK_RE.findall(answer))
+    bare_count = len(_CITATION_BARE_RE.findall(answer))
+    total = link_count + bare_count
+    if total == 0:
+        return {"prose_citation_rate": 0.0}
+    return {"prose_citation_rate": link_count / total}
 
 
 def _abstention_metric(events: list[dict[str, Any]], expect: dict[str, Any]) -> dict[str, float]:
