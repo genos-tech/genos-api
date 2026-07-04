@@ -865,10 +865,20 @@ def reconstruct_sources_for_run(run) -> list[dict[str, Any]]:
 # Phase 4.2 — source-chip ranking by citation density                         #
 # --------------------------------------------------------------------------- #
 
-# Matches the same `[entity_id]` shape used in the agent's prompt and the
-# frontend citation rewriter — keep this in sync with `_CITATION_RE` in
-# evals/runner.py and the regex in SpotlightOverlay's rewriteCitations.
-_INLINE_CITATION_RE = re.compile(r"\[([a-z][a-z0-9_:\-]+)\]")
+# Matches BOTH citation forms the agent emits (§4.6 D5): the natural-prose
+# link `[prose](type:id)` (id captured in group 1) and the bare `[type:id]`
+# fallback (id in group 2). The link alternative is FIRST and consumes the
+# whole `[label](id)` so a single-word label (`[spike](task:42)`) yields the
+# id, not the label. Keep in sync with the frontend rewriter (citationUtils.ts
+# CITATION_PATTERN / CITATION_LINK_PATTERN) and `_CITATION_RE` in
+# evals/runner.py.
+_INLINE_CITATION_RE = re.compile(r"\[[^\]]*\]\(([a-z][a-z0-9_:\-]+)\)|\[([a-z][a-z0-9_:\-]+)\]")
+
+
+def _iter_cited_ids(text: str):
+    """Yield the entity-id token from every citation (either form) in `text`."""
+    for m in _INLINE_CITATION_RE.finditer(text or ""):
+        yield (m.group(1) or m.group(2))
 
 
 def _rank_sources_by_citation(
@@ -891,7 +901,7 @@ def _rank_sources_by_citation(
     if not sources:
         return sources
 
-    cited_tokens = {m.lower() for m in _INLINE_CITATION_RE.findall(answer_text or "")}
+    cited_tokens = {tok.lower() for tok in _iter_cited_ids(answer_text)}
     if not cited_tokens:
         return sources
 

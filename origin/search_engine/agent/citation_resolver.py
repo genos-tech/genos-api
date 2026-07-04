@@ -57,13 +57,17 @@ from origin.search_engine.chunkers.base import (
 
 log = logging.getLogger(__name__)
 
-# Same pattern the frontend rewriter uses (citationUtils.ts) —
-# anchored to the known entity prefixes so an unrelated bracketed
-# phrase ("[reminder: ship Friday]") doesn't trip it. Keep this prefix
-# set in sync with `CITATION_PATTERN` in the frontend's citationUtils.ts:
-# a type the frontend strips but this resolver can't back-fill would be
-# silently dropped (no chip) when cited from context rather than retrieved.
-_CITATION_RE = re.compile(r"\[((?:chat|task|note|project|todo|milestone):[^\]\s]+)\]")
+# Matches BOTH citation forms the agent emits (§4.6 D5): the natural-prose
+# link `[prose](type:id)` (id in group 1) and the bare `[type:id]` fallback
+# (id in group 2). The link alternative is FIRST and consumes the whole
+# `[label](id)`. Anchored to the known entity prefixes so an unrelated
+# bracketed phrase ("[reminder: ship Friday]") doesn't trip it. Keep this
+# prefix set in sync with `CITATION_PATTERN` / `CITATION_LINK_PATTERN` in the
+# frontend's citationUtils.ts: a type the frontend strips but this resolver
+# can't back-fill would be silently dropped (no chip) when cited from context
+# rather than retrieved.
+_ENTITY_ID = r"(?:chat|task|note|project|todo|milestone):[^)\]\s]+"
+_CITATION_RE = re.compile(rf"\[[^\]]*\]\(({_ENTITY_ID})\)|\[({_ENTITY_ID})\]")
 
 # Frontend uses "my" as the URL label for personal notes; the LLM
 # tends to echo what it sees in the system prompt (which uses
@@ -114,7 +118,7 @@ def resolve_unresolved_citations(
     if not answer:
         return []
 
-    tokens = {m.group(1) for m in _CITATION_RE.finditer(answer)}
+    tokens = {(m.group(1) or m.group(2)) for m in _CITATION_RE.finditer(answer)}
     if not tokens:
         return []
 
