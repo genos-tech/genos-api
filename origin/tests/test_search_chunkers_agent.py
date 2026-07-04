@@ -947,6 +947,8 @@ class TestCitationResolver(BaseAPITestCase):
         self.build_project = lambda *a: {"kind": "project", "args": a}
         self.build_chat = lambda *a: {"kind": "chat", "args": a}
         self.build_note = lambda *a: {"kind": "note", "args": a}
+        self.build_todo = lambda *a: {"kind": "todo", "args": a}
+        self.build_milestone = lambda *a: {"kind": "milestone", "args": a}
 
     def _resolve(self, answer, seen_keys=None):
         return cr.resolve_unresolved_citations(
@@ -958,6 +960,8 @@ class TestCitationResolver(BaseAPITestCase):
             build_project_source=self.build_project,
             build_chat_source=self.build_chat,
             build_note_source=self.build_note,
+            build_todo_source=self.build_todo,
+            build_milestone_source=self.build_milestone,
         )
 
     def test_empty_answer_returns_empty(self):
@@ -1142,3 +1146,97 @@ class TestCitationResolver(BaseAPITestCase):
         self.assertEqual(cr._CHAT_LABEL_TO_CODE["dm"], CHAT_TYPE_DM)
         self.assertEqual(cr._CHAT_LABEL_TO_CODE["pm"], CHAT_TYPE_PM)
         self.assertEqual(cr._CHAT_LABEL_TO_CODE["mdm"], CHAT_TYPE_MDM)
+
+    # ----- todo -----
+
+    def test_resolves_visible_todo(self):
+        group = ToDoGroup.objects.create(
+            team=self.team, user=self.user, local_date=dt.date(2026, 7, 3)
+        )
+        item = ToDoItem.objects.create(group=group, title="Cited todo", sort_order=0)
+        out = self._resolve(f"deferred [todo:2026-07-03:item:{item.item_id}]")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["kind"], "todo")
+        # Date comes from the item's group, not the token.
+        self.assertEqual(out[0]["args"], (item.item_id, "Cited todo", "2026-07-03"))
+
+    def test_todo_not_owner_filtered_out(self):
+        # Todo owned by user2 — the requesting user (self.user) can't see it.
+        group = ToDoGroup.objects.create(
+            team=self.team, user=self.user2, local_date=dt.date(2026, 7, 3)
+        )
+        item = ToDoItem.objects.create(group=group, title="Private todo", sort_order=0)
+        out = self._resolve(f"[todo:2026-07-03:item:{item.item_id}]")
+        self.assertEqual(out, [])
+
+    def test_seen_key_skips_todo_token(self):
+        group = ToDoGroup.objects.create(
+            team=self.team, user=self.user, local_date=dt.date(2026, 7, 3)
+        )
+        item = ToDoItem.objects.create(group=group, title="Seen todo", sort_order=0)
+        seen = {("todo", f"todo:2026-07-03:item:{item.item_id}")}
+        out = self._resolve(f"[todo:2026-07-03:item:{item.item_id}]", seen_keys=seen)
+        self.assertEqual(out, [])
+
+    def test_malformed_todo_token_ignored(self):
+        # Missing the `item` segment / non-int id -> dropped silently.
+        self.assertEqual(self._resolve("[todo:2026-07-03]"), [])
+        self.assertEqual(self._resolve("[todo:2026-07-03:item:abc]"), [])
+
+    # ----- milestone -----
+
+    def test_resolves_visible_milestone(self):
+        project = ProjectMaster.objects.create(
+            team=self.team, project_name="MSProj", owner=self.user
+        )
+        ProjectMembers.objects.create(team=self.team, project=project, attendee=self.user)
+        backing = TaskMaster.objects.create(
+            team=self.team, project=project, title="backing", status="open"
+        )
+        m = MilestoneMaster.objects.create(
+            team=self.team, project=project, title="Cited MS", task=backing
+        )
+        out = self._resolve(f"targeting [milestone:{m.milestone_id}]")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["kind"], "milestone")
+        # Backing task_id + project_id feed the frontend deep-link.
+        self.assertEqual(
+            out[0]["args"],
+            (m.milestone_id, "Cited MS", project.project_id, backing.task_id),
+        )
+
+    def test_milestone_visible_via_assignee(self):
+        # User is NOT a project member but IS a milestone assignee.
+        project = ProjectMaster.objects.create(
+            team=self.team, project_name="OtherProj", owner=self.user2
+        )
+        ProjectMembers.objects.create(team=self.team, project=project, attendee=self.user2)
+        m = MilestoneMaster.objects.create(team=self.team, project=project, title="Assigned MS")
+        MilestoneAssignees.objects.create(team=self.team, milestone=m, user=self.user)
+        out = self._resolve(f"[milestone:{m.milestone_id}]")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["kind"], "milestone")
+        # No backing task -> task_id resolves to None.
+        self.assertEqual(
+            out[0]["args"], (m.milestone_id, "Assigned MS", project.project_id, None)
+        )
+
+    def test_milestone_not_visible_filtered_out(self):
+        project = ProjectMaster.objects.create(
+            team=self.team, project_name="HiddenMSProj", owner=self.user2
+        )
+        ProjectMembers.objects.create(team=self.team, project=project, attendee=self.user2)
+        m = MilestoneMaster.objects.create(team=self.team, project=project, title="Hidden MS")
+        out = self._resolve(f"[milestone:{m.milestone_id}]")
+        self.assertEqual(out, [])
+
+    def test_deleted_milestone_filtered_out(self):
+        project = ProjectMaster.objects.create(
+            team=self.team, project_name="DelMSProj", owner=self.user
+        )
+        ProjectMembers.objects.create(team=self.team, project=project, attendee=self.user)
+        m = MilestoneMaster.objects.create(
+            team=self.team, project=project, title="Gone MS", is_deleted=True
+        )
+        out = self._resolve(f"[milestone:{m.milestone_id}]")
+        self.assertEqual(out, [])

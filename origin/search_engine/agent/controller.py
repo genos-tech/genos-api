@@ -495,6 +495,21 @@ def _todo_source(item_id: Any, title: Any, local_date: Any) -> dict[str, Any]:
     return s
 
 
+def _milestone_source(
+    milestone_id: Any, title: Any, project_id: Any, task_id: Any = None
+) -> dict[str, Any]:
+    # entity_id mirrors the milestone chunker (`milestone:<id>`). The
+    # backing task_id + project_id let the frontend deep-link the chip
+    # through the task view (App.tsx handleSpotlightSelect routes a
+    # milestone the same as its backing task). task_id is None for legacy
+    # milestones whose backing task hasn't been auto-created yet.
+    s = _blank_source("milestone", f"milestone:{milestone_id}")
+    s["title"] = title or ""
+    s["project_id"] = str(project_id) if project_id is not None else None
+    s["task_id"] = str(task_id) if task_id is not None else None
+    return s
+
+
 def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[dict[str, Any]]:
     """Build UI source dicts from a non-search read tool's result.
 
@@ -1315,6 +1330,12 @@ def _drive_loop(
                 ),
                 build_note_source=lambda note_type, note_id, title, parent_context: _note_source(
                     note_type, note_id, title, parent_context
+                ),
+                build_todo_source=lambda item_id, title, local_date: _todo_source(
+                    item_id, title, local_date
+                ),
+                build_milestone_source=lambda milestone_id, title, project_id, task_id: (
+                    _milestone_source(milestone_id, title, project_id, task_id)
                 ),
             )
             if late_sources:
