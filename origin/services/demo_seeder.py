@@ -1579,10 +1579,6 @@ DM_BLUEPRINTS = [
             "parent_index": 3,
             "messages": [
                 (
-                    "bot",
-                    "Bundle size mainly. 40KB gzip for the marketing page is too steep for the perf budget we agreed on. Web Animations API handles the drawer fine.",
-                ),
-                (
                     "demo",
                     "What's the actual perf budget number we agreed on? Want to make sure we hold the line.",
                 ),
