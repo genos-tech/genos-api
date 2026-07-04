@@ -422,6 +422,19 @@ SEARCH_ENGINE = {
     "GEMINI_USE_VERTEX": os.environ.get("GEMINI_USE_VERTEX", "false").lower() == "true",
     "GEMINI_PROJECT": os.environ.get("GEMINI_PROJECT", ""),
     "GEMINI_LOCATION": os.environ.get("GEMINI_LOCATION", "us-central1"),
+    # Optional per-role Vertex region override for the LLM (agent /
+    # reranker / rewriter) client ONLY. Falls back to GEMINI_LOCATION
+    # when unset, so existing single-region deploys are unchanged. This
+    # exists because GEMINI_LOCATION is shared with the Vertex EMBEDDER
+    # (embeddings/vertex_embedder.py) and the reindex job — some Gemini
+    # models (e.g. *-preview) are served on the `global` endpoint or in
+    # us-central1 but NOT in every regional endpoint (e.g. Tokyo /
+    # asia-northeast1), while gemini-embedding-001 is regional. Point
+    # this at `global` (or us-central1) to reach a preview LLM model
+    # while embeddings stay on the region their index was built in —
+    # avoiding a region change that would silently break retrieval
+    # (see genos-platform infra/gcp/README.md "Vertex model + region").
+    "GEMINI_LLM_LOCATION": os.environ.get("GEMINI_LLM_LOCATION", ""),
     "GEMINI_SERVICE_ACCOUNT_FILE": os.environ.get("GEMINI_SERVICE_ACCOUNT_FILE", ""),
     # Default agent model for users with no saved preference. MUST be a
     # model present in MODEL_CATALOG below — `_server_default_choice()` in
