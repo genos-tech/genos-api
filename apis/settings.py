@@ -545,6 +545,34 @@ SEARCH_ENGINE = {
     # Bound the work: expand at most N top task hits, inject at most M neighbours.
     "RAG_GRAPH_MAX_SOURCES": int(os.environ.get("RAG_GRAPH_MAX_SOURCES", "5")),
     "RAG_GRAPH_MAX_NEIGHBORS": int(os.environ.get("RAG_GRAPH_MAX_NEIGHBORS", "5")),
+    # A1-ext — multi-hop traversal depth. 1 = the original one-hop
+    # behavior; 2 surfaces transitive dependencies ("what's downstream of
+    # the spike?" reaches what the blocked task itself gates) at
+    # score × RAG_GRAPH_WEIGHT**2 and one extra TaskDependency query.
+    # **Default 2** per the measured A/B on
+    # graph_native_2hop_downstream_of_framer_spike (hops=1: recall 0.0 →
+    # hops=2: recall 1.0, one-hop + gibberish guards unaffected — the
+    # source gate is hop-independent). Set 1 to restore the Q2.4 radius.
+    "RAG_GRAPH_MAX_HOPS": int(os.environ.get("RAG_GRAPH_MAX_HOPS", "2")),
+    # A1-ext — extra multiplier for REVERSE steps (traversing
+    # blocked→blocker, i.e. surfacing an upstream blocker). 1.0 = the
+    # original undirected behavior; < 1.0 biases toward downstream
+    # neighbours without hiding upstream ones. A/B-able per query class
+    # via agent_eval_compare before any default change.
+    "RAG_GRAPH_REVERSE_WEIGHT": float(os.environ.get("RAG_GRAPH_REVERSE_WEIGHT", "1.0")),
+    # A1-ext — vector-only relational entry. Empty (default) = OFF: the
+    # keyword-anchor gate stands and vector-only hits never seed
+    # expansion (the gibberish guard). Set to a post-fusion score floor
+    # to let a strong vector-only hit (e.g. a cross-lingual relational
+    # query sharing no token with the task) seed expansion too.
+    # **Calibration warning (measured 2026-07):** on the current RRF
+    # scale this floor CANNOT be tuned safely — rank-based fusion
+    # flattens similarity, so gibberish vector noise at rank 1 scores
+    # exactly like a genuine cross-lingual rank-1 hit (both 0.0328 on
+    # the fixture). Leave OFF until raw kNN cosine similarity is plumbed
+    # through fusion; the red `graph_native_crosslingual_vector_entry`
+    # retrieval case is the standing target for that follow-up.
+    "RAG_GRAPH_VECTOR_FLOOR": os.environ.get("RAG_GRAPH_VECTOR_FLOOR", ""),
     # Cohere Rerank — used when RAG_RERANKER_PROVIDER=cohere.
     # Get an API key at https://dashboard.cohere.com/api-keys
     # Pricing as of late 2025 is ~$2 / 1k queries.

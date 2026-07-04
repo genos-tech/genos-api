@@ -2381,6 +2381,10 @@ _DEPENDENCY_EDGES = [
     # gate the Hero build.
     ("framer-motion", "Hero + FeatureGrid"),
     ("Migrate marketing pages", "Hero + FeatureGrid"),
+    # …and the Hero build gates the accessibility audit, giving the graph a
+    # 2-hop chain (framer-motion → Hero → Accessibility audit) — the A1
+    # multi-hop eval target (graph_native_2hop_* in retrieval_cases.yaml).
+    ("Hero + FeatureGrid", "Accessibility audit"),
     # Q2 Roadmap: interview synthesis and competitor analysis feed the proposal.
     ("Synthesize 12 customer interviews", "Roadmap proposal"),
     ("Competitor analysis", "Roadmap proposal"),

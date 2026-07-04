@@ -1432,3 +1432,70 @@ class ApplyFriendlyTitlesTests(BaseAPITestCase):
         ]
         out = apply_friendly_titles(rows, self.viewer)
         self.assertEqual([r["title"] for r in out], ["T", "Friendly", "N"])
+
+
+# --------------------------------------------------------------------------- #
+# search._walk_dependency_graph (A1-ext — multi-hop GraphRAG)                  #
+# --------------------------------------------------------------------------- #
+
+
+class WalkDependencyGraphTests(SimpleTestCase):
+    """Pure tests for the frontier walk (DB injected via fetch_edges)."""
+
+    @staticmethod
+    def _walk(edges, src, **kw):
+        from origin.search_engine.search import _walk_dependency_graph
+
+        calls: list[list[int]] = []
+
+        def fetch(ids):
+            calls.append(sorted(ids))
+            idset = set(ids)
+            return [(b, d) for b, d in edges if b in idset or d in idset]
+
+        defaults = {"weight": 0.9, "reverse_weight": 1.0, "max_hops": 1}
+        defaults.update(kw)
+        return _walk_dependency_graph(fetch, src, **defaults), calls
+
+    def test_one_hop_both_directions_matches_legacy_behavior(self):
+        # A blocks B; C blocks A. From source A: B is downstream, C is
+        # upstream — both reachable at weight 0.9 with reverse_weight=1.
+        reached, _ = self._walk([(1, 2), (3, 1)], {1: 1.0})
+        self.assertEqual(reached[2], (0.9, "downstream"))
+        self.assertEqual(reached[3], (0.9, "upstream"))
+
+    def test_sources_are_never_reinjected(self):
+        reached, _ = self._walk([(1, 2), (2, 1)], {1: 1.0, 2: 0.5})
+        self.assertEqual(reached, {})
+
+    def test_two_hop_chain_decays_per_hop(self):
+        # 1 → 2 → 3, max_hops=2: task 3 reached at 0.9² = 0.81.
+        reached, calls = self._walk([(1, 2), (2, 3)], {1: 1.0}, max_hops=2)
+        self.assertEqual(reached[2], (0.9, "downstream"))
+        self.assertAlmostEqual(reached[3][0], 0.81)
+        self.assertEqual(reached[3][1], "downstream")
+        # One edges query per hop, frontier-shaped.
+        self.assertEqual(calls, [[1], [2]])
+
+    def test_hop_cap_stops_the_walk(self):
+        reached, _ = self._walk([(1, 2), (2, 3)], {1: 1.0}, max_hops=1)
+        self.assertNotIn(3, reached)
+
+    def test_best_path_wins_across_routes(self):
+        # Direct 1→3 (one hop, 0.9) beats 1→2→3 (two hops, 0.81).
+        reached, _ = self._walk([(1, 3), (1, 2), (2, 3)], {1: 1.0}, max_hops=2)
+        self.assertEqual(reached[3], (0.9, "downstream"))
+
+    def test_reverse_weight_discounts_upstream_steps(self):
+        # 3 blocks 1: from source 1 the blocker is upstream, discounted.
+        reached, _ = self._walk([(3, 1)], {1: 1.0}, reverse_weight=0.5)
+        self.assertAlmostEqual(reached[3][0], 0.45)
+        self.assertEqual(reached[3][1], "upstream")
+
+    def test_strongest_source_wins_shared_neighbor(self):
+        reached, _ = self._walk([(1, 9), (2, 9)], {1: 1.0, 2: 0.4})
+        self.assertEqual(reached[9], (0.9, "downstream"))
+
+    def test_zero_weight_prunes_the_walk(self):
+        reached, _ = self._walk([(1, 2)], {1: 1.0}, weight=0.0)
+        self.assertEqual(reached, {})
