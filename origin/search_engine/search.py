@@ -58,7 +58,9 @@ DEFAULT_LIMIT = 20
 #                  outrank raw concatenations because the agent reads
 #                  abstracts better than walls of text).
 #   "eval"      → offline `agent_eval --retrieval` harness. Wide pool, flat weights,
-#                  no freshness boost — pure retrieval quality.
+#                  no freshness boost, and no production overlays (reranker /
+#                  graph expansion) unless the caller opts in via `overlays=True`
+#                  — pure retrieval quality by default.
 #
 # Per-mode hyperparameters live in `_MODE_CONFIG` below so a tweak
 # touches one dict, not three call sites.
@@ -173,6 +175,7 @@ def search(
     max_chunks_per_entity: int = 3,
     rewrite: bool = False,
     mode: Optional[SearchMode] = None,
+    overlays: Optional[bool] = None,
 ) -> dict:
     """Run a hybrid search and return entity-grouped results.
 
@@ -216,6 +219,16 @@ def search(
             True → ai_search, False → typeahead. Pinning `pool_size`
             explicitly still wins so callers that know their workload
             can override.
+        overlays: whether the post-ranking production overlays (LLM
+            reranker + graph expansion) may run. `None` resolves per
+            mode: ai_search → True, typeahead/eval → False. This is
+            what keeps `mode="eval"` genuinely raw (BM25 + vector +
+            RRF) now that the overlay flags default ON — the offline
+            harness opts back in per case (`overlays: true` in the
+            case YAML) when it *wants* to measure an overlay. `True`
+            still honors the individual `RAG_USE_RERANKER` /
+            `RAG_GRAPH_EXPANSION` flags, so flag-flip A/Bs via
+            `agent_eval_compare --b-overrides` keep working.
     """
     if not query or not query.strip():
         return {"query": query, "results": []}
@@ -230,6 +243,10 @@ def search(
     ef_search = mode_cfg["ef_search"]
     apply_freshness_flag = mode_cfg["apply_freshness"]
     chunk_type_weights: dict[str, float] = mode_cfg.get("chunk_type_weights") or {}
+    # Overlay resolution (reranker + graph expansion). Only the live
+    # agent path gets them by default; eval stays raw unless the case
+    # opts in, and typeahead never runs them (latency budget).
+    overlays_enabled = overlays if overlays is not None else (mode == "ai_search")
 
     # Settings-level override hooks for the threshold knobs. When the
     # caller didn't explicitly pin a value (i.e. left the kwarg at its
@@ -338,13 +355,20 @@ def search(
     # hits get displaced by semantically-richer-but-less-precise
     # candidates). Locking the top-N from RRF preserves those wins
     # while still letting the reranker fix the noisy tail.
-    # Mode guard: NEVER rerank in typeahead mode. The reranker makes an LLM
-    # call (seconds), which is incompatible with typeahead's sub-100 ms Cmd-K
-    # budget. Reranking/fusion is an ai_search (agent path) + eval (offline
-    # measurement) concern only — so flipping RAG_USE_RERANKER on by default
-    # (Q2.1, backed by measured +0.118 recall on the agent path) doesn't
-    # silently tax the as-you-type surface.
-    if settings.SEARCH_ENGINE.get("RAG_USE_RERANKER") and grouped and mode != "typeahead":
+    # Overlay guard: NEVER rerank in typeahead mode (the reranker makes an
+    # LLM call — seconds — incompatible with the sub-100 ms Cmd-K budget),
+    # and only when `overlays_enabled` (ai_search by default; eval mode is
+    # raw unless the case opts in via `overlays: true`, so the offline
+    # retrieval numbers measure BM25 + vector + RRF, not the production
+    # overlay stack). Flipping RAG_USE_RERANKER on by default (Q2.1, backed
+    # by measured +0.118 recall on the agent path) therefore taxes neither
+    # the as-you-type surface nor the eval baseline.
+    if (
+        settings.SEARCH_ENGINE.get("RAG_USE_RERANKER")
+        and grouped
+        and mode != "typeahead"
+        and overlays_enabled
+    ):
         from origin.search_engine.reranker import rerank  # noqa: PLC0415
 
         input_k = int(settings.SEARCH_ENGINE.get("RAG_RERANK_INPUT_K", 20))
@@ -394,9 +418,15 @@ def search(
     # query ("what's blocked by the framer-motion spike?") surfaces the
     # graph-related task even when it shares no text with the query. Skipped
     # on typeahead (its sub-100 ms budget can't afford the extra DB+OS round
-    # trip); flag-gated. ACL is automatic — neighbors are fetched through the
-    # same acl_user_ids filter as everything else.
-    if settings.SEARCH_ENGINE.get("RAG_GRAPH_EXPANSION") and mode != "typeahead" and grouped:
+    # trip) and when overlays are disabled (eval mode stays raw unless the
+    # case opts in); flag-gated. ACL is automatic — neighbors are fetched
+    # through the same acl_user_ids filter as everything else.
+    if (
+        settings.SEARCH_ENGINE.get("RAG_GRAPH_EXPANSION")
+        and mode != "typeahead"
+        and overlays_enabled
+        and grouped
+    ):
         grouped = _graph_expand(
             grouped,
             team_id=team_id,

@@ -653,19 +653,22 @@
     must_not_contain_title: ["stakeholder map"]
 
 # ============================================================ #
-# K. Graph-native relational recall (Q2.4 / GraphRAG TARGET)   #
+# K. Graph-native relational recall (Q2.4 / GraphRAG)          #
 # ============================================================ #
 # The framer-motion spike BLOCKS the Hero build (seeded TaskDependency),
-# but the Hero task's TEXT need not mention framer-motion — so today's
-# BM25 + vector retrieval cannot connect them. This case asserts the
-# blocked task surfaces for a relational query. It is EXPECTED TO FAIL on
-# the current pipeline (no graph fusion at ranking time) and is the
-# measurable target GraphRAG (A1, §4.3) would turn green — i.e. a red
-# baseline here quantifies the GraphRAG gap. (The reactive get_task_blockers
-# path already covers this relation; see the graph_* behavior cases.)
+# but the Hero task's TEXT need not mention framer-motion — so raw
+# BM25 + vector retrieval cannot connect them. Graph ranking fusion
+# (`_graph_expand`, Q2.4) closed this gap: the one-hop TaskDependency
+# walk injects the blocked task at ranking time, and this case is its
+# REGRESSION GUARD (green since Q2.4; it was the red target baseline
+# before that). `overlays: true` because the case exists to measure the
+# graph overlay — eval mode is otherwise raw (no reranker, no graph).
+# (The reactive get_task_blockers path covers the same relation; see
+# the graph_* behavior cases.)
 
 - id: graph_native_blocked_by_framer_spike
   fixture: true
+  overlays: true
   query: "Which tasks are blocked by the framer-motion spike decision?"
   expect:
     must_contain_title_in_top_n:
