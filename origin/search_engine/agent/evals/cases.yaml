@@ -826,3 +826,30 @@
     tool_calls_at_least: 1
     answer_contains_any: ["priya"]
     no_errors: true
+
+# --------------------------------------------------------------------- #
+# V. Membership rosters (A1-ext — list_project_members / channel)       #
+# --------------------------------------------------------------------- #
+# The membership graph existed only as an ACL guard; nothing let the
+# agent ANSWER "who is on project X?" (get_team_members is team-grain).
+# These lock in the routing: project-grain questions hit the new tool,
+# and team-grain questions still hit get_team_members (the
+# disambiguation case guards the cheat-sheet edit against regression).
+
+- id: members_of_website_redesign
+  query: "Who is on the Website Redesign project?"
+  fixture: true
+  expect:
+    tools_used_contains: ["list_project_members"]
+    # Every fixture project is staffed by the demo user + the four
+    # seeded bots; a real roster answer names several of them.
+    answer_contains_all: ["alice", "bob", "carol"]
+    no_errors: true
+
+- id: team_vs_project_members_disambiguation
+  query: "Who is on this team?"
+  fixture: true
+  expect:
+    tools_used_contains: ["get_team_members"]
+    tools_used_excludes: ["list_project_members"]
+    no_errors: true
