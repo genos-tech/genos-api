@@ -429,6 +429,55 @@ class DefaultModelsInCatalogTests(SimpleTestCase):
 
 
 # --------------------------------------------------------------------------- #
+# gemini_client.py — Vertex region resolution (LLM vs embedder decoupling)     #
+# --------------------------------------------------------------------------- #
+
+
+class GeminiClientLocationTests(SimpleTestCase):
+    """`_build_client` must let GEMINI_LLM_LOCATION override the LLM region
+    without touching the embedder's GEMINI_LOCATION — so a preview model on
+    `global`/us-central1 is reachable while embeddings stay on their index's
+    region. The genai SDK is mocked; no client is really constructed."""
+
+    def _build_with(self, **overrides):
+        from django.conf import settings as dj_settings
+
+        from origin.search_engine.llm import gemini_client
+
+        cfg = dict(dj_settings.SEARCH_ENGINE)
+        cfg.update(
+            {
+                "GEMINI_USE_VERTEX": True,
+                "GEMINI_PROJECT": "proj-x",
+                "GEMINI_SERVICE_ACCOUNT_FILE": "",  # ADC branch, no file load
+            }
+        )
+        cfg.update(overrides)
+        with override_settings(SEARCH_ENGINE=cfg):
+            with patch.object(gemini_client, "genai") as mock_genai:
+                gemini_client._build_client()
+        return mock_genai.Client.call_args.kwargs
+
+    def test_llm_location_overrides_gemini_location(self):
+        kwargs = self._build_with(
+            GEMINI_LOCATION="asia-northeast1", GEMINI_LLM_LOCATION="global"
+        )
+        self.assertEqual(kwargs["location"], "global")
+        self.assertTrue(kwargs["vertexai"])
+        self.assertEqual(kwargs["project"], "proj-x")
+
+    def test_falls_back_to_gemini_location_when_unset(self):
+        kwargs = self._build_with(
+            GEMINI_LOCATION="asia-northeast1", GEMINI_LLM_LOCATION=""
+        )
+        self.assertEqual(kwargs["location"], "asia-northeast1")
+
+    def test_final_fallback_us_central1(self):
+        kwargs = self._build_with(GEMINI_LOCATION="", GEMINI_LLM_LOCATION="")
+        self.assertEqual(kwargs["location"], "us-central1")
+
+
+# --------------------------------------------------------------------------- #
 # reranker.py — _fuse_by_score math (pure)                                    #
 # --------------------------------------------------------------------------- #
 
