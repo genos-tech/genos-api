@@ -641,8 +641,10 @@ def _retrieval_metrics(entities: list[dict[str, Any]], expect: dict[str, Any]) -
     but is only fractional for the handful of multi-gold cases.
 
     Scope (do not overclaim): retrieval cases run under `mode="eval"`
-    (freshness + chunk-type overlays OFF — see `run_retrieval_case`), so
-    these measure RAW BM25+vector+RRF recall on fixtures. They are ideal
+    with production overlays OFF (freshness, chunk-type weights, LLM
+    reranker, graph expansion — see `run_retrieval_case`; per-case
+    `overlays: true` opts back in), so by default these measure RAW
+    BM25+vector+RRF recall on fixtures. They are ideal
     for A/B-ing a retrieval change, but are NOT production recall — that
     is the online-sampling half of the foundation, which this doesn't
     touch. Ranks are measured within the returned list (capped at the
@@ -832,10 +834,16 @@ def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
             limit=int(case.get("limit", 10)),
             use_vector=bool(case.get("use_vector", True)),
             rewrite=bool(_settings.SEARCH_ENGINE.get("RAG_USE_QUERY_REWRITE", False)),
-            # `mode="eval"` disables freshness boost + chunk-type
-            # reweighting so the retrieval-quality numbers reflect raw
-            # BM25 + vector + RRF, not the production-tuned overlays.
+            # `mode="eval"` disables freshness boost, chunk-type
+            # reweighting, AND the production overlays (LLM reranker +
+            # graph expansion), so the retrieval-quality numbers reflect
+            # raw BM25 + vector + RRF. A case that exists to measure an
+            # overlay (e.g. the graph_native_* cases) opts back in with
+            # `overlays: true` in its YAML — the overlay still honors its
+            # own RAG_* flag, so `agent_eval_compare --b-overrides` can
+            # flag-flip it for a clean A/B.
             mode="eval",
+            overlays=bool(case.get("overlays", False)),
         )
     except Exception as e:  # noqa: BLE001
         duration_ms = int((time.monotonic() - started) * 1000)
