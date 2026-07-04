@@ -53,6 +53,7 @@ from origin.search_engine.llm import (
     ToolDeclaration,
     get_model_client,
 )
+from origin.search_engine.llm.choice import _server_default_choice, get_llm_choice
 from origin.search_engine.models import AgentRun, AgentStep
 
 log = logging.getLogger(__name__)
@@ -1238,6 +1239,80 @@ def resume_agent(
 # --------------------------------------------------------------------------- #
 
 
+def _resolve_planning_override() -> str | None:
+    """B3 provider tier split (SPOTLIGHT_FUTURE_ARCHITECTURE.md §3).
+
+    Returns the model id to run the loop's PLANNING steps on (passed as
+    `model_override`, which beats the user's `LlmChoice`), or None when
+    the split is inactive and every step runs on one model exactly as
+    before. The final SYNTHESIS step always uses the user's model — see
+    the discard-and-rerun logic in `_drive_loop`.
+
+    Skips (returning None) when:
+      * `RAG_PLANNING_MODEL` is empty — feature off, zero code-path change;
+      * the planning model IS the effective synthesis model (user picked
+        the fast model, or the server default already is it) — the split
+        would buy nothing but the buffering machinery;
+      * the planning model's provider doesn't match the active provider.
+        This guard is PREVENTIVE, unlike the reranker's try/except
+        fallback: a mid-loop model error kills the run, so we must never
+        hand `ClaudeClient` a `gemini-*` id (or vice versa).
+    """
+    planning = (settings.SEARCH_ENGINE.get("RAG_PLANNING_MODEL") or "").strip()
+    if not planning:
+        return None
+    choice = get_llm_choice() or _server_default_choice()
+    synthesis_model = (choice.model or "").strip()
+    if not synthesis_model or planning == synthesis_model:
+        return None
+    provider_prefix = "claude" if choice.provider == "claude" else "gemini"
+    if not planning.startswith(provider_prefix):
+        log.warning(
+            "RAG_PLANNING_MODEL=%r does not match the active provider %r; "
+            "planning split disabled for this run",
+            planning,
+            choice.provider,
+        )
+        return None
+    return planning
+
+
+def _collect_step(
+    client: Any,
+    *,
+    messages: list[AgentMessage],
+    tools: list[ToolDeclaration],
+    system_instruction: str,
+    emit: Callable[[dict[str, Any]], None],
+    model_override: str | None = None,
+    emit_deltas: bool = True,
+) -> tuple[list[str], list[FunctionCall]]:
+    """Run ONE model turn and collect `(text_parts, function_calls)`.
+
+    `emit_deltas=False` buffers text instead of streaming it — the B3
+    planning pass uses this because a text-only planning response is a
+    DRAFT that will be discarded and re-generated on the user's model;
+    streaming it would show the user an answer that then gets replaced.
+    Exceptions propagate to the caller (the loop owns error handling).
+    """
+    text_parts: list[str] = []
+    calls: list[FunctionCall] = []
+    stream = client.generate_step(
+        messages=messages,
+        tools=tools,
+        system_instruction=system_instruction,
+        model_override=model_override,
+    )
+    for text_chunk, function_call in stream:
+        if function_call is not None:
+            calls.append(function_call)
+        elif text_chunk:
+            text_parts.append(text_chunk)
+            if emit_deltas:
+                emit({"type": "answer_delta", "text": text_chunk})
+    return text_parts, calls
+
+
 def _drive_loop(
     *,
     messages: list[AgentMessage],
@@ -1269,27 +1344,62 @@ def _drive_loop(
     if max_steps is None:
         max_steps = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
     client = get_model_client()
+    # B3 — planning-model split. When active, loop steps run on the fast
+    # planning model and only the final synthesis is written by the
+    # user's model, via discard-and-rerun below. None = single-model
+    # behavior, byte-identical to the pre-B3 loop.
+    planning_model = _resolve_planning_override()
     tools = _build_tool_declarations(disabled_tools)
     system_instruction = AGENT_SYSTEM_PROMPT
     if system_extra:
         system_instruction = f"{AGENT_SYSTEM_PROMPT}\n\n{system_extra}"
 
     for step in range(starting_step, max_steps):
-        accumulated_function_calls: list[FunctionCall] = []
-        accumulated_text_parts: list[str] = []
-
         try:
-            stream = client.generate_step(
-                messages=messages,
-                tools=tools,
-                system_instruction=system_instruction,
-            )
-            for text_chunk, function_call in stream:
-                if function_call is not None:
-                    accumulated_function_calls.append(function_call)
-                elif text_chunk:
-                    accumulated_text_parts.append(text_chunk)
-                    emit({"type": "answer_delta", "text": text_chunk})
+            if planning_model is None:
+                accumulated_text_parts, accumulated_function_calls = _collect_step(
+                    client,
+                    messages=messages,
+                    tools=tools,
+                    system_instruction=system_instruction,
+                    emit=emit,
+                )
+            else:
+                # Planning pass on the fast model, deltas BUFFERED — a
+                # step is only known to be planning vs synthesis after
+                # the model responds, and a synthesis draft from the
+                # fast model must never reach the user.
+                accumulated_text_parts, accumulated_function_calls = _collect_step(
+                    client,
+                    messages=messages,
+                    tools=tools,
+                    system_instruction=system_instruction,
+                    emit=emit,
+                    model_override=planning_model,
+                    emit_deltas=False,
+                )
+                if accumulated_function_calls:
+                    # Planning step confirmed — flush the buffered
+                    # thinking-out-loud text now (same events, batched).
+                    for chunk in accumulated_text_parts:
+                        emit({"type": "answer_delta", "text": chunk})
+                else:
+                    # The fast model judged the loop ready to answer.
+                    # DISCARD its draft and re-run this one step with no
+                    # override (= the user's model), streaming live. Net
+                    # cost vs single-model: the same one smart call plus
+                    # N cheap planning calls and one wasted draft; net
+                    # win: every planning round-trip at fast-model
+                    # latency. If the smart model instead decides to dig
+                    # further (it's the better judge), its calls flow
+                    # into normal tool execution below.
+                    accumulated_text_parts, accumulated_function_calls = _collect_step(
+                        client,
+                        messages=messages,
+                        tools=tools,
+                        system_instruction=system_instruction,
+                        emit=emit,
+                    )
         except Exception as e:  # noqa: BLE001 — surface as stream error
             log.exception("Agent step %d LLM call failed", step)
             emit({"type": "error", "message": f"LLM call failed: {e}"})
