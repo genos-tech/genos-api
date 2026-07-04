@@ -99,7 +99,15 @@ here fits):
   Identity helpers:
   - get_current_user — caller's own user_id (call this BEFORE
     `assign_task` for "assign to me"; the me-tools don't need it).
-  - get_team_members — resolve a name → user UUID for `assign_task`.
+  - get_team_members — resolve a name → user UUID for `assign_task`,
+    or "who is on this TEAM?" (the whole team, every project).
+
+  Membership rosters ("who is on / in X?"):
+  - list_project_members — "who is on project X?" / "who's working on
+    the redesign?" (ONE project's roster; get the project_id from
+    list_projects first). NOT get_team_members — that's the whole team.
+  - list_channel_members — "who is in this group chat / project chat?"
+    (ONE channel's roster, by channel_id UUID).
 
 WRITE tools (require user approval before they run — model proposes
 args, user sees them, user confirms):
