@@ -33,10 +33,12 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 from uuid import UUID
 
 from django.conf import settings
+from django.db import connections
 
 from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
 from origin.search_engine.agent.citation_resolver import resolve_unresolved_citations
@@ -1238,6 +1240,60 @@ def resume_agent(
 # --------------------------------------------------------------------------- #
 
 
+def _run_tool_guarded(tool: Any, call_name: str, call_args: dict[str, Any], ctx: ToolContext) -> tuple[str, Any]:
+    """Execute one read-only tool, never raising.
+
+    Returns a tagged outcome consumed by the loop's apply phase:
+      ("ok", result_dict) | ("tool_error", message) | ("crash", message)
+    The tag split preserves today's two error flavors exactly: a
+    ToolError's message is user-facing (ACL denials, bad args), a crash
+    gets the generic internal-error string + a server-side traceback.
+    Shared by the serial path and the E1 parallel executor, so error
+    semantics can't diverge between them.
+    """
+    try:
+        return ("ok", tool.run(call_args, ctx))
+    except ToolError as e:
+        return ("tool_error", str(e))
+    except Exception:  # noqa: BLE001
+        log.exception("Tool %s crashed on args %r", call_name, call_args)
+        return ("crash", f"Internal error in tool '{call_name}'.")
+
+
+def _execute_batch_parallel(
+    calls: list[FunctionCall], ctx: ToolContext
+) -> list[tuple[str, Any]]:
+    """E1 — run a batch of read-only tool calls concurrently.
+
+    Returns outcomes IN CALL ORDER (pool.map preserves it), so the
+    caller's emit/persist/messages sequence stays byte-deterministic
+    regardless of completion order — `AgentStep` rows and the message
+    transcript must not depend on thread scheduling (resume rebuilds
+    from them). Wall-clock is bounded by the slowest call either way.
+
+    Each worker closes its Django DB connections in `finally`:
+    short-lived executor threads would otherwise leak a connection per
+    call (`close_old_connections` is for long-lived threads; these die
+    with the batch). All DB WRITES (_persist_step) happen on the
+    controller thread after the join — no write concurrency here.
+    """
+    max_workers = min(
+        len(calls), int(settings.SEARCH_ENGINE.get("RAG_PARALLEL_TOOLS_MAX_WORKERS", 4))
+    )
+
+    def _task(call: FunctionCall) -> tuple[str, Any]:
+        try:
+            return _run_tool_guarded(REGISTRY.get(call.name), call.name, dict(call.args), ctx)
+        finally:
+            try:
+                connections.close_all()
+            except Exception:  # noqa: BLE001 — cleanup must not eat the outcome
+                log.exception("close_all failed in parallel tool worker")
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        return list(pool.map(_task, calls))
+
+
 def _drive_loop(
     *,
     messages: list[AgentMessage],
@@ -1377,7 +1433,37 @@ def _drive_loop(
             emit({"type": "done"})
             return None
 
-        for call in accumulated_function_calls:
+        # ---- E1: parallel dispatch for read-only batches (flag-gated) ----
+        # Only when the WHOLE batch is known, read-only tools and there's
+        # actual parallelism to win (len > 1). Any unknown tool or
+        # `requires_approval` write keeps the serial path byte-for-byte —
+        # the approval pause returns mid-batch and drops the remaining
+        # calls, and "parallel + mid-stream pause" is incoherent. All
+        # `tool_call_start` events go out first in call order; outcomes
+        # come back in call order too (see _execute_batch_parallel), so
+        # the emit/persist/messages sequence below is unchanged.
+        parallel_outcomes: list[tuple[str, Any]] | None = None
+        if (
+            settings.SEARCH_ENGINE.get("RAG_PARALLEL_TOOLS", False)
+            and len(accumulated_function_calls) > 1
+            and all(
+                REGISTRY.get(c.name) is not None
+                and not getattr(REGISTRY.get(c.name), "requires_approval", False)
+                for c in accumulated_function_calls
+            )
+        ):
+            for call in accumulated_function_calls:
+                emit(
+                    {
+                        "type": "tool_call_start",
+                        "step": step,
+                        "tool_name": call.name,
+                        "arguments": _friendly_arguments(dict(call.args)),
+                    }
+                )
+            parallel_outcomes = _execute_batch_parallel(accumulated_function_calls, ctx)
+
+        for call_idx, call in enumerate(accumulated_function_calls):
             call_args = dict(call.args)
             call_name = call.name
 
@@ -1445,46 +1531,27 @@ def _drive_loop(
                     "arguments": call_args,
                 }
 
-            # ---- Read-only tool: run it inline ----
-            emit(
-                {
-                    "type": "tool_call_start",
-                    "step": step,
-                    "tool_name": call_name,
-                    "arguments": _friendly_arguments(call_args),
-                }
-            )
-
-            try:
-                result = tool.run(call_args, ctx)
-            except ToolError as e:
+            # ---- Read-only tool ----
+            # Serial path: emit start + run inline. Parallel path: starts
+            # were already emitted (call order) and the outcome comes from
+            # the executor — everything from here down is identical for
+            # both, so E1 cannot change events, AgentStep rows, or the
+            # message transcript, only when `tool.run` executed.
+            if parallel_outcomes is not None:
+                kind, payload = parallel_outcomes[call_idx]
+            else:
                 emit(
                     {
-                        "type": "tool_call_error",
+                        "type": "tool_call_start",
                         "step": step,
                         "tool_name": call_name,
-                        "error": str(e),
+                        "arguments": _friendly_arguments(call_args),
                     }
                 )
-                _persist_step(
-                    run_id,
-                    step_index=step,
-                    tool_name=call_name,
-                    arguments_json=call_args,
-                    thought_signature=call.thought_signature,
-                    error=str(e),
-                )
-                if trace_hook is not None:
-                    try:
-                        trace_hook(call_name, call_args, {"error": str(e)})
-                    except Exception:  # noqa: BLE001
-                        log.exception("trace_hook failed for tool %s (error path)", call_name)
-                messages.append(_assistant_function_call_turn(call))
-                messages.append(_function_response_turn(call_name, {"error": str(e)}))
-                continue
-            except Exception as e:  # noqa: BLE001
-                log.exception("Tool %s crashed on args %r", call_name, call_args)
-                err = f"Internal error in tool '{call_name}'."
+                kind, payload = _run_tool_guarded(tool, call_name, call_args, ctx)
+
+            if kind != "ok":
+                err = str(payload)
                 emit(
                     {
                         "type": "tool_call_error",
@@ -1505,11 +1572,12 @@ def _drive_loop(
                     try:
                         trace_hook(call_name, call_args, {"error": err})
                     except Exception:  # noqa: BLE001
-                        log.exception("trace_hook failed for tool %s (crash path)", call_name)
+                        log.exception("trace_hook failed for tool %s (error path)", call_name)
                 messages.append(_assistant_function_call_turn(call))
                 messages.append(_function_response_turn(call_name, {"error": err}))
                 continue
 
+            result = payload
             summary = result.pop("__summary__", "ok")
             emit(
                 {

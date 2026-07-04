@@ -598,6 +598,27 @@ SEARCH_ENGINE = {
     # until synthesis is upgraded). Changing it changes the measured
     # config — re-run the §1.1 A/B before relying on a new value.
     "RAG_REWRITE_MODEL": os.environ.get("RAG_REWRITE_MODEL", ""),
+    # E1 — parallel tool execution (SPOTLIGHT_FUTURE_ARCHITECTURE.md §6,
+    # Tier 1; roadmap §5.5). When True and the model returns a batch of
+    # >1 function calls in one step, the controller dispatches them
+    # concurrently on a bounded ThreadPoolExecutor instead of the serial
+    # for-loop — a compound query fanning out into 3 searches pays the
+    # slowest call, not the sum. Guard rails: only batches where EVERY
+    # call is a known, read-only tool (any `requires_approval` write or
+    # unknown tool keeps the serial path byte-for-byte, preserving the
+    # approval-pause semantics); all events/DB writes stay on the
+    # controller thread in call order, so AgentStep rows and the message
+    # transcript are byte-identical to serial; each worker closes its DB
+    # connections. **Default false** (concurrency + ORM-in-threads is
+    # gate-first territory): flip criterion is behavior-suite parity via
+    # `agent_eval_compare --judge --b-overrides '{"RAG_PARALLEL_TOOLS":
+    # true}'` plus a duration_ms win on the compound cases
+    # (complete_four_part_wrd / complete_cross_project_five_facts). Note
+    # the win is model-dependent — it only pays when the model actually
+    # emits parallel batches.
+    "RAG_PARALLEL_TOOLS": (os.environ.get("RAG_PARALLEL_TOOLS", "false").lower() == "true"),
+    # Executor cap per batch — bounds the per-request DB-connection burst.
+    "RAG_PARALLEL_TOOLS_MAX_WORKERS": int(os.environ.get("RAG_PARALLEL_TOOLS_MAX_WORKERS", "4")),
     # Phase 3.2 — self-critique reflection step. When True, after the
     # agent produces its draft final answer, a second LLM call re-reads
     # the draft against the captured tool results and may produce a
