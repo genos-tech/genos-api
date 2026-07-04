@@ -639,6 +639,28 @@ SEARCH_ENGINE = {
     # GEMINI_MODEL=gemini-3.1-pro-preview as baseline showing behavior
     # parity + the TTFT win. Intended production value: "gemini-3.5-flash".
     "RAG_PLANNING_MODEL": os.environ.get("RAG_PLANNING_MODEL", ""),
+    # C3 — session working memory / tool-result cache
+    # (SPOTLIGHT_FUTURE_ARCHITECTURE.md §4, Tier 1). When True, a
+    # follow-up turn in the SAME AgentSession that re-calls a read-only
+    # tool with identical args reuses the cached result instead of
+    # re-executing it ("list my tasks" → "which of those is highest
+    # priority?" stops re-fetching the list). Redis-backed via
+    # django.core.cache (embeddings-L2 pattern: never raises, degrades
+    # to re-execution); write tools are never cached and a successful
+    # APPROVED write invalidates the whole session (generation bump).
+    # Freshness tradeoff: same-user agent writes invalidate, the TTL
+    # bounds everything else — but ANOTHER user's edit within the TTL
+    # can serve a stale read. That documented window is why this ships
+    # **default false**; flip criterion: multi-turn behavior parity
+    # (evals pass no session_id, so the suite is unaffected either way),
+    # a manual two-turn hit check (`cached: true` on the second turn's
+    # tool_call_result), and no staleness complaints in dogfood.
+    "RAG_SESSION_TOOL_CACHE": (
+        os.environ.get("RAG_SESSION_TOOL_CACHE", "false").lower() == "true"
+    ),
+    # Per-entry TTL. 300 s covers the "rapid follow-ups in one sitting"
+    # window without letting stale workspace reads live long.
+    "RAG_SESSION_TOOL_CACHE_TTL_S": int(os.environ.get("RAG_SESSION_TOOL_CACHE_TTL_S", "300")),
     # Phase 3.2 — self-critique reflection step. When True, after the
     # agent produces its draft final answer, a second LLM call re-reads
     # the draft against the captured tool results and may produce a

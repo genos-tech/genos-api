@@ -579,6 +579,9 @@ class AgentAskView(AuthenticatedAPIView):
                     disabled_tools=disabled_tools,
                     system_extra=system_extra,
                     seed_sources=seed_sources,
+                    # C3 — keys the session tool-result cache. None (no
+                    # session) disables caching for this run entirely.
+                    session_id=str(session.session_id) if session else None,
                 )
             finally:
                 reset_llm_choice(token)

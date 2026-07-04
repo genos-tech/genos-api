@@ -40,6 +40,7 @@ from uuid import UUID
 from django.conf import settings
 from django.db import connections
 
+from origin.search_engine.agent import tool_cache
 from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
 from origin.search_engine.agent.citation_resolver import resolve_unresolved_citations
 from origin.search_engine.agent.prompts import (
@@ -941,6 +942,7 @@ def run_agent(
     system_extra: str | None = None,
     seed_sources: list[dict[str, Any]] | None = None,
     trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Drive the agent loop from a fresh user query.
 
@@ -1037,6 +1039,7 @@ def run_agent(
                 disabled_tools=disabled_tools,
                 system_extra=system_extra,
                 trace_hook=trace_fn,
+                session_id=session_id,
             )
         return _drive_loop(
             messages=messages,
@@ -1048,6 +1051,7 @@ def run_agent(
             disabled_tools=disabled_tools,
             system_extra=system_extra,
             trace_hook=trace_fn,
+            session_id=session_id,
         )
 
     # §4.1 abstention gate — only on a fresh workspace query. With
@@ -1212,6 +1216,11 @@ def resume_agent(
                         "summary": summary,
                     }
                 )
+                # C3: an APPROVED write just changed the workspace, so
+                # every cached read this session made before it is now
+                # suspect — drop them all (generation bump, O(1)).
+                if run.session_id:
+                    tool_cache.invalidate_session(str(run.session_id))
                 try:
                     pending_step.summary = summary
                     pending_step.result_json = result
@@ -1233,6 +1242,7 @@ def resume_agent(
         run_id=run.run_id,
         starting_step=step_index + 1,
         seen_sources_by_id={},  # `sources` events were sent in the original stream; don't double-emit.
+        session_id=str(run.session_id) if run.session_id else None,
     )
 
 
@@ -1379,6 +1389,7 @@ def _drive_loop(
     system_extra: str | None = None,
     trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
     max_steps: int | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any] | None:
     """The core agent loop, shared by `run_agent` and `resume_agent`.
 
@@ -1394,6 +1405,11 @@ def _drive_loop(
     this call. The critique-with-retrieval continuation passes a tight
     budget (`starting_step + RAG_CRITIQUE_MAX_STEPS`) so the critique can
     fire at most one more retrieval before answering.
+
+    `session_id`, when set, keys the C3 session tool-result cache — a
+    follow-up turn re-calling the same read-only tool with identical
+    args reuses the stored result. None (evals, tests, sessionless
+    callers) bypasses the cache entirely.
     """
     if max_steps is None:
         max_steps = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
@@ -1541,19 +1557,41 @@ def _drive_loop(
             emit({"type": "done"})
             return None
 
+        # ---- C3: resolve session-cache hits before any execution ----
+        # A follow-up turn re-calling the same read-only tool with the
+        # same args inside the session TTL gets the stored result — no
+        # tool round-trip. Hits are injected as pre-resolved "ok"
+        # outcomes (summary re-attached so the shared pop below works);
+        # write/unknown tools are never consulted.
+        precomputed: dict[int, tuple[str, Any]] = {}
+        cached_indices: set[int] = set()
+        if session_id and tool_cache.enabled():
+            for i, c in enumerate(accumulated_function_calls):
+                t = REGISTRY.get(c.name)
+                if t is None or getattr(t, "requires_approval", False):
+                    continue
+                hit = tool_cache.get_cached(session_id, c.name, dict(c.args))
+                if hit is not None:
+                    precomputed[i] = ("ok", {**hit["result"], "__summary__": hit["summary"]})
+                    cached_indices.add(i)
+
         # ---- E1: parallel dispatch for read-only batches (flag-gated) ----
-        # Only when the WHOLE batch is known, read-only tools and there's
-        # actual parallelism to win (len > 1). Any unknown tool or
-        # `requires_approval` write keeps the serial path byte-for-byte —
-        # the approval pause returns mid-batch and drops the remaining
-        # calls, and "parallel + mid-stream pause" is incoherent. All
-        # `tool_call_start` events go out first in call order; outcomes
-        # come back in call order too (see _execute_batch_parallel), so
-        # the emit/persist/messages sequence below is unchanged.
-        parallel_outcomes: list[tuple[str, Any]] | None = None
+        # Only when the WHOLE batch is known, read-only tools and there
+        # is actual parallelism to win among the cache MISSES (>1). Any
+        # unknown tool or `requires_approval` write keeps the serial
+        # path byte-for-byte — the approval pause returns mid-batch and
+        # drops the remaining calls, and "parallel + mid-stream pause"
+        # is incoherent. All `tool_call_start` events go out first in
+        # call order; outcomes come back in call order too (see
+        # _execute_batch_parallel), so the emit/persist/messages
+        # sequence below is unchanged.
+        starts_pre_emitted = False
+        miss_indices = [
+            i for i in range(len(accumulated_function_calls)) if i not in precomputed
+        ]
         if (
             settings.SEARCH_ENGINE.get("RAG_PARALLEL_TOOLS", False)
-            and len(accumulated_function_calls) > 1
+            and len(miss_indices) > 1
             and all(
                 REGISTRY.get(c.name) is not None
                 and not getattr(REGISTRY.get(c.name), "requires_approval", False)
@@ -1569,7 +1607,10 @@ def _drive_loop(
                         "arguments": _friendly_arguments(dict(call.args)),
                     }
                 )
-            parallel_outcomes = _execute_batch_parallel(accumulated_function_calls, ctx)
+            starts_pre_emitted = True
+            miss_calls = [accumulated_function_calls[i] for i in miss_indices]
+            for i, outcome in zip(miss_indices, _execute_batch_parallel(miss_calls, ctx)):
+                precomputed[i] = outcome
 
         for call_idx, call in enumerate(accumulated_function_calls):
             call_args = dict(call.args)
@@ -1640,14 +1681,13 @@ def _drive_loop(
                 }
 
             # ---- Read-only tool ----
-            # Serial path: emit start + run inline. Parallel path: starts
-            # were already emitted (call order) and the outcome comes from
-            # the executor — everything from here down is identical for
-            # both, so E1 cannot change events, AgentStep rows, or the
-            # message transcript, only when `tool.run` executed.
-            if parallel_outcomes is not None:
-                kind, payload = parallel_outcomes[call_idx]
-            else:
+            # Serial path: emit start + resolve inline (cache hit or
+            # run). Parallel path: starts were already emitted (call
+            # order) and the outcome sits in `precomputed` — everything
+            # from here down is identical for both, so E1/C3 cannot
+            # change events, AgentStep rows, or the message transcript,
+            # only whether/when `tool.run` executed.
+            if not starts_pre_emitted:
                 emit(
                     {
                         "type": "tool_call_start",
@@ -1656,7 +1696,11 @@ def _drive_loop(
                         "arguments": _friendly_arguments(call_args),
                     }
                 )
+            if call_idx in precomputed:
+                kind, payload = precomputed[call_idx]
+            else:
                 kind, payload = _run_tool_guarded(tool, call_name, call_args, ctx)
+            from_cache = call_idx in cached_indices
 
             if kind != "ok":
                 err = str(payload)
@@ -1687,14 +1731,22 @@ def _drive_loop(
 
             result = payload
             summary = result.pop("__summary__", "ok")
-            emit(
-                {
-                    "type": "tool_call_result",
-                    "step": step,
-                    "tool_name": call_name,
-                    "summary": summary,
-                }
-            )
+            result_event = {
+                "type": "tool_call_result",
+                "step": step,
+                "tool_name": call_name,
+                "summary": summary,
+            }
+            if from_cache:
+                # Observability marker only — the frontend destructures
+                # step/tool_name/summary and ignores unknown fields.
+                result_event["cached"] = True
+            emit(result_event)
+            # C3: cache the fresh result for follow-up turns in this
+            # session. Cached hits are NOT re-stored (their TTL should
+            # date from the original execution, not the last reuse).
+            if not from_cache:
+                tool_cache.store(session_id, call_name, call_args, summary, result)
             _persist_step(
                 run_id,
                 step_index=step,
@@ -1790,6 +1842,7 @@ def _drive_loop_with_critique(
     disabled_tools: set[str] | None = None,
     system_extra: str | None = None,
     trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Run `_drive_loop` with captured events, then optionally rewrite
     the draft answer via a single self-critique LLM call.
@@ -1839,6 +1892,7 @@ def _drive_loop_with_critique(
         disabled_tools=disabled_tools,
         system_extra=system_extra,
         trace_hook=_capture_trace,
+        session_id=session_id,
     )
 
     if pause_descriptor is not None:
@@ -1873,6 +1927,7 @@ def _drive_loop_with_critique(
             disabled_tools=disabled_tools,
             system_extra=system_extra,
             trace_hook=trace_hook,
+            session_id=session_id,
         ):
             emit(e)
         return None
@@ -1965,6 +2020,7 @@ def _critique_with_retrieval(
     disabled_tools: set[str] | None,
     system_extra: str | None,
     trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None,
+    session_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Retrieval-capable critique: re-enter `_drive_loop` for a short,
     read-only continuation so the model can fix a *completeness* gap with
@@ -2012,6 +2068,7 @@ def _critique_with_retrieval(
             system_extra=system_extra,
             trace_hook=trace_hook,
             max_steps=next_step + crit_steps,
+            session_id=session_id,
         )
     except Exception:  # noqa: BLE001 — never lose the draft on a critique fault
         log.exception("Critique-with-retrieval continuation failed; keeping draft")
