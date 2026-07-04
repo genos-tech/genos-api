@@ -619,6 +619,26 @@ SEARCH_ENGINE = {
     "RAG_PARALLEL_TOOLS": (os.environ.get("RAG_PARALLEL_TOOLS", "false").lower() == "true"),
     # Executor cap per batch — bounds the per-request DB-connection burst.
     "RAG_PARALLEL_TOOLS_MAX_WORKERS": int(os.environ.get("RAG_PARALLEL_TOOLS_MAX_WORKERS", "4")),
+    # B3 — provider tier split for the AGENT LOOP itself
+    # (SPOTLIGHT_FUTURE_ARCHITECTURE.md §3, Tier 1): run the loop's
+    # PLANNING steps (tool selection) on this fast model while the final
+    # SYNTHESIS keeps the user's chosen model. A step is only known to be
+    # synthesis after the model responds, so the controller buffers the
+    # planning pass's text and, when it turns out to be a final answer,
+    # DISCARDS that draft and re-generates it once on the user's model
+    # (cost: same one smart call + N cheap planning calls + one wasted
+    # draft; win: every planning round-trip at fast latency — the doc's
+    # "cheapest big TTFT lever", ~3-5s/step on pro → ~1s on flash).
+    # Guards in `_resolve_planning_override`: inert when empty, when equal
+    # to the effective synthesis model (the server default GEMINI_MODEL is
+    # already flash, so this only bites for users who picked pro), or when
+    # the provider prefix doesn't match the active provider (preventive —
+    # a mid-loop model error kills the run).
+    # **Default OFF (empty)**: the doc warns fast planners can pick worse
+    # tools; flip criterion is an `agent_eval_compare --judge` A/B with
+    # GEMINI_MODEL=gemini-3.1-pro-preview as baseline showing behavior
+    # parity + the TTFT win. Intended production value: "gemini-3.5-flash".
+    "RAG_PLANNING_MODEL": os.environ.get("RAG_PLANNING_MODEL", ""),
     # Phase 3.2 — self-critique reflection step. When True, after the
     # agent produces its draft final answer, a second LLM call re-reads
     # the draft against the captured tool results and may produce a
