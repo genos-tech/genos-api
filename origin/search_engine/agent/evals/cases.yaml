@@ -771,3 +771,58 @@
     tool_calls_at_least: 1
     citations_count_at_least: 2
     no_errors: true
+
+# --------------------------------------------------------------------- #
+# U. A2 Phase A — context-boundary recall (hierarchical retrieval eval) #
+# --------------------------------------------------------------------- #
+# Eval-first probe for A2 parent-document retrieval (§2 of the future-
+# architecture doc). Each query lexically matches ONE chunk of a multi-
+# section fixture note (title or a "bait" section), while the answer
+# fact lives in a NEIGHBORING section written to avoid the query's
+# words (see fixture.py `_CONTEXT_BOUNDARY_NOTES`). If the small chunk
+# were all the pipeline could see, these would fail — so:
+#   GREEN here = the agent path already recovers adjacent context
+#     (entity grouping ships up to 3 chunks + the model drills via
+#     fetch_note), i.e. A2's schema+reindex investment buys nothing on
+#     this surface and the item closes as "measured, not needed".
+#   RED here = the concrete target Phase B (parent_chunk_id + post-hit
+#     expansion) must turn green.
+
+- id: context_boundary_vendor_decision
+  # Query words ("vendor evaluation", "analytics") live in the title +
+  # "Candidates compared" section; the decision lives in "Outcome",
+  # which never says vendor/evaluation/analytics.
+  query: "What did the vendor evaluation for the analytics migration conclude?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    answer_contains_any: ["matomo"]
+    no_errors: true
+
+- id: context_boundary_vendor_budget_owner
+  # Same note, different adjacent facts: monthly spend + decision owner.
+  query: "How much will we pay monthly after the analytics vendor evaluation, and who owns the decision?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    answer_contains_all: ["79", "dana"]
+    no_errors: true
+
+- id: context_boundary_incident_root_cause
+  # "Root cause" appears nowhere in the note; the fact section is
+  # titled "What we changed" and avoids latency/spike wording.
+  query: "What was the root cause of the search latency spike?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    answer_contains_any: ["wildcard", "typeahead"]
+    no_errors: true
+
+- id: context_boundary_incident_follow_up_owner
+  # Owner named only in the final "Next steps" section.
+  query: "Who owns the follow-up actions from the search latency retrospective?"
+  fixture: true
+  expect:
+    tool_calls_at_least: 1
+    answer_contains_any: ["priya"]
+    no_errors: true
