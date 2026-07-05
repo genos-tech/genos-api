@@ -1,0 +1,190 @@
+# On-demand A/B "bake-off" — evaluate a model/config change with evidence.
+#
+# Wraps `manage.py agent_eval_compare` (the harness every flag-gated lever
+# was decided with — SPOTLIGHT_EVALS_CI.md §5, genos-docs) in a manual
+# workflow, so "is the new model / flag OK to ship?" becomes a one-click,
+# prod-parity CI run instead of a local ritual. Run A = the current
+# settings exactly as the nightly/gate use them; run B = the same suite
+# with your JSON overrides applied to SEARCH_ENGINE. The per-case diff +
+# aggregate deltas land in the job summary.
+#
+# Examples (Actions → agent-eval-bakeoff → Run workflow):
+#   b_overrides: {"CLAUDE_MODEL": "claude-opus-4-8", "LLM_PROVIDER": "claude"}
+#   b_overrides: {"GEMINI_MODEL": "gemini-3.1-pro-preview"}
+#   b_overrides: {"RAG_USE_QUERY_REWRITE": true}          suite: behavior
+#   b_overrides: {"RAG_RERANK_OUTPUT_K": 5}               suite: retrieval
+#
+# Provider credentials: Gemini/Vertex auth comes from WIF (same as every
+# eval workflow). A bake-off that switches LLM_PROVIDER to claude needs
+# the CLAUDE_API_KEY repo secret — it's passed through below and simply
+# empty (→ the B run errors per-case) until that secret is configured.
+#
+# Report-only by nature: this never gates anything. Judge scores and
+# tool choices vary run-to-run — read the diff as evidence, and prefer
+# pass-count + retrieval metrics over single-case judge deltas.
+#
+# Required GitHub secrets (same as agent-evals.yml):
+#   GCP_WIF_PROVIDER  = wif_provider
+#   GCP_DEPLOY_SA     = deploy_service_account
+# Optional: CLAUDE_API_KEY (only for claude-provider bake-offs)
+
+name: agent-eval-bakeoff
+
+on:
+  workflow_dispatch:
+    inputs:
+      b_overrides:
+        description: 'JSON object of SEARCH_ENGINE overrides for run B, e.g. {"GEMINI_MODEL": "gemini-3.1-pro-preview"}'
+        type: string
+        required: true
+      suite:
+        description: "Suite to compare on"
+        type: choice
+        options: [behavior, retrieval]
+        default: behavior
+      judge:
+        description: "Score both runs with the LLM judge (behavior suite only; ~2x LLM spend)"
+        type: boolean
+        default: false
+      case:
+        description: "Optional: limit to a single case id (fast iteration)"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  id-token: write # mint the WIF OIDC token
+
+concurrency:
+  group: agent-eval-bakeoff
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT: amplified-album-496413-t2
+  GCP_REGION: asia-northeast1
+  AR: asia-northeast1-docker.pkg.dev/amplified-album-496413-t2/genos
+
+jobs:
+  bakeoff:
+    name: A/B bake-off (report-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PIPENV_VENV_IN_PROJECT: "1"
+      DJANGO_DEBUG: "true"
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/origin
+      DJANGO_SECRET_KEY: ci-eval-secret-key
+      JWT_SECRET_KEY: ci-eval-secret-key
+      OPENSEARCH_HOST: localhost
+      OPENSEARCH_PORT: "9200"
+      # Run A = prod-parity defaults, same env the nightly trend uses
+      # (Vertex via WIF ADC; reranker at its prod default).
+      LLM_PROVIDER: gemini
+      GEMINI_USE_VERTEX: "true"
+      GEMINI_PROJECT: amplified-album-496413-t2
+      GEMINI_LOCATION: asia-northeast1
+      EMBEDDING_PROVIDER: vertex
+      # Empty unless the repo secret exists — required only when
+      # b_overrides switches LLM_PROVIDER/judge to claude.
+      CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+      B_OVERRIDES: ${{ inputs.b_overrides }}
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: origin
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - name: Validate inputs (before spinning up heavy infra)
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          try:
+              o = json.loads(os.environ["B_OVERRIDES"])
+              assert isinstance(o, dict), "must be a JSON object"
+          except Exception as e:
+              print(f"::error::b_overrides is not a valid JSON object: {e}")
+              sys.exit(1)
+          if "${{ inputs.judge }}" == "true" and "${{ inputs.suite }}" == "retrieval":
+              print("::error::--judge only applies to the behavior suite")
+              sys.exit(1)
+          print("inputs OK:", o)
+          PY
+
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (keyless WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Start multilingual OpenSearch (prod image)
+        run: |
+          gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
+          docker run -d --name opensearch -p 9200:9200 \
+            --ulimit memlock=-1:-1 --ulimit nofile=65536:65536 \
+            -e discovery.type=single-node -e bootstrap.memory_lock=true \
+            -e DISABLE_INSTALL_DEMO_CONFIG=true -e DISABLE_SECURITY_PLUGIN=true \
+            -e OPENSEARCH_JAVA_OPTS="-Xms1g -Xmx1g" \
+            "$AR/opensearch-multilingual:3.6.0"
+          echo "waiting for OpenSearch to be green..."
+          for i in $(seq 1 40); do
+            curl -sf localhost:9200/_cluster/health >/dev/null && { echo "up"; break; }
+            sleep 5
+          done
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --upgrade pip pipenv
+      - name: Install deps
+        run: |
+          pipenv sync
+          pipenv run pip install -r requirements-dev.txt
+
+      - name: Migrate + set up OpenSearch index + seed fixture (Vertex reindex)
+        run: |
+          pipenv run python manage.py migrate --noinput
+          # MUST run before any write — see agent-evals.yml (knn_vector
+          # mapping footgun).
+          pipenv run python manage.py opensearch_setup
+          pipenv run python manage.py agent_eval_setup --reseed
+
+      - name: Run A/B compare
+        run: |
+          set -o pipefail
+          ARGS=()
+          [ "${{ inputs.suite }}" = "retrieval" ] && ARGS+=(--retrieval)
+          [ "${{ inputs.judge }}" = "true" ] && ARGS+=(--judge)
+          [ -n "${{ inputs.case }}" ] && ARGS+=(--case "${{ inputs.case }}")
+          pipenv run python manage.py agent_eval_compare "${ARGS[@]}" \
+            --b-overrides "$B_OVERRIDES" 2>&1 | tee bakeoff.out
+
+      - name: Publish diff to the job summary
+        if: always()
+        run: |
+          {
+            echo "## agent-eval-bakeoff — ${{ inputs.suite }}${{ inputs.judge == true && ' + judge' || '' }}"
+            echo
+            echo '**B overrides:** `'"$B_OVERRIDES"'`'
+            echo
+            echo '```'
+            sed -n '/^=== diff ===/,$p' bakeoff.out || true
+            grep -q "^=== diff ===" bakeoff.out || tail -20 bakeoff.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload full output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bakeoff-${{ github.run_id }}
+          path: bakeoff.out
+          retention-days: 90
