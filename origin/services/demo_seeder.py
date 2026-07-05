@@ -1523,10 +1523,6 @@ DM_BLUEPRINTS = [
             "parent_index": 5,
             "messages": [
                 (
-                    "bot",
-                    "Whether the Q3 roadmap should bet on proactive surfacing (assistant tells you what you missed) or just better search. Interview signal is leaning proactive but we want more transcripts coded first.",
-                ),
-                (
                     "demo",
                     "When you say “proactive surfacing,” are we talking about a daily digest, or something that interrupts in-stream?",
                 ),
@@ -1636,10 +1632,6 @@ DM_BLUEPRINTS = [
         "thread": {
             "parent_index": 5,
             "messages": [
-                (
-                    "bot",
-                    "Secondary-button contrast is at 4.6:1 in the v3.2 tokens — clears the audit. The old 3.8:1 was a layering bug, not a token issue.",
-                ),
                 ("demo", "Wait — how was 3.8 vs 4.6 a layering issue rather than a token one?"),
                 (
                     "bot",
@@ -1721,10 +1713,6 @@ GM_BLUEPRINT = {
     "thread": {
         "parent_index": 13,  # Dan's keyboard-shortcuts question
         "messages": [
-            (
-                4,
-                "parking-lot question — are we doing keyboard-shortcut docs for the launch? Spotlight Cmd-K is reachable but nothing tells users it exists.",
-            ),
             (
                 1,
                 "also worth mentioning that Cmd-K isn't just navigation anymore — the AI side of it answers questions across chats, tasks, and notes. People miss that.",
