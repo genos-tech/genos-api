@@ -1655,7 +1655,6 @@ DM_BLUEPRINTS = [
 
 GM_BLUEPRINT = {
     "messages": [
-        (0, "GM created."),
         (
             0,
             "Morning team — quick standup thread. Going to drop my updates here, please add yours below.",
