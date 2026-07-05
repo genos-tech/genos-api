@@ -1,0 +1,170 @@
+# Tool-trajectory diff for agent-touching PRs — REPORT-ONLY.
+#
+# SPOTLIGHT_AGENT_CHANGE_SAFETY.md §5.1 (genos-docs): when a PR changes
+# agent logic or tools, show the reviewer WHICH TOOLS the agent now
+# reaches for per behavior case, diffed against a committed baseline
+# (origin/search_engine/agent/evals/trajectory_baseline.json). The
+# pass/fail suite asserts expectations; this surfaces the *unasserted*
+# behavioral delta.
+#
+# Never a gate: the diff is tolerant (set-of-tools per case, repeat
+# calls collapsed) but the model still varies run-to-run, so the job
+# always succeeds and the reviewer reads the diff as a signal. Gating
+# on it would flap red and train everyone to ignore it.
+#
+# Cost control: runs ONLY when the PR touches the agent package (paths
+# filter) — the one time the delta is worth a judge-less behavior-suite
+# run (~58 cases through the full agent loop against Vertex).
+#
+# Bootstrap / accepting changes: run this workflow manually
+# (workflow_dispatch, write_baseline=true) → download the
+# trajectory-baseline artifact → commit it. PR runs print a hint until
+# a baseline is committed. Intentional trajectory changes regenerate
+# the same way, so the baseline update is reviewed inside the PR.
+#
+# Required GitHub secrets (same as agent-evals.yml):
+#   GCP_WIF_PROVIDER  = wif_provider
+#   GCP_DEPLOY_SA     = deploy_service_account
+
+name: agent-trajectory-diff
+
+on:
+  pull_request:
+    paths:
+      - "origin/search_engine/agent/**"
+  workflow_dispatch:
+    inputs:
+      write_baseline:
+        description: "Regenerate trajectory_baseline.json and upload it as an artifact"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write # mint the WIF OIDC token
+  pull-requests: write # best-effort PR comment with the diff
+
+concurrency:
+  group: agent-trajectory-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GCP_PROJECT: amplified-album-496413-t2
+  GCP_REGION: asia-northeast1
+  AR: asia-northeast1-docker.pkg.dev/amplified-album-496413-t2/genos
+
+jobs:
+  trajectory-diff:
+    name: tool-trajectory diff (report-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PIPENV_VENV_IN_PROJECT: "1"
+      DJANGO_DEBUG: "true"
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/origin
+      DJANGO_SECRET_KEY: ci-eval-secret-key
+      JWT_SECRET_KEY: ci-eval-secret-key
+      OPENSEARCH_HOST: localhost
+      OPENSEARCH_PORT: "9200"
+      # Same Vertex path as prod (embeddings + Gemini) via WIF ADC.
+      LLM_PROVIDER: gemini
+      GEMINI_USE_VERTEX: "true"
+      GEMINI_PROJECT: amplified-album-496413-t2
+      GEMINI_LOCATION: asia-northeast1
+      EMBEDDING_PROVIDER: vertex
+      # Match the PR gate (RAG_USE_RERANKER=false): trajectories should
+      # diff against a like-for-like config, and the reranker doesn't
+      # change WHICH tools the model picks — it reorders retrieval.
+      RAG_USE_RERANKER: "false"
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: origin
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (keyless WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Start multilingual OpenSearch (prod image)
+        run: |
+          gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
+          docker run -d --name opensearch -p 9200:9200 \
+            --ulimit memlock=-1:-1 --ulimit nofile=65536:65536 \
+            -e discovery.type=single-node -e bootstrap.memory_lock=true \
+            -e DISABLE_INSTALL_DEMO_CONFIG=true -e DISABLE_SECURITY_PLUGIN=true \
+            -e OPENSEARCH_JAVA_OPTS="-Xms1g -Xmx1g" \
+            "$AR/opensearch-multilingual:3.6.0"
+          echo "waiting for OpenSearch to be green..."
+          for i in $(seq 1 40); do
+            curl -sf localhost:9200/_cluster/health >/dev/null && { echo "up"; break; }
+            sleep 5
+          done
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --upgrade pip pipenv
+      - name: Install deps
+        run: |
+          pipenv sync
+          pipenv run pip install -r requirements-dev.txt
+
+      - name: Migrate + set up OpenSearch index + seed fixture (Vertex reindex)
+        run: |
+          pipenv run python manage.py migrate --noinput
+          # MUST run before any write — see agent-evals.yml (knn_vector
+          # mapping footgun).
+          pipenv run python manage.py opensearch_setup
+          pipenv run python manage.py agent_eval_setup --reseed
+
+      - name: Capture trajectories + diff against committed baseline
+        run: |
+          set -o pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.write_baseline }}" = "true" ]; then
+            pipenv run python manage.py agent_eval_trajectory --write-baseline | tee trajectory.out
+          else
+            pipenv run python manage.py agent_eval_trajectory | tee trajectory.out
+          fi
+
+      - name: Publish diff to the job summary
+        if: always()
+        run: |
+          {
+            echo "### agent-trajectory-diff — ${GITHUB_SHA::7}"
+            echo
+            # The command prints per-case capture lines first, then the
+            # markdown diff (which starts at its '## ' heading). Publish
+            # the diff; fall back to the tail when no baseline exists yet.
+            sed -n '/^## Agent tool-trajectory diff/,$p' trajectory.out | head -100
+            grep -q "^## Agent tool-trajectory diff" trajectory.out || tail -5 trajectory.out
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment the diff on the PR (best-effort)
+        # Same-repo PRs only — fork tokens are read-only. Never fails the job.
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sed -n '/^## Agent tool-trajectory diff/,$p' trajectory.out > comment.md
+          [ -s comment.md ] || echo "agent-trajectory-diff ran, but no baseline is committed yet — see the job summary." > comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md || true
+
+      - name: Upload baseline artifact (workflow_dispatch --write-baseline)
+        if: github.event_name == 'workflow_dispatch' && inputs.write_baseline == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: trajectory-baseline
+          path: origin/search_engine/agent/evals/trajectory_baseline.json
+          retention-days: 14
