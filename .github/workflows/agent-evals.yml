@@ -161,10 +161,17 @@ jobs:
         # suite on every PR. Trend the full behavior suite on a schedule instead.
         run: pipenv run python manage.py agent_eval --case simple_rag_wip_tasks --judge
 
+  # COST SWITCH: the eval gate (agent-evals job above) ALWAYS runs — it's the
+  # quality gate, independent of deploy target. This deploy step ships to GCP
+  # only when the repo/org variable DEPLOY_TO_GCP is "true". Unset (the default)
+  # = OFF → Railway-only, no GCP deploy. NOTE: this only stops shipping new
+  # revisions — it does NOT reduce the running GCP bill (Cloud SQL / OpenSearch
+  # VM / Redis / warm Cloud Run keep billing). To cut cost, pause or tear down
+  # the infra (see genos-docs operations/ENVIRONMENTS.md "Going Railway-only").
   deploy:
     name: deploy to Cloud Run (gated on evals)
     needs: agent-evals
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.DEPLOY_TO_GCP == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
