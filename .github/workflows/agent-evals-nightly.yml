@@ -22,9 +22,13 @@
 #     these numbers to a gate later means adding floors here once the
 #     nightly baseline is understood (see SPOTLIGHT_EVALS_CI.md §6.3/6.4).
 #
-# Trend storage: full output uploaded as a 90-day artifact per night +
-# aggregate lines in the job summary. A dashboard over the artifacts is
-# the deliberate next step, not part of this workflow.
+# Trend storage: three layers. (1) Aggregate lines in the job summary;
+# (2) full output as a 90-day artifact; (3) one comment per night on the
+# pinned "Agent nightly quality trend" issue (markdown + machine-readable
+# JSON) — the issue thread is the dashboard. The trend step also compares
+# tonight against the trailing median and opens/updates the "Agent
+# nightly quality DRIFT" issue on regression (report-only alerting; see
+# .github/scripts/nightly_trend_issue.py).
 #
 # Required GitHub secrets (same as agent-evals.yml):
 #   GCP_WIF_PROVIDER  = wif_provider
@@ -40,6 +44,7 @@ on:
 permissions:
   contents: read
   id-token: write # mint the WIF OIDC token
+  issues: write # trend + drift issues (nightly_trend_issue.py)
 
 concurrency:
   group: agent-evals-nightly
@@ -157,3 +162,14 @@ jobs:
           name: agent-evals-nightly-${{ github.run_id }}
           path: eval-nightly.out
           retention-days: 90
+
+      # Runs only when the eval step produced output (not on harness
+      # failure — a broken run must not become a trend point).
+      - name: Append to trend issue + drift check (report-only alerting)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DRIFT_PCT: "10"
+          DRIFT_MIN_HISTORY: "3"
+        run: python3 .github/scripts/nightly_trend_issue.py eval-nightly.out
