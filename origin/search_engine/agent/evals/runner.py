@@ -428,6 +428,37 @@ _CITATION_BARE_RE = re.compile(
     r"\[((?:chat|task|note|project|todo|milestone)(?::[a-z0-9_\-]+)+)\](?!\()"
 )
 
+# A link LABEL that is itself a raw entity token — `[task:42](task:42)`.
+# Weak models (seen with gemini-flash) emit this instead of natural
+# prose; the frontend has to repair it, and it reads as a raw id in any
+# other consumer of the answer text.
+_RAW_TOKEN_LABEL_RE = re.compile(r"^(?:chat|task|note|project|todo|milestone):\S+$")
+
+# Per-type id-shape vocabulary for `citation_wellformed_rate`. Matches
+# every id form the system prompt teaches and the chunkers emit —
+# anything else (e.g. gemini-flash's invented `chat:…:msg:<uuid>`
+# segment, copied from tool results) is malformed: it resolves to no
+# source and would surface as raw text without frontend repair. Keep in
+# sync with the prompt's citation section and the frontend's
+# CITATION_PATTERN vocabulary.
+_WELLFORMED_ID_RES = {
+    "task": re.compile(r"^task:\d+$"),
+    "project": re.compile(r"^project:\d+$"),
+    "milestone": re.compile(r"^milestone:\d+$"),
+    "note": re.compile(r"^note:(?:personal|my|task|chat):\d+$"),
+    "todo": re.compile(r"^todo:\d{4}-\d{2}-\d{2}(?::item:\d+)?$"),
+    # chat ids are v3 UUIDs today but legacy ints still exist in old
+    # chunks — accept any [a-z0-9-] segment. The tail may ONLY be a
+    # `:thread:` segment; `:msg:` (or anything else) is malformed.
+    "chat": re.compile(r"^chat:(?:dm|gm|pm|mdm):[a-z0-9\-]+(?::thread:[a-z0-9\-]+)?$"),
+}
+
+
+def _citation_id_wellformed(cited_id: str) -> bool:
+    etype = cited_id.split(":", 1)[0]
+    pattern = _WELLFORMED_ID_RES.get(etype)
+    return bool(pattern and pattern.match(cited_id))
+
 
 def _citation_style_metric(events: list[dict[str, Any]], expect: dict[str, Any]) -> dict[str, float]:
     """D5 prose-citation adoption rate (§4.6).
@@ -446,20 +477,49 @@ def _citation_style_metric(events: list[dict[str, Any]], expect: dict[str, Any])
     expected, none emitted in link form" (including the none-at-all
     case, which the binary assertion already fails separately).
     """
+    # `citation_style_metric: true` is a METRIC-ONLY opt-in (precedent:
+    # the `should_abstain` metric gold): it feeds these style metrics
+    # without adding a binary citation assertion. Use it on cases where
+    # a weak model only *sometimes* cites — `has_citations: true` there
+    # would flake the deploy-gating suite, but the style of whatever
+    # citations do appear is still worth measuring.
     positively_expects = any(
-        k in expect for k in ("has_citations", "citations_contain", "citations_count_at_least")
+        k in expect
+        for k in (
+            "has_citations",
+            "citations_contain",
+            "citations_count_at_least",
+            "citation_style_metric",
+        )
     ) and not expect.get("no_citations")
     if not positively_expects:
         return {}
-    from origin.search_engine.agent.evals.judge import CITATION_LINK_RE  # noqa: PLC0415
+    from origin.search_engine.agent.evals.judge import extract_prose_citations  # noqa: PLC0415
 
     answer = "".join((e.get("text") or "") for e in events if e.get("type") == "answer_delta")
-    link_count = len(CITATION_LINK_RE.findall(answer))
-    bare_count = len(_CITATION_BARE_RE.findall(answer))
-    total = link_count + bare_count
+    links = extract_prose_citations(answer)
+    bare_ids = _CITATION_BARE_RE.findall(answer)
+    total = len(links) + len(bare_ids)
     if total == 0:
         return {"prose_citation_rate": 0.0}
-    return {"prose_citation_rate": link_count / total}
+
+    # `citation_wellformed_rate` — the STYLE half the adoption rate is
+    # blind to. A citation is well-formed when (a) a link's label is
+    # prose, not the raw token itself (`[task:42](task:42)` counts as
+    # "link-form" for adoption but is malformed here), and (b) the cited
+    # id matches the taught per-type shape (catches invented segments
+    # like `chat:…:msg:<uuid>`). Both malformations were observed
+    # verbatim from gemini-flash (2026-07-05); without frontend repair
+    # they render as raw ids. 1.0 = every citation clean.
+    wellformed = sum(
+        1
+        for label, cited_id in links
+        if not _RAW_TOKEN_LABEL_RE.match(label.strip()) and _citation_id_wellformed(cited_id)
+    ) + sum(1 for cited_id in bare_ids if _citation_id_wellformed(cited_id))
+    return {
+        "prose_citation_rate": len(links) / total,
+        "citation_wellformed_rate": wellformed / total,
+    }
 
 
 def _abstention_metric(events: list[dict[str, Any]], expect: dict[str, Any]) -> dict[str, float]:

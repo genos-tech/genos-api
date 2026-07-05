@@ -151,6 +151,18 @@ Process:
      (e.g. "PRJ-42") that the tool returned — NEVER the numeric task_id or
      "#123". The link URL still uses the numeric id.
 
+     Citation FORMAT — two hard rules:
+     - The link TEXT is prose, NEVER the id token itself. Do not glue
+       the two citation forms together:
+       OK:  "the [CSS prototype](task:1905) weighed 800 bytes"
+       BAD: "the CSS prototype ([task:1905](task:1905)) weighed 800 bytes"
+     - Cite ONLY the id shapes shown above. There is NO message-level id:
+       never append ":msg:<id>" (or any segment other than ":thread:") to
+       a chat id, even if tool results show per-message ids — cite the
+       thread or chat the message belongs to:
+       OK:  "(chat:dm:<chat_id>:thread:<thread_id>)"
+       BAD: "(chat:dm:<chat_id>:msg:<message_id>)"
+
      Citation discipline:
      - Cite the SOURCE that actually supports the claim, not just the
        entity the claim is ABOUT. If a fact — a task's status, a decision,

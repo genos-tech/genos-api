@@ -454,6 +454,26 @@
     citations_count_at_least: 2
     no_errors: true
 
+- id: multi_turn_citation_style_followup
+  # Reproduces the 2026-07-05 gemini-flash citation malformation flow
+  # verbatim: TURN 2 of a session — with turn 1's thread-fetch results
+  # in context — is where the weak model degraded to `[token](token)`
+  # link labels and invented `chat:…:msg:<uuid>` ids (AgentRun
+  # cabd15b1). `citation_style_metric` (metric-only) feeds
+  # `citation_wellformed_rate` from this exact scenario WITHOUT a
+  # binary `has_citations` assertion — flash only sometimes cites on
+  # this follow-up, and a stochastic assertion would flake the
+  # deploy-gating suite. A style regression moves the aggregate metric
+  # instead of going unmeasured.
+  fixture: true
+  turns:
+    - query: "Why did we rule out framer-motion?"
+    - query: "And what's the in-app animation decision?"
+      expect:
+        answer_contains_all: ["framer-motion"]
+        citation_style_metric: true
+        no_errors: true
+
 # --------------------------------------------------------------------- #
 # M. List / filter tasks (structural queries)                           #
 # --------------------------------------------------------------------- #
