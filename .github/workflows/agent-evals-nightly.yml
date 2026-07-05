@@ -1,0 +1,159 @@
+# Nightly behavior + judge TREND for the Spotlight / Genos AI agent.
+#
+# The PR gate (agent-evals.yml) hard-gates only the deterministic
+# retrieval core and smoke-judges ONE behavior case — the right call for
+# a gate (judge scores flap; gating on them would flap CI red). But that
+# leaves the fullest quality signal — the whole behavior suite under the
+# LLM judge — unmeasured between releases. This workflow runs it nightly
+# and persists the output, so drift from agent changes (new tools,
+# controller logic, prompt edits) is visible as a trend without gating
+# PRs on non-determinism. SPOTLIGHT_AGENT_CHANGE_SAFETY.md §4.5 /
+# SPOTLIGHT_EVALS_CI.md §6.2 (genos-docs).
+#
+# REPORT-ONLY by design: documented-red cases and judge flap never fail
+# the run. The job fails only when the harness itself produces no
+# parseable output — that's an infra break, and SHOULD be loud.
+#
+# Two deliberate divergences from the PR gate:
+#   * RAG_USE_RERANKER is left at the PROD default (on) — the trend
+#     should measure what production actually runs, not the stripped
+#     deterministic core the gate measures.
+#   * No floors, no gate step — trend, not enforcement. Promoting any of
+#     these numbers to a gate later means adding floors here once the
+#     nightly baseline is understood (see SPOTLIGHT_EVALS_CI.md §6.3/6.4).
+#
+# Trend storage: full output uploaded as a 90-day artifact per night +
+# aggregate lines in the job summary. A dashboard over the artifacts is
+# the deliberate next step, not part of this workflow.
+#
+# Required GitHub secrets (same as agent-evals.yml):
+#   GCP_WIF_PROVIDER  = wif_provider
+#   GCP_DEPLOY_SA     = deploy_service_account
+
+name: agent-evals-nightly
+
+on:
+  schedule:
+    - cron: "0 17 * * *" # 02:00 JST — off-peak Vertex quota window
+  workflow_dispatch: # manual trend point, e.g. right after merging an agent change
+
+permissions:
+  contents: read
+  id-token: write # mint the WIF OIDC token
+
+concurrency:
+  group: agent-evals-nightly
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT: amplified-album-496413-t2
+  GCP_REGION: asia-northeast1
+  AR: asia-northeast1-docker.pkg.dev/amplified-album-496413-t2/genos
+
+jobs:
+  nightly-trend:
+    name: behavior + judge trend (report-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PIPENV_VENV_IN_PROJECT: "1"
+      DJANGO_DEBUG: "true"
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/origin
+      DJANGO_SECRET_KEY: ci-eval-secret-key
+      JWT_SECRET_KEY: ci-eval-secret-key
+      OPENSEARCH_HOST: localhost
+      OPENSEARCH_PORT: "9200"
+      # Same Vertex path as prod (embeddings + Gemini) via WIF ADC.
+      LLM_PROVIDER: gemini
+      GEMINI_USE_VERTEX: "true"
+      GEMINI_PROJECT: amplified-album-496413-t2
+      GEMINI_LOCATION: asia-northeast1
+      EMBEDDING_PROVIDER: vertex
+      # NOTE: no RAG_USE_RERANKER override — prod default on purpose (see
+      # header). The PR gate forces it off for determinism; the trend
+      # wants prod parity.
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: origin
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (keyless WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Start multilingual OpenSearch (prod image)
+        run: |
+          gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
+          docker run -d --name opensearch -p 9200:9200 \
+            --ulimit memlock=-1:-1 --ulimit nofile=65536:65536 \
+            -e discovery.type=single-node -e bootstrap.memory_lock=true \
+            -e DISABLE_INSTALL_DEMO_CONFIG=true -e DISABLE_SECURITY_PLUGIN=true \
+            -e OPENSEARCH_JAVA_OPTS="-Xms1g -Xmx1g" \
+            "$AR/opensearch-multilingual:3.6.0"
+          echo "waiting for OpenSearch to be green..."
+          for i in $(seq 1 40); do
+            curl -sf localhost:9200/_cluster/health >/dev/null && { echo "up"; break; }
+            sleep 5
+          done
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --upgrade pip pipenv
+      - name: Install deps
+        run: |
+          pipenv sync
+          pipenv run pip install -r requirements-dev.txt
+
+      - name: Migrate + set up OpenSearch index + seed fixture (Vertex reindex)
+        run: |
+          pipenv run python manage.py migrate --noinput
+          # MUST run before any write: creates knowledge_chunks_* with the
+          # knn_vector mapping (same footgun as the PR gate — skipping it
+          # silently degrades to keyword-only and poisons the trend).
+          pipenv run python manage.py opensearch_setup
+          pipenv run python manage.py agent_eval_setup --reseed
+
+      - name: Full retrieval + behavior suite with LLM judge (report-only)
+        run: |
+          set -o pipefail
+          # `|| true`: documented-red cases exit non-zero by design, and
+          # judge scores are non-deterministic — neither is a failure of
+          # this run. The guard below is what fails the job: NO parseable
+          # output means the harness/infra broke, which must be loud.
+          pipenv run python manage.py agent_eval --all --judge 2>&1 | tee eval-nightly.out || true
+          grep -q "passed" eval-nightly.out || {
+            echo "::error::agent_eval produced no parseable output — harness/infra failure, not an eval regression"
+            exit 1
+          }
+
+      - name: Publish aggregate lines to the job summary
+        if: always()
+        run: |
+          {
+            echo "## agent-evals nightly — $(date -u +%F) (run ${GITHUB_RUN_ID})"
+            echo
+            echo '```'
+            grep -E "passed|Continuous metrics:" eval-nightly.out | tail -30 || echo "(no aggregate lines)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload full output (the trend artifact)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-evals-nightly-${{ github.run_id }}
+          path: eval-nightly.out
+          retention-days: 90
