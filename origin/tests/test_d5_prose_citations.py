@@ -89,17 +89,72 @@ class TestCitationStyleMetric(SimpleTestCase):
     def test_all_link_form_scores_one(self):
         events = _delta_events("A [x](task:1) and B [y](note:personal:2).")
         m = _citation_style_metric(events, {"has_citations": True})
-        self.assertEqual(m, {"prose_citation_rate": 1.0})
+        self.assertEqual(m, {"prose_citation_rate": 1.0, "citation_wellformed_rate": 1.0})
 
     def test_mixed_forms_score_fraction(self):
         events = _delta_events("A [x](task:1) and the bare [task:2].")
         m = _citation_style_metric(events, {"citations_count_at_least": 2})
-        self.assertEqual(m, {"prose_citation_rate": 0.5})
+        self.assertEqual(m, {"prose_citation_rate": 0.5, "citation_wellformed_rate": 1.0})
 
     def test_expected_but_absent_scores_zero(self):
+        # No citations at all → nothing to judge well-formed, so the
+        # wellformed key is skipped (skip-when-immovable), not 0.0.
         events = _delta_events("no citations at all")
         m = _citation_style_metric(events, {"has_citations": True})
         self.assertEqual(m, {"prose_citation_rate": 0.0})
+
+
+class TestCitationWellformedRate(SimpleTestCase):
+    """`citation_wellformed_rate` — the style half `prose_citation_rate`
+    is blind to. Malformation inputs are VERBATIM from a real
+    gemini-flash run (AgentRun cabd15b1, 2026-07-05)."""
+
+    def test_raw_token_label_is_malformed_but_counts_as_link_form(self):
+        # Flash emits the id as the link's visible text. Adoption sees a
+        # link (rate 1.0); style flags it.
+        events = _delta_events("…constraints ([task:1905](task:1905)).")
+        m = _citation_style_metric(events, {"has_citations": True})
+        self.assertEqual(m["prose_citation_rate"], 1.0)
+        self.assertEqual(m["citation_wellformed_rate"], 0.0)
+
+    def test_invented_msg_segment_is_malformed(self):
+        # `:msg:<uuid>` is not in the citation vocabulary (flash copies
+        # message ids from tool results) — even under a prose label.
+        events = _delta_events(
+            "the team agreed [in Bob's DM]"
+            "(chat:dm:0738dbef-e482-4504-b93a-106420759553:msg:58ed60f3)."
+        )
+        m = _citation_style_metric(events, {"has_citations": True})
+        self.assertEqual(m["citation_wellformed_rate"], 0.0)
+
+    def test_bare_token_with_invented_segment_is_malformed(self):
+        events = _delta_events("Tracked separately [chat:dm:0738dbef:msg:63b3b58c].")
+        m = _citation_style_metric(events, {"has_citations": True})
+        self.assertEqual(m["citation_wellformed_rate"], 0.0)
+
+    def test_healthy_forms_across_types_score_one(self):
+        events = _delta_events(
+            "Per [the spike](task:1905), [Bob's thread]"
+            "(chat:dm:0738dbef-e482:thread:8995bd1d-9dae) and the bare "
+            "[note:personal:9] plus [todo:2026-07-05:item:977]."
+        )
+        m = _citation_style_metric(events, {"has_citations": True})
+        self.assertEqual(m["citation_wellformed_rate"], 1.0)
+
+    def test_mixed_scores_fraction(self):
+        events = _delta_events(
+            "Good [the spike](task:1905) but bad ([task:1905](task:1905))."
+        )
+        m = _citation_style_metric(events, {"has_citations": True})
+        self.assertEqual(m["citation_wellformed_rate"], 0.5)
+
+    def test_metric_only_flag_enables_metrics_without_assertion(self):
+        # `citation_style_metric: true` feeds the style metrics on cases
+        # that deliberately do NOT assert `has_citations` (stochastic
+        # weak-model citing would flake the deploy-gating suite).
+        events = _delta_events("Per [the spike](task:1905), agreed.")
+        m = _citation_style_metric(events, {"citation_style_metric": True})
+        self.assertEqual(m, {"prose_citation_rate": 1.0, "citation_wellformed_rate": 1.0})
 
 
 class TestJudgeProseFaithfulness(SimpleTestCase):
