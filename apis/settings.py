@@ -451,6 +451,18 @@ SEARCH_ENGINE = {
     # The controller stops + emits an error if the model hasn't
     # produced a final answer by then.
     "AGENT_MAX_STEPS": int(os.environ.get("AGENT_MAX_STEPS", "10")),
+    # Ops kill-switch for individual agent tools: comma-separated tool
+    # names to hide from the model (e.g. "search_web,create_task"), so a
+    # risky new tool can ship dark / be switched off per environment with
+    # no code change (SPOTLIGHT_AGENT_CHANGE_SAFETY.md §4.4, genos-docs).
+    # FAIL-OPEN by design: unset/empty disables NOTHING. Env vars are
+    # configured per service (Railway) and per environment, so a service
+    # that misses the var must run at full capability rather than
+    # silently losing tools. Unknown names are logged and ignored by the
+    # controller (typo guard).
+    "AGENT_DISABLED_TOOLS": frozenset(
+        t.strip() for t in os.environ.get("AGENT_DISABLED_TOOLS", "").split(",") if t.strip()
+    ),
     # Phase 5 — provider selection. "gemini" (default) or "claude".
     # `get_model_client()` in origin.search_engine.llm reads this at
     # request time; an unknown value raises rather than silently

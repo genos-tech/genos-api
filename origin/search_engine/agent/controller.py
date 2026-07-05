@@ -87,17 +87,56 @@ def _persist_step(run_id: UUID | None, **fields: Any) -> AgentStep | None:
         return None
 
 
+# One-shot latch so the kill-switch state is logged once per worker
+# process (visible near startup) instead of spamming every request.
+_KILLSWITCH_LOGGED = False
+
+
+def _operator_disabled_tools() -> set[str]:
+    """Resolve the `AGENT_DISABLED_TOOLS` ops kill-switch (+ log once).
+
+    FAIL-OPEN: unset/empty disables nothing — env vars are per-service /
+    per-environment config, so a service that misses the var must run at
+    full capability rather than silently losing tools (see settings.py
+    and SPOTLIGHT_AGENT_CHANGE_SAFETY.md §4.4). Unknown names disable
+    nothing and are logged at ERROR: the operator believes something is
+    switched off that isn't — exactly a typo's failure mode.
+    """
+    global _KILLSWITCH_LOGGED
+    configured = settings.SEARCH_ENGINE.get("AGENT_DISABLED_TOOLS") or frozenset()
+    if not configured:
+        return set()
+    known = set(configured) & set(REGISTRY)
+    if not _KILLSWITCH_LOGGED:
+        _KILLSWITCH_LOGGED = True
+        log.warning(
+            "AGENT_DISABLED_TOOLS active — tools hidden from the agent: %s",
+            sorted(known),
+        )
+        unknown = set(configured) - known
+        if unknown:
+            log.error(
+                "AGENT_DISABLED_TOOLS names unknown tool(s) %s — probable "
+                "typo; they disable nothing",
+                sorted(unknown),
+            )
+    return known
+
+
 def _build_tool_declarations(
     disabled_tools: set[str] | None = None,
 ) -> list[ToolDeclaration]:
     """Translate each registered Tool into a provider-neutral declaration.
 
     Tools whose name appears in `disabled_tools` are omitted from the
-    list, so the model never even sees them as callable. Currently used
-    to honour the frontend "Web search" toggle (filters out
-    `search_web`).
+    list, so the model never even sees them as callable. Used to honour
+    the frontend "Web search" toggle (filters out `search_web`) and §4.5
+    tool subsetting; the `AGENT_DISABLED_TOOLS` ops kill-switch is
+    unioned in here — the single choke point every declaration build
+    passes through. Note this hides tools from NEW model turns; a write
+    tool already paused for approval still resumes if the user approves.
     """
-    disabled = disabled_tools or set()
+    disabled = (disabled_tools or set()) | _operator_disabled_tools()
     return [
         ToolDeclaration(
             name=t.name,
