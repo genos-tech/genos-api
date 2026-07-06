@@ -10,6 +10,7 @@ from origin.views.common.github_views import (
     GithubBranchesForTaskView,
     GithubMyPullsView,
     GithubPullDetailView,
+    GithubPullsForTasksView,
     GithubPullsForTaskView,
     GithubWebhookView,
 )
@@ -122,6 +123,13 @@ urlpatterns = [
         "api/v2/github/pulls/for-task/",
         GithubPullsForTaskView.as_view(),
         name="github_pulls_for_task",
+    ),
+    # Batched variant: one request resolves the PR column for a whole
+    # table paint (?task_ids=1,2,3) instead of one request per row.
+    path(
+        "api/v2/github/pulls/for-tasks/",
+        GithubPullsForTasksView.as_view(),
+        name="github_pulls_for_tasks",
     ),
     path("api/v2/user/profile/", UserProfileView.as_view(), name="update_status"),
     path("api/v2/user/me/", UserInfoView.as_view(), name="user_me"),
