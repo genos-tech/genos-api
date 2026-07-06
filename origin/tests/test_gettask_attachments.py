@@ -115,3 +115,13 @@ class TestGetTaskAttachmentModes(TestCase):
         resp = self._get_task("&attachments=meta")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(resp.json()[0]["attachments"]), 1)
+
+    def test_gettask_query_count_stays_collapsed(self):
+        # Regression guard for the select_related on GetTaskView: the
+        # serialization walks project / project_system_user / team /
+        # assignee / reporter, which used to cost five extra queries per
+        # request on the most frequently called task endpoint. Budget:
+        # 1 auth-user fetch + 1 joined task row + 1 attachment prefetch.
+        with self.assertNumQueries(3):
+            resp = self._get_task("&attachments=meta")
+        self.assertEqual(resp.status_code, 200)
