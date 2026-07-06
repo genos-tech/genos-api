@@ -840,10 +840,14 @@ def _serialize_task_attachments(task, *, meta_only: bool, include_ids: bool) -> 
     for the client to lazy-load instead of `file_base64`.
     """
     attached_files: list[dict] = []
-    rows = task.task_attachments.all().values_list(
-        "attachment_id", "attached_file", "attached_type", "original_filename"
-    )
-    for attachment_id, file_path, file_type, orig_name in rows:
+    # Iterate the related objects rather than `.values_list()`: a
+    # values_list on the related manager always issues a fresh query,
+    # silently bypassing the caller's prefetch_related.
+    for attachment in task.task_attachments.all():
+        attachment_id = attachment.attachment_id
+        file_path = attachment.attached_file.name
+        file_type = attachment.attached_type
+        orig_name = attachment.original_filename
         entry: dict = {
             "file": file_path,
             "name": orig_name or os.path.basename(file_path),
@@ -897,11 +901,21 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
         if len(target_task) == 0:
             return Response({}, status=status.HTTP_200_OK)
 
-        task_attachments = TaskMaster.objects.prefetch_related("task_attachments").filter(
-            team=team_id,
-            project_id=target_task[0][0],
-            task_id=target_task[0][1],
-            is_init_task=False,
+        # select_related collapses the five FK walks the serialization
+        # below does per row (project, its system user, team, assignee,
+        # reporter) into the base query — without it each request paid
+        # five extra queries.
+        task_attachments = (
+            TaskMaster.objects.select_related(
+                "project", "project__project_system_user", "team", "assignee", "reporter"
+            )
+            .prefetch_related("task_attachments")
+            .filter(
+                team=team_id,
+                project_id=target_task[0][0],
+                task_id=target_task[0][1],
+                is_init_task=False,
+            )
         )
 
         # Same opt-in as GetTaskView: `?attachments=meta` skips the
@@ -1038,9 +1052,18 @@ class GetTaskView(AuthenticatedAPIView):
         project_id = int(raw_project_id)
         task_id = int(raw_task_id)
 
-        # Get the specific task with its attachments.
-        task = TaskMaster.objects.prefetch_related("task_attachments").filter(
-            team=team_id, project_id=project_id, task_id=task_id, is_init_task=False
+        # Get the specific task with its attachments. select_related
+        # collapses the five FK walks the serialization below does per
+        # row (project, its system user, team, assignee, reporter) into
+        # the base query — this endpoint is the most frequent task call
+        # (fired on every preview open / parent lookup / post-save
+        # cache refresh), so the extra queries were paid constantly.
+        task = (
+            TaskMaster.objects.select_related(
+                "project", "project__project_system_user", "team", "assignee", "reporter"
+            )
+            .prefetch_related("task_attachments")
+            .filter(team=team_id, project_id=project_id, task_id=task_id, is_init_task=False)
         )
 
         # `?attachments=meta` skips the base64 disk inlining and returns
