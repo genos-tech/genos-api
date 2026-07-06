@@ -784,6 +784,95 @@ def _invalidate_pr_caches(owner: str, repo: str, number: int | None, head_ref: s
         logger.exception("PR cache invalidation failed for %s/%s#%s", owner, repo, number)
 
 
+def _collect_repo_branches(
+    account: ConnectedAccount,
+    repos,
+    *,
+    bypass_cache: bool = False,
+) -> list[tuple[str, str, list[dict]]]:
+    """Fetch each registered repo's branch list once (Redis-cached).
+    Repos whose branch listing errors (404 no access / 403 rate limit)
+    are skipped silently so one bad repo doesn't poison the result."""
+    out: list[tuple[str, str, list[dict]]] = []
+    for owner, repo in repos:
+        branches = _list_repo_branches(account, owner, repo, bypass_cache=bypass_cache)
+        if branches is None:
+            continue
+        out.append((owner, repo, branches))
+    return out
+
+
+def _pulls_for_task(
+    account: ConnectedAccount,
+    task,
+    display_id: str,
+    repo_branches: list[tuple[str, str, list[dict]]],
+    *,
+    bypass_cache: bool = False,
+) -> list[dict]:
+    """Resolve the auto-linked PRs for one task against pre-fetched
+    branch lists. Shared by the single and batched endpoints so the
+    two sources (live branch walk + persisted `task.links` auto-links)
+    and the html_url dedupe behave identically — see
+    `GithubPullsForTaskView`'s docstring for the source semantics."""
+    pattern = _branch_match_re(display_id)
+    pulls: list[dict] = []
+    seen_urls: set[str] = set()
+    # --- Source 1: live branches matching display_id -------------
+    for owner, repo, branches in repo_branches:
+        for branch in branches:
+            name = branch.get("name") or ""
+            if not pattern.search(name):
+                continue
+            pr = _find_pr_for_branch(account, owner, repo, name, bypass_cache=bypass_cache)
+            if pr is None:
+                continue
+            # Same PR can appear from different matching branches
+            # (rare — but a renamed-then-recreated branch could do
+            # it). Dedupe by html_url so the column shows one badge
+            # per PR.
+            url = pr.get("html_url")
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+            pulls.append(pr)
+
+    # --- Source 2: PR URLs persisted in task.links with the
+    # `isAutoLinked` marker. Picks up PRs whose source branch has
+    # been deleted post-merge (Source 1's branch walk misses those
+    # because the branch is gone).
+    #
+    # We re-validate that the fetched PR's head branch actually
+    # contains the task's display_id. The flag is set by the
+    # frontend and an earlier bug in the body-mirror effect could
+    # mark unrelated PR URLs (referenced from the task body) as
+    # auto-linked. Without this backstop those bad flags would
+    # leak unrelated PRs into the column. GitHub keeps the head
+    # ref on the PR record even after branch deletion, so this
+    # check still works for the post-merge persistence case.
+    for link in task.links or []:
+        if not isinstance(link, dict) or not link.get("isAutoLinked"):
+            continue
+        url = link.get("url")
+        if not isinstance(url, str) or url in seen_urls:
+            continue
+        ref = parse_pr_url_full(url)
+        if ref is None:
+            continue
+        owner_p, repo_p, number = ref
+        pr = _fetch_pr_by_number(account, owner_p, repo_p, number, bypass_cache=bypass_cache)
+        if pr is None:
+            continue
+        head_ref = pr.get("branch") or ""
+        if not head_ref or not pattern.search(head_ref):
+            continue
+        seen_urls.add(url)
+        pulls.append(pr)
+
+    return pulls
+
+
 def _resolve_task_display_id(task_id: str):
     """Common task lookup + display-id guard shared by both endpoints.
     Returns (task, display_id) on success or a Response on failure."""
@@ -889,65 +978,78 @@ class GithubPullsForTaskView(APIView):
         if account is None:
             return Response({"pulls": []})
 
-        pattern = _branch_match_re(display_id)
         repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
         bypass_cache = request.GET.get("fresh") == "1"
-
-        pulls: list[dict] = []
-        seen_urls: set[str] = set()
-        # --- Source 1: live branches matching display_id -------------
-        for owner, repo in repos:
-            branches = _list_repo_branches(account, owner, repo, bypass_cache=bypass_cache)
-            if branches is None:
-                continue
-            for branch in branches:
-                name = branch.get("name") or ""
-                if not pattern.search(name):
-                    continue
-                pr = _find_pr_for_branch(account, owner, repo, name, bypass_cache=bypass_cache)
-                if pr is None:
-                    continue
-                # Same PR can appear from different matching branches
-                # (rare — but a renamed-then-recreated branch could do
-                # it). Dedupe by html_url so the column shows one badge
-                # per PR.
-                url = pr.get("html_url")
-                if url and url in seen_urls:
-                    continue
-                if url:
-                    seen_urls.add(url)
-                pulls.append(pr)
-
-        # --- Source 2: PR URLs persisted in task.links with the
-        # `isAutoLinked` marker. Picks up PRs whose source branch has
-        # been deleted post-merge (Source 1's branch walk misses those
-        # because the branch is gone).
-        #
-        # We re-validate that the fetched PR's head branch actually
-        # contains the task's display_id. The flag is set by the
-        # frontend and an earlier bug in the body-mirror effect could
-        # mark unrelated PR URLs (referenced from the task body) as
-        # auto-linked. Without this backstop those bad flags would
-        # leak unrelated PRs into the column. GitHub keeps the head
-        # ref on the PR record even after branch deletion, so this
-        # check still works for the post-merge persistence case.
-        for link in task.links or []:
-            if not isinstance(link, dict) or not link.get("isAutoLinked"):
-                continue
-            url = link.get("url")
-            if not isinstance(url, str) or url in seen_urls:
-                continue
-            ref = parse_pr_url_full(url)
-            if ref is None:
-                continue
-            owner_p, repo_p, number = ref
-            pr = _fetch_pr_by_number(account, owner_p, repo_p, number, bypass_cache=bypass_cache)
-            if pr is None:
-                continue
-            head_ref = pr.get("branch") or ""
-            if not head_ref or not pattern.search(head_ref):
-                continue
-            seen_urls.add(url)
-            pulls.append(pr)
-
+        repo_branches = _collect_repo_branches(account, repos, bypass_cache=bypass_cache)
+        pulls = _pulls_for_task(
+            account, task, display_id, repo_branches, bypass_cache=bypass_cache
+        )
         return Response({"pulls": pulls})
+
+
+class GithubPullsForTasksView(APIView):
+    """Batched variant of `GithubPullsForTaskView`:
+    `GET /api/v2/github/pulls/for-tasks/?task_ids=1,2,3`.
+
+    One request resolves the PR column for a whole table paint instead
+    of one request per row. The repo/branch walk is hoisted out of the
+    per-task loop — each registered repo's branch list is fetched once
+    per request (Redis-cached), then matched against every task's
+    display ID. Per-task semantics (source union, branch-match
+    backstop, html_url dedupe) are shared with the single view via
+    `_pulls_for_task`.
+
+    Response: `{"pulls_by_task": {"<taskId>": [slim pull dicts]}}`.
+    Every requested id gets a key; unknown ids, tasks without a
+    project-scoped display ID, and tasks with no PRs all map to `[]`
+    (unlike the single view's 404) so one bad id can't fail the batch
+    and the client can cache negatives uniformly.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    # Lower than burndown's 500: each task can trigger per-branch PR
+    # lookups on a cold cache, so the worst-case upstream fan-out per
+    # request is larger.
+    MAX_TASK_IDS = 200
+
+    def get(self, request: Request):
+        raw_ids = request.GET.get("task_ids") or ""
+        try:
+            task_ids = sorted({int(p) for p in raw_ids.split(",") if p.strip()})
+        except ValueError:
+            return Response(
+                {"detail": "task_ids must be a comma-separated list of integers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(task_ids) > self.MAX_TASK_IDS:
+            return Response(
+                {"detail": f"Too many task_ids (max {self.MAX_TASK_IDS})."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        pulls_by_task: dict[str, list[dict]] = {str(tid): [] for tid in task_ids}
+        if not task_ids:
+            return Response({"pulls_by_task": pulls_by_task})
+
+        account = _connected_account(request.user)
+        if account is None:
+            return Response({"pulls_by_task": pulls_by_task})
+
+        with_display: list[tuple[TaskMaster, str]] = []
+        for task in TaskMaster.objects.filter(task_id__in=task_ids).select_related("project"):
+            display_id = task.display_id
+            if not display_id or display_id.startswith("#"):
+                continue
+            with_display.append((task, display_id))
+        if not with_display:
+            return Response({"pulls_by_task": pulls_by_task})
+
+        repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
+        bypass_cache = request.GET.get("fresh") == "1"
+        repo_branches = _collect_repo_branches(account, repos, bypass_cache=bypass_cache)
+
+        for task, display_id in with_display:
+            pulls_by_task[str(task.task_id)] = _pulls_for_task(
+                account, task, display_id, repo_branches, bypass_cache=bypass_cache
+            )
+        return Response({"pulls_by_task": pulls_by_task})
