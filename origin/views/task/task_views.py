@@ -2042,3 +2042,60 @@ class TaskDependencyView(AuthenticatedAPIView):
             )
         dep.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class TaskDependencyBatchListView(AuthenticatedAPIView):
+    """Batched variant of `TaskDependencyView.get`:
+    `GET /api/v2/task/dependency/list-for-tasks/?task_ids=1,2,3`.
+
+    The task-graph diagram needs the dependency edges for EVERY node in
+    the visible tree — per-task GETs meant one request (plus its own
+    CORS preflight, since the preflight cache is keyed by exact URL)
+    per node. This resolves the whole set in two indexed queries.
+
+    Response: `{"dependencies_by_task": {"<taskId>": {"blocking": [...],
+    "blockedBy": [...]}}}` — the per-task ref shape is identical to the
+    single view (shared `_hydrate_dependency_ref`). Every requested id
+    gets a key; unknown ids map to empty lists so one bad id can't fail
+    the batch.
+    """
+
+    MAX_TASK_IDS = 500
+
+    def get(self, request):
+        raw_ids = request.GET.get("task_ids") or ""
+        try:
+            task_ids = sorted({int(p) for p in raw_ids.split(",") if p.strip()})
+        except ValueError:
+            return Response(
+                {"error": "task_ids must be a comma-separated list of integers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(task_ids) > self.MAX_TASK_IDS:
+            return Response(
+                {"error": f"Too many task_ids (max {self.MAX_TASK_IDS})."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        by_task = {str(tid): {"blocking": [], "blockedBy": []} for tid in task_ids}
+        if not task_ids:
+            return Response({"dependencies_by_task": by_task}, status=status.HTTP_200_OK)
+
+        blocking_rows = (
+            TaskDependency.objects.filter(blocker_task_id__in=task_ids)
+            .select_related("blocked_task", "blocked_task__project")
+            .exclude(blocked_task__is_deleted=True)
+        )
+        blocked_by_rows = (
+            TaskDependency.objects.filter(blocked_task_id__in=task_ids)
+            .select_related("blocker_task", "blocker_task__project")
+            .exclude(blocker_task__is_deleted=True)
+        )
+        for d in blocking_rows:
+            by_task[str(d.blocker_task_id)]["blocking"].append(
+                _hydrate_dependency_ref(d, d.blocked_task)
+            )
+        for d in blocked_by_rows:
+            by_task[str(d.blocked_task_id)]["blockedBy"].append(
+                _hydrate_dependency_ref(d, d.blocker_task)
+            )
+        return Response({"dependencies_by_task": by_task}, status=status.HTTP_200_OK)
