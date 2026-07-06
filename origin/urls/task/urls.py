@@ -56,6 +56,13 @@ urlpatterns = [
         TaskDependencyView.as_view(),
         name="task_dependency_list",
     ),
+    # Batched variant: the diagram resolves edges for a whole node set
+    # in one request (?task_ids=1,2,3) instead of one per node.
+    path(
+        "api/v2/task/dependency/list-for-tasks/",
+        TaskDependencyBatchListView.as_view(),
+        name="task_dependency_list_batch",
+    ),
     path(
         "api/v2/task/dependency/<int:dependency_id>/",
         TaskDependencyView.as_view(),
