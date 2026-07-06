@@ -4,6 +4,8 @@ import os
 from collections import defaultdict
 from datetime import datetime
 
+from django.conf import settings
+
 logger = logging.getLogger(__name__)
 from django.db.models import Case, F, IntegerField, Max, Q, Value, When
 from rest_framework import status
@@ -825,6 +827,43 @@ class ChildTaskView(AuthenticatedAPIView):
         return Response(response_data, status=status.HTTP_200_OK)
 
 
+def _serialize_task_attachments(task, *, meta_only: bool, include_ids: bool) -> list[dict]:
+    """Serialize a task's attachments for the getTask / thread detail
+    responses.
+
+    Default mode inlines every file from disk as base64 — the shape the
+    deployed frontend expects. That is a synchronous read + 1.33×
+    encode of the task's total attachment bytes inside the request
+    (the same anti-pattern already evicted from ChildTaskView), so
+    callers can opt out with `?attachments=meta` (`meta_only=True`):
+    no disk I/O, and each entry carries `file_url` (MEDIA_URL-prefixed)
+    for the client to lazy-load instead of `file_base64`.
+    """
+    attached_files: list[dict] = []
+    rows = task.task_attachments.all().values_list(
+        "attachment_id", "attached_file", "attached_type", "original_filename"
+    )
+    for attachment_id, file_path, file_type, orig_name in rows:
+        entry: dict = {
+            "file": file_path,
+            "name": orig_name or os.path.basename(file_path),
+            "type": file_type,
+        }
+        if include_ids:
+            entry["attachment_id"] = attachment_id
+        if meta_only:
+            entry["file_url"] = settings.MEDIA_URL + file_path
+        else:
+            try:
+                with open("./uploads/" + file_path, "rb") as f:
+                    entry["file_base64"] = base64.b64encode(f.read()).decode("utf-8")
+            except FileNotFoundError:
+                print(f"File not found: {file_path}")
+                continue
+        attached_files.append(entry)
+    return attached_files
+
+
 class GetTaskByThreadIdView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
@@ -865,29 +904,15 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
             is_init_task=False,
         )
 
+        # Same opt-in as GetTaskView: `?attachments=meta` skips the
+        # base64 disk inlining in favour of `file_url` entries.
+        attachments_meta_only = request.GET.get("attachments") == "meta"
+
         response_data = []
         for t in task_attachments:
-            attached_files = []
-            for _file in t.task_attachments.all().values_list(
-                "attached_file", "attached_type", "original_filename"
-            ):
-                file_path = _file[0]
-                file_type = _file[1]
-                orig_name = _file[2]
-                try:
-                    with open("./uploads/" + file_path, "rb") as f:
-                        encoded_file = base64.b64encode(f.read()).decode("utf-8")
-                        attached_files.append(
-                            {
-                                "file": file_path,
-                                "file_base64": encoded_file,
-                                "name": orig_name or os.path.basename(file_path),
-                                "type": file_type,
-                            }
-                        )
-                except FileNotFoundError:
-                    print(f"File not found: {file_path}")
-                    continue
+            attached_files = _serialize_task_attachments(
+                t, meta_only=attachments_meta_only, include_ids=False
+            )
 
             response_data.append(
                 {
@@ -1018,31 +1043,15 @@ class GetTaskView(AuthenticatedAPIView):
             team=team_id, project_id=project_id, task_id=task_id, is_init_task=False
         )
 
+        # `?attachments=meta` skips the base64 disk inlining and returns
+        # `file_url` entries instead — see _serialize_task_attachments.
+        attachments_meta_only = request.GET.get("attachments") == "meta"
+
         response_data = []
         for t in task:
-            attached_files = []
-            for _file in t.task_attachments.all().values_list(
-                "attachment_id", "attached_file", "attached_type", "original_filename"
-            ):
-                attachment_id = _file[0]
-                file_path = _file[1]
-                file_type = _file[2]
-                orig_name = _file[3]
-                try:
-                    with open("./uploads/" + file_path, "rb") as f:
-                        encoded_file = base64.b64encode(f.read()).decode("utf-8")
-                        attached_files.append(
-                            {
-                                "attachment_id": attachment_id,
-                                "file": file_path,
-                                "file_base64": encoded_file,
-                                "name": orig_name or os.path.basename(file_path),
-                                "type": file_type,
-                            }
-                        )
-                except FileNotFoundError:
-                    print(f"File not found: {file_path}")
-                    continue
+            attached_files = _serialize_task_attachments(
+                t, meta_only=attachments_meta_only, include_ids=True
+            )
 
             response_data.append(
                 {
