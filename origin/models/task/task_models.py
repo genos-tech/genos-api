@@ -128,6 +128,16 @@ class TaskMaster(models.Model):
                 fields=["team", "project", "is_init_task"],
                 name="taskmaster_team_proj_init_idx",
             ),
+            # Matches ChildTaskView's filter (team=X, project=Y,
+            # parent_task_id=Z). `parent_task_id` is a denormalized
+            # BigIntegerField (not an FK), so nothing indexes it
+            # implicitly — the sibling index above stops at the project
+            # prefix and every child-list fetch scanned the project's
+            # rows for the parent match.
+            models.Index(
+                fields=["team", "project", "parent_task_id"],
+                name="taskmaster_parent_task_idx",
+            ),
         ]
 
     @property
