@@ -77,6 +77,21 @@ class TestTaskViews(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertIn("newly_mentioned_user_ids", response.data)
 
+    def test_create_task_response_includes_display_id(self):
+        # POST must surface the computed `display_id` (like PUT and the
+        # project-tasks list endpoint) so a single-POST create can render
+        # the friendly "<code>-<n>" id without waiting for a refetch.
+        from origin.models.task.task_models import TaskMaster
+
+        response = self._create_task()
+        self.assertEqual(response.status_code, 201)
+        self.assertIn("displayId", response.data["task"])
+        task = TaskMaster.objects.get(task_id=response.data["task"]["task_id"])
+        self.assertEqual(response.data["task"]["displayId"], task.display_id)
+        # The serialized display id is non-empty (either "<code>-<n>" once
+        # the post-save signal assigns a number, or the "#<id>" fallback).
+        self.assertTrue(response.data["task"]["displayId"])
+
     def test_create_task_missing_required_field(self):
         # A missing required field is a client error: a clean 400, not a
         # 500 from an unguarded request.data[...] KeyError.
