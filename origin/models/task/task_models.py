@@ -1,9 +1,18 @@
+import logging
 import os
 
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from django.db.models import Max
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+
+logger = logging.getLogger(__name__)
+
+# How many times to retry the per-project number claim when a concurrent
+# create wins the same number first. Each retry recomputes MAX after the
+# winner has committed, so a handful of attempts absorbs realistic bursts
+# (creates serialize behind whoever commits the colliding number).
+_PROJECT_NUMBER_MAX_RETRIES = 8
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
@@ -215,27 +224,55 @@ def set_root_task_id(sender, instance, created, **kwargs):
     instance.save(update_fields=["root_task_id"])
 
 
+def _next_project_task_number(project_id, exclude_pk):
+    """MAX(project_task_number)+1 within a project, treating an empty
+    project (all-NULL) as 0 so the first task gets 1."""
+    return (
+        TaskMaster.objects.filter(project_id=project_id)
+        .exclude(pk=exclude_pk)
+        .aggregate(m=Max("project_task_number"))["m"]
+        or 0
+    ) + 1
+
+
 @receiver(post_save, sender=TaskMaster)
 def assign_project_task_number(sender, instance, created, **kwargs):
     """On task create, claim the next sequential number within the
     owning project. Skips tasks without a project (orphan tasks fall
-    back to "#<task_id>" in `display_id`). The unique constraint on
-    (project, project_task_number) is the ultimate race backstop —
-    if two concurrent creates collide on the same number, one save
-    raises IntegrityError and the caller retries."""
+    back to "#<task_id>" in `display_id`).
+
+    The unique constraint on (project, project_task_number) is the race
+    backstop: two concurrent creates in the same project can read the
+    same MAX and try to write the same number, so the loser's UPDATE
+    raises IntegrityError. Retry the claim — the recompute now sees the
+    winner's committed row (the DB blocks our UPDATE until they commit)
+    and picks the next free number. Without this loop the IntegrityError
+    bubbled all the way out of the create request as an unhandled 500."""
     if not created or instance.project_id is None:
         return
     if instance.project_task_number is not None:
         return
-    with transaction.atomic():
-        next_num = (
-            TaskMaster.objects.filter(project_id=instance.project_id)
-            .exclude(pk=instance.pk)
-            .aggregate(m=Max("project_task_number"))["m"]
-            or 0
-        ) + 1
-        instance.project_task_number = next_num
-        instance.save(update_fields=["project_task_number"])
+    for _ in range(_PROJECT_NUMBER_MAX_RETRIES):
+        try:
+            with transaction.atomic():
+                instance.project_task_number = _next_project_task_number(
+                    instance.project_id, instance.pk
+                )
+                instance.save(update_fields=["project_task_number"])
+            return
+        except IntegrityError:
+            # Another create claimed this number first; drop our guess so
+            # the next iteration recomputes cleanly, then retry.
+            instance.project_task_number = None
+    # Exhausted retries under sustained contention. Leave the number
+    # unset — `display_id` falls back to "#<task_id>" — rather than 500
+    # the create. Logged so the (very unlikely) exhaustion is visible.
+    logger.warning(
+        "assign_project_task_number: gave up after %d attempts for task_id=%s project_id=%s",
+        _PROJECT_NUMBER_MAX_RETRIES,
+        instance.pk,
+        instance.project_id,
+    )
 
 
 def task_attachment_path(instance, filename):
