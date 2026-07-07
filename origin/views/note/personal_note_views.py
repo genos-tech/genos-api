@@ -43,6 +43,7 @@ class AllPersonalNotesView(AuthenticatedAPIView):
                 ownerId=F("owner"),
                 noteId=F("note_id"),
                 parentNoteId=F("parent_note_id"),
+                folderId=F("folder_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
             )
@@ -55,6 +56,7 @@ class AllPersonalNotesView(AuthenticatedAPIView):
                 "roleId",
                 "noteId",
                 "parentNoteId",
+                "folderId",
                 "title",
                 "body",
                 "tsCreated",
@@ -83,6 +85,7 @@ class AllPersonalNoteMetaView(AuthenticatedAPIView):
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 noteId=F("note_id"),
                 parentNoteId=F("parent_note_id"),
+                folderId=F("folder_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
             )
@@ -92,6 +95,7 @@ class AllPersonalNoteMetaView(AuthenticatedAPIView):
                 "noteType",
                 "noteId",
                 "parentNoteId",
+                "folderId",
                 "title",
                 "tsCreated",
                 "tsUpdated",
@@ -120,6 +124,22 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
 
         data["parent_note_id"] = request.data.get("parent_note_id")
 
+        # Optional folder placement — "New note here" on a sidebar
+        # folder. Validate ownership so a note can't be filed into
+        # someone else's folder.
+        folder_id = request.data.get("folder_id")
+        if folder_id is not None:
+            from origin.models.note.personal_note_models import PersonalNoteFolder
+
+            if not PersonalNoteFolder.objects.filter(
+                folder_id=folder_id, team=data["team"], owner=data["owner"]
+            ).exists():
+                return Response(
+                    {"error": "Target folder not found."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        data["folder_id"] = folder_id
+
         serializer = PersonalNoteMasterSerializer(data=data)
         if serializer.is_valid():
             try:
@@ -135,6 +155,7 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
                         "noteType": NOTE_TYPE,
                         "noteId": serializer.data["note_id"],
                         "parentNoteId": serializer.data["parent_note_id"],
+                        "folderId": serializer.data["folder_id"],
                         "title": serializer.data["title"],
                         "body": serializer.data["body"],
                         "tsCreated": serializer.data["ts_created_at"],
@@ -310,6 +331,7 @@ class SinglePersonalNoteView(AuthenticatedAPIView):
                 ownerId=F("owner"),
                 noteId=F("note_id"),
                 parentNoteId=F("parent_note_id"),
+                folderId=F("folder_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
             )
@@ -320,6 +342,7 @@ class SinglePersonalNoteView(AuthenticatedAPIView):
                 "roleId",
                 "noteId",
                 "parentNoteId",
+                "folderId",
                 "title",
                 "body",
                 "tsCreated",

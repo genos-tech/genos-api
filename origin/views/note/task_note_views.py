@@ -26,6 +26,58 @@ from origin.views.utils.request_validators import validate_request_data, validat
 NOTE_TYPE = 2  # Task Notes
 
 
+def _task_hierarchy_fields(team_id, task_id):
+    """Resolve the Project → Milestone → Task → Subtask fields the meta
+    endpoint exposes for one task. Shared by POST (so the sidebar can
+    place a newly-created note without a full meta refetch) and
+    TaskNoteMoveView (same need after a re-anchor). Missing task → all
+    Nones; the next meta refetch fills in the right fields."""
+    fields = {
+        "taskTitle": None,
+        "displayId": None,
+        "projectName": None,
+        "parentTaskId": None,
+        "isMilestone": False,
+        "milestoneId": None,
+        "milestoneTitle": None,
+        "parentTaskTitle": None,
+        "parentTaskIsMilestone": None,
+        "parentTaskDisplayId": None,
+    }
+    try:
+        task = TaskMaster.objects.select_related("milestone", "project").get(task_id=task_id)
+    except TaskMaster.DoesNotExist:
+        return fields
+    # `taskTitle` / `projectName` mirror the fields the meta endpoint
+    # returns. Without them, the sidebar would render "Task #<id>" /
+    # "Project <id>" until the next full meta refetch. `displayId`
+    # surfaces the human-readable "<code>-<n>" id (same fallback
+    # semantics as `TaskMaster.display_id`).
+    fields["taskTitle"] = task.title
+    fields["displayId"] = task.display_id
+    fields["projectName"] = task.project.project_name if task.project else None
+    fields["parentTaskId"] = task.parent_task_id
+    fields["isMilestone"] = task.is_milestone
+    fields["milestoneId"] = task.milestone_id
+    fields["milestoneTitle"] = task.milestone.title if task.milestone else None
+    if task.parent_task_id is not None:
+        parent = (
+            TaskMaster.objects.filter(team=team_id, task_id=task.parent_task_id)
+            .select_related("project")
+            .only(
+                "title",
+                "is_milestone",
+                "project",
+                "project_task_number",
+            )
+            .first()
+        )
+        fields["parentTaskTitle"] = parent.title if parent else None
+        fields["parentTaskIsMilestone"] = parent.is_milestone if parent else None
+        fields["parentTaskDisplayId"] = parent.display_id if parent else None
+    return fields
+
+
 def _accessible_task_note_ids(team_id, user_id):
     """Notes the user can see: project-member notes + explicitly granted notes."""
     project_ids = list(
@@ -311,59 +363,7 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                     # sidebar can place the newly-created note in the
                     # correct folder without waiting for a full meta
                     # refetch.
-                    try:
-                        task = TaskMaster.objects.select_related("milestone", "project").get(
-                            task_id=data["task"]
-                        )
-                        # `taskTitle` / `projectName` mirror the fields the
-                        # meta endpoint returns. Without them, the sidebar
-                        # would render "Task #<id>" / "Project <id>" until
-                        # the next full meta refetch.
-                        note["taskTitle"] = task.title
-                        # Surface the human-readable id so the
-                        # optimistic sidebar render uses "<code>-<n>"
-                        # for the new note's task folder. Same fallback
-                        # semantics as `TaskMaster.display_id`.
-                        note["displayId"] = task.display_id
-                        note["projectName"] = task.project.project_name if task.project else None
-                        note["parentTaskId"] = task.parent_task_id
-                        note["isMilestone"] = task.is_milestone
-                        note["milestoneId"] = task.milestone_id
-                        note["milestoneTitle"] = task.milestone.title if task.milestone else None
-                        if task.parent_task_id is not None:
-                            parent = (
-                                TaskMaster.objects.filter(
-                                    team=data["team"], task_id=task.parent_task_id
-                                )
-                                .select_related("project")
-                                .only(
-                                    "title",
-                                    "is_milestone",
-                                    "project",
-                                    "project_task_number",
-                                )
-                                .first()
-                            )
-                            note["parentTaskTitle"] = parent.title if parent else None
-                            note["parentTaskIsMilestone"] = parent.is_milestone if parent else None
-                            note["parentTaskDisplayId"] = parent.display_id if parent else None
-                        else:
-                            note["parentTaskTitle"] = None
-                            note["parentTaskIsMilestone"] = None
-                            note["parentTaskDisplayId"] = None
-                    except TaskMaster.DoesNotExist:
-                        # Fall back to empty hierarchy — the next meta
-                        # refetch will fill in the right fields.
-                        note["taskTitle"] = None
-                        note["displayId"] = None
-                        note["projectName"] = None
-                        note["parentTaskId"] = None
-                        note["isMilestone"] = False
-                        note["milestoneId"] = None
-                        note["milestoneTitle"] = None
-                        note["parentTaskTitle"] = None
-                        note["parentTaskIsMilestone"] = None
-                        note["parentTaskDisplayId"] = None
+                    note.update(_task_hierarchy_fields(data["team"], data["task"]))
 
                     # Second, create the associated role for that note
                     team_obj = TeamMaster.objects.get(team_id=data["team"])
@@ -589,3 +589,109 @@ class TaskNoteAttachmentView(AuthenticatedAPIView):
             return Response(res, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class TaskNoteMoveView(AuthenticatedAPIView):
+    """Re-anchor a task note (and its whole descendant subtree) to a
+    different task. The sidebar's DnD "drop note onto another task
+    folder" lands here.
+
+    Design notes:
+      - Dedicated endpoint rather than the generic PUT: the PUT's
+        None-strip contract is load-bearing for autosave, and a move
+        needs target validation + a descendant cascade that don't
+        belong in the field-update path.
+      - `project` is ALWAYS derived from the target task, never
+        client-supplied, so a task/project mismatch can't be written.
+      - The cascade `.update()` explicitly bumps `ts_updated_at` so the
+        incremental OpenSearch reindex (`opensearch_reindex
+        --since-minutes N` cron, filters ts_updated_at__gte) re-ingests
+        every moved note with the NEW project's ACL. Without it, old
+        project members would keep finding the moved sub-notes in
+        Spotlight until a full reindex.
+    """
+
+    def put(self, request):
+        from django.utils import timezone
+
+        request_user_id = request.user.id
+
+        data = {
+            "team_id": request.data.get("team_id"),
+            "user_id": request.data.get("user_id"),
+            "note_id": request.data.get("note_id"),
+            "task_id": request.data.get("task_id"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+            return res
+
+        if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
+            return res
+
+        try:
+            note = TaskNoteMaster.objects.get(team=data["team_id"], note_id=data["note_id"])
+        except TaskNoteMaster.DoesNotExist:
+            return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            target_task = TaskMaster.objects.get(team=data["team_id"], task_id=data["task_id"])
+        except TaskMaster.DoesNotExist:
+            return Response({"error": "Target task not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # The mover must be a member of the target task's project —
+        # mirrors the implicit-access rule in `_accessible_task_note_ids`.
+        if not ProjectMembers.objects.filter(
+            team=data["team_id"], attendee=request_user_id, project=target_task.project_id
+        ).exists():
+            return Response(
+                {"error": "You are not a member of the target task's project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        now = timezone.now()
+        with transaction.atomic():
+            note.task = target_task
+            note.project = target_task.project
+            note.save(update_fields=["task", "project", "ts_updated_at"])
+
+            # Cascade to the whole descendant subtree (parent_note_id is
+            # a plain int — walk level by level). Children must follow
+            # the root note to the new task, or the task-scoped listing
+            # and the sidebar grouping would diverge. The explicit
+            # ts_updated_at bump is what routes them into the
+            # incremental reindex window (ACL refresh — see class doc).
+            visited = {note.note_id}
+            frontier = [note.note_id]
+            while frontier:
+                child_ids = list(
+                    TaskNoteMaster.objects.filter(
+                        team=data["team_id"], parent_note_id__in=frontier
+                    )
+                    .exclude(note_id__in=visited)
+                    .values_list("note_id", flat=True)
+                )
+                if not child_ids:
+                    break
+                TaskNoteMaster.objects.filter(note_id__in=child_ids).update(
+                    task=target_task,
+                    project=target_task.project,
+                    ts_updated_at=now,
+                )
+                visited.update(child_ids)
+                frontier = child_ids
+
+        res = {
+            "noteType": NOTE_TYPE,
+            "noteId": note.note_id,
+            "parentNoteId": note.parent_note_id,
+            "projectId": target_task.project_id,
+            "taskId": target_task.task_id,
+            "title": note.title,
+            "tsUpdated": note.ts_updated_at,
+        }
+        res.update(_task_hierarchy_fields(data["team_id"], target_task.task_id))
+        return Response(res, status=status.HTTP_200_OK)

@@ -773,3 +773,122 @@ class ChatSubNotesView(AuthenticatedAPIView):
         )
 
         return Response(list(sub_notes), status=status.HTTP_200_OK)
+
+
+class ChatNoteMoveView(AuthenticatedAPIView):
+    """Re-anchor a chat note (and its whole descendant subtree) to a
+    different channel. The sidebar's DnD "drop note onto another chat
+    folder" lands here.
+
+    Design notes (mirrors TaskNoteMoveView):
+      - Dedicated endpoint — the generic PUT's None-strip contract is
+        load-bearing for autosave and has no target validation.
+      - Thread anchoring is CLEARED on move (`is_thread=False`,
+        `thread_root_id=None`): the old thread-root message lives in the
+        old channel, so keeping it would leave a dangling cross-channel
+        thread pointer.
+      - The cascade `.update()` explicitly bumps `ts_updated_at` so the
+        incremental OpenSearch reindex re-ingests every moved note with
+        the NEW channel's member ACL.
+    """
+
+    def put(self, request):
+        from django.utils import timezone
+
+        request_user_id = request.user.id
+
+        data = {
+            "team_id": request.data.get("team_id"),
+            "user_id": request.data.get("user_id"),
+            "note_id": request.data.get("note_id"),
+            "chat_type": request.data.get("chat_type"),
+            "channel_id": request.data.get("channel_id"),
+        }
+
+        if res := validate_request_data(data):
+            return res
+
+        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+            return res
+
+        if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
+            return res
+
+        try:
+            note = ChatNoteMaster.objects.get(team=data["team_id"], note_id=data["note_id"])
+        except ChatNoteMaster.DoesNotExist:
+            return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            target_channel = Channel.objects.get(
+                id=data["channel_id"], team_id=data["team_id"], is_deleted=False
+            )
+        except (Channel.DoesNotExist, ValueError):
+            return Response(
+                {"error": "Target channel not found."}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        # The mover must be an active member of the target channel —
+        # mirrors the implicit-access rule in `_chat_membership_filters`.
+        if not ChannelMember.objects.filter(
+            channel_id=target_channel.id, user_id=request_user_id, is_deleted=False
+        ).exists():
+            return Response(
+                {"error": "You are not a member of the target chat."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        now = timezone.now()
+        with transaction.atomic():
+            note.channel = target_channel
+            note.chat_type = data["chat_type"]
+            note.is_thread = False
+            note.thread_root_id = None
+            note.save(
+                update_fields=[
+                    "channel",
+                    "chat_type",
+                    "is_thread",
+                    "thread_root_id",
+                    "ts_updated_at",
+                ]
+            )
+
+            # Cascade to descendants — see TaskNoteMoveView for why the
+            # ts_updated_at bump matters (incremental-reindex ACL).
+            visited = {note.note_id}
+            frontier = [note.note_id]
+            while frontier:
+                child_ids = list(
+                    ChatNoteMaster.objects.filter(
+                        team=data["team_id"], parent_note_id__in=frontier
+                    )
+                    .exclude(note_id__in=visited)
+                    .values_list("note_id", flat=True)
+                )
+                if not child_ids:
+                    break
+                ChatNoteMaster.objects.filter(note_id__in=child_ids).update(
+                    channel=target_channel,
+                    chat_type=data["chat_type"],
+                    is_thread=False,
+                    thread_root_id=None,
+                    ts_updated_at=now,
+                )
+                visited.update(child_ids)
+                frontier = child_ids
+
+        return Response(
+            {
+                "noteType": NOTE_TYPE,
+                "noteId": note.note_id,
+                "parentNoteId": note.parent_note_id,
+                "chatType": note.chat_type,
+                "chatId": str(target_channel.id),
+                "isThread": False,
+                "threadId": None,
+                "title": note.title,
+                "tsUpdated": note.ts_updated_at,
+            },
+            status=status.HTTP_200_OK,
+        )
