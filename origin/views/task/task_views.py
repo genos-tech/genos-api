@@ -313,7 +313,17 @@ class TaskMasterView(AuthenticatedAPIView):
                 logger.exception("ensure_webhooks_for_links crashed (swallowed)")
             return Response(
                 {
-                    "task": serializer.data,
+                    # Mirror the PUT handler and surface the computed
+                    # `display_id` ("<code>-<n>") alongside the serialized
+                    # fields. TaskMasterSerializer uses `fields="__all__"`
+                    # on a ModelSerializer so it only emits DB columns, not
+                    # @property values. Without this, a single-POST create
+                    # (createQuickTask / the table's inline quick-add row)
+                    # has no displayId to show, so the new row flashes the
+                    # raw "#<id>" until the next REST refetch overwrites it.
+                    # `serializer.instance` carries the project_task_number
+                    # the post-save signal assigned during `.save()`.
+                    "task": {**serializer.data, "displayId": serializer.instance.display_id},
                     "newly_mentioned_user_ids": newly_mentioned_user_ids,
                     # On create there's no prior set; `all` equals `newly`
                     # and `removed` is empty. Returning the keys keeps the
