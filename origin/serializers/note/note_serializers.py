@@ -15,6 +15,12 @@ class PersonalNoteMasterSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class PersonalNoteFolderSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PersonalNoteFolder
+        fields = "__all__"
+
+
 class TaskNoteMasterSerializer(serializers.ModelSerializer):
     class Meta:
         model = TaskNoteMaster

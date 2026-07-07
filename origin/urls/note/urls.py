@@ -13,6 +13,10 @@ from origin.views.note.note_version_views import (
     NoteVersionListView,
     NoteVersionRestoreView,
 )
+from origin.views.note.personal_note_folder_views import (
+    PersonalNoteFolderView,
+    PersonalNoteMoveView,
+)
 from origin.views.note.personal_note_views import *
 from origin.views.note.recent_note_views import *
 from origin.views.note.task_note_views import *
@@ -38,6 +42,17 @@ urlpatterns = [
         SharedPersonalNoteMetaView.as_view(),
         name="shared_personal_note_meta",
     ),
+    # Sidebar folders (personal-only organization layer)
+    path(
+        "api/v2/note/personal/folder/",
+        PersonalNoteFolderView.as_view(),
+        name="personal_note_folder",
+    ),
+    path(
+        "api/v2/note/personal/move/",
+        PersonalNoteMoveView.as_view(),
+        name="personal_note_move",
+    ),
     path("api/v2/note/task/", TaskNoteMasterView.as_view(), name="task_note"),
     path(
         "api/v2/note/task/single/",
@@ -51,6 +66,7 @@ urlpatterns = [
         TaskNoteAttachmentView.as_view(),
         name="task_attachment",
     ),
+    path("api/v2/note/task/move/", TaskNoteMoveView.as_view(), name="task_note_move"),
     path("api/v2/note/chat/", ChatNoteMasterView.as_view(), name="chat_note"),
     path(
         "api/v2/note/chat/single/",
@@ -69,6 +85,7 @@ urlpatterns = [
         ChatSubNotesView.as_view(),
         name="chat_sub_notes",
     ),
+    path("api/v2/note/chat/move/", ChatNoteMoveView.as_view(), name="chat_note_move"),
     # Favorite note endpoints
     path(
         "api/v2/note/favorite/",
