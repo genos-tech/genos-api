@@ -53,7 +53,7 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
-from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
@@ -2803,18 +2803,45 @@ def _create_notes(team, demo_user, bots, seeded_projects):
     """
     permissions: list[NotePermissionMaster] = []
 
+    # Sidebar folders for the personal notes — shows off the folder
+    # feature out of the box: two root folders, one nested subfolder,
+    # and one note left unfiled at the My Notes root so the demo
+    # covers both filed and unfiled states.
+    folder_getting_started = PersonalNoteFolder.objects.create(
+        team=team, owner=demo_user, name="Getting started"
+    )
+    folder_product = PersonalNoteFolder.objects.create(
+        team=team, owner=demo_user, name="Product"
+    )
+    folder_design = PersonalNoteFolder.objects.create(
+        team=team,
+        owner=demo_user,
+        name="Design system",
+        parent_folder_id=folder_product.folder_id,
+    )
+
+    # (title, body, folder or None=root)
     personal_specs = [
-        ("Welcome to your demo workspace", NOTE_WELCOME_BODY),
-        ("How to get the most out of Spotlight (Cmd-K)", NOTE_SPOTLIGHT_TIPS_BODY),
-        ("This week's priorities", NOTE_WEEKLY_PRIORITIES_BODY),
-        ("Design system inventory (v3.2)", NOTE_DESIGN_SYSTEM_INVENTORY_BODY),
+        ("Welcome to your demo workspace", NOTE_WELCOME_BODY, folder_getting_started),
+        (
+            "How to get the most out of Spotlight (Cmd-K)",
+            NOTE_SPOTLIGHT_TIPS_BODY,
+            folder_getting_started,
+        ),
+        ("This week's priorities", NOTE_WEEKLY_PRIORITIES_BODY, None),
+        (
+            "Design system inventory (v3.2)",
+            NOTE_DESIGN_SYSTEM_INVENTORY_BODY,
+            folder_design,
+        ),
     ]
-    for title, body in personal_specs:
+    for title, body, folder in personal_specs:
         note = PersonalNoteMaster.objects.create(
             team=team,
             owner=demo_user,
             title=title,
             body=body,
+            folder_id=folder.folder_id if folder else None,
         )
         permissions.append(
             NotePermissionMaster(
@@ -3200,6 +3227,7 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
         ChatNoteMaster.objects.filter(team=team_id).delete()
         TaskNoteMaster.objects.filter(team=team_id).delete()
         PersonalNoteMaster.objects.filter(team=team_id).delete()
+        PersonalNoteFolder.objects.filter(team=team_id).delete()
 
         # Tasks (TaskActivity cascades on task delete; comments/tags/
         # attachments are SET_NULL so delete explicitly).
