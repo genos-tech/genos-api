@@ -15,6 +15,7 @@ ACTUAL current behavior and document the divergence.
 """
 
 from datetime import date
+from unittest import mock
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
@@ -269,6 +270,33 @@ class TaskNumberingSignalTests(BaseAPITestCase):
                     status="Open",
                     project_task_number=dup_num,
                 )
+
+    def test_number_race_collision_is_retried(self):
+        # Regression for the "create task -> 500" bug: two concurrent
+        # creates in the same project can compute the same MAX+1 and the
+        # loser's UPDATE hit the unique constraint, which used to bubble
+        # out as an unhandled 500. The signal must now retry and land on
+        # the next free number instead of raising.
+        t1 = TaskMaster.objects.create(
+            team=self.team, project=self.project, title="first", status="Open"
+        )
+        t1.refresh_from_db()
+        self.assertEqual(t1.project_task_number, 1)
+
+        # Force the first claim to reuse t1's number (simulating a racing
+        # create that already committed number 1), then let the recompute
+        # return the real next value on retry.
+        with mock.patch(
+            "origin.models.task.task_models._next_project_task_number",
+            side_effect=[1, 2],
+        ) as m:
+            t2 = TaskMaster.objects.create(
+                team=self.team, project=self.project, title="second", status="Open"
+            )
+        t2.refresh_from_db()
+        # Collided on 1, retried, and claimed 2 — no exception escaped.
+        self.assertEqual(t2.project_task_number, 2)
+        self.assertEqual(m.call_count, 2)
 
 
 class TaskRootIdSignalTests(BaseAPITestCase):
