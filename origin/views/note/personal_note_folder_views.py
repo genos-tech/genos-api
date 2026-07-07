@@ -21,7 +21,9 @@ from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 
+from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
+from origin.models.note.version_note_models import NoteVersionMaster
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
@@ -181,6 +183,13 @@ class PersonalNoteFolderView(AuthenticatedAPIView):
         return Response(_folder_dict(folder), status=status.HTTP_200_OK)
 
     def delete(self, request):
+        """DESTRUCTIVE delete (per product spec): the folder, every
+        descendant folder, every note filed anywhere in that subtree,
+        and each such note's own `parent_note_id` child-note chain are
+        hard-deleted — nothing is re-parented or retained. Note
+        permission + version rows are purged like the single-note
+        DELETE; search-index chunks are left to the reindex cycle,
+        matching the existing single-note delete behavior."""
         request_user_id = request.user.id
 
         data = {
@@ -198,27 +207,76 @@ class PersonalNoteFolderView(AuthenticatedAPIView):
         try:
             with transaction.atomic():
                 folder = _get_owned_folder(data["folder_id"], data["team_id"], data["user_id"])
-                # Contents move UP one level (to the deleted folder's
-                # parent, or to root). `.update()` skips auto_now on the
-                # notes, so they keep their -tsUpdated sidebar position.
-                new_parent = folder.parent_folder_id
-                PersonalNoteFolder.objects.filter(
-                    team=data["team_id"],
-                    owner=data["user_id"],
-                    parent_folder_id=folder.folder_id,
-                ).update(parent_folder_id=new_parent)
-                PersonalNoteMaster.objects.filter(
-                    team=data["team_id"],
-                    owner=data["user_id"],
-                    folder_id=folder.folder_id,
-                ).update(folder_id=new_parent)
-                folder.delete()
+
+                # 1. The folder subtree (BFS; visited set guards against
+                #    pre-existing corrupt loops).
+                folder_ids = {folder.folder_id}
+                frontier = [folder.folder_id]
+                while frontier:
+                    child_ids = list(
+                        PersonalNoteFolder.objects.filter(
+                            team=data["team_id"],
+                            owner=data["user_id"],
+                            parent_folder_id__in=frontier,
+                        )
+                        .exclude(folder_id__in=folder_ids)
+                        .values_list("folder_id", flat=True)
+                    )
+                    if not child_ids:
+                        break
+                    folder_ids.update(child_ids)
+                    frontier = child_ids
+
+                # 2. Root notes filed in any of those folders…
+                note_ids = set(
+                    PersonalNoteMaster.objects.filter(
+                        team=data["team_id"],
+                        owner=data["user_id"],
+                        folder_id__in=folder_ids,
+                    ).values_list("note_id", flat=True)
+                )
+                # …plus their child-note subtrees (children carry
+                # folder_id NULL and hang off parent_note_id).
+                frontier = list(note_ids)
+                while frontier:
+                    child_notes = list(
+                        PersonalNoteMaster.objects.filter(
+                            team=data["team_id"],
+                            owner=data["user_id"],
+                            parent_note_id__in=frontier,
+                        )
+                        .exclude(note_id__in=note_ids)
+                        .values_list("note_id", flat=True)
+                    )
+                    if not child_notes:
+                        break
+                    note_ids.update(child_notes)
+                    frontier = child_notes
+
+                # 3. Hard delete: notes, then their permission/version
+                #    rows (bulk form of what the single-note DELETE does
+                #    via delete_note_permissions/delete_note_versions),
+                #    then the folders.
+                PersonalNoteMaster.objects.filter(note_id__in=note_ids).delete()
+                NotePermissionMaster.objects.filter(
+                    note_type=NOTE_TYPE, note_id__in=note_ids
+                ).delete()
+                NoteVersionMaster.objects.filter(
+                    note_type=NOTE_TYPE, note_id__in=note_ids
+                ).delete()
+                PersonalNoteFolder.objects.filter(folder_id__in=folder_ids).delete()
         except PersonalNoteFolder.DoesNotExist:
             return Response({"error": "Folder not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        # 200 with the deleted ids (not 204): the frontend uses them to
+        # close tabs and purge local caches for every destroyed note.
         return Response(
-            {"message": "Folder deleted successfully."},
-            status=status.HTTP_204_NO_CONTENT,
+            {
+                "message": "Folder and contents deleted.",
+                "deletedFolderIds": sorted(folder_ids),
+                "deletedNoteIds": sorted(note_ids),
+            },
+            status=status.HTTP_200_OK,
         )
 
 

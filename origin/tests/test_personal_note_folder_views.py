@@ -164,46 +164,76 @@ class PersonalNoteFolderViewTests(BaseAPITestCase):
         self.assertEqual(res.status_code, 404)
 
     # ------------------------------------------------------------------
-    # Delete — contents move up
+    # Delete — DESTRUCTIVE: whole subtree (folders + notes + note
+    # children) is hard-deleted, nothing re-parented.
     # ------------------------------------------------------------------
 
-    def test_delete_mid_chain_moves_contents_up(self):
+    def test_delete_destroys_subtree_folders_notes_and_note_children(self):
+        from origin.models.note.common_note_models import NotePermissionMaster
+        from origin.models.note.version_note_models import NoteVersionMaster
+
         a = self._create_folder("A")
         b = self._create_folder("B", parent_folder_id=a.folder_id)
         c = self._create_folder("C", parent_folder_id=b.folder_id)
-        note = self._create_note("in-b", folder_id=b.folder_id)
-        ts_before = note.ts_updated_at
+        note_b = self._create_note("in-b", folder_id=b.folder_id)
+        note_c = self._create_note("in-c", folder_id=c.folder_id)
+        # Child-note chain under the filed root (folder_id NULL —
+        # attached via parent_note_id): must be destroyed too.
+        child = self._create_note("child", parent_note_id=note_b.note_id)
+        grandchild = self._create_note("grandchild", parent_note_id=child.note_id)
+        # Bookkeeping rows that the delete must purge.
+        NotePermissionMaster.objects.create(
+            team=self.team, user=self.user, note_type=1, note_id=note_b.note_id, role_id=1
+        )
+        NoteVersionMaster.objects.create(
+            team=self.team,
+            editor=self.user,
+            note_type=1,
+            note_id=note_b.note_id,
+            version_no=1,
+            title="v1",
+            body=[],
+        )
+        # Outside the subtree — must survive.
+        survivor = self._create_note("outside", folder_id=a.folder_id)
 
         res = self.client.delete(
             f"{FOLDER_URL}?{urlencode({**self._get_params(), 'folder_id': b.folder_id})}"
         )
-        self.assertEqual(res.status_code, 204)
+        self.assertEqual(res.status_code, 200)
+        destroyed_notes = {note_b.note_id, note_c.note_id, child.note_id, grandchild.note_id}
+        self.assertEqual(set(res.data["deletedNoteIds"]), destroyed_notes)
+        self.assertEqual(set(res.data["deletedFolderIds"]), {b.folder_id, c.folder_id})
 
-        c.refresh_from_db()
-        note.refresh_from_db()
-        self.assertEqual(c.parent_folder_id, a.folder_id)
-        self.assertEqual(note.folder_id, a.folder_id)
-        # .update() must skip auto_now — moved notes keep their sidebar
-        # position in the -tsUpdated ordering.
-        self.assertEqual(note.ts_updated_at, ts_before)
         self.assertFalse(
-            PersonalNoteFolder.objects.filter(folder_id=b.folder_id).exists()
+            PersonalNoteFolder.objects.filter(
+                folder_id__in=[b.folder_id, c.folder_id]
+            ).exists()
         )
+        self.assertFalse(
+            PersonalNoteMaster.objects.filter(note_id__in=destroyed_notes).exists()
+        )
+        self.assertFalse(
+            NotePermissionMaster.objects.filter(
+                note_type=1, note_id=note_b.note_id
+            ).exists()
+        )
+        self.assertFalse(
+            NoteVersionMaster.objects.filter(note_type=1, note_id=note_b.note_id).exists()
+        )
+        # Parent folder + its own note untouched.
+        self.assertTrue(PersonalNoteFolder.objects.filter(folder_id=a.folder_id).exists())
+        survivor.refresh_from_db()
+        self.assertEqual(survivor.folder_id, a.folder_id)
 
-    def test_delete_root_folder_contents_go_to_root(self):
+    def test_delete_empty_folder(self):
         a = self._create_folder("A")
-        child = self._create_folder("child", parent_folder_id=a.folder_id)
-        note = self._create_note("in-a", folder_id=a.folder_id)
-
         res = self.client.delete(
             f"{FOLDER_URL}?{urlencode({**self._get_params(), 'folder_id': a.folder_id})}"
         )
-        self.assertEqual(res.status_code, 204)
-
-        child.refresh_from_db()
-        note.refresh_from_db()
-        self.assertIsNone(child.parent_folder_id)
-        self.assertIsNone(note.folder_id)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["deletedNoteIds"], [])
+        self.assertFalse(PersonalNoteFolder.objects.filter(folder_id=a.folder_id).exists())
 
     def test_delete_foreign_folder_404(self):
         theirs = self._create_folder("theirs", user=self.user2)

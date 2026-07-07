@@ -15,9 +15,9 @@ class PersonalNoteFolder(models.Model):
     deep; `PersonalNoteMaster.folder_id` attaches a ROOT-level note (its
     `parent_note_id` child subtree rides along implicitly). Both are
     plain BigIntegerFields per the repo's tree convention
-    (`parent_note_id` / `parent_task_id`) — the "contents move up"
-    delete semantics live in the view, so an FK cascade would be wrong
-    anyway.
+    (`parent_note_id` / `parent_task_id`) — folder deletion is a
+    DESTRUCTIVE recursive delete of the whole subtree (folders + filed
+    notes + their child notes), implemented in the view.
     """
 
     team = models.ForeignKey(
