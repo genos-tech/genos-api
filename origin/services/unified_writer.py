@@ -688,7 +688,20 @@ def write_task_comment_as_thread_reply(
             # Atomically increment the parent's reply_count. Using
             # F() avoids the read-modify-write race against concurrent
             # comment creates.
-            Message.objects.filter(id=parent.id).update(reply_count=F("reply_count") + 1)
+            #
+            # Also bump ts_updated_at: `.update()` skips the `auto_now`,
+            # and the FE syncs top-level messages incrementally via
+            # `?since=ts_updated_at`. Without this the task-header row is
+            # never re-served after a comment, so a cached bubble keeps its
+            # stale `taskCommentCount` chip until a full resync. The
+            # direct-reply path (`message_views`) already bumps it via
+            # `.save(update_fields=[..., "ts_updated_at"])`; match that.
+            from django.utils import timezone
+
+            Message.objects.filter(id=parent.id).update(
+                reply_count=F("reply_count") + 1,
+                ts_updated_at=timezone.now(),
+            )
         return msg
     except Exception:  # noqa: BLE001
         logger.exception(
