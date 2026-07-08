@@ -29,7 +29,7 @@ from origin.models.chat.unified_models import (
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import ProjectMaster
-from origin.models.task.task_models import TaskMaster
+from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.serializers.chat.todo_serializers import (
     ToDoCategorySerializer,
     ToDoGroupSerializer,
@@ -487,8 +487,8 @@ class MessageSerializerTests(BaseAPITestCase):
             "id", "channelId", "channelKind", "sender", "seq", "body",
             "bodyText", "parentId", "threadRootId", "isThreadReply",
             "replyCount", "reactions", "mentions", "attachments", "metadata",
-            "taskId", "displayId", "taskStatus", "editedAt", "deletedAt",
-            "tsSent", "tsUpdated",
+            "taskId", "displayId", "taskStatus", "taskCommentCount",
+            "editedAt", "deletedAt", "tsSent", "tsUpdated",
         }
         self.assertEqual(set(data.keys()), expected_keys)
         self.assertEqual(data["id"], str(msg.id))
@@ -500,6 +500,7 @@ class MessageSerializerTests(BaseAPITestCase):
         self.assertIsNone(data["taskId"])
         self.assertIsNone(data["displayId"])
         self.assertIsNone(data["taskStatus"])
+        self.assertIsNone(data["taskCommentCount"])
         # No reactions/mentions/attachments yet.
         self.assertEqual(data["reactions"], [])
         self.assertEqual(data["mentions"], [])
@@ -546,6 +547,51 @@ class MessageSerializerTests(BaseAPITestCase):
         ch = self._channel(ChannelKind.PM)
         msg = self._message(ch, task=task)
         self.assertEqual(MessageSerializer(msg).data["displayId"], "DIS-7")
+
+    def test_task_comment_count_reflects_live_comments_only(self):
+        """The PM task-header chip count must equal the number of LIVE task
+        comments (matching the Comments tab), NOT `reply_count`. Only
+        surfaces when the view annotates `task_comment_count`; un-annotated
+        rows fall back to null so the FE uses `replyCount`."""
+        task = TaskMaster.objects.create(team=self.team, title="T", status="Open")
+        # 2 live comments + 1 soft-deleted -> the live count is 2.
+        for cid in (1, 2):
+            TaskComments.objects.create(
+                task=task, sender=self.user, comment_id=cid, comment_body={"t": cid}
+            )
+        TaskComments.objects.create(
+            task=task, sender=self.user, comment_id=3, comment_body={"t": 3}, is_deleted=True
+        )
+        ch = self._channel(ChannelKind.PM)
+        # `reply_count=5` proves the count is NOT sourced from reply_count.
+        header = self._message(ch, task=task, is_thread_reply=False, reply_count=5)
+
+        # Un-annotated -> null (FE falls back to replyCount).
+        self.assertIsNone(MessageSerializer(header).data["taskCommentCount"])
+
+        # Annotated (as the message + channel views do) -> live count, 2.
+        annotated = MessageSerializer.annotate_task_comment_count(
+            Message.objects.filter(pk=header.pk)
+        ).first()
+        data = MessageSerializer(annotated).data
+        self.assertEqual(data["taskCommentCount"], 2)
+        self.assertEqual(data["replyCount"], 5)
+
+        # A mirrored comment (thread reply carrying task_id) gets no chip
+        # count even when annotated — the chip lives only on the header.
+        reply = self._message(
+            ch,
+            seq=2,
+            task=task,
+            is_thread_reply=True,
+            parent=header,
+            thread_root=header,
+            metadata={"taskCommentId": 1},
+        )
+        annotated_reply = MessageSerializer.annotate_task_comment_count(
+            Message.objects.filter(pk=reply.pk)
+        ).first()
+        self.assertIsNone(MessageSerializer(annotated_reply).data["taskCommentCount"])
 
 
 class MessageReactionSerializerTests(BaseAPITestCase):

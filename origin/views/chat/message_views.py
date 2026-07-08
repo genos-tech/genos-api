@@ -385,7 +385,7 @@ def _prefetched_messages(qs):
     between `*SingleMessageView` and `*MessagesDeltaView` is exactly the
     class of bug this rewrite eliminates.
     """
-    return qs.select_related(
+    qs = qs.select_related(
         "sender",
         "channel",
         # PM-only `task` FK + nested `task.project` for `displayId`
@@ -399,6 +399,10 @@ def _prefetched_messages(qs):
         "mentions",
         "attachments",
     )
+    # PM bubble "N comments" chip: the authoritative live comment count,
+    # so it matches the thread's Comments tab instead of `reply_count`
+    # (which counts all thread replies). See `MessageSerializer`.
+    return MessageSerializer.annotate_task_comment_count(qs)
 
 
 class MessagesDeltaView(AuthenticatedAPIView):

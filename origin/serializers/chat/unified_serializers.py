@@ -3,10 +3,9 @@ Unified serializers for the new chat schema.
 
 One canonical `MessageSerializer` for all channel kinds (DM=1, GM=2, PM=3,
 MDM=4). PM-specific fields (taskId, displayId, taskStatus, taskCommentCount)
-ride in `metadata` JSON instead of top-level columns — the legacy
-`pm_serializers` vs `dm_serializers` divergence (where PM had extra fields
-and DM/GM/MDM returned slightly different timestamp shapes) does not exist
-here.
+are top-level, derived off the `task` FK — the legacy `pm_serializers` vs
+`dm_serializers` divergence (where PM had extra fields and DM/GM/MDM returned
+slightly different timestamp shapes) does not exist here.
 
 DRF's default DateTimeField already emits ISO 8601 strings, so no explicit
 DATETIME_FORMAT setting is required. The legacy code's `str(msg.ts_sent_at)`
@@ -14,6 +13,8 @@ calls were a regression that this rewrite eliminates by going back to the
 DRF default.
 """
 
+from django.db.models import Count, IntegerField, OuterRef, Subquery
+from django.db.models.functions import Coalesce
 from rest_framework import serializers
 
 from origin.models.chat.unified_models import (
@@ -161,6 +162,16 @@ class MessageSerializer(serializers.ModelSerializer):
     # null-coalesce without forcing a DB hit when `task` is unset.
     displayId = serializers.SerializerMethodField()
     taskStatus = serializers.SerializerMethodField()
+    # Number of LIVE (non-deleted) task comments on the PM task this
+    # header renders — the authoritative count the thread's "Comments"
+    # tab shows (`loadTaskComments` filters `is_deleted=False`). The FE
+    # bubble chip uses this instead of `replyCount`: `reply_count`
+    # counts every thread reply, so it over-counts legacy free-form
+    # replies that were never task comments AND under-counts when a
+    # comment→thread-reply mirror failed. Null unless the view annotated
+    # `task_comment_count` (see `annotate_task_comment_count`); the FE
+    # falls back to `replyCount` for un-annotated / pre-change rows.
+    taskCommentCount = serializers.SerializerMethodField()
     editedAt = serializers.DateTimeField(source="edited_at", read_only=True, allow_null=True)
     deletedAt = serializers.DateTimeField(source="deleted_at", read_only=True, allow_null=True)
     tsSent = serializers.DateTimeField(source="ts_sent_at", read_only=True)
@@ -187,6 +198,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "taskId",
             "displayId",
             "taskStatus",
+            "taskCommentCount",
             "editedAt",
             "deletedAt",
             "tsSent",
@@ -208,6 +220,45 @@ class MessageSerializer(serializers.ModelSerializer):
 
     def get_taskStatus(self, obj):
         return obj.task.status if getattr(obj, "task", None) else None
+
+    @staticmethod
+    def annotate_task_comment_count(qs):
+        """Annotate `task_comment_count` = live (non-deleted) `TaskComments`
+        for each message's linked PM task, via ONE correlated subquery so
+        `get_taskCommentCount` reads it without an N+1.
+
+        Every view that serializes PM task-header messages must apply this:
+        the message-delta + single-message endpoints (through
+        `_prefetched_messages`) and the channel list/detail
+        `_latest_message`. Harmlessly 0 for non-task rows (`task_id` NULL →
+        empty subquery), and only surfaced on top-level task headers.
+        """
+        from origin.models.task.task_models import TaskComments
+
+        comment_count_sq = (
+            TaskComments.objects.filter(task_id=OuterRef("task_id"), is_deleted=False)
+            .order_by()
+            .values("task_id")
+            .annotate(c=Count("id"))
+            .values("c")
+        )
+        return qs.annotate(
+            task_comment_count=Coalesce(
+                Subquery(comment_count_sq, output_field=IntegerField()), 0
+            )
+        )
+
+    def get_taskCommentCount(self, obj):
+        # Only meaningful on a top-level PM task-header message (the one
+        # the FE renders the "N comments" chip on). Thread replies —
+        # including the mirrored comments themselves, which carry
+        # `task_id` — return None so no per-reply chip is implied, and
+        # non-task rows (DM/GM/MDM) return None. When the serving view
+        # didn't annotate (`getattr` default), also None so the FE falls
+        # back to `replyCount`.
+        if obj.is_thread_reply or obj.task_id is None:
+            return None
+        return getattr(obj, "task_comment_count", None)
 
 
 class ChannelMemberSerializer(serializers.ModelSerializer):

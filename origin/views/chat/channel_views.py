@@ -39,6 +39,7 @@ from origin.models.common.team_models import TeamMaster
 from origin.serializers.chat.unified_serializers import (
     ChannelMemberSerializer,
     ChannelSerializer,
+    MessageSerializer,
 )
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
@@ -191,7 +192,7 @@ class ChannelListView(AuthenticatedAPIView):
         # exactly (top-level, non-deleted) so the resolved message is
         # identical to what the OR chain returned.
         ids = [c.id for c in channels]
-        latest_messages = (
+        latest_messages = MessageSerializer.annotate_task_comment_count(
             Message.objects.filter(
                 channel_id__in=ids,
                 is_thread_reply=False,
@@ -424,12 +425,14 @@ class ChannelDetailView(AuthenticatedAPIView):
         annotated = qs.first()
         if annotated and annotated._latest_seq is not None:
             latest = (
-                Message.objects.filter(
-                    channel_id=channel.id,
-                    seq=annotated._latest_seq,
+                MessageSerializer.annotate_task_comment_count(
+                    Message.objects.filter(
+                        channel_id=channel.id,
+                        seq=annotated._latest_seq,
+                    )
+                    .select_related("sender", "channel", "task", "task__project")
+                    .prefetch_related("reactions__user", "mentions", "attachments")
                 )
-                .select_related("sender", "channel", "task", "task__project")
-                .prefetch_related("reactions__user", "mentions", "attachments")
                 .first()
             )
             channel._latest_message = latest
