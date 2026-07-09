@@ -23,12 +23,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.db import transaction
+
+from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_OWNER
 
 _VALID_TYPES = {"personal", "task"}
 
@@ -61,14 +65,31 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
 
 def _create_personal(*, title: str, body, ctx: ToolContext) -> dict[str, Any]:
-    """Personal notes have no ACL beyond ownership — the creator is the owner."""
+    """Personal notes are gated by an explicit NotePermissionMaster role
+    row, NOT by the `owner` column — `note_role.get_effective_role` grants
+    personal notes *no* implicit access, so the read/write ACL checks
+    (`require_read_role` / `require_write_role`) only pass when a role row
+    exists. The UI create path (`PersonalNoteMasterView.post`) writes the
+    note AND a ROLE_OWNER row in one transaction; this tool must do the
+    same or the creator gets a 403 opening the note it just made.
+
+    Wrapped in a transaction so a failure writing the role can't leave an
+    orphaned, permanently-inaccessible note behind."""
     try:
-        note = PersonalNoteMaster.objects.create(
-            team_id=ctx.team_id,
-            owner_id=ctx.user_id,
-            title=title,
-            body=body,
-        )
+        with transaction.atomic():
+            note = PersonalNoteMaster.objects.create(
+                team_id=ctx.team_id,
+                owner_id=ctx.user_id,
+                title=title,
+                body=body,
+            )
+            NotePermissionMaster.objects.create(
+                team_id=ctx.team_id,
+                user_id=ctx.user_id,
+                note_id=note.note_id,
+                note_type=NOTE_TYPE_PERSONAL,
+                role_id=ROLE_OWNER,
+            )
     except Exception as e:  # noqa: BLE001
         raise ToolError(f"Failed to create personal note: {e}")
     return {

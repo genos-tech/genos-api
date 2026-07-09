@@ -154,6 +154,36 @@ class TestNoteViews(TestCase):
         )
         self.assertEqual(response.status_code, 404)
 
+    def test_agent_created_personal_note_is_readable_by_creator(self):
+        """Regression: a personal note created by the agent `create_note`
+        tool must be openable by its creator. Personal notes have no
+        implicit access (`note_role.get_effective_role` returns None), so
+        the tool must write a ROLE_OWNER `NotePermissionMaster` row like
+        the UI create path does — otherwise the single-note GET 403s."""
+        from origin.search_engine.agent.tools.base import ToolContext
+        from origin.search_engine.agent.tools.create_note import _run
+
+        result = _run(
+            {
+                "note_type": "personal",
+                "title": "Filed by Genos",
+                "content_text": "spotlight answer body",
+            },
+            ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id)),
+        )
+        note_id = result["note_id"]
+
+        response = self.client.get(
+            "/api/v2/note/personal/single/",
+            {
+                "team_id": str(self.team.team_id),
+                "user_id": self.user.id,
+                "note_id": note_id,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["title"], "Filed by Genos")
+
     # ── Get All Notes ──────────────────────────────────────────────
 
     def test_get_all_notes(self):
