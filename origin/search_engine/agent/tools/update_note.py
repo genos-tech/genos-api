@@ -29,6 +29,7 @@ from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.search_engine.chunkers.base import NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
 
 _VALID_TYPES = {"personal", "task"}
@@ -36,10 +37,10 @@ _NOTE_TYPE_CODE = {"personal": NOTE_TYPE_PERSONAL, "task": NOTE_TYPE_TASK}
 
 
 def _wrap_blocknote(text: str) -> list[dict[str, Any]]:
-    """Same minimal BlockNote shape the other write tools produce."""
-    if not text:
-        return []
-    return [{"type": "paragraph", "content": [{"type": "text", "text": text}]}]
+    """Parse the agent's markdown into structured BlockNote blocks so an
+    updated note keeps headings / lists / emphasis instead of collapsing
+    to one flat paragraph. See `blocknote_md`."""
+    return markdown_to_blocks(text)
 
 
 def _has_write_permission(
