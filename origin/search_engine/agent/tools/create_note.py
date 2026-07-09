@@ -32,16 +32,17 @@ from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_OWNER
 
 _VALID_TYPES = {"personal", "task"}
 
 
 def _wrap_blocknote(text: str) -> list[dict[str, Any]]:
-    """Same shape `create_task` produces — keeps the chunker happy on reindex."""
-    if not text:
-        return []
-    return [{"type": "paragraph", "content": [{"type": "text", "text": text}]}]
+    """Parse the agent's markdown answer into structured BlockNote blocks
+    (headings / lists / bold / italic) so the saved note keeps its
+    formatting instead of being one flat paragraph. See `blocknote_md`."""
+    return markdown_to_blocks(text)
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
