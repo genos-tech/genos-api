@@ -172,6 +172,11 @@ urlpatterns = [
         name="auto_sync_tasks_to_calendar_preference",
     ),
     path(
+        "api/v2/user/preferences/spotlight-web-search/",
+        SpotlightWebSearchPreferenceView.as_view(),
+        name="spotlight_web_search_preference",
+    ),
+    path(
         "api/v2/user/preferences/llm-model/",
         LlmModelPreferenceView.as_view(),
         name="llm_model_preference",

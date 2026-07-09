@@ -168,6 +168,39 @@ class AutoCloseOnPrMergePreferenceView(AuthenticatedAPIView):
         )
 
 
+class SpotlightWebSearchPreferenceView(AuthenticatedAPIView):
+    """GET / PATCH the calling user's "Spotlight web search" preference.
+    Operates on `request.user`; no user_id is accepted, so a leaked token
+    can't toggle someone else's setting.
+
+    Persisting this server-side (rather than only in browser localStorage)
+    is what makes the toggle follow the user across devices/sessions — the
+    Spotlight client reads it on load and forwards `allow_web_search` on
+    each agent ask. Returns and accepts a single boolean field
+    `spotlight_web_search_enabled`.
+    """
+
+    def get(self, request):
+        return Response(
+            {"spotlight_web_search_enabled": bool(request.user.spotlight_web_search_enabled)},
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request):
+        value = request.data.get("spotlight_web_search_enabled")
+        if not isinstance(value, bool):
+            return Response(
+                {"error": "spotlight_web_search_enabled must be a boolean."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        request.user.spotlight_web_search_enabled = value
+        request.user.save(update_fields=["spotlight_web_search_enabled"])
+        return Response(
+            {"spotlight_web_search_enabled": value},
+            status=status.HTTP_200_OK,
+        )
+
+
 class AutoSyncTasksToCalendarPreferenceView(AuthenticatedAPIView):
     """GET / PATCH the calling user's "auto-sync task due dates to
     Google Calendar" preference. Mirrors `AutoCloseOnPrMergePreferenceView`

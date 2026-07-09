@@ -123,6 +123,14 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     # cleanly without error.
     auto_sync_tasks_to_calendar = models.BooleanField(default=False)
 
+    # When True, Spotlight's agent is offered the `search_web` (Tavily)
+    # tool. OFF by default — web browsing adds latency + metered external
+    # calls, so it's opt-in per user from Settings → Spotlight. Persisted
+    # per-account (not just browser localStorage) so the choice follows
+    # the user across devices/sessions; the Spotlight client reads it and
+    # forwards `allow_web_search` on each agent ask.
+    spotlight_web_search_enabled = models.BooleanField(default=False)
+
     # Subscription tier. Free is the default; admins move users to
     # 'pro' or 'max' via `manage.py feature_access set-tier`.
     tier = models.CharField(
