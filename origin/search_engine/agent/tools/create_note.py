@@ -195,7 +195,14 @@ CREATE_NOTE = Tool(
             },
             "content_text": {
                 "type": "STRING",
-                "description": "Optional plain-text body. Omit for a title-only note.",
+                "description": (
+                    "The note body as plain text. When the user asks to save "
+                    "or file a previous answer, put the ENTIRE answer here "
+                    "verbatim — every section, in full. Do NOT summarize, "
+                    "abbreviate, or drop later sections; the note should "
+                    "contain the whole thing, not a recap. Omit only for a "
+                    "deliberately title-only note."
+                ),
             },
             "project_id": {
                 "type": "INTEGER",

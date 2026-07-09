@@ -91,8 +91,17 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 log = logging.getLogger(__name__)
 
-# Answer truncation for session history — keeps the context budget bounded.
-_PRIOR_ANSWER_MAX_CHARS = 400
+# Answer truncation for session history — keeps the context budget bounded
+# while still holding a *whole* prior answer verbatim. The old 400-char cap
+# was small enough that a follow-up like "save that answer to my note" or
+# "expand on that" only ever saw the first paragraph of the prior answer —
+# the rest wasn't in context, so the model couldn't reproduce it. Sized to
+# comfortably hold a full answer (answers are already bounded by the model's
+# max output tokens, ~4k → ~16k chars). Applied uniformly across the whole
+# verbatim window (SESSION_MAX_PRIOR_TURNS), so a two-turns-back answer
+# ("no, include ALL of it") is preserved too, not just the most recent.
+# Tunable per deploy via SEARCH_ENGINE["SESSION_PRIOR_ANSWER_MAX_CHARS"].
+_DEFAULT_PRIOR_ANSWER_MAX_CHARS = 12000
 
 # Phase 3.5 — upper bound on how many prior turns we'll load when
 # `RAG_SESSION_ROLLING_SUMMARY` is on. The session TTL (default 30 min)
@@ -211,15 +220,21 @@ def _load_prior_turns(session: AgentSession, max_turns: int) -> list[tuple[str, 
 
     Only includes runs that have a non-empty `final_answer_text` (i.e.
     the model produced an actual answer — done, rejected, etc.). Each
-    answer is truncated to `_PRIOR_ANSWER_MAX_CHARS` to keep the
-    context budget predictable.
+    answer is truncated to `SESSION_PRIOR_ANSWER_MAX_CHARS` (default
+    `_DEFAULT_PRIOR_ANSWER_MAX_CHARS`) to keep the context budget
+    bounded while still carrying whole prior answers verbatim.
     """
+    max_chars = int(
+        settings.SEARCH_ENGINE.get(
+            "SESSION_PRIOR_ANSWER_MAX_CHARS", _DEFAULT_PRIOR_ANSWER_MAX_CHARS
+        )
+    )
     runs = (
         AgentRun.objects.filter(session=session)
         .exclude(final_answer_text="")
         .order_by("-started_at")[:max_turns]
     )
-    return [(r.query, r.final_answer_text[:_PRIOR_ANSWER_MAX_CHARS]) for r in reversed(list(runs))]
+    return [(r.query, r.final_answer_text[:max_chars]) for r in reversed(list(runs))]
 
 
 # --------------------------------------------------------------------------- #

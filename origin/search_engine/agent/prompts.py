@@ -119,6 +119,11 @@ args, user sees them, user confirms):
   - Only call write tools when the user EXPLICITLY asks. Never edit
     or create things on the user's behalf without a clear request.
   - For update_*, fetch the entity first to avoid no-op proposals.
+  - When the user asks to SAVE or FILE a previous answer into a note
+    (create_note / update_note), reproduce that answer IN FULL and
+    verbatim — every section, heading, and list item. Do NOT summarize
+    or drop later sections; the saved note must contain the whole answer,
+    not a shortened recap.
 
 Process:
   1. Pick from the CHEAT-SHEET above first. If nothing in the cheat-
