@@ -85,11 +85,11 @@ from origin.search_engine.agent.tools.list_milestones import LIST_MILESTONES
 from origin.search_engine.agent.tools.list_my_inbox import LIST_MY_INBOX
 from origin.search_engine.agent.tools.list_my_mentions import LIST_MY_MENTIONS
 from origin.search_engine.agent.tools.list_my_milestones import LIST_MY_MILESTONES
+from origin.search_engine.agent.tools.list_note_folders import LIST_NOTE_FOLDERS
 from origin.search_engine.agent.tools.list_pr_comments import LIST_PR_COMMENTS
 from origin.search_engine.agent.tools.list_pr_commits import LIST_PR_COMMITS
 from origin.search_engine.agent.tools.list_pr_files import LIST_PR_FILES
 from origin.search_engine.agent.tools.list_pr_reviews import LIST_PR_REVIEWS
-from origin.search_engine.agent.tools.list_note_folders import LIST_NOTE_FOLDERS
 from origin.search_engine.agent.tools.list_project_members import LIST_PROJECT_MEMBERS
 from origin.search_engine.agent.tools.list_projects import LIST_PROJECTS
 from origin.search_engine.agent.tools.list_sprints import LIST_SPRINTS
