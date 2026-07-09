@@ -103,6 +103,25 @@ log = logging.getLogger(__name__)
 # Tunable per deploy via SEARCH_ENGINE["SESSION_PRIOR_ANSWER_MAX_CHARS"].
 _DEFAULT_PRIOR_ANSWER_MAX_CHARS = 12000
 
+def _persisted_disabled_tools(user) -> set[str]:
+    """Per-request tool gates derived from the user's PERSISTED preferences.
+
+    Web search is gated by `CustomUser.spotlight_web_search_enabled` (toggled
+    in Settings → Spotlight), NOT by a frontend-sent `allow_web_search` flag.
+    The flag was fragile: a stale client bundle, or a failed/racing preference
+    fetch, could send `false` even with the toggle on — silently dropping
+    `search_web` so the agent answered "I don't have a web search tool" while
+    the user's saved preference was ON. Reading the stored field here makes
+    the toggle authoritative regardless of client state. The preference is the
+    same value the client writes via PATCH /user/preferences/spotlight-web-search/,
+    so there's a single source of truth.
+    """
+    disabled: set[str] = set()
+    if not bool(getattr(user, "spotlight_web_search_enabled", False)):
+        disabled.add("search_web")
+    return disabled
+
+
 # Phase 3.5 — upper bound on how many prior turns we'll load when
 # `RAG_SESSION_ROLLING_SUMMARY` is on. The session TTL (default 30 min)
 # realistically caps active sessions well below this, but we set a hard
@@ -402,12 +421,11 @@ class AgentAskView(AuthenticatedAPIView):
         except Exception:  # noqa: BLE001
             log.exception("Failed to create AgentRun row; continuing without persistence")
 
-        # Per-request tool gates from the frontend Spotlight preferences.
-        # `allow_web_search` defaults to True so older clients that omit
-        # the field get the same behavior as before.
-        disabled_tools: set[str] = set()
-        if data.get("allow_web_search") is False:
-            disabled_tools.add("search_web")
+        # Per-request tool gates. Web search is gated by the user's
+        # PERSISTED preference (see `_persisted_disabled_tools`), which is
+        # authoritative — the old frontend-sent `allow_web_search` flag was
+        # fragile and is now ignored.
+        disabled_tools: set[str] = _persisted_disabled_tools(request.user)
 
         # Thread Q&A branch: when the frontend passes a `thread_context`,
         # the agent is *primed* with that thread's summary but still has
