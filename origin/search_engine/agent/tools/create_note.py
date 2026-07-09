@@ -30,12 +30,33 @@ from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent.acl import task_acl_user_ids
+from origin.search_engine.agent.acl import owns_personal_folder, task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_OWNER
 
 _VALID_TYPES = {"personal", "task"}
+
+
+def _resolve_folder_id(args: dict[str, Any], note_type: str, ctx: ToolContext):
+    """Validate an optional `folder_id` for a personal note. Returns the
+    owned folder id (int) or None (top level). Folders are personal-only
+    and owner-scoped — see `owns_personal_folder`."""
+    raw = args.get("folder_id")
+    if raw is None or raw == "":
+        return None
+    if note_type != "personal":
+        raise ToolError("`folder_id` is only valid for personal notes.")
+    try:
+        folder_id = int(raw)
+    except (TypeError, ValueError):
+        raise ToolError(f"`folder_id` must be an integer (got {raw!r}).")
+    if not owns_personal_folder(folder_id=folder_id, team_id=ctx.team_id, user_id=ctx.user_id):
+        raise ToolError(
+            f"Folder {folder_id} is not one of your personal-note folders. "
+            "Call list_note_folders to see the available folders and their ids."
+        )
+    return folder_id
 
 
 def _wrap_blocknote(text: str) -> list[dict[str, Any]]:
@@ -60,12 +81,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     content_text = (args.get("content_text") or "").strip()
     body = _wrap_blocknote(content_text)
 
+    folder_id = _resolve_folder_id(args, note_type, ctx)
+
     if note_type == "personal":
-        return _create_personal(title=title, body=body, ctx=ctx)
+        return _create_personal(title=title, body=body, folder_id=folder_id, ctx=ctx)
     return _create_task_note(args=args, title=title, body=body, ctx=ctx)
 
 
-def _create_personal(*, title: str, body, ctx: ToolContext) -> dict[str, Any]:
+def _create_personal(*, title: str, body, folder_id, ctx: ToolContext) -> dict[str, Any]:
     """Personal notes are gated by an explicit NotePermissionMaster role
     row, NOT by the `owner` column — `note_role.get_effective_role` grants
     personal notes *no* implicit access, so the read/write ACL checks
@@ -73,6 +96,9 @@ def _create_personal(*, title: str, body, ctx: ToolContext) -> dict[str, Any]:
     exists. The UI create path (`PersonalNoteMasterView.post`) writes the
     note AND a ROLE_OWNER row in one transaction; this tool must do the
     same or the creator gets a 403 opening the note it just made.
+
+    `folder_id` (already validated as owned, or None for top level) files
+    the new root note into a sidebar folder.
 
     Wrapped in a transaction so a failure writing the role can't leave an
     orphaned, permanently-inaccessible note behind."""
@@ -83,6 +109,7 @@ def _create_personal(*, title: str, body, ctx: ToolContext) -> dict[str, Any]:
                 owner_id=ctx.user_id,
                 title=title,
                 body=body,
+                folder_id=folder_id,
             )
             NotePermissionMaster.objects.create(
                 team_id=ctx.team_id,
@@ -97,7 +124,11 @@ def _create_personal(*, title: str, body, ctx: ToolContext) -> dict[str, Any]:
         "note_id": note.note_id,
         "note_type": "personal",
         "title": note.title,
-        "__summary__": f'Created personal note #{note.note_id}: "{title[:60]}"',
+        "folder_id": folder_id,
+        "__summary__": (
+            f'Created personal note #{note.note_id}: "{title[:60]}"'
+            + (f" in folder #{folder_id}" if folder_id else "")
+        ),
     }
 
 
@@ -175,10 +206,11 @@ CREATE_NOTE = Tool(
     description=(
         "Create a new note. REQUIRES USER APPROVAL — the user sees your "
         "proposed title and body before it's saved. Two types: "
-        "'personal' (private to the creator; no extra args) or 'task' "
-        "(attached to a project, optionally to a specific task; needs "
-        "project_id, optionally task_id). Chat-attached notes are not "
-        "supported by this tool — users add those through the UI."
+        "'personal' (private to the creator; optionally filed into a "
+        "sidebar folder via folder_id) or 'task' (attached to a project, "
+        "optionally to a specific task; needs project_id, optionally "
+        "task_id). Chat-attached notes are not supported by this tool — "
+        "users add those through the UI."
     ),
     parameters_schema={
         "type": "OBJECT",
@@ -218,6 +250,15 @@ CREATE_NOTE = Tool(
                 "description": (
                     "Optional (only valid with note_type='task'): attach "
                     "the note to a specific task within the project."
+                ),
+            },
+            "folder_id": {
+                "type": "INTEGER",
+                "description": (
+                    "Optional (only valid with note_type='personal'): file "
+                    "the note into a My-Notes sidebar folder. Resolve the "
+                    "folder NAME to its id with `list_note_folders` first. "
+                    "Omit to leave the note at the top level."
                 ),
             },
         },

@@ -68,6 +68,9 @@ here fits):
                             → list_milestones
   - sprints (project, status) → list_sprints
   - projects (name filter)   → list_projects
+  - "my note folders" / "what's in my <X> folder?" → list_note_folders
+    (personal notes' sidebar folder tree — the ONLY way to see folders;
+    they aren't in search_knowledge_base)
 
   Fetch a known entity by id:
   - fetch_task / fetch_note / fetch_chat_thread / fetch_pr
@@ -124,6 +127,11 @@ args, user sees them, user confirms):
     verbatim — every section, heading, and list item. Do NOT summarize
     or drop later sections; the saved note must contain the whole answer,
     not a shortened recap.
+  - Personal notes can be organized into sidebar FOLDERS. To file a note
+    into a folder the user names ("save it in my Projects folder"), first
+    call list_note_folders to resolve that NAME to its folder_id, then
+    pass folder_id to create_note (new note) or update_note (move an
+    existing one). Folders are personal-only. Never guess a folder_id.
 
 Process:
   1. Pick from the CHEAT-SHEET above first. If nothing in the cheat-

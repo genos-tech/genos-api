@@ -28,6 +28,7 @@ from typing import Any
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
+from origin.search_engine.agent.acl import owns_personal_folder
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.search_engine.chunkers.base import NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
@@ -78,8 +79,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     has_title = "title" in args and args["title"] is not None
     has_body = "content_text" in args and args["content_text"] is not None
-    if not has_title and not has_body:
-        raise ToolError("At least one of `title` or `content_text` must be provided.")
+    # `folder_id` present (incl. explicit null → unfile to top level) is a
+    # move. Folders are personal-only.
+    has_folder = "folder_id" in args
+    if has_folder and note_type != "personal":
+        raise ToolError("`folder_id` is only valid for personal notes.")
+    if not has_title and not has_body and not has_folder:
+        raise ToolError(
+            "At least one of `title`, `content_text`, or `folder_id` must be provided."
+        )
 
     note_type_code = _NOTE_TYPE_CODE[note_type]
 
@@ -132,6 +140,32 @@ def _update_personal(
             "You must be the owner or have explicit editor permission."
         )
 
+    # Optional folder move (personal-only). `folder_id` present in args —
+    # including an explicit null — is a move; None unfiles to the top level.
+    folder_provided = "folder_id" in args
+    new_folder_id = None
+    if folder_provided:
+        # `folder_id` is only meaningful on ROOT notes; child notes ride
+        # along with their root (see PersonalNoteMaster.folder_id).
+        if getattr(note, "parent_note_id", None) is not None:
+            raise ToolError(
+                "Only top-level notes can be filed into a folder; this is a "
+                "child note — move its parent (root) note instead."
+            )
+        raw = args.get("folder_id")
+        if raw is not None and raw != "":
+            try:
+                new_folder_id = int(raw)
+            except (TypeError, ValueError):
+                raise ToolError(f"`folder_id` must be an integer or null (got {raw!r}).")
+            if not owns_personal_folder(
+                folder_id=new_folder_id, team_id=ctx.team_id, user_id=ctx.user_id
+            ):
+                raise ToolError(
+                    f"Folder {new_folder_id} is not one of your personal-note folders. "
+                    "Call list_note_folders to see the available folders and their ids."
+                )
+
     return _apply_changes(
         note=note,
         args=args,
@@ -139,6 +173,8 @@ def _update_personal(
         has_body=has_body,
         note_id=note_id,
         note_type="personal",
+        folder_provided=folder_provided,
+        new_folder_id=new_folder_id,
     )
 
 
@@ -192,6 +228,8 @@ def _apply_changes(
     has_body: bool,
     note_id: int,
     note_type: str,
+    folder_provided: bool = False,
+    new_folder_id=None,
 ) -> dict[str, Any]:
     update_fields: list[str] = []
     changed: list[str] = []
@@ -211,6 +249,13 @@ def _apply_changes(
             note.body = new_body
             update_fields.append("body")
             changed.append("body")
+
+    # Folder move (personal-only; `new_folder_id` already validated as
+    # owned, or None for top level).
+    if folder_provided and getattr(note, "folder_id", None) != new_folder_id:
+        note.folder_id = new_folder_id
+        update_fields.append("folder_id")
+        changed.append("folder")
 
     if not update_fields:
         return {
@@ -236,12 +281,15 @@ def _apply_changes(
 UPDATE_NOTE = Tool(
     name="update_note",
     description=(
-        "Update an existing note's title and/or body text. REQUIRES USER "
-        "APPROVAL — the user sees your proposed changes before they are saved. "
+        "Update an existing note's title and/or body text, and/or move a "
+        "personal note between sidebar folders. REQUIRES USER APPROVAL — the "
+        "user sees your proposed changes before they are saved. "
         "Supports note_type 'personal' and 'task'. Chat notes are not supported. "
         "You must be the note owner or have explicit editor permission — "
         "project membership alone is not sufficient. "
-        "Use fetch_note first to read the current content before proposing changes."
+        "Use fetch_note first to read the current content before proposing "
+        "content changes; use list_note_folders to resolve a folder name to "
+        "its id before moving a note with folder_id."
     ),
     parameters_schema={
         "type": "OBJECT",
@@ -264,6 +312,16 @@ UPDATE_NOTE = Tool(
                 "description": (
                     "New body text in plain text. Omit to leave unchanged. "
                     "Pass '' to clear the body."
+                ),
+            },
+            "folder_id": {
+                "type": "INTEGER",
+                "description": (
+                    "Optional (only valid with note_type='personal'): move the "
+                    "note into this My-Notes sidebar folder. Resolve the folder "
+                    "NAME to its id with `list_note_folders` first. Pass null to "
+                    "move it back to the top level. Omit to leave the folder "
+                    "unchanged."
                 ),
             },
         },

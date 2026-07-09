@@ -89,6 +89,7 @@ from origin.search_engine.agent.tools.list_pr_comments import LIST_PR_COMMENTS
 from origin.search_engine.agent.tools.list_pr_commits import LIST_PR_COMMITS
 from origin.search_engine.agent.tools.list_pr_files import LIST_PR_FILES
 from origin.search_engine.agent.tools.list_pr_reviews import LIST_PR_REVIEWS
+from origin.search_engine.agent.tools.list_note_folders import LIST_NOTE_FOLDERS
 from origin.search_engine.agent.tools.list_project_members import LIST_PROJECT_MEMBERS
 from origin.search_engine.agent.tools.list_projects import LIST_PROJECTS
 from origin.search_engine.agent.tools.list_sprints import LIST_SPRINTS
@@ -117,6 +118,7 @@ for _t in (
     FETCH_TASK,
     FETCH_CHAT_THREAD,
     FETCH_NOTE,
+    LIST_NOTE_FOLDERS,
     # --- Read tools (Phase 13) ---
     LIST_PROJECTS,
     LIST_TASKS,
@@ -192,6 +194,7 @@ __all__ = [
     "DELETE_CALENDAR_EVENT",
     "FETCH_CHAT_THREAD",
     "FETCH_NOTE",
+    "LIST_NOTE_FOLDERS",
     "FETCH_PR",
     "FETCH_TASK",
     "GET_CURRENT_USER",
