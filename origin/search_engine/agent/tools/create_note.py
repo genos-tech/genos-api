@@ -250,7 +250,11 @@ CREATE_NOTE = Tool(
         "'personal' (private to the creator; optionally filed into a "
         "sidebar folder via folder_id) or 'task' (attached to a project, "
         "optionally to a specific task; needs project_id, optionally "
-        "task_id). Chat-attached notes are not supported by this tool — "
+        "task_id). Use the task type for plan/research DOCUMENTS about a "
+        "task or milestone (a milestone's note attaches to its backing "
+        "task_id — see list_milestones); when the user wants TASKS "
+        "created instead of a document, use create_task_plan. "
+        "Chat-attached notes are not supported by this tool — "
         "users add those through the UI."
     ),
     parameters_schema={

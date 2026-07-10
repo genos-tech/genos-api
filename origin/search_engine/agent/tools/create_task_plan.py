@@ -499,7 +499,8 @@ CREATE_TASK_PLAN = Tool(
         "approves once. Use this whenever the user asks to create a "
         "milestone with tasks, break a discussion/chat/task into tasks, or "
         "add MULTIPLE related tasks — NEVER a series of create_task calls. "
-        "(create_task remains correct for one single ad-hoc task.) Max "
+        "(create_task remains correct for one single ad-hoc task; for a "
+        "plan as a DOCUMENT/note rather than tasks, use create_note.) Max "
         f"{_MAX_PLAN_TASKS} tasks; reference other tasks in the batch by "
         "array index (parent_index, blocked_by_indexes)."
     ),
