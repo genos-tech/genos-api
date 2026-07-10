@@ -33,6 +33,7 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.search_engine.agent.acl import owns_personal_folder
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
+from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
 from origin.search_engine.chunkers.base import NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
 from origin.views.utils.note_role import ROLE_EDITOR, get_effective_role
 from origin.views.utils.note_version import snapshot_note_version
@@ -43,11 +44,18 @@ _VALID_TYPES = {"personal", "task"}
 _NOTE_TYPE_CODE = {"personal": NOTE_TYPE_PERSONAL, "task": NOTE_TYPE_TASK}
 
 
-def _wrap_blocknote(text: str) -> list[dict[str, Any]]:
+def _wrap_blocknote(text: str, ctx: ToolContext) -> list[dict[str, Any]]:
     """Parse the agent's markdown into structured BlockNote blocks so an
     updated note keeps headings / lists / emphasis instead of collapsing
-    to one flat paragraph. See `blocknote_md`."""
-    return markdown_to_blocks(text)
+    to one flat paragraph. Citation tokens (`[prose](task:12)`, bare
+    `[task:12]`) become working in-app links, resolved team-scoped —
+    see `blocknote_md` / `entity_links`."""
+    return markdown_to_blocks(
+        text,
+        entity_link_resolver=lambda token: resolve_note_entity_link(
+            token, team_id=ctx.team_id
+        ),
+    )
 
 
 def _has_write_permission(
@@ -271,7 +279,7 @@ def _apply_changes(
             changed.append("title")
 
     if has_body:
-        new_body = _wrap_blocknote((args.get("content_text") or "").strip())
+        new_body = _wrap_blocknote((args.get("content_text") or "").strip(), ctx)
         if new_body != (note.body or []):
             note.body = new_body
             update_fields.append("body")
