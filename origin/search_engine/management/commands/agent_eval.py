@@ -277,7 +277,15 @@ class Command(BaseCommand):
         return False
 
     def _print_one(self, r: CaseResult) -> None:
-        label = self.style.SUCCESS("PASS") if r.passed else self.style.ERROR("FAIL")
+        if r.passed:
+            label = self.style.SUCCESS("PASS")
+        elif getattr(r, "infra_error", False):
+            # Not-passed, but provider infrastructure died (429/5xx) —
+            # excluded from continuous metrics; visually distinct so a
+            # quota-weather night isn't read as a quality regression.
+            label = self.style.WARNING("INFR")
+        else:
+            label = self.style.ERROR("FAIL")
         ttft_part = f", ttft {r.ttft_ms} ms" if getattr(r, "ttft_ms", -1) >= 0 else ""
         if r.tool_call_count > 0 or r.step_count > 0:
             detail = (
@@ -311,15 +319,18 @@ class Command(BaseCommand):
     def _print_summary(self, results: list[CaseResult], *, run_judge: bool) -> None:
         total = len(results)
         passed = sum(1 for r in results if r.passed)
+        infra = [r.case_id for r in results if getattr(r, "infra_error", False)]
+        infra_part = f" ({len(infra)} infra-errored, excluded from metrics)" if infra else ""
         self.stdout.write("")
         if passed == total:
             self.stdout.write(self.style.SUCCESS(f"{passed}/{total} passed."))
         else:
-            self.stdout.write(self.style.ERROR(f"{passed}/{total} passed."))
+            self.stdout.write(self.style.ERROR(f"{passed}/{total} passed.{infra_part}"))
             failed = [r.case_id for r in results if not r.passed]
             self.stdout.write("Failures:")
             for cid in failed:
-                self.stdout.write(f"  - {cid}")
+                marker = "  (infra)" if cid in infra else ""
+                self.stdout.write(f"  - {cid}{marker}")
 
         if run_judge:
             judged = [r for r in results if r.judge_scores is not None]
