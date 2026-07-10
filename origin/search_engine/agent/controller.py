@@ -268,6 +268,16 @@ def _resolve_milestone_title(raw: Any) -> str | None:
     )
 
 
+def _resolve_note_folder_name(raw: Any) -> str | None:
+    try:
+        fid = int(raw)
+    except (TypeError, ValueError):
+        return None
+    from origin.models.note.personal_note_models import PersonalNoteFolder  # noqa: PLC0415
+
+    return PersonalNoteFolder.objects.filter(folder_id=fid).values_list("name", flat=True).first()
+
+
 # Argument-key → resolver. Resolvers return None on a miss so we fall
 # back to the raw value (the user sees the ID rather than a blank).
 _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any], str | None]] = {
@@ -281,6 +291,8 @@ _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any], str | None]] = {
     "milestone_id": _resolve_milestone_title,
     "existing_milestone_id": _resolve_milestone_title,
     "parent_task_id": _resolve_task_display_id,
+    # Only the note tools take `folder_id` (My-Notes sidebar folders).
+    "folder_id": _resolve_note_folder_name,
 }
 
 
@@ -383,10 +395,34 @@ def _friendly_bulk_update_arguments(out: dict[str, Any]) -> None:
     out["updates"] = new_updates
 
 
+def _friendly_update_note_arguments(out: dict[str, Any]) -> None:
+    """In-place nested enrichment for `update_note` arguments.
+
+    ADDS `note_title` (resolved from the note tables) so the approval
+    card can say which note is being edited. `note_id` itself is left
+    numeric — unlike the flat resolvers this must not replace the key,
+    because the preview needs both the label and the raw id."""
+    ntype = str(out.get("note_type") or "").lower()
+    try:
+        nid = int(out.get("note_id"))
+    except (TypeError, ValueError):
+        return
+    from origin.models.note.personal_note_models import PersonalNoteMaster  # noqa: PLC0415
+    from origin.models.note.task_note_models import TaskNoteMaster  # noqa: PLC0415
+
+    model = {"personal": PersonalNoteMaster, "task": TaskNoteMaster}.get(ntype)
+    if model is None:
+        return
+    title = model.objects.filter(note_id=nid).values_list("title", flat=True).first()
+    if title:
+        out["note_title"] = title
+
+
 # Tool-name → nested enrichment pass, applied after the flat resolvers.
 _FRIENDLY_NESTED_ENRICHERS: dict[str, Callable[[dict[str, Any]], None]] = {
     "create_task_plan": _friendly_task_plan_arguments,
     "update_tasks_bulk": _friendly_bulk_update_arguments,
+    "update_note": _friendly_update_note_arguments,
 }
 
 
@@ -802,7 +838,11 @@ def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list
             return []
         return [_chat_source(chat_type, chat_id, result.get("thread_id"))]
 
-    if call_name == "fetch_note":
+    if call_name in ("fetch_note", "create_note", "update_note"):
+        # The two write tools return the same note_id / note_type /
+        # title / parent_context fields as fetch_note, so one branch
+        # gives approved note writes a clickable chip too (emitted via
+        # the resume path's write-result pass).
         nid = result.get("note_id")
         ntype = result.get("note_type")
         if not nid or not ntype:
@@ -1424,14 +1464,25 @@ def resume_agent(
                 messages.append(_function_response_turn(call_name, {"error": err}))
             else:
                 summary = result.pop("__summary__", "ok")
-                emit(
-                    {
-                        "type": "tool_call_result",
-                        "step": step_index,
-                        "tool_name": call_name,
-                        "summary": summary,
+                result_event = {
+                    "type": "tool_call_result",
+                    "step": step_index,
+                    "tool_name": call_name,
+                    "summary": summary,
+                }
+                # Approved note writes carry a compact `note` ref so the
+                # frontend can refresh caches and (for body updates) push
+                # the new blocks into the live Yjs doc. Additive — older
+                # frontends destructure known fields and ignore this.
+                if call_name in ("create_note", "update_note"):
+                    note_ref = {
+                        k: result.get(k)
+                        for k in ("note_id", "note_type", "title", "changed_fields")
+                        if result.get(k) is not None
                     }
-                )
+                    if note_ref.get("note_id"):
+                        result_event["note"] = note_ref
+                emit(result_event)
                 # C3: an APPROVED write just changed the workspace, so
                 # every cached read this session made before it is now
                 # suspect — drop them all (generation bump, O(1)).
