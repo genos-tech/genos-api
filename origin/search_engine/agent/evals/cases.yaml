@@ -873,3 +873,50 @@
     tools_used_contains: ["get_team_members"]
     tools_used_excludes: ["list_project_members"]
     no_errors: true
+
+# --------------------------------------------------------------------- #
+# W. Composite plan writes (BAU Wave 1 — create_task_plan)              #
+# --------------------------------------------------------------------- #
+# One approval for a whole milestone + task tree. The routing risk this
+# section guards: the model falling back to a SERIES of create_task
+# proposals (one approval per task, no nesting/dependencies) instead of
+# ONE create_task_plan proposal. Write proposals pause the run on
+# `tool_call_pending_approval` (no tool_call_start is emitted), so
+# these use the `pending_tools_contains` expectation key.
+
+- id: composite_plan_single_proposal
+  query: >-
+    Create a milestone called "Beta launch" due 2026-08-31 in the
+    Website Redesign project with three tasks: "Design review" (High
+    priority), "Implementation" which is blocked by the design review,
+    and "QA pass" blocked by implementation.
+  fixture: true
+  expect:
+    pending_tools_contains: ["create_task_plan"]
+    tools_used_excludes: ["create_task"]
+    no_errors: true
+
+- id: composite_tasks_only_existing_milestone
+  # Tasks-only mode: attach to the fixture's existing milestone instead
+  # of creating a new one (existing_milestone_id path). The model must
+  # resolve the milestone id first (list_milestones) rather than guess.
+  query: >-
+    Add two follow-up tasks to the "v1.0 Public Launch" milestone in the
+    Website Redesign project: "Post-launch analytics review" and
+    "Collect early user feedback".
+  fixture: true
+  expect:
+    pending_tools_contains: ["create_task_plan"]
+    tools_used_excludes: ["create_task"]
+    no_errors: true
+
+# Negative — a SINGLE ad-hoc task must still route to create_task, not
+# get inflated into a one-task "plan". Metric-only (`forbidden_tools`)
+# until a validating run confirms the routing, per the section-P house
+# convention above.
+- id: negtool_single_task_not_plan
+  query: "Add a task to the Website Redesign project to buy more coffee for the office."
+  fixture: true
+  expect:
+    no_errors: true
+    forbidden_tools: ["create_task_plan"]
