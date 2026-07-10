@@ -930,6 +930,38 @@ PROJECT_BLUEPRINTS = [
                         "bot3",
                         "QA can rerun the trace on the staging build once the migration is in.",
                     ),
+                    # ---- Plan-shaped follow-up discussion. ----
+                    # This thread is the demo surface for the agent's
+                    # "Plan tasks from this thread" flow (create_task_plan):
+                    # it scopes a follow-up workstream with an implied task
+                    # breakdown, ordering ("X first / after Y"), owners, and
+                    # a rough deadline — everything a good plan proposal
+                    # needs — and nothing here exists as tasks yet, so the
+                    # created milestone is clearly new.
+                    (
+                        "demo",
+                        "Zooming out from this one bug — mobile speed keeps biting us after every launch. Once the design-system migration lands I'd like to spin up a proper mobile performance hardening effort: images, JS weight, third-party scripts, and ongoing monitoring so we catch regressions before users feel them.",
+                    ),
+                    (
+                        "bot1",
+                        "Agreed. Concretely I'd split it in two: (1) an image optimization pipeline — responsive sizes plus AVIF/WebP with lazy loading below the fold; (2) route-level code splitting so the landing pages stop shipping app code. The code splitting should come after the image pipeline, otherwise we're measuring against a moving baseline.",
+                    ),
+                    (
+                        "bot2",
+                        "Add a third-party script audit before either of those — the analytics tags and the chat widget account for a scary slice of main-thread time in my last trace. Doing the audit first might delete work from the other two.",
+                    ),
+                    (
+                        "bot3",
+                        "From QA: whatever we ship, I want an automated speed check in CI on every PR — fail the build if the landing pages get slower. I can own that, but it needs the monitoring dashboards to exist first so we agree on the numbers we gate on.",
+                    ),
+                    (
+                        "bot1",
+                        "Monitoring dashboards plus alerting can be mine. That one needs the image pipeline done first, or the graphs are dominated by known-bad assets.",
+                    ),
+                    (
+                        "demo",
+                        "Nice, that hangs together: Carol's script audit first, then Bob's image pipeline followed by the code splitting, monitoring on top of the pipeline, and Dan's CI gate last. High priority on the audit and the image pipeline, normal for the rest. Let's target end of next month for the whole thing. When someone has a minute, turn this thread into a proper milestone with tasks.",
+                    ),
                 ],
             },
             {
@@ -1482,6 +1514,181 @@ PROJECT_BLUEPRINTS = [
                 ),
             ],
         },
+        # ---- Deliberately DISORGANIZED milestone. ----
+        # Demo surface for the agent's "Organize tasks with AI" flow
+        # (list_tasks + list_task_dependencies → ONE update_tasks_bulk):
+        # priorities and due dates contradict the dependency order on
+        # purpose — the plans/entitlements matrix gates almost everything
+        # yet sits at Low priority with a nearly-last due date, tasks
+        # downstream of it are due BEFORE it, one dependent is already
+        # WIP while its blocker is untouched, and an independent cosmetic
+        # task carries an inflated Critical. Keep the contradictions if
+        # you edit — a tidy milestone gives the agent nothing to fix.
+        # (Topic chosen for keyword disjointness from the eval suites:
+        # billing/payment/invoice appear nowhere in cases.yaml /
+        # retrieval_cases.yaml, so the extra rows can't shift retrieval
+        # rankings.)
+        "extra_milestones": [
+            {
+                "milestone": {
+                    "title": "Billing & Plans Revamp",
+                    "status": "Open",
+                    "priority": "High",
+                    "due_offset_days": 25,
+                    "body": _body(
+                        (
+                            "🎯 Goal",
+                            [
+                                "Move from the single flat plan to a tiered plans-and-limits "
+                                "model: define the plans, meter usage against them, and let "
+                                "customers change plans without a support ticket.",
+                            ],
+                        ),
+                        (
+                            "⚠️ State of this milestone",
+                            [
+                                "Tasks were brain-dumped in a hurry after the pricing "
+                                "offsite — priorities and dates have not been groomed "
+                                "against the dependency order yet.",
+                            ],
+                        ),
+                    ),
+                },
+                "tasks": [
+                    {
+                        "title": "Define billing plans and entitlements matrix",
+                        "status": "Open",
+                        "priority": "Low",
+                        "assignee": "bot0",
+                        "is_milestone_child": True,
+                        "parent_idx": None,
+                        "due_offset_days": 24,
+                        "body": _body(
+                            (
+                                "🧾 Summary",
+                                [
+                                    "Decide the plan tiers (Free / Pro / Max), which features "
+                                    "and limits belong to each, and the upgrade/downgrade "
+                                    "rules. Every other piece of the revamp consumes this "
+                                    "matrix as its source of truth.",
+                                ],
+                            ),
+                        ),
+                        "comments": [
+                            (
+                                "bot1",
+                                "Shouldn't this land before we wire the payment sandbox? Hard to integrate against plan names we haven't defined.",
+                            ),
+                        ],
+                    },
+                    {
+                        "title": "Integrate payment provider sandbox",
+                        "status": "WIP",
+                        "priority": "Critical",
+                        "assignee": "bot1",
+                        "is_milestone_child": True,
+                        "parent_idx": None,
+                        "due_offset_days": 6,
+                        "body": _body(
+                            (
+                                "🧾 Summary",
+                                [
+                                    "Stand up the payment provider's sandbox: checkout "
+                                    "session, webhooks for payment events, and the customer "
+                                    "portal hand-off.",
+                                ],
+                            ),
+                        ),
+                        "comments": [
+                            (
+                                "bot1",
+                                "Started scaffolding, but I'm coding against guessed plan names until the entitlements matrix lands.",
+                            ),
+                        ],
+                    },
+                    {
+                        "title": "Build subscription upgrade and downgrade flow",
+                        "status": "Open",
+                        "priority": "Minimal",
+                        "assignee": "bot2",
+                        "is_milestone_child": True,
+                        "parent_idx": None,
+                        "due_offset_days": 10,
+                        "body": _body(
+                            (
+                                "🧾 Summary",
+                                [
+                                    "In-app flow for switching plans: proration preview, "
+                                    "confirmation, and the downgrade guard rails when usage "
+                                    "exceeds the target plan's limits.",
+                                ],
+                            ),
+                        ),
+                        "comments": [],
+                    },
+                    {
+                        "title": "Usage metering pipeline for plan limits",
+                        "status": "Open",
+                        "priority": "Normal",
+                        "assignee": "bot1",
+                        "is_milestone_child": True,
+                        "parent_idx": None,
+                        "due_offset_days": 4,
+                        "body": _body(
+                            (
+                                "🧾 Summary",
+                                [
+                                    "Count the metered actions per workspace per day and "
+                                    "expose them to the plan-limit checks. Needs the matrix "
+                                    "to know WHICH actions are metered per tier.",
+                                ],
+                            ),
+                        ),
+                        "comments": [],
+                    },
+                    {
+                        "title": "Billing admin dashboard for support",
+                        "status": "Open",
+                        "priority": "High",
+                        "assignee": "bot2",
+                        "is_milestone_child": True,
+                        "parent_idx": None,
+                        "due_offset_days": 5,
+                        "body": _body(
+                            (
+                                "🧾 Summary",
+                                [
+                                    "Internal view for support: a customer's current plan, "
+                                    "usage against limits, recent payment events, and manual "
+                                    "plan-change override.",
+                                ],
+                            ),
+                        ),
+                        "comments": [],
+                    },
+                    {
+                        "title": "Invoice PDF and receipt email templates",
+                        "status": "Open",
+                        "priority": "Critical",
+                        "assignee": "bot3",
+                        "is_milestone_child": True,
+                        "parent_idx": None,
+                        "due_offset_days": 26,
+                        "body": _body(
+                            (
+                                "🧾 Summary",
+                                [
+                                    "Branded invoice PDF and the receipt email. Cosmetic and "
+                                    "independent of the other tracks — can ship any time "
+                                    "before launch.",
+                                ],
+                            ),
+                        ),
+                        "comments": [],
+                    },
+                ],
+            },
+        ],
     },
 ]
 
@@ -2156,6 +2363,7 @@ def create_demo_environment(demo_user: CustomUser, *, short: str | None = None) 
                 seeded["blueprint"],
                 seeded["tasks"],
                 seeded["backing_task"],
+                seeded.get("extra_milestones"),
             )
 
         # 14. (legacy UserChatMaster seeding removed — the legacy chat
@@ -2345,16 +2553,40 @@ def _create_project_from_blueprint(team, demo_user, all_members, bots, short, bl
         blueprint["tasks"],
     )
 
+    # Optional additional milestones (same spec shape as the main one,
+    # each with its own task list). Used for the deliberately messy
+    # "Billing & Plans Revamp" milestone that the agent's organize flow
+    # (update_tasks_bulk) is demoed against.
+    extra_milestones = []
+    all_project_tasks: List[TaskMaster] = list(tasks)
+    for extra in blueprint.get("extra_milestones", []):
+        extra_ms, extra_backing = _create_milestone_with_backing_task(
+            team, project, sprint, demo_user, bots, extra["milestone"]
+        )
+        extra_tasks = _create_blueprint_tasks(
+            team,
+            project,
+            sprint,
+            extra_ms,
+            extra_backing,
+            demo_user,
+            bots,
+            extra["tasks"],
+        )
+        extra_milestones.append({"backing_task": extra_backing, "tasks": extra_tasks})
+        all_project_tasks += [extra_backing, *extra_tasks]
+
     # Seed a few realistic blocker→blocked edges so the relationship graph
-    # has data: powers `get_task_blockers` and is the substrate the GraphRAG
-    # eval cases (Q2.4) measure against.
-    _seed_task_dependencies(team, demo_user, tasks)
+    # has data: powers `get_task_blockers` / `list_task_dependencies` and is
+    # the substrate the GraphRAG eval cases (Q2.4) measure against.
+    _seed_task_dependencies(team, demo_user, all_project_tasks)
 
     return {
         "project": project,
         "blueprint": blueprint,
         "tasks": tasks,
         "backing_task": backing_task,
+        "extra_milestones": extra_milestones,
     }
 
 
@@ -2375,6 +2607,16 @@ _DEPENDENCY_EDGES = [
     # Q2 Roadmap: interview synthesis and competitor analysis feed the proposal.
     ("Synthesize 12 customer interviews", "Roadmap proposal"),
     ("Competitor analysis", "Roadmap proposal"),
+    # Billing & Plans Revamp (the messy organize-demo milestone): the
+    # entitlements matrix gates integration + metering, which gate the
+    # customer-facing flow and the support dashboard. The blueprint's
+    # priorities/due dates deliberately CONTRADICT this order — that
+    # contradiction is what the update_tasks_bulk organize flow fixes.
+    ("plans and entitlements matrix", "payment provider sandbox"),
+    ("plans and entitlements matrix", "Usage metering"),
+    ("payment provider sandbox", "upgrade and downgrade flow"),
+    ("Usage metering", "Billing admin dashboard"),
+    ("upgrade and downgrade flow", "Billing admin dashboard"),
 ]
 
 
@@ -2707,7 +2949,7 @@ def _create_group_chat(team, demo_user, members) -> Channel:
     return channel
 
 
-def _create_pm_messages(project, members, blueprint, tasks, backing_task):
+def _create_pm_messages(project, members, blueprint, tasks, backing_task, extra_milestones=None):
     """Seed the PM channel the way the v3 model actually works.
 
     The v3 PM pane renders ONE top-level "task-card" `Message` per task
@@ -2737,6 +2979,11 @@ def _create_pm_messages(project, members, blueprint, tasks, backing_task):
     channel = Channel.objects.get(project=project, kind=ChannelKind.PM)
     team = project.team
     all_tasks = [backing_task] + list(tasks)
+    # Extra milestones (e.g. Billing & Plans Revamp) get their cards after
+    # the main blueprint's — backing task first, then its tasks, matching
+    # the order the live create paths would have produced.
+    for extra in extra_milestones or []:
+        all_tasks += [extra["backing_task"], *extra["tasks"]]
 
     # 1. One task-card header per task. `seq` is per-channel; the channel
     #    starts empty, so headers take seq 1..N and the comment mirror
