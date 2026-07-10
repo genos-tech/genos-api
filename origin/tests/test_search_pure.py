@@ -478,6 +478,60 @@ class GeminiClientLocationTests(SimpleTestCase):
 
 
 # --------------------------------------------------------------------------- #
+# gemini_client.py — transient-error retry wiring (issue #46)                  #
+# --------------------------------------------------------------------------- #
+
+
+class GeminiClientRetryTests(SimpleTestCase):
+    """`_build_client` must hand the SDK a `retry_options` so transient
+    429/5xx errors (e.g. Vertex RESOURCE_EXHAUSTED quota blips) are retried
+    at request initiation instead of hard-failing the agent step. Attempts
+    come from GEMINI_RETRY_ATTEMPTS; 0/1 disables. The genai SDK client is
+    mocked; the real `types.HttpOptions` pydantic models are constructed."""
+
+    def _build_with(self, **overrides):
+        from django.conf import settings as dj_settings
+
+        from origin.search_engine.llm import gemini_client
+
+        cfg = dict(dj_settings.SEARCH_ENGINE)
+        cfg.update(
+            {
+                "GEMINI_USE_VERTEX": True,
+                "GEMINI_PROJECT": "proj-x",
+                "GEMINI_SERVICE_ACCOUNT_FILE": "",  # ADC branch, no file load
+            }
+        )
+        cfg.update(overrides)
+        with override_settings(SEARCH_ENGINE=cfg):
+            with patch.object(gemini_client, "genai") as mock_genai:
+                gemini_client._build_client()
+        return mock_genai.Client.call_args.kwargs
+
+    def test_retry_options_attached_with_configured_attempts(self):
+        kwargs = self._build_with(GEMINI_RETRY_ATTEMPTS=4)
+        http_options = kwargs["http_options"]
+        self.assertIsNotNone(http_options)
+        self.assertEqual(http_options.retry_options.attempts, 4)
+
+    def test_zero_attempts_disables_retry(self):
+        kwargs = self._build_with(GEMINI_RETRY_ATTEMPTS=0)
+        self.assertIsNone(kwargs["http_options"])
+
+    def test_one_attempt_disables_retry(self):
+        # 1 == just the initial call — the SDK treats that as no retry;
+        # we pass None so behavior is byte-identical to pre-change.
+        kwargs = self._build_with(GEMINI_RETRY_ATTEMPTS=1)
+        self.assertIsNone(kwargs["http_options"])
+
+    def test_api_key_mode_gets_retry_options_too(self):
+        kwargs = self._build_with(
+            GEMINI_USE_VERTEX=False, GEMINI_API_KEY="test-key", GEMINI_RETRY_ATTEMPTS=3
+        )
+        self.assertEqual(kwargs["http_options"].retry_options.attempts, 3)
+
+
+# --------------------------------------------------------------------------- #
 # reranker.py — _fuse_by_score math (pure)                                    #
 # --------------------------------------------------------------------------- #
 

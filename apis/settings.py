@@ -436,6 +436,15 @@ SEARCH_ENGINE = {
     # (see genos-platform infra/gcp/README.md "Vertex model + region").
     "GEMINI_LLM_LOCATION": os.environ.get("GEMINI_LLM_LOCATION", ""),
     "GEMINI_SERVICE_ACCOUNT_FILE": os.environ.get("GEMINI_SERVICE_ACCOUNT_FILE", ""),
+    # Transient-error retry for the Gemini LLM client (google-genai's
+    # built-in tenacity retry). Total attempts INCLUDING the first call;
+    # 0 or 1 disables retrying. The SDK retries request initiation only
+    # (never mid-stream, so no duplicated chunks) on 408/429/500/502/
+    # 503/504 + connect/timeout errors, with exponential backoff +
+    # jitter (~1s/2s/4s waits at the default 4 attempts). Added after a
+    # Vertex 429 RESOURCE_EXHAUSTED blip hard-failed an agent step and
+    # fired the nightly tool_recall drift alarm (issue #46).
+    "GEMINI_RETRY_ATTEMPTS": int(os.environ.get("GEMINI_RETRY_ATTEMPTS", "4")),
     # Default agent model for users with no saved preference. MUST be a
     # model present in MODEL_CATALOG below — `_server_default_choice()` in
     # llm/choice.py intentionally does NOT catalog-validate the server
