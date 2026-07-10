@@ -330,9 +330,62 @@ def _friendly_task_plan_arguments(out: dict[str, Any]) -> None:
         }
 
 
+def _friendly_bulk_update_arguments(out: dict[str, Any]) -> None:
+    """In-place nested enrichment for `update_tasks_bulk` arguments.
+
+    Each update row gains `display_id` / `title` and a `current` snapshot
+    of the fields the tool can change (one batched query for the whole
+    batch), so the approval card can render a true old→new diff table.
+    The proposed values and `task_id` stay untouched — the persisted
+    `arguments_json` is raw anyway; this only shapes the wire event.
+    """
+    updates = out.get("updates")
+    if not isinstance(updates, list) or not updates:
+        return
+
+    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+
+    ids: list[int] = []
+    for row in updates:
+        if isinstance(row, dict):
+            try:
+                ids.append(int(row.get("task_id")))
+            except (TypeError, ValueError):
+                continue
+    if not ids:
+        return
+
+    by_id = {
+        t.task_id: t
+        for t in TaskMaster.objects.select_related("project").filter(task_id__in=ids)
+    }
+    new_updates = []
+    for row in updates:
+        if isinstance(row, dict):
+            try:
+                task = by_id.get(int(row.get("task_id")))
+            except (TypeError, ValueError):
+                task = None
+            if task is not None:
+                row = {
+                    **row,
+                    "display_id": task.display_id,
+                    "title": task.title,
+                    "current": {
+                        "priority": task.priority,
+                        "effort_level": task.effort_level,
+                        "status": task.status,
+                        "due_date": task.due_date.isoformat() if task.due_date else None,
+                    },
+                }
+        new_updates.append(row)
+    out["updates"] = new_updates
+
+
 # Tool-name → nested enrichment pass, applied after the flat resolvers.
 _FRIENDLY_NESTED_ENRICHERS: dict[str, Callable[[dict[str, Any]], None]] = {
     "create_task_plan": _friendly_task_plan_arguments,
+    "update_tasks_bulk": _friendly_bulk_update_arguments,
 }
 
 
@@ -702,6 +755,20 @@ def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list
         if pid:
             sources.append(_project_source(pid, result.get("project_name")))
         return sources
+
+    if call_name == "update_tasks_bulk":
+        # Approved organize pass → chips for the touched tasks so the
+        # answer's "I bumped X to Critical" citations resolve.
+        return [
+            _task_source(
+                row.get("task_id"),
+                row.get("title"),
+                row.get("project_id"),
+                display_id=row.get("display_id"),
+            )
+            for row in (result.get("updated") or [])[:10]
+            if row.get("task_id")
+        ]
 
     if call_name == "list_projects":
         return [
