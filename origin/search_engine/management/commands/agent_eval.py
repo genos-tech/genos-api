@@ -107,6 +107,21 @@ class Command(BaseCommand):
             ),
         )
         parser.add_argument(
+            "--skip-env-check",
+            action="store_true",
+            help=(
+                "Skip the index-mapping drift preflight. The eval refuses to "
+                "run when the live search index's mapping is missing subfields "
+                "the code queries (e.g. a local index created before the "
+                "multilingual .icu/.ja or .en/.prefix subfields landed) — a "
+                "stale index silently depresses every retrieval number and "
+                "turns an assessment into noise (quality round 2 found a "
+                "local index with ZERO subfields behind 4 'chronic' FAILs). "
+                "Fix: opensearch_setup --recreate && opensearch_reindex && "
+                "agent_eval_setup --reseed."
+            ),
+        )
+        parser.add_argument(
             "--metric-gate",
             action="store_true",
             help=(
@@ -129,6 +144,21 @@ class Command(BaseCommand):
         run_judge: bool = options.get("judge") or False
         persist_metrics: bool = options.get("persist_metrics") or False
         metric_gate: bool = options.get("metric_gate") or False
+
+        if not options.get("skip_env_check"):
+            drift = self._index_mapping_drift()
+            if drift:
+                self.stderr.write(
+                    self.style.ERROR(
+                        "Search index mapping is STALE — eval numbers would be noise:\n  "
+                        + "\n  ".join(drift)
+                        + "\nFix:  python manage.py opensearch_setup --recreate && "
+                        "python manage.py opensearch_reindex && "
+                        "python manage.py agent_eval_setup --reseed\n"
+                        "(or pass --skip-env-check to run anyway)"
+                    )
+                )
+                sys.exit(2)
 
         if run_judge and (retrieval_only or summary_only):
             self.stderr.write(
@@ -275,6 +305,40 @@ class Command(BaseCommand):
                 )
             )
         return False
+
+    def _index_mapping_drift(self) -> list[str]:
+        """Compare the live index's text-field subfields against the
+        canonical `build_mappings()`.
+
+        Returns human-readable drift lines; [] = healthy. Additive-only
+        check (live extras are fine — only MISSING subfields hurt, by
+        silently disabling the query lanes search.py boosts). OpenSearch
+        being unreachable is NOT drift — the suite will fail loudly on
+        its own; we don't want the preflight masking that error shape.
+        """
+        try:
+            from django.conf import settings  # noqa: PLC0415
+
+            from origin.search_engine.index_config import build_mappings  # noqa: PLC0415
+            from origin.search_engine.opensearch_client import get_client  # noqa: PLC0415
+
+            alias = settings.SEARCH_ENGINE.get("OPENSEARCH_ALIAS", "knowledge_chunks_current")
+            client = get_client()
+            live = client.indices.get_mapping(index=alias)
+            live_props = live[next(iter(live))]["mappings"].get("properties") or {}
+        except Exception:  # noqa: BLE001 — connectivity is the suites' problem
+            return []
+
+        drift: list[str] = []
+        for fname, spec in (build_mappings().get("properties") or {}).items():
+            want = set((spec.get("fields") or {}).keys())
+            if not want:
+                continue
+            have = set(((live_props.get(fname) or {}).get("fields")) or {})
+            missing = sorted(want - have)
+            if missing:
+                drift.append(f"{fname}: live index is missing subfields {missing}")
+        return drift
 
     def _print_one(self, r: CaseResult) -> None:
         if r.passed:
