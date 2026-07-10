@@ -920,3 +920,21 @@
   expect:
     no_errors: true
     forbidden_tools: ["create_task_plan"]
+
+- id: bulk_prioritize_milestone
+  # Organize flow: read current state (list_tasks; the dependency graph
+  # via list_task_dependencies is metric-only gold — the model may
+  # legitimately skip it when the milestone has no edges), then ONE
+  # update_tasks_bulk proposal — never serial update_task calls.
+  query: >-
+    Reprioritize the tasks in the "v1.0 Public Launch" milestone of the
+    Website Redesign project: blockers of unfinished work first, adjust
+    due dates where they contradict the dependency order, and explain
+    each change.
+  fixture: true
+  expect:
+    tools_used_contains: ["list_tasks"]
+    pending_tools_contains: ["update_tasks_bulk"]
+    tools_used_excludes: ["update_task"]
+    no_errors: true
+    expected_tools: ["list_tasks", "list_task_dependencies"]
