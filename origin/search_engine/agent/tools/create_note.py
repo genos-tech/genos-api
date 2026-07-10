@@ -33,7 +33,8 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import owns_personal_folder, task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
-from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_OWNER
+from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK, ROLE_OWNER
+from origin.views.utils.note_version import snapshot_note_version
 
 _VALID_TYPES = {"personal", "task"}
 
@@ -64,6 +65,23 @@ def _wrap_blocknote(text: str) -> list[dict[str, Any]]:
     (headings / lists / bold / italic) so the saved note keeps its
     formatting instead of being one flat paragraph. See `blocknote_md`."""
     return markdown_to_blocks(text)
+
+
+def _snapshot_v1(*, note, note_type_code: int, ctx: ToolContext) -> None:
+    """Initial version snapshot (v1) — parity with the REST create paths,
+    so version history / restore works on agent-created notes from the
+    first edit. Called inside the create transaction; the FK instances on
+    the fresh note row spare extra lookups."""
+    from origin.models.common.user_models import CustomUser  # noqa: PLC0415
+
+    snapshot_note_version(
+        team=note.team,
+        editor=CustomUser.objects.filter(id=ctx.user_id).first(),
+        note_type=note_type_code,
+        note_id=note.note_id,
+        title=note.title,
+        body=note.body,
+    )
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -118,6 +136,7 @@ def _create_personal(*, title: str, body, folder_id, ctx: ToolContext) -> dict[s
                 note_type=NOTE_TYPE_PERSONAL,
                 role_id=ROLE_OWNER,
             )
+            _snapshot_v1(note=note, note_type_code=NOTE_TYPE_PERSONAL, ctx=ctx)
     except Exception as e:  # noqa: BLE001
         raise ToolError(f"Failed to create personal note: {e}")
     return {
@@ -176,15 +195,29 @@ def _create_task_note(
             )
         task_id_field = task_id_int
 
+    # Transaction: note + explicit ROLE_OWNER row + v1 snapshot, same
+    # trio the REST create path writes. The owner row is redundant for
+    # ACL (project members are implicit Editors) but keeps the note's
+    # members list and owner-gated actions consistent with UI-created
+    # task notes.
     try:
-        note = TaskNoteMaster.objects.create(
-            team_id=ctx.team_id,
-            project_id=project_id,
-            owner_id=ctx.user_id,
-            task_id=task_id_field,
-            title=title,
-            body=body,
-        )
+        with transaction.atomic():
+            note = TaskNoteMaster.objects.create(
+                team_id=ctx.team_id,
+                project_id=project_id,
+                owner_id=ctx.user_id,
+                task_id=task_id_field,
+                title=title,
+                body=body,
+            )
+            NotePermissionMaster.objects.create(
+                team_id=ctx.team_id,
+                user_id=ctx.user_id,
+                note_id=note.note_id,
+                note_type=NOTE_TYPE_TASK,
+                role_id=ROLE_OWNER,
+            )
+            _snapshot_v1(note=note, note_type_code=NOTE_TYPE_TASK, ctx=ctx)
     except Exception as e:  # noqa: BLE001
         raise ToolError(f"Failed to create task note: {e}")
 
@@ -194,6 +227,14 @@ def _create_task_note(
         "project_id": project_id,
         "task_id": task_id_field,
         "title": note.title,
+        "parent_context": {
+            k: v
+            for k, v in {
+                "project_id": str(project_id),
+                "task_id": str(task_id_field) if task_id_field else None,
+            }.items()
+            if v is not None
+        },
         "__summary__": (
             f'Created task note #{note.note_id}: "{title[:60]}"'
             + (f" (attached to task #{task_id_field})" if task_id_field else "")
