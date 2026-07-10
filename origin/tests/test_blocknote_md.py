@@ -7,6 +7,15 @@ from django.test import SimpleTestCase
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.search_engine.text_extraction import extract_sections, extract_text
 
+
+def _fake_resolver(token):
+    """Stands in for entity_links.resolve_note_entity_link: knows one
+    task and one project, misses everything else."""
+    return {
+        "task:7": ("/workspace/tasks/project/3/task/7", "WRD-7"),
+        "project:3": ("/workspace/tasks/project/3", "Website Redesign"),
+    }.get(token)
+
 _ANSWER = """**What is pglogical?**
 
 pglogical is a *logical* replication extension for PostgreSQL.
@@ -57,6 +66,41 @@ class TestMarkdownToBlocks(SimpleTestCase):
         # The non-URL citation target keeps its prose, no dead link.
         flat = "".join(c.get("text", "") for c in para["content"] if c["type"] == "text")
         self.assertIn("that task", flat)
+
+    def test_citation_link_resolves_to_in_app_href_with_resolver(self):
+        [para] = markdown_to_blocks(
+            "see [the Safari task](task:7) in [Website Redesign](project:3)",
+            entity_link_resolver=_fake_resolver,
+        )
+        links = [c for c in para["content"] if c["type"] == "link"]
+        self.assertEqual(
+            [(ln["href"], ln["content"][0]["text"]) for ln in links],
+            [
+                # The model's prose stays the label; href is the app route.
+                ("/workspace/tasks/project/3/task/7", "the Safari task"),
+                ("/workspace/tasks/project/3", "Website Redesign"),
+            ],
+        )
+
+    def test_bare_token_resolves_with_entity_label(self):
+        [para] = markdown_to_blocks(
+            "tracked in [task:7] this sprint", entity_link_resolver=_fake_resolver
+        )
+        link = next(c for c in para["content"] if c["type"] == "link")
+        self.assertEqual(link["href"], "/workspace/tasks/project/3/task/7")
+        # Bare tokens have no prose — the resolver's label is used.
+        self.assertEqual(link["content"][0]["text"], "WRD-7")
+        flat = "".join(c.get("text", "") for c in para["content"] if c["type"] == "text")
+        self.assertIn("this sprint", flat)
+
+    def test_unresolvable_citation_degrades_even_with_resolver(self):
+        [para] = markdown_to_blocks(
+            "see [gone](task:999) and [note:personal:1]", entity_link_resolver=_fake_resolver
+        )
+        self.assertEqual([c["type"] for c in para["content"] if c["type"] == "link"], [])
+        flat = "".join(c.get("text", "") for c in para["content"] if c["type"] == "text")
+        self.assertIn("gone", flat)  # prose kept for the inline form
+        self.assertIn("[note:personal:1]", flat)  # bare token left literal
 
     def test_multi_section_answer_is_structured(self):
         blocks = markdown_to_blocks(_ANSWER)

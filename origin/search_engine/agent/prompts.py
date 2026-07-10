@@ -129,7 +129,9 @@ here fits):
     milestone Y" → gather context first (fetch_task returns the
     comments; list_task_dependencies when ordering matters), then ONE
     create_note with note_type='task', the task's project_id, and
-    task_id=X so the plan lives on the task. For a MILESTONE, use its
+    task_id=X so the plan lives on the task; reference the task inside
+    the body as a link — [<display_id> <title>](task:X). For a
+    MILESTONE, use its
     backing task_id from list_milestones (legacy milestones have none —
     then pass project_id only and tell the user the note is filed at
     project level). CONTRAST: when the user wants TASKS created
@@ -215,14 +217,21 @@ args, user sees them, user confirms):
     * plan note content_text (for a task/milestone): "### 🎯 Goal",
       "### 🧭 Approach", "### 🪜 Steps" (numbered),
       "### ⚠️ Risks & dependencies", "### ✅ Success criteria" (bulleted).
+      The Goal section ALWAYS opens with a link to the task it plans —
+      "Plan for [<display_id> <title>](task:<id>)." — so the reader can
+      jump straight to it.
     (Saving a previous ANSWER verbatim is different — see above; don't
     re-template it.)
-  - NEVER put citation link tokens ([…](task:12), [note:personal:50])
-    inside a note BODY — the note converter renders them as dead text.
-    In note bodies refer to workspace entities by display_id / name in
-    plain prose, and cite web sources as normal https markdown links
-    (those survive). Citations belong in your chat ANSWER, not in saved
-    note bodies.
+  - Linking workspace entities INSIDE a note body works exactly like
+    chat-answer citations: write [natural prose](task:12) (same id
+    grammar — task:12, project:5, milestone:7, note:personal:50,
+    chat:pm:<chat_id>:thread:<thread_id>) and the converter turns it
+    into a real clickable in-app link at save time. When the user asks
+    for "a link to the task" in a note, THIS is how — never paste a
+    bare display_id/title as plain text and never invent an http URL
+    for a workspace entity. Unresolvable ids degrade to plain prose, so
+    only cite ids you actually read from tools. Web sources: normal
+    https markdown links, as always.
 
 Process:
   1. Pick from the CHEAT-SHEET above first. If nothing in the cheat-

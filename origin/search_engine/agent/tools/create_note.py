@@ -33,6 +33,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import owns_personal_folder, task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
+from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK, ROLE_OWNER
 from origin.views.utils.note_version import snapshot_note_version
 
@@ -60,11 +61,18 @@ def _resolve_folder_id(args: dict[str, Any], note_type: str, ctx: ToolContext):
     return folder_id
 
 
-def _wrap_blocknote(text: str) -> list[dict[str, Any]]:
+def _wrap_blocknote(text: str, ctx: ToolContext) -> list[dict[str, Any]]:
     """Parse the agent's markdown answer into structured BlockNote blocks
     (headings / lists / bold / italic) so the saved note keeps its
-    formatting instead of being one flat paragraph. See `blocknote_md`."""
-    return markdown_to_blocks(text)
+    formatting instead of being one flat paragraph. Citation tokens
+    (`[prose](task:12)`, bare `[task:12]`) become working in-app links,
+    resolved team-scoped — see `blocknote_md` / `entity_links`."""
+    return markdown_to_blocks(
+        text,
+        entity_link_resolver=lambda token: resolve_note_entity_link(
+            token, team_id=ctx.team_id
+        ),
+    )
 
 
 def _snapshot_v1(*, note, note_type_code: int, ctx: ToolContext) -> None:
@@ -97,7 +105,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError("`title` is required.")
 
     content_text = (args.get("content_text") or "").strip()
-    body = _wrap_blocknote(content_text)
+    body = _wrap_blocknote(content_text, ctx)
 
     folder_id = _resolve_folder_id(args, note_type, ctx)
 

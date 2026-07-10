@@ -19,6 +19,7 @@ from origin.models.note.personal_note_models import PersonalNoteFolder, Personal
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.controller import (
     _friendly_arguments,
@@ -26,6 +27,7 @@ from origin.search_engine.agent.controller import (
 )
 from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.search_engine.agent.tools.create_note import _run as create_note_run
+from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
 from origin.search_engine.agent.tools.update_note import _run as update_note_run
 from origin.views.utils.note_role import (
     NOTE_TYPE_PERSONAL,
@@ -305,3 +307,162 @@ class FriendlyArgumentTests(NoteWriteToolTestBase):
             tool_name="create_note",
         )
         self.assertEqual(out["folder_id"], "Research")
+
+
+def _links_in(body):
+    """Flatten every link inline node in a stored BlockNote body."""
+    out = []
+    for block in body:
+        for node in block.get("content") or []:
+            if node.get("type") == "link":
+                out.append((node["href"], node["content"][0]["text"]))
+    return out
+
+
+class NoteBodyEntityLinkTests(NoteWriteToolTestBase):
+    """Citation tokens in note bodies become working in-app links
+    (entity_links.resolve_note_entity_link via markdown_to_blocks)."""
+
+    def _task(self, title="Investigate slow homepage load"):
+        task = TaskMaster.objects.create(
+            team=self.team, project=self.project, title=title, status="Open"
+        )
+        task.refresh_from_db()  # signal assigns project_task_number/display_id
+        return task
+
+    def test_resolver_supported_types(self):
+        task = self._task()
+        milestone = MilestoneMaster.objects.create(
+            team=self.team, project=self.project, title="Perf hardening"
+        )
+        my_note = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="Research", body=[]
+        )
+        task_note = TaskNoteMaster.objects.create(
+            team=self.team, project=self.project, owner=self.user,
+            task=task, title="Plan", body=[],
+        )
+        team_id = str(self.team.team_id)
+        pid = self.project.project_id
+
+        self.assertEqual(
+            resolve_note_entity_link(f"task:{task.task_id}", team_id=team_id),
+            (f"/workspace/tasks/project/{pid}/task/{task.task_id}", task.display_id),
+        )
+        self.assertEqual(
+            resolve_note_entity_link(f"project:{pid}", team_id=team_id),
+            (f"/workspace/tasks/project/{pid}", "Website Redesign"),
+        )
+        self.assertEqual(
+            resolve_note_entity_link(f"milestone:{milestone.milestone_id}", team_id=team_id),
+            (
+                f"/workspace/tasks/project/{pid}/milestone/{milestone.milestone_id}",
+                "Perf hardening",
+            ),
+        )
+        self.assertEqual(
+            resolve_note_entity_link(f"note:personal:{my_note.note_id}", team_id=team_id),
+            (f"/workspace/notes/my/{my_note.note_id}", "Research"),
+        )
+        self.assertEqual(
+            resolve_note_entity_link(f"note:task:{task_note.note_id}", team_id=team_id),
+            (
+                f"/workspace/notes/task/project/{pid}/task/{task.task_id}"
+                f"/note/{task_note.note_id}",
+                "Plan",
+            ),
+        )
+        # Chat tokens are a pure syntactic mapping.
+        self.assertEqual(
+            resolve_note_entity_link(
+                "chat:pm:11111111-2222-3333-4444-555555555555:thread:"
+                "66666666-7777-8888-9999-000000000000",
+                team_id=team_id,
+            ),
+            (
+                "/workspace/chat/pm/11111111-2222-3333-4444-555555555555"
+                "/thread/66666666-7777-8888-9999-000000000000",
+                "thread",
+            ),
+        )
+
+    def test_resolver_rejects_foreign_deleted_and_unroutable(self):
+        task = self._task()
+        team_id = str(self.team.team_id)
+        # Foreign team.
+        self.assertIsNone(resolve_note_entity_link(f"task:{task.task_id}", team_id="other"))
+        # Deleted task.
+        task.is_deleted = True
+        task.save(update_fields=["is_deleted"])
+        self.assertIsNone(resolve_note_entity_link(f"task:{task.task_id}", team_id=team_id))
+        # Unknown id / unsupported type / project-level task note (no route).
+        self.assertIsNone(resolve_note_entity_link("task:999999", team_id=team_id))
+        self.assertIsNone(resolve_note_entity_link("todo:2026-07-10:item:5", team_id=team_id))
+        project_note = TaskNoteMaster.objects.create(
+            team=self.team, project=self.project, owner=self.user, title="P", body=[]
+        )
+        self.assertIsNone(
+            resolve_note_entity_link(f"note:task:{project_note.note_id}", team_id=team_id)
+        )
+
+    def test_create_note_body_carries_working_task_link(self):
+        task = self._task()
+        res = create_note_run(
+            {
+                "note_type": "task",
+                "title": "Plan: mobile Safari perf",
+                "content_text": (
+                    "### 🎯 Goal\n"
+                    f"Fix [the Safari task](task:{task.task_id}) — see [task:{task.task_id}]."
+                ),
+                "project_id": self.project.project_id,
+                "task_id": task.task_id,
+            },
+            self.ctx,
+        )
+        note = TaskNoteMaster.objects.get(note_id=res["note_id"])
+        href = f"/workspace/tasks/project/{self.project.project_id}/task/{task.task_id}"
+        self.assertEqual(
+            _links_in(note.body),
+            [(href, "the Safari task"), (href, task.display_id)],
+        )
+
+    def test_update_note_body_resolves_links_too(self):
+        task = self._task()
+        note = self._personal_note()
+        update_note_run(
+            {
+                "note_type": "personal",
+                "note_id": note.note_id,
+                "content_text": f"Progress on [the fix](task:{task.task_id}).",
+            },
+            self.ctx,
+        )
+        note.refresh_from_db()
+        self.assertEqual(
+            _links_in(note.body),
+            [(f"/workspace/tasks/project/{self.project.project_id}/task/{task.task_id}", "the fix")],
+        )
+
+    def test_cross_team_token_degrades_to_prose(self):
+        task = self._task()
+        other_ctx = self.ctx  # same user, but pretend the task is foreign:
+        TaskMaster.objects.filter(task_id=task.task_id).update(team=None)
+        res = create_note_run(
+            {
+                "note_type": "personal",
+                "title": "n",
+                "content_text": f"see [the task](task:{task.task_id})",
+            },
+            other_ctx,
+        )
+        note = PersonalNoteMaster.objects.get(note_id=res["note_id"])
+        self.assertEqual(_links_in(note.body), [])
+        # The prose survives as plain text.
+        flat = "".join(
+            n.get("text", "")
+            for b in note.body
+            for n in (b.get("content") or [])
+            if n.get("type") == "text"
+        )
+        self.assertIn("the task", flat)

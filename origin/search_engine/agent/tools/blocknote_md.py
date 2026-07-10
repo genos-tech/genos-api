@@ -10,9 +10,12 @@ This is the backend counterpart of the frontend
 `features/agentQA/markdownToBlocks.ts` — deliberately the same small
 vocabulary and the same block/inline shapes, so a note the agent writes
 is indistinguishable from one saved through the UI's "save answer as
-note" flow. Citation-token resolution (`[prose](type:id)`) is the one
-frontend feature omitted here: the tool has no `sourcesById` map, so a
-non-URL link target degrades to its visible prose (never a dead link).
+note" flow. Citation tokens (`[prose](type:id)` and bare `[type:id]`)
+are resolved into in-app `/workspace/...` links when the caller supplies
+an `entity_link_resolver` (see `entity_links.resolve_note_entity_link`;
+create_note / update_note pass one bound to the caller's team); without
+a resolver, or on a miss, the target degrades to its visible prose
+(never a dead link).
 
 The output is consumed by two places, both of which this shape satisfies:
   * the BlockNote editor (paragraph/heading/bulletListItem/
@@ -26,7 +29,11 @@ The output is consumed by two places, both of which this shape satisfies:
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Callable
+
+# Maps a citation token ("task:12") to (href, fallback_label), or None
+# when it can't be resolved (unknown id, foreign team, unsupported type).
+EntityLinkResolver = Callable[[str], "tuple[str, str] | None"]
 
 _BASE_PROPS = {
     "textColor": "default",
@@ -77,49 +84,96 @@ def _tokenize_formatting(text: str) -> list[dict[str, Any]]:
     return out
 
 
-def _tokenize_inline(text: str) -> list[dict[str, Any]]:
-    """Inline content for one line: markdown links become BlockNote link
-    nodes (real URLs only); everything else runs through bold/italic
-    tokenisation. A `[prose](task:5)`-style citation link — target isn't a
-    URL — degrades to its prose so the note never carries a dead link."""
+# Bare citation token in prose — `[task:12]` — that is NOT the label of
+# a markdown link (no following paren). Same vocabulary as the frontend's
+# CITATION_PATTERN.
+_BARE_TOKEN_RE = re.compile(
+    r"\[((?:chat|task|note|project|todo|milestone):[^\]\s]+)\](?!\()"
+)
+
+
+def _link_node(href: str, label: str) -> dict[str, Any]:
+    return {"type": "link", "href": href, "content": [_text_node(label)]}
+
+
+def _tokenize_prose(text: str, resolver: EntityLinkResolver | None) -> list[dict[str, Any]]:
+    """A link-free run: resolve bare `[type:id]` citation tokens into
+    links when a resolver is supplied (label = the entity's
+    display_id/name/title), otherwise/on a miss keep the literal text;
+    everything between runs through bold/italic tokenisation."""
     if not text:
         return []
+    if resolver is None:
+        return _tokenize_formatting(text)
     out: list[dict[str, Any]] = []
     cursor = 0
-    for m in _LINK_RE.finditer(text):
+    for m in _BARE_TOKEN_RE.finditer(text):
+        resolved = resolver(m.group(1))
+        if not resolved:
+            continue  # leave the literal token inside the surrounding run
         if m.start() > cursor:
             out.extend(_tokenize_formatting(text[cursor : m.start()]))
-        label, href = m.group(1), m.group(2)
-        if href.startswith(("http://", "https://", "mailto:")):
-            out.append(
-                {
-                    "type": "link",
-                    "href": href,
-                    "content": [_text_node(label)],
-                }
-            )
-        else:
-            # Non-URL target (e.g. a citation token) — keep the prose.
-            out.extend(_tokenize_formatting(label))
+        out.append(_link_node(resolved[0], resolved[1]))
         cursor = m.end()
     if cursor < len(text):
         out.extend(_tokenize_formatting(text[cursor:]))
     return out
 
 
-def _block(block_type: str, text: str, *, level: int | None = None) -> dict[str, Any]:
+def _tokenize_inline(
+    text: str, resolver: EntityLinkResolver | None = None
+) -> list[dict[str, Any]]:
+    """Inline content for one line: markdown links become BlockNote link
+    nodes — real URLs always, and `[prose](task:5)`-style citation
+    targets when an entity-link resolver is supplied (create_note /
+    update_note pass one bound to the caller's team, so saved notes
+    carry working in-app links). An unresolvable citation target
+    degrades to its prose so the note never carries a dead link."""
+    if not text:
+        return []
+    out: list[dict[str, Any]] = []
+    cursor = 0
+    for m in _LINK_RE.finditer(text):
+        if m.start() > cursor:
+            out.extend(_tokenize_prose(text[cursor : m.start()], resolver))
+        label, href = m.group(1), m.group(2)
+        if href.startswith(("http://", "https://", "mailto:")):
+            out.append(_link_node(href, label))
+        else:
+            resolved = resolver(href) if resolver else None
+            if resolved:
+                # Citation target → in-app link, keeping the model's prose.
+                out.append(_link_node(resolved[0], label))
+            else:
+                # Non-URL target we can't resolve — keep the prose.
+                out.extend(_tokenize_formatting(label))
+        cursor = m.end()
+    if cursor < len(text):
+        out.extend(_tokenize_prose(text[cursor:], resolver))
+    return out
+
+
+def _block(
+    block_type: str,
+    text: str,
+    *,
+    level: int | None = None,
+    resolver: EntityLinkResolver | None = None,
+) -> dict[str, Any]:
     props = dict(_BASE_PROPS)
     if level is not None:
         props["level"] = level
     return {
         "type": block_type,
         "props": props,
-        "content": _tokenize_inline(text),
+        "content": _tokenize_inline(text, resolver),
         "children": [],
     }
 
 
-def markdown_to_blocks(markdown: str) -> list[dict[str, Any]]:
+def markdown_to_blocks(
+    markdown: str, *, entity_link_resolver: EntityLinkResolver | None = None
+) -> list[dict[str, Any]]:
     """Parse the agent's markdown into BlockNote `PartialBlock`-shaped dicts.
 
     Handles headings (# / ## / ###), bullet lists (-, *, •), numbered
@@ -149,7 +203,7 @@ def markdown_to_blocks(markdown: str) -> list[dict[str, Any]]:
         heading = _HEADING_RE.match(stripped)
         if heading:
             level = min(len(heading.group(1)), 3)
-            blocks.append(_block("heading", heading.group(2), level=level))
+            blocks.append(_block("heading", heading.group(2), level=level, resolver=entity_link_resolver))
             i += 1
             continue
 
@@ -158,7 +212,7 @@ def markdown_to_blocks(markdown: str) -> list[dict[str, Any]]:
                 mm = _BULLET_RE.match(lines[i].strip())
                 if not mm:
                     break
-                blocks.append(_block("bulletListItem", mm.group(1)))
+                blocks.append(_block("bulletListItem", mm.group(1), resolver=entity_link_resolver))
                 i += 1
             continue
 
@@ -167,7 +221,7 @@ def markdown_to_blocks(markdown: str) -> list[dict[str, Any]]:
                 mm = _NUMBERED_RE.match(lines[i].strip())
                 if not mm:
                     break
-                blocks.append(_block("numberedListItem", mm.group(1)))
+                blocks.append(_block("numberedListItem", mm.group(1), resolver=entity_link_resolver))
                 i += 1
             continue
 
@@ -182,6 +236,6 @@ def markdown_to_blocks(markdown: str) -> list[dict[str, Any]]:
                 break
             buf.append(nxt.rstrip("\\"))
             i += 1
-        blocks.append(_block("paragraph", " ".join(buf)))
+        blocks.append(_block("paragraph", " ".join(buf), resolver=entity_link_resolver))
 
     return blocks
