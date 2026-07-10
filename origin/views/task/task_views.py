@@ -1378,17 +1378,22 @@ class TaskAttachmentsView(AuthenticatedAPIView):
 
             serializer = TaskAttachmentsSerializer(data=data)
             if serializer.is_valid():
-                serializer.save()
+                instance = serializer.save()
 
-                file_path = serializer.data["attached_file"].replace("/media/", "/uploads/")
-                with open("." + file_path, "rb") as f:
+                # Echo the bytes back through the FileField's storage API.
+                # The previous `open("." + url.replace("/media/", "/uploads/"))`
+                # only worked when MEDIA_ROOT happened to be `<cwd>/uploads`;
+                # on Railway the volume is mounted elsewhere (DJANGO_MEDIA_ROOT)
+                # so the hand-built path didn't exist and every upload 500'd
+                # AFTER the row + file were already persisted.
+                with instance.attached_file.open("rb") as f:
                     encoded_file = base64.b64encode(f.read()).decode("utf-8")
 
                 return Response(
                     {
                         **serializer.data,
                         "file_base64": encoded_file,
-                        "name": original_name or os.path.basename(file_path),
+                        "name": original_name or os.path.basename(instance.attached_file.name),
                     },
                     status=status.HTTP_201_CREATED,
                 )
