@@ -938,3 +938,19 @@
     tools_used_excludes: ["update_task"]
     no_errors: true
     expected_tools: ["list_tasks", "list_task_dependencies"]
+
+- id: composite_subtasks_under_existing_task
+  # Sub-task mode: work that already lives in a task must NOT become a
+  # new milestone — the batch nests under the existing task via
+  # parent_task_id. The agent reads the task's comments first
+  # (fetch_task returns them) so the split is grounded in the actual
+  # discussion.
+  query: >-
+    Break the "Investigate slow homepage load on mobile Safari" task in
+    the Website Redesign project into sub-tasks based on its comments.
+  fixture: true
+  expect:
+    tools_used_contains: ["fetch_task"]
+    pending_tools_contains: ["create_task_plan"]
+    tools_used_excludes: ["create_task"]
+    no_errors: true

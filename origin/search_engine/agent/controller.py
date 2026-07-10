@@ -280,6 +280,7 @@ _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any], str | None]] = {
     "parent_item_id": _resolve_todo_item_title,
     "milestone_id": _resolve_milestone_title,
     "existing_milestone_id": _resolve_milestone_title,
+    "parent_task_id": _resolve_task_display_id,
 }
 
 
@@ -746,6 +747,17 @@ def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list
         if ms.get("milestone_id"):
             sources.append(
                 _milestone_source(ms["milestone_id"], ms.get("title"), pid, ms.get("task_id"))
+            )
+        parent = result.get("parent_task") or {}
+        if parent.get("task_id"):
+            # Sub-task mode: chip for the anchor task the batch nested under.
+            sources.append(
+                _task_source(
+                    parent["task_id"],
+                    parent.get("title"),
+                    pid,
+                    display_id=parent.get("display_id"),
+                )
             )
         for t in (result.get("tasks") or [])[:10]:
             if t.get("task_id"):

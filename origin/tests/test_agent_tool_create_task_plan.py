@@ -173,6 +173,40 @@ class CreateTaskPlanHappyPathTests(CreateTaskPlanTestBase):
         self.assertIsNone(out["milestone"])
         self.assertEqual(MilestoneMaster.objects.count(), 0)
 
+    def test_subtasks_under_existing_task(self):
+        milestone = MilestoneMaster.objects.create(
+            team=self.team, project=self.project, reporter=self.user, title="v1.0"
+        )
+        anchor = TaskMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            reporter=self.user,
+            milestone=milestone,
+            title="Investigate slow homepage load",
+            status="WIP",
+        )
+        out = self.run_tool(
+            {
+                "project_id": self.project.project_id,
+                "parent_task_id": anchor.task_id,
+                "tasks": [
+                    {"title": "Rerun trace on real devices"},
+                    {"title": "Strip legacy CSS bundle", "blocked_by_indexes": [0]},
+                ],
+            }
+        )
+        subs = TaskMaster.objects.filter(parent_task_id=anchor.task_id)
+        self.assertEqual(subs.count(), 2)
+        for s in subs:
+            # Sub-tasks inherit the anchor's milestone and hang off its root.
+            self.assertEqual(s.milestone_id, milestone.milestone_id)
+            self.assertEqual(s.root_task_id, anchor.task_id)
+        self.assertIsNone(out["milestone"])
+        self.assertEqual(out["parent_task"]["task_id"], anchor.task_id)
+        self.assertEqual(out["parent_task"]["display_id"], anchor.display_id)
+        self.assertIn(f"2 sub-task(s) under {anchor.display_id}", out["__summary__"])
+        self.assertEqual(out["dependencies_created"], 1)
+
 
 class CreateTaskPlanValidationTests(CreateTaskPlanTestBase):
     def _base_args(self, **overrides):
@@ -183,12 +217,41 @@ class CreateTaskPlanValidationTests(CreateTaskPlanTestBase):
         args.update(overrides)
         return args
 
-    def test_both_milestone_modes_rejected(self):
-        with self.assertRaisesMessage(ToolError, "not both"):
+    def test_attach_modes_are_mutually_exclusive(self):
+        with self.assertRaisesMessage(ToolError, "at most ONE"):
             self.run_tool(
                 self._base_args(milestone={"title": "New"}, existing_milestone_id=1)
             )
+        with self.assertRaisesMessage(ToolError, "at most ONE"):
+            self.run_tool(self._base_args(milestone={"title": "New"}, parent_task_id=1))
+        with self.assertRaisesMessage(ToolError, "at most ONE"):
+            self.run_tool(self._base_args(existing_milestone_id=1, parent_task_id=1))
         self.assert_nothing_created()
+
+    def test_parent_task_from_other_project_rejected(self):
+        other_project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Elsewhere",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        foreign_parent = TaskMaster.objects.create(
+            team=self.team, project=other_project, reporter=self.user, title="Foreign"
+        )
+        with self.assertRaisesMessage(ToolError, "belongs to project"):
+            self.run_tool(self._base_args(parent_task_id=foreign_parent.task_id))
+        self.assertEqual(TaskMaster.objects.exclude(title="Foreign").count(), 0)
+
+    def test_deleted_parent_task_rejected(self):
+        gone = TaskMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            reporter=self.user,
+            title="Gone",
+            is_deleted=True,
+        )
+        with self.assertRaisesMessage(ToolError, "has been deleted"):
+            self.run_tool(self._base_args(parent_task_id=gone.task_id))
 
     def test_forward_parent_index_rejected(self):
         with self.assertRaisesMessage(ToolError, "EARLIER task"):

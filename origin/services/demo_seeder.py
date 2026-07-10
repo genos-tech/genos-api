@@ -930,37 +930,25 @@ PROJECT_BLUEPRINTS = [
                         "bot3",
                         "QA can rerun the trace on the staging build once the migration is in.",
                     ),
-                    # ---- Plan-shaped follow-up discussion. ----
-                    # This thread is the demo surface for the agent's
-                    # "Plan tasks from this thread" flow (create_task_plan):
-                    # it scopes a follow-up workstream with an implied task
-                    # breakdown, ordering ("X first / after Y"), owners, and
-                    # a rough deadline — everything a good plan proposal
-                    # needs — and nothing here exists as tasks yet, so the
-                    # created milestone is clearly new.
-                    (
-                        "demo",
-                        "Zooming out from this one bug — mobile speed keeps biting us after every launch. Once the design-system migration lands I'd like to spin up a proper mobile performance hardening effort: images, JS weight, third-party scripts, and ongoing monitoring so we catch regressions before users feel them.",
-                    ),
+                    # ---- Sub-task-shaped follow-up. ----
+                    # Demo surface for the agent's break-a-task-into-
+                    # sub-tasks flow (create_task_plan with
+                    # parent_task_id): the comments propose a concrete
+                    # split of THIS task's work — the natural ask is
+                    # "add these as sub-tasks of this task", never a new
+                    # milestone (the milestone-from-a-thread demo lives
+                    # in the group chat's mobile-speed thread instead).
                     (
                         "bot1",
-                        "Agreed. Concretely I'd split it in two: (1) an image optimization pipeline — responsive sizes plus AVIF/WebP with lazy loading below the fold; (2) route-level code splitting so the landing pages stop shipping app code. The code splitting should come after the image pipeline, otherwise we're measuring against a moving baseline.",
-                    ),
-                    (
-                        "bot2",
-                        "Add a third-party script audit before either of those — the analytics tags and the chat widget account for a scary slice of main-thread time in my last trace. Doing the audit first might delete work from the other two.",
+                        "This is turning out to be more than one fix. Based on the trace I'd break it down: (1) rerun the profile on real devices after the design-system cutover, (2) strip the legacy Bootstrap CSS that still ships alongside v3, (3) add a regression check so this class of slowdown can't sneak back in.",
                     ),
                     (
                         "bot3",
-                        "From QA: whatever we ship, I want an automated speed check in CI on every PR — fail the build if the landing pages get slower. I can own that, but it needs the monitoring dashboards to exist first so we agree on the numbers we gate on.",
-                    ),
-                    (
-                        "bot1",
-                        "Monitoring dashboards plus alerting can be mine. That one needs the image pipeline done first, or the graphs are dominated by known-bad assets.",
+                        "Agreed on the split — QA can take the device rerun and the regression check.",
                     ),
                     (
                         "demo",
-                        "Nice, that hangs together: Carol's script audit first, then Bob's image pipeline followed by the code splitting, monitoring on top of the pipeline, and Dan's CI gate last. High priority on the audit and the image pipeline, normal for the rest. Let's target end of next month for the whole thing. When someone has a minute, turn this thread into a proper milestone with tasks.",
+                        "Sounds right. Let's add those as sub-tasks of this task so we can track them separately.",
                     ),
                 ],
             },
@@ -1915,6 +1903,10 @@ GM_BLUEPRINT = {
             0,
             "Good catch Dan. I'll add a “What's new” modal for the launch that highlights Cmd-K and the redesign. Carving a task out of this thread.",
         ),
+        (
+            0,
+            "Separate topic before we wrap — mobile speed. We keep firefighting it one bug at a time; the latest iOS report is just the newest symptom. I'd like to scope a proper mobile performance hardening effort. Thread below — let's shape it.",
+        ),
     ],
     "thread": {
         "parent_index": 13,  # Dan's keyboard-shortcuts question
@@ -1935,6 +1927,46 @@ GM_BLUEPRINT = {
             (2, "I can wire the modal in with the launch banner. One PR, both surfaces."),
         ],
     },
+    # ---- Plan-shaped thread. ----
+    # Demo surface for the agent's plan-from-a-chat-thread flow
+    # (create_task_plan): a proper CHAT thread (not task comments)
+    # scoping a new workstream with an implied breakdown, ordering
+    # ("first / after the pipeline"), owners, a deadline, and the home
+    # project named explicitly so the agent can resolve it. Nothing in
+    # it exists as tasks yet, so the created milestone is clearly new.
+    # Keyword note: deliberately avoids "Safari" / "Lighthouse" /
+    # "marketing site" so it can't outrank those retrieval-eval targets.
+    "extra_threads": [
+        {
+            "parent_index": 14,  # demo's "mobile speed" scoping message
+            "messages": [
+                (
+                    2,
+                    "Concretely I'd split it in two: (1) an image optimization pipeline — responsive sizes plus AVIF/WebP with lazy loading below the fold; (2) route-level code splitting so the landing pages stop shipping app code. Code splitting should come after the image pipeline, otherwise we're measuring against a moving baseline.",
+                ),
+                (
+                    3,
+                    "Add a third-party script audit before either of those — the analytics tags and the chat widget eat a scary slice of main-thread time in my last trace. Doing the audit first might delete work from the other two.",
+                ),
+                (
+                    4,
+                    "Whatever we ship, I want an automated speed check in CI on every PR — fail the build if the landing pages get slower. I can own that, but it needs the monitoring dashboards to exist first so we agree on the numbers we gate on.",
+                ),
+                (
+                    2,
+                    "Monitoring dashboards plus alerting can be mine. Needs the image pipeline done first, or the graphs are dominated by known-bad assets.",
+                ),
+                (
+                    1,
+                    "Owners then: Carol the script audit, Bob the image pipeline and monitoring, Dan the CI gate. High priority on the audit and the pipeline, normal for the rest — and let's aim for end of next month.",
+                ),
+                (
+                    0,
+                    "Perfect, that hangs together. This belongs in the Website Redesign project — someone turn this thread into a milestone with tasks when you get a minute.",
+                ),
+            ],
+        },
+    ],
 }
 
 
@@ -2916,8 +2948,6 @@ def _create_group_chat(team, demo_user, members) -> Channel:
         ]
     )
 
-    thread_parent_idx = GM_BLUEPRINT["thread"]["parent_index"]
-
     created_msgs = []
     for midx, (sender_idx, text) in enumerate(GM_BLUEPRINT["messages"]):
         msg = Message.objects.create(
@@ -2930,21 +2960,27 @@ def _create_group_chat(team, demo_user, members) -> Channel:
         )
         created_msgs.append(msg)
 
-    parent_msg = created_msgs[thread_parent_idx]
-    for tidx, (sender_idx, text) in enumerate(GM_BLUEPRINT["thread"]["messages"]):
-        Message.objects.create(
-            channel=channel,
-            sender=members[sender_idx],
-            seq=len(created_msgs) + tidx + 1,
-            body=_text_body(text),
-            body_text=text,
-            is_thread_reply=True,
-            parent=parent_msg,
-            thread_root=parent_msg,
-            metadata={},
-        )
-    parent_msg.reply_count = len(GM_BLUEPRINT["thread"]["messages"])
-    parent_msg.save(update_fields=["reply_count", "ts_updated_at"])
+    # One or more threads, each anchored to a top-level message by
+    # index. `extra_threads` carries e.g. the mobile-performance
+    # planning discussion (the create_task_plan demo surface).
+    next_seq = len(created_msgs) + 1
+    for thread_spec in [GM_BLUEPRINT["thread"], *GM_BLUEPRINT.get("extra_threads", [])]:
+        parent_msg = created_msgs[thread_spec["parent_index"]]
+        for sender_idx, text in thread_spec["messages"]:
+            Message.objects.create(
+                channel=channel,
+                sender=members[sender_idx],
+                seq=next_seq,
+                body=_text_body(text),
+                body_text=text,
+                is_thread_reply=True,
+                parent=parent_msg,
+                thread_root=parent_msg,
+                metadata={},
+            )
+            next_seq += 1
+        parent_msg.reply_count = len(thread_spec["messages"])
+        parent_msg.save(update_fields=["reply_count", "ts_updated_at"])
 
     return channel
 

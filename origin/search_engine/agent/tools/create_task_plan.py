@@ -1,8 +1,9 @@
 """`create_task_plan` composite write tool — a whole plan in ONE approval.
 
 Creates a milestone plus its task tree (nesting + blocker dependencies)
-— or a batch of tasks under an existing milestone / no milestone — in a
-single approval-gated call. This is the tool behind "create a milestone
+— or a batch of tasks under an existing milestone, sub-tasks of an
+existing task (`parent_task_id`, the "break this task down from its
+comments" flow), or standalone — in a single approval-gated call. This is the tool behind "create a milestone
 and tasks based on this chat": without it the model would need one
 `create_task` proposal per task, which means one Approve click per task
 and no way to express nesting or dependencies at all (`create_task`
@@ -126,11 +127,39 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if ctx.user_id not in allowed:
         raise ToolError(f"Not authorized to create tasks in project {project_id}.")
 
-    # ---- milestone mode resolution ----
+    # ---- attach-mode resolution (new milestone XOR existing milestone
+    # XOR sub-tasks of an existing task XOR standalone) ----
     milestone_spec = args.get("milestone")
     raw_existing_id = args.get("existing_milestone_id")
-    if milestone_spec is not None and raw_existing_id is not None:
-        raise ToolError("Pass either `milestone` (create new) or `existing_milestone_id`, not both.")
+    raw_parent_task_id = args.get("parent_task_id")
+    modes_given = sum(
+        x is not None for x in (milestone_spec, raw_existing_id, raw_parent_task_id)
+    )
+    if modes_given > 1:
+        raise ToolError(
+            "Pass at most ONE of `milestone` (create new), `existing_milestone_id`, "
+            "or `parent_task_id` (sub-tasks of an existing task)."
+        )
+
+    parent_task: TaskMaster | None = None
+    if raw_parent_task_id is not None:
+        try:
+            parent_id = int(raw_parent_task_id)
+        except (TypeError, ValueError):
+            raise ToolError(f"`parent_task_id` must be an integer (got {raw_parent_task_id!r}).")
+        try:
+            parent_task = TaskMaster.objects.select_related("project").get(task_id=parent_id)
+        except TaskMaster.DoesNotExist:
+            raise ToolError(f"Task {parent_id} not found.")
+        if parent_task.is_deleted:
+            raise ToolError(f"Task {parent_id} has been deleted.")
+        if str(getattr(parent_task, "team_id", "") or "") != ctx.team_id:
+            raise ToolError("Not authorized: parent task is in a different team.")
+        if parent_task.project_id != project_id:
+            raise ToolError(
+                f"Task {parent_id} belongs to project {parent_task.project_id}, "
+                f"not {project_id}."
+            )
 
     existing_milestone: MilestoneMaster | None = None
     if raw_existing_id is not None:
@@ -287,8 +316,17 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 milestone = existing_milestone
                 ensure_backing_task(milestone)
 
-            backing_id = milestone.task_id if milestone is not None else None
-            sprint_id = milestone.sprint_id if milestone is not None else None
+            if parent_task is not None:
+                # Sub-tasks of an existing task: nest under it and
+                # inherit its milestone/sprint (same semantics a
+                # UI-created sub-task gets).
+                anchor_parent_id = parent_task.task_id
+                anchor_milestone = parent_task.milestone
+                sprint_id = parent_task.sprint_id
+            else:
+                anchor_parent_id = milestone.task_id if milestone is not None else None
+                anchor_milestone = milestone
+                sprint_id = milestone.sprint_id if milestone is not None else None
 
             created: list[TaskMaster] = []
             for spec in tasks:
@@ -298,8 +336,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     parent_task_id = parent.task_id
                     task_milestone = parent.milestone
                 else:
-                    parent_task_id = backing_id
-                    task_milestone = milestone
+                    parent_task_id = anchor_parent_id
+                    task_milestone = anchor_milestone
                 created.append(
                     TaskMaster.objects.create(
                         team_id=ctx.team_id,
@@ -360,11 +398,23 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         for i, t in enumerate(created)
     ]
 
+    parent_out = None
+    if parent_task is not None:
+        parent_out = {
+            "task_id": parent_task.task_id,
+            "display_id": parent_task.display_id,
+            "title": parent_task.title,
+        }
+
     n_deps = len(dependencies)
     if milestone_spec is not None:
         summary = (
             f'Created milestone "{milestone.title}" with {len(created)} task(s)'
             + (f", {n_deps} dependency(ies)" if n_deps else "")
+        )
+    elif parent_task is not None:
+        summary = f"Created {len(created)} sub-task(s) under {parent_task.display_id}" + (
+            f", {n_deps} dependency(ies)" if n_deps else ""
         )
     else:
         target = f' in milestone "{milestone.title}"' if milestone is not None else ""
@@ -374,6 +424,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     return {
         "milestone": milestone_out,
+        "parent_task": parent_out,
         "project_id": project_id,
         "project_name": project.project_name,
         "tasks": tasks_out,
@@ -389,7 +440,11 @@ _TASK_ITEM_SCHEMA: dict[str, Any] = {
         "content_markdown": {
             "type": "STRING",
             "description": (
-                "Optional task body in markdown (headings, bullets, bold). "
+                "Optional task body in markdown following the house task "
+                "template: '### 🧾 Summary', '### 🪜 Motivation', "
+                "'### ✅ Acceptance criteria' (bulleted). For bug-type tasks "
+                "use '### 🐞 Summary', '### 🔁 Steps to reproduce', "
+                "'### 🎯 Expected behavior', '### 💥 Actual behavior'. "
                 "Keep it under ~150 words."
             ),
         },
@@ -437,11 +492,13 @@ CREATE_TASK_PLAN = Tool(
     description=(
         "Create a whole work plan in ONE approval: a new milestone plus its "
         "tasks/sub-tasks with dependencies — or a batch of tasks attached to "
-        "an existing milestone (existing_milestone_id) or standalone in a "
-        "project. REQUIRES USER APPROVAL — the user sees the full proposed "
-        "plan and approves once. Use this whenever the user asks to create a "
-        "milestone with tasks, break a discussion/chat into tasks, or add "
-        "MULTIPLE related tasks — NEVER a series of create_task calls. "
+        "an existing milestone (existing_milestone_id), nested as SUB-TASKS "
+        "of an existing task (parent_task_id — e.g. 'break this task into "
+        "sub-tasks based on its comments'), or standalone in a project. "
+        "REQUIRES USER APPROVAL — the user sees the full proposed plan and "
+        "approves once. Use this whenever the user asks to create a "
+        "milestone with tasks, break a discussion/chat/task into tasks, or "
+        "add MULTIPLE related tasks — NEVER a series of create_task calls. "
         "(create_task remains correct for one single ad-hoc task.) Max "
         f"{_MAX_PLAN_TASKS} tasks; reference other tasks in the batch by "
         "array index (parent_index, blocked_by_indexes)."
@@ -468,7 +525,13 @@ CREATE_TASK_PLAN = Tool(
                     "title": {"type": "STRING", "description": "Milestone title."},
                     "description_markdown": {
                         "type": "STRING",
-                        "description": "Optional milestone body in markdown.",
+                        "description": (
+                            "Optional milestone body in markdown following "
+                            "the house milestone template: '### 🎯 Goal', "
+                            "'### ✅ Success criteria' (bulleted), "
+                            "'### 📦 In scope', '### 🚫 Out of scope', "
+                            "'### ⚠️ Risks & dependencies'."
+                        ),
                     },
                     "priority": {"type": "STRING", "enum": PRIORITY_ENUM},
                     "effort_level": {"type": "STRING", "enum": EFFORT_ENUM},
@@ -497,6 +560,17 @@ CREATE_TASK_PLAN = Tool(
                     "Optional: attach all top-level tasks to this EXISTING "
                     "milestone instead of creating one (resolve via "
                     "list_milestones)."
+                ),
+            },
+            "parent_task_id": {
+                "type": "INTEGER",
+                "description": (
+                    "Optional: create every top-level task in the batch as a "
+                    "SUB-TASK of this existing task ('break this task down "
+                    "into sub-tasks'). They inherit its milestone and "
+                    "sprint. Mutually exclusive with milestone / "
+                    "existing_milestone_id. Use fetch_task first to read "
+                    "the task and its comments."
                 ),
             },
             "tasks": {
