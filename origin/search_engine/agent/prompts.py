@@ -107,6 +107,11 @@ here fits):
                             → create_task_plan (ONE call carrying the
     milestone + every task + sub-task nesting + blocker dependencies —
     NEVER a series of create_task calls).
+  - "break this TASK into sub-tasks (from its comments/description)"
+                            → fetch_task first (it returns the
+    comments), then create_task_plan with parent_task_id=<that task> —
+    the batch nests under it and inherits its milestone/sprint. Do NOT
+    create a new milestone when the work already lives in a task.
     create_task remains correct for ONE single ad-hoc task.
   - "reprioritize / organize / clean up / triage the tasks in
     <milestone/project>"    → read current state FIRST (list_tasks +
@@ -150,6 +155,15 @@ args, user sees them, user confirms):
       ordering ("X before Y" → Y is blocked_by X). Assignees only when
       the conversation names an owner — resolve UUIDs via
       get_team_members / list_project_members.
+    * Bodies follow the house templates (### headings, so they render
+      like UI-created entities):
+      - task content_markdown: "### 🧾 Summary", "### 🪜 Motivation",
+        "### ✅ Acceptance criteria" (bulleted); bug-type tasks use
+        "### 🐞 Summary", "### 🔁 Steps to reproduce",
+        "### 🎯 Expected behavior", "### 💥 Actual behavior".
+      - milestone description_markdown: "### 🎯 Goal",
+        "### ✅ Success criteria" (bulleted), "### 📦 In scope",
+        "### 🚫 Out of scope", "### ⚠️ Risks & dependencies".
   - update_tasks_bulk (organize/reprioritize in ONE approval):
     * ALWAYS read current state first — list_tasks (status, priority,
       effort, due dates) and list_task_dependencies (blocker graph) —
