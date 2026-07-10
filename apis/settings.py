@@ -764,6 +764,22 @@ SEARCH_ENGINE = {
     # calendar without a calendar keyword) can't reach it. Conservative
     # keep-direction mitigates; off by default, opt-in.
     "RAG_TOOL_SUBSETTING": (os.environ.get("RAG_TOOL_SUBSETTING", "false").lower() == "true"),
+    # Quality round 2 — collapse MIRROR results (a project's PM channel,
+    # a thread inheriting its channel title, a milestone's backing task,
+    # a DM titled after the person): keep only the highest-ranked row
+    # per normalized title across entity types + one surface per chat
+    # channel per title. Built when a STALE local index (pre-subfield
+    # mapping — see agent_eval's index-drift preflight) made mirrors
+    # crowd the top-N ("Q2 Roadmap · …" three times in one top-5).
+    # **Default OFF — measured on a healthy index the retrieval A/B
+    # REGRESSED (66-case suite: pass 64→61, recall_at_n 0.967→0.924,
+    # mrr 0.858→0.847): with proper lexical subfields the mirrors rank
+    # sanely and the collapse removes legitimately-useful rows.** Kept
+    # as an opt-in lever for typeahead-UX experiments (three identical
+    # rows in the Cmd-K overlay is still ugly); re-A/B before flipping.
+    "RAG_COLLAPSE_MIRROR_RESULTS": (
+        os.environ.get("RAG_COLLAPSE_MIRROR_RESULTS", "false").lower() == "true"
+    ),
     # F2 — online judge sampling (SPOTLIGHT_QUALITY_ARCHITECTURE.md §F2).
     # Fraction (0.0–1.0) of completed agent runs the `agent_judge_sample`
     # cron command scores with the LLM judge, so production faithfulness /
