@@ -256,6 +256,18 @@ def _resolve_todo_item_title(raw: Any) -> str | None:
     return ToDoItem.objects.filter(item_id=tid).values_list("title", flat=True).first()
 
 
+def _resolve_milestone_title(raw: Any) -> str | None:
+    try:
+        mid = int(raw)
+    except (TypeError, ValueError):
+        return None
+    from origin.models.task.milestone_models import MilestoneMaster  # noqa: PLC0415
+
+    return (
+        MilestoneMaster.objects.filter(milestone_id=mid).values_list("title", flat=True).first()
+    )
+
+
 # Argument-key → resolver. Resolvers return None on a miss so we fall
 # back to the raw value (the user sees the ID rather than a blank).
 _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any], str | None]] = {
@@ -266,16 +278,72 @@ _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any], str | None]] = {
     "new_assignee_id": _resolve_user_name,
     "item_id": _resolve_todo_item_title,
     "parent_item_id": _resolve_todo_item_title,
+    "milestone_id": _resolve_milestone_title,
+    "existing_milestone_id": _resolve_milestone_title,
 }
 
 
-def _friendly_arguments(args: dict[str, Any]) -> dict[str, Any]:
+def _friendly_task_plan_arguments(out: dict[str, Any]) -> None:
+    """In-place nested enrichment for `create_task_plan` arguments.
+
+    The flat resolver pass above only touches top-level keys; a plan's
+    assignees live inside `tasks[i].assignee_id` and
+    `milestone.assignee_ids`. Resolve them all with ONE batched user
+    query so the approval card shows usernames, not UUIDs. Structure is
+    otherwise preserved — the frontend's structured preview renders the
+    same shape the model proposed.
+    """
+    from origin.models.common.user_models import CustomUser  # noqa: PLC0415
+
+    tasks = out.get("tasks") if isinstance(out.get("tasks"), list) else []
+    milestone = out.get("milestone") if isinstance(out.get("milestone"), dict) else None
+
+    ids: set[str] = set()
+    for t in tasks:
+        if isinstance(t, dict) and t.get("assignee_id"):
+            ids.add(str(t["assignee_id"]))
+    if milestone:
+        for uid in milestone.get("assignee_ids") or []:
+            if uid:
+                ids.add(str(uid))
+    if not ids:
+        return
+
+    names = {
+        str(u_id): username
+        for u_id, username in CustomUser.objects.filter(id__in=list(ids)).values_list(
+            "id", "username"
+        )
+    }
+    new_tasks = []
+    for t in tasks:
+        if isinstance(t, dict) and t.get("assignee_id"):
+            t = {**t, "assignee_id": names.get(str(t["assignee_id"]), t["assignee_id"])}
+        new_tasks.append(t)
+    out["tasks"] = new_tasks
+    if milestone and milestone.get("assignee_ids"):
+        out["milestone"] = {
+            **milestone,
+            "assignee_ids": [
+                names.get(str(uid), uid) for uid in milestone["assignee_ids"] if uid
+            ],
+        }
+
+
+# Tool-name → nested enrichment pass, applied after the flat resolvers.
+_FRIENDLY_NESTED_ENRICHERS: dict[str, Callable[[dict[str, Any]], None]] = {
+    "create_task_plan": _friendly_task_plan_arguments,
+}
+
+
+def _friendly_arguments(args: dict[str, Any], tool_name: str | None = None) -> dict[str, Any]:
     """Return a copy of `args` with raw IDs replaced by human labels.
 
     Applied only at the wire-event boundary (the approval card + tool
     progress strip render this). The persisted `arguments_json` keeps
     the canonical primary keys so the resume path re-runs the tool
-    correctly.
+    correctly. `tool_name` selects an optional nested enrichment pass
+    for composite tools whose IDs live below the top level.
     """
     out: dict[str, Any] = {}
     for key, value in args.items():
@@ -289,6 +357,13 @@ def _friendly_arguments(args: dict[str, Any]) -> dict[str, Any]:
             out[key] = friendly if friendly is not None else value
         else:
             out[key] = value
+
+    enricher = _FRIENDLY_NESTED_ENRICHERS.get(tool_name or "")
+    if enricher is not None:
+        try:
+            enricher(out)
+        except Exception:  # noqa: BLE001 — labels never break the loop
+            log.exception("Nested friendly-arg enrichment failed for %s", tool_name)
     return out
 
 
@@ -607,6 +682,26 @@ def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list
                 display_id=result.get("display_id"),
             )
         ]
+
+    if call_name == "create_task_plan":
+        # Approved plan → chips for everything it created, so the final
+        # answer's citations resolve and the user can click straight
+        # into the new milestone/tasks. Capped like other multi-row chips.
+        sources: list[dict[str, Any]] = []
+        pid = result.get("project_id")
+        ms = result.get("milestone") or {}
+        if ms.get("milestone_id"):
+            sources.append(
+                _milestone_source(ms["milestone_id"], ms.get("title"), pid, ms.get("task_id"))
+            )
+        for t in (result.get("tasks") or [])[:10]:
+            if t.get("task_id"):
+                sources.append(
+                    _task_source(t["task_id"], t.get("title"), pid, display_id=t.get("display_id"))
+                )
+        if pid:
+            sources.append(_project_source(pid, result.get("project_name")))
+        return sources
 
     if call_name == "list_projects":
         return [
@@ -1148,6 +1243,9 @@ def resume_agent(
         args=call_args,
         thought_signature=_coerce_signature(pending_step.thought_signature),
     )
+    # Chips created by an approved write (filled in the approve branch);
+    # doubles as the continued loop's sources dedup seed.
+    resumed_sources: dict[tuple[Any, Any], dict[str, Any]] = {}
 
     # Emit the start event the original run skipped. Same step index so
     # the frontend can correlate the approve/reject card with the row
@@ -1157,7 +1255,7 @@ def resume_agent(
             "type": "tool_call_start",
             "step": step_index,
             "tool_name": call_name,
-            "arguments": _friendly_arguments(call_args),
+            "arguments": _friendly_arguments(call_args, call_name),
         }
     )
 
@@ -1269,18 +1367,39 @@ def resume_agent(
                         "Failed to update pending step %s after approve",
                         pending_step.step_id,
                     )
+                # Chips for entities the approved write CREATED (e.g. a
+                # create_task_plan's milestone + tasks) so the final
+                # answer's citations resolve to clickable previews.
+                # Mirrors the seeded-sources pattern in run_agent: emit
+                # once here, then seed the continued loop's dedup map so
+                # later read-tools don't re-add (and cumulative `sources`
+                # events keep including them). Tools without a
+                # _ui_sources_from_tool_result branch return [] — no
+                # behavior change for the other write tools.
+                for src in _ui_sources_from_tool_result(call_name, result):
+                    key = (src.get("entity_type"), src.get("entity_id"))
+                    if all(key) and key not in resumed_sources:
+                        resumed_sources[key] = src
+                if resumed_sources:
+                    hydrated = _hydrate_task_display_ids(
+                        _apply_friendly_titles(list(resumed_sources.values()), ctx)
+                    )
+                    emit({"type": "sources", "sources": hydrated})
                 messages.append(_assistant_function_call_turn(function_call))
                 messages.append(_function_response_turn(call_name, result))
 
     # Continue the loop from the next step. The original run wrote
     # steps 0..step_index inclusive, so we resume at step_index + 1.
+    # `resumed_sources` seeds the dedup map with chips the approved
+    # write emitted above; pre-approval `sources` events were already
+    # sent in the original stream and are not re-seeded.
     return _drive_loop(
         messages=messages,
         ctx=ctx,
         emit=emit,
         run_id=run.run_id,
         starting_step=step_index + 1,
-        seen_sources_by_id={},  # `sources` events were sent in the original stream; don't double-emit.
+        seen_sources_by_id=resumed_sources,
         session_id=str(run.session_id) if run.session_id else None,
     )
 
@@ -1643,7 +1762,7 @@ def _drive_loop(
                         "type": "tool_call_start",
                         "step": step,
                         "tool_name": call.name,
-                        "arguments": _friendly_arguments(dict(call.args)),
+                        "arguments": _friendly_arguments(dict(call.args), call.name),
                     }
                 )
             starts_pre_emitted = True
@@ -1662,7 +1781,7 @@ def _drive_loop(
                         "type": "tool_call_start",
                         "step": step,
                         "tool_name": call_name,
-                        "arguments": _friendly_arguments(call_args),
+                        "arguments": _friendly_arguments(call_args, call_name),
                     }
                 )
                 err = f"Unknown tool: {call_name}"
@@ -1705,7 +1824,7 @@ def _drive_loop(
                     "type": "tool_call_pending_approval",
                     "step": step,
                     "tool_name": call_name,
-                    "arguments": _friendly_arguments(call_args),
+                    "arguments": _friendly_arguments(call_args, call_name),
                     "approval_token": str(approval_token),
                 }
                 if run_id is not None:
@@ -1732,7 +1851,7 @@ def _drive_loop(
                         "type": "tool_call_start",
                         "step": step,
                         "tool_name": call_name,
-                        "arguments": _friendly_arguments(call_args),
+                        "arguments": _friendly_arguments(call_args, call_name),
                     }
                 )
             if call_idx in precomputed:

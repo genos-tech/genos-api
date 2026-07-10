@@ -46,6 +46,7 @@ from origin.search_engine.agent.tools.base import REGISTRY, Tool, ToolContext, T
 from origin.search_engine.agent.tools.create_calendar_event import CREATE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.create_note import CREATE_NOTE
 from origin.search_engine.agent.tools.create_task import CREATE_TASK
+from origin.search_engine.agent.tools.create_task_plan import CREATE_TASK_PLAN
 from origin.search_engine.agent.tools.create_todo_item import CREATE_TODO_ITEM
 from origin.search_engine.agent.tools.delete_calendar_event import DELETE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.fetch_chat_thread import FETCH_CHAT_THREAD
@@ -133,6 +134,8 @@ for _t in (
     UPDATE_TASK,
     ADD_COMMENT,
     CREATE_NOTE,
+    # --- Composite write tools (BAU Wave 1) — one approval per plan ---
+    CREATE_TASK_PLAN,
     # --- Write tools (Phase 13) ---
     ASSIGN_TASK,
     UPDATE_NOTE,
@@ -190,6 +193,7 @@ __all__ = [
     "CREATE_CALENDAR_EVENT",
     "CREATE_NOTE",
     "CREATE_TASK",
+    "CREATE_TASK_PLAN",
     "CREATE_TODO_ITEM",
     "DELETE_CALENDAR_EVENT",
     "FETCH_CHAT_THREAD",

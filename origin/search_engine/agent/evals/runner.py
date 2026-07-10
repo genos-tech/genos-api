@@ -609,6 +609,13 @@ def _check_behavior_expectations(
 
     tools_used = [e.get("tool_name") for e in events if e.get("type") == "tool_call_start"]
     tool_call_count = len(tools_used)
+    # Write-tool PROPOSALS never emit `tool_call_start` pre-approval —
+    # the run pauses on `tool_call_pending_approval` instead — so
+    # asserting "the model proposed write tool X" needs its own event
+    # set (`pending_tools_contains` below).
+    tools_pending = [
+        e.get("tool_name") for e in events if e.get("type") == "tool_call_pending_approval"
+    ]
     tool_errors = [e for e in events if e.get("type") == "tool_call_error"]
     fatal_errors = [e for e in events if e.get("type") == "error"]
     answer = "".join(e.get("text") or "" for e in events if e.get("type") == "answer_delta")
@@ -649,6 +656,13 @@ def _check_behavior_expectations(
         leaked = forbidden & seen
         if leaked:
             _add(f"tools_used_excludes: forbidden tool was used: {sorted(leaked)}")
+
+    if "pending_tools_contains" in expect:
+        required = set(expect["pending_tools_contains"])
+        seen = set(tools_pending)
+        missing = required - seen
+        if missing:
+            _add(f"pending_tools_contains: missing {sorted(missing)} (saw {sorted(seen)})")
 
     if "answer_contains_any" in expect:
         needles = [s.lower() for s in expect["answer_contains_any"]]
