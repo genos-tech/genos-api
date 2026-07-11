@@ -25,6 +25,7 @@ Design notes:
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 import time
@@ -232,14 +233,22 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
         # `lookup_title` / `lookup_username`, resolved against the DB at
         # run time — fixture entity ids are dynamic, so cases can't pin
         # them. Runs the SAME parse → resolve → build path as
-        # AgentAskView, so evals exercise production mention code.
+        # AgentAskView, so evals exercise production mention code —
+        # including the v2 ToolContext channel that feeds the
+        # search_knowledge_base soft boost.
         # (Multi-turn cases don't support mentions yet.)
         mention_extra: str | None = None
         mention_seeds: list[dict[str, Any]] | None = None
         if case.get("mentions"):
-            mention_extra, mention_seeds = _resolve_mention_specs(
-                case["mentions"], team_id=team_id, user_id=user_id
+            resolved = _resolve_mention_specs(case["mentions"], team_id=team_id, user_id=user_id)
+            from origin.search_engine.agent.mentions import (  # noqa: PLC0415
+                build_mention_seed_sources,
+                build_mention_system_extra,
             )
+
+            mention_extra = build_mention_system_extra(resolved)
+            mention_seeds = build_mention_seed_sources(resolved)
+            ctx = dataclasses.replace(ctx, resolved_mentions=tuple(m.as_json() for m in resolved))
 
         def _attempt() -> tuple[list[dict[str, Any]], list[dict[str, Any]], float | None]:
             """One full agent run with event / trace / TTFT capture.
@@ -1065,6 +1074,23 @@ def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
         # is set up once Django has loaded.
         from django.conf import settings as _settings  # noqa: PLC0415
 
+        # Mentions v2 — a retrieval case may attach `mentions:` (same
+        # lookup_title / lookup_username spec as behavior cases); they
+        # feed the soft-boost params through the SAME derivation the
+        # search_knowledge_base tool uses. `person_id:` (a username)
+        # exercises the hard person filter.
+        boost: dict[str, list[str]] = {"boost_person_ids": [], "boost_entity_ids": []}
+        if case.get("mentions"):
+            from origin.search_engine.agent.mentions import (  # noqa: PLC0415
+                mention_search_params,
+            )
+
+            resolved = _resolve_mention_specs(case["mentions"], team_id=team_id, user_id=user_id)
+            boost = mention_search_params([m.as_json() for m in resolved])
+        person_id: str | None = None
+        if case.get("person_id"):
+            person_id = _lookup_member_id(str(case["person_id"]), team_id=team_id)
+
         result = search(
             query=query,
             team_id=team_id,
@@ -1075,6 +1101,9 @@ def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
             limit=int(case.get("limit", 10)),
             use_vector=bool(case.get("use_vector", True)),
             rewrite=bool(_settings.SEARCH_ENGINE.get("RAG_USE_QUERY_REWRITE", False)),
+            boost_person_ids=boost["boost_person_ids"],
+            boost_entity_ids=boost["boost_entity_ids"],
+            person_id=person_id,
             # `mode="eval"` disables freshness boost, chunk-type
             # reweighting, AND the production overlays (LLM reranker +
             # graph expansion), so the retrieval-quality numbers reflect
@@ -1481,10 +1510,23 @@ def _setup_seed_personal_note(spec: dict[str, Any], *, team_id: str, user_id: st
     return cleanup
 
 
-def _resolve_mention_specs(
-    specs: list[dict[str, Any]], *, team_id: str, user_id: str
-) -> tuple[str | None, list[dict[str, Any]] | None]:
-    """Turn a case's `mentions:` list into (system_extra, seed_sources).
+def _lookup_member_id(username: str, *, team_id: str) -> str:
+    """Resolve a fixture member's username → user UUID (retrieval cases'
+    `person_id:` field). Raises for a missing member — broken case."""
+    from origin.models.common.team_models import TeamMembers  # noqa: PLC0415
+
+    membership = (
+        TeamMembers.objects.filter(team_id=team_id, attendee__username=username, is_deleted=False)
+        .select_related("attendee")
+        .first()
+    )
+    if membership is None or membership.attendee is None:
+        raise ValueError(f"person_id lookup: no member named {username!r}")
+    return str(membership.attendee.id)
+
+
+def _resolve_mention_specs(specs: list[dict[str, Any]], *, team_id: str, user_id: str) -> list:
+    """Turn a case's `mentions:` list into resolved `ResolvedMention`s.
 
     Each entry is the production wire shape, except the id field may be
     replaced by a runtime lookup:
@@ -1493,10 +1535,12 @@ def _resolve_mention_specs(
         {type: note, lookup_title: "..."}     → note_id (personal notes)
     Raises ValueError when a lookup finds nothing — a case referencing a
     missing entity is a broken case, not a soft failure.
+
+    Callers derive what they need: behavior cases build system_extra /
+    seed_sources and stash the as_json dicts on ToolContext; retrieval
+    cases feed `mention_search_params` into `search()` directly.
     """
     from origin.search_engine.agent.mentions import (  # noqa: PLC0415
-        build_mention_seed_sources,
-        build_mention_system_extra,
         parse_mentions,
         resolve_mentions,
     )
@@ -1550,7 +1594,7 @@ def _resolve_mention_specs(
         # A dropped mention in an eval is always a case bug — surface it
         # loudly rather than silently running an un-mentioned query.
         raise ValueError(f"mention resolution dropped entries: {len(resolved)}/{len(wire)} kept")
-    return build_mention_system_extra(resolved), build_mention_seed_sources(resolved)
+    return resolved
 
 
 def _setup_seed_conversation(spec: dict[str, Any], *, team_id: str, user_id: str):

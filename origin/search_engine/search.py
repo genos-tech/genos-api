@@ -176,6 +176,9 @@ def search(
     rewrite: bool = False,
     mode: Optional[SearchMode] = None,
     overlays: Optional[bool] = None,
+    boost_person_ids: Optional[list[str]] = None,
+    boost_entity_ids: Optional[list[str]] = None,
+    person_id: Optional[str] = None,
 ) -> dict:
     """Run a hybrid search and return entity-grouped results.
 
@@ -229,6 +232,22 @@ def search(
             still honors the individual `RAG_USE_RERANKER` /
             `RAG_GRAPH_EXPANSION` flags, so flag-flip A/Bs via
             `agent_eval_compare --b-overrides` keep working.
+        boost_person_ids / boost_entity_ids: mention-aware soft boost
+            (mentions v2). Chunks authored by / assigned to / owned by
+            one of `boost_person_ids`, or belonging to (or related to)
+            one of `boost_entity_ids` (chunker entity_id grammar, e.g.
+            "task:123" / "note:personal:50" / "gm:<uuid>"), get their
+            fused score multiplied by RAG_MENTION_BOOST_WEIGHT at the
+            chunk-multiplier seam. Deliberately NOT mode/overlay-gated
+            (like `_collapse_mirror_entities`) so `mode="eval"`
+            measures exactly what production applies; a no-op when
+            empty, which is every non-mention call path.
+        person_id: hard filter — only chunks authored by, assigned to,
+            or owned by this user id (already-indexed keyword fields
+            `author_id` / `task_assignee_id` / `note_owner_id`). Set
+            from the agent tool's LLM-visible `person_id` arg; the ACL
+            filter still applies on top, so a bogus id just matches
+            nothing.
     """
     if not query or not query.strip():
         return {"query": query, "results": []}
@@ -263,7 +282,9 @@ def search(
     client = get_client()
     index = get_index_alias()
 
-    base_filter = _build_filter(team_id, user_id, entity_types, date_from, date_to, mode=mode)
+    base_filter = _build_filter(
+        team_id, user_id, entity_types, date_from, date_to, mode=mode, person_id=person_id
+    )
 
     # --- Phase 10: query rewriting (optional) ---
     # `variants` always starts with the original query; the rewriter
@@ -306,6 +327,21 @@ def search(
             weight = chunk_type_weights.get(ct, 1.0) if ct else 1.0
             if weight != 1.0:
                 hit["score"] *= weight
+
+    # --- Mentions v2: soft boost for mention-matched chunks ---
+    # Applied at the same chunk-level seam as the reweights above so it
+    # composes with (rather than overrides) the reranker downstream.
+    # Inactive whenever the boost lists are empty — i.e. on every
+    # non-mention call path — so existing behavior is byte-identical.
+    if (boost_person_ids or boost_entity_ids) and settings.SEARCH_ENGINE.get(
+        "RAG_MENTION_BOOST", True
+    ):
+        fused = _apply_mention_boost(
+            fused,
+            person_ids=boost_person_ids or [],
+            entity_ids=boost_entity_ids or [],
+            weight=float(settings.SEARCH_ENGINE.get("RAG_MENTION_BOOST_WEIGHT", 1.5)),
+        )
 
     # --- Phase 6: freshness multiplier + text-hash dedup ---
     # Both are no-ops when their settings are at the disable values
@@ -541,9 +577,7 @@ def _multi_variant_fuse(
             existing["keyword_rank"] = _min_rank(
                 existing.get("keyword_rank"), hit.get("keyword_rank")
             )
-            existing["vector_rank"] = _min_rank(
-                existing.get("vector_rank"), hit.get("vector_rank")
-            )
+            existing["vector_rank"] = _min_rank(existing.get("vector_rank"), hit.get("vector_rank"))
     return sorted(chunks_by_id.values(), key=lambda x: x["score"], reverse=True)
 
 
@@ -731,11 +765,31 @@ def _build_filter(
     date_from: Optional[str],
     date_to: Optional[str],
     mode: Optional[SearchMode] = None,
+    person_id: Optional[str] = None,
 ) -> list[dict]:
     filt: list[dict] = [
         {"term": {"team_id": team_id}},
         {"term": {"acl_user_ids": user_id}},
     ]
+    if person_id:
+        # Person-scoped search (mentions v2): only chunks authored by,
+        # assigned to, or owned by this member. OR across the three
+        # member fields because each chunk family populates a different
+        # one (chat_message → author_id; task chunks → task_assignee_id;
+        # note chunks → note_owner_id). Composes into both the keyword
+        # and vector lanes like every other clause here.
+        filt.append(
+            {
+                "bool": {
+                    "should": [
+                        {"term": {"author_id": person_id}},
+                        {"term": {"task_assignee_id": person_id}},
+                        {"term": {"note_owner_id": person_id}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        )
     if entity_types:
         filt.append({"terms": {"entity_type": entity_types}})
     else:
@@ -759,6 +813,51 @@ def _build_filter(
             rng["lte"] = date_to
         filt.append({"range": {"updated_at": rng}})
     return filt
+
+
+# The three per-chunk member fields a person can be linked through.
+# Populated by the chunkers as: chat_message chunks → author_id;
+# every task chunk (incl. comments) → task_assignee_id; note chunks +
+# note summaries → note_owner_id.
+_PERSON_FIELDS = ("author_id", "task_assignee_id", "note_owner_id")
+
+
+def _apply_mention_boost(
+    fused: list[dict],
+    *,
+    person_ids: list[str],
+    entity_ids: list[str],
+    weight: float,
+) -> list[dict]:
+    """Mentions v2 — multiply the fused score of chunks matching a
+    user-provided @/# mention.
+
+    Pure function over the chunk-level hit list (same contract as
+    `_apply_freshness`): mutates `hit["score"]` in place and returns the
+    list. A hit matches when its source carries one of `person_ids` in
+    any member field, OR its `entity_id` is in `entity_ids`, OR its
+    `related_entity_ids` intersects `entity_ids` (so a mentioned task
+    also lifts the notes/threads that reference it). The multiplier is
+    applied AT MOST ONCE per hit — a chunk that is both Bob-authored and
+    about the mentioned task doesn't compound.
+
+    The caller re-sorts after the multiplier block, so ordering is
+    handled there.
+    """
+    if not fused or weight == 1.0 or (not person_ids and not entity_ids):
+        return fused
+    persons = set(person_ids)
+    entities = set(entity_ids)
+    for hit in fused:
+        src = hit.get("source") or {}
+        matched = any(src.get(f) in persons for f in _PERSON_FIELDS) if persons else False
+        if not matched and entities:
+            matched = src.get("entity_id") in entities or bool(
+                entities.intersection(src.get("related_entity_ids") or ())
+            )
+        if matched:
+            hit["score"] *= weight
+    return fused
 
 
 # Trailing `:msg:<id>` on a chat_message chunk's id. Used to surface
@@ -987,6 +1086,12 @@ def _source_fields(*, for_agent: bool = False) -> list[str]:
         # collapse near-duplicates. SHA-256 of the chunk's search_text
         # written by the chunker; identical text → identical hash.
         "text_hash",
+        # Mentions v2 — member linkage fields read by
+        # `_apply_mention_boost` (indexed since v2 mappings; absent on
+        # chunk families that don't carry them, which `to_dict()` drops).
+        "author_id",
+        "task_assignee_id",
+        "note_owner_id",
     ]
     if for_agent:
         # The full chunk text — used as LLM grounding context. Excluded
@@ -1268,9 +1373,11 @@ def _graph_expand(
         return grouped
 
     def _fetch_edges(ids: list[int]):
-        return TaskDependency.objects.filter(team_id=team_id).filter(
-            Q(blocker_task_id__in=ids) | Q(blocked_task_id__in=ids)
-        ).values_list("blocker_task_id", "blocked_task_id")
+        return (
+            TaskDependency.objects.filter(team_id=team_id)
+            .filter(Q(blocker_task_id__in=ids) | Q(blocked_task_id__in=ids))
+            .values_list("blocker_task_id", "blocked_task_id")
+        )
 
     walked = _walk_dependency_graph(
         _fetch_edges,
@@ -1339,9 +1446,7 @@ def _graph_expand(
         # the `:downstream` / `:upstream` variant says which way the last
         # hop traversed (downstream = the source blocks this task).
         direction = neigh_direction.get(tid) if tid is not None else None
-        provenance = ["graph:dependency"] + (
-            [f"graph:dependency:{direction}"] if direction else []
-        )
+        provenance = ["graph:dependency"] + ([f"graph:dependency:{direction}"] if direction else [])
         e["matched_terms"] = list(dict.fromkeys((e.get("matched_terms") or []) + provenance))
         e["graph_related"] = True
 

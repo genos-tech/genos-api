@@ -28,6 +28,15 @@ class ToolContext:
 
     team_id: str
     user_id: str
+    # Mentions v2 — the run's resolved @/# mentions as
+    # `ResolvedMention.as_json()` dicts (plain data; the same shape
+    # persisted on `AgentRun.mentions`, so the decide/resume path can
+    # rehydrate from the run row). Server-derived and ACL-validated in
+    # the view — NEVER from the LLM. `search_knowledge_base` reads it
+    # to derive soft-boost params; empty tuple on every non-mention
+    # run, keeping all existing call sites unchanged. Populate via
+    # `dataclasses.replace` (frozen).
+    resolved_mentions: tuple[dict[str, Any], ...] = ()
 
 
 class ToolError(Exception):

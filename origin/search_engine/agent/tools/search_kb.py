@@ -15,6 +15,7 @@ from typing import Any
 
 from django.conf import settings
 
+from origin.search_engine.agent.mentions import mention_search_params
 from origin.search_engine.agent.tools.base import Tool, ToolContext, wrap_workspace_content
 from origin.search_engine.search import search
 
@@ -46,6 +47,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # 0 regressions on the agent eval suite (roadmap §1.1).
     use_rewrite = bool(settings.SEARCH_ENGINE.get("RAG_USE_QUERY_REWRITE", False))
 
+    # Mentions v2 — explicit person filter (LLM-chosen). A bogus or
+    # unauthorized id simply matches nothing: the ACL filter still
+    # applies on top of the person clause.
+    person_id = (args.get("person_id") or "").strip() or None
+
+    # Mentions v2 — invisible soft boost derived from the run's
+    # server-trusted resolved mentions (never from LLM args).
+    boost = mention_search_params(ctx.resolved_mentions)
+
     result = search(
         query=query,
         team_id=ctx.team_id,
@@ -54,6 +64,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         limit=limit,
         for_agent=True,
         rewrite=use_rewrite,
+        person_id=person_id,
+        boost_person_ids=boost["boost_person_ids"],
+        boost_entity_ids=boost["boost_entity_ids"],
     )
 
     # Trim the per-entity payload to what the LLM actually needs:
@@ -135,7 +148,17 @@ SEARCH_KNOWLEDGE_BASE = Tool(
             "limit": {
                 "type": "INTEGER",
                 "description": (
-                    f"Max entity-level matches to return (1-{_MAX_LIMIT}). " "Default 10."
+                    f"Max entity-level matches to return (1-{_MAX_LIMIT}). Default 10."
+                ),
+            },
+            "person_id": {
+                "type": "STRING",
+                "description": (
+                    "Optional. Only return content authored by, assigned "
+                    "to, or owned by this team member (user_id UUID from "
+                    "get_team_members or the USER-PROVIDED REFERENCES "
+                    "block). Use for 'what did X say / write / work on' "
+                    "questions. Omit for regular searches."
                 ),
             },
         },

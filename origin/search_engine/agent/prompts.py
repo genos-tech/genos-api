@@ -89,6 +89,10 @@ here fits):
   Open-ended natural-language questions over the workspace:
   - search_knowledge_base (hybrid keyword + semantic over chats /
     tasks / notes / projects). Start here for vague questions.
+    For person-scoped content questions ("what did X say / write /
+    work on"), pass person_id=<user UUID> (from the USER-PROVIDED
+    REFERENCES block or get_team_members) to restrict results to
+    content authored by / assigned to / owned by that member.
 
   External / "how do I …" / best-practice questions:
   - search_web (Tavily). Combine with search_knowledge_base when the

@@ -30,6 +30,7 @@ and pre-seeded source chips so citations resolve without tool calls.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -368,9 +369,10 @@ def _bullet_for(m: ResolvedMention) -> str:
     if m.kind == "user":
         return (
             f'  - "@{m.label}" → team member user_id={m.user_id}. For this '
-            f"person's tasks or activity, prefer list_tasks(assignee_id="
-            f"'{m.user_id}') or other structural tools with this UUID; treat "
-            "them as the person the question is about."
+            f"person's tasks, prefer list_tasks(assignee_id='{m.user_id}'); "
+            f"for what they said, wrote, or worked on, use "
+            f"search_knowledge_base(person_id='{m.user_id}'). Treat them as "
+            "the person the question is about."
         )
     if m.kind == "task":
         display = f" ({m.display_id})" if m.display_id else ""
@@ -440,3 +442,29 @@ def build_mention_seed_sources(resolved: list[ResolvedMention]) -> list[dict[str
         elif m.kind == "chat":
             out.append(_chat_source(chat_type=m.chat_type_label, chat_id=m.chat_id, title=m.label))
     return out
+
+
+def mention_search_params(mentions_json: Sequence[dict[str, Any]]) -> dict[str, list[str]]:
+    """Derive the `search()` soft-boost params from resolved-mention
+    dicts (the `ResolvedMention.as_json()` shape — the same data carried
+    on `ToolContext.resolved_mentions` and persisted on
+    `AgentRun.mentions`, so the decide/resume path can rehydrate from
+    the run row).
+
+    Entity ids follow the chunker grammar (mirrors the seed-source
+    builders in the controller): `task:<id>`, `note:<label>:<id>`, and
+    `<chat_label>:<uuid>` (chat entity_ids carry no "chat:" prefix).
+    """
+    person_ids: list[str] = []
+    entity_ids: list[str] = []
+    for m in mentions_json:
+        kind = m.get("kind")
+        if kind == "user" and m.get("user_id"):
+            person_ids.append(str(m["user_id"]))
+        elif kind == "task" and m.get("task_id") is not None:
+            entity_ids.append(f"task:{m['task_id']}")
+        elif kind == "note" and m.get("note_id") is not None and m.get("note_type_label"):
+            entity_ids.append(f"note:{m['note_type_label']}:{m['note_id']}")
+        elif kind == "chat" and m.get("chat_id") and m.get("chat_type_label"):
+            entity_ids.append(f"{m['chat_type_label']}:{m['chat_id']}")
+    return {"boost_person_ids": person_ids, "boost_entity_ids": entity_ids}

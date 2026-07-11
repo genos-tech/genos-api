@@ -31,6 +31,7 @@ incrementally; nginx buffering disabled via header.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from datetime import timedelta
@@ -628,6 +629,13 @@ class AgentAskView(AuthenticatedAPIView):
         if mention_extra:
             system_extra = f"{system_extra}\n\n{mention_extra}" if system_extra else mention_extra
             seed_sources = (seed_sources or []) + build_mention_seed_sources(resolved_mentions)
+        # Mentions v2 — stash the resolved refs on the server-trusted
+        # ToolContext so `search_knowledge_base` can derive its soft-
+        # boost params without any LLM-visible schema change.
+        if resolved_mentions:
+            ctx = dataclasses.replace(
+                ctx, resolved_mentions=tuple(m.as_json() for m in resolved_mentions)
+            )
 
         # `chosen` is captured in the worker closure so the contextvar
         # is set inside the controller's threading.Thread — a bare
@@ -740,7 +748,15 @@ class AgentDecideView(AuthenticatedAPIView):
             except Exception:  # noqa: BLE001
                 pass
 
-        ctx = ToolContext(team_id=run.team_id, user_id=run.user_id)
+        # Mentions v2 — rehydrate the run's resolved mentions from the
+        # persisted row so a leg resumed after write-approval keeps
+        # mention-aware search. `run.mentions` stores the exact
+        # as_json dicts the ask leg stashed on its ToolContext.
+        ctx = ToolContext(
+            team_id=run.team_id,
+            user_id=run.user_id,
+            resolved_mentions=tuple(run.mentions or ()),
+        )
 
         # Resolve the user's LLM choice for the resumed leg. No quota
         # increment here — the original /ask/ call already counted; a
