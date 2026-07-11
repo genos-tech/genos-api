@@ -125,16 +125,34 @@ class MentionSearchParamsTests(SimpleTestCase):
                 {"kind": "note", "label": "N", "note_type_label": "personal", "note_id": 50},
                 {"kind": "chat", "label": "C", "chat_type_label": "gm", "chat_id": "abc"},
                 {"kind": "project", "label": "P", "project_id": "77"},
+                # Groups expand to their members on the person list.
+                {"kind": "group", "label": "G", "group_id": 3, "member_ids": ["u-carol", "u-dan"]},
+                {
+                    "kind": "todo",
+                    "label": "D",
+                    "todo_item_id": 55,
+                    "todo_local_date": "2026-07-10",
+                },
             ]
         )
-        self.assertEqual(params["boost_person_ids"], ["u-bob"])
+        self.assertEqual(params["boost_person_ids"], ["u-bob", "u-carol", "u-dan"])
         # Chat entity_ids carry no "chat:" prefix (chunker convention).
-        self.assertEqual(params["boost_entity_ids"], ["task:123", "note:personal:50", "gm:abc"])
+        self.assertEqual(
+            params["boost_entity_ids"],
+            ["task:123", "note:personal:50", "gm:abc", "todo:2026-07-10:item:55"],
+        )
         self.assertEqual(params["boost_project_ids"], ["77"])
 
     def test_tolerates_partial_dicts(self):
         params = mention_search_params(
-            [{"kind": "task"}, {"kind": "user"}, {"kind": "project"}, {}]
+            [
+                {"kind": "task"},
+                {"kind": "user"},
+                {"kind": "project"},
+                {"kind": "group"},
+                {"kind": "todo"},
+                {},
+            ]
         )
         self.assertEqual(
             params,

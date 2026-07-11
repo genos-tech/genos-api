@@ -910,3 +910,29 @@
   expect:
     # Control for mention_project_boost — see mention_member_boost_control.
     must_not_contain_title: ["usage metering pipeline"]
+
+- id: mention_todo_boost
+  fixture: true
+  query: "plausible"
+  mentions:
+    - type: todo
+      lookup_title: "Set up Plausible events tracker on the marketing site"
+  expect:
+    # Todo mentions ride the entity boost with the todo chunker's id
+    # grammar (todo:<date>:item:<id>). Calibrated at the top-1 boundary
+    # (measured 2026-07-11, rewrite on, 4/4 reps each way): baseline
+    # rank 1 is always the "Set up Plausible analytics" TASK with the
+    # todo right behind it; the boost flips the todo to rank 1. Wider
+    # windows were noisier — the todo's rank-2/3 neighbours reorder
+    # under query-rewrite variance ("storybook" failed that way).
+    must_contain_title_in_top_n:
+      n: 1
+      title_substrings: ["events tracker"]
+
+- id: mention_todo_boost_control
+  fixture: true
+  query: "plausible"
+  limit: 1
+  expect:
+    # Control for mention_todo_boost — see mention_member_boost_control.
+    must_not_contain_title: ["events tracker"]
