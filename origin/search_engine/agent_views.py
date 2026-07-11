@@ -51,6 +51,14 @@ from origin.search_engine.agent.controller import (
     resume_agent,
     run_agent,
 )
+from origin.search_engine.agent.mentions import (
+    MentionParseError,
+    ResolvedMention,
+    build_mention_seed_sources,
+    build_mention_system_extra,
+    parse_mentions,
+    resolve_mentions,
+)
 from origin.search_engine.agent.note_summary import (
     NoteSummaryError,
     note_type_label,
@@ -102,6 +110,7 @@ log = logging.getLogger(__name__)
 # ("no, include ALL of it") is preserved too, not just the most recent.
 # Tunable per deploy via SEARCH_ENGINE["SESSION_PRIOR_ANSWER_MAX_CHARS"].
 _DEFAULT_PRIOR_ANSWER_MAX_CHARS = 12000
+
 
 def _persisted_disabled_tools(user) -> set[str]:
     """Per-request tool gates derived from the user's PERSISTED preferences.
@@ -177,9 +186,7 @@ def _get_or_create_session(
                 # Entity-scoped sessions (thread OR note) bypass TTL —
                 # same rationale as the per-thread / per-note lookups
                 # below.
-                entity_scoped = (
-                    session.chat_type is not None or session.note_type is not None
-                )
+                entity_scoped = session.chat_type is not None or session.note_type is not None
                 if entity_scoped or session.last_active_at >= cutoff:
                     AgentSession.objects.filter(session_id=session.session_id).update(
                         last_active_at=timezone.now()
@@ -391,6 +398,22 @@ class AgentAskView(AuthenticatedAPIView):
                     {"error": "note_context must have integer note_type and note_id."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+        # Structured @/# mentions (see agent/mentions.py). Parse errors
+        # mean a malformed payload → 400; per-entry problems and ACL
+        # denials are dropped inside the helpers, never fatal. Resolution
+        # happens up front (it only needs `ctx`) so the resolved list is
+        # available for AgentRun persistence below; the system-prompt /
+        # seed-source injection joins the context branches further down.
+        try:
+            mentions_parsed = parse_mentions(data.get("mentions"))
+        except MentionParseError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        resolved_mentions: list[ResolvedMention] = []
+        if mentions_parsed:
+            try:
+                resolved_mentions = resolve_mentions(mentions_parsed, ctx)
+            except Exception:  # noqa: BLE001
+                log.exception("Mention resolution failed; continuing without mentions")
         try:
             session = _get_or_create_session(
                 session_id_str,
@@ -417,6 +440,7 @@ class AgentAskView(AuthenticatedAPIView):
                 user_id=user_id,
                 query=query,
                 session=session,
+                mentions=[m.as_json() for m in resolved_mentions],
             )
         except Exception:  # noqa: BLE001
             log.exception("Failed to create AgentRun row; continuing without persistence")
@@ -595,6 +619,15 @@ class AgentAskView(AuthenticatedAPIView):
                     parent_context=parent_context,
                 )
             ]
+
+        # Structured-mention injection. APPENDS to whatever the thread/
+        # note branch already set — a thread or note ask can also carry
+        # mentions, and both blocks should reach the model. The seed
+        # chips ride the same dedup/friendly-title pipeline in run_agent.
+        mention_extra = build_mention_system_extra(resolved_mentions)
+        if mention_extra:
+            system_extra = f"{system_extra}\n\n{mention_extra}" if system_extra else mention_extra
+            seed_sources = (seed_sources or []) + build_mention_seed_sources(resolved_mentions)
 
         # `chosen` is captured in the worker closure so the contextvar
         # is set inside the controller's threading.Thread — a bare
@@ -1248,8 +1281,7 @@ class ThreadSummaryView(AuthenticatedAPIView):
             return Response(
                 {
                     "error": (
-                        "chat_type must be an integer; chat_id and thread_id "
-                        "must be UUID strings."
+                        "chat_type must be an integer; chat_id and thread_id must be UUID strings."
                     )
                 },
                 status=status.HTTP_400_BAD_REQUEST,
@@ -1787,8 +1819,11 @@ class AgentRunFeedbackView(AuthenticatedAPIView):
     (it's "was MY answer good?") — a light ACL on top of auth.
     """
 
-    _VALID_RATINGS = {AgentRunFeedback.RATING_UP, AgentRunFeedback.RATING_DOWN,
-                      AgentRunFeedback.RATING_CLEARED}
+    _VALID_RATINGS = {
+        AgentRunFeedback.RATING_UP,
+        AgentRunFeedback.RATING_DOWN,
+        AgentRunFeedback.RATING_CLEARED,
+    }
 
     def post(self, request, run_id: str):
         data = request.data or {}
@@ -1816,9 +1851,7 @@ class AgentRunFeedbackView(AuthenticatedAPIView):
         try:
             run = AgentRun.objects.get(run_id=run_id)
         except (AgentRun.DoesNotExist, ValueError, ValidationError):
-            return Response(
-                {"error": "No such agent run."}, status=status.HTTP_404_NOT_FOUND
-            )
+            return Response({"error": "No such agent run."}, status=status.HTTP_404_NOT_FOUND)
 
         # Light ACL: you can only rate an answer to your own question.
         if str(run.user_id) != user_id:
