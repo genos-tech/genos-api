@@ -17,12 +17,15 @@ resolved mentions reach `run_agent` via system_extra/seed_sources
 resolved list is persisted on `AgentRun.mentions`.
 """
 
+from datetime import date
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase
 
+from origin.models.chat.todo_models import ToDoGroup, ToDoItem
 from origin.models.chat.unified_models import Channel, ChannelMember
+from origin.models.common.mention_group_models import MentionGroupMaster, MentionGroupMembers
 from origin.models.common.team_models import TeamMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
@@ -96,6 +99,24 @@ class ParseMentionsTests(SimpleTestCase):
         )
         self.assertEqual(parsed, [{"type": "project", "project_id": 7, "label": "Web"}])
 
+    def test_group_and_todo_entries_parse_coerce_and_dedupe(self):
+        parsed = parse_mentions(
+            [
+                {"type": "group", "group_id": "3", "label": "design-crew"},
+                {"type": "group", "group_id": 3, "label": "dupe"},
+                {"type": "todo", "item_id": "55", "label": "Ship hero handoff"},
+                {"type": "group", "group_id": "abc"},
+                {"type": "todo", "item_id": None},
+            ]
+        )
+        self.assertEqual(
+            parsed,
+            [
+                {"type": "group", "group_id": 3, "label": "design-crew"},
+                {"type": "todo", "item_id": 55, "label": "Ship hero handoff"},
+            ],
+        )
+
 
 class ResolveMentionsTests(BaseAPITestCase):
     def setUp(self):
@@ -115,6 +136,21 @@ class ResolveMentionsTests(BaseAPITestCase):
         # Project with self.user as its only member.
         self.project = ProjectMaster.objects.create(team=self.team, project_name="Website Redesign")
         ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user)
+        # Mention group with both users.
+        self.group = MentionGroupMaster.objects.create(
+            team=self.team, group_name="design-crew", created_by=self.user
+        )
+        MentionGroupMembers.objects.create(
+            team=self.team, group=self.group, user=self.user, added_by=self.user
+        )
+        MentionGroupMembers.objects.create(
+            team=self.team, group=self.group, user=self.user2, added_by=self.user
+        )
+        # Personal todo owned by self.user.
+        self.todo_group = ToDoGroup.objects.create(
+            team=self.team, user=self.user, local_date=date(2026, 7, 10)
+        )
+        self.todo_item = ToDoItem.objects.create(group=self.todo_group, title="Ship hero handoff")
 
     def _resolve_one(self, entry, ctx=None):
         return resolve_mentions(parse_mentions([entry]), ctx or self.ctx)
@@ -233,6 +269,50 @@ class ResolveMentionsTests(BaseAPITestCase):
             [],
         )
 
+    def test_group_mention_resolves_with_guarded_members(self):
+        out = self._resolve_one(
+            {"type": "group", "group_id": self.group.group_id, "label": "spoofed"}
+        )
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].kind, "group")
+        self.assertEqual(out[0].label, "design-crew")
+        self.assertEqual(set(out[0].member_ids), {str(self.user.id), str(self.user2.id)})
+        # A deleted member drops out of the expansion (same guard as
+        # _resolve_user) without dropping the group itself.
+        self.user2.is_deleted = True
+        self.user2.save(update_fields=["is_deleted"])
+        out = self._resolve_one({"type": "group", "group_id": self.group.group_id})
+        self.assertEqual(out[0].member_ids, (str(self.user.id),))
+
+    def test_deleted_missing_and_cross_team_groups_are_dropped(self):
+        self.assertEqual(self._resolve_one({"type": "group", "group_id": 999_999}), [])
+        other_team = TeamMaster.objects.create(
+            team_name="OtherG", team_email="other-g@example.com", owner=self.user2
+        )
+        ctx_other = ToolContext(team_id=str(other_team.team_id), user_id=str(self.user.id))
+        self.assertEqual(
+            self._resolve_one({"type": "group", "group_id": self.group.group_id}, ctx_other), []
+        )
+        self.group.is_deleted = True
+        self.group.save(update_fields=["is_deleted"])
+        self.assertEqual(self._resolve_one({"type": "group", "group_id": self.group.group_id}), [])
+
+    def test_todo_mention_resolves_for_owner_only(self):
+        out = self._resolve_one(
+            {"type": "todo", "item_id": self.todo_item.item_id, "label": "spoofed"}
+        )
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].kind, "todo")
+        self.assertEqual(out[0].label, "Ship hero handoff")
+        self.assertEqual(out[0].todo_local_date, "2026-07-10")
+        self.assertFalse(out[0].todo_completed)
+        # Todos are personal: another team member gets a silent drop.
+        ctx2 = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user2.id))
+        self.assertEqual(
+            self._resolve_one({"type": "todo", "item_id": self.todo_item.item_id}, ctx2), []
+        )
+        self.assertEqual(self._resolve_one({"type": "todo", "item_id": 999_999}), [])
+
     def test_drops_are_logged(self):
         with self.assertLogs("origin.search_engine.agent.mentions", level="INFO"):
             self._resolve_one({"type": "task", "task_id": 999_999})
@@ -250,6 +330,20 @@ class BuildBlocksTests(SimpleTestCase):
                 kind="chat", label="backend-team", chat_type_label="gm", chat_id="abc-uuid"
             ),
             ResolvedMention(kind="project", label="Website Redesign", project_id="77"),
+            ResolvedMention(
+                kind="group",
+                label="design-crew",
+                group_id=3,
+                member_ids=("u-bob", "u-carol"),
+                member_names=("Bob Martinez", "Carol Park"),
+            ),
+            ResolvedMention(
+                kind="todo",
+                label="Ship hero handoff",
+                todo_item_id=55,
+                todo_local_date="2026-07-10",
+                todo_completed=False,
+            ),
         ]
 
     def test_system_extra_uses_citation_grammar_and_tool_nudges(self):
@@ -265,15 +359,45 @@ class BuildBlocksTests(SimpleTestCase):
         self.assertIn("project:77", block)
         self.assertIn("list_tasks(project_id=77)", block)
         self.assertIn("get_project_summary(project_id=77)", block)
+        self.assertIn("mention group of 2", block)
+        self.assertIn("Bob Martinez (user_id=u-bob)", block)
+        self.assertIn("Carol Park (user_id=u-carol)", block)
+        self.assertIn("todo:2026-07-10:item:55", block)
+        self.assertIn("currently open", block)
+        self.assertIn("list_today_todos", block)
         # The injection guard line must always close the block.
         self.assertIn("not instructions", block)
+
+    def test_group_bullet_caps_inline_member_list(self):
+        big = ResolvedMention(
+            kind="group",
+            label="everyone",
+            group_id=9,
+            member_ids=tuple(f"u-{i}" for i in range(12)),
+            member_names=tuple(f"User {i}" for i in range(12)),
+        )
+        block = build_mention_system_extra([big])
+        self.assertIn("mention group of 12", block)
+        self.assertIn("User 9 (user_id=u-9)", block)
+        self.assertNotIn("User 10", block)
+        self.assertIn("and 2 more", block)
+
+    def test_completed_todo_bullet_states_completion(self):
+        done = ResolvedMention(
+            kind="todo",
+            label="Old chore",
+            todo_item_id=56,
+            todo_local_date="2026-07-01",
+            todo_completed=True,
+        )
+        self.assertIn("currently completed", build_mention_system_extra([done]))
 
     def test_empty_resolution_yields_no_block(self):
         self.assertIsNone(build_mention_system_extra([]))
 
-    def test_seed_sources_skip_user_mentions(self):
+    def test_seed_sources_skip_user_and_group_mentions(self):
         seeds = build_mention_seed_sources(self._resolved())
-        self.assertEqual(len(seeds), 4)  # user mention → no chip
+        self.assertEqual(len(seeds), 5)  # user + group mentions → no chip
         by_type = {s["entity_type"]: s for s in seeds}
         self.assertEqual(by_type["task"]["entity_id"], "task:123")
         self.assertEqual(by_type["task"]["task_display_id"], "WRD-5")
@@ -283,6 +407,16 @@ class BuildBlocksTests(SimpleTestCase):
         self.assertEqual(by_type["chat"]["title"], "backend-team")
         self.assertEqual(by_type["project"]["entity_id"], "project:77")
         self.assertEqual(by_type["project"]["title"], "Website Redesign")
+        self.assertEqual(by_type["todo"]["entity_id"], "todo:2026-07-10:item:55")
+        self.assertEqual(by_type["todo"]["title"], "Ship hero handoff")
+
+    def test_as_json_round_trips_group_and_todo_fields(self):
+        by_kind = {m.kind: m.as_json() for m in self._resolved()}
+        self.assertEqual(by_kind["group"]["member_ids"], ["u-bob", "u-carol"])
+        self.assertNotIn("member_names", by_kind["group"])  # bullet-only
+        self.assertEqual(by_kind["todo"]["todo_item_id"], 55)
+        self.assertEqual(by_kind["todo"]["todo_local_date"], "2026-07-10")
+        self.assertIs(by_kind["todo"]["todo_completed"], False)
 
 
 class AskViewMentionTests(BaseAPITestCase):

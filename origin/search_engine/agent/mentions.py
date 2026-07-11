@@ -1,15 +1,18 @@
 """Structured @/# mentions attached to `/api/v2/agent/ask/` requests.
 
-The frontend mention picker lets the user tag team members (`@`) and
-tasks / notes / chats / projects (`#`) directly in their question. The
-query text keeps the human-readable `@Name` / `#Title` tokens; alongside
-it the client sends a `mentions` array carrying the resolved ids:
+The frontend mention picker lets the user tag team members and mention
+groups (`@`) and tasks / notes / chats / projects / todos (`#`) directly
+in their question. The query text keeps the human-readable `@Name` /
+`#Title` tokens; alongside it the client sends a `mentions` array
+carrying the resolved ids:
 
     {"type": "user", "user_id": "<uuid>",                 "label": "Ken Sato"}
     {"type": "task", "task_id": 123,                      "label": "API v2 rollout"}
     {"type": "note", "note_type": 1, "note_id": 50,       "label": "Meeting minutes"}
     {"type": "chat", "chat_type": 2, "chat_id": "<uuid>", "label": "backend-team"}
     {"type": "project", "project_id": 7,                  "label": "Website Redesign"}
+    {"type": "group", "group_id": 3,                      "label": "design-crew"}
+    {"type": "todo", "item_id": 55,                       "label": "Ship hero handoff"}
 
 `note_type` / `chat_type` are the integer codes used by
 `thread_context` / `note_context` on the same endpoint; the server owns
@@ -43,7 +46,11 @@ log = logging.getLogger(__name__)
 # not a real question, so the view 400s instead of truncating.
 MAX_MENTIONS = 20
 
-_VALID_TYPES = {"user", "task", "note", "chat", "project"}
+# Max members listed inline in a group-mention bullet; the rest collapse
+# to "and N more" so a whole-team group can't flood the system prompt.
+_GROUP_BULLET_CAP = 10
+
+_VALID_TYPES = {"user", "task", "note", "chat", "project", "group", "todo"}
 
 
 class MentionParseError(ValueError):
@@ -63,7 +70,7 @@ class ResolvedMention:
     safe to inject into the system prompt.
     """
 
-    kind: str  # "user" | "task" | "note" | "chat" | "project"
+    kind: str  # "user" | "task" | "note" | "chat" | "project" | "group" | "todo"
     label: str
     # user
     user_id: str | None = None
@@ -78,6 +85,16 @@ class ResolvedMention:
     # chat
     chat_type_label: str | None = None
     chat_id: str | None = None
+    # group — member_ids persist (they feed the search boost on the
+    # decide/resume path); member_names exist only for the bullet, so
+    # they stay out of as_json.
+    group_id: int | None = None
+    member_ids: tuple[str, ...] | None = None
+    member_names: tuple[str, ...] | None = None
+    # todo
+    todo_item_id: int | None = None
+    todo_local_date: str | None = None
+    todo_completed: bool | None = None
 
     def as_json(self) -> dict[str, Any]:
         """Compact dict for `AgentRun.mentions` persistence."""
@@ -91,10 +108,15 @@ class ResolvedMention:
             "note_id",
             "chat_type_label",
             "chat_id",
+            "group_id",
+            "member_ids",
+            "todo_item_id",
+            "todo_local_date",
+            "todo_completed",
         ):
             val = getattr(self, key)
             if val is not None:
-                out[key] = val
+                out[key] = list(val) if isinstance(val, tuple) else val
         return out
 
 
@@ -113,6 +135,10 @@ def _identity_key(entry: dict[str, Any]) -> tuple:
         return ("note", entry["note_type"], entry["note_id"])
     if kind == "project":
         return ("project", entry["project_id"])
+    if kind == "group":
+        return ("group", entry["group_id"])
+    if kind == "todo":
+        return ("todo", entry["item_id"])
     return ("chat", entry["chat_type"], entry["chat_id"])
 
 
@@ -163,6 +189,10 @@ def _normalise_entry(entry: Any) -> dict[str, Any] | None:
             return {"type": "task", "task_id": int(entry.get("task_id")), "label": label}
         if kind == "project":
             return {"type": "project", "project_id": int(entry.get("project_id")), "label": label}
+        if kind == "group":
+            return {"type": "group", "group_id": int(entry.get("group_id")), "label": label}
+        if kind == "todo":
+            return {"type": "todo", "item_id": int(entry.get("item_id")), "label": label}
         if kind == "note":
             note_type = int(entry.get("note_type"))
             if note_type not in NOTE_TYPE_LABEL:
@@ -377,12 +407,73 @@ def _resolve_project(entry: dict[str, Any], ctx) -> ResolvedMention | None:
     )
 
 
+def _resolve_group(entry: dict[str, Any], ctx) -> ResolvedMention | None:
+    from origin.models.common.mention_group_models import (  # noqa: PLC0415
+        MentionGroupMaster,
+        MentionGroupMembers,
+    )
+
+    group = MentionGroupMaster.objects.filter(group_id=entry["group_id"], is_deleted=False).first()
+    if group is None:
+        return None
+    # Mention groups are team-visible (any member can @ them in the
+    # editors; the chat fan-out resolver has no requester check either),
+    # so tenancy is the whole ACL.
+    if str(getattr(group, "team_id", "") or "") != ctx.team_id:
+        return None
+    member_ids: list[str] = []
+    member_names: list[str] = []
+    rows = (
+        MentionGroupMembers.objects.filter(group_id=group.group_id)
+        .select_related("user")
+        .order_by("ts_created_at")
+    )
+    for row in rows:
+        user = row.user
+        # Same guards as `_resolve_user`.
+        if user is None or user.is_deleted or user.is_system_user:
+            continue
+        member_ids.append(str(user.id))
+        member_names.append(user.username or "")
+    return ResolvedMention(
+        kind="group",
+        label=group.group_name or "",
+        group_id=group.group_id,
+        member_ids=tuple(member_ids),
+        member_names=tuple(member_names),
+    )
+
+
+def _resolve_todo(entry: dict[str, Any], ctx) -> ResolvedMention | None:
+    from origin.models.chat.todo_models import ToDoItem  # noqa: PLC0415
+
+    item = ToDoItem.objects.select_related("group").filter(item_id=entry["item_id"]).first()
+    if item is None or item.group is None:
+        return None
+    group = item.group
+    if str(getattr(group, "team_id", "") or "") != ctx.team_id:
+        return None
+    # Todos are personal — owner-only, matching the todo chunker's
+    # single-owner acl_user_ids.
+    if str(getattr(group, "user_id", "") or "") != ctx.user_id:
+        return None
+    return ResolvedMention(
+        kind="todo",
+        label=item.title or "",
+        todo_item_id=item.item_id,
+        todo_local_date=group.local_date.isoformat() if group.local_date else None,
+        todo_completed=bool(item.is_completed),
+    )
+
+
 _RESOLVERS = {
     "user": _resolve_user,
     "task": _resolve_task,
     "note": _resolve_note,
     "chat": _resolve_chat,
     "project": _resolve_project,
+    "group": _resolve_group,
+    "todo": _resolve_todo,
 }
 
 
@@ -421,6 +512,31 @@ def _bullet_for(m: ResolvedMention) -> str:
             f"get_project_summary(project_id={m.project_id}) for status "
             f"counts; cite it as [prose](project:{m.project_id})."
         )
+    if m.kind == "group":
+        ids = m.member_ids or ()
+        names = m.member_names or ()
+        shown = ", ".join(
+            f"{name} (user_id={uid})" for name, uid in list(zip(names, ids))[:_GROUP_BULLET_CAP]
+        )
+        if len(ids) > _GROUP_BULLET_CAP:
+            shown += f", and {len(ids) - _GROUP_BULLET_CAP} more"
+        members = shown or "no current members"
+        return (
+            f'  - "@{m.label}" → mention group of {len(ids)} team member(s): '
+            f"{members}. Treat the question as being about these people: for "
+            f"their tasks call list_tasks(assignee_id='<user_id>') per member; "
+            f"for what a member said, wrote, or worked on, use "
+            f"search_knowledge_base(person_id='<user_id>')."
+        )
+    if m.kind == "todo":
+        state = "completed" if m.todo_completed else "open"
+        eid = f"todo:{m.todo_local_date}:item:{m.todo_item_id}"
+        return (
+            f'  - "#{m.label}" → your personal todo {eid} from '
+            f"{m.todo_local_date}, currently {state}. list_today_todos / "
+            f"list_uncompleted_todos show it in context; cite it as "
+            f"[prose]({eid})."
+        )
     return (
         f'  - "#{m.label}" → chat channel {m.chat_type_label}:{m.chat_id}. Call '
         f"fetch_chat_thread(chat_type='{m.chat_type_label}', "
@@ -452,12 +568,14 @@ def build_mention_system_extra(resolved: list[ResolvedMention]) -> str | None:
 def build_mention_seed_sources(resolved: list[ResolvedMention]) -> list[dict[str, Any]]:
     """Pre-seeded source chips for mentioned entities so inline citations
     resolve even when the agent answers without firing a read tool.
-    User mentions get no chip — people aren't citable entities."""
+    User and group mentions get no chip — people aren't citable
+    entities."""
     from origin.search_engine.agent.controller import (  # noqa: PLC0415
         _chat_source,
         _note_source,
         _project_source,
         _task_source,
+        _todo_source,
     )
 
     out: list[dict[str, Any]] = []
@@ -477,6 +595,8 @@ def build_mention_seed_sources(resolved: list[ResolvedMention]) -> list[dict[str
             out.append(_chat_source(chat_type=m.chat_type_label, chat_id=m.chat_id, title=m.label))
         elif m.kind == "project":
             out.append(_project_source(m.project_id, m.label))
+        elif m.kind == "todo":
+            out.append(_todo_source(m.todo_item_id, m.label, m.todo_local_date))
     return out
 
 
@@ -488,8 +608,10 @@ def mention_search_params(mentions_json: Sequence[dict[str, Any]]) -> dict[str, 
     the run row).
 
     Entity ids follow the chunker grammar (mirrors the seed-source
-    builders in the controller): `task:<id>`, `note:<label>:<id>`, and
-    `<chat_label>:<uuid>` (chat entity_ids carry no "chat:" prefix).
+    builders in the controller): `task:<id>`, `note:<label>:<id>`,
+    `<chat_label>:<uuid>` (chat entity_ids carry no "chat:" prefix), and
+    `todo:<date>:item:<id>`. Group mentions expand to their member ids
+    on the person list — same lever as a direct @member mention.
     Project mentions ride the separate `boost_project_ids` list —
     projects aren't indexed entities; the boost matches the `project_id`
     field every task / task-note / PM-chat / milestone chunk carries.
@@ -501,12 +623,16 @@ def mention_search_params(mentions_json: Sequence[dict[str, Any]]) -> dict[str, 
         kind = m.get("kind")
         if kind == "user" and m.get("user_id"):
             person_ids.append(str(m["user_id"]))
+        elif kind == "group":
+            person_ids.extend(str(uid) for uid in m.get("member_ids") or ())
         elif kind == "task" and m.get("task_id") is not None:
             entity_ids.append(f"task:{m['task_id']}")
         elif kind == "note" and m.get("note_id") is not None and m.get("note_type_label"):
             entity_ids.append(f"note:{m['note_type_label']}:{m['note_id']}")
         elif kind == "chat" and m.get("chat_id") and m.get("chat_type_label"):
             entity_ids.append(f"{m['chat_type_label']}:{m['chat_id']}")
+        elif kind == "todo" and m.get("todo_item_id") is not None and m.get("todo_local_date"):
+            entity_ids.append(f"todo:{m['todo_local_date']}:item:{m['todo_item_id']}")
         elif kind == "project" and m.get("project_id"):
             project_ids.append(str(m["project_id"]))
     return {

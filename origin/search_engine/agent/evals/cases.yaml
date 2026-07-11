@@ -1099,3 +1099,33 @@
   expect:
     tools_used_contains_any: ["get_project_summary", "list_tasks"]
     no_errors: true
+
+- id: mention_group_tasks
+  # Group mention → the references block expands the group to its
+  # members (ids + names) and nudges per-member list_tasks. The fixture
+  # has no mention groups, so the case seeds a transient one.
+  query: "What is @design-crew working on right now?"
+  fixture: true
+  setup:
+    seed_mention_group:
+      name: "design-crew"
+      members: ["Bob Martinez", "Carol Park"]
+  mentions:
+    - type: group
+      lookup_name: "design-crew"
+  expect:
+    tools_used_contains: ["list_tasks"]
+    no_errors: true
+
+- id: mention_todo_status
+  # Todo mention → the bullet carries the resolved state directly
+  # ("currently completed"), so the agent can answer the completion
+  # question deterministically. The fixture seeds this todo as done.
+  query: "Did I already finish #Synthesize the remaining 3 customer interviews in Dovetail?"
+  fixture: true
+  mentions:
+    - type: todo
+      lookup_title: "Synthesize the remaining 3 customer interviews in Dovetail"
+  expect:
+    answer_contains_any: ["completed", "done", "finished", "yes"]
+    no_errors: true

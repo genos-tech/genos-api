@@ -225,6 +225,11 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
                 setup["seed_personal_note"], team_id=team_id, user_id=user_id
             )
             cleanup_handles.append(handle)
+        if "seed_mention_group" in setup:
+            handle = _setup_seed_mention_group(
+                setup["seed_mention_group"], team_id=team_id, user_id=user_id
+            )
+            cleanup_handles.append(handle)
 
         ctx = ToolContext(team_id=team_id, user_id=user_id)
 
@@ -1515,6 +1520,45 @@ def _setup_seed_personal_note(spec: dict[str, Any], *, team_id: str, user_id: st
     return cleanup
 
 
+def _setup_seed_mention_group(spec: dict[str, Any], *, team_id: str, user_id: str):
+    """Create a transient `MentionGroupMaster` (+ members) for a case.
+
+    The demo seeder doesn't create mention groups, so group-mention
+    cases seed their own. SQL rows only — groups aren't indexed.
+
+    `spec` keys:
+        name    (str): group name (also the `lookup_name` target)
+        members (list[str]): fixture usernames to enrol
+    """
+    from origin.models.common.mention_group_models import (  # noqa: PLC0415
+        MentionGroupMaster,
+        MentionGroupMembers,
+    )
+
+    name = (spec.get("name") or "eval-group").strip()
+    # Group names are unique per team — clear any leak from a crashed
+    # earlier run so the case can't wedge itself permanently.
+    MentionGroupMaster.objects.filter(team_id=team_id, group_name=name).delete()
+    group = MentionGroupMaster.objects.create(
+        team_id=team_id, group_name=name, created_by_id=user_id
+    )
+    for username in spec.get("members") or []:
+        MentionGroupMembers.objects.create(
+            team_id=team_id,
+            group=group,
+            user_id=_lookup_member_id(str(username), team_id=team_id),
+            added_by_id=user_id,
+        )
+
+    def cleanup() -> None:
+        try:
+            MentionGroupMaster.objects.filter(group_id=group.group_id).delete()
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to delete eval-seeded mention group %s", group.group_id)
+
+    return cleanup
+
+
 def _lookup_member_id(username: str, *, team_id: str) -> str:
     """Resolve a fixture member's username → user UUID (retrieval cases'
     `person_id:` field). Raises for a missing member — broken case."""
@@ -1540,6 +1584,8 @@ def _resolve_mention_specs(specs: list[dict[str, Any]], *, team_id: str, user_id
         {type: note, lookup_title: "..."}     → note_id (personal notes)
         {type: project, lookup_name: "..."}   → project_id (icontains —
             seeded project names carry a per-fixture slug suffix)
+        {type: group, lookup_name: "..."}     → group_id
+        {type: todo, lookup_title: "..."}     → item_id (fixture user's)
     Raises ValueError when a lookup finds nothing — a case referencing a
     missing entity is a broken case, not a soft failure.
 
@@ -1604,6 +1650,28 @@ def _resolve_mention_specs(specs: list[dict[str, Any]], *, team_id: str, user_id
             if project is None:
                 raise ValueError(f"mention lookup: no project named {spec.get('lookup_name')!r}")
             entry["project_id"] = project.project_id
+        elif kind == "group" and "lookup_name" in entry:
+            from origin.models.common.mention_group_models import (  # noqa: PLC0415
+                MentionGroupMaster,
+            )
+
+            group = MentionGroupMaster.objects.filter(
+                team_id=team_id, group_name=entry.pop("lookup_name"), is_deleted=False
+            ).first()
+            if group is None:
+                raise ValueError(f"mention lookup: no group named {spec.get('lookup_name')!r}")
+            entry["group_id"] = group.group_id
+        elif kind == "todo" and "lookup_title" in entry:
+            from origin.models.chat.todo_models import ToDoItem  # noqa: PLC0415
+
+            item = ToDoItem.objects.filter(
+                group__team_id=team_id,
+                group__user_id=user_id,
+                title=entry.pop("lookup_title"),
+            ).first()
+            if item is None:
+                raise ValueError(f"mention lookup: no todo titled {spec.get('lookup_title')!r}")
+            entry["item_id"] = item.item_id
         wire.append(entry)
 
     ctx = ToolContext(team_id=team_id, user_id=user_id)
