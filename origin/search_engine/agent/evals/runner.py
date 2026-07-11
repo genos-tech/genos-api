@@ -1079,7 +1079,11 @@ def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
         # feed the soft-boost params through the SAME derivation the
         # search_knowledge_base tool uses. `person_id:` (a username)
         # exercises the hard person filter.
-        boost: dict[str, list[str]] = {"boost_person_ids": [], "boost_entity_ids": []}
+        boost: dict[str, list[str]] = {
+            "boost_person_ids": [],
+            "boost_entity_ids": [],
+            "boost_project_ids": [],
+        }
         if case.get("mentions"):
             from origin.search_engine.agent.mentions import (  # noqa: PLC0415
                 mention_search_params,
@@ -1103,6 +1107,7 @@ def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
             rewrite=bool(_settings.SEARCH_ENGINE.get("RAG_USE_QUERY_REWRITE", False)),
             boost_person_ids=boost["boost_person_ids"],
             boost_entity_ids=boost["boost_entity_ids"],
+            boost_project_ids=boost["boost_project_ids"],
             person_id=person_id,
             # `mode="eval"` disables freshness boost, chunk-type
             # reweighting, AND the production overlays (LLM reranker +
@@ -1533,6 +1538,8 @@ def _resolve_mention_specs(specs: list[dict[str, Any]], *, team_id: str, user_id
         {type: task, lookup_title: "..."}     → task_id
         {type: user, lookup_username: "..."}  → user_id
         {type: note, lookup_title: "..."}     → note_id (personal notes)
+        {type: project, lookup_name: "..."}   → project_id (icontains —
+            seeded project names carry a per-fixture slug suffix)
     Raises ValueError when a lookup finds nothing — a case referencing a
     missing entity is a broken case, not a soft failure.
 
@@ -1586,6 +1593,17 @@ def _resolve_mention_specs(specs: list[dict[str, Any]], *, team_id: str, user_id
                 raise ValueError(f"mention lookup: no note titled {spec.get('lookup_title')!r}")
             entry.setdefault("note_type", 1)
             entry["note_id"] = note.note_id
+        elif kind == "project" and "lookup_name" in entry:
+            from origin.models.project.prj_models import ProjectMaster  # noqa: PLC0415
+
+            project = ProjectMaster.objects.filter(
+                team_id=team_id,
+                project_name__icontains=entry.pop("lookup_name"),
+                is_deleted=False,
+            ).first()
+            if project is None:
+                raise ValueError(f"mention lookup: no project named {spec.get('lookup_name')!r}")
+            entry["project_id"] = project.project_id
         wire.append(entry)
 
     ctx = ToolContext(team_id=team_id, user_id=user_id)

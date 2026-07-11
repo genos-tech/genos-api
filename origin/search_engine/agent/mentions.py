@@ -1,14 +1,15 @@
 """Structured @/# mentions attached to `/api/v2/agent/ask/` requests.
 
 The frontend mention picker lets the user tag team members (`@`) and
-tasks / notes / chats (`#`) directly in their question. The query text
-keeps the human-readable `@Name` / `#Title` tokens; alongside it the
-client sends a `mentions` array carrying the resolved ids:
+tasks / notes / chats / projects (`#`) directly in their question. The
+query text keeps the human-readable `@Name` / `#Title` tokens; alongside
+it the client sends a `mentions` array carrying the resolved ids:
 
     {"type": "user", "user_id": "<uuid>",                 "label": "Ken Sato"}
     {"type": "task", "task_id": 123,                      "label": "API v2 rollout"}
     {"type": "note", "note_type": 1, "note_id": 50,       "label": "Meeting minutes"}
     {"type": "chat", "chat_type": 2, "chat_id": "<uuid>", "label": "backend-team"}
+    {"type": "project", "project_id": 7,                  "label": "Website Redesign"}
 
 `note_type` / `chat_type` are the integer codes used by
 `thread_context` / `note_context` on the same endpoint; the server owns
@@ -42,7 +43,7 @@ log = logging.getLogger(__name__)
 # not a real question, so the view 400s instead of truncating.
 MAX_MENTIONS = 20
 
-_VALID_TYPES = {"user", "task", "note", "chat"}
+_VALID_TYPES = {"user", "task", "note", "chat", "project"}
 
 
 class MentionParseError(ValueError):
@@ -62,11 +63,11 @@ class ResolvedMention:
     safe to inject into the system prompt.
     """
 
-    kind: str  # "user" | "task" | "note" | "chat"
+    kind: str  # "user" | "task" | "note" | "chat" | "project"
     label: str
     # user
     user_id: str | None = None
-    # task
+    # task (parent project) / project mention (the project itself)
     task_id: int | None = None
     display_id: str | None = None
     project_id: str | None = None
@@ -110,6 +111,8 @@ def _identity_key(entry: dict[str, Any]) -> tuple:
         return ("task", entry["task_id"])
     if kind == "note":
         return ("note", entry["note_type"], entry["note_id"])
+    if kind == "project":
+        return ("project", entry["project_id"])
     return ("chat", entry["chat_type"], entry["chat_id"])
 
 
@@ -158,6 +161,8 @@ def _normalise_entry(entry: Any) -> dict[str, Any] | None:
             return {"type": "user", "user_id": user_id, "label": label}
         if kind == "task":
             return {"type": "task", "task_id": int(entry.get("task_id")), "label": label}
+        if kind == "project":
+            return {"type": "project", "project_id": int(entry.get("project_id")), "label": label}
         if kind == "note":
             note_type = int(entry.get("note_type"))
             if note_type not in NOTE_TYPE_LABEL:
@@ -352,11 +357,32 @@ def _resolve_chat(entry: dict[str, Any], ctx) -> ResolvedMention | None:
     )
 
 
+def _resolve_project(entry: dict[str, Any], ctx) -> ResolvedMention | None:
+    from origin.models.project.prj_models import ProjectMaster, ProjectMembers  # noqa: PLC0415
+
+    project = ProjectMaster.objects.filter(project_id=entry["project_id"], is_deleted=False).first()
+    if project is None:
+        return None
+    if str(getattr(project, "team_id", "") or "") != ctx.team_id:
+        return None
+    # Same ACL as `list_projects` / `get_project_summary`: membership only.
+    if not ProjectMembers.objects.filter(
+        project_id=project.project_id, attendee_id=ctx.user_id
+    ).exists():
+        return None
+    return ResolvedMention(
+        kind="project",
+        label=project.project_name or "",
+        project_id=str(project.project_id),
+    )
+
+
 _RESOLVERS = {
     "user": _resolve_user,
     "task": _resolve_task,
     "note": _resolve_note,
     "chat": _resolve_chat,
+    "project": _resolve_project,
 }
 
 
@@ -387,6 +413,13 @@ def _bullet_for(m: ResolvedMention) -> str:
             f"fetch_note(note_type='{m.note_type_label}', note_id={m.note_id}) "
             f"for its full body; cite it as "
             f"[prose](note:{m.note_type_label}:{m.note_id})."
+        )
+    if m.kind == "project":
+        return (
+            f'  - "#{m.label}" → project:{m.project_id}. Call '
+            f"list_tasks(project_id={m.project_id}) for its tasks or "
+            f"get_project_summary(project_id={m.project_id}) for status "
+            f"counts; cite it as [prose](project:{m.project_id})."
         )
     return (
         f'  - "#{m.label}" → chat channel {m.chat_type_label}:{m.chat_id}. Call '
@@ -423,6 +456,7 @@ def build_mention_seed_sources(resolved: list[ResolvedMention]) -> list[dict[str
     from origin.search_engine.agent.controller import (  # noqa: PLC0415
         _chat_source,
         _note_source,
+        _project_source,
         _task_source,
     )
 
@@ -441,6 +475,8 @@ def build_mention_seed_sources(resolved: list[ResolvedMention]) -> list[dict[str
             )
         elif m.kind == "chat":
             out.append(_chat_source(chat_type=m.chat_type_label, chat_id=m.chat_id, title=m.label))
+        elif m.kind == "project":
+            out.append(_project_source(m.project_id, m.label))
     return out
 
 
@@ -454,9 +490,13 @@ def mention_search_params(mentions_json: Sequence[dict[str, Any]]) -> dict[str, 
     Entity ids follow the chunker grammar (mirrors the seed-source
     builders in the controller): `task:<id>`, `note:<label>:<id>`, and
     `<chat_label>:<uuid>` (chat entity_ids carry no "chat:" prefix).
+    Project mentions ride the separate `boost_project_ids` list —
+    projects aren't indexed entities; the boost matches the `project_id`
+    field every task / task-note / PM-chat / milestone chunk carries.
     """
     person_ids: list[str] = []
     entity_ids: list[str] = []
+    project_ids: list[str] = []
     for m in mentions_json:
         kind = m.get("kind")
         if kind == "user" and m.get("user_id"):
@@ -467,4 +507,10 @@ def mention_search_params(mentions_json: Sequence[dict[str, Any]]) -> dict[str, 
             entity_ids.append(f"note:{m['note_type_label']}:{m['note_id']}")
         elif kind == "chat" and m.get("chat_id") and m.get("chat_type_label"):
             entity_ids.append(f"{m['chat_type_label']}:{m['chat_id']}")
-    return {"boost_person_ids": person_ids, "boost_entity_ids": entity_ids}
+        elif kind == "project" and m.get("project_id"):
+            project_ids.append(str(m["project_id"]))
+    return {
+        "boost_person_ids": person_ids,
+        "boost_entity_ids": entity_ids,
+        "boost_project_ids": project_ids,
+    }
