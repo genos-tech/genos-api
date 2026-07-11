@@ -219,8 +219,27 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
                 setup["seed_conversation"], team_id=team_id, user_id=user_id
             )
             cleanup_handles.append(handle)
+        if "seed_personal_note" in setup:
+            handle = _setup_seed_personal_note(
+                setup["seed_personal_note"], team_id=team_id, user_id=user_id
+            )
+            cleanup_handles.append(handle)
 
         ctx = ToolContext(team_id=team_id, user_id=user_id)
+
+        # Structured-mention cases: `mentions:` entries use the production
+        # wire shape (agent/mentions.py) except ids may be given as
+        # `lookup_title` / `lookup_username`, resolved against the DB at
+        # run time — fixture entity ids are dynamic, so cases can't pin
+        # them. Runs the SAME parse → resolve → build path as
+        # AgentAskView, so evals exercise production mention code.
+        # (Multi-turn cases don't support mentions yet.)
+        mention_extra: str | None = None
+        mention_seeds: list[dict[str, Any]] | None = None
+        if case.get("mentions"):
+            mention_extra, mention_seeds = _resolve_mention_specs(
+                case["mentions"], team_id=team_id, user_id=user_id
+            )
 
         def _attempt() -> tuple[list[dict[str, Any]], list[dict[str, Any]], float | None]:
             """One full agent run with event / trace / TTFT capture.
@@ -244,12 +263,18 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
                     ttft = time.monotonic() - emit_t0
                 attempt_events.append(event)
 
-            def _capture_trace(
-                name: str, args: dict[str, Any], result: dict[str, Any]
-            ) -> None:
+            def _capture_trace(name: str, args: dict[str, Any], result: dict[str, Any]) -> None:
                 attempt_traces.append({"tool_name": name, "arguments": args, "result": result})
 
-            run_agent(query, ctx, _ts_emit, run_id=None, trace_hook=_capture_trace)
+            run_agent(
+                query,
+                ctx,
+                _ts_emit,
+                run_id=None,
+                trace_hook=_capture_trace,
+                system_extra=mention_extra,
+                seed_sources=mention_seeds,
+            )
             return attempt_events, attempt_traces, ttft
 
         try:
@@ -534,7 +559,9 @@ def _citation_id_wellformed(cited_id: str) -> bool:
     return bool(pattern and pattern.match(cited_id))
 
 
-def _citation_style_metric(events: list[dict[str, Any]], expect: dict[str, Any]) -> dict[str, float]:
+def _citation_style_metric(
+    events: list[dict[str, Any]], expect: dict[str, Any]
+) -> dict[str, float]:
     """D5 prose-citation adoption rate (§4.6).
 
     `prose_citation_rate` = link-form citations / all citations — how
@@ -675,9 +702,7 @@ def _tool_selection_metrics(
     return out
 
 
-def _check_behavior_expectations(
-    events: list[dict[str, Any]], expect: dict[str, Any]
-) -> list[str]:
+def _check_behavior_expectations(events: list[dict[str, Any]], expect: dict[str, Any]) -> list[str]:
     """Run each declared assertion. Returns the list of failure reasons."""
     reasons: list[str] = []
 
@@ -768,10 +793,7 @@ def _check_behavior_expectations(
         required = {c.lower() for c in expect["citations_contain"]}
         missing = required - citations_seen
         if missing:
-            _add(
-                f"citations_contain: missing {sorted(missing)} "
-                f"(found {sorted(citations_seen)})"
-            )
+            _add(f"citations_contain: missing {sorted(missing)} (found {sorted(citations_seen)})")
 
     if "has_citations" in expect and expect["has_citations"]:
         if not citations_seen:
@@ -1152,9 +1174,7 @@ def _check_retrieval_expectations(
     # ACL-leak cases ("the off-team document must NOT surface").
     if "must_not_contain_title" in expect:
         forbidden = [s.lower() for s in (expect["must_not_contain_title"] or [])]
-        leaked = [
-            needle for needle in forbidden if any(needle in t.lower() for t in ranked_titles)
-        ]
+        leaked = [needle for needle in forbidden if any(needle in t.lower() for t in ranked_titles)]
         if leaked:
             _add(
                 f"must_not_contain_title: forbidden title substring(s) "
@@ -1423,6 +1443,114 @@ def _setup_inject_note(spec: dict[str, Any], *, team_id: str, user_id: str):
             log.exception("Failed to delete eval-injected note %s", chunk_id)
 
     return cleanup
+
+
+def _setup_seed_personal_note(spec: dict[str, Any], *, team_id: str, user_id: str):
+    """Create a real `PersonalNoteMaster` row for the duration of a case.
+
+    Unlike `_setup_inject_note` (OpenSearch-only), this seeds SQL — which
+    is what structured-mention resolution and `fetch_note` read. Used by
+    mention cases that need a note the user can actually reference.
+
+    `spec` keys:
+        title (str): note title (also the `lookup_title` target)
+        body  (str): plain-text body, wrapped into one BlockNote paragraph
+    """
+    from origin.models.note.personal_note_models import PersonalNoteMaster  # noqa: PLC0415
+
+    title = (spec.get("title") or "Eval mention note").strip()
+    body_text = spec.get("body") or ""
+    note = PersonalNoteMaster.objects.create(
+        team_id=team_id,
+        owner_id=user_id,
+        title=title,
+        body=[
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": body_text, "styles": {}}],
+            }
+        ],
+    )
+
+    def cleanup() -> None:
+        try:
+            PersonalNoteMaster.objects.filter(note_id=note.note_id).delete()
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to delete eval-seeded personal note %s", note.note_id)
+
+    return cleanup
+
+
+def _resolve_mention_specs(
+    specs: list[dict[str, Any]], *, team_id: str, user_id: str
+) -> tuple[str | None, list[dict[str, Any]] | None]:
+    """Turn a case's `mentions:` list into (system_extra, seed_sources).
+
+    Each entry is the production wire shape, except the id field may be
+    replaced by a runtime lookup:
+        {type: task, lookup_title: "..."}     → task_id
+        {type: user, lookup_username: "..."}  → user_id
+        {type: note, lookup_title: "..."}     → note_id (personal notes)
+    Raises ValueError when a lookup finds nothing — a case referencing a
+    missing entity is a broken case, not a soft failure.
+    """
+    from origin.search_engine.agent.mentions import (  # noqa: PLC0415
+        build_mention_seed_sources,
+        build_mention_system_extra,
+        parse_mentions,
+        resolve_mentions,
+    )
+    from origin.search_engine.agent.tools import ToolContext  # noqa: PLC0415
+
+    wire: list[dict[str, Any]] = []
+    for spec in specs:
+        entry = dict(spec)
+        kind = entry.get("type")
+        if kind == "task" and "lookup_title" in entry:
+            from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+
+            task = TaskMaster.objects.filter(
+                team_id=team_id, title=entry.pop("lookup_title"), is_deleted=False
+            ).first()
+            if task is None:
+                raise ValueError(f"mention lookup: no task titled {spec.get('lookup_title')!r}")
+            entry["task_id"] = task.task_id
+        elif kind == "user" and "lookup_username" in entry:
+            from origin.models.common.team_models import TeamMembers  # noqa: PLC0415
+
+            membership = (
+                TeamMembers.objects.filter(
+                    team_id=team_id,
+                    attendee__username=entry.pop("lookup_username"),
+                    is_deleted=False,
+                )
+                .select_related("attendee")
+                .first()
+            )
+            if membership is None or membership.attendee is None:
+                raise ValueError(f"mention lookup: no member named {spec.get('lookup_username')!r}")
+            entry["user_id"] = str(membership.attendee.id)
+        elif kind == "note" and "lookup_title" in entry:
+            from origin.models.note.personal_note_models import (  # noqa: PLC0415
+                PersonalNoteMaster,
+            )
+
+            note = PersonalNoteMaster.objects.filter(
+                team_id=team_id, title=entry.pop("lookup_title")
+            ).first()
+            if note is None:
+                raise ValueError(f"mention lookup: no note titled {spec.get('lookup_title')!r}")
+            entry.setdefault("note_type", 1)
+            entry["note_id"] = note.note_id
+        wire.append(entry)
+
+    ctx = ToolContext(team_id=team_id, user_id=user_id)
+    resolved = resolve_mentions(parse_mentions(wire), ctx)
+    if len(resolved) != len(wire):
+        # A dropped mention in an eval is always a case bug — surface it
+        # loudly rather than silently running an un-mentioned query.
+        raise ValueError(f"mention resolution dropped entries: {len(resolved)}/{len(wire)} kept")
+    return build_mention_system_extra(resolved), build_mention_seed_sources(resolved)
 
 
 def _setup_seed_conversation(spec: dict[str, Any], *, team_id: str, user_id: str):

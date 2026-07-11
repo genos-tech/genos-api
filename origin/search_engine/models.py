@@ -126,6 +126,11 @@ class AgentRun(models.Model):
         blank=True,
         related_name="runs",
     )
+    # Structured @/# mentions the user attached to this ask, AFTER
+    # DB + ACL resolution (see agent/mentions.py — client labels are
+    # never stored). Observational only: debugging, eval sampling,
+    # future analytics. Empty list for runs without mentions.
+    mentions = models.JSONField(default=list, blank=True)
     started_at = models.DateTimeField(auto_now_add=True)
     finished_at = models.DateTimeField(blank=True, null=True)
 
@@ -340,9 +345,7 @@ class AgentRunFeedback(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(
-                fields=["run", "user_id"], name="uq_agent_feedback_run_user"
-            ),
+            models.UniqueConstraint(fields=["run", "user_id"], name="uq_agent_feedback_run_user"),
         ]
         indexes = [
             models.Index(fields=["team_id", "-created_at"], name="se_feedback_team_created_idx"),
