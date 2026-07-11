@@ -280,9 +280,7 @@ WEBPUSH_VAPID_ADMIN_EMAIL = os.environ.get("WEBPUSH_VAPID_ADMIN_EMAIL", "admin@e
 WEBPUSH_MEDIA_BASE_URL = os.environ.get("WEBPUSH_MEDIA_BASE_URL", "")
 
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
-    )
+    "DEFAULT_AUTHENTICATION_CLASSES": ("rest_framework_simplejwt.authentication.JWTAuthentication",)
 }
 
 SIMPLE_JWT = {
@@ -314,9 +312,7 @@ SESSION_COOKIE_HTTPONLY = True  # Prevents JavaScript access to the session cook
 SESSION_COOKIE_SAMESITE = "Lax"  # Adjust as needed: "Lax", "Strict", or "None"
 CSRF_COOKIE_NAME = "csrftoken"  # Default cookie name
 CSRF_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_HTTPONLY = (
-    False  # CSRF cookie should be accessible by JavaScript (for CSRF protection)
-)
+CSRF_COOKIE_HTTPONLY = False  # CSRF cookie should be accessible by JavaScript (for CSRF protection)
 CSRF_COOKIE_SAMESITE = "Lax"
 
 # Refresh-token cookie attributes.
@@ -490,6 +486,11 @@ SEARCH_ENGINE = {
     "RAG_FRESHNESS_HALF_LIFE_DAYS": float(os.environ.get("RAG_FRESHNESS_HALF_LIFE_DAYS", "90")),
     # Drop duplicate chunks (same text_hash) before entity grouping.
     "RAG_DEDUP_BY_HASH": (os.environ.get("RAG_DEDUP_BY_HASH", "true").lower() == "true"),
+    # Mentions v2 — soft boost for chunks matching the ask's resolved
+    # @/# mentions (member fields / entity ids). Inactive on every
+    # call without mentions, so it only shapes mention-carrying asks.
+    "RAG_MENTION_BOOST": (os.environ.get("RAG_MENTION_BOOST", "true").lower() == "true"),
+    "RAG_MENTION_BOOST_WEIGHT": float(os.environ.get("RAG_MENTION_BOOST_WEIGHT", "1.5")),
     # LLM-as-judge reranker. ON by default (Q2.1) for the agent / ai_search
     # path: score-fusion measured +0.118 recall / +5 behavior cases / ZERO
     # regressions on gemini-3.1-pro-preview (SPOTLIGHT_Q0_Q2_PROGRESS.md).
@@ -704,9 +705,7 @@ SEARCH_ENGINE = {
     # (evals pass no session_id, so the suite is unaffected either way),
     # a manual two-turn hit check (`cached: true` on the second turn's
     # tool_call_result), and no staleness complaints in dogfood.
-    "RAG_SESSION_TOOL_CACHE": (
-        os.environ.get("RAG_SESSION_TOOL_CACHE", "false").lower() == "true"
-    ),
+    "RAG_SESSION_TOOL_CACHE": (os.environ.get("RAG_SESSION_TOOL_CACHE", "false").lower() == "true"),
     # Per-entry TTL. 300 s covers the "rapid follow-ups in one sitting"
     # window without letting stale workspace reads live long.
     "RAG_SESSION_TOOL_CACHE_TTL_S": int(os.environ.get("RAG_SESSION_TOOL_CACHE_TTL_S", "300")),
@@ -728,9 +727,7 @@ SEARCH_ENGINE = {
     # only) — so the measured precision path is untouched. The critique
     # only replaces the draft if it actually retrieved AND produced an
     # answer; otherwise the draft is preserved verbatim.
-    "RAG_CRITIQUE_RETRIEVAL": (
-        os.environ.get("RAG_CRITIQUE_RETRIEVAL", "false").lower() == "true"
-    ),
+    "RAG_CRITIQUE_RETRIEVAL": (os.environ.get("RAG_CRITIQUE_RETRIEVAL", "false").lower() == "true"),
     # Step budget for the retrieval continuation above: 2 = at most one
     # read tool call + one final answer. Bounds the latency/cost the
     # critique can add.
@@ -818,9 +815,7 @@ SEARCH_ENGINE = {
     # the multi-tool cases is still being validated and enforcing-by-default
     # would regress a suite the team runs green. Per-case tool gold stays
     # non-gating (path-sensitive); only the aggregate is checked.
-    "RAG_TOOL_SELECTION_NORTH_STAR": float(
-        os.environ.get("RAG_TOOL_SELECTION_NORTH_STAR", "0.90")
-    ),
+    "RAG_TOOL_SELECTION_NORTH_STAR": float(os.environ.get("RAG_TOOL_SELECTION_NORTH_STAR", "0.90")),
     # Q0.5 — F2 drift alert threshold (SPOTLIGHT_QUALITY_ARCHITECTURE.md §F2:
     # "sample N%, score async, alert on regression"). `agent_judge_sample
     # --report` compares the recent half of the window against the prior half;
@@ -836,9 +831,7 @@ SEARCH_ENGINE = {
     # first request of a session — Gemini 2.5+/3.x caches stable
     # prefixes of ≥1024 (Flash) / ≥4096 (Pro) tokens automatically.
     # Off by default to keep production logs quiet.
-    "LLM_LOG_USAGE_METADATA": (
-        os.environ.get("LLM_LOG_USAGE_METADATA", "false").lower() == "true"
-    ),
+    "LLM_LOG_USAGE_METADATA": (os.environ.get("LLM_LOG_USAGE_METADATA", "false").lower() == "true"),
     # Phase 3.5 — rolling-summary multi-turn context. When True AND a
     # session has more than `SESSION_MAX_PRIOR_TURNS` prior turns, the
     # earliest turns are condensed into a single short summary that is

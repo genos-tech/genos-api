@@ -797,3 +797,88 @@
     must_contain_title_in_top_n:
       n: 8
       title_substrings: ["Hero + FeatureGrid"]
+
+# ============================================================ #
+# H. Mention-aware retrieval (mentions v2)                       #
+# ============================================================ #
+# `mentions:` uses the behavior-suite spec (lookup_title /
+# lookup_username resolved against the fixture at runtime) and feeds
+# the SAME `mention_search_params` derivation the search_knowledge_base
+# tool uses; `person_id:` (a fixture username) exercises the hard
+# person filter. Each boost case has a no-mention control proving the
+# boost — not the query — moves the expected entity into the asserted
+# window. Calibrated against measured fixture rankings WITH query
+# rewriting on (2026-07-11, the suite default): "performance" ranks
+# Bob's Safari task 4th at baseline (boost → top-3); "spike results"
+# ranks the framer spike task 5th (boost → 2nd). The controls pin the
+# baseline via `limit`, so fixture/embedding drift that moves the
+# baseline rank fails the CONTROL loudly instead of leaving a
+# silently-vacuous boost case.
+
+- id: mention_member_boost
+  fixture: true
+  query: "performance"
+  mentions:
+    - type: user
+      lookup_username: "Bob Martinez"
+  expect:
+    # Bob's WIP task ("Investigate slow homepage load on mobile
+    # Safari", task_assignee_id=Bob) enters the top 3 only via the
+    # member boost.
+    must_contain_title_in_top_n:
+      n: 3
+      title_substrings: ["slow homepage load"]
+
+- id: mention_member_boost_control
+  fixture: true
+  query: "performance"
+  # `limit: 3` scopes the negative assertion to the same top-3 window
+  # the boost case asserts on — at baseline Bob's Safari task sits at
+  # rank 4 (query rewriting pulls it into the pool, but not the top).
+  limit: 3
+  expect:
+    # Control for mention_member_boost: without the mention, Bob's
+    # Safari task stays OUT of the top 3. If this ever fails, the
+    # boost case above has gone vacuous — recalibrate both together.
+    must_not_contain_title: ["slow homepage load"]
+
+- id: person_filter_carol
+  fixture: true
+  query: "marketing pages design system"
+  entity_types: ["task"]
+  person_id: "Carol Park"
+  expect:
+    # Hard person filter: only Carol-linked tasks may return. The
+    # keyword-dominant hits ("Migrate marketing pages…", "Audit
+    # existing marketing pages" — both assigned to the demo user) must
+    # be excluded by the filter, leaving Carol's design-system work.
+    must_contain_title_in_top_n:
+      n: 2
+      title_substrings: ["hero + featuregrid"]
+    must_not_contain_title:
+      - "migrate marketing pages"
+      - "audit existing marketing pages"
+
+- id: mention_entity_boost
+  fixture: true
+  query: "spike results"
+  mentions:
+    - type: task
+      lookup_title: "Spike: framer-motion vs native CSS animations for the redesign"
+  expect:
+    # The mentioned spike task ranks 5th for this ambiguous query at
+    # baseline (behind its own review-todo and two chats); the entity
+    # boost lifts it into the top 3 (measured: rank 2). The substring
+    # includes the "spike:" prefix so the review-todo's title (which
+    # also contains "framer-motion") can't satisfy the assertion.
+    must_contain_title_in_top_n:
+      n: 3
+      title_substrings: ["spike: framer-motion"]
+
+- id: mention_entity_boost_control
+  fixture: true
+  query: "spike results"
+  limit: 3
+  expect:
+    # Control for mention_entity_boost — see mention_member_boost_control.
+    must_not_contain_title: ["spike: framer-motion"]
