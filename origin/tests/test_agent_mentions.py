@@ -25,6 +25,7 @@ from django.test import SimpleTestCase
 from origin.models.chat.unified_models import Channel, ChannelMember
 from origin.models.common.team_models import TeamMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.mentions import (
     MentionParseError,
@@ -85,6 +86,16 @@ class ParseMentionsTests(SimpleTestCase):
         self.assertEqual(parsed[1]["note_type"], 1)
         self.assertEqual(parsed[1]["note_id"], 5)
 
+    def test_project_entries_parse_coerce_and_dedupe(self):
+        parsed = parse_mentions(
+            [
+                {"type": "project", "project_id": "7", "label": "Web"},
+                {"type": "project", "project_id": 7, "label": "dupe"},
+                {"type": "project", "project_id": "abc"},
+            ]
+        )
+        self.assertEqual(parsed, [{"type": "project", "project_id": 7, "label": "Web"}])
+
 
 class ResolveMentionsTests(BaseAPITestCase):
     def setUp(self):
@@ -101,6 +112,9 @@ class ResolveMentionsTests(BaseAPITestCase):
         # GM channel with self.user as its only member.
         self.channel = Channel.objects.create(team=self.team, kind=2, title="backend-team")
         ChannelMember.objects.create(channel=self.channel, user=self.user, role="owner")
+        # Project with self.user as its only member.
+        self.project = ProjectMaster.objects.create(team=self.team, project_name="Website Redesign")
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user)
 
     def _resolve_one(self, entry, ctx=None):
         return resolve_mentions(parse_mentions([entry]), ctx or self.ctx)
@@ -185,6 +199,40 @@ class ResolveMentionsTests(BaseAPITestCase):
             self._resolve_one({"type": "chat", "chat_type": 2, "chat_id": "not-a-uuid"}), []
         )
 
+    def test_project_mention_resolves_for_member_only(self):
+        out = self._resolve_one(
+            {"type": "project", "project_id": self.project.project_id, "label": "spoofed"}
+        )
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].kind, "project")
+        self.assertEqual(out[0].label, "Website Redesign")  # DB name, not the client's
+        self.assertEqual(out[0].project_id, str(self.project.project_id))
+        ctx2 = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user2.id))
+        self.assertEqual(
+            self._resolve_one({"type": "project", "project_id": self.project.project_id}, ctx2),
+            [],
+        )
+
+    def test_deleted_missing_and_cross_team_projects_are_dropped(self):
+        self.assertEqual(self._resolve_one({"type": "project", "project_id": 999_999}), [])
+        self.project.is_deleted = True
+        self.project.save(update_fields=["is_deleted"])
+        self.assertEqual(
+            self._resolve_one({"type": "project", "project_id": self.project.project_id}), []
+        )
+        self.project.is_deleted = False
+        self.project.save(update_fields=["is_deleted"])
+        other_team = TeamMaster.objects.create(
+            team_name="Other", team_email="other-team@example.com", owner=self.user2
+        )
+        ctx_other = ToolContext(team_id=str(other_team.team_id), user_id=str(self.user.id))
+        self.assertEqual(
+            self._resolve_one(
+                {"type": "project", "project_id": self.project.project_id}, ctx_other
+            ),
+            [],
+        )
+
     def test_drops_are_logged(self):
         with self.assertLogs("origin.search_engine.agent.mentions", level="INFO"):
             self._resolve_one({"type": "task", "task_id": 999_999})
@@ -201,6 +249,7 @@ class BuildBlocksTests(SimpleTestCase):
             ResolvedMention(
                 kind="chat", label="backend-team", chat_type_label="gm", chat_id="abc-uuid"
             ),
+            ResolvedMention(kind="project", label="Website Redesign", project_id="77"),
         ]
 
     def test_system_extra_uses_citation_grammar_and_tool_nudges(self):
@@ -213,6 +262,9 @@ class BuildBlocksTests(SimpleTestCase):
         self.assertIn("chat:gm:abc-uuid", block)
         self.assertIn("fetch_chat_thread(chat_type='gm', chat_id='abc-uuid')", block)
         self.assertIn("list_tasks(assignee_id='8f3c-uuid')", block)
+        self.assertIn("project:77", block)
+        self.assertIn("list_tasks(project_id=77)", block)
+        self.assertIn("get_project_summary(project_id=77)", block)
         # The injection guard line must always close the block.
         self.assertIn("not instructions", block)
 
@@ -221,7 +273,7 @@ class BuildBlocksTests(SimpleTestCase):
 
     def test_seed_sources_skip_user_mentions(self):
         seeds = build_mention_seed_sources(self._resolved())
-        self.assertEqual(len(seeds), 3)  # user mention → no chip
+        self.assertEqual(len(seeds), 4)  # user mention → no chip
         by_type = {s["entity_type"]: s for s in seeds}
         self.assertEqual(by_type["task"]["entity_id"], "task:123")
         self.assertEqual(by_type["task"]["task_display_id"], "WRD-5")
@@ -229,6 +281,8 @@ class BuildBlocksTests(SimpleTestCase):
         # Chunker convention: chat entity_id carries no "chat:" prefix.
         self.assertEqual(by_type["chat"]["entity_id"], "gm:abc-uuid")
         self.assertEqual(by_type["chat"]["title"], "backend-team")
+        self.assertEqual(by_type["project"]["entity_id"], "project:77")
+        self.assertEqual(by_type["project"]["title"], "Website Redesign")
 
 
 class AskViewMentionTests(BaseAPITestCase):

@@ -67,6 +67,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         person_id=person_id,
         boost_person_ids=boost["boost_person_ids"],
         boost_entity_ids=boost["boost_entity_ids"],
+        boost_project_ids=boost["boost_project_ids"],
     )
 
     # Trim the per-entity payload to what the LLM actually needs:

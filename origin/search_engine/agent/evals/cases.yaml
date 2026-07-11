@@ -1086,3 +1086,16 @@
     tools_used_contains: ["search_knowledge_base"]
     answer_contains_any: ["framer", "animation", "css", "spike"]
     no_errors: true
+
+- id: mention_project_scope
+  # Project mention → the references block hands the agent the
+  # project_id and nudges the deterministic project tools
+  # (list_tasks / get_project_summary) instead of keyword search.
+  query: "How many open tasks are in #Website Redesign?"
+  fixture: true
+  mentions:
+    - type: project
+      lookup_name: "Website Redesign"
+  expect:
+    tools_used_contains_any: ["get_project_summary", "list_tasks"]
+    no_errors: true

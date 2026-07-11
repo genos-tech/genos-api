@@ -39,7 +39,9 @@ class ApplyMentionBoostTests(SimpleTestCase):
     def test_boosts_each_person_field(self):
         for field in ("author_id", "task_assignee_id", "note_owner_id"):
             fused = [_hit(1.0, **{field: "u-bob"}), _hit(1.0, **{field: "u-carol"})]
-            _apply_mention_boost(fused, person_ids=["u-bob"], entity_ids=[], weight=2.0)
+            _apply_mention_boost(
+                fused, person_ids=["u-bob"], entity_ids=[], project_ids=[], weight=2.0
+            )
             self.assertEqual([h["score"] for h in fused], [2.0, 1.0], field)
 
     def test_boosts_entity_id_and_related_entity_ids(self):
@@ -48,25 +50,43 @@ class ApplyMentionBoostTests(SimpleTestCase):
             _hit(1.0, entity_id="note:personal:9", related_entity_ids=["task:123"]),
             _hit(1.0, entity_id="task:999"),
         ]
-        _apply_mention_boost(fused, person_ids=[], entity_ids=["task:123"], weight=1.5)
+        _apply_mention_boost(
+            fused, person_ids=[], entity_ids=["task:123"], project_ids=[], weight=1.5
+        )
+        self.assertEqual([h["score"] for h in fused], [1.5, 1.5, 1.0])
+
+    def test_boosts_project_id_chunks(self):
+        # A mentioned project lifts everything carrying its project_id
+        # (task, task-note, PM-chat, milestone chunks alike).
+        fused = [
+            _hit(1.0, entity_id="task:1", project_id="77"),
+            _hit(1.0, entity_id="milestone:3", project_id="77"),
+            _hit(1.0, entity_id="task:2", project_id="88"),
+        ]
+        _apply_mention_boost(fused, person_ids=[], entity_ids=[], project_ids=["77"], weight=1.5)
         self.assertEqual([h["score"] for h in fused], [1.5, 1.5, 1.0])
 
     def test_multiplier_applies_at_most_once(self):
-        # Bob-authored chunk ABOUT the mentioned task: one boost, not two.
-        fused = [_hit(1.0, author_id="u-bob", entity_id="task:123")]
-        _apply_mention_boost(fused, person_ids=["u-bob"], entity_ids=["task:123"], weight=2.0)
+        # Bob-authored chunk ABOUT the mentioned task IN the mentioned
+        # project: one boost, not three.
+        fused = [_hit(1.0, author_id="u-bob", entity_id="task:123", project_id="77")]
+        _apply_mention_boost(
+            fused, person_ids=["u-bob"], entity_ids=["task:123"], project_ids=["77"], weight=2.0
+        )
         self.assertEqual(fused[0]["score"], 2.0)
 
     def test_noop_on_empty_params_or_unit_weight(self):
         fused = [_hit(1.0, author_id="u-bob")]
-        _apply_mention_boost(fused, person_ids=[], entity_ids=[], weight=2.0)
+        _apply_mention_boost(fused, person_ids=[], entity_ids=[], project_ids=[], weight=2.0)
         self.assertEqual(fused[0]["score"], 1.0)
-        _apply_mention_boost(fused, person_ids=["u-bob"], entity_ids=[], weight=1.0)
+        _apply_mention_boost(fused, person_ids=["u-bob"], entity_ids=[], project_ids=[], weight=1.0)
         self.assertEqual(fused[0]["score"], 1.0)
 
     def test_missing_source_fields_do_not_crash_or_match(self):
         fused = [_hit(1.0), {"score": 1.0, "source": None}]
-        _apply_mention_boost(fused, person_ids=["u-bob"], entity_ids=["task:1"], weight=2.0)
+        _apply_mention_boost(
+            fused, person_ids=["u-bob"], entity_ids=["task:1"], project_ids=[], weight=2.0
+        )
         self.assertEqual([h["score"] for h in fused], [1.0, 1.0])
 
 
@@ -99,18 +119,27 @@ class MentionSearchParamsTests(SimpleTestCase):
         params = mention_search_params(
             [
                 {"kind": "user", "label": "Bob", "user_id": "u-bob"},
-                {"kind": "task", "label": "T", "task_id": 123},
+                # A task mention carries its PARENT project_id — that
+                # must not leak into boost_project_ids.
+                {"kind": "task", "label": "T", "task_id": 123, "project_id": "88"},
                 {"kind": "note", "label": "N", "note_type_label": "personal", "note_id": 50},
                 {"kind": "chat", "label": "C", "chat_type_label": "gm", "chat_id": "abc"},
+                {"kind": "project", "label": "P", "project_id": "77"},
             ]
         )
         self.assertEqual(params["boost_person_ids"], ["u-bob"])
         # Chat entity_ids carry no "chat:" prefix (chunker convention).
         self.assertEqual(params["boost_entity_ids"], ["task:123", "note:personal:50", "gm:abc"])
+        self.assertEqual(params["boost_project_ids"], ["77"])
 
     def test_tolerates_partial_dicts(self):
-        params = mention_search_params([{"kind": "task"}, {"kind": "user"}, {}])
-        self.assertEqual(params, {"boost_person_ids": [], "boost_entity_ids": []})
+        params = mention_search_params(
+            [{"kind": "task"}, {"kind": "user"}, {"kind": "project"}, {}]
+        )
+        self.assertEqual(
+            params,
+            {"boost_person_ids": [], "boost_entity_ids": [], "boost_project_ids": []},
+        )
 
 
 class SearchKbMentionTests(SimpleTestCase):
@@ -129,11 +158,13 @@ class SearchKbMentionTests(SimpleTestCase):
             resolved_mentions=(
                 {"kind": "user", "label": "Bob", "user_id": "u-bob"},
                 {"kind": "task", "label": "T", "task_id": 7},
+                {"kind": "project", "label": "P", "project_id": "77"},
             ),
         )
         kwargs = self._run_tool({"query": "x"}, ctx)
         self.assertEqual(kwargs["boost_person_ids"], ["u-bob"])
         self.assertEqual(kwargs["boost_entity_ids"], ["task:7"])
+        self.assertEqual(kwargs["boost_project_ids"], ["77"])
         self.assertIsNone(kwargs["person_id"])
 
     def test_person_id_arg_forwarded_and_empty_ctx_is_noop(self):
@@ -143,6 +174,7 @@ class SearchKbMentionTests(SimpleTestCase):
         self.assertEqual(kwargs["person_id"], "u-bob")
         self.assertEqual(kwargs["boost_person_ids"], [])
         self.assertEqual(kwargs["boost_entity_ids"], [])
+        self.assertEqual(kwargs["boost_project_ids"], [])
 
     def test_schema_declares_person_id(self):
         self.assertIn("person_id", SEARCH_KNOWLEDGE_BASE.parameters_schema["properties"])

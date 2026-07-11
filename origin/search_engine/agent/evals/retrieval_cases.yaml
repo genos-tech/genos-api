@@ -882,3 +882,31 @@
   expect:
     # Control for mention_entity_boost — see mention_member_boost_control.
     must_not_contain_title: ["spike: framer-motion"]
+
+- id: mention_project_boost
+  fixture: true
+  query: "analytics"
+  mentions:
+    - type: project
+      lookup_name: "Q2 Roadmap"
+  expect:
+    # Project boost matches the chunk-level `project_id` field. At
+    # baseline (measured 2026-07-11, rewrite on) "analytics" is
+    # stably dominated by the vendor-evaluation note and Website-
+    # Redesign items, with the Q2-Roadmap tasks at ranks 4-7;
+    # mentioning #Q2 Roadmap lifts "Usage metering pipeline for plan
+    # limits" into the top 3 (measured over 3 reps: 1 / 1 / 3). The
+    # query was chosen for pool stability: the target is retrieved by
+    # the base query's keyword lane, not a stochastic rewrite variant
+    # ("what should we prioritize" failed exactly that way).
+    must_contain_title_in_top_n:
+      n: 3
+      title_substrings: ["usage metering pipeline"]
+
+- id: mention_project_boost_control
+  fixture: true
+  query: "analytics"
+  limit: 3
+  expect:
+    # Control for mention_project_boost — see mention_member_boost_control.
+    must_not_contain_title: ["usage metering pipeline"]

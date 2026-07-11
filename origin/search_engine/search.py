@@ -178,6 +178,7 @@ def search(
     overlays: Optional[bool] = None,
     boost_person_ids: Optional[list[str]] = None,
     boost_entity_ids: Optional[list[str]] = None,
+    boost_project_ids: Optional[list[str]] = None,
     person_id: Optional[str] = None,
 ) -> dict:
     """Run a hybrid search and return entity-grouped results.
@@ -232,16 +233,19 @@ def search(
             still honors the individual `RAG_USE_RERANKER` /
             `RAG_GRAPH_EXPANSION` flags, so flag-flip A/Bs via
             `agent_eval_compare --b-overrides` keep working.
-        boost_person_ids / boost_entity_ids: mention-aware soft boost
-            (mentions v2). Chunks authored by / assigned to / owned by
-            one of `boost_person_ids`, or belonging to (or related to)
-            one of `boost_entity_ids` (chunker entity_id grammar, e.g.
-            "task:123" / "note:personal:50" / "gm:<uuid>"), get their
-            fused score multiplied by RAG_MENTION_BOOST_WEIGHT at the
-            chunk-multiplier seam. Deliberately NOT mode/overlay-gated
-            (like `_collapse_mirror_entities`) so `mode="eval"`
-            measures exactly what production applies; a no-op when
-            empty, which is every non-mention call path.
+        boost_person_ids / boost_entity_ids / boost_project_ids:
+            mention-aware soft boost (mentions v2). Chunks authored by /
+            assigned to / owned by one of `boost_person_ids`, belonging
+            to (or related to) one of `boost_entity_ids` (chunker
+            entity_id grammar, e.g. "task:123" / "note:personal:50" /
+            "gm:<uuid>"), or carrying one of `boost_project_ids` in
+            their `project_id` field (task / task-note / PM-chat /
+            milestone chunks — projects aren't indexed entities), get
+            their fused score multiplied by RAG_MENTION_BOOST_WEIGHT at
+            the chunk-multiplier seam. Deliberately NOT
+            mode/overlay-gated (like `_collapse_mirror_entities`) so
+            `mode="eval"` measures exactly what production applies; a
+            no-op when empty, which is every non-mention call path.
         person_id: hard filter — only chunks authored by, assigned to,
             or owned by this user id (already-indexed keyword fields
             `author_id` / `task_assignee_id` / `note_owner_id`). Set
@@ -333,13 +337,14 @@ def search(
     # composes with (rather than overrides) the reranker downstream.
     # Inactive whenever the boost lists are empty — i.e. on every
     # non-mention call path — so existing behavior is byte-identical.
-    if (boost_person_ids or boost_entity_ids) and settings.SEARCH_ENGINE.get(
+    if (boost_person_ids or boost_entity_ids or boost_project_ids) and settings.SEARCH_ENGINE.get(
         "RAG_MENTION_BOOST", True
     ):
         fused = _apply_mention_boost(
             fused,
             person_ids=boost_person_ids or [],
             entity_ids=boost_entity_ids or [],
+            project_ids=boost_project_ids or [],
             weight=float(settings.SEARCH_ENGINE.get("RAG_MENTION_BOOST_WEIGHT", 1.5)),
         )
 
@@ -827,6 +832,7 @@ def _apply_mention_boost(
     *,
     person_ids: list[str],
     entity_ids: list[str],
+    project_ids: list[str],
     weight: float,
 ) -> list[dict]:
     """Mentions v2 — multiply the fused score of chunks matching a
@@ -837,17 +843,21 @@ def _apply_mention_boost(
     list. A hit matches when its source carries one of `person_ids` in
     any member field, OR its `entity_id` is in `entity_ids`, OR its
     `related_entity_ids` intersects `entity_ids` (so a mentioned task
-    also lifts the notes/threads that reference it). The multiplier is
-    applied AT MOST ONCE per hit — a chunk that is both Bob-authored and
-    about the mentioned task doesn't compound.
+    also lifts the notes/threads that reference it), OR its `project_id`
+    is in `project_ids` (a mentioned project lifts everything indexed
+    under it: tasks + comments, task notes, PM-chat messages,
+    milestones). The multiplier is applied AT MOST ONCE per hit — a
+    chunk that is both Bob-authored and about the mentioned task doesn't
+    compound.
 
     The caller re-sorts after the multiplier block, so ordering is
     handled there.
     """
-    if not fused or weight == 1.0 or (not person_ids and not entity_ids):
+    if not fused or weight == 1.0 or (not person_ids and not entity_ids and not project_ids):
         return fused
     persons = set(person_ids)
     entities = set(entity_ids)
+    projects = set(project_ids)
     for hit in fused:
         src = hit.get("source") or {}
         matched = any(src.get(f) in persons for f in _PERSON_FIELDS) if persons else False
@@ -855,6 +865,8 @@ def _apply_mention_boost(
             matched = src.get("entity_id") in entities or bool(
                 entities.intersection(src.get("related_entity_ids") or ())
             )
+        if not matched and projects:
+            matched = src.get("project_id") in projects
         if matched:
             hit["score"] *= weight
     return fused
