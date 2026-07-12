@@ -14,6 +14,9 @@ Contract under test:
     emits a clickable note chip and the frontend can deep-link + apply.
 """
 
+from datetime import date
+
+from origin.models.chat.todo_models import ToDoGroup, ToDoItem
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
@@ -385,6 +388,16 @@ class NoteBodyEntityLinkTests(NoteWriteToolTestBase):
                 "thread",
             ),
         )
+        # Todo items link via the GROUP's date (a model-mangled token
+        # date still resolves to the item's real day).
+        group = ToDoGroup.objects.create(
+            team=self.team, user=self.user, local_date=date(2026, 7, 12)
+        )
+        todo = ToDoItem.objects.create(group=group, title="ship the fix")
+        self.assertEqual(
+            resolve_note_entity_link(f"todo:2026-01-01:item:{todo.item_id}", team_id=team_id),
+            (f"/workspace/todo/2026-07-12/item/{todo.item_id}", "ship the fix"),
+        )
 
     def test_resolver_rejects_foreign_deleted_and_unroutable(self):
         task = self._task()
@@ -395,9 +408,20 @@ class NoteBodyEntityLinkTests(NoteWriteToolTestBase):
         task.is_deleted = True
         task.save(update_fields=["is_deleted"])
         self.assertIsNone(resolve_note_entity_link(f"task:{task.task_id}", team_id=team_id))
-        # Unknown id / unsupported type / project-level task note (no route).
+        # Unknown id / malformed token / project-level task note (no route).
         self.assertIsNone(resolve_note_entity_link("task:999999", team_id=team_id))
+        # Nonexistent todo item.
         self.assertIsNone(resolve_note_entity_link("todo:2026-07-10:item:5", team_id=team_id))
+        # Foreign-team todo item.
+        group = ToDoGroup.objects.create(
+            team=self.team, user=self.user, local_date=date(2026, 7, 10)
+        )
+        todo = ToDoItem.objects.create(group=group, title="mine")
+        self.assertIsNone(
+            resolve_note_entity_link(f"todo:2026-07-10:item:{todo.item_id}", team_id="other")
+        )
+        # Malformed todo token (missing item segment).
+        self.assertIsNone(resolve_note_entity_link("todo:2026-07-10", team_id=team_id))
         project_note = TaskNoteMaster.objects.create(
             team=self.team, project=self.project, owner=self.user, title="P", body=[]
         )
