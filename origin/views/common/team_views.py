@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import secrets
+import time
 from collections import defaultdict
 from datetime import timedelta
 
@@ -173,7 +174,18 @@ class TeamProfileImageView(AuthenticatedAPIView):
             # At this point, Django has stored the file, possibly renamed
             # Now get the actual stored filename
             stored_file_name = saved_team.profile_image_file.name.split("/")[-1]
-            saved_team.profile_image_file_name = f"team_profiles/{team_id}/{stored_file_name}"
+            # Append `?v=<ms-timestamp>` so the served URL is unique per
+            # upload — mirrors UserProfileImageView / ProjectProfileImageView.
+            # Local FileSystemStorage collision-suffixes the filename so the
+            # path already changes per upload; but on S3/R2/GCS (Railway /
+            # GCP, `AWS_S3_FILE_OVERWRITE=True`) the FE's fixed `profile.jpg`
+            # name reuses the same path, so without the query string the
+            # browser serves the stale cached team avatar. The query string
+            # is ignored by media path-matching.
+            cache_buster = int(time.time() * 1000)
+            saved_team.profile_image_file_name = (
+                f"team_profiles/{team_id}/{stored_file_name}?v={cache_buster}"
+            )
             saved_team.save(update_fields=["profile_image_file_name"])
 
             return Response(TeamMasterSerializer(saved_team).data, status=status.HTTP_200_OK)
