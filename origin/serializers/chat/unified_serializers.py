@@ -437,10 +437,12 @@ class FlagSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(read_only=True)
     messageId = serializers.UUIDField(source="message_id", read_only=True)
     tsCreated = serializers.DateTimeField(source="ts_created_at", read_only=True)
+    # Null while active; set when the user marks the flag done.
+    completedAt = serializers.DateTimeField(source="completed_at", read_only=True)
 
     class Meta:
         model = Flag
-        fields = ["id", "messageId", "tsCreated"]
+        fields = ["id", "messageId", "tsCreated", "completedAt"]
 
 
 class ActivitySerializer(serializers.ModelSerializer):

@@ -27,6 +27,7 @@ side-effect and it is pure-DB (writes an Activity row). No mocking needed.
 
 from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 
 from origin.models.chat.unified_models import (
@@ -260,6 +261,83 @@ class FlagViewTests(_ChannelMixin, BaseAPITestCase):
         url = reverse("v3_message_flag", args=["00000000-0000-0000-0000-000000000000"])
         resp = self.client.post(url)
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_patch_marks_done_then_reopens(self):
+        self.authenticate()
+        Flag.objects.create(user=self.user, message=self.message)
+
+        resp = self.client.patch(self.url, {"completed": True}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIsNotNone(resp.data["completedAt"])
+        self.assertIsNotNone(
+            Flag.objects.get(user=self.user, message=self.message).completed_at
+        )
+
+        resp2 = self.client.patch(self.url, {"completed": False}, format="json")
+        self.assertEqual(resp2.status_code, status.HTTP_200_OK)
+        self.assertIsNone(resp2.data["completedAt"])
+        self.assertIsNone(
+            Flag.objects.get(user=self.user, message=self.message).completed_at
+        )
+
+    def test_patch_nonexistent_flag_returns_404(self):
+        self.authenticate()
+        resp = self.client.patch(self.url, {"completed": True}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_reflag_reactivates_completed_flag(self):
+        """POST on a completed flag clears completed_at (uniq_flag gotcha)."""
+        self.authenticate()
+        flag = Flag.objects.create(
+            user=self.user, message=self.message, completed_at=timezone.now()
+        )
+        resp = self.client.post(self.url)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)  # existing row
+        flag.refresh_from_db()
+        self.assertIsNone(flag.completed_at)
+
+
+# ---------------------------------------------------------------------------
+# FlagListView — GET /api/v3/flags/?status=active|completed
+# ---------------------------------------------------------------------------
+class FlagListViewTests(_ChannelMixin, BaseAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.channel = self._make_gm(members=("user",))
+        self.active_msg = self._make_message(self.channel, seq=1)
+        self.done_msg = self._make_message(self.channel, seq=2)
+        Flag.objects.create(user=self.user, message=self.active_msg)
+        Flag.objects.create(
+            user=self.user, message=self.done_msg, completed_at=timezone.now()
+        )
+        self.url = reverse("v3_flag_list")
+
+    def test_active_status_returns_only_active(self):
+        self.authenticate()
+        resp = self.client.get(self.url, {"status": "active"})
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        ids = {f["messageId"] for f in resp.data["flags"]}
+        self.assertEqual(ids, {str(self.active_msg.id)})
+
+    def test_default_status_is_active(self):
+        self.authenticate()
+        resp = self.client.get(self.url)
+        ids = {f["messageId"] for f in resp.data["flags"]}
+        self.assertEqual(ids, {str(self.active_msg.id)})
+
+    def test_completed_status_returns_only_completed(self):
+        self.authenticate()
+        resp = self.client.get(self.url, {"status": "completed"})
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        flags = resp.data["flags"]
+        self.assertEqual([f["messageId"] for f in flags], [str(self.done_msg.id)])
+        self.assertIsNotNone(flags[0]["completedAt"])
+
+    def test_scoped_to_requesting_user(self):
+        """user2's flags never appear in user's list."""
+        self.authenticate(self.user2)
+        resp = self.client.get(self.url, {"status": "active"})
+        self.assertEqual(resp.data["flags"], [])
 
 
 # ---------------------------------------------------------------------------

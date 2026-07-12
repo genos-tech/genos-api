@@ -66,7 +66,7 @@ from origin.views.chat.message_views import (
     MessagesDeltaView,
     ThreadMessagesDeltaView,
 )
-from origin.views.chat.pin_flag_views import FlagView, PinView
+from origin.views.chat.pin_flag_views import FlagListView, FlagView, PinView
 from origin.views.chat.reaction_views_v3 import MessageReactionsView
 from origin.views.chat.read_cursor_views import ReadCursorView
 from origin.views.chat.search_views_v3 import SearchTeamMembersAndGroupsView
@@ -152,6 +152,11 @@ urlpatterns = [
         "api/v3/messages/<uuid:message_id>/flag/",
         FlagView.as_view(),
         name="v3_message_flag",
+    ),
+    path(
+        "api/v3/flags/",
+        FlagListView.as_view(),
+        name="v3_flag_list",
     ),
     # Activity feed
     path(

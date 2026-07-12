@@ -530,7 +530,12 @@ def write_flag(*, chat_type: int, chat_id: int, message_id: int, user_id: str) -
         msg = _resolve_message(chat_type, chat_id, message_id)
         if msg is None:
             return None
-        flag, _ = Flag.objects.get_or_create(user_id=user_id, message=msg)
+        flag, created = Flag.objects.get_or_create(user_id=user_id, message=msg)
+        # Parity with FlagView.post: re-flagging a completed message must
+        # reactivate it (clear completed_at) rather than leave it done.
+        if not created and flag.completed_at is not None:
+            flag.completed_at = None
+            flag.save(update_fields=["completed_at"])
         return flag
     except Exception:  # noqa: BLE001
         logger.exception("[unified_writer] write_flag failed")
