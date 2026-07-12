@@ -517,6 +517,11 @@ class Flag(models.Model):
     )
     message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name="flags")
     ts_created_at = models.DateTimeField(auto_now_add=True)
+    # Null while the flag is active (an outstanding "check later" bookmark).
+    # Set when the user marks it done: the flag drops off the active list but
+    # is retained so a "past/completed flags" view can list it. Reopening
+    # clears it back to null; unflag still hard-deletes.
+    completed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -524,6 +529,10 @@ class Flag(models.Model):
         ]
         indexes = [
             models.Index(fields=["user", "ts_created_at"], name="flag_user_ts_idx"),
+            # Backs the completed-list query (filter user + completed_at not
+            # null, order by completion time). Mirrors Activity's
+            # is_read composite index.
+            models.Index(fields=["user", "completed_at"], name="flag_user_completed_idx"),
         ]
 
 
