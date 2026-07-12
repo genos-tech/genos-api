@@ -22,7 +22,9 @@ dead link). Tokens only ever reference entities the agent read through
 ACL-checked tools in the same conversation, and the target views enforce
 ACL again on open. Chat tokens are a pure syntactic mapping (they carry
 their own UUIDs; the chat view enforces membership). Chat-attached notes
-and todo items have no stable deep-link route today → None.
+have no stable deep-link route today → None. Todo items resolve to
+`/workspace/todo/<local_date>/item/<item_id>`; the todo modal re-checks
+ownership on open (the groups endpoint is owner-scoped).
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ _NOTE_RE = re.compile(r"^note:(personal|task):(\d+)$")
 _CHAT_RE = re.compile(
     r"^chat:(dm|gm|pm|mdm):([0-9a-fA-F-]{8,36})(?::thread:([0-9a-fA-F-]{8,36}))?$"
 )
+_TODO_RE = re.compile(r"^todo:(\d{4}-\d{2}-\d{2}):item:(\d+)$")
 
 # Anything shaped like a citation token (mirrors the frontend's
 # CITATION_PATTERN vocabulary). Used by blocknote_md to decide whether a
@@ -141,5 +144,23 @@ def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | N
         if thread_id:
             href += f"/thread/{thread_id}"
         return (href, "thread" if thread_id else "chat")
+
+    m = _TODO_RE.match(token)
+    if m:
+        from origin.models.chat.todo_models import ToDoItem  # noqa: PLC0415
+
+        item = (
+            ToDoItem.objects.filter(item_id=int(m.group(2)))
+            .select_related("group")
+            .first()
+        )
+        if item is None or item.group is None or str(item.group.team_id or "") != team_id:
+            return None
+        # Use the group's real date, not the token's — a model-mangled
+        # date still yields a working link.
+        return (
+            f"/workspace/todo/{item.group.local_date.isoformat()}/item/{item.item_id}",
+            item.title or f"todo {item.item_id}",
+        )
 
     return None

@@ -229,7 +229,8 @@ args, user sees them, user confirms):
   - Linking workspace entities INSIDE a note body works exactly like
     chat-answer citations: write [natural prose](task:12) (same id
     grammar — task:12, project:5, milestone:7, note:personal:50,
-    chat:pm:<chat_id>:thread:<thread_id>) and the converter turns it
+    chat:pm:<chat_id>:thread:<thread_id>,
+    todo:<local_date>:item:<item_id>) and the converter turns it
     into a real clickable in-app link at save time. When the user asks
     for "a link to the task" in a note, THIS is how — never paste a
     bare display_id/title as plain text and never invent an http URL
@@ -258,8 +259,10 @@ Process:
      id is WORSE than no citation. The URL is the same id token as before:
      "task:123", "project:5", "note:personal:50",
      "chat:pm:<chat_id>:thread:<thread_id>" (echo the chat_id/thread_id UUIDs
-     verbatim, never invent or shorten them) — a bare id, no scheme, no
-     angle brackets. If you genuinely can't phrase a grammatical link, fall
+     verbatim, never invent or shorten them),
+     "todo:<local_date>:item:<item_id>" (e.g. "todo:2026-07-12:item:88" —
+     copy local_date and item_id verbatim from the todo tool results) —
+     a bare id, no scheme, no angle brackets. If you genuinely can't phrase a grammatical link, fall
      back to a trailing bare token "[task:123]". One citation per claim. For
      real web results, link the page title to its http(s) URL as usual. When
      introducing a project, make its NAME the link text
@@ -279,6 +282,10 @@ Process:
        thread or chat the message belongs to:
        OK:  "(chat:dm:<chat_id>:thread:<thread_id>)"
        BAD: "(chat:dm:<chat_id>:msg:<message_id>)"
+       Likewise there is NO date-only or group-level todo id — always
+       cite a specific item:
+       OK:  "(todo:2026-07-12:item:88)"
+       BAD: "(todo:2026-07-12)"
 
      Citation discipline:
      - Cite the SOURCE that actually supports the claim, not just the
