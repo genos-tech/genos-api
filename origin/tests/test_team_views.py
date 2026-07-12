@@ -3,6 +3,7 @@
 import uuid
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework import status
 
 from origin.models.common.team_models import TeamMembers
@@ -328,3 +329,39 @@ class TestUserProfileUpdate(BaseAPITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class TestTeamProfileImage(BaseAPITestCase):
+    """PUT /api/v2/team/profile/image/"""
+
+    def _png(self, name="profile.jpg"):
+        png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+            b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+            b"\x00\x00\x00\rIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        return SimpleUploadedFile(name, png, content_type="image/png")
+
+    def test_team_image_upload_stores_cache_busted_path(self):
+        """Uploading a team avatar must store a per-upload cache-busted path.
+
+        Regression guard: the FE reads the team avatar straight from
+        `profile_image_file_name` and forces the fixed filename `profile.jpg`.
+        On overwrite storage (S3/R2/GCS on Railway / GCP) that path would
+        repeat across uploads, so without a `?v=` query string the browser
+        serves the stale cached avatar. Mirrors User / Project image flows.
+        """
+        self.authenticate(self.user)
+        response = self.client.put(
+            "/api/v2/team/profile/image/",
+            {"team_id": str(self.team.team_id), "team_profile_image": self._png()},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.team.refresh_from_db()
+        self.assertTrue(self.team.profile_image_file_name)
+        self.assertTrue(self.team.profile_image_file_name.startswith("team_profiles/"))
+        # The per-upload cache-buster is what keeps overwrite storage from
+        # serving a stale cached team avatar.
+        self.assertIn("?v=", self.team.profile_image_file_name)
