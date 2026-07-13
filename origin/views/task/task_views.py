@@ -32,7 +32,7 @@ from origin.views.utils.incremental import (
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
-from .common_color import EFFORT_LEVEL_COLOR_MAP, PRIORITY_COLOR_MAP, STATUS_COLOR_MAP
+from .common_color import EFFORT_LEVEL_COLOR_MAP, PRIORITY_COLOR_MAP, status_color
 
 
 def _bridge_milestone_to_parent(task, requested_milestone_id, parent_task_id):
@@ -592,12 +592,8 @@ class TaskMetaView(AuthenticatedAPIView):
                     "status": {
                         "code": 0,
                         "status": raw_personal_note["status"],
-                        "color": STATUS_COLOR_MAP[raw_personal_note["status"].lower()][
-                            "chipColor"
-                        ],
-                        "textColor": STATUS_COLOR_MAP[raw_personal_note["status"].lower()][
-                            "textColor"
-                        ],
+                        "color": status_color(raw_personal_note["status"])["chipColor"],
+                        "textColor": status_color(raw_personal_note["status"])["textColor"],
                     },
                     "tsUpdated": raw_personal_note["tsUpdated"],
                 }
@@ -793,7 +789,7 @@ class ChildTaskView(AuthenticatedAPIView):
         response_data = []
         for t in child_tasks:
             status_label = t["status"] or ""
-            status_color = STATUS_COLOR_MAP.get(status_label.lower(), {})
+            status_colors = status_color(status_label)
 
             # Compute display id from the flat dict — no model instance
             # here. Mirrors `TaskMaster.display_id` semantics.
@@ -824,8 +820,8 @@ class ChildTaskView(AuthenticatedAPIView):
                     "status": {
                         "code": 0,
                         "status": status_label,
-                        "color": status_color.get("chipColor"),
-                        "textColor": status_color.get("textColor"),
+                        "color": status_colors["chipColor"],
+                        "textColor": status_colors["textColor"],
                     },
                     "tags": t["tags"] or [],
                     "parentTaskId": t["parent_task_id"],
@@ -988,8 +984,8 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                     "status": {
                         "code": 0,
                         "status": t.status,
-                        "color": STATUS_COLOR_MAP[t.status.lower()]["chipColor"],
-                        "textColor": STATUS_COLOR_MAP[t.status.lower()]["textColor"],
+                        "color": status_color(t.status)["chipColor"],
+                        "textColor": status_color(t.status)["textColor"],
                     },
                     "priority": {
                         "code": 0,
@@ -1136,8 +1132,8 @@ class GetTaskView(AuthenticatedAPIView):
                     "status": {
                         "code": 0,
                         "status": t.status,
-                        "color": STATUS_COLOR_MAP[t.status.lower()]["chipColor"],
-                        "textColor": STATUS_COLOR_MAP[t.status.lower()]["textColor"],
+                        "color": status_color(t.status)["chipColor"],
+                        "textColor": status_color(t.status)["textColor"],
                     },
                     "priority": {
                         "code": 0,
@@ -1903,7 +1899,7 @@ def _hydrate_dependency_ref(dep, other_task):
     side; when it appears in `blockedBy`, `other_task` is the blocker.
     """
     status_label = other_task.status or ""
-    status_color = STATUS_COLOR_MAP.get(status_label.lower(), {})
+    status_colors = status_color(status_label)
     return {
         "dependencyId": dep.id,
         "otherTaskId": other_task.task_id,
@@ -1914,8 +1910,8 @@ def _hydrate_dependency_ref(dep, other_task):
         "status": {
             "code": 0,
             "status": status_label,
-            "color": status_color.get("chipColor"),
-            "textColor": status_color.get("textColor"),
+            "color": status_colors["chipColor"],
+            "textColor": status_colors["textColor"],
         },
         "assigneeUserId": other_task.assignee_id,
         "isMilestone": other_task.is_milestone,

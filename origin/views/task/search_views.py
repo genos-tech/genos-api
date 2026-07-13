@@ -8,11 +8,12 @@ from origin.models.project.prj_models import *
 from origin.models.task.task_models import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
-from .common_color import STATUS_COLOR_MAP
+from .common_color import status_color
 
 STATUS_MAP = {
     "open": "Open",
     "wip": "WIP",
+    "blocked": "Blocked",
     "pending": "Pending",
     "closed": "Closed",
     "deleted": "Deleted",
@@ -134,8 +135,8 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
                     "status": {
                         "code": 0,
                         "status": task[5],
-                        "color": STATUS_COLOR_MAP[task[5].lower()]["chipColor"],
-                        "textColor": STATUS_COLOR_MAP[task[5].lower()]["textColor"],
+                        "color": status_color(task[5])["chipColor"],
+                        "textColor": status_color(task[5])["textColor"],
                     },
                     "tsUpdated": task[6],
                 }
