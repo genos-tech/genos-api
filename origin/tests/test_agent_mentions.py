@@ -29,6 +29,7 @@ from origin.models.common.mention_group_models import MentionGroupMaster, Mentio
 from origin.models.common.team_models import TeamMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.mentions import (
     MentionParseError,
@@ -180,6 +181,34 @@ class ResolveMentionsTests(BaseAPITestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0].label, "Fix login flow")
         self.assertEqual(out[0].task_id, self.task.task_id)
+
+    def test_milestone_backing_task_mention_carries_milestone_id(self):
+        # A milestone is picked as its backing task (there is no `milestone`
+        # mention type). The resolver must surface the milestone_id so the
+        # bullet can steer the agent to the milestone tools instead of
+        # letting it pass the backing task_id as a milestone_id.
+        backing = TaskMaster.objects.create(
+            team=self.team,
+            title="Stabilizing DMS pipeline",
+            assignee=self.user,
+            reporter=self.user,
+            project=self.project,
+            is_milestone=True,
+        )
+        milestone = MilestoneMaster.objects.create(
+            team=self.team, project=self.project, title="Stabilizing DMS pipeline", task=backing
+        )
+        out = self._resolve_one({"type": "task", "task_id": backing.task_id})
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].task_id, backing.task_id)
+        self.assertEqual(out[0].milestone_id, milestone.milestone_id)
+        # Bullet must name the milestone_id and the milestone tools, and
+        # NOT tell the agent to pass the backing task_id as a milestone_id.
+        block = build_mention_system_extra(out)
+        self.assertIn(f"milestone_id={milestone.milestone_id}", block)
+        self.assertIn(f"list_tasks(milestone_id={milestone.milestone_id})", block)
+        self.assertIn(f"get_milestone_summary(milestone_id={milestone.milestone_id})", block)
+        self.assertNotIn(f"milestone_id={backing.task_id}", block)
 
     def test_task_outside_acl_is_dropped(self):
         ctx2 = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user2.id))
