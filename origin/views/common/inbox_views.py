@@ -128,6 +128,10 @@ class InboxItemView(AuthenticatedAPIView):
                     "requestStatus": item.request_status,
                     "isDeleted": item.is_deleted,
                     "tsSent": item.ts_created_at,
+                    # Request routing payload (e.g. note-access items carry
+                    # note_type/note_id/note_title so the client can open the
+                    # referenced note). Null for plain activity items.
+                    "itemOptionals": item.item_optionals,
                 }
             )
 
@@ -585,6 +589,10 @@ class InboxItemForNoteAccessRequestView(AuthenticatedAPIView):
                         "itemType": serializer.data.get("item_type", None),
                         "isRead": serializer.data.get("is_read", None),
                         "tsSent": serializer.data.get("ts_created_at", None),
+                        # Carried so the owner's live-delivered item is
+                        # note-clickable without waiting for a reload — mirrors
+                        # the field the delta GET now returns.
+                        "itemOptionals": serializer.data.get("item_optionals", None),
                     },
                     "receiver": serializer.data.get("receiver", None),
                     "noteTitle": note_title,
