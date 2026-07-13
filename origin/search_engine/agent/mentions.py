@@ -78,6 +78,13 @@ class ResolvedMention:
     task_id: int | None = None
     display_id: str | None = None
     project_id: str | None = None
+    # Set only when the mentioned task is a milestone's BACKING task
+    # (TaskMaster.is_milestone). A milestone is filtered/summarised by
+    # its own `milestone_id`, NOT the backing task_id — so we surface it
+    # here and steer the bullet toward the milestone tools, otherwise the
+    # agent guesses `list_tasks(milestone_id=<task_id>)` and hits
+    # "Milestone <task_id> not found".
+    milestone_id: int | None = None
     # note
     note_type_label: str | None = None
     note_id: int | None = None
@@ -104,6 +111,7 @@ class ResolvedMention:
             "task_id",
             "display_id",
             "project_id",
+            "milestone_id",
             "note_type_label",
             "note_id",
             "chat_type_label",
@@ -281,12 +289,27 @@ def _resolve_task(entry: dict[str, Any], ctx) -> ResolvedMention | None:
     )
     if ctx.user_id not in allowed:
         return None
+    # A milestone is surfaced through the picker as its BACKING task
+    # (there is no `milestone` mention type). The milestone tools filter
+    # by `milestone_id`, not the backing `task_id`, so resolve it here
+    # and steer the bullet toward the milestone tools — otherwise the
+    # agent passes the task_id as `milestone_id` and the call fails.
+    milestone_id: int | None = None
+    if getattr(task, "is_milestone", False):
+        from origin.models.task.milestone_models import MilestoneMaster  # noqa: PLC0415
+
+        milestone_id = (
+            MilestoneMaster.objects.filter(task_id=task.task_id, is_deleted=False)
+            .values_list("milestone_id", flat=True)
+            .first()
+        )
     return ResolvedMention(
         kind="task",
         label=task.title or "",
         task_id=task.task_id,
         display_id=task.display_id,
         project_id=str(task.project_id) if task.project_id else None,
+        milestone_id=milestone_id,
     )
 
 
@@ -493,6 +516,19 @@ def _bullet_for(m: ResolvedMention) -> str:
         )
     if m.kind == "task":
         display = f" ({m.display_id})" if m.display_id else ""
+        if m.milestone_id is not None:
+            # This "#" is a MILESTONE (its backing task is task:{m.task_id}).
+            # Milestone tools take `milestone_id`, NOT the backing task_id —
+            # spell it out so the agent doesn't pass one for the other.
+            return (
+                f'  - "#{m.label}" → milestone milestone_id={m.milestone_id} '
+                f"(backed by task:{m.task_id}{display}). Use "
+                f"get_milestone_summary(milestone_id={m.milestone_id}) for its "
+                f"rollup, list_tasks(milestone_id={m.milestone_id}) for its "
+                f"tasks, and list_task_dependencies(milestone_id={m.milestone_id}) "
+                f"for blockers. Do NOT pass the backing task_id as a "
+                f"milestone_id. Cite it as [prose](task:{m.task_id})."
+            )
         return (
             f'  - "#{m.label}" → task:{m.task_id}{display}. Call '
             f"fetch_task(task_id={m.task_id}) before making claims about it; "
