@@ -261,6 +261,7 @@ def _inbox_title(item, sender_name: str) -> str:
         1: f"{sender_name} asked to join your team",
         2: f"{sender_name} asked to join your project",
         3: f"{sender_name} asked to join your group chat",
+        4: f"{sender_name} requested access to your note",
     }
     return titles.get(item.item_type, "New inbox item")
 

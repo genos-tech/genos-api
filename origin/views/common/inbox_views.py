@@ -409,3 +409,266 @@ class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
 
         error = serializer.errors
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+
+#############################
+# Note access request views
+#############################
+
+# Note-type ints match origin.views.utils.note_role (1=personal, 2=task,
+# 3=chat). Kept as a local map so the request/grant pair below can
+# resolve the right master table without importing the note views.
+def _note_master_for_type(note_type):
+    from origin.models.note.chat_note_models import ChatNoteMaster
+    from origin.models.note.personal_note_models import PersonalNoteMaster
+    from origin.models.note.task_note_models import TaskNoteMaster
+
+    return {1: PersonalNoteMaster, 2: TaskNoteMaster, 3: ChatNoteMaster}.get(note_type)
+
+
+def _note_and_owner(note_type, note_id):
+    """Resolve (note, owner_user_id) for one note, or (None, None).
+
+    The owner is the explicit `NotePermissionMaster` ROLE_OWNER row when
+    one exists (the canonical "note owner" the role-management UI shows),
+    falling back to the master row's `owner` FK for notes created before
+    the permission table was backfilled.
+    """
+    from origin.models.note.common_note_models import NotePermissionMaster
+    from origin.views.utils.note_role import ROLE_OWNER
+
+    model = _note_master_for_type(note_type)
+    if model is None:
+        return None, None
+    note = model.objects.filter(note_id=note_id).first()
+    if note is None:
+        return None, None
+    owner_id = (
+        NotePermissionMaster.objects.filter(
+            note_type=note_type, note_id=note_id, role_id=ROLE_OWNER
+        )
+        .values_list("user_id", flat=True)
+        .first()
+    )
+    return note, owner_id or getattr(note, "owner_id", None)
+
+
+class InboxItemForNoteAccessRequestView(AuthenticatedAPIView):
+    """POST /api/v2/inbox/noteAccessRequest/ — file a note-access request.
+
+    Body: {team_id, note_type, note_id}. The sender is ALWAYS the
+    authenticated caller (never a body field), and the note title is
+    resolved server-side — a role-less requester can't read the note, so
+    the client doesn't (and must not need to) know its title. Mirrors
+    `InboxItemForJoinProjectRequestView`: resolves the note owner as the
+    receiver, dedupes pending requests, web-pushes the owner.
+    """
+
+    def post(self, request):
+        team_id = request.data.get("team_id")
+        try:
+            note_type = int(request.data.get("note_type"))
+            note_id = int(request.data.get("note_id"))
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "note_type and note_id must be integers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not team_id:
+            return Response({"error": "team_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from origin.views.utils.note_role import get_effective_role
+
+        note, owner_id = _note_and_owner(note_type, note_id)
+        if note is None or owner_id is None:
+            return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
+        if str(getattr(note, "team_id", "") or "") != str(team_id):
+            return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Someone with any effective role doesn't need to request access.
+        if get_effective_role(request.user.id, note_type, note_id, team_id) is not None:
+            return Response(
+                {"error": "You already have access to this note."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        sender = request.user
+        note_title = note.title or "Untitled note"
+        item_body = [
+            {
+                "type": "paragraph",
+                "props": {
+                    "textColor": "default",
+                    "textAlignment": "left",
+                    "backgroundColor": "default",
+                },
+                "content": [
+                    {
+                        "type": "mention",
+                        "props": {
+                            "teamId": str(team_id),
+                            "userId": str(sender.id),
+                            "teamName": "N/A",
+                            "userName": sender.username or "",
+                            "userEmail": sender.email or "",
+                            "avatarImgPath": "",
+                            "tsLastSeen": "",
+                            "tsJoined": "",
+                            "customStatus": "",
+                        },
+                    },
+                    {"text": " is requesting access to the note - ", "type": "text", "styles": {}},
+                    {
+                        "text": note_title,
+                        "type": "text",
+                        "styles": {"bold": True, "textColor": "pink"},
+                    },
+                    {"text": ".", "type": "text", "styles": {}},
+                ],
+                "children": [],
+            },
+            {
+                "type": "paragraph",
+                "props": {
+                    "textColor": "default",
+                    "textAlignment": "left",
+                    "backgroundColor": "default",
+                },
+                "content": [
+                    {"text": "Waiting for your approval...", "type": "text", "styles": {}},
+                ],
+                "children": [],
+            },
+        ]
+
+        data = {
+            "team": team_id,
+            "sender": sender.id,
+            "receiver": owner_id,
+            "item_body": item_body,
+            "item_type": 4,
+            "item_optionals": {
+                "note_type": note_type,
+                "note_id": note_id,
+                "note_title": note_title,
+            },
+            "is_read": False,
+        }
+
+        # Only block on outstanding (pending) requests — a rejected or
+        # revoked-then-re-requested flow stays possible (same rationale
+        # as the team/project variants above).
+        is_already_requested = InboxItems.objects.filter(
+            team=data["team"],
+            sender=data["sender"],
+            receiver=data["receiver"],
+            item_type=data["item_type"],
+            item_optionals=data["item_optionals"],
+            request_status="pending",
+            is_deleted=False,
+        ).exists()
+
+        serializer = InboxItemsSerializer(data=data)
+        if serializer.is_valid():
+            if is_already_requested == False:  # noqa: E712 — house style in this module
+                item = serializer.save()
+                from origin.services.webpush_dispatch import schedule_push_for_inbox_item
+
+                schedule_push_for_inbox_item(item)
+            return Response(
+                {
+                    "wsType": "inbox",
+                    "alreadyExist": is_already_requested,
+                    "data": {
+                        "itemId": serializer.data.get("item_id", None),
+                        "itemBody": serializer.data.get("item_body", None),
+                        "itemType": serializer.data.get("item_type", None),
+                        "isRead": serializer.data.get("is_read", None),
+                        "tsSent": serializer.data.get("ts_created_at", None),
+                    },
+                    "receiver": serializer.data.get("receiver", None),
+                    "noteTitle": note_title,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        error = serializer.errors
+        return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+
+class GrantNoteAccessFromInboxView(AuthenticatedAPIView):
+    """POST /api/v2/note/role/fromInbox/ — approve a note-access request.
+
+    The inbox item (item_type=4) carries the requester in `sender` and
+    the target note in `item_optionals`. The approver (request.user)
+    must be the note's owner (404 otherwise — no existence leak).
+    Grants VIEWER via `NotePermissionMaster` unless the requester
+    already has an explicit role (never downgrades), settles the
+    request, and web-pushes the requester. Returns the camelCase shape
+    the Flask `approve_note_access_request` handler forwards.
+    """
+
+    def post(self, request):
+        inbox_item_id = int(request.data["item_id"])
+        try:
+            sender_id, optionals = InboxItems.objects.values_list("sender", "item_optionals").get(
+                item_id=inbox_item_id
+            )
+        except InboxItems.DoesNotExist:
+            return Response(
+                {"error": f"Inbox item {inbox_item_id} not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        optionals = optionals or {}
+        try:
+            note_type = int(optionals.get("note_type"))
+            note_id = int(optionals.get("note_id"))
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "Inbox item carries no note reference."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        note, owner_id = _note_and_owner(note_type, note_id)
+        if note is None or owner_id is None or str(owner_id) != str(request.user.id):
+            # Missing note OR non-owner approver — 404 either way so we
+            # don't leak whether the note exists.
+            return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        from origin.models.note.common_note_models import NotePermissionMaster
+        from origin.views.utils.note_role import ROLE_VIEWER, get_explicit_role
+
+        note_title = optionals.get("note_title") or note.title or "Untitled note"
+        with transaction.atomic():
+            # Never downgrade an existing explicit role (e.g. the owner
+            # granted Editor between request and approval).
+            if get_explicit_role(sender_id, note_type, note_id) is None:
+                NotePermissionMaster.objects.create(
+                    team_id=note.team_id,
+                    user_id=sender_id,
+                    note_type=note_type,
+                    note_id=note_id,
+                    role_id=ROLE_VIEWER,
+                )
+            InboxItems.objects.filter(item_id=inbox_item_id).update(request_status="approved")
+
+        from origin.services.webpush_dispatch import schedule_push_to_user
+
+        schedule_push_to_user(
+            recipient_id=sender_id,
+            category="inbox",
+            title=f"Your request to access {note_title} was approved",
+            url="/workspace/inbox",
+            actor=request.user,
+        )
+
+        return Response(
+            {
+                "attendee": str(sender_id),
+                "noteTitle": note_title,
+                "noteType": note_type,
+                "noteId": note_id,
+            },
+            status=status.HTTP_201_CREATED,
+        )
