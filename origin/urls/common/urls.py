@@ -256,5 +256,15 @@ urlpatterns = [
         JoinGMFromInboxView.as_view(),
         name="join_gm_from_inbox",
     ),
+    path(
+        "api/v2/inbox/noteAccessRequest/",
+        InboxItemForNoteAccessRequestView.as_view(),
+        name="inbox_note_access_request_item",
+    ),
+    path(
+        "api/v2/note/role/fromInbox/",
+        GrantNoteAccessFromInboxView.as_view(),
+        name="grant_note_access_from_inbox",
+    ),
     path("api/v2/getPageTitle/", get_page_title, name="get_page_title"),
 ]
