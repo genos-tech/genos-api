@@ -64,6 +64,28 @@ class NoteAccessRequestTests(BaseAPITestCase):
             item.item_optionals,
             {"note_type": 1, "note_id": self.note.note_id, "note_title": "Q3 Strategy"},
         )
+        # The live-delivered payload carries item_optionals so the owner's
+        # inbox item is note-clickable without a reload.
+        self.assertEqual(
+            resp.data["data"]["itemOptionals"],
+            {"note_type": 1, "note_id": self.note.note_id, "note_title": "Q3 Strategy"},
+        )
+
+    def test_delta_get_returns_item_optionals(self):
+        # The owner reloads: the inbox delta GET must carry item_optionals
+        # so a persisted note-access item stays note-clickable.
+        self._request_access()  # user2 files a request to user's note
+        self.authenticate(self.user)
+        resp = self.client.get(
+            "/api/v2/inbox/",
+            {"team_id": str(self.team.team_id), "user_id": str(self.user.id)},
+        )
+        self.assertEqual(resp.status_code, 200)
+        items = resp.data["data"]["items"]
+        note_items = [i for i in items if i["itemType"] == 4]
+        self.assertEqual(len(note_items), 1)
+        self.assertEqual(note_items[0]["itemOptionals"]["note_id"], self.note.note_id)
+        self.assertEqual(note_items[0]["itemOptionals"]["note_type"], 1)
 
     def test_pending_request_dedupes(self):
         self._request_access()
