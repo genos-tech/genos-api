@@ -460,9 +460,16 @@ class ChannelDetailView(AuthenticatedAPIView):
         Authorization: only the channel owner can change metadata.
         DM channels cannot be renamed/customized (their identity is
         the user pair). PM channels have their title/avatar mirrored
-        from the underlying ProjectMaster, so updating here would
-        desync; return 400 to make the caller go through the project
-        edit flow instead.
+        from the underlying ProjectMaster, so a direct channel write
+        would desync; a `title`-only PM patch instead DELEGATES to the
+        project rename (same owner + collision rules as
+        `ProjectMasterView.put`) and lets the
+        `_ensure_pm_channel_for_project` signal mirror it back. This
+        gives PM renames the same live `channel.updated` broadcast
+        path as GM renames (the sockets `channel.update` proxy calls
+        this view) — without it, other members' sidebars kept the old
+        project name until a full reload. Any other field on a PM
+        channel is still rejected with "edit the project instead".
 
         Body (any subset, all optional):
             {
@@ -490,15 +497,7 @@ class ChannelDetailView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if channel.kind == ChannelKind.PM:
-            return Response(
-                {
-                    "error": (
-                        "PM channels mirror the project's title/avatar; "
-                        "edit the project instead."
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return self._patch_pm_title(request, channel)
         if not channel.owner_id or str(channel.owner_id) != str(request.user.id):
             return Response(
                 {"error": "Only the channel owner can edit metadata."},
@@ -589,6 +588,70 @@ class ChannelDetailView(AuthenticatedAPIView):
                     is_deleted=False,
                 ).update(role="owner")
 
+        return Response({"channel": ChannelSerializer(channel, context={"request": request}).data})
+
+    def _patch_pm_title(self, request, channel):
+        """Title-only PM patch: rename the backing PROJECT, not the channel.
+
+        The PM channel's title mirrors `ProjectMaster.project_name` (kept
+        in sync by `_ensure_pm_channel_for_project`), so the rename is
+        applied to the project with the same rules as
+        `ProjectMasterView.put`: project-owner-only, non-empty, unique
+        within the team. The signal mirrors the new name back onto the
+        channel, and the refreshed channel is returned in the standard
+        `{channel}` shape so the sockets proxy broadcasts
+        `channel.updated` exactly as it does for a GM rename.
+        """
+        from origin.models.project.prj_models import ProjectMaster  # noqa: PLC0415
+
+        body = request.data or {}
+        extra_fields = set(body.keys()) - {"title"}
+        if extra_fields or "title" not in body:
+            return Response(
+                {
+                    "error": (
+                        "PM channels mirror the project's metadata; only `title` "
+                        "can be patched (it renames the project). Edit the "
+                        "project for anything else."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        title = (body.get("title") or "").strip()
+        if not title:
+            return Response(
+                {"error": "title must be a non-empty string."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        project = ProjectMaster.objects.filter(project_id=channel.project_id).first()
+        if project is None:
+            return Response(
+                {"error": "Backing project not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        # Same gate as ProjectMasterView.put: renames are project-owner-only.
+        if not project.owner_id or str(project.owner_id) != str(request.user.id):
+            return Response(
+                {"error": "Only the project owner can change name or owner."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        collision = (
+            ProjectMaster.objects.filter(team=project.team_id, project_name=title)
+            .exclude(project_id=project.project_id)
+            .exists()
+        )
+        if collision:
+            return Response(
+                {"error": "Another project in this team already uses that name."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        project.project_name = title
+        # post_save → _ensure_pm_channel_for_project mirrors the name
+        # onto Channel.title.
+        project.save(update_fields=["project_name", "ts_updated_at"])
+        channel.refresh_from_db()
         return Response({"channel": ChannelSerializer(channel, context={"request": request}).data})
 
 

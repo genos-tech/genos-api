@@ -157,6 +157,75 @@ class ChannelDetailViewPatchOwnerTransferTests(BaseAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
 
+class ChannelDetailViewPatchPmTitleTests(BaseAPITestCase):
+    """Title-only PM patch — delegates to the project rename so the PM
+    channel keeps mirroring `ProjectMaster.project_name` and the sockets
+    proxy can broadcast `channel.updated` for a project rename exactly
+    like it does for a GM rename."""
+
+    def setUp(self):
+        super().setUp()
+        from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+
+        # ProjectMaster post_save auto-creates the PM channel (signal);
+        # ProjectMembers post_save creates the ChannelMember rows that
+        # `_get_channel_for_user` requires.
+        self.project = ProjectMaster.objects.create(
+            team=self.team, project_name="Old Project Name", owner=self.user
+        )
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user)
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
+        self.channel = Channel.objects.get(project=self.project, kind=ChannelKind.PM)
+        self.url = reverse("v3_channel_detail", args=[self.channel.id])
+
+    def test_project_owner_can_rename_via_pm_title_patch(self):
+        """Renames the PROJECT; the signal mirrors the new name onto the
+        channel and the response carries the refreshed title."""
+        self.authenticate()
+        resp = self.client.patch(self.url, {"title": "New Project Name"}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["channel"]["title"], "New Project Name")
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.project_name, "New Project Name")
+        self.channel.refresh_from_db()
+        self.assertEqual(self.channel.title, "New Project Name")
+
+    def test_non_project_owner_cannot_rename(self):
+        self.authenticate(self.user2)
+        resp = self.client.patch(self.url, {"title": "Hijacked"}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.project_name, "Old Project Name")
+
+    def test_name_collision_within_team_is_409(self):
+        from origin.models.project.prj_models import ProjectMaster
+
+        ProjectMaster.objects.create(team=self.team, project_name="Taken Name", owner=self.user)
+        self.authenticate()
+        resp = self.client.patch(self.url, {"title": "Taken Name"}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+
+    def test_empty_title_rejected(self):
+        self.authenticate()
+        resp = self.client.patch(self.url, {"title": "   "}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_non_title_fields_still_rejected_for_pm(self):
+        """Avatar/visibility/owner on a PM channel keep the 'edit the
+        project instead' contract — only `title` is delegated."""
+        self.authenticate()
+        for body in (
+            {"profile_image_url": "x.png"},
+            {"is_private": True},
+            {"owner_user_id": str(self.user2.id)},
+            {"title": "Combined", "is_private": True},
+        ):
+            resp = self.client.patch(self.url, body, format="json")
+            self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST, body)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.project_name, "Old Project Name")
+
+
 class ChannelProfileImageViewTests(BaseAPITestCase):
     """PUT /api/v3/channels/{id}/profile/image/.
 
