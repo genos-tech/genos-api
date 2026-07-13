@@ -99,8 +99,13 @@ class CreateTaskPlanHappyPathTests(CreateTaskPlanTestBase):
             self.assertEqual(tasks[title].parent_task_id, backing.task_id)
             self.assertEqual(tasks[title].milestone_id, milestone.milestone_id)
             self.assertEqual(tasks[title].root_task_id, backing.task_id)
-            self.assertEqual(tasks[title].status, "Open")
             self.assertEqual(str(tasks[title].reporter_id), str(self.user.id))
+        # Auto-"Blocked": a plan task created with an open blocker starts
+        # Blocked (services/task_blocking, invoked after bulk_create);
+        # unblocked ones start Open.
+        self.assertEqual(tasks["Design review"].status, "Open")
+        self.assertEqual(tasks["Implementation"].status, "Blocked")
+        self.assertEqual(tasks["QA pass"].status, "Blocked")
         # Sub-task: nests under its sibling, inherits the milestone FK.
         sub = tasks["Write unit tests"]
         self.assertEqual(sub.parent_task_id, tasks["Implementation"].task_id)

@@ -23,7 +23,7 @@ from origin.models.task.milestone_models import MilestoneAssignees
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 
 _MAX_LIMIT = 50
-_OPEN_STATUSES = ["Open", "WIP", "Pending"]
+_OPEN_STATUSES = ["Open", "WIP", "Blocked", "Pending"]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:

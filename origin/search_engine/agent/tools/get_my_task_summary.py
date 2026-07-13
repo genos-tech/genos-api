@@ -29,7 +29,7 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext
 
-_STATUS_LABELS = ["Open", "WIP", "Pending", "Closed"]
+_STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed"]
 _PRIORITY_LABELS = ["Minimal", "Low", "Normal", "High", "Critical"]
 _CLOSED_STATUSES = ["Closed", "Deleted"]
 _PER_PROJECT_LIMIT = 10

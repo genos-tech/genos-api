@@ -73,6 +73,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         .annotate(
             open_count=Count(Case(When(status="Open", then=1))),
             wip_count=Count(Case(When(status="WIP", then=1))),
+            blocked_count=Count(Case(When(status="Blocked", then=1))),
             pending_count=Count(Case(When(status="Pending", then=1))),
             overdue_count=Count(
                 Case(
@@ -90,10 +91,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     assignees = []
     for r in qs:
-        active_total = (r["open_count"] or 0) + (r["wip_count"] or 0) + (r["pending_count"] or 0)
+        active_total = (
+            (r["open_count"] or 0)
+            + (r["wip_count"] or 0)
+            + (r["blocked_count"] or 0)
+            + (r["pending_count"] or 0)
+        )
         # Skip noise: assignee rows where every conditional count is 0
-        # (can happen if a status falls outside Open/WIP/Pending after
-        # being excluded from Closed — e.g. a future status value).
+        # (can happen if a status falls outside Open/WIP/Blocked/Pending
+        # after being excluded from Closed — e.g. a future status value).
         if active_total == 0 and (r["overdue_count"] or 0) == 0:
             continue
         assignees.append(
@@ -102,6 +108,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "username": r["assignee__username"] or "",
                 "open_count": r["open_count"] or 0,
                 "wip_count": r["wip_count"] or 0,
+                "blocked_count": r["blocked_count"] or 0,
                 "pending_count": r["pending_count"] or 0,
                 "overdue_count": r["overdue_count"] or 0,
             }
@@ -109,8 +116,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     if assignees:
         head = ", ".join(
-            f"{a['username']} ({a['open_count'] + a['wip_count'] + a['pending_count']} active, "
-            f"{a['overdue_count']} overdue)"
+            f"{a['username']} ("
+            f"{a['open_count'] + a['wip_count'] + a['blocked_count'] + a['pending_count']}"
+            f" active, {a['overdue_count']} overdue)"
             for a in assignees[:3]
         )
         summary = f"Workload across {len(assignees)} assignee(s): {head}" + (
@@ -130,11 +138,11 @@ GET_WORKLOAD_DISTRIBUTION = Tool(
     name="get_workload_distribution",
     description=(
         "Snapshot of current per-assignee workload: counts of Open, WIP, "
-        "and Pending tasks per user, plus an `overdue_count` cross-cut "
-        "(tasks past due_date that are not Closed). Use for 'who has the "
-        "most open work?', 'is anyone overloaded?', or load-balancing "
-        "questions. Note: `overdue_count` is a subset of open+wip+pending, "
-        "NOT a separate bucket. Unassigned tasks are excluded. Closed "
+        "Blocked, and Pending tasks per user, plus an `overdue_count` "
+        "cross-cut (tasks past due_date that are not Closed). Use for 'who "
+        "has the most open work?', 'is anyone overloaded?', or "
+        "load-balancing questions. Note: `overdue_count` is a subset of "
+        "open+wip+blocked+pending, NOT a separate bucket. Unassigned tasks are excluded. Closed "
         "tasks are excluded (use get_task_throughput_stats for historical "
         "throughput instead). Scoped to projects the current user is a "
         "member of."

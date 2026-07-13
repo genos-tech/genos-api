@@ -24,7 +24,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 
-_VALID_STATUSES = {"Open", "WIP", "Pending", "Closed", "Deleted"}
+_VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"}
 # Canonical enums live in `frontend/.../taskMeta.ts`. Keep in sync —
 # a value outside the set still saves but renders without chip colour.
 _VALID_PRIORITIES = {"Minimal", "Low", "Normal", "High", "Critical"}
@@ -190,7 +190,7 @@ UPDATE_TASK = Tool(
         "whether to execute. Required: task_id. Optional (omit fields "
         "you don't want to change): title, content_text, status, "
         "priority, effort_level, due_date. Pass `due_date: ''` to "
-        "clear the due date. Status enum: Open, WIP, Pending, Closed, "
+        "clear the due date. Status enum: Open, WIP, Blocked, Pending, Closed, "
         "Deleted. Use `fetch_task` first to see the current state so "
         "you don't propose a no-op."
     ),
@@ -214,7 +214,7 @@ UPDATE_TASK = Tool(
             },
             "status": {
                 "type": "STRING",
-                "enum": ["Open", "WIP", "Pending", "Closed", "Deleted"],
+                "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"],
                 "description": "New status. Omit to leave unchanged.",
             },
             "priority": {

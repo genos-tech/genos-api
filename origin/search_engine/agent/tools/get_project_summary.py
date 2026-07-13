@@ -23,7 +23,7 @@ from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 
-_STATUS_LABELS = ["Open", "WIP", "Pending", "Closed"]
+_STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed"]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:

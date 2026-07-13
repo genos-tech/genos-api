@@ -35,7 +35,7 @@ from origin.search_engine.agent.tools.list_tasks import _milestone_task_q
 
 # Five-row breakdown (vs four in get_project_summary). "Deleted" is the
 # enum value, not the is_deleted tombstone.
-_STATUS_LABELS = ["Open", "WIP", "Pending", "Closed", "Deleted"]
+_STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"]
 _PRIORITY_LABELS = ["Minimal", "Low", "Normal", "High", "Critical"]
 _EFFORT_LABELS = ["Minimal", "Low", "Moderate", "High", "Extensive"]
 _CLOSED_STATUSES = ["Closed", "Deleted"]
