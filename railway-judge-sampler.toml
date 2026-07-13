@@ -36,6 +36,13 @@ dockerfilePath = "Dockerfile"
 # the lag before a new run gets judged — it does not raise the rate.
 # Absolute path avoids any ambiguity about the working directory when
 # Railway executes the startCommand override.
+#
+# The startCommand goes through `railway-judge-sampler-entrypoint.sh`
+# rather than calling manage.py directly: the cron's startCommand
+# REPLACES the Dockerfile CMD, which is where the Vertex service-account
+# key ($GEMINI_SA_BASE64 -> /tmp/gemini-sa.json) is decoded. Without that
+# decode the Gemini SDK falls back to the AI-Studio API-key path and every
+# judge call 400s with `API_KEY_INVALID`. Same pattern as the reindexer.
 cronSchedule = "0 * * * *"
-startCommand = "python /app/manage.py agent_judge_sample"
+startCommand = "sh /app/railway-judge-sampler-entrypoint.sh"
 restartPolicyType = "NEVER"
