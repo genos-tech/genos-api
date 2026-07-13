@@ -37,7 +37,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 
 _MAX_LIMIT = 50
-_VALID_STATUSES = {"Open", "WIP", "Pending", "Closed"}
+_VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed"}
 # Mirror of the canonical frontend enum in `taskMeta.ts` (Minimal/Low/
 # Normal/High/Critical). Invalid values are rejected with a clear error
 # so the model corrects course rather than silently returning [].
@@ -241,7 +241,7 @@ LIST_TASKS = Tool(
                 "type": "ARRAY",
                 "items": {
                     "type": "STRING",
-                    "enum": ["Open", "WIP", "Pending", "Closed"],
+                    "enum": ["Open", "WIP", "Blocked", "Pending", "Closed"],
                 },
                 "description": (
                     "Filter by one or more statuses. Omit to include all " "non-deleted tasks."

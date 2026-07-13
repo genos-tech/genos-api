@@ -369,6 +369,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             ]
             if dependencies:
                 TaskDependency.objects.bulk_create(dependencies, ignore_conflicts=True)
+                # bulk_create bypasses post_save, so the dependency
+                # signals never fire — apply the auto-"Blocked" rule
+                # explicitly for every task that received a blocker.
+                from origin.services.task_blocking import sync_blocked_status  # noqa: PLC0415
+
+                sync_blocked_status({d.blocked_task_id for d in dependencies})
     except ToolError:
         raise
     except Exception as e:  # noqa: BLE001 — surface as ToolError for the model

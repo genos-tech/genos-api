@@ -30,7 +30,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.list_tasks import _milestone_task_q
 
-_STATUS_LABELS = ["Open", "WIP", "Pending", "Closed", "Deleted"]
+_STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"]
 _PRIORITY_LABELS = ["Minimal", "Low", "Normal", "High", "Critical"]
 _CLOSED_STATUSES = ["Closed", "Deleted"]
 
