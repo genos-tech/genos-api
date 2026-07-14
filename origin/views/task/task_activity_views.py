@@ -327,3 +327,159 @@ class MilestoneBurndownView(AuthenticatedAPIView):
             cursor += timedelta(days=1)
 
         return Response({"burndown": series, "total": total}, status=status.HTTP_200_OK)
+
+
+# The task status that means "work has actually started". `started` in
+# the velocity series counts tasks that transitioned INTO this status in
+# a bucket. If more in-progress statuses are added later (see
+# blocked-task-status rollout), widen this into a set and switch the
+# `new_value ==` check below to a membership test.
+_WIP_STATUS = "WIP"
+
+
+class TaskVelocityView(AuthenticatedAPIView):
+    """`GET /api/v2/task/velocity/?team_id=&task_ids=1,2,3&start=YYYY-MM-DD&end=YYYY-MM-DD&granularity=day|week`
+
+    Returns a dense per-bucket flow series over the given task set — how
+    many tasks were **created / started / closed / updated** in each day
+    (or ISO-week) of the window. Powers the "Velocity" section on the
+    task dashboard's Sprint Insights + My Tasks tabs, so PMs can see how
+    fast a sprint is moving and spot the days nothing advanced.
+
+    Counts are **distinct tasks per bucket** (a task edited ten times in
+    a day counts once toward `updated`), so a chatty task can't dominate
+    the bars. The series intentionally overlap: a task closed on a day is
+    counted under both `closed` AND `updated`.
+
+    Category rules (all keyed off the `TaskActivity` audit log):
+      - created: a `CREATED` row
+      - started: a `STATUS` row whose `new_value` is `_WIP_STATUS`
+      - closed:  a `CLOSED` row, OR a `STATUS` row whose `new_value` is a
+                 closed status (mirrors the burndown close detection)
+      - updated: ANY audit row (the task was touched at all)
+
+    Read-only over existing rows — no model change. `granularity`
+    defaults to `day`; `week` buckets by the activity date's ISO Monday.
+    Like burndown, `end` is clamped to today and the series is dense
+    (every bucket in range, zero-filled), so the frontend chart can map
+    straight over it.
+    """
+
+    MAX_TASK_IDS = 500
+
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        if not team_id:
+            return Response(
+                {"error": "team_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        raw_ids = request.GET.get("task_ids") or ""
+        try:
+            task_ids = sorted({int(p) for p in raw_ids.split(",") if p.strip()})
+        except ValueError:
+            return Response(
+                {"error": "task_ids must be a comma-separated list of integers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        granularity = (request.GET.get("granularity") or "day").lower()
+        if granularity not in ("day", "week"):
+            return Response(
+                {"error": "granularity must be 'day' or 'week'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not task_ids:
+            return Response(
+                {"velocity": [], "granularity": granularity},
+                status=status.HTTP_200_OK,
+            )
+        if len(task_ids) > self.MAX_TASK_IDS:
+            return Response(
+                {"error": f"Too many task_ids (max {self.MAX_TASK_IDS})."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        start_day = _parse_iso_day(request.GET.get("start"))
+        end_day = _parse_iso_day(request.GET.get("end"))
+        if start_day is None or end_day is None:
+            return Response(
+                {"error": "start and end must be YYYY-MM-DD."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if end_day < start_day:
+            return Response(
+                {"error": "end must be on or after start."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Clamp at today — future buckets are always empty.
+        last_day = min(end_day, date.today())
+        if last_day < start_day:
+            return Response(
+                {"velocity": [], "granularity": granularity},
+                status=status.HTTP_200_OK,
+            )
+
+        def bucket_of(d: date) -> date:
+            # Day: the date itself. Week: that date's ISO Monday, so a
+            # bucket key is stable regardless of which weekday the
+            # activity fell on.
+            return d if granularity == "day" else d - timedelta(days=d.weekday())
+
+        # One scan. Team-scoped like `TaskActivityListView` (the FK is
+        # nullable for legacy rows, so keep null-team rows in). The
+        # `taskact_task_created_idx (task, -ts_created_at)` index covers
+        # the task_id__in + ts filter. `new_value` is JSON but status
+        # diffs are stored as plain strings, so equality/membership works.
+        rows = (
+            TaskActivity.objects.filter(task_id__in=task_ids)
+            .filter(Q(team_id=team_id) | Q(team__isnull=True))
+            .filter(
+                ts_created_at__date__gte=start_day,
+                ts_created_at__date__lte=last_day,
+            )
+            .values_list("task_id", "action_type", "new_value", "ts_created_at")
+        )
+
+        # Distinct task_ids per (bucket, category).
+        created: dict[date, set[int]] = defaultdict(set)
+        started: dict[date, set[int]] = defaultdict(set)
+        closed: dict[date, set[int]] = defaultdict(set)
+        updated: dict[date, set[int]] = defaultdict(set)
+        for tid, action, new_value, ts in rows:
+            b = bucket_of(ts.date())
+            updated[b].add(tid)
+            if action == TaskActivityActionType.CREATED:
+                created[b].add(tid)
+            elif action == TaskActivityActionType.CLOSED:
+                closed[b].add(tid)
+            elif action == TaskActivityActionType.STATUS:
+                if new_value == _WIP_STATUS:
+                    started[b].add(tid)
+                elif new_value in _CLOSED_STATUSES:
+                    closed[b].add(tid)
+
+        # Dense series: every bucket from start to last_day, zero-filled.
+        series: list[dict[str, object]] = []
+        step = timedelta(days=1 if granularity == "day" else 7)
+        cursor = bucket_of(start_day)
+        end_bucket = bucket_of(last_day)
+        while cursor <= end_bucket:
+            series.append(
+                {
+                    "date": cursor.isoformat(),
+                    "created": len(created.get(cursor, ())),
+                    "started": len(started.get(cursor, ())),
+                    "closed": len(closed.get(cursor, ())),
+                    "updated": len(updated.get(cursor, ())),
+                }
+            )
+            cursor += step
+
+        return Response(
+            {"velocity": series, "granularity": granularity},
+            status=status.HTTP_200_OK,
+        )

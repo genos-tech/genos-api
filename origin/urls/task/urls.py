@@ -11,7 +11,11 @@ from origin.views.task.sprint_views import (
     SprintConfigView,
     SprintView,
 )
-from origin.views.task.task_activity_views import MilestoneBurndownView, TaskActivityListView
+from origin.views.task.task_activity_views import (
+    MilestoneBurndownView,
+    TaskActivityListView,
+    TaskVelocityView,
+)
 from origin.views.task.task_views import *
 
 urlpatterns = [
@@ -44,6 +48,11 @@ urlpatterns = [
         "api/v2/task/burndown/",
         MilestoneBurndownView.as_view(),
         name="milestone_burndown",
+    ),
+    path(
+        "api/v2/task/velocity/",
+        TaskVelocityView.as_view(),
+        name="task_velocity",
     ),
     # Dependencies (blocking / blocked-by)
     path(
