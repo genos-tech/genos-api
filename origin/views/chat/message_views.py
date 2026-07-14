@@ -722,6 +722,106 @@ class MessageDetailView(AuthenticatedAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class TaskCardMessageView(AuthenticatedAPIView):
+    """PATCH /api/v3/tasks/{task_id}/card-message/
+
+    Rewrite the body of the PM channel's top-level "task card" header
+    message for a task, so an edit to the task's title / status /
+    priority / assignee / etc. is reflected on the card that renders in
+    the PM channel — for every viewer, live.
+
+    Background: the card's body (BlockNote blocks: title heading, status
+    chip, priority, ...) is built client-side at task-create time and
+    stored on the message row; `PUT /task/` updates only the `TaskMaster`
+    row, so the stored card body froze at creation. (`taskStatus` /
+    `displayId` re-derive live off the `task` FK in `MessageSerializer`,
+    but the rendered body blocks do not.) The pre-v3 socket
+    `message` PUT used to rewrite the card + broadcast; its Flask handler
+    was removed in the v3 migration. This endpoint restores that:  the
+    client supplies the freshly-built `body`, we relocate it onto the
+    stored row and bump `ts_updated_at`. The Flask WS proxy re-broadcasts
+    the returned row as `message.updated`; the next `?since=` delta sync
+    surfaces it to clients that missed the live event.
+
+    Keyed by `task_id` (not message_id) because the caller — the task
+    editor — knows the task id but not the PM message UUID, and the edit
+    can originate from surfaces (Task Home, board) where the PM channel
+    isn't loaded client-side.
+
+    Authorization: the requester must be an active member of the PM
+    channel that holds the card. This deliberately does NOT require the
+    requester to be the message's sender (the card's sender is the
+    project system user), which is why it can't reuse
+    `MessageDetailView.patch` (sender-only).
+    """
+
+    def patch(self, request, task_id):
+        body_json = request.data.get("body") if request.data else None
+        if body_json is None or not isinstance(body_json, list):
+            return Response(
+                {"error": "body must be a non-empty list of blocks."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        body_text = (request.data or {}).get("body_text") or ""
+        metadata = (request.data or {}).get("metadata")
+
+        # The top-level (non-thread-reply) card header for this task.
+        # There is one per task per PM channel; `order_by("seq")` resolves
+        # a (pathological) duplicate deterministically to the earliest
+        # header. `select_related("channel")` for the membership check +
+        # the broadcast's channel id/kind.
+        message = (
+            Message.objects.select_related("channel")
+            .filter(task_id=task_id, is_thread_reply=False, deleted_at__isnull=True)
+            .order_by("seq")
+            .first()
+        )
+        if message is None:
+            # No card message (task predates the PM-card feature, is a
+            # sub-task with no header, or the project has no PM channel).
+            # Not an error — nothing to sync. 200 with a sentinel so the
+            # WS proxy knows to skip the broadcast instead of erroring.
+            return Response({"updated": False}, status=status.HTTP_200_OK)
+
+        is_member = ChannelMember.objects.filter(
+            channel=message.channel, user=request.user, is_deleted=False
+        ).exists()
+        if not is_member:
+            # 404-not-403 to match the existence-hiding rule used
+            # everywhere else in this view file.
+            raise Http404("Task card message not found.")
+
+        with transaction.atomic():
+            message.body = body_json
+            message.body_text = body_text
+            message.edited_at = timezone.now()
+            update_fields = ["body", "body_text", "edited_at", "ts_updated_at"]
+            if isinstance(metadata, dict):
+                message.metadata = metadata
+                update_fields.append("metadata")
+            message.save(update_fields=update_fields)
+
+            # Re-sync MessageMention rows from the new card body (the card
+            # @-mentions the assignee + reporter). Mirrors
+            # `MessageDetailView.patch` so the `mentions[]` array stays
+            # consistent after an assignee change. No Activity rows are
+            # created here — task-body mention notifications are owned
+            # separately by the task PUT / `task_body_mention` path.
+            new_mentioned_ids = _valid_mention_user_ids(message.channel, body_json)
+            MessageMention.objects.filter(message=message).delete()
+            if new_mentioned_ids:
+                MessageMention.objects.bulk_create(
+                    [
+                        MessageMention(message=message, mentioned_user_id=uid)
+                        for uid in new_mentioned_ids
+                    ],
+                    ignore_conflicts=True,
+                )
+
+        message = _prefetched_messages(Message.objects.filter(pk=message.pk)).first()
+        return Response(MessageSerializer(message).data)
+
+
 # Cap individual uploads. Above this, the server returns 413. Keep in
 # sync with the frontend client-side guard in `useAttachmentDraft` so
 # the user gets a fast error instead of a slow multipart upload that
