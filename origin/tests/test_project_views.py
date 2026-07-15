@@ -1,11 +1,12 @@
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from origin.models.chat.unified_models import Channel, ChannelKind, Message
-from origin.models.common.team_models import TeamMaster
+from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint, SprintConfig
@@ -420,3 +421,113 @@ class TestProjectDelete(TestCase):
             self.assertIsNone(task.project_id)
         # PROTECTed chat history survives.
         self.assertTrue(Message.objects.filter(id=message.id).exists())
+
+
+_LOCMEM_CACHE = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "project-list-cache-tests",
+    }
+}
+
+
+@override_settings(CACHES=_LOCMEM_CACHE)
+class TestProjectListCacheInvalidation(TestCase):
+    """`ProjectsView` caches `project:list:{team}:{attendee}` for 60s.
+
+    Regression: nothing invalidated that cache when the PROJECT itself changed.
+    The only receiver fired on `ProjectMembers` writes — and `ProjectMembers.
+    project` is SET_NULL, which Django implements as a bulk UPDATE, so deleting
+    a project fired no signal at all.
+
+    So a deleted project came back on the next load and stayed for the rest of
+    the TTL: the list was served from cache while every other endpoint read the
+    DB, meaning the resurrected project 404'd the moment it was selected
+    (`/milestone/list/`, `/sprint/list/` → "Project not found.").
+
+    LocMem rather than the real Redis: the invalidation must not depend on
+    `delete_pattern`, which only django-redis implements.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="cacheowner", email="cacheowner@test.com", password="pw"
+        )
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(refresh.access_token)}")
+        self.team = TeamMaster.objects.create(
+            team_name="Cache Team", team_email="cache@test.com", owner=self.user
+        )
+        TeamMembers.objects.create(team=self.team, attendee=self.user)
+        self.project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Ghost Project",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+
+    def _list(self):
+        res = self.client.get(
+            f"/api/v2/project/projects/?team_id={self.team.team_id}&attendee_id={self.user.id}"
+        )
+        return [p["projectId"] for p in res.data]
+
+    def _delete(self):
+        return self.client.delete(
+            f"/api/v2/project/?team_id={self.team.team_id}&project_id={self.project.project_id}"
+        )
+
+    def test_deleted_project_does_not_come_back_from_cache(self):
+        # Populate the cache, exactly as the app does before a delete.
+        self.assertIn(self.project.project_id, self._list())
+
+        self._delete()
+
+        # Without invalidation this returns the cached list, and the project
+        # the user just deleted reappears — then 404s everywhere else.
+        self.assertNotIn(self.project.project_id, self._list())
+
+    def test_renamed_project_does_not_serve_a_stale_name(self):
+        self.client.get(
+            f"/api/v2/project/projects/?team_id={self.team.team_id}&attendee_id={self.user.id}"
+        )
+
+        self.project.project_name = "Renamed Project"
+        self.project.save()
+
+        res = self.client.get(
+            f"/api/v2/project/projects/?team_id={self.team.team_id}&attendee_id={self.user.id}"
+        )
+        names = [p["projectName"] for p in res.data]
+        self.assertIn("Renamed Project", names)
+
+    def test_new_project_is_visible_to_a_teammate_immediately(self):
+        """The ProjectMembers receiver only clears the ACTOR's key.
+
+        A teammate who had already listed projects would keep a cached list
+        without the new project for the rest of the TTL.
+        """
+        mate = User.objects.create_user(username="mate", email="mate@test.com", password="pw")
+        TeamMembers.objects.create(team=self.team, attendee=mate)
+        refresh = RefreshToken.for_user(mate)
+        mate_client = APIClient()
+        mate_client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(refresh.access_token)}")
+
+        # The teammate primes their own cache entry.
+        mate_client.get(
+            f"/api/v2/project/projects/?team_id={self.team.team_id}&attendee_id={mate.id}"
+        )
+
+        fresh = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Brand New",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+
+        res = mate_client.get(
+            f"/api/v2/project/projects/?team_id={self.team.team_id}&attendee_id={mate.id}"
+        )
+        self.assertIn(fresh.project_id, [p["projectId"] for p in res.data])
