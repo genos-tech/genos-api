@@ -7,10 +7,11 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from origin.models.chat.unified_models import Channel, ChannelKind, Message
 from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint, SprintConfig
-from origin.models.task.task_models import TaskMaster
+from origin.models.task.task_models import TaskComments, TaskMaster
 
 User = get_user_model()
 
@@ -376,6 +377,65 @@ class TestProjectDelete(TestCase):
         response = self._delete()
 
         self.assertLess(response.status_code, 500)
+
+    def test_delete_destroys_the_project_s_task_data(self):
+        """Deleting a project must leave nothing behind.
+
+        Every FK from the task subtree to the project used to be SET_NULL, so a
+        delete DETACHED tasks (project=None) instead of removing them: they
+        stayed in the DB forever, invisible, along with their comments and
+        notes. The delete modal now tells users this data is destroyed, so it
+        has to actually be.
+        """
+        sprint_res = self.client.get(f"/api/v2/sprint/list/?project_id={self.project.project_id}")
+        self.assertEqual(sprint_res.status_code, 200)
+        sprint = Sprint.objects.filter(project=self.project).first()
+        milestone = MilestoneMaster.objects.create(
+            team=self.team, project=self.project, sprint=sprint, title="M1", reporter=self.user
+        )
+        task = TaskMaster.objects.create(
+            team=self.team, project=self.project, milestone=milestone, sprint=sprint
+        )
+        comment = TaskComments.objects.create(
+            task=task, sender=self.user, comment_id=1, comment_body=[{"text": "hi"}]
+        )
+        note = TaskNoteMaster.objects.create(
+            team=self.team, project=self.project, task=task, title="N1", owner=self.user
+        )
+        member = ProjectMembers.objects.create(
+            team=self.team, project=self.project, attendee=self.user
+        )
+        tag = ProjectTags.objects.create(
+            team=self.team, project=self.project, tag_id=1, tag_name="bug"
+        )
+
+        response = self._delete()
+
+        self.assertEqual(response.status_code, 204)
+        # Checked BY PK: filtering on project_id would pass vacuously for a
+        # SET_NULL'd row that survived detached — which is the bug itself.
+        self.assertFalse(TaskMaster.objects.filter(pk=task.pk).exists())
+        self.assertFalse(TaskComments.objects.filter(pk=comment.pk).exists())
+        self.assertFalse(TaskNoteMaster.objects.filter(pk=note.pk).exists())
+        self.assertFalse(MilestoneMaster.objects.filter(pk=milestone.pk).exists())
+        self.assertFalse(ProjectMembers.objects.filter(pk=member.pk).exists())
+        self.assertFalse(ProjectTags.objects.filter(pk=tag.pk).exists())
+
+    def test_delete_with_task_comments_does_not_explode_on_the_audit_signal(self):
+        """`post_delete` on TaskComments records a task-activity entry.
+
+        It read `instance.task`, which RAISES DoesNotExist (it doesn't return
+        None) once the task is deleted in the same cascade — taking the whole
+        request down with it. Only reachable now that the subtree cascades.
+        """
+        task = TaskMaster.objects.create(team=self.team, project=self.project)
+        TaskComments.objects.create(
+            task=task, sender=self.user, comment_id=1, comment_body=[{"text": "hi"}]
+        )
+
+        response = self._delete()
+
+        self.assertEqual(response.status_code, 204)
 
     def test_delete_a_real_project_with_its_whole_object_graph(self):
         """A bare project only proves `Channel.project` was cleared.
