@@ -407,11 +407,33 @@ class TaskMasterView(AuthenticatedAPIView):
             removed_user_ids = list(prev_set - full_mentioned)
             all_mentioned_user_ids = list(full_mentioned)
 
-        # Preserve `project_task_number` across the update — fields="__all__"
-        # would otherwise demand it in the payload, and the frontend never
-        # sends a value the user can't see/edit. The signal already assigned
-        # it on first create; updates never change it.
-        if "project_task_number" not in update_data:
+        # A task can MOVE between projects (the create form's project
+        # picker, and the same picker in the task preview). Capture that
+        # here — `serializer.save()` below mutates `task` in place, so the
+        # old project id is unrecoverable afterwards.
+        old_project_id = task.project_id
+        project_changed = (
+            "project" in update_data
+            and update_data["project"] is not None
+            and str(update_data["project"]) != str(old_project_id)
+        )
+
+        # `project_task_number` is only unique WITHIN a project, so it can't
+        # ride along on a move: re-sending the source project's number with
+        # the destination project collides with whatever task already holds
+        # that number there, and the serializer's constraint-derived
+        # UniqueTogetherValidator 400s ("The fields project,
+        # project_task_number must make a unique set"). Null it out instead
+        # — NULL is exempt from both the validator and the constraint's
+        # `condition` — and re-claim a free number in the destination right
+        # after the save.
+        #
+        # Otherwise preserve it: fields="__all__" would demand a value the
+        # frontend never sends (the user can't see or edit it), and an
+        # in-place update must not renumber.
+        if project_changed:
+            update_data["project_task_number"] = None
+        elif "project_task_number" not in update_data:
             update_data["project_task_number"] = task.project_task_number
 
         # Partial=True so callers (e.g. the task-graph diagram) can PUT
@@ -424,6 +446,13 @@ class TaskMasterView(AuthenticatedAPIView):
         serializer = TaskMasterSerializer(task, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
+
+            # Re-claim a number in the destination project (see the null-out
+            # above). Runs before the blocks below so their
+            # `refresh_from_db()` calls — and `serializer.data` in the
+            # response — carry the new number and the new `display_id`.
+            if project_changed:
+                claim_project_task_number(task)
 
             # Same best-effort webhook registration as the POST path:
             # whenever a task's links change, scan for new PR URLs and
@@ -461,12 +490,13 @@ class TaskMasterView(AuthenticatedAPIView):
                 _cascade_milestone_to_subtasks(task.task_id, requested_milestone_id)
 
             # Drop the project-tasks cache so the next sidebar fetch
-            # reflects the update. `task.refresh_from_db()` above (when
-            # milestone_in_request) keeps team/project current; the
-            # non-milestone path didn't refresh, but team & project
-            # aren't editable via this endpoint so the original instance
-            # values are still authoritative.
+            # reflects the update. `task` carries the post-save project, so
+            # this clears the destination; a move must also clear the SOURCE
+            # project, or the moved task lingers in its cached list for the
+            # full TTL.
             invalidate_for_task(task)
+            if project_changed:
+                invalidate_project_tasks_cache(task.team_id, old_project_id)
 
             return Response(
                 {
