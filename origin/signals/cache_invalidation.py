@@ -19,7 +19,7 @@ from django.dispatch import receiver
 
 from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
-from origin.models.project.prj_models import ProjectMembers
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 
 # NOTE: the legacy DM/GM/MDM-member cache-invalidation receivers were
 # removed with the v3 cutover. They invalidated `dm:ids` / `gm:ids` /
@@ -48,6 +48,36 @@ def _invalidate_project_members(sender, instance, **kwargs):
     attendee_id = getattr(instance, "attendee_id", None)
     if team_id is not None and attendee_id is not None:
         cache.delete(f"project:list:{team_id}:{attendee_id}")
+
+
+@receiver(post_save, sender=ProjectMaster)
+@receiver(post_delete, sender=ProjectMaster)
+def _invalidate_project_list(sender, instance, **kwargs):
+    """Project created / renamed / deleted — wipe the team's cached lists.
+
+    `ProjectsView` caches `project:list:{team}:{attendee}` for 60s, and the
+    receiver above only fires on `ProjectMembers` writes. That covers a member
+    joining or leaving, but NOT the project itself changing — and crucially not
+    a DELETE: `ProjectMembers.project` is `SET_NULL`, which Django implements as
+    a bulk UPDATE, so deleting a project fires no ProjectMembers signal at all.
+
+    The result was a deleted project reappearing on the next load and living on
+    for the rest of the TTL: the list came from cache while every other endpoint
+    read the DB, so selecting the ghost project 404'd
+    (`/milestone/list/`, `/sprint/list/` → "Project not found.").
+
+    The cache is keyed per VIEWER, so one project write has to clear every team
+    member's entry — a project appearing/vanishing changes what they all see.
+    Enumerated rather than `delete_pattern`d (which the receiver below uses):
+    it's exact, and it works on any cache backend instead of only Redis.
+    """
+    team_id = getattr(instance, "team_id", None)
+    if team_id is None:
+        return
+    attendee_ids = TeamMembers.objects.filter(team_id=team_id).values_list("attendee_id", flat=True)
+    keys = [f"project:list:{team_id}:{attendee_id}" for attendee_id in attendee_ids if attendee_id]
+    if keys:
+        cache.delete_many(keys)
 
 
 @receiver(post_save, sender=CustomUser)
