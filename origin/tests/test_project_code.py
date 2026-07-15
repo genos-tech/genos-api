@@ -203,3 +203,158 @@ class TestProjectAndTaskAutoAssignment(TestCase):
             status="Open",
         )
         self.assertEqual(task.display_id, f"#{task.task_id}")
+
+
+class TestTaskProjectMove(TestCase):
+    """A task PUT that changes `project` must re-claim a number in the
+    destination. Numbers are unique per project, so carrying the source's
+    number over collides with whatever task already holds it there."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="alice",
+            email="alice@test.com",
+            password="testpass123",
+            is_email_verified=True,
+        )
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {RefreshToken.for_user(self.user).access_token}"
+        )
+        self.team = TeamMaster.objects.create(
+            team_name="Alice's Team",
+            team_email="alice@team.com",
+            owner=self.user,
+        )
+        self.project_a = self._create_project("Alpha")
+        self.project_b = self._create_project("Beta")
+
+    def _create_project(self, name: str) -> int:
+        resp = self.client.post(
+            "/api/v2/project/",
+            {
+                "team": str(self.team.team_id),
+                "project_name": name,
+                "owner": self.user.id,
+                "project_system_user": self.user.id,
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201, resp.data)
+        project_id = resp.data["project_id"]
+        ProjectMembers.objects.create(
+            team=self.team,
+            project=ProjectMaster.objects.get(project_id=project_id),
+            attendee=self.user,
+        )
+        return project_id
+
+    def _create_task(self, project_id: int, title: str = "T", is_init_task: bool = False) -> dict:
+        resp = self.client.post(
+            "/api/v2/task/",
+            {
+                "team": str(self.team.team_id),
+                "project": project_id,
+                "assignee": self.user.id,
+                "reporter": self.user.id,
+                "title": title,
+                "priority": "Medium",
+                "effort_level": "Medium",
+                "status": "Open",
+                "content": {},
+                "due_date": "2026-12-31",
+                "links": [],
+                "tags": [],
+                "is_init_task": is_init_task,
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201, resp.data)
+        return resp.data["task"]
+
+    def _put_task(self, task_id: int, project_id: int, title: str = "T"):
+        return self.client.put(
+            "/api/v2/task/",
+            {
+                "team": str(self.team.team_id),
+                "task_id": task_id,
+                "project": project_id,
+                "assignee": self.user.id,
+                "reporter": self.user.id,
+                "title": title,
+                "priority": "Medium",
+                "effort_level": "Medium",
+                "status": "Open",
+                "content": {},
+                "due_date": "2026-12-31",
+                "links": [],
+                "tags": [],
+                "is_init_task": False,
+            },
+            format="json",
+        )
+
+    def test_move_to_project_whose_number_is_taken(self):
+        """The reported bug: the create form bootstraps an empty task in the
+        current project, the user switches the picker to another project, and
+        the finalizing PUT carried the source project's number into a slot
+        the destination had already used → 400 "must make a unique set"."""
+        # Beta already owns number 1, so the naive carry-over collides.
+        self._create_task(self.project_b, title="Beta's first")
+        moving = self._create_task(self.project_a, title="draft", is_init_task=True)
+        self.assertEqual(
+            TaskMaster.objects.get(task_id=moving["task_id"]).project_task_number, 1
+        )
+
+        resp = self._put_task(moving["task_id"], self.project_b, title="real title")
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        task = TaskMaster.objects.get(task_id=moving["task_id"])
+        self.assertEqual(task.project_id, self.project_b)
+        # Renumbered into Beta's sequence, not left holding Alpha's 1.
+        self.assertEqual(task.project_task_number, 2)
+        self.assertEqual(task.display_id, "BET-2")
+        # The response carries the post-move display_id — the frontend
+        # stamps it onto the new row and outgoing socket payloads.
+        self.assertEqual(resp.data["task"]["displayId"], "BET-2")
+
+    def test_move_to_empty_project_starts_that_projects_sequence(self):
+        self._create_task(self.project_a, title="Alpha's first")
+        moving = self._create_task(self.project_a, title="draft", is_init_task=True)
+        self.assertEqual(
+            TaskMaster.objects.get(task_id=moving["task_id"]).project_task_number, 2
+        )
+
+        resp = self._put_task(moving["task_id"], self.project_b)
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        task = TaskMaster.objects.get(task_id=moving["task_id"])
+        # Beta's first task → 1, NOT Alpha's 2 carried over.
+        self.assertEqual(task.project_task_number, 1)
+        self.assertEqual(task.display_id, "BET-1")
+
+    def test_update_within_same_project_keeps_number(self):
+        """The common path — every ordinary edit PUTs `project` unchanged.
+        A false-positive move detection here would renumber (and change the
+        display_id of) every task on every save."""
+        task_data = self._create_task(self.project_a, title="first")
+        self._create_task(self.project_a, title="second")
+
+        resp = self._put_task(task_data["task_id"], self.project_a, title="edited")
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        task = TaskMaster.objects.get(task_id=task_data["task_id"])
+        self.assertEqual(task.title, "edited")
+        self.assertEqual(task.project_task_number, 1)
+        self.assertEqual(task.display_id, "ALP-1")
+
+    def test_move_frees_the_source_number_for_reuse(self):
+        moving = self._create_task(self.project_a, title="draft", is_init_task=True)
+        self._put_task(moving["task_id"], self.project_b)
+
+        # Alpha's 1 is vacated by the move; Alpha's next create takes it
+        # rather than 500ing on the unique constraint.
+        next_a = self._create_task(self.project_a, title="after the move")
+        self.assertEqual(
+            TaskMaster.objects.get(task_id=next_a["task_id"]).project_task_number, 1
+        )

@@ -235,23 +235,25 @@ def _next_project_task_number(project_id, exclude_pk):
     ) + 1
 
 
-@receiver(post_save, sender=TaskMaster)
-def assign_project_task_number(sender, instance, created, **kwargs):
-    """On task create, claim the next sequential number within the
-    owning project. Skips tasks without a project (orphan tasks fall
-    back to "#<task_id>" in `display_id`).
+def claim_project_task_number(instance):
+    """Claim the next free sequential number for `instance` within its
+    current project, and persist it.
+
+    Used on create (via the post-save signal below) and when a task MOVES
+    to another project — a number is only unique within one project, so a
+    move has to re-claim in the destination.
 
     The unique constraint on (project, project_task_number) is the race
-    backstop: two concurrent creates in the same project can read the
-    same MAX and try to write the same number, so the loser's UPDATE
-    raises IntegrityError. Retry the claim — the recompute now sees the
-    winner's committed row (the DB blocks our UPDATE until they commit)
-    and picks the next free number. Without this loop the IntegrityError
-    bubbled all the way out of the create request as an unhandled 500."""
-    if not created or instance.project_id is None:
-        return
-    if instance.project_task_number is not None:
-        return
+    backstop: two concurrent claims in the same project can read the same
+    MAX and try to write the same number, so the loser's UPDATE raises
+    IntegrityError. Retry the claim — the recompute now sees the winner's
+    committed row (the DB blocks our UPDATE until they commit) and picks
+    the next free number. Without this loop the IntegrityError bubbled all
+    the way out of the request as an unhandled 500.
+
+    The `save()` here re-fires post_save with `created=False`, which every
+    receiver guards on, so this doesn't recurse.
+    """
     for _ in range(_PROJECT_NUMBER_MAX_RETRIES):
         try:
             with transaction.atomic():
@@ -261,18 +263,30 @@ def assign_project_task_number(sender, instance, created, **kwargs):
                 instance.save(update_fields=["project_task_number"])
             return
         except IntegrityError:
-            # Another create claimed this number first; drop our guess so
-            # the next iteration recomputes cleanly, then retry.
+            # Another claim took this number first; drop our guess so the
+            # next iteration recomputes cleanly, then retry.
             instance.project_task_number = None
-    # Exhausted retries under sustained contention. Leave the number
-    # unset — `display_id` falls back to "#<task_id>" — rather than 500
-    # the create. Logged so the (very unlikely) exhaustion is visible.
+    # Exhausted retries under sustained contention. Leave the number unset
+    # — `display_id` falls back to "#<task_id>" — rather than 500 the
+    # request. Logged so the (very unlikely) exhaustion is visible.
     logger.warning(
-        "assign_project_task_number: gave up after %d attempts for task_id=%s project_id=%s",
+        "claim_project_task_number: gave up after %d attempts for task_id=%s project_id=%s",
         _PROJECT_NUMBER_MAX_RETRIES,
         instance.pk,
         instance.project_id,
     )
+
+
+@receiver(post_save, sender=TaskMaster)
+def assign_project_task_number(sender, instance, created, **kwargs):
+    """On task create, claim the next sequential number within the owning
+    project. Skips tasks without a project (orphan tasks fall back to
+    "#<task_id>" in `display_id`)."""
+    if not created or instance.project_id is None:
+        return
+    if instance.project_task_number is not None:
+        return
+    claim_project_task_number(instance)
 
 
 def task_attachment_path(instance, filename):
