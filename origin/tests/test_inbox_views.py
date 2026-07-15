@@ -30,6 +30,74 @@ class TestInboxCreate(BaseAPITestCase):
         self.assertEqual(response.data["data"]["itemType"], 0)
         self.assertFalse(response.data["alreadyExist"])
 
+    def test_create_inbox_item_persists_item_optionals(self):
+        """Activity items must be able to carry routing ids.
+
+        This endpoint built its `data` dict without `item_optionals`, so a
+        caller could send them and they silently never persisted — which is
+        why every activity row has null optionals and an activity card can't
+        link to the project/GM it names. The joinXRequest/ endpoints always
+        passed theirs through; only this one dropped them.
+        """
+        self.authenticate()
+        response = self.client.post(
+            "/api/v2/inbox/",
+            {
+                "team_id": str(self.team.team_id),
+                "sender_id": str(self.user.id),
+                "receiver_id": str(self.user2.id),
+                "item_body": {"text": "added you to a project"},
+                "item_type": 0,
+                "item_optionals": {"project_id": 7, "project_name": "Apollo"},
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        item = InboxItems.objects.get(item_id=response.data["data"]["itemId"])
+        self.assertEqual(item.item_optionals, {"project_id": 7, "project_name": "Apollo"})
+
+    def test_create_inbox_item_echoes_item_optionals(self):
+        """The POST response feeds the sockets `send()` body verbatim.
+
+        A field missing from this response is a field the socket-delivered
+        item lacks until the next full refetch — the GET has always returned
+        `itemOptionals`, so the two would disagree.
+        """
+        self.authenticate()
+        response = self.client.post(
+            "/api/v2/inbox/",
+            {
+                "team_id": str(self.team.team_id),
+                "sender_id": str(self.user.id),
+                "receiver_id": str(self.user2.id),
+                "item_body": {"text": "added you to a group"},
+                "item_type": 0,
+                "item_optionals": {"gm_id": "gm-uuid", "gm_name": "Squad"},
+            },
+            format="json",
+        )
+        self.assertEqual(
+            response.data["data"]["itemOptionals"], {"gm_id": "gm-uuid", "gm_name": "Squad"}
+        )
+
+    def test_create_inbox_item_without_optionals_still_works(self):
+        """Every existing caller omits the key — it must stay optional."""
+        self.authenticate()
+        response = self.client.post(
+            "/api/v2/inbox/",
+            {
+                "team_id": str(self.team.team_id),
+                "sender_id": str(self.user.id),
+                "receiver_id": str(self.user2.id),
+                "item_body": {"text": "no optionals"},
+                "item_type": 0,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIsNone(response.data["data"]["itemOptionals"])
+
     def test_create_inbox_item_duplicate_is_idempotent(self):
         """Sending the exact same inbox item again should return 201 with alreadyExist=True."""
         self.authenticate()

@@ -27,6 +27,12 @@ class InboxItemView(AuthenticatedAPIView):
             "receiver": request.data["receiver_id"],
             "item_body": request.data["item_body"],
             "item_type": request.data["item_type"],  # Must be '0'
+            # Optional, unlike the joinXRequest/ endpoints where it's the
+            # required routing payload. This endpoint used to drop it on the
+            # floor: callers could send `item_optionals` and it silently never
+            # persisted, which is why every activity row has null optionals
+            # and an activity card can't link to the project/GM it names.
+            "item_optionals": request.data.get("item_optionals"),
             "is_read": False,
         }
 
@@ -59,6 +65,13 @@ class InboxItemView(AuthenticatedAPIView):
                         "itemType": serializer.data.get("item_type", None),
                         "isRead": serializer.data.get("is_read", None),
                         "tsSent": serializer.data.get("ts_created_at", None),
+                        # Echoed so the caller can hand the socket-delivered
+                        # payload the same shape a later GET returns. The
+                        # sockets handlers copy this dict straight into their
+                        # `send()` body, and the client stores that verbatim —
+                        # so a field missing here is a field the live item
+                        # lacks until the next full refetch.
+                        "itemOptionals": serializer.data.get("item_optionals", None),
                     },
                     "receiver": serializer.data.get("receiver", None),
                 },
