@@ -3,11 +3,13 @@ import time
 from collections import defaultdict
 
 from django.core.cache import cache
+from django.db import transaction
 from django.db.models import Exists, OuterRef, Q
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
+from origin.models.chat.unified_models import Channel
 from origin.models.common.inbox_models import InboxItems
 from origin.models.project.prj_models import *
 from origin.serializers.project.prj_serializers import *
@@ -239,8 +241,27 @@ class ProjectMasterView(AuthenticatedAPIView):
 
         try:
             target_project = ProjectMaster.objects.get(team=team_id, project_id=project_id)
-            if str(request_user_id) == str(target_project.owner.id):
-                target_project.delete()
+            if target_project.owner and str(request_user_id) == str(target_project.owner.id):
+                with transaction.atomic():
+                    # Every project gets a PM channel from the
+                    # `_ensure_pm_channel_for_project` post_save signal, and
+                    # `Channel.project` is PROTECT — so deleting the project
+                    # while that row still points at it raises ProtectedError
+                    # and surfaces as a bare 500. Hard-deleting the channel
+                    # isn't the way out either: `Message.channel` is PROTECT
+                    # too, deliberately, so chat history outlives its
+                    # container.
+                    #
+                    # Soft-delete the channel and release the FK instead.
+                    # `_user_channels_qs` filters `is_deleted=False`, so the
+                    # PM channel leaves every sidebar while its messages stay
+                    # on disk. Atomic because ATOMIC_REQUESTS is off — without
+                    # it a failure between the two statements would strand a
+                    # detached channel against a live project.
+                    Channel.objects.filter(project=target_project).update(
+                        is_deleted=True, project=None
+                    )
+                    target_project.delete()
                 return Response(
                     {"message": f"Project `{project_id}` deleted successfully."},
                     status=status.HTTP_204_NO_CONTENT,
