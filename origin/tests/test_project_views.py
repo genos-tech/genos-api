@@ -7,6 +7,9 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from origin.models.chat.unified_models import Channel, ChannelKind, Message
 from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
+from origin.models.task.milestone_models import MilestoneMaster
+from origin.models.task.sprint_models import Sprint, SprintConfig
+from origin.models.task.task_models import TaskMaster
 
 User = get_user_model()
 
@@ -372,3 +375,48 @@ class TestProjectDelete(TestCase):
         response = self._delete()
 
         self.assertLess(response.status_code, 500)
+
+    def test_delete_a_real_project_with_its_whole_object_graph(self):
+        """A bare project only proves `Channel.project` was cleared.
+
+        Django's collector raises on the FIRST protected relation it finds
+        with rows, so the original ProtectedError naming only `Channel.project`
+        never proved it was the only one — the collector may simply never have
+        reached the CASCADE children. A real project has been viewed, which
+        lazily bootstraps SprintConfig + Sprints, and usually has milestones
+        and tasks hanging off it. Delete that shape, not a toy one.
+        """
+        # The real lazy bootstrap, via the endpoint that writes it.
+        sprint_res = self.client.get(f"/api/v2/sprint/list/?project_id={self.project.project_id}")
+        self.assertEqual(sprint_res.status_code, 200)
+        self.assertTrue(SprintConfig.objects.filter(project=self.project).exists())
+        sprint = Sprint.objects.filter(project=self.project).first()
+        self.assertIsNotNone(sprint)
+
+        milestone = MilestoneMaster.objects.create(
+            team=self.team, project=self.project, sprint=sprint, title="M1", reporter=self.user
+        )
+        TaskMaster.objects.create(
+            team=self.team, project=self.project, milestone=milestone, sprint=sprint
+        )
+        channel = Channel.objects.get(project=self.project)
+        message = Message.objects.create(
+            channel=channel, sender=self.user, seq=1, body={"t": "hi"}, body_text="hi"
+        )
+
+        response = self._delete()
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(ProjectMaster.objects.filter(project_id=self.project.project_id).exists())
+        # CASCADE children go with it.
+        self.assertFalse(SprintConfig.objects.filter(project_id=self.project.project_id).exists())
+        self.assertFalse(Sprint.objects.filter(project_id=self.project.project_id).exists())
+        self.assertFalse(
+            MilestoneMaster.objects.filter(project_id=self.project.project_id).exists()
+        )
+        # SET_NULL children survive, orphaned.
+        task = TaskMaster.objects.filter(task_id=self.project.project_id).first()
+        if task is not None:
+            self.assertIsNone(task.project_id)
+        # PROTECTed chat history survives.
+        self.assertTrue(Message.objects.filter(id=message.id).exists())
