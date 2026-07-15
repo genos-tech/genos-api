@@ -31,7 +31,7 @@ class TaskMaster(models.Model):
     )
     project = models.ForeignKey(
         ProjectMaster,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         null=True,
         related_name="project_tasks_master",
         to_field="project_id",
@@ -288,7 +288,7 @@ def task_attachment_path(instance, filename):
 class TaskAttachments(models.Model):
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         null=True,
         related_name="task_attachments",
         to_field="task_id",
@@ -318,7 +318,7 @@ class TaskTags(models.Model):
     )
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         null=True,
         related_name="task_tags",
         to_field="task_id",
@@ -339,7 +339,7 @@ class TaskTags(models.Model):
 class TaskComments(models.Model):
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         null=True,
         related_name="task_comments",
         to_field="task_id",
@@ -372,7 +372,7 @@ class TaskCommentReactionFact(models.Model):
     )
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         null=True,
         related_name="task_comment_reactions",
         to_field="task_id",
@@ -412,7 +412,7 @@ class TaskCommentMentionFact(models.Model):
     )
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         null=True,
         to_field="task_id",
     )
@@ -451,7 +451,7 @@ def task_body_attachment_path(instance, filename):
 class TaskBodyAttachmentFact(models.Model):
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         null=True,
         to_field="task_id",
     )

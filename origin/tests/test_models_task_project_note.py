@@ -643,7 +643,7 @@ class MilestoneModelTests(BaseAPITestCase):
         self.assertEqual(MilestoneAssignees.objects.count(), 0)
 
 
-class TaskFkSetNullTests(BaseAPITestCase):
+class TaskFkOnDeleteTests(BaseAPITestCase):
     """The non-obvious divergence: TaskMaster's project/milestone/sprint
     FKs are SET_NULL (task survives a project delete), whereas
     MilestoneMaster/Sprint/SprintConfig CASCADE off the same project."""
@@ -654,15 +654,20 @@ class TaskFkSetNullTests(BaseAPITestCase):
             team=self.team, project_name="Div Proj", owner=self.user, code="DIV"
         )
 
-    def test_task_survives_project_delete_with_nulled_fk(self):
+    def test_task_is_deleted_with_its_project(self):
+        """`TaskMaster.project` is CASCADE.
+
+        It used to be SET_NULL, and this test pinned that: the task survived
+        with `project=None`. That wasn't a requirement — it left tasks (and
+        their comments and notes) in the DB forever, invisible and unreachable.
+        The delete-project modal now states this data is destroyed, so it is.
+        """
         task = TaskMaster.objects.create(
             team=self.team, project=self.project, title="t", status="Open"
         )
         _detach_project_channels(self.project)
         self.project.delete()
-        task.refresh_from_db()
-        self.assertIsNone(task.project_id)
-        self.assertEqual(TaskMaster.objects.filter(pk=task.pk).count(), 1)
+        self.assertFalse(TaskMaster.objects.filter(pk=task.pk).exists())
 
     def test_task_milestone_fk_set_null_on_milestone_delete(self):
         milestone = MilestoneMaster.objects.create(
@@ -826,7 +831,13 @@ class NoteTreeTests(BaseAPITestCase):
         self.assertIsNone(root.parent_note_id)
         self.assertEqual(child.parent_note_id, root.note_id)
 
-    def test_task_note_survives_task_delete_set_null(self):
+    def test_task_note_is_deleted_with_its_task(self):
+        """`TaskNoteMaster.task` is CASCADE.
+
+        It used to be SET_NULL, leaving a note attached to nothing once its
+        task was gone. A note about a deleted task is unreachable, so it goes
+        with it.
+        """
         task = TaskMaster.objects.create(
             team=self.team, project=self.project, title="t", status="Open"
         )
@@ -838,9 +849,7 @@ class NoteTreeTests(BaseAPITestCase):
             title="n",
         )
         task.delete()
-        note.refresh_from_db()
-        # task FK is SET_NULL — note survives.
-        self.assertIsNone(note.task_id)
+        self.assertFalse(TaskNoteMaster.objects.filter(pk=note.pk).exists())
 
 
 class NoteAuxModelTests(BaseAPITestCase):

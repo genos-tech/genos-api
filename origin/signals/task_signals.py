@@ -395,9 +395,32 @@ def comment_record(sender, instance: TaskComments, created: bool, **kwargs):
     )
 
 
+def _task_or_none(instance) -> Optional[TaskMaster]:
+    """The instance's task, or None if it has already been deleted.
+
+    `instance.task` does NOT return None when the row is gone — it raises
+    DoesNotExist, because `task_id` is still set and the descriptor goes
+    looking for it. That happens whenever the task is deleted in the same
+    cascade as its children, which is exactly what a project delete does now
+    that the task subtree CASCADEs.
+
+    Returning None is right rather than merely safe: the audit row we'd write
+    is about to be deleted anyway (`TaskActivity.task` is CASCADE), so there is
+    nothing to record against a task that no longer exists.
+
+    Mirrors `_milestone_backing_task`, which already guards the same way.
+    """
+    if getattr(instance, "task_id", None) is None:
+        return None
+    try:
+        return instance.task
+    except TaskMaster.DoesNotExist:
+        return None
+
+
 @receiver(post_delete, sender=TaskComments)
 def comment_record_delete(sender, instance: TaskComments, **kwargs):
-    task = instance.task
+    task = _task_or_none(instance)
     if task is None:
         return
     _record(
@@ -434,7 +457,7 @@ def attachment_record_add(sender, instance: TaskAttachments, created: bool, **kw
 
 @receiver(post_delete, sender=TaskAttachments)
 def attachment_record_remove(sender, instance: TaskAttachments, **kwargs):
-    task = instance.task
+    task = _task_or_none(instance)
     if task is None:
         return
     _record(

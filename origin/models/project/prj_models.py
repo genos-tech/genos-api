@@ -72,7 +72,7 @@ class ProjectMembers(models.Model):
     )
     project = models.ForeignKey(
         ProjectMaster,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         null=True,
         related_name="project_members",
         to_field="project_id",
@@ -104,7 +104,7 @@ class ProjectTags(models.Model):
     )
     project = models.ForeignKey(
         ProjectMaster,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         null=True,
         related_name="project_tags",
         to_field="project_id",

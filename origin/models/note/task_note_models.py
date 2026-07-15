@@ -17,7 +17,7 @@ class TaskNoteMaster(models.Model):
     )
     project = models.ForeignKey(
         ProjectMaster,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         null=True,
         related_name="project_task_notes",
         to_field="project_id",
@@ -30,7 +30,7 @@ class TaskNoteMaster(models.Model):
     )
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         null=True,
         to_field="task_id",
     )
@@ -67,7 +67,7 @@ class TaskNoteAttachmentFact(models.Model):
     )
     task = models.ForeignKey(
         TaskMaster,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         null=True,
         to_field="task_id",
     )
