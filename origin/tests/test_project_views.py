@@ -4,9 +4,12 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from origin.models.chat.unified_models import Channel, ChannelKind
+from origin.models.chat.unified_models import Channel, ChannelKind, Message
 from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
+from origin.models.task.milestone_models import MilestoneMaster
+from origin.models.task.sprint_models import Sprint, SprintConfig
+from origin.models.task.task_models import TaskMaster
 
 User = get_user_model()
 
@@ -284,3 +287,136 @@ class TestProjectViews(TestCase):
         # Carries the per-upload cache-buster so a future overwrite-storage
         # switch can't serve a stale cached avatar (mirrors the user flow).
         self.assertIn("?v=", channel.profile_image_url)
+
+
+class TestProjectDelete(TestCase):
+    """DELETE /api/v2/project/
+
+    Regression: every project gets a PM channel from the
+    `_ensure_pm_channel_for_project` post_save signal, and `Channel.project`
+    is PROTECT. So `target_project.delete()` raised ProtectedError for every
+    project that had ever been created through the app — an uncaught 500,
+    since only `ProjectMaster.DoesNotExist` was handled.
+
+    Hard-deleting the channel is not the fix: `Message.channel` is PROTECT
+    too, so a project with any chat history would just move the 500 down a
+    level. The channel is soft-deleted and its FK released instead.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="owner", email="owner@test.com", password="pw"
+        )
+        self.other = User.objects.create_user(
+            username="other", email="other@test.com", password="pw"
+        )
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(refresh.access_token)}")
+        self.team = TeamMaster.objects.create(
+            team_name="Delete Team", team_email="del@test.com", owner=self.user
+        )
+        self.project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Doomed Project",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+
+    def _delete(self):
+        return self.client.delete(
+            f"/api/v2/project/?team_id={self.team.team_id}&project_id={self.project.project_id}"
+        )
+
+    def test_delete_project_that_has_a_pm_channel(self):
+        # The signal must actually have produced one, else this test would
+        # pass against the broken code.
+        self.assertEqual(Channel.objects.filter(project=self.project).count(), 1)
+
+        response = self._delete()
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(ProjectMaster.objects.filter(project_id=self.project.project_id).exists())
+
+    def test_pm_channel_is_soft_deleted_and_detached(self):
+        channel = Channel.objects.get(project=self.project)
+
+        self._delete()
+
+        channel.refresh_from_db()
+        self.assertTrue(channel.is_deleted)
+        self.assertIsNone(channel.project_id)
+
+    def test_delete_preserves_chat_history(self):
+        """`Message.channel` is PROTECT on purpose — messages must survive."""
+        channel = Channel.objects.get(project=self.project)
+        message = Message.objects.create(
+            channel=channel, sender=self.user, seq=1, body={"text": "hello"}, body_text="hello"
+        )
+
+        response = self._delete()
+
+        self.assertEqual(response.status_code, 204)
+        self.assertTrue(Message.objects.filter(id=message.id).exists())
+
+    def test_non_owner_cannot_delete(self):
+        refresh = RefreshToken.for_user(self.other)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(refresh.access_token)}")
+
+        self._delete()
+
+        self.assertTrue(ProjectMaster.objects.filter(project_id=self.project.project_id).exists())
+
+    def test_ownerless_project_is_not_a_500(self):
+        """`ProjectMaster.owner` is SET_NULL, so it can be None."""
+        self.project.owner = None
+        self.project.save()
+
+        response = self._delete()
+
+        self.assertLess(response.status_code, 500)
+
+    def test_delete_a_real_project_with_its_whole_object_graph(self):
+        """A bare project only proves `Channel.project` was cleared.
+
+        Django's collector raises on the FIRST protected relation it finds
+        with rows, so the original ProtectedError naming only `Channel.project`
+        never proved it was the only one — the collector may simply never have
+        reached the CASCADE children. A real project has been viewed, which
+        lazily bootstraps SprintConfig + Sprints, and usually has milestones
+        and tasks hanging off it. Delete that shape, not a toy one.
+        """
+        # The real lazy bootstrap, via the endpoint that writes it.
+        sprint_res = self.client.get(f"/api/v2/sprint/list/?project_id={self.project.project_id}")
+        self.assertEqual(sprint_res.status_code, 200)
+        self.assertTrue(SprintConfig.objects.filter(project=self.project).exists())
+        sprint = Sprint.objects.filter(project=self.project).first()
+        self.assertIsNotNone(sprint)
+
+        milestone = MilestoneMaster.objects.create(
+            team=self.team, project=self.project, sprint=sprint, title="M1", reporter=self.user
+        )
+        TaskMaster.objects.create(
+            team=self.team, project=self.project, milestone=milestone, sprint=sprint
+        )
+        channel = Channel.objects.get(project=self.project)
+        message = Message.objects.create(
+            channel=channel, sender=self.user, seq=1, body={"t": "hi"}, body_text="hi"
+        )
+
+        response = self._delete()
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(ProjectMaster.objects.filter(project_id=self.project.project_id).exists())
+        # CASCADE children go with it.
+        self.assertFalse(SprintConfig.objects.filter(project_id=self.project.project_id).exists())
+        self.assertFalse(Sprint.objects.filter(project_id=self.project.project_id).exists())
+        self.assertFalse(
+            MilestoneMaster.objects.filter(project_id=self.project.project_id).exists()
+        )
+        # SET_NULL children survive, orphaned.
+        task = TaskMaster.objects.filter(task_id=self.project.project_id).first()
+        if task is not None:
+            self.assertIsNone(task.project_id)
+        # PROTECTed chat history survives.
+        self.assertTrue(Message.objects.filter(id=message.id).exists())
