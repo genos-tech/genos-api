@@ -32,16 +32,26 @@ def _ensure_default_config(project: ProjectMaster) -> SprintConfig:
     a default they can tweak later via `SprintConfigDialog`.
     """
 
-    config = SprintConfig.objects.filter(project=project).first()
-    if config is not None:
-        return config
-    config = SprintConfig.objects.create(
+    # `get_or_create`, NOT filter-then-create: this bootstrap runs on a GET,
+    # and a brand-new project draws several of them at once (dashboard,
+    # sidebar, milestone picker…). Check-then-create let every one of them
+    # see "no config" and INSERT, so all but the first 500'd with
+    # `duplicate key ... origin_sprintconfig_project_id_key`.
+    #
+    # `get_or_create` closes that: it wraps the INSERT in its own atomic
+    # block and re-runs the SELECT when the unique constraint on
+    # `project` (OneToOneField) rejects it — so the losers return the
+    # winner's row instead of raising. Safe here because ATOMIC_REQUESTS is
+    # off; inside an outer atomic block the IntegrityError would poison it.
+    config, _ = SprintConfig.objects.get_or_create(
         project=project,
-        team=project.team,
-        duration_days=DEFAULT_SPRINT_DURATION_DAYS,
-        anchor_date=date.today(),
-        auto_roll=True,
-        upcoming_horizon=DEFAULT_SPRINT_UPCOMING_HORIZON,
+        defaults={
+            "team": project.team,
+            "duration_days": DEFAULT_SPRINT_DURATION_DAYS,
+            "anchor_date": date.today(),
+            "auto_roll": True,
+            "upcoming_horizon": DEFAULT_SPRINT_UPCOMING_HORIZON,
+        },
     )
     return config
 
@@ -116,17 +126,52 @@ def _ensure_upcoming_sprints(project: ProjectMaster, config: SprintConfig) -> No
     if config.duration_days <= 0:
         return
 
+    # Same concurrency problem as `_ensure_default_config`, but it can't be
+    # solved with get_or_create: `sequence_number` is DERIVED from a prior
+    # read (max + 1), so two GETs racing on a fresh project both compute the
+    # same numbers and the loser 500s on `unique_project_sprint_sequence`.
+    #
+    # Serialise per project by locking the config row. Double-checked: the
+    # cheap "is there anything to do?" test runs UNLOCKED first, so the
+    # overwhelmingly common case (sprints already materialised) takes no lock
+    # at all — only an actual bootstrap pays for one. The work is re-derived
+    # inside the lock because the winner may have just created these rows.
+    if not _needs_upcoming_sprints(project, config):
+        return
+    with transaction.atomic():
+        locked = SprintConfig.objects.select_for_update().filter(pk=config.pk).first()
+        if locked is None:
+            return
+        _create_upcoming_sprints(project, locked)
+
+
+def _needs_upcoming_sprints(project: ProjectMaster, config: SprintConfig) -> bool:
+    """Cheap, unlocked "is a bootstrap needed?" probe for the fast path."""
+    today = date.today()
+    cycle_start = _current_cycle_start(config, today)
+    horizon = max(1, config.upcoming_horizon)
+    sprints_in_window = Sprint.objects.filter(
+        project=project, is_deleted=False, start_date__gte=cycle_start
+    ).count()
+    return sprints_in_window < horizon
+
+
+def _current_cycle_start(config: SprintConfig, today: date) -> date:
+    """Walk from `anchor_date` in `duration_days` strides until today is
+    inside the window."""
+    if today < config.anchor_date:
+        return config.anchor_date
+    steps = (today - config.anchor_date).days // config.duration_days
+    return config.anchor_date + timedelta(days=steps * config.duration_days)
+
+
+def _create_upcoming_sprints(project: ProjectMaster, config: SprintConfig) -> None:
+    """The original materialiser. Callers MUST hold the config row lock —
+    it derives `sequence_number` from a read, so concurrent runs collide."""
     today = date.today()
     duration = timedelta(days=config.duration_days)
 
-    # Find the "current cycle" by walking from anchor_date forward in
-    # `duration` strides until today is inside the window.
-    cycle_start = config.anchor_date
-    if today < cycle_start:
-        cycle_start = config.anchor_date
-    else:
-        steps = (today - config.anchor_date).days // config.duration_days
-        cycle_start = config.anchor_date + timedelta(days=steps * config.duration_days)
+    cycle_start = _current_cycle_start(config, today)
 
     # Determine the next sequence number to assign to any newly created
     # auto sprints. We use the maximum existing sequence_number for the
