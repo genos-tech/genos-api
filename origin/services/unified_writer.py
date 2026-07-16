@@ -715,3 +715,55 @@ def write_task_comment_as_thread_reply(
             comment_id,
         )
         return None
+
+
+def soft_delete_task_comment_as_thread_reply(
+    *,
+    task_id: int,
+    comment_id: int,
+) -> bool:
+    """Tombstone the v3 mirror of a soft-deleted `TaskComments` row.
+
+    The inverse of `write_task_comment_as_thread_reply`. Without it a
+    deleted comment stays visible in the PM task thread, which renders
+    comments exclusively through the mirror.
+
+    Semantics match the v3 `MessageDetailView.delete`: set `deleted_at`
+    (a tombstone — the body is kept for audit/recovery), decrement the
+    parent's `reply_count` (floored at 0 so a double-delete can't
+    underflow), and bump the parent's `ts_updated_at` so the FE's
+    `?since=` message delta re-serves the task-header row and its
+    `taskCommentCount` chip re-annotates.
+
+    Idempotent: an already-tombstoned (or never-mirrored) comment is a
+    no-op returning False, so the parent's `reply_count` is only ever
+    decremented once per comment.
+
+    Returns True when this call tombstoned the mirror. Never raises —
+    the caller's legacy `TaskComments` row is the source of truth and
+    must not be affected by mirror failures.
+    """
+    from django.utils import timezone
+
+    try:
+        deterministic_id = task_comment_message_uuid(task_id, comment_id)
+        with transaction.atomic():
+            msg = Message.objects.filter(id=deterministic_id).first()
+            if msg is None or msg.deleted_at is not None:
+                return False
+            msg.deleted_at = timezone.now()
+            msg.save(update_fields=["deleted_at", "ts_updated_at"])
+            if msg.parent_id is not None:
+                Message.objects.filter(pk=msg.parent_id, reply_count__gt=0).update(
+                    reply_count=F("reply_count") - 1,
+                    ts_updated_at=timezone.now(),
+                )
+        return True
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "[unified_writer] soft_delete_task_comment_as_thread_reply failed: "
+            "task=%s comment=%s",
+            task_id,
+            comment_id,
+        )
+        return False
