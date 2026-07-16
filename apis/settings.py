@@ -38,6 +38,14 @@ DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() == "true"
 ALLOWED_HOSTS = [
     h.strip() for h in os.environ.get("ALLOWED_HOSTS", "localhost").split(",") if h.strip()
 ]
+# Railway's deploy healthcheck probes `healthcheckPath` with
+# Host: healthcheck.railway.app. Prod's env var lists only the public API
+# domain, so without this DisallowedHost 400s every probe and a deploy
+# gated on the healthcheck would NEVER go live. Appended in code (not the
+# env var) so the healthcheck can't be broken by env drift; harmless
+# everywhere else.
+if "healthcheck.railway.app" not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append("healthcheck.railway.app")
 
 
 # -- Unified messaging dual-write (Track B Phase 1) --------------------------
