@@ -22,9 +22,36 @@
 name: agent-evals
 
 on:
+  # NOT path-filtered, deliberately. The `deploy` job below lives in this
+  # workflow and is `needs: agent-evals`, so a `paths:` filter here would skip
+  # the whole workflow on a non-agent merge — silently stopping the api from
+  # deploying to Cloud Run. Every merge runs the gate, and every merge deploys.
   push:
     branches: [main]
+  # PRs only run the evals when the change can actually move the numbers. This
+  # is an early warning, not the gate: the pre-deploy run on `main` above is
+  # what protects prod, and it still runs on every merge. The trade is that a
+  # regression from a path not listed here surfaces at merge (main red, deploy
+  # blocked) instead of on the PR.
+  #
+  # Deliberately NOT listed:
+  #   * `origin/models/**` — the chunkers do read them (task_chunker imports
+  #     task_models), so a field change CAN move retrieval numbers. Left out
+  #     because most PRs here touch models, which would defeat the filter; the
+  #     merge run covers it.
+  #   * `origin/agent/**` — that's `evals/runs/*.jsonl`, committed eval OUTPUT.
+  #     Recording a run must not trigger another one.
+  #
+  # Safe today because `main` has no branch protection. If required checks are
+  # ever turned on, a skipped run leaves the check pending forever and blocks
+  # merges — you'd need the always-passing companion-job pattern instead.
   pull_request:
+    paths:
+      - "origin/search_engine/**" # agent, chunkers, embeddings, llm, eval harness + cases
+      - "apis/settings.py" # EMBEDDING_PROVIDER / GEMINI_USE_VERTEX / RAG knobs
+      - "Pipfile"
+      - "Pipfile.lock"
+      - ".github/workflows/agent-evals.yml"
 
 permissions:
   contents: read
