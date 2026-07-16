@@ -10,6 +10,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.services.project_code import derive_project_code
 
@@ -249,7 +250,13 @@ class TestTaskProjectMove(TestCase):
         )
         return project_id
 
-    def _create_task(self, project_id: int, title: str = "T", is_init_task: bool = False) -> dict:
+    def _create_task(
+        self,
+        project_id: int,
+        title: str = "T",
+        is_init_task: bool = False,
+        parent_task_id: int | None = None,
+    ) -> dict:
         resp = self.client.post(
             "/api/v2/task/",
             {
@@ -266,33 +273,60 @@ class TestTaskProjectMove(TestCase):
                 "links": [],
                 "tags": [],
                 "is_init_task": is_init_task,
+                "parent_task_id": parent_task_id,
             },
             format="json",
         )
         self.assertEqual(resp.status_code, 201, resp.data)
         return resp.data["task"]
 
-    def _put_task(self, task_id: int, project_id: int, title: str = "T"):
-        return self.client.put(
-            "/api/v2/task/",
-            {
-                "team": str(self.team.team_id),
-                "task_id": task_id,
-                "project": project_id,
-                "assignee": self.user.id,
-                "reporter": self.user.id,
-                "title": title,
-                "priority": "Medium",
-                "effort_level": "Medium",
-                "status": "Open",
-                "content": {},
-                "due_date": "2026-12-31",
-                "links": [],
-                "tags": [],
-                "is_init_task": False,
-            },
-            format="json",
+    def _create_milestone(self, project_id: int, title: str) -> tuple[int, int]:
+        """A milestone plus the backing task the picker parents tasks onto.
+        Built through the ORM because the shape matters here, not the create
+        endpoint. Returns (milestone_id, backing_task_id)."""
+        project = ProjectMaster.objects.get(project_id=project_id)
+        milestone = MilestoneMaster.objects.create(
+            team=self.team, project=project, title=title, reporter=self.user
         )
+        backing = TaskMaster.objects.create(
+            team=self.team,
+            project=project,
+            milestone=milestone,
+            title=title,
+            status="Open",
+            is_milestone=True,
+            reporter=self.user,
+        )
+        milestone.task = backing
+        milestone.save(update_fields=["task"])
+        return milestone.milestone_id, backing.task_id
+
+    def _put_task(
+        self,
+        task_id: int,
+        project_id: int,
+        title: str = "T",
+        milestone: int | None = None,
+    ):
+        payload = {
+            "team": str(self.team.team_id),
+            "task_id": task_id,
+            "project": project_id,
+            "assignee": self.user.id,
+            "reporter": self.user.id,
+            "title": title,
+            "priority": "Medium",
+            "effort_level": "Medium",
+            "status": "Open",
+            "content": {},
+            "due_date": "2026-12-31",
+            "links": [],
+            "tags": [],
+            "is_init_task": False,
+        }
+        if milestone is not None:
+            payload["milestone"] = milestone
+        return self.client.put("/api/v2/task/", payload, format="json")
 
     def test_move_to_project_whose_number_is_taken(self):
         """The reported bug: the create form bootstraps an empty task in the
@@ -347,6 +381,66 @@ class TestTaskProjectMove(TestCase):
         self.assertEqual(task.title, "edited")
         self.assertEqual(task.project_task_number, 1)
         self.assertEqual(task.display_id, "ALP-1")
+
+    def test_move_takes_the_sub_tasks_along(self):
+        """A task's identity is project-scoped, so children left behind keep
+        the source project's display IDs and keep showing in its table under
+        a parent that isn't there any more."""
+        # Beta already holds numbers 1-3, so every naive carry-over collides.
+        for i in range(3):
+            self._create_task(self.project_b, title=f"beta {i}")
+
+        root = self._create_task(self.project_a, title="root")
+        child = self._create_task(self.project_a, title="child", parent_task_id=root["task_id"])
+        grandchild = self._create_task(
+            self.project_a, title="grandchild", parent_task_id=child["task_id"]
+        )
+
+        resp = self._put_task(root["task_id"], self.project_b, title="root")
+        self.assertEqual(resp.status_code, 200, resp.data)
+
+        moved = [
+            TaskMaster.objects.get(task_id=t["task_id"]) for t in (root, child, grandchild)
+        ]
+        # The whole subtree lands in Beta, two levels deep included.
+        for task in moved:
+            self.assertEqual(task.project_id, self.project_b)
+            self.assertIsNotNone(task.project_task_number)
+            self.assertTrue(task.display_id.startswith("BET-"), task.display_id)
+        # Each re-claimed a FREE number in Beta rather than carrying Alpha's
+        # 1/2/3 (which Beta already used) — and they don't collide with each
+        # other either.
+        numbers = sorted(t.project_task_number for t in moved)
+        self.assertEqual(numbers, [4, 5, 6])
+        # The subtree's internal shape survives the move.
+        self.assertEqual(moved[1].parent_task_id, root["task_id"])
+        self.assertEqual(moved[2].parent_task_id, child["task_id"])
+
+    def test_move_clears_the_old_projects_milestone_link(self):
+        """The client sends the source project's `milestone` right back on a
+        move (the project picker resets `tags` but not milestone/sprint). Left
+        alone, the bridge re-parents the task onto that milestone's backing
+        task — dragging it back into the project it just left."""
+        milestone_id, backing_task_id = self._create_milestone(self.project_a, "Alpha goal")
+        moving = self._create_task(self.project_a, title="under the milestone")
+        # Land it in the milestone first, the way the picker would.
+        resp = self._put_task(moving["task_id"], self.project_a, milestone=milestone_id)
+        self.assertEqual(resp.status_code, 200, resp.data)
+        task = TaskMaster.objects.get(task_id=moving["task_id"])
+        self.assertEqual(task.milestone_id, milestone_id)
+        self.assertEqual(task.parent_task_id, backing_task_id)
+
+        # Now move it to Beta, still sending Alpha's milestone.
+        resp = self._put_task(moving["task_id"], self.project_b, milestone=milestone_id)
+        self.assertEqual(resp.status_code, 200, resp.data)
+
+        task = TaskMaster.objects.get(task_id=moving["task_id"])
+        self.assertEqual(task.project_id, self.project_b)
+        # No link may point back into Alpha.
+        self.assertIsNone(task.milestone_id)
+        self.assertIsNone(task.sprint_id)
+        self.assertIsNone(task.parent_task_id)
+        self.assertEqual(task.root_task_id, task.task_id)
 
     def test_move_frees_the_source_number_for_reuse(self):
         moving = self._create_task(self.project_a, title="draft", is_init_task=True)
