@@ -98,3 +98,5 @@ See `docs/RAILWAY_DEPLOY.md` (in genos-platform) for the operator runbook.
 - **backend-django** (required) — system check, migration-drift check, and
   `coverage run manage.py test origin.tests` against a Postgres 15 service.
 - **backend-django-lint** (report-only) — `ruff check origin apis`.
+
+<!-- CI skip-path probe: docs-only change; PR closed after verification -->
