@@ -116,6 +116,65 @@ def _bridge_milestone_to_parent(task, requested_milestone_id, parent_task_id):
         task.save(update_fields=update_fields)
 
 
+def _collect_descendant_task_ids(root_task_id, depth_limit=10):
+    """Every task below `root_task_id` in the `parent_task_id` chain
+    (the root itself excluded).
+
+    BFS down the chain with a depth cap to defang any cyclic / corrupt
+    parent_task_id loops that might exist in the wild. The cap is
+    generous (10) because real task hierarchies are shallow.
+    """
+    collected = set()
+    frontier = {root_task_id}
+    for _ in range(depth_limit):
+        if not frontier:
+            break
+        children = set(
+            TaskMaster.objects.filter(parent_task_id__in=frontier)
+            .exclude(task_id__in=collected | {root_task_id})
+            .values_list("task_id", flat=True)
+        )
+        if not children:
+            break
+        collected |= children
+        frontier = children
+    return collected
+
+
+def _cascade_project_to_subtasks(root_task_id, project_id):
+    """Move a task's descendants into `project_id` alongside it.
+
+    A task's identity is project-scoped — its `<CODE>-<n>` display id,
+    the per-project task list, milestone rollups — so children left
+    behind keep the old project's ids and keep showing in the old
+    project's table under a parent that is no longer there.
+
+    Numbers are re-claimed rather than carried: they're unique per
+    project, so a child's number can already be taken in the destination
+    — the same collision the moved task itself hits. Milestone / sprint
+    links are cleared by the milestone cascade the caller runs; they
+    point at rows the OLD project owns.
+
+    Only descendants are touched. If the moved task itself has a parent,
+    that parent stays behind and the cross-project edge survives — see
+    the caller.
+    """
+    descendants = _collect_descendant_task_ids(root_task_id)
+    if not descendants:
+        return
+    # Null every number BEFORE re-claiming. A child still holding the
+    # source project's number can collide with a row already in the
+    # destination, and NULL is exempt from the unique constraint — the
+    # same null-then-reclaim the moved task uses.
+    TaskMaster.objects.filter(task_id__in=descendants).update(
+        project_id=project_id, project_task_number=None
+    )
+    # Re-fetch AFTER the bulk update so each instance carries the new
+    # project — `claim_project_task_number` counts within `project_id`.
+    for child in TaskMaster.objects.filter(task_id__in=descendants):
+        claim_project_task_number(child)
+
+
 def _cascade_milestone_to_subtasks(parent_task_id, milestone_id, depth_limit=10):
     """Push `milestone_id` down the `parent_task_id` chain.
 
@@ -123,25 +182,8 @@ def _cascade_milestone_to_subtasks(parent_task_id, milestone_id, depth_limit=10)
     transitively move with it — `milestone_views.py` aggregations and
     the sprint board both filter by `milestone_id`, so failing to
     cascade silently under-counts.
-
-    BFS down the chain with a depth cap to defang any cyclic / corrupt
-    parent_task_id loops that might exist in the wild. The cap is
-    generous (10) because real task hierarchies are shallow.
     """
-    collected = set()
-    frontier = {parent_task_id}
-    for _ in range(depth_limit):
-        if not frontier:
-            break
-        children = set(
-            TaskMaster.objects.filter(parent_task_id__in=frontier)
-            .exclude(task_id__in=collected | {parent_task_id})
-            .values_list("task_id", flat=True)
-        )
-        if not children:
-            break
-        collected |= children
-        frontier = children
+    collected = _collect_descendant_task_ids(parent_task_id, depth_limit=depth_limit)
     if collected:
         # Mirror the milestone's sprint onto the cascade so descendants
         # follow the same milestone → sprint mapping as their root. A
@@ -436,6 +478,24 @@ class TaskMasterView(AuthenticatedAPIView):
         elif "project_task_number" not in update_data:
             update_data["project_task_number"] = task.project_task_number
 
+        if project_changed:
+            # Milestone and sprint are project-scoped, and the client sends
+            # them straight back on a move: `ACTeamProjects` resets `tags`
+            # when the project picker changes but not these, so the OLD
+            # project's milestone id arrives alongside the NEW project.
+            #
+            # Dropping the keys isn't enough — left in `requested_milestone_id`
+            # the bridge below would look the milestone up and set
+            # `parent_task_id` / `root_task_id` to its backing task, i.e.
+            # re-parent the task we just moved back into the project it came
+            # from. Force the bridge's CLEAR branch instead, which also
+            # detaches a task whose only parent was that backing task. The
+            # user re-picks a milestone in the destination.
+            update_data.pop("milestone", None)
+            update_data.pop("sprint", None)
+            milestone_in_request = True
+            requested_milestone_id = None
+
         # Partial=True so callers (e.g. the task-graph diagram) can PUT
         # a subset of fields like `{task_id, start_date}` without being
         # forced to round-trip the full TaskProps object. The full-PUT
@@ -488,6 +548,14 @@ class TaskMasterView(AuthenticatedAPIView):
                 task.refresh_from_db()
                 _bridge_milestone_to_parent(task, requested_milestone_id, parent_task_id)
                 _cascade_milestone_to_subtasks(task.task_id, requested_milestone_id)
+
+            # Take the sub-tasks along. Runs AFTER the milestone block so the
+            # root's own links are already settled — that block has cleared
+            # the descendants' milestone/sprint too, leaving only the project
+            # and their per-project numbers to move.
+            if project_changed:
+                task.refresh_from_db()
+                _cascade_project_to_subtasks(task.task_id, task.project_id)
 
             # Drop the project-tasks cache so the next sidebar fetch
             # reflects the update. `task` carries the post-save project, so
