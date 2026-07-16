@@ -479,22 +479,53 @@ class TaskMasterView(AuthenticatedAPIView):
             update_data["project_task_number"] = task.project_task_number
 
         if project_changed:
-            # Milestone and sprint are project-scoped, and the client sends
-            # them straight back on a move: `ACTeamProjects` resets `tags`
-            # when the project picker changes but not these, so the OLD
-            # project's milestone id arrives alongside the NEW project.
+            # Milestone and sprint are project-scoped, and two callers hit
+            # this path with a milestone id alongside a project change —
+            # with OPPOSITE intent:
             #
-            # Dropping the keys isn't enough — left in `requested_milestone_id`
-            # the bridge below would look the milestone up and set
-            # `parent_task_id` / `root_task_id` to its backing task, i.e.
-            # re-parent the task we just moved back into the project it came
-            # from. Force the bridge's CLEAR branch instead, which also
-            # detaches a task whose only parent was that backing task. The
-            # user re-picks a milestone in the destination.
+            #   * The task preview's picker (a genuine MOVE): the client
+            #     re-sends the task's existing — now stale — milestone id
+            #     with the NEW project (`ACTeamProjects` resets `tags` on a
+            #     project change but not milestone/sprint). Honoring it via
+            #     the bridge below would set `parent_task_id` /
+            #     `root_task_id` to its backing task, i.e. re-parent the
+            #     task we just moved back into the project it came from.
+            #     It must be CLEARED; the user re-picks in the destination.
+            #
+            #   * The create form: the scaffold row was POSTed under the
+            #     page's current project, so picking a different project in
+            #     the form makes the finalize PUT a "move" — and the
+            #     milestone the user picked belongs to the DESTINATION.
+            #     Unconditionally clearing (the old behavior) silently
+            #     un-linked the task the user just filed under it: the
+            #     serializer still saved `parent_task_id` (never popped),
+            #     so the task NESTED under the milestone while
+            #     `milestone_id` / `sprint_id` / `root_task_id` stayed
+            #     NULL.
+            #
+            # Ownership disambiguates the two: keep the milestone iff it
+            # belongs to the destination project; otherwise force the
+            # bridge's CLEAR branch, which also detaches a task whose only
+            # parent was the stale milestone's backing task.
+            from origin.models.task.milestone_models import MilestoneMaster
+
+            keep_requested_milestone = (
+                requested_milestone_id is not None
+                and MilestoneMaster.objects.filter(
+                    milestone_id=requested_milestone_id,
+                    project_id=update_data["project"],
+                    is_deleted=False,
+                ).exists()
+            )
+            # Either way the bridge owns every linkage write on a move —
+            # `sprint` is always derived from the task's milestone (see
+            # `_bridge_milestone_to_parent`) — so the raw keys never go
+            # through the serializer here.
             update_data.pop("milestone", None)
             update_data.pop("sprint", None)
-            milestone_in_request = True
-            requested_milestone_id = None
+            if not keep_requested_milestone:
+                milestone_in_request = True
+                requested_milestone_id = None
 
         # Partial=True so callers (e.g. the task-graph diagram) can PUT
         # a subset of fields like `{task_id, start_date}` without being
