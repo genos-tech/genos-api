@@ -4,3 +4,13 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 restartPolicyType = "ON_FAILURE"
+# Zero-downtime deploys: keep the previous deployment serving until the
+# new container answers 200 here. The entrypoint runs collectstatic +
+# migrations + OpenSearch index checks BEFORE gunicorn listens, so
+# without this every merge produced a minutes-long window of edge
+# errors (no CORS headers → browsers reported it as a CORS wall).
+# The endpoint pings the DB, so a container with broken DATABASE_URL
+# never takes traffic. Timeout is generous for cold boots; matches
+# Railway's default but explicit.
+healthcheckPath = "/api/v2/health/"
+healthcheckTimeout = 300

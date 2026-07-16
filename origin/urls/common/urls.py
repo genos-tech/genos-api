@@ -14,6 +14,7 @@ from origin.views.common.github_views import (
     GithubPullsForTaskView,
     GithubWebhookView,
 )
+from origin.views.common.health_views import HealthView
 from origin.views.common.inbox_views import *
 from origin.views.common.mention_group_views import (
     MentionGroupMembersView,
@@ -39,6 +40,8 @@ from origin.views.utils.extract_page_title_view import get_page_title
 user_list = UserViewSet.as_view({"post": "create"})
 
 urlpatterns = [
+    # Deploy-readiness probe (Railway healthcheckPath). Unauthenticated.
+    path("api/v2/health/", HealthView.as_view(), name="health"),
     # User
     path("api/v2/user/signup/", user_list, name="signup"),
     path("api/v2/user/signin/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
