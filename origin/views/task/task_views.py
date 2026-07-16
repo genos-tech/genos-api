@@ -1555,6 +1555,13 @@ class TaskAttachmentsView(AuthenticatedAPIView):
 
 class TaskCommentsView(AuthenticatedAPIView):
     def post(self, request):
+        # NOTE: this count must stay UNFILTERED by `is_deleted`. `comment_id`
+        # is a per-task sequence claimed at create time and guarded by the
+        # `unique_task_comment` constraint, and deletes are soft (the row
+        # stays). Counting only live rows would re-issue the id of a deleted
+        # comment and collide on the constraint — and the v3 mirror's
+        # `uuid5(task_id, comment_id)` PK would resolve to the tombstoned
+        # message. Deleted rows keep their slot on purpose.
         comment_count = TaskComments.objects.filter(task=request.data["task_id"]).count()
 
         data = {
@@ -1704,6 +1711,72 @@ class TaskCommentsView(AuthenticatedAPIView):
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    def delete(self, request):
+        """Soft-delete one task comment.
+
+        Query params (matching `TaskCommentMentionView.delete`, the
+        sibling DELETE on this resource): `task_id`, `comment_id`.
+
+        Soft, not hard: `comment_id` is a per-task sequence the POST
+        above derives from a row COUNT, so removing the row would make
+        the next comment reuse this id. Flipping `is_deleted` also
+        drives the existing `comment_record` signal, which records a
+        COMMENT_DELETED activity, and every live-comment reader
+        (`taskCommentCount` annotation, search chunker, the plain-comment
+        fan-out) already filters on the flag.
+
+        Idempotent: deleting an already-deleted comment re-reports the
+        count without writing a second COMMENT_DELETED activity row.
+        """
+        task_id = request.GET.get("task_id")
+        comment_id = request.GET.get("comment_id")
+
+        if not task_id or not comment_id:
+            return Response(
+                {"error": "task_id and comment_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            comment = TaskComments.objects.get(task=task_id, comment_id=comment_id)
+        except TaskComments.DoesNotExist:
+            return Response(
+                {"error": "Comment not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "task_id and comment_id must be integers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not comment.is_deleted:
+            # `ts_updated_at` is `auto_now`, so it must be listed for the
+            # save to refresh it.
+            comment.is_deleted = True
+            comment.save(update_fields=["is_deleted", "ts_updated_at"])
+            # Tombstone the v3 mirror too — the PM task thread renders
+            # comments ONLY through it, so skipping this leaves the
+            # deleted comment on screen there.
+            unified_writer.soft_delete_task_comment_as_thread_reply(
+                task_id=int(task_id),
+                comment_id=int(comment_id),
+            )
+
+        # The authoritative live count, echoed so the Flask handler can
+        # broadcast it: the FE's comment chip is bumped live from the
+        # socket payload and only otherwise re-derived by a full channel
+        # resync, which nothing triggers on delete.
+        live_count = TaskComments.objects.filter(task=task_id, is_deleted=False).count()
+        return Response(
+            {
+                "taskId": int(task_id),
+                "commentId": int(comment_id),
+                "taskCommentCount": live_count,
+            },
+            status=status.HTTP_200_OK,
+        )
+
     def get(self, request):
         user_id = request.GET.get("user_id")
         raw_task_id = request.GET.get("task_id")
@@ -1751,7 +1824,7 @@ class TaskCommentsView(AuthenticatedAPIView):
                 )
 
             comments = (
-                TaskComments.objects.filter(task=task_id)
+                TaskComments.objects.filter(task=task_id, is_deleted=False)
                 .select_related("sender")
                 .values(
                     "task",
