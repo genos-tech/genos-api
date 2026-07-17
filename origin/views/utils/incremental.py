@@ -157,16 +157,26 @@ def build_delta_response(
     data: dict,
     server_time: datetime,
     force_full_reload: bool = False,
+    retention: dict | None = None,
 ) -> dict:
     """Wrap an endpoint payload in the standard delta envelope:
     `{server_time: ISO, data: {...}}`. When `force_full_reload=True`,
     adds a top-level flag that tells the client to treat this response
     as a full load (clear-before-insert) even though it sent a `since`
-    value. Used for the catastrophic-delta fallback."""
+    value. Used for the catastrophic-delta fallback.
+
+    `retention` (optional, additive): `{"days", "cutoff", "truncated"}`
+    when the viewing user's tier limits message history — the client
+    uses it to render the "history limited" banner and to detect
+    tier changes (upgrade/downgrade → evict + full resync). Absent for
+    tiers with unlimited history, so paid-tier responses are
+    byte-identical to before."""
     response = {
         "server_time": server_time.isoformat(),
         "data": data,
     }
     if force_full_reload:
         response["force_full_reload"] = True
+    if retention is not None:
+        response["retention"] = retention
     return response
