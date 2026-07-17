@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
+import json
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -924,10 +925,12 @@ SEARCH_ENGINE = {
             "note": "Very slow, but best for very complex questions.",
         },
     ],
-    # Daily quotas by user tier. Three tiers — free / pro / max —
-    # resolved from `CustomUser.tier` by `origin.search_engine.quota`.
-    # Each tier sets three independent daily quotas (all reset at
-    # UTC midnight):
+    # Quotas by subscription tier — free / pro / max / enterprise —
+    # resolved from the user's *effective* tier (best of
+    # `CustomUser.tier` and the `plan` of every team they belong to)
+    # by `origin.search_engine.quota`.
+    #
+    # Daily quotas (reset at UTC midnight):
     #   - `llm_ask_daily`: total agent asks per day (counted on first
     #     answer_delta).
     #   - `web_search_daily`: Tavily searches per day (counted on
@@ -935,8 +938,20 @@ SEARCH_ENGINE = {
     #   - `model_daily[<model>]`: per-model asks per day. A model
     #     missing from a tier's dict is treated as unlimited for that
     #     tier.
-    # A limit value of `None` means unlimited. Numbers below are
-    # placeholders — tune as needed.
+    # Monthly quotas (UTC calendar month; creations counted — deleting
+    # a resource does not refund quota):
+    #   - `task_create_monthly`: TaskMaster rows created per month.
+    #   - `note_create_monthly`: notes created per month (personal +
+    #     task + chat notes share one cap).
+    # Other dimensions:
+    #   - `message_retention_days`: chat history window visible to the
+    #     user (older messages are hidden, never deleted — upgrading
+    #     restores them).
+    #   - `upload_max_mb`: per-file attachment size ceiling.
+    # A limit value of `None` (or a missing key) means unlimited.
+    # The four new dimensions ship as `None` (dark) — flip to the
+    # commented target values when the frontend limit UI is live.
+    # Daily numbers are placeholders — tune as needed.
     "TIER_QUOTAS": {
         "free": {
             "llm_ask_daily": 20,
@@ -950,6 +965,10 @@ SEARCH_ENGINE = {
                 "claude-sonnet-4-6": 10,
                 "claude-opus-4-7": 0,
             },
+            "task_create_monthly": None,  # target: 200
+            "note_create_monthly": None,  # target: 100
+            "message_retention_days": None,  # target: 90
+            "upload_max_mb": None,  # target: 10
         },
         "pro": {
             "llm_ask_daily": 100,
@@ -963,6 +982,10 @@ SEARCH_ENGINE = {
                 "claude-sonnet-4-6": 50,
                 "claude-opus-4-7": 20,
             },
+            "task_create_monthly": None,  # target: 2000
+            "note_create_monthly": None,  # target: 1000
+            "message_retention_days": None,  # unlimited on paid tiers
+            "upload_max_mb": None,  # target: 25
         },
         "max": {
             "llm_ask_daily": 1000,
@@ -976,9 +999,34 @@ SEARCH_ENGINE = {
                 "claude-sonnet-4-6": 500,
                 "claude-opus-4-7": 200,
             },
+            "task_create_monthly": None,  # target: 10000
+            "note_create_monthly": None,  # target: 5000
+            "message_retention_days": None,  # unlimited on paid tiers
+            "upload_max_mb": None,  # target: 100
+        },
+        # Contact-sales tier: everything unlimited except an absolute
+        # per-file ceiling. Set manually via `feature_access set-tier`
+        # / `set-team-plan` — never sold self-serve.
+        "enterprise": {
+            "llm_ask_daily": None,
+            "web_search_daily": None,
+            "model_daily": {},
+            "task_create_monthly": None,
+            "note_create_monthly": None,
+            "message_retention_days": None,
+            "upload_max_mb": None,  # target: 200
         },
     },
 }
+
+# Optional full-replace override for the tier quota table, so ops can
+# tune limits per environment (or tests can rig tiny ones) without a
+# code change. Value = a JSON object with the same shape as the
+# default above. Invalid JSON fails loud at boot — better than
+# silently running with default limits.
+_tier_quotas_json = os.environ.get("TIER_QUOTAS_JSON", "")
+if _tier_quotas_json:
+    SEARCH_ENGINE["TIER_QUOTAS"] = json.loads(_tier_quotas_json)
 
 # --- Email ---
 # Dev default: print emails to the runserver console so engineers don't

@@ -38,15 +38,20 @@ PRIMARY_AUTH_CHOICES = [
 ]
 
 
-# User subscription tier. Controls daily quotas for AI features:
-# LLM ask total, web search, and per-model usage. Set via the
-# `feature_access set-tier` management command. Limits live in
-# SEARCH_ENGINE["TIER_QUOTAS"]. Resolved at request time by
-# `origin.search_engine.quota.get_user_tier`.
+# Subscription tier. Controls usage quotas (AI asks, web search,
+# per-model caps, monthly task/note creations) plus message retention
+# and per-file upload size. Set via the `feature_access set-tier`
+# management command; teams carry the same choices on
+# `TeamMaster.plan`. Limits live in SEARCH_ENGINE["TIER_QUOTAS"].
+# Resolved at request time by
+# `origin.search_engine.quota.get_effective_tier` (best of the user's
+# own tier and their teams' plans). "enterprise" is contact-sales
+# only — never sold self-serve.
 TIER_CHOICES = [
     ("free", "Free"),
     ("pro", "Pro"),
     ("max", "Max"),
+    ("enterprise", "Enterprise"),
 ]
 
 

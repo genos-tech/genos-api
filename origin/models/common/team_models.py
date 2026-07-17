@@ -3,7 +3,7 @@ import uuid
 
 from django.db import models
 
-from origin.models.common.user_models import CustomUser
+from origin.models.common.user_models import TIER_CHOICES, CustomUser
 
 
 def profile_image_path(instance, filename):
@@ -27,6 +27,18 @@ class TeamMaster(models.Model):
     )
     profile_image_file = models.FileField(upload_to=profile_image_path, blank=True, null=True)
     profile_image_file_name = models.CharField(blank=True, null=True)
+    # Team subscription plan ("one member pays, every member benefits").
+    # Same ladder as CustomUser.tier; a member's effective tier is the
+    # best of their own tier and their teams' plans — see
+    # `origin.search_engine.quota.get_effective_tier`. Set via
+    # `manage.py feature_access set-team-plan` (later: Stripe per-seat
+    # subscription webhook).
+    plan = models.CharField(
+        max_length=16,
+        choices=TIER_CHOICES,
+        default="free",
+        db_index=True,
+    )
     is_deleted = models.BooleanField(default=False)
     is_demo = models.BooleanField(default=False, db_index=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
