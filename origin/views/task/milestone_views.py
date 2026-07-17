@@ -8,6 +8,7 @@ from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.purge import purge_milestone, purge_task
 from origin.services import mention_extractor
 from origin.services.milestone_service import (
     create_milestone,
@@ -381,6 +382,12 @@ class MilestoneView(AuthenticatedAPIView):
         # Backing task got soft-deleted + every child detached → next
         # project-tasks read needs a fresh DB pull.
         invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
+        # Best-effort: drop the milestone's chunks (and its soft-deleted
+        # backing task's) from OpenSearch — chunkers skip `is_deleted`
+        # rows, so nothing else cleans these up until the orphan sweep.
+        purge_milestone(milestone_id)
+        if milestone.task_id is not None:
+            purge_task(milestone.task_id)
         return Response(
             {"message": "Milestone soft-deleted."},
             status=status.HTTP_200_OK,

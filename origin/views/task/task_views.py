@@ -14,6 +14,7 @@ from rest_framework.response import Response
 
 from origin.models.project.prj_models import *
 from origin.models.task.task_models import *
+from origin.search_engine.purge import purge_task, purge_task_comment
 from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
 from origin.serializers.task.task_serializers import *
 from origin.services import unified_writer
@@ -651,6 +652,10 @@ class TaskMasterView(AuthenticatedAPIView):
             cache_project_id = task.project_id
             task.delete()
             invalidate_project_tasks_cache(cache_team_id, cache_project_id)
+            # Best-effort: drop the task's chunks from OpenSearch now
+            # (chunkers never revisit deleted rows). The orphan sweep in
+            # the reindex cron retries if this fails.
+            purge_task(data["task_id"])
             return Response(
                 {"message": "Task deleted successfully."}, status=status.HTTP_204_NO_CONTENT
             )
@@ -1805,6 +1810,10 @@ class TaskCommentsView(AuthenticatedAPIView):
                 task_id=int(task_id),
                 comment_id=int(comment_id),
             )
+            # Best-effort: drop the comment's chunk from OpenSearch now.
+            # The `ts_updated_at` bump above also marks the task dirty for
+            # the incremental reindexer, which re-chunks without it.
+            purge_task_comment(task_id, comment_id)
 
         # The authoritative live count, echoed so the Flask handler can
         # broadcast it: the FE's comment chip is bumped live from the

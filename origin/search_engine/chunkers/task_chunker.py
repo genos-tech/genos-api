@@ -68,8 +68,12 @@ def iter_task_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]
         dirty_task_ids = set(
             task_qs.filter(ts_updated_at__gte=since).values_list("task_id", flat=True)
         )
+        # No `is_deleted` filter here, deliberately: soft-deleting a comment
+        # bumps its `ts_updated_at`, and that deletion must mark the task
+        # dirty so the re-chunk drops the comment's chunk. (The content
+        # query below still excludes deleted comments.)
         comment_dirty_task_ids = set(
-            TaskComments.objects.filter(is_deleted=False, ts_updated_at__gte=since).values_list(
+            TaskComments.objects.filter(ts_updated_at__gte=since).values_list(
                 "task_id", flat=True
             )
         )

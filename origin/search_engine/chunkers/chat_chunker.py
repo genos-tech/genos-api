@@ -155,6 +155,15 @@ def _iter_kind_chunks(
             continue
         msgs = msgs_by_channel.get(channel.id, [])
         if not msgs:
+            # No live messages left (all soft-deleted): tombstone the main
+            # entity so ingestion purges its chunks. Thread entities can't
+            # be enumerated without messages — the orphan sweep in
+            # `search_engine.purge` reaps those.
+            yield EntityChunks(
+                entity_type="chat",
+                entity_id=chat_entity_id(label, str(channel.id)),
+                chunks=[],
+            )
             continue
         if is_pm:
             acl_user_ids = members_by_project.get(channel.project_id, [])
@@ -225,8 +234,11 @@ def _emit_channel_chunks(
         project_id=project_id,
         sender_names=sender_names,
     )
-    if main_chunks:
-        yield EntityChunks(entity_type="chat", entity_id=main_entity_id, chunks=main_chunks)
+    # Yielded even when empty: an entity whose live messages are all gone
+    # (deleted / edited to empty) must reach ingestion as a tombstone so
+    # `_delete_stale` purges its previously-indexed chunks. Skipping it
+    # here would leave the dead chunks searchable forever.
+    yield EntityChunks(entity_type="chat", entity_id=main_entity_id, chunks=main_chunks)
 
     # 2) One entity per thread (rooted at a top-level message).
     for root_id in root_ids:
@@ -249,8 +261,8 @@ def _emit_channel_chunks(
             sender_names=sender_names,
             skip_window=skip_window,
         )
-        if chunks:
-            yield EntityChunks(entity_type="chat", entity_id=thread_entity_id, chunks=chunks)
+        # Same tombstone rule as the main entity above.
+        yield EntityChunks(entity_type="chat", entity_id=thread_entity_id, chunks=chunks)
 
 
 def _build_message_chunks(

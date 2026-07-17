@@ -6,6 +6,7 @@ from rest_framework.response import Response
 
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.purge import purge_note
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -498,6 +499,10 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                 note.delete()
                 delete_note_permissions(NOTE_TYPE, data["note_id"])
                 delete_note_versions(NOTE_TYPE, data["note_id"])
+            # Best-effort (after the commit): drop the note's chunks from
+            # OpenSearch — chunkers never revisit deleted rows. The orphan
+            # sweep in the reindex cron retries if this fails.
+            purge_note("task", data["note_id"])
             return Response(
                 {"message": "Note deleted successfully."},
                 status=status.HTTP_204_NO_CONTENT,

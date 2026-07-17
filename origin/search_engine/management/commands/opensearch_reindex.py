@@ -35,6 +35,7 @@ from origin.management.cron_command import CronCommand
 from origin.search_engine.index_config import INDEX_SCHEMA_VERSION
 from origin.search_engine.ingestion import ingest_all
 from origin.search_engine.opensearch_client import get_client, get_index_alias
+from origin.search_engine.purge import sweep_orphans
 
 
 class Command(CronCommand):
@@ -86,6 +87,25 @@ class Command(CronCommand):
                 "OpenSearch / the tracking table."
             ),
         )
+        parser.add_argument(
+            "--no-purge-orphans",
+            action="store_true",
+            help=(
+                "Skip the post-ingestion orphan sweep (chunks whose "
+                "backing entity was deleted). The sweep is the only "
+                "cleanup path for deleted entities — chunkers never "
+                "revisit them — so skip it only for debugging."
+            ),
+        )
+        parser.add_argument(
+            "--purge-orphans-only",
+            action="store_true",
+            help=(
+                "Run ONLY the orphan sweep, without ingesting. Useful "
+                "for a one-off cleanup of the deleted-entity backlog "
+                "without paying for a full reindex scan."
+            ),
+        )
 
     def handle(self, *args, **options):
         # Schema-version sanity check. Best-effort: a mismatched index
@@ -107,20 +127,41 @@ class Command(CronCommand):
         elif options.get("since_minutes") is not None:
             since = datetime.now(timezone.utc) - timedelta(minutes=options["since_minutes"])
 
+        dry_run = options.get("dry_run", False)
+
+        if options.get("purge_orphans_only"):
+            self.stdout.write("Orphan sweep only (no ingestion)...")
+            sweep_stats = sweep_orphans(dry_run=dry_run)
+            self.stdout.write(self.style.SUCCESS("Orphan sweep complete."))
+            self.stdout.write(json.dumps({"orphan_sweep": sweep_stats}, indent=2))
+            return
+
         if since is not None:
             self.stdout.write(f"Incremental reindex since {since.isoformat()}...")
         else:
             self.stdout.write("Full reindex starting...")
-        if options.get("dry_run"):
+        if dry_run:
             self.stdout.write("(dry-run: no embeddings, no writes)")
 
         stats = ingest_all(
             since=since,
             entity_types=options.get("entity_types"),
-            dry_run=options.get("dry_run", False),
+            dry_run=dry_run,
         )
+
+        # Deleted entities never re-enter the chunkers, so ingestion alone
+        # can't clean them up — the sweep is the delete path's backstop.
+        # It runs on every pass (hooks in the delete views give immediacy;
+        # this bounds worst-case staleness at the cron cadence).
+        sweep_stats = None
+        if not options.get("no_purge_orphans"):
+            sweep_stats = sweep_orphans(dry_run=dry_run)
+
         self.stdout.write(self.style.SUCCESS("Reindex complete."))
-        self.stdout.write(json.dumps(stats.as_dict(), indent=2))
+        payload = {"ingestion": stats.as_dict()}
+        if sweep_stats is not None:
+            payload["orphan_sweep"] = sweep_stats
+        self.stdout.write(json.dumps(payload, indent=2))
 
     def _warn_on_schema_mismatch(self):
         """Sample one chunk's `index_schema_version` and compare to the
