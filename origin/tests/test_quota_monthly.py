@@ -307,8 +307,8 @@ class DefaultConfigShapeTests(TestCase):
         tq = settings.SEARCH_ENGINE["TIER_QUOTAS"]
         expected = {
             "free": (200, 100, 90, 10),
-            "pro": (2000, 1000, None, 25),
-            "max": (10000, 5000, None, 100),
+            "pro": (1000, 500, None, 25),
+            "max": (5000, 3000, None, 100),
             "enterprise": (None, None, None, 200),
         }
         for tier, (task, note, retention, upload) in expected.items():

@@ -988,8 +988,8 @@ SEARCH_ENGINE = {
                 "claude-sonnet-4-6": 30,
                 "claude-opus-4-7": 5,
             },
-            "task_create_monthly": 2000,
-            "note_create_monthly": 1000,
+            "task_create_monthly": 1000,
+            "note_create_monthly": 500,
             "message_retention_days": None,  # unlimited on paid tiers
             "upload_max_mb": 25,
         },
@@ -1005,8 +1005,8 @@ SEARCH_ENGINE = {
                 "claude-sonnet-4-6": 150,
                 "claude-opus-4-7": 20,
             },
-            "task_create_monthly": 10000,
-            "note_create_monthly": 5000,
+            "task_create_monthly": 5000,
+            "note_create_monthly": 3000,
             "message_retention_days": None,  # unlimited on paid tiers
             "upload_max_mb": 100,
         },
