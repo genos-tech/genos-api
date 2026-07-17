@@ -312,6 +312,60 @@ def handle_event(event) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Subscription overview (read-only)                                           #
+# --------------------------------------------------------------------------- #
+
+# Non-terminal statuses the overview reports, in relevance order.
+_OVERVIEW_STATUS_RANK = {"active": 0, "trialing": 1, "past_due": 2, "paused": 3}
+
+
+def subscription_overview(user: CustomUser) -> dict | None:
+    """The user's current subscription, shaped for the Plan & Usage tab.
+
+    Returns None when there is nothing to show (billing disabled, no
+    Stripe customer, or no non-terminal subscription) — the UI hides
+    the renewal row entirely. Stripe API failures raise BillingError
+    (the view maps them to 503).
+
+        {
+          "plan": "pro" | "max" | None,       # None = unmapped price
+          "status": "active" | "trialing" | "past_due" | "paused",
+          "cancel_at_period_end": bool,
+          "current_period_end": <unix ts> | None,
+          "cancel_at": <unix ts> | None,
+        }
+    """
+    if not billing_enabled() or not user.stripe_customer_id:
+        return None
+    stripe = _stripe()
+    try:
+        resp = stripe.Subscription.list(customer=user.stripe_customer_id, status="all", limit=100)
+    except Exception as e:  # noqa: BLE001
+        raise BillingError(f"Could not list subscriptions: {e}")
+    subs = (json.loads(str(resp)) or {}).get("data") or []
+    candidates = [s for s in subs if (s or {}).get("status") in _OVERVIEW_STATUS_RANK]
+    if not candidates:
+        return None
+    best = min(
+        candidates,
+        key=lambda s: (_OVERVIEW_STATUS_RANK[s.get("status")], -(s.get("created") or 0)),
+    )
+    items = (best.get("items") or {}).get("data") or []
+    first_item = items[0] or {} if items else {}
+    # Stripe API 2025-03-31 (Basil) moved current_period_end onto the
+    # subscription ITEMS; the top-level read is the fallback for
+    # accounts pinned to older API versions.
+    period_end = first_item.get("current_period_end") or best.get("current_period_end")
+    return {
+        "plan": tier_for_price(_subscription_price_id(best)),
+        "status": best.get("status"),
+        "cancel_at_period_end": bool(best.get("cancel_at_period_end")),
+        "current_period_end": period_end,
+        "cancel_at": best.get("cancel_at"),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Reconciliation (pull)                                                       #
 # --------------------------------------------------------------------------- #
 

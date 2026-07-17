@@ -34,6 +34,7 @@ CONFIG_URL = "/api/v2/billing/config/"
 CHECKOUT_URL = "/api/v2/billing/checkout/"
 PORTAL_URL = "/api/v2/billing/portal/"
 REFRESH_URL = "/api/v2/billing/refresh/"
+SUBSCRIPTION_URL = "/api/v2/billing/subscription/"
 WEBHOOK_URL = "/api/v2/billing/stripe/webhook/"
 
 STRIPE_TEST_SETTINGS = {
@@ -540,3 +541,119 @@ class RefreshViewTests(BillingTestBase):
             res = self.client.post(REFRESH_URL, {}, format="json")
         self.assertEqual(res.status_code, 200)
         self.assertIn("no billing account", res.data["detail"])
+
+
+@override_settings(STRIPE=STRIPE_TEST_SETTINGS)
+class SubscriptionOverviewTests(BillingTestBase):
+    """`subscription_overview` + GET /billing/subscription/.
+
+    Mocks return real SDK `ListObject`s — see `ReconcileTests` for why
+    plain dicts are banned here.
+    """
+
+    def _bind(self, customer="cus_abc"):
+        self.user.stripe_customer_id = customer
+        self.user.save(update_fields=["stripe_customer_id"])
+
+    @staticmethod
+    def _sub(
+        status_="active",
+        price="price_pro_123",
+        created=100,
+        cancel_at_period_end=False,
+        cancel_at=None,
+        item_period_end=1900000000,
+        top_period_end=None,
+    ):
+        sub = {
+            "id": f"sub_{status_}_{created}",
+            "object": "subscription",
+            "status": status_,
+            "created": created,
+            "cancel_at_period_end": cancel_at_period_end,
+            "cancel_at": cancel_at,
+            "items": {"data": [{"price": {"id": price}, "current_period_end": item_period_end}]},
+        }
+        if top_period_end is not None:
+            sub["current_period_end"] = top_period_end
+        return sub
+
+    @staticmethod
+    def _list_mock(*subs):
+        import stripe  # noqa: PLC0415 — lazy like the service itself
+
+        payload = {
+            "object": "list",
+            "data": list(subs),
+            "has_more": False,
+            "url": "/v1/subscriptions",
+        }
+        return mock.patch(
+            "stripe.Subscription.list",
+            return_value=stripe.ListObject.construct_from(payload, "sk_test_x"),
+        )
+
+    def test_no_customer_is_none(self):
+        self.assertIsNone(stripe_billing.subscription_overview(self.user))
+
+    def test_disabled_is_none_even_with_customer(self):
+        self._bind()
+        with override_settings(STRIPE=STRIPE_DISABLED_SETTINGS):
+            self.assertIsNone(stripe_billing.subscription_overview(self.user))
+
+    def test_active_subscription_reads_item_period_end(self):
+        self._bind()
+        with self._list_mock(self._sub(price="price_max_456", item_period_end=1900000123)):
+            o = stripe_billing.subscription_overview(self.user)
+        self.assertEqual(o["plan"], "max")
+        self.assertEqual(o["status"], "active")
+        self.assertFalse(o["cancel_at_period_end"])
+        # API 2025-03-31+ shape: period end lives on the item.
+        self.assertEqual(o["current_period_end"], 1900000123)
+
+    def test_top_level_period_end_fallback(self):
+        self._bind()
+        with self._list_mock(self._sub(item_period_end=None, top_period_end=1900000456)):
+            o = stripe_billing.subscription_overview(self.user)
+        self.assertEqual(o["current_period_end"], 1900000456)
+
+    def test_scheduled_cancellation_passes_through(self):
+        self._bind()
+        with self._list_mock(self._sub(cancel_at_period_end=True, cancel_at=1900000789)):
+            o = stripe_billing.subscription_overview(self.user)
+        self.assertTrue(o["cancel_at_period_end"])
+        self.assertEqual(o["cancel_at"], 1900000789)
+
+    def test_only_terminal_subscriptions_is_none(self):
+        self._bind()
+        with self._list_mock(self._sub(status_="canceled")):
+            self.assertIsNone(stripe_billing.subscription_overview(self.user))
+
+    def test_active_preferred_over_past_due_then_newest(self):
+        self._bind()
+        with self._list_mock(
+            self._sub(status_="past_due", price="price_max_456", created=300),
+            self._sub(status_="active", price="price_pro_123", created=100),
+            self._sub(status_="active", price="price_max_456", created=200),
+        ):
+            o = stripe_billing.subscription_overview(self.user)
+        self.assertEqual(o["status"], "active")
+        self.assertEqual(o["plan"], "max")  # newest active wins
+
+    def test_view_returns_payload(self):
+        self._bind()
+        with self._list_mock(self._sub(price="price_pro_123")):
+            res = self.client.get(SUBSCRIPTION_URL)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["subscription"]["plan"], "pro")
+
+    def test_view_null_without_customer(self):
+        res = self.client.get(SUBSCRIPTION_URL)
+        self.assertEqual(res.status_code, 200)
+        self.assertIsNone(res.data["subscription"])
+
+    def test_view_billing_error_maps_to_503(self):
+        self._bind()
+        with mock.patch("stripe.Subscription.list", side_effect=RuntimeError("api down")):
+            res = self.client.get(SUBSCRIPTION_URL)
+        self.assertEqual(res.status_code, 503)
