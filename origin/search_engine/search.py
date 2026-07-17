@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import math
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 
 from django.conf import settings
@@ -35,6 +35,7 @@ from opensearchpy.exceptions import NotFoundError
 
 from origin.search_engine.embeddings import embed_one
 from origin.search_engine.opensearch_client import get_client, get_index_alias
+from origin.search_engine.quota import get_message_retention_days
 
 log = logging.getLogger(__name__)
 
@@ -286,8 +287,26 @@ def search(
     client = get_client()
     index = get_index_alias()
 
+    # Tier retention: the viewer's chat-history window also bounds RAG
+    # retrieval — otherwise Spotlight would surface messages the chat
+    # UI hides (see message_views._apply_retention). Fail-open helper:
+    # None = unlimited = no clause. Non-chat entities are untouched.
+    retention_days = get_message_retention_days(user_id)
+    chat_retention_cutoff = None
+    if retention_days is not None:
+        chat_retention_cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=retention_days)
+        ).isoformat()
+
     base_filter = _build_filter(
-        team_id, user_id, entity_types, date_from, date_to, mode=mode, person_id=person_id
+        team_id,
+        user_id,
+        entity_types,
+        date_from,
+        date_to,
+        mode=mode,
+        person_id=person_id,
+        chat_retention_cutoff=chat_retention_cutoff,
     )
 
     # --- Phase 10: query rewriting (optional) ---
@@ -771,6 +790,7 @@ def _build_filter(
     date_to: Optional[str],
     mode: Optional[SearchMode] = None,
     person_id: Optional[str] = None,
+    chat_retention_cutoff: Optional[str] = None,
 ) -> list[dict]:
     filt: list[dict] = [
         {"term": {"team_id": team_id}},
@@ -817,6 +837,31 @@ def _build_filter(
         if date_to:
             rng["lte"] = date_to
         filt.append({"range": {"updated_at": rng}})
+    if chat_retention_cutoff:
+        # Viewer-tier retention (ISO cutoff computed in Python by the
+        # caller — no OpenSearch date-math ambiguity): hide chat-family
+        # chunks older than the viewer's message-history window. Clause
+        # reads "NOT a chat-family chunk OR recent enough". Chat chunks
+        # stamp `created_at = ts_sent_at` (chat_chunker), matching the
+        # REST read-path filter exactly. `thread_summary` chunks carry
+        # their own regeneration `created_at` — a freshly regenerated
+        # summary of old messages can still surface a coarse digest;
+        # accepted for v1 (documented in SUBSCRIPTION_TIERS.md).
+        filt.append(
+            {
+                "bool": {
+                    "should": [
+                        {
+                            "bool": {
+                                "must_not": [{"terms": {"entity_type": ["chat", "thread_summary"]}}]
+                            }
+                        },
+                        {"range": {"created_at": {"gte": chat_retention_cutoff}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        )
     return filt
 
 
