@@ -1,6 +1,12 @@
 from django.urls import path
 
 from origin.views.common.auth_views import *
+from origin.views.common.billing_views import (
+    BillingCheckoutView,
+    BillingConfigView,
+    BillingPortalView,
+    StripeWebhookView,
+)
 from origin.views.common.calendar_views import (
     CalendarEventDetailView,
     CalendarEventsView,
@@ -113,6 +119,15 @@ urlpatterns = [
         "api/v2/github/webhook/",
         GithubWebhookView.as_view(),
         name="github_webhook",
+    ),
+    # Billing — Stripe self-serve subscriptions (tier system).
+    path("api/v2/billing/config/", BillingConfigView.as_view(), name="billing_config"),
+    path("api/v2/billing/checkout/", BillingCheckoutView.as_view(), name="billing_checkout"),
+    path("api/v2/billing/portal/", BillingPortalView.as_view(), name="billing_portal"),
+    path(
+        "api/v2/billing/stripe/webhook/",
+        StripeWebhookView.as_view(),
+        name="stripe_webhook",
     ),
     # Branches matching a task's display ID (e.g. branches containing "GEN-42").
     path(

@@ -1052,6 +1052,25 @@ ANYMAIL = {
 # deployed environments to the actual frontend host.
 FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "http://localhost:3000")
 
+# --- Stripe billing (self-serve subscription tiers) ---
+# Entirely optional: with SECRET_KEY unset the billing endpoints report
+# {enabled: false} and the frontend keeps its "coming soon" placeholder —
+# the tier system works without Stripe (ops set tiers via
+# `feature_access`). A plan is purchasable only when its price id is
+# set. WEBHOOK_SECRET is required for the webhook endpoint to accept
+# events at all (unverified events are never processed).
+# `enterprise` is deliberately absent — contact-sales only.
+STRIPE = {
+    "SECRET_KEY": os.environ.get("STRIPE_SECRET_KEY", ""),
+    "WEBHOOK_SECRET": os.environ.get("STRIPE_WEBHOOK_SECRET", ""),
+    "PRICE_PRO": os.environ.get("STRIPE_PRICE_PRO", ""),
+    "PRICE_MAX": os.environ.get("STRIPE_PRICE_MAX", ""),
+    # Stripe Tax on checkout sessions. Leave off until the account's
+    # tax settings (origin address, registrations) are configured in
+    # the dashboard — Stripe rejects session creation otherwise.
+    "AUTOMATIC_TAX": os.environ.get("STRIPE_AUTOMATIC_TAX", "false").lower() == "true",
+}
+
 # How long a password-reset URL is valid for, in minutes. Short enough
 # that a leaked link is unlikely to still work, long enough that users
 # can finish reading the email and clicking.

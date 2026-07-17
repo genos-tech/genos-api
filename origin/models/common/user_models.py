@@ -145,6 +145,19 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         db_index=True,
     )
 
+    # Stripe customer id ("cus_..."), set the first time the user starts
+    # a checkout (or by the webhook on completion). The webhook resolves
+    # subscription events back to a user through this column, and its
+    # presence gates the "Manage billing" (customer portal) button.
+    # Never cleared on cancellation — the Stripe customer keeps existing
+    # and is reused for re-subscribes.
+    stripe_customer_id = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        db_index=True,
+    )
+
     # User-selected LLM provider + model id. Empty string means "fall
     # back to the server default" (SEARCH_ENGINE["LLM_PROVIDER"] /
     # GEMINI_MODEL / CLAUDE_MODEL). Validated against
