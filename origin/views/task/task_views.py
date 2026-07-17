@@ -33,6 +33,7 @@ from origin.views.utils.incremental import (
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.utils.upload_limits import check_upload_size
 
 from .common_color import EFFORT_LEVEL_COLOR_MAP, PRIORITY_COLOR_MAP, status_color
 
@@ -1495,6 +1496,10 @@ class TaskAttachmentsView(AuthenticatedAPIView):
         attached_type = request.POST.get("attached_type")
         attached_file = request.FILES.get("attached_file")
 
+        # Tier quota: per-file upload size.
+        if attached_file is not None and (res := check_upload_size(request.user, attached_file)):
+            return res
+
         # Add only a new attachment
         if attachment_id != "" and int(attachment_id) == -1:
             curr_attachments_id = TaskAttachments.objects.filter(task=task).aggregate(
@@ -2079,6 +2084,10 @@ class TaskBodyAttachmentView(AuthenticatedAPIView):
             return res
 
         if res := validate_request_user(str(request_user_id), str(data["uploader"])):
+            return res
+
+        # Tier quota: per-file upload size.
+        if res := check_upload_size(request.user, data["body_attachment_url"]):
             return res
 
         serializer = TaskBodyAttachmentFactSerializer(data=data)

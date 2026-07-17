@@ -20,6 +20,7 @@ from origin.views.utils.note_version import (
 )
 from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.utils.upload_limits import check_upload_size
 
 NOTE_TYPE = 1  # Personal Notes
 
@@ -385,6 +386,10 @@ class PersonalNoteAttachmentView(AuthenticatedAPIView):
             return res
 
         if res := require_write_role(request_user_id, NOTE_TYPE, data["note"]):
+            return res
+
+        # Tier quota: per-file upload size.
+        if res := check_upload_size(request.user, data["note_attachment_url"]):
             return res
 
         serializer = PersonalNoteAttachmentFactSerializer(data=data)

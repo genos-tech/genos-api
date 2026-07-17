@@ -42,6 +42,7 @@ from origin.serializers.chat.unified_serializers import (
     MessageSerializer,
 )
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.upload_limits import check_upload_size
 
 User = get_user_model()
 
@@ -424,17 +425,14 @@ class ChannelDetailView(AuthenticatedAPIView):
         qs = _annotate_latest_and_unread(Channel.objects.filter(id=channel.id), request.user)
         annotated = qs.first()
         if annotated and annotated._latest_seq is not None:
-            latest = (
-                MessageSerializer.annotate_task_comment_count(
-                    Message.objects.filter(
-                        channel_id=channel.id,
-                        seq=annotated._latest_seq,
-                    )
-                    .select_related("sender", "channel", "task", "task__project")
-                    .prefetch_related("reactions__user", "mentions", "attachments")
+            latest = MessageSerializer.annotate_task_comment_count(
+                Message.objects.filter(
+                    channel_id=channel.id,
+                    seq=annotated._latest_seq,
                 )
-                .first()
-            )
+                .select_related("sender", "channel", "task", "task__project")
+                .prefetch_related("reactions__user", "mentions", "attachments")
+            ).first()
             channel._latest_message = latest
             # `_unread_count` is the exact correlated-COUNT annotation from
             # `_annotate_latest_and_unread` (no longer a seq difference).
@@ -868,7 +866,7 @@ class ChannelProfileImageView(AuthenticatedAPIView):
             )
         if channel.kind == ChannelKind.PM:
             return Response(
-                {"error": ("PM channels mirror the project avatar; " "edit the project instead.")},
+                {"error": ("PM channels mirror the project avatar; edit the project instead.")},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if not channel.owner_id or str(channel.owner_id) != str(request.user.id):
@@ -937,11 +935,8 @@ class ChannelInlineUploadView(AuthenticatedAPIView):
                 {"error": "Missing multipart field 'file'."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if file.size > MAX_INLINE_UPLOAD_BYTES:
-            return Response(
-                {"error": f"File exceeds the {MAX_INLINE_UPLOAD_BYTES}-byte limit."},
-                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            )
+        if res := check_upload_size(request.user, file, fallback_bytes=MAX_INLINE_UPLOAD_BYTES):
+            return res
 
         # default_storage sanitises the name and collision-suffixes it; the
         # channel-scoped prefix keeps inline uploads grouped per chat.
