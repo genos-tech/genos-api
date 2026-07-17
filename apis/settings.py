@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 import json
 import os
+import sys
 from datetime import timedelta
 from pathlib import Path
 
@@ -274,6 +275,21 @@ CACHES = {
 }
 DJANGO_REDIS_IGNORE_EXCEPTIONS = True
 
+# Under `manage.py test`, swap the shared Redis cache for an isolated
+# in-process one. Redis persists across runs (and is shared with the
+# running dev server), so tests would otherwise (a) leak DRF throttle
+# history between runs — a suite re-run within the hour trips the
+# per-hour auth throttles with spurious 429s — and (b) poison the live
+# dev app's caches (e.g. the 60s project-list cache) with test-fixture
+# data.
+if len(sys.argv) > 1 and sys.argv[1] == "test":
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "django-tests",
+        }
+    }
+
 # Web Push (VAPID). Generate a keypair with
 # `python manage.py generate_vapid_keys` (or `npx web-push
 # generate-vapid-keys`). The PRIVATE key is a secret — set it via env,
@@ -289,7 +305,18 @@ WEBPUSH_VAPID_ADMIN_EMAIL = os.environ.get("WEBPUSH_VAPID_ADMIN_EMAIL", "admin@e
 WEBPUSH_MEDIA_BASE_URL = os.environ.get("WEBPUSH_MEDIA_BASE_URL", "")
 
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": ("rest_framework_simplejwt.authentication.JWTAuthentication",)
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ),
+    # Per-IP throttling behind a proxy: both prod edges (Railway, Cloud
+    # Run's front end) sit exactly one hop in front of gunicorn and
+    # append the real client address to X-Forwarded-For. NUM_PROXIES=1
+    # makes DRF's AnonRateThrottle key on that address instead of the
+    # proxy's — without it every visitor shares one bucket and a single
+    # attacker can 429 the whole login page. Client-supplied XFF entries
+    # sit EARLIER in the list, so this stays spoof-proof. Local dev has
+    # no proxy: keep None so REMOTE_ADDR is used directly.
+    **({"NUM_PROXIES": 1} if not DEBUG else {}),
 }
 
 SIMPLE_JWT = {
@@ -304,6 +331,42 @@ SIMPLE_JWT = {
     "USER_ID_CLAIM": "user_id",
 }
 
+
+def _validate_prod_secrets(*, debug: bool, secret_key: str, jwt_signing_key: str) -> None:
+    """Refuse to boot a production process on the known dev-fallback
+    signing keys.
+
+    Both fallbacks above exist so local dev works with no env file, but
+    they are PUBLIC values (this file is on GitHub). If env drift ever
+    dropped DJANGO_SECRET_KEY or JWT_SECRET_KEY in prod, the app would
+    silently sign sessions / password-reset state / every JWT with a
+    key an attacker can read — i.e. anyone could mint a valid token for
+    any user. Failing the deploy loudly (the healthcheck gate catches
+    it before traffic shifts) is strictly better than that.
+
+    Extracted as a function so tests can exercise it without re-importing
+    the settings module.
+    """
+    if debug:
+        return
+    from django.core.exceptions import ImproperlyConfigured
+
+    if not secret_key or secret_key.startswith("django-insecure-"):
+        raise ImproperlyConfigured(
+            "DJANGO_SECRET_KEY is unset (or the public dev fallback) with "
+            "DJANGO_DEBUG=false. Set a real secret before deploying."
+        )
+    if not jwt_signing_key or jwt_signing_key == "your_secret_key":
+        raise ImproperlyConfigured(
+            "JWT_SECRET_KEY is unset (or the public dev fallback) with "
+            "DJANGO_DEBUG=false. Set a real secret before deploying."
+        )
+
+
+_validate_prod_secrets(
+    debug=DEBUG, secret_key=SECRET_KEY, jwt_signing_key=SIMPLE_JWT["SIGNING_KEY"]
+)
+
 AUTH_USER_MODEL = "origin.CustomUser"
 
 
@@ -315,6 +378,37 @@ CSRF_TRUSTED_ORIGINS = [
     ).split(",")
     if o.strip()
 ]
+
+# -- Security headers / proxy TLS ------------------------------------------
+#
+# Both prod deployments terminate TLS at the edge (Railway, Cloud Run)
+# and forward plain HTTP with `X-Forwarded-Proto: https`. Trusting that
+# header makes `request.is_secure()` true behind the proxy, which HSTS
+# emission (and anything else keyed on is_secure) depends on. Safe
+# because clients cannot reach gunicorn directly in either environment
+# — the edge always overwrites the header.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Deliberately NOT setting SECURE_SSL_REDIRECT: the edges only publish
+# HTTPS endpoints, and Railway's deploy healthcheck probes over plain
+# internal HTTP — a 301 there would hang every deploy (same trap as the
+# ALLOWED_HOSTS healthcheck host, see above).
+
+# Browsers pin HTTPS for a year after the first visit — defeats
+# SSL-stripping on later visits. Scoped to this exact host (no
+# subdomain/preload ambitions for an API domain). DEBUG-gated so plain
+# http://localhost dev never caches a pin.
+if not DEBUG:
+    SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+    SECURE_HSTS_PRELOAD = False
+
+# Django defaults, pinned explicitly so a version bump can't silently
+# relax them: refuse MIME sniffing, refuse framing (clickjacking), and
+# keep referrers on-origin.
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+X_FRAME_OPTIONS = "DENY"
 
 SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_HTTPONLY = True  # Prevents JavaScript access to the session cookie

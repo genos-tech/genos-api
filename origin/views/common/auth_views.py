@@ -11,7 +11,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
-from rest_framework import permissions, status, viewsets
+from rest_framework import mixins, permissions, status, viewsets
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
@@ -60,11 +60,71 @@ from origin.services.email import send_templated_email
 User = get_user_model()
 
 
-class UserViewSet(viewsets.ModelViewSet):
-    """User ViewSet"""
+# --------------------------------------------------------------------------- #
+# Per-IP throttles for the unauthenticated auth endpoints.                    #
+#                                                                             #
+# Same pattern as DemoSignInThrottle below: AnonRateThrottle subclasses with  #
+# an explicit `rate` (so the numbers live next to the endpoints they guard)   #
+# backed by the default Redis cache. Client IP resolution behind the          #
+# Railway/Cloud Run edge is handled by REST_FRAMEWORK["NUM_PROXIES"] in       #
+# settings — without it every user would share the proxy's address and one    #
+# attacker could exhaust the bucket for everyone.                             #
+# --------------------------------------------------------------------------- #
+
+
+class SignInBurstThrottle(AnonRateThrottle):
+    """Caps online password guessing without bothering real users — a
+    human retrying a forgotten password stays far under 20/min."""
+
+    rate = "20/min"
+    scope = "signin_burst"
+
+
+class SignInSustainedThrottle(AnonRateThrottle):
+    """Backstop for low-and-slow guessing that ducks the burst limit."""
+
+    rate = "300/hour"
+    scope = "signin_sustained"
+
+
+class SignUpThrottle(AnonRateThrottle):
+    """Each signup writes a user row and sends a verification email —
+    uncapped, it's a mass-registration + email-spam vector."""
+
+    rate = "20/hour"
+    scope = "signup"
+
+
+class PasswordResetRequestThrottle(AnonRateThrottle):
+    """Each hit can send an email; uncapped it's an email-bombing vector
+    (the enumeration-safe 200 also hides abuse from the caller)."""
+
+    rate = "10/hour"
+    scope = "password_reset"
+
+
+class PasswordResetConfirmThrottle(AnonRateThrottle):
+    """Token brute-force is already infeasible (256-bit random, hashed,
+    short TTL); this just keeps volumetric guessing off the DB."""
+
+    rate = "20/hour"
+    scope = "password_reset_confirm"
+
+
+class ResendVerificationThrottle(AnonRateThrottle):
+    rate = "6/hour"
+    scope = "resend_verification"
+
+
+class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
+    """Signup endpoint. Deliberately create-only: the URLconf maps just
+    `{"post": "create"}`, and narrowing from ModelViewSet guarantees a
+    future router registration can't accidentally expose AllowAny
+    list/retrieve/update/delete over the full user table."""
 
     queryset = User.objects.all()
     permission_classes = [permissions.AllowAny]  # Allow anyone to register
+    throttle_classes = [SignUpThrottle]
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -149,6 +209,11 @@ class UserViewSet(viewsets.ModelViewSet):
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer  # Use custom serializer
+    # Burst + sustained pair: the burst cap stops fast credential
+    # stuffing, the sustained cap stops the slow variant that stays
+    # under it. Successful sign-ins count too, but 300/hour/IP is far
+    # beyond any legitimate use.
+    throttle_classes = [SignInBurstThrottle, SignInSustainedThrottle]
 
     def post(self, request, *args, **kwargs):
         # Email-verification gate. We check before delegating to
@@ -399,6 +464,7 @@ class PasswordResetRequestView(APIView):
     """
 
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [PasswordResetRequestThrottle]
 
     def post(self, request: Request):
         serializer = PasswordResetRequestSerializer(data=request.data)
@@ -447,6 +513,7 @@ class PasswordResetConfirmView(APIView):
     """
 
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [PasswordResetConfirmThrottle]
 
     def post(self, request: Request):
         serializer = PasswordResetConfirmSerializer(data=request.data)
@@ -578,6 +645,7 @@ class ResendVerificationView(APIView):
     """
 
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ResendVerificationThrottle]
 
     def post(self, request: Request):
         serializer = ResendVerificationSerializer(data=request.data)
