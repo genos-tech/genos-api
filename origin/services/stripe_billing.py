@@ -46,6 +46,7 @@ import logging
 from django.conf import settings
 from django.core.cache import cache
 
+from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.quota import invalidate_effective_tier
 
@@ -365,6 +366,22 @@ def handle_event(event) -> str:
     obj = (event.get("data") or {}).get("object") or {}
 
     if etype == "checkout.session.completed":
+        # Team purchases carry the team id in session metadata (set
+        # server-side at session creation, never browser-influenced).
+        team_ref = ((obj.get("metadata") or {}).get("genos_team_id") or "").strip()
+        if team_ref:
+            team = TeamMaster.objects.filter(team_id=team_ref, is_deleted=False).first()
+            if team is None:
+                log.warning("stripe webhook: %s for unknown team ref %r", etype, team_ref)
+                return "ignored: unknown team"
+            _bind_team_customer(team, obj.get("customer"))
+            plan = ((obj.get("metadata") or {}).get("plan") or "").strip()
+            if plan not in PURCHASABLE_PLANS:
+                log.warning("stripe webhook: %s with unusable team plan %r", etype, plan)
+                return "team customer bound; plan deferred to subscription event"
+            _set_team_plan(team, plan, reason=etype)
+            return f"team plan set to {plan}"
+
         user = CustomUser.objects.filter(
             id=obj.get("client_reference_id") or None, is_deleted=False
         ).first()
@@ -384,8 +401,11 @@ def handle_event(event) -> str:
         return f"tier set to {plan}"
 
     if etype in ("customer.subscription.created", "customer.subscription.updated"):
+        # Personal and team subscriptions bill DISTINCT Stripe
+        # customers; resolve the user first, then the team.
         user = _user_by_customer(obj.get("customer"))
-        if user is None:
+        team = None if user else _team_by_customer(obj.get("customer"))
+        if user is None and team is None:
             log.warning("stripe webhook: %s for unknown customer %r", etype, obj.get("customer"))
             return "ignored: unknown customer"
         status_ = obj.get("status") or ""
@@ -398,9 +418,15 @@ def handle_event(event) -> str:
                     _subscription_price_id(obj),
                 )
                 return "ignored: unmapped price"
+            if team is not None:
+                _set_team_plan(team, tier, reason=f"{etype}:{status_}")
+                return f"team plan set to {tier}"
             _set_personal_tier(user, tier, reason=f"{etype}:{status_}")
             return f"tier set to {tier}"
         if status_ in ("canceled", "unpaid", "incomplete_expired"):
+            if team is not None:
+                _set_team_plan(team, "free", reason=f"{etype}:{status_}")
+                return "team plan set to free"
             _set_personal_tier(user, "free", reason=f"{etype}:{status_}")
             return "tier set to free"
         # past_due / incomplete / paused: keep the current tier —
@@ -410,13 +436,232 @@ def handle_event(event) -> str:
 
     if etype == "customer.subscription.deleted":
         user = _user_by_customer(obj.get("customer"))
-        if user is None:
+        team = None if user else _team_by_customer(obj.get("customer"))
+        if user is None and team is None:
             log.warning("stripe webhook: %s for unknown customer %r", etype, obj.get("customer"))
             return "ignored: unknown customer"
+        if team is not None:
+            _set_team_plan(team, "free", reason=etype)
+            return "team plan set to free"
         _set_personal_tier(user, "free", reason=etype)
         return "tier set to free"
 
     return f"ignored event type {etype!r}"
+
+
+# --------------------------------------------------------------------------- #
+# Team subscriptions (per-seat)                                               #
+# --------------------------------------------------------------------------- #
+#
+# The Slack model the tier system was designed for: the team OWNER buys
+# a quantity-based subscription on the SAME prices as personal plans
+# (quantity = active member count), the webhook writes
+# `TeamMaster.plan`, and every member inherits through the effective
+# tier. Personal and team subscriptions are independent Stripe
+# customers; a user may hold both (effective tier takes the best).
+
+
+def _team_member_ids(team_id) -> list:
+    return list(
+        TeamMembers.objects.filter(team_id=team_id, is_deleted=False).values_list(
+            "attendee_id", flat=True
+        )
+    )
+
+
+def team_seats(team_id) -> int:
+    """Billable seats = active members. Floor of 1 so a pathological
+    empty team can still hold a subscription without a zero-quantity
+    error from Stripe."""
+    return max(TeamMembers.objects.filter(team_id=team_id, is_deleted=False).count(), 1)
+
+
+def _set_team_plan(team: TeamMaster, plan: str, *, reason: str) -> None:
+    """The same write `feature_access set-team-plan` performs; evicts
+    every member's effective-tier cache so the grant lands at once."""
+    previous = team.plan or "free"
+    if previous == plan:
+        return
+    team.plan = plan
+    team.save(update_fields=["plan"])
+    invalidate_effective_tier(_team_member_ids(team.team_id))
+    log.info(
+        "stripe billing: plan for team %s: %s -> %s (%s)",
+        team.team_name,
+        previous,
+        plan,
+        reason,
+    )
+
+
+def _bind_team_customer(team: TeamMaster, customer_id: str | None) -> None:
+    if customer_id and team.stripe_customer_id != customer_id:
+        team.stripe_customer_id = customer_id
+        team.save(update_fields=["stripe_customer_id"])
+
+
+def _team_by_customer(customer_id: str | None) -> TeamMaster | None:
+    if not customer_id:
+        return None
+    return TeamMaster.objects.filter(stripe_customer_id=customer_id, is_deleted=False).first()
+
+
+def ensure_team_customer(team: TeamMaster) -> str:
+    """Team twin of `ensure_customer` — same verify-then-replace rule
+    for customers deleted in the dashboard."""
+    stripe = _stripe()
+    if team.stripe_customer_id:
+        if _customer_is_alive(stripe, team.stripe_customer_id):
+            return team.stripe_customer_id
+        log.warning(
+            "stripe customer %s for team %s no longer exists — minting a replacement",
+            team.stripe_customer_id,
+            team.team_name,
+        )
+    try:
+        customer = stripe.Customer.create(
+            email=team.team_email,
+            name=team.team_name,
+            metadata={"genos_team_id": str(team.team_id)},
+        )
+    except Exception as e:  # noqa: BLE001
+        raise BillingError(f"Could not create the team's Stripe customer: {e}")
+    _bind_team_customer(team, customer["id"])
+    return customer["id"]
+
+
+def create_team_checkout_session(team: TeamMaster, plan: str) -> str:
+    """Quantity-based Checkout Session for a team (owner-gated in the
+    view). Same prices as personal plans; quantity = current seats."""
+    if plan not in PURCHASABLE_PLANS:
+        raise BillingError(f"Unknown plan {plan!r}.")
+    price_id = price_for_plan(plan)
+    if not price_id:
+        raise BillingError(f"Plan {plan!r} has no configured Stripe price.")
+    stripe = _stripe()
+    customer_id = ensure_team_customer(team)
+    base = settings.FRONTEND_BASE_URL.rstrip("/")
+    params = {
+        "mode": "subscription",
+        "customer": customer_id,
+        "line_items": [{"price": price_id, "quantity": team_seats(team.team_id)}],
+        # The webhook resolves the TEAM from this metadata — never from
+        # anything the browser can influence.
+        "metadata": {"genos_team_id": str(team.team_id), "plan": plan},
+        "success_url": f"{base}/?billing=success&plan={plan}",
+        "cancel_url": f"{base}/?billing=cancelled",
+        "automatic_tax": {"enabled": settings.STRIPE.get("AUTOMATIC_TAX", False)},
+    }
+    if settings.STRIPE.get("TOS_CONSENT"):
+        params["consent_collection"] = {"terms_of_service": "required"}
+    try:
+        session = stripe.checkout.Session.create(**params)
+    except Exception as e:  # noqa: BLE001
+        raise BillingError(f"Could not start the team checkout: {e}")
+    return session["url"]
+
+
+def create_team_portal_session(team: TeamMaster) -> str:
+    """Customer portal for the TEAM's Stripe customer (owner-gated in
+    the view): seat/plan changes, cancel, invoices."""
+    if not team.stripe_customer_id:
+        raise BillingError("No billing account for this team yet.")
+    stripe = _stripe()
+    base = settings.FRONTEND_BASE_URL.rstrip("/")
+    try:
+        session = stripe.billing_portal.Session.create(
+            customer=team.stripe_customer_id,
+            return_url=f"{base}/?billing=portal_return",
+        )
+    except Exception as e:  # noqa: BLE001
+        raise BillingError(f"Could not open the team billing portal: {e}")
+    return session["url"]
+
+
+def sync_team_subscription_quantity(team_id) -> str:
+    """Best-effort seat sync, called from the TeamMembers signal on
+    every membership change. Updates the active subscription's quantity
+    to the current member count with `create_prorations` — the charge /
+    credit folds into the NEXT invoice (no surprise immediate charges).
+
+    Fail-SOFT by design: this runs inside member-management writes, and
+    a Stripe hiccup must never block adding or removing a member. Bulk
+    membership updates bypass signals (Django semantics) — the next
+    signal-triggering change trues the count up.
+    """
+    team = TeamMaster.objects.filter(team_id=team_id, is_deleted=False).first()
+    if team is None or not team.stripe_customer_id or not billing_enabled():
+        return "no-op"
+    try:
+        stripe = _stripe()
+        resp = json.loads(
+            str(stripe.Subscription.list(customer=team.stripe_customer_id, status="active", limit=10))
+        )
+        subs = resp.get("data") or []
+        if not subs:
+            return "no active subscription"
+        sub = subs[0]
+        item = ((sub.get("items") or {}).get("data") or [{}])[0]
+        seats = team_seats(team_id)
+        if item.get("quantity") == seats:
+            return "in sync"
+        stripe.Subscription.modify(
+            sub["id"],
+            items=[{"id": item.get("id"), "quantity": seats}],
+            proration_behavior="create_prorations",
+        )
+        log.info(
+            "stripe billing: team %s seats %s -> %s (membership change)",
+            team.team_name,
+            item.get("quantity"),
+            seats,
+        )
+        return f"quantity set to {seats}"
+    except Exception as e:  # noqa: BLE001 — never block member management
+        log.warning("stripe seat sync failed for team %s: %s", team_id, e)
+        return "failed (logged)"
+
+
+def reconcile_team_from_stripe(team: TeamMaster) -> str:
+    """Team twin of `reconcile_from_stripe` — same write policy, same
+    lost-webhook repair. Called from the refresh endpoint for teams the
+    refreshing user OWNS."""
+    if not team.stripe_customer_id:
+        return "no billing account"
+    stripe = _stripe()
+    try:
+        resp = stripe.Subscription.list(customer=team.stripe_customer_id, status="all", limit=100)
+    except Exception as e:  # noqa: BLE001
+        raise BillingError(f"Could not list the team's subscriptions: {e}")
+    subs = (json.loads(str(resp)) or {}).get("data") or []
+    active_plans: list[str] = []
+    unmapped_active = False
+    in_grace = False
+    for sub in subs:
+        status_ = (sub or {}).get("status") or ""
+        if status_ in ("active", "trialing"):
+            plan = tier_for_price(_subscription_price_id(sub))
+            if plan is None:
+                unmapped_active = True
+            else:
+                active_plans.append(plan)
+        elif status_ in ("past_due", "incomplete", "paused"):
+            in_grace = True
+    if active_plans:
+        best = max(active_plans, key=PURCHASABLE_PLANS.index)
+        _set_team_plan(team, best, reason="reconcile")
+        return f"team plan set to {best}"
+    if unmapped_active:
+        log.warning(
+            "stripe reconcile: team %s has an active subscription with an unmapped price"
+            " — plan NOT changed",
+            team.team_name,
+        )
+        return "unchanged: active subscription with unmapped price"
+    if in_grace:
+        return "unchanged: subscription in dunning grace"
+    _set_team_plan(team, "free", reason="reconcile")
+    return "team plan set to free"
 
 
 # --------------------------------------------------------------------------- #

@@ -10,6 +10,7 @@ class OriginConfig(AppConfig):
         # task_signals.py / cache_invalidation.py register the handlers as a
         # side effect.
         from origin.signals import (
+            billing_signals,  # noqa: F401
             cache_invalidation,  # noqa: F401
             dependency_signals,  # noqa: F401
             pm_channel_signals,  # noqa: F401

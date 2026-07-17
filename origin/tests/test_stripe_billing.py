@@ -811,6 +811,259 @@ class EnsureCustomerTests(BillingTestBase):
         self.assertEqual(self.user.stripe_customer_id, "cus_new")
 
 
+TEAM_CONFIG_URL = "/api/v2/billing/team/config/"
+TEAM_CHECKOUT_URL = "/api/v2/billing/team/checkout/"
+TEAM_PORTAL_URL = "/api/v2/billing/team/portal/"
+
+
+@override_settings(STRIPE=STRIPE_TEST_SETTINGS)
+class TeamBillingTests(BillingTestBase):
+    """Per-seat team subscriptions: owner-gated endpoints, the
+    quantity-based checkout, team webhook resolution, seat auto-sync,
+    and the team reconcile. `self.user` owns `self.team`; `self.user2`
+    is a plain member."""
+
+    def _bind_team(self, customer="cus_team_1"):
+        self.team.stripe_customer_id = customer
+        self.team.save(update_fields=["stripe_customer_id"])
+
+    @staticmethod
+    def _sdk(kind, payload):
+        import stripe  # noqa: PLC0415
+
+        cls = stripe
+        for part in kind.split("."):
+            cls = getattr(cls, part)
+        return cls.construct_from(payload, "sk_test_x")
+
+    def _team_checkout_event(self, *, plan="pro", customer="cus_team_1"):
+        return {
+            "id": "evt_t1",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "customer": customer,
+                    "metadata": {"genos_team_id": str(self.team.team_id), "plan": plan},
+                }
+            },
+        }
+
+    # ---- endpoints -------------------------------------------------- #
+
+    def test_config_lists_owned_teams_with_seats(self):
+        res = self.client.get(TEAM_CONFIG_URL)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(res.data["teams"]), 1)
+        t = res.data["teams"][0]
+        self.assertEqual(t["team_name"], "Test Team")
+        self.assertEqual(t["seats"], 2)
+        self.assertEqual(t["plan"], "free")
+        self.assertFalse(t["has_billing_account"])
+
+    def test_config_empty_for_non_owner(self):
+        self.authenticate(self.user2)
+        res = self.client.get(TEAM_CONFIG_URL)
+        self.assertEqual(res.data["teams"], [])
+
+    def test_checkout_owner_only_404_for_member(self):
+        self.authenticate(self.user2)
+        res = self.client.post(
+            TEAM_CHECKOUT_URL,
+            {"team_id": str(self.team.team_id), "plan": "pro"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 404)
+
+    def test_checkout_unknown_plan_400(self):
+        res = self.client.post(
+            TEAM_CHECKOUT_URL,
+            {"team_id": str(self.team.team_id), "plan": "enterprise"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_checkout_owner_gets_url(self):
+        with mock.patch.object(
+            stripe_billing, "create_team_checkout_session", return_value="https://stripe/cs_t"
+        ) as create:
+            res = self.client.post(
+                TEAM_CHECKOUT_URL,
+                {"team_id": str(self.team.team_id), "plan": "max"},
+                format="json",
+            )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["url"], "https://stripe/cs_t")
+        self.assertEqual(create.call_args.args[1], "max")
+
+    def test_portal_owner_only(self):
+        self.authenticate(self.user2)
+        res = self.client.post(
+            TEAM_PORTAL_URL, {"team_id": str(self.team.team_id)}, format="json"
+        )
+        self.assertEqual(res.status_code, 404)
+
+    # ---- checkout session shape ------------------------------------- #
+
+    def test_team_session_quantity_and_metadata(self):
+        session = self._sdk(
+            "checkout.Session",
+            {"id": "cs_t", "object": "checkout.session", "url": "https://stripe/cs_t"},
+        )
+        with (
+            mock.patch(
+                "stripe.Customer.create",
+                return_value=self._sdk("Customer", {"id": "cus_team_1", "object": "customer"}),
+            ),
+            mock.patch("stripe.checkout.Session.create", return_value=session) as create,
+        ):
+            url = stripe_billing.create_team_checkout_session(self.team, "pro")
+        self.assertEqual(url, "https://stripe/cs_t")
+        kwargs = create.call_args.kwargs
+        self.assertEqual(kwargs["line_items"][0]["quantity"], 2)  # both members
+        self.assertEqual(kwargs["metadata"]["genos_team_id"], str(self.team.team_id))
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.stripe_customer_id, "cus_team_1")
+
+    # ---- webhook ----------------------------------------------------- #
+
+    def test_team_checkout_completed_sets_plan_and_member_tiers(self):
+        summary = stripe_billing.handle_event(self._team_checkout_event(plan="pro"))
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.plan, "pro")
+        self.assertEqual(self.team.stripe_customer_id, "cus_team_1")
+        self.assertIn("team plan", summary)
+        # A plain member inherits immediately (cache evicted on write).
+        self.assertEqual(quota.get_effective_tier(self.user2.id), "pro")
+
+    def test_team_subscription_updated_maps_price(self):
+        self._bind_team()
+        stripe_billing.handle_event(
+            self.subscription_event(
+                etype="customer.subscription.updated",
+                status_="active",
+                price="price_max_456",
+                customer="cus_team_1",
+            )
+        )
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.plan, "max")
+
+    def test_team_subscription_deleted_downgrades(self):
+        self._bind_team()
+        self.team.plan = "pro"
+        self.team.save(update_fields=["plan"])
+        stripe_billing.handle_event(
+            self.subscription_event(
+                etype="customer.subscription.deleted",
+                status_="canceled",
+                customer="cus_team_1",
+            )
+        )
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.plan, "free")
+        self.assertEqual(quota.get_effective_tier(self.user2.id), "free")
+
+    # ---- seat auto-sync ---------------------------------------------- #
+
+    def _seat_sync_mocks(self, current_quantity=2):
+        list_obj = self._sdk(
+            "ListObject",
+            {
+                "object": "list",
+                "data": [
+                    {
+                        "id": "sub_t1",
+                        "object": "subscription",
+                        "status": "active",
+                        "items": {"data": [{"id": "si_1", "quantity": current_quantity}]},
+                    }
+                ],
+                "has_more": False,
+                "url": "/v1/subscriptions",
+            },
+        )
+        return (
+            mock.patch("stripe.Subscription.list", return_value=list_obj),
+            mock.patch("stripe.Subscription.modify"),
+        )
+
+    def test_member_join_bumps_quantity(self):
+        from origin.models.common.team_models import TeamMembers  # noqa: PLC0415
+        from origin.models.common.user_models import CustomUser  # noqa: PLC0415
+
+        self._bind_team()
+        user3 = CustomUser.objects.create_user(
+            email="third@example.com", username="third", password="x" * 24
+        )
+        list_mock, modify_mock = self._seat_sync_mocks(current_quantity=2)
+        with list_mock, modify_mock as modify:
+            TeamMembers.objects.create(team=self.team, attendee=user3)  # signal fires
+        modify.assert_called_once()
+        self.assertEqual(modify.call_args.kwargs["items"][0]["quantity"], 3)
+        self.assertEqual(modify.call_args.kwargs["proration_behavior"], "create_prorations")
+
+    def test_sync_noop_when_already_true(self):
+        self._bind_team()
+        list_mock, modify_mock = self._seat_sync_mocks(current_quantity=2)
+        with list_mock, modify_mock as modify:
+            out = stripe_billing.sync_team_subscription_quantity(self.team.team_id)
+        self.assertEqual(out, "in sync")
+        modify.assert_not_called()
+
+    def test_sync_fail_soft(self):
+        self._bind_team()
+        with mock.patch("stripe.Subscription.list", side_effect=RuntimeError("api down")):
+            out = stripe_billing.sync_team_subscription_quantity(self.team.team_id)
+        self.assertIn("failed", out)  # logged, never raised
+
+    def test_sync_noop_without_billing_account(self):
+        with mock.patch("stripe.Subscription.list") as listed:
+            out = stripe_billing.sync_team_subscription_quantity(self.team.team_id)
+        self.assertEqual(out, "no-op")
+        listed.assert_not_called()
+
+    # ---- reconcile ---------------------------------------------------- #
+
+    def test_reconcile_team_active_sets_plan(self):
+        self._bind_team()
+        list_obj = self._sdk(
+            "ListObject",
+            {
+                "object": "list",
+                "data": [
+                    {
+                        "id": "sub_t1",
+                        "object": "subscription",
+                        "status": "active",
+                        "items": {"data": [{"price": {"id": "price_max_456"}}]},
+                    }
+                ],
+                "has_more": False,
+                "url": "/v1/subscriptions",
+            },
+        )
+        with mock.patch("stripe.Subscription.list", return_value=list_obj):
+            summary = stripe_billing.reconcile_team_from_stripe(self.team)
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.plan, "max")
+        self.assertIn("max", summary)
+        self.assertEqual(quota.get_effective_tier(self.user2.id), "max")
+
+    def test_refresh_endpoint_reconciles_owned_teams(self):
+        self._bind_team()
+        with (
+            mock.patch.object(
+                stripe_billing, "reconcile_from_stripe", return_value="no billing account"
+            ),
+            mock.patch.object(
+                stripe_billing, "reconcile_team_from_stripe", return_value="team plan set to pro"
+            ) as team_rec,
+        ):
+            res = self.client.post(REFRESH_URL, {}, format="json")
+        self.assertEqual(res.status_code, 200)
+        team_rec.assert_called_once()
+
+
 @override_settings(STRIPE=STRIPE_TEST_SETTINGS)
 class PlansViewTests(BillingTestBase):
     """GET /billing/plans/ + `price_display`.
