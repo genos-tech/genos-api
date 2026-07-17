@@ -55,6 +55,14 @@ log = logging.getLogger(__name__)
 # Plans purchasable self-serve. Deliberately a subset of TIER_CHOICES.
 PURCHASABLE_PLANS = ("pro", "max")
 
+# Where Stripe sends the browser back to. MUST be a route inside the
+# authenticated workspace: the app root is the guest-only sign-in
+# route, so a signed-in user returning there is bounced to /jointeam by
+# GuestGuard — dropping the ?billing= param, which silently skipped
+# both the return toast and the tier reconcile. The plans page is also
+# simply the right place to land: it shows the plan you just bought.
+RETURN_PATH = "/workspace/plans"
+
 
 class BillingError(Exception):
     """Billing is unconfigured, or a Stripe API call failed. The view
@@ -266,8 +274,8 @@ def create_checkout_session(user: CustomUser, plan: str) -> str:
         # anything the browser can influence.
         "client_reference_id": str(user.id),
         "metadata": {"genos_user_id": str(user.id), "plan": plan},
-        "success_url": f"{base}/?billing=success&plan={plan}",
-        "cancel_url": f"{base}/?billing=cancelled",
+        "success_url": f"{base}{RETURN_PATH}?billing=success&plan={plan}",
+        "cancel_url": f"{base}{RETURN_PATH}?billing=cancelled",
         # Stripe Tax: activates only when enabled on the account
         # (dashboard: Settings → Tax). Harmless flag otherwise per
         # Stripe docs; if account setup is incomplete Stripe returns
@@ -297,7 +305,7 @@ def create_portal_session(user: CustomUser) -> str:
     try:
         session = stripe.billing_portal.Session.create(
             customer=user.stripe_customer_id,
-            return_url=f"{base}/?billing=portal_return",
+            return_url=f"{base}{RETURN_PATH}?billing=portal_return",
         )
     except Exception as e:  # noqa: BLE001
         raise BillingError(f"Could not open the billing portal: {e}")
@@ -548,8 +556,8 @@ def create_team_checkout_session(team: TeamMaster, plan: str) -> str:
         # The webhook resolves the TEAM from this metadata — never from
         # anything the browser can influence.
         "metadata": {"genos_team_id": str(team.team_id), "plan": plan},
-        "success_url": f"{base}/?billing=success&plan={plan}",
-        "cancel_url": f"{base}/?billing=cancelled",
+        "success_url": f"{base}{RETURN_PATH}?billing=success&plan={plan}",
+        "cancel_url": f"{base}{RETURN_PATH}?billing=cancelled",
         "automatic_tax": {"enabled": settings.STRIPE.get("AUTOMATIC_TAX", False)},
     }
     if settings.STRIPE.get("TOS_CONSENT"):
@@ -571,7 +579,7 @@ def create_team_portal_session(team: TeamMaster) -> str:
     try:
         session = stripe.billing_portal.Session.create(
             customer=team.stripe_customer_id,
-            return_url=f"{base}/?billing=portal_return",
+            return_url=f"{base}{RETURN_PATH}?billing=portal_return",
         )
     except Exception as e:  # noqa: BLE001
         raise BillingError(f"Could not open the team billing portal: {e}")
