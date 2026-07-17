@@ -304,6 +304,14 @@ WEBPUSH_VAPID_ADMIN_EMAIL = os.environ.get("WEBPUSH_VAPID_ADMIN_EMAIL", "admin@e
 # "http://localhost:8890/media". When unset, push cards use the app icon.
 WEBPUSH_MEDIA_BASE_URL = os.environ.get("WEBPUSH_MEDIA_BASE_URL", "")
 
+# GIF search (the chat composers' GIF picker) via the GIPHY API.
+# Create an app at https://developers.giphy.com to get a key.
+# Set GIPHY_API_KEY in .env (local) and Railway env vars (production);
+# GCP mirrors it as a tfvars feature secret. Leave empty to disable —
+# the proxy endpoint answers a clean 503 rather than crashing, and the
+# frontend hides the picker's results accordingly.
+GIPHY_API_KEY = os.environ.get("GIPHY_API_KEY", "")
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
