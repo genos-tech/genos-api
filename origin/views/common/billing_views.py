@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 
+from django.conf import settings
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import permissions, status
@@ -83,6 +84,60 @@ class BillingPortalView(AuthenticatedAPIView):
             logger.warning("billing portal failed for %s: %s", request.user.email, e)
             return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         return Response({"url": url})
+
+
+# The dimensions the plans page compares. Deliberately excludes
+# `model_daily` — per-model caps churn with the model catalog; the page
+# carries a static "per-model caps apply" footnote instead.
+_PLAN_LIMIT_KEYS = (
+    "llm_ask_daily",
+    "web_search_daily",
+    "task_create_monthly",
+    "note_create_monthly",
+    "message_retention_days",
+    "upload_max_mb",
+)
+
+
+class BillingPlansView(AuthenticatedAPIView):
+    """GET /api/v2/billing/plans/ — the tier comparison the plans page renders.
+
+    Limits come straight from `SEARCH_ENGINE["TIER_QUOTAS"]` — the
+    enforcement table — so the page can never advertise a limit the
+    quota engine doesn't apply. Prices come from Stripe (cached,
+    fail-soft null). Enterprise is contact-sales: no price, never
+    purchasable.
+    """
+
+    def get(self, request):
+        quotas = settings.SEARCH_ENGINE.get("TIER_QUOTAS") or {}
+        purchasable = stripe_billing.purchasable_plans()
+        tiers = []
+        for tier in ("free", "pro", "max", "enterprise"):
+            cfg = quotas.get(tier)
+            if cfg is None:
+                continue
+            if tier == "free":
+                price = {"amount": 0, "currency": "jpy", "interval": "month"}
+            elif tier in stripe_billing.PURCHASABLE_PLANS:
+                price = stripe_billing.price_display(tier)
+            else:
+                price = None
+            tiers.append(
+                {
+                    "tier": tier,
+                    "price": price,
+                    "purchasable": tier in purchasable,
+                    "contact_sales": tier == "enterprise",
+                    "limits": {k: cfg.get(k) for k in _PLAN_LIMIT_KEYS},
+                }
+            )
+        return Response(
+            {
+                "billing_enabled": stripe_billing.billing_enabled(),
+                "tiers": tiers,
+            }
+        )
 
 
 class BillingSubscriptionView(AuthenticatedAPIView):

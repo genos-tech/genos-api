@@ -4,6 +4,7 @@ from origin.views.common.auth_views import *
 from origin.views.common.billing_views import (
     BillingCheckoutView,
     BillingConfigView,
+    BillingPlansView,
     BillingPortalView,
     BillingRefreshView,
     BillingSubscriptionView,
@@ -124,6 +125,7 @@ urlpatterns = [
     ),
     # Billing — Stripe self-serve subscriptions (tier system).
     path("api/v2/billing/config/", BillingConfigView.as_view(), name="billing_config"),
+    path("api/v2/billing/plans/", BillingPlansView.as_view(), name="billing_plans"),
     path("api/v2/billing/checkout/", BillingCheckoutView.as_view(), name="billing_checkout"),
     path("api/v2/billing/portal/", BillingPortalView.as_view(), name="billing_portal"),
     path("api/v2/billing/refresh/", BillingRefreshView.as_view(), name="billing_refresh"),
