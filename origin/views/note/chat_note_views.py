@@ -22,6 +22,7 @@ from origin.views.utils.note_version import (
     snapshot_note_version,
 )
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.utils.upload_limits import check_upload_size
 
 NOTE_TYPE = 3  # Chat Notes
 
@@ -234,9 +235,7 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
 
             user_id_to_name = {
                 str(u["id"]): u["username"]
-                for u in CustomUser.objects.filter(id__in=partner_user_ids).values(
-                    "id", "username"
-                )
+                for u in CustomUser.objects.filter(id__in=partner_user_ids).values("id", "username")
             }
             for chan_id, partner_id in partner_by_chan.items():
                 dm_partner_names[chan_id] = user_id_to_name.get(str(partner_id), "Direct Message")
@@ -683,6 +682,10 @@ class ChatNoteAttachmentView(AuthenticatedAPIView):
         if res := require_write_role(request_user_id, NOTE_TYPE, data["note"]):
             return res
 
+        # Tier quota: per-file upload size.
+        if res := check_upload_size(request.user, data["note_attachment_url"]):
+            return res
+
         is_thread_bool = str(request.data.get("is_thread")).lower() in ("true", "1")
         thread_id_raw = request.data.get("thread_id")
         data["is_thread"] = is_thread_bool
@@ -860,9 +863,7 @@ class ChatNoteMoveView(AuthenticatedAPIView):
             frontier = [note.note_id]
             while frontier:
                 child_ids = list(
-                    ChatNoteMaster.objects.filter(
-                        team=data["team_id"], parent_note_id__in=frontier
-                    )
+                    ChatNoteMaster.objects.filter(team=data["team_id"], parent_note_id__in=frontier)
                     .exclude(note_id__in=visited)
                     .values_list("note_id", flat=True)
                 )

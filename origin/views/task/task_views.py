@@ -31,6 +31,7 @@ from origin.views.utils.incremental import (
 )
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.utils.upload_limits import check_upload_size
 
 from .common_color import EFFORT_LEVEL_COLOR_MAP, PRIORITY_COLOR_MAP, status_color
 
@@ -1485,9 +1486,12 @@ class TaskAttachmentsView(AuthenticatedAPIView):
         attached_type = request.POST.get("attached_type")
         attached_file = request.FILES.get("attached_file")
 
+        # Tier quota: per-file upload size.
+        if attached_file is not None and (res := check_upload_size(request.user, attached_file)):
+            return res
+
         # Add only a new attachment
         if attachment_id != "" and int(attachment_id) == -1:
-
             curr_attachments_id = TaskAttachments.objects.filter(task=task).aggregate(
                 Max("attachment_id")
             )["attachment_id__max"]
@@ -1651,9 +1655,7 @@ class TaskCommentsView(AuthenticatedAPIView):
 
                     sender = mirror.sender
                     comment_body = request.data["comment_body"] or []
-                    mentioned_ids = set(
-                        mention_extractor.extract_mentioned_user_ids(comment_body)
-                    )
+                    mentioned_ids = set(mention_extractor.extract_mentioned_user_ids(comment_body))
                     group_ids = mention_extractor.extract_mention_group_ids(comment_body)
                     if group_ids:
                         mentioned_ids |= resolve_group_members(group_ids)
@@ -1821,7 +1823,6 @@ class TaskCommentsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if task_id:
-
             # Fetch ALL reactions for this task in a single SQL (JOIN via the
             # double-underscore traversal on sender). Group by comment_id in
             # Python so the per-comment loop below just looks up a dict
@@ -2035,9 +2036,7 @@ class TaskCommentMentionView(AuthenticatedAPIView):
 
         if not team_id or not mentioned_user_ids or not task_id or not comment_id:
             return Response(
-                {
-                    "error": "`team_id`, `mentioned_user_ids`, `task_id`, `comment_id` are required."
-                },
+                {"error": "`team_id`, `mentioned_user_ids`, `task_id`, `comment_id` are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -2075,6 +2074,10 @@ class TaskBodyAttachmentView(AuthenticatedAPIView):
             return res
 
         if res := validate_request_user(str(request_user_id), str(data["uploader"])):
+            return res
+
+        # Tier quota: per-file upload size.
+        if res := check_upload_size(request.user, data["body_attachment_url"]):
             return res
 
         serializer = TaskBodyAttachmentFactSerializer(data=data)

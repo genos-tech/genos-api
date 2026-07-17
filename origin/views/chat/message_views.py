@@ -59,6 +59,7 @@ from origin.views.utils.incremental import (
     check_since,
 )
 from origin.views.utils.mention_handler import resolve_group_members
+from origin.views.utils.upload_limits import check_upload_size
 
 
 def _apply_message_since_filter(qs, since):
@@ -822,10 +823,11 @@ class TaskCardMessageView(AuthenticatedAPIView):
         return Response(MessageSerializer(message).data)
 
 
-# Cap individual uploads. Above this, the server returns 413. Keep in
-# sync with the frontend client-side guard in `useAttachmentDraft` so
-# the user gets a fast error instead of a slow multipart upload that
-# fails at the end.
+# Historical flat cap for chat attachments — now the FALLBACK while
+# the per-tier `upload_max_mb` ships dark (None). Above the resolved
+# limit, the server returns 413. Keep in sync with the frontend
+# client-side guard in `useAttachmentDraft` so the user gets a fast
+# error instead of a slow multipart upload that fails at the end.
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024  # 25 MiB
 
 
@@ -889,11 +891,8 @@ class MessageAttachmentsView(AuthenticatedAPIView):
                 {"error": "Missing multipart field 'file'."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if file.size > MAX_ATTACHMENT_BYTES:
-            return Response(
-                {"error": f"File exceeds the {MAX_ATTACHMENT_BYTES}-byte limit."},
-                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            )
+        if res := check_upload_size(request.user, file, fallback_bytes=MAX_ATTACHMENT_BYTES):
+            return res
 
         mime = (request.data.get("mime") or file.content_type or "").strip()
 
