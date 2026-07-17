@@ -115,8 +115,13 @@ class StripeWebhookView(APIView):
         except Exception:  # noqa: BLE001 — ack anyway, but loudly
             # A handler bug must not make Stripe retry forever against
             # the same crash; log with the event id for replay via the
-            # dashboard once fixed.
-            logger.exception("stripe webhook handler crashed for event %s", event.get("id"))
+            # dashboard once fixed. The id lookup is deliberately
+            # defensive: this ran while already handling a failure, and
+            # an id extraction that itself raises would mask the real
+            # traceback (it did exactly that once — `.get` on a
+            # StripeObject).
+            event_id = event.get("id") if isinstance(event, dict) else None
+            logger.exception("stripe webhook handler crashed for event %s", event_id)
             return Response({"detail": "handler_error"}, status=status.HTTP_200_OK)
 
         logger.info("stripe webhook %s (%s): %s", event.get("id"), event.get("type"), summary)

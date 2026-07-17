@@ -40,6 +40,7 @@ so Stripe's at-least-once delivery needs no dedup table.
 
 from __future__ import annotations
 
+import json
 import logging
 
 from django.conf import settings
@@ -194,9 +195,21 @@ def create_portal_session(user: CustomUser) -> str:
     return session["url"]
 
 
-def verify_webhook(raw_body: bytes, signature_header: str | None):
-    """Verify + parse a webhook payload. Raises BillingError on any
-    failure — the caller never sees an unverified event object."""
+def verify_webhook(raw_body: bytes, signature_header: str | None) -> dict:
+    """Verify a webhook payload; return the event as a PLAIN dict.
+
+    Raises BillingError on any failure — the caller never sees an
+    unverified event.
+
+    Why the re-parse: `construct_event` returns a `stripe.Event`
+    (`StripeObject`), which is NOT a dict subclass in stripe 5.x+ —
+    `event.get(...)` raises `AttributeError`, and the only recursive
+    dict conversion the SDK offers is private (`_to_dict_recursive`).
+    `construct_event`'s job here is the HMAC check over the raw body;
+    once it passes, that same body is safe to `json.loads` into plain
+    nested dicts. This keeps `handle_event` on the stdlib dict API
+    (and independent of SDK object-model churn).
+    """
     webhook_secret = settings.STRIPE.get("WEBHOOK_SECRET") or ""
     if not webhook_secret:
         raise BillingError("Stripe webhook secret is not configured.")
@@ -204,9 +217,16 @@ def verify_webhook(raw_body: bytes, signature_header: str | None):
     if not signature_header:
         raise BillingError("Missing Stripe-Signature header.")
     try:
-        return stripe.Webhook.construct_event(raw_body, signature_header, webhook_secret)
+        stripe.Webhook.construct_event(raw_body, signature_header, webhook_secret)
     except Exception as e:  # noqa: BLE001
         raise BillingError(f"Webhook verification failed: {e}")
+    try:
+        event = json.loads(raw_body.decode("utf-8") or "{}")
+    except ValueError as e:
+        raise BillingError(f"Webhook body is not valid JSON: {e}")
+    if not isinstance(event, dict):
+        raise BillingError("Webhook body is not a JSON object.")
+    return event
 
 
 # --------------------------------------------------------------------------- #
