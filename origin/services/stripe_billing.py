@@ -60,6 +60,30 @@ class BillingError(Exception):
     layer maps this to a clean 4xx/5xx instead of a traceback."""
 
 
+# Key types that can call the server-side API: secret and restricted.
+# A publishable key (pk_) in STRIPE_SECRET_KEY is the classic dashboard
+# copy-paste mix-up (the pk sits directly above the sk) — it sails past
+# an is-it-set check and only explodes when a real user clicks Upgrade.
+_SECRET_KEY_PREFIXES = ("sk_", "rk_")
+
+# Warn-once dedup so the misconfiguration is loud in the logs without
+# repeating on every `billing_enabled()` probe (config/plans fetches).
+_bad_key_warned = ""
+
+
+def _secret_key_error(secret: str) -> str | None:
+    """None if `secret` looks like a server-side key, else the reason."""
+    if not secret:
+        return "Stripe billing is not configured."
+    if not secret.startswith(_SECRET_KEY_PREFIXES):
+        return (
+            f"STRIPE_SECRET_KEY does not look like a secret key "
+            f"(starts with {secret[:3]!r}; expected sk_ or rk_ — a pk_ "
+            f"publishable key cannot call the Stripe API)."
+        )
+    return None
+
+
 def _stripe():
     """Return the configured `stripe` module, or raise BillingError.
 
@@ -68,8 +92,9 @@ def _stripe():
     a billing endpoint is actually hit.
     """
     secret = settings.STRIPE.get("SECRET_KEY") or ""
-    if not secret:
-        raise BillingError("Stripe billing is not configured.")
+    error = _secret_key_error(secret)
+    if error:
+        raise BillingError(error)
     try:
         import stripe  # noqa: PLC0415
     except ImportError:
@@ -79,7 +104,18 @@ def _stripe():
 
 
 def billing_enabled() -> bool:
-    if not (settings.STRIPE.get("SECRET_KEY") or ""):
+    global _bad_key_warned
+    secret = settings.STRIPE.get("SECRET_KEY") or ""
+    if not secret:
+        return False
+    error = _secret_key_error(secret)
+    if error:
+        # Report disabled (no checkout buttons render) and say WHY once
+        # — the alternative is a healthy-looking config endpoint and a
+        # 503 in a user's face at click time.
+        if _bad_key_warned != secret[:3]:
+            _bad_key_warned = secret[:3]
+            log.warning("stripe billing disabled: %s", error)
         return False
     try:
         import stripe  # noqa: F401, PLC0415
@@ -159,13 +195,46 @@ def _bind_customer(user: CustomUser, customer_id: str | None) -> None:
         user.save(update_fields=["stripe_customer_id"])
 
 
+def _customer_is_alive(stripe, customer_id: str) -> bool:
+    """True when the customer exists and isn't deleted.
+
+    False ONLY on the two definitive gone-signals: Stripe returns the
+    `{"deleted": true}` stub (customer was deleted in the dashboard) or
+    a `resource_missing` error (id never existed / wrong mode). Any
+    OTHER failure raises instead — minting a replacement customer on a
+    transient error would silently detach the user from the customer
+    their live subscription bills against, and later webhooks for that
+    subscription would no longer resolve to them.
+    """
+    try:
+        customer = json.loads(str(stripe.Customer.retrieve(customer_id)))
+    except Exception as e:  # noqa: BLE001
+        if getattr(e, "code", "") == "resource_missing":
+            return False
+        raise BillingError(f"Could not verify the Stripe customer: {e}")
+    return not customer.get("deleted", False)
+
+
 def ensure_customer(user: CustomUser) -> str:
-    """Reuse the stored Stripe customer, or create one. The customer
-    carries our user id in metadata for dashboard-side debugging; the
-    authoritative link is the `stripe_customer_id` column."""
-    if user.stripe_customer_id:
-        return user.stripe_customer_id
+    """Return a USABLE Stripe customer id for this user, creating one
+    when needed. The customer carries our user id in metadata for
+    dashboard-side debugging; the authoritative link is the
+    `stripe_customer_id` column.
+
+    A stored id is verified against Stripe first: a customer deleted in
+    the dashboard used to brick that user's checkout permanently (every
+    session create failed `resource_missing` until an operator nulled
+    the column). Definitively-gone customers now just get replaced.
+    """
     stripe = _stripe()
+    if user.stripe_customer_id:
+        if _customer_is_alive(stripe, user.stripe_customer_id):
+            return user.stripe_customer_id
+        log.warning(
+            "stripe customer %s for %s no longer exists — minting a replacement",
+            user.stripe_customer_id,
+            user.email,
+        )
     try:
         customer = stripe.Customer.create(
             email=user.email,

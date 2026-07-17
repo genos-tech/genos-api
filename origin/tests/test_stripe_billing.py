@@ -163,7 +163,7 @@ class CheckoutAndPortalViewTests(BillingTestBase):
         self.assertEqual(res.status_code, 503)
 
     def _create_session_kwargs(self, stripe_settings):
-        """Run create_checkout_session against a REAL-SDK-shaped mock
+        """Run create_checkout_session against REAL-SDK-shaped mocks
         and return the kwargs Stripe would have received."""
         import stripe  # noqa: PLC0415
 
@@ -173,8 +173,13 @@ class CheckoutAndPortalViewTests(BillingTestBase):
             {"id": "cs_x", "object": "checkout.session", "url": "https://stripe/cs_x"},
             "sk_test_x",
         )
+        # ensure_customer verifies the stored customer against Stripe.
+        alive = stripe.Customer.construct_from(
+            {"id": "cus_abc", "object": "customer"}, "sk_test_x"
+        )
         with (
             override_settings(STRIPE=stripe_settings),
+            mock.patch("stripe.Customer.retrieve", return_value=alive),
             mock.patch("stripe.checkout.Session.create", return_value=session) as create,
         ):
             url = stripe_billing.create_checkout_session(self.user, "pro")
@@ -688,6 +693,122 @@ class SubscriptionOverviewTests(BillingTestBase):
         with mock.patch("stripe.Subscription.list", side_effect=RuntimeError("api down")):
             res = self.client.get(SUBSCRIPTION_URL)
         self.assertEqual(res.status_code, 503)
+
+
+@override_settings(STRIPE={**STRIPE_TEST_SETTINGS, "SECRET_KEY": "pk_live_x"})
+class WrongKeyKindTests(BillingTestBase):
+    """A publishable key in STRIPE_SECRET_KEY — the dashboard
+    copy-paste mix-up that actually shipped to prod (the pk sits
+    directly above the sk in the dashboard). It must read as
+    billing-DISABLED with a clear reason, not as healthy config that
+    503s in a user's face at click time."""
+
+    def test_billing_disabled_with_pk_key(self):
+        self.assertFalse(stripe_billing.billing_enabled())
+
+    def test_config_endpoint_reports_disabled(self):
+        res = self.client.get(CONFIG_URL)
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(res.data["enabled"])
+
+    def test_checkout_503_names_the_problem(self):
+        res = self.client.post(CHECKOUT_URL, {"plan": "pro"}, format="json")
+        self.assertEqual(res.status_code, 503)
+        self.assertIn("publishable", res.data["error"])
+
+    def test_restricted_key_is_accepted(self):
+        with override_settings(STRIPE={**STRIPE_TEST_SETTINGS, "SECRET_KEY": "rk_test_x"}):
+            self.assertTrue(stripe_billing.billing_enabled())
+
+    def test_missing_key_still_just_disabled(self):
+        with override_settings(STRIPE=STRIPE_DISABLED_SETTINGS):
+            self.assertFalse(stripe_billing.billing_enabled())
+
+
+@override_settings(STRIPE=STRIPE_TEST_SETTINGS)
+class EnsureCustomerTests(BillingTestBase):
+    """`ensure_customer` self-heal: a customer deleted in the Stripe
+    dashboard used to brick that user's checkout permanently (every
+    session create failed `resource_missing` until an operator nulled
+    the column). Gone-customers are replaced; ambiguous failures are
+    NOT (a replacement minted on a transient error would detach the
+    user from the customer their live subscription bills against)."""
+
+    @staticmethod
+    def _customer(id_="cus_new", deleted=False):
+        import stripe  # noqa: PLC0415
+
+        payload = {"id": id_, "object": "customer"}
+        if deleted:
+            payload["deleted"] = True
+        return stripe.Customer.construct_from(payload, "sk_test_x")
+
+    def _bind(self, customer="cus_old"):
+        self.user.stripe_customer_id = customer
+        self.user.save(update_fields=["stripe_customer_id"])
+
+    def test_live_customer_is_reused(self):
+        self._bind()
+        with (
+            mock.patch("stripe.Customer.retrieve", return_value=self._customer("cus_old")),
+            mock.patch("stripe.Customer.create") as create,
+        ):
+            self.assertEqual(stripe_billing.ensure_customer(self.user), "cus_old")
+        create.assert_not_called()
+
+    def test_deleted_customer_is_replaced(self):
+        self._bind()
+        with (
+            mock.patch(
+                "stripe.Customer.retrieve",
+                return_value=self._customer("cus_old", deleted=True),
+            ),
+            mock.patch("stripe.Customer.create", return_value=self._customer("cus_new")),
+        ):
+            self.assertEqual(stripe_billing.ensure_customer(self.user), "cus_new")
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.stripe_customer_id, "cus_new")
+
+    def test_resource_missing_is_replaced(self):
+        import stripe  # noqa: PLC0415
+
+        self._bind()
+        with (
+            mock.patch(
+                "stripe.Customer.retrieve",
+                side_effect=stripe.InvalidRequestError(
+                    "No such customer", param="customer", code="resource_missing"
+                ),
+            ),
+            mock.patch("stripe.Customer.create", return_value=self._customer("cus_new")),
+        ):
+            self.assertEqual(stripe_billing.ensure_customer(self.user), "cus_new")
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.stripe_customer_id, "cus_new")
+
+    def test_transient_error_does_not_replace(self):
+        self._bind()
+        with (
+            mock.patch("stripe.Customer.retrieve", side_effect=RuntimeError("api down")),
+            mock.patch("stripe.Customer.create") as create,
+        ):
+            with self.assertRaises(stripe_billing.BillingError):
+                stripe_billing.ensure_customer(self.user)
+        create.assert_not_called()
+        self.user.refresh_from_db()
+        # The binding survives — webhooks for the live subscription
+        # must still resolve to this user.
+        self.assertEqual(self.user.stripe_customer_id, "cus_old")
+
+    def test_no_customer_creates_and_binds(self):
+        with (
+            mock.patch("stripe.Customer.retrieve") as retrieve,
+            mock.patch("stripe.Customer.create", return_value=self._customer("cus_new")),
+        ):
+            self.assertEqual(stripe_billing.ensure_customer(self.user), "cus_new")
+        retrieve.assert_not_called()
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.stripe_customer_id, "cus_new")
 
 
 @override_settings(STRIPE=STRIPE_TEST_SETTINGS)
