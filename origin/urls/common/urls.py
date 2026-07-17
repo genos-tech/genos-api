@@ -18,6 +18,7 @@ from origin.views.common.calendar_views import (
     CalendarEventsView,
     CalendarListView,
 )
+from origin.views.common.gif_views import GifSearchView
 from origin.views.common.github_views import (
     GithubBranchesForTaskView,
     GithubMyPullsView,
@@ -281,6 +282,8 @@ urlpatterns = [
         MentionGroupResolveView.as_view(),
         name="mention_group_resolve",
     ),
+    # GIF search proxy (GIPHY key stays server-side).
+    path("api/v2/gif/search/", GifSearchView.as_view(), name="gif_search"),
     # Team custom emoji (Slack-style :name: images, incl. animated GIFs).
     path("api/v2/team-emoji/", TeamEmojiView.as_view(), name="team_emoji"),
     # Inbox
