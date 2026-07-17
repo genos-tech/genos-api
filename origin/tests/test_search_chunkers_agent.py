@@ -337,9 +337,12 @@ class TestChatChunker(BaseAPITestCase):
         batches = list(iter_dm_chunks())
         ids = {b.entity_id for b in batches}
         # The thread root is NOT in the main channel (mutually exclusive),
-        # so the main channel produces no chunks -> no main entity. Only the
-        # thread entity is emitted.
-        self.assertEqual(ids, {f"dm:{self.dm.id}:thread:{root.id}"})
+        # so the main channel produces no chunks — but it's still yielded
+        # as an empty tombstone so ingestion can purge stale chunks. Only
+        # the thread entity carries chunks.
+        self.assertEqual(ids, {f"dm:{self.dm.id}", f"dm:{self.dm.id}:thread:{root.id}"})
+        main_batch = next(b for b in batches if b.entity_id == f"dm:{self.dm.id}")
+        self.assertEqual(main_batch.chunks, [])
         thread_batch = next(b for b in batches if b.entity_id.endswith(f"thread:{root.id}"))
         types = [c.chunk_type for c in thread_batch.chunks]
         # anchor message + reply message + thread window.
@@ -671,7 +674,11 @@ class TestThreadSummaryChunker(BaseAPITestCase):
         super().setUp()
         self.dm = Channel.objects.create(team=self.team, kind=CHAT_TYPE_DM)
         ChannelMember.objects.create(channel=self.dm, user=self.user)
-        self.thread_root = uuid.uuid4()
+        # A real root message: summaries of threads with no live messages
+        # are tombstoned by the chunker, so the fixtures need one.
+        self.thread_root = Message.objects.create(
+            channel=self.dm, sender=self.user, seq=1, body=_bn("thread root")
+        ).id
 
     def test_summary_chunk_fields(self):
         ts = ThreadSummary.objects.create(

@@ -48,6 +48,18 @@ def iter_thread_summary_chunks(since: Optional[datetime] = None) -> Iterator[Ent
             continue
 
         entity_id = f"thread_summary:{summary.chat_type}:{summary.chat_id}:{summary.thread_id}"
+
+        # The summary text derives from the thread's messages; when every
+        # one of them has been soft-deleted the summary must not stay
+        # searchable. Tombstone (empty EntityChunks) so ingestion purges
+        # any indexed copy. The orphan sweep in `search_engine.purge`
+        # applies the same rule for rows this iterator never revisits.
+        if not _thread_has_live_message(summary.thread_id):
+            yield EntityChunks(
+                entity_type="thread_summary", entity_id=entity_id, chunks=[]
+            )
+            continue
+
         chunk = Chunk(
             chunk_id=entity_id,
             entity_type="thread_summary",
@@ -72,3 +84,16 @@ def iter_thread_summary_chunks(since: Optional[datetime] = None) -> Iterator[Ent
             entity_id=entity_id,
             chunks=[chunk],
         )
+
+
+def _thread_has_live_message(thread_root_id) -> bool:
+    """True while the thread still has any non-deleted message — the
+    root or at least one reply."""
+    from django.db.models import Q
+
+    from origin.models.chat.unified_models import Message
+
+    return Message.objects.filter(
+        Q(id=thread_root_id) | Q(thread_root_id=thread_root_id),
+        deleted_at__isnull=True,
+    ).exists()

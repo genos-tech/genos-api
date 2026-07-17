@@ -8,6 +8,7 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
+from origin.search_engine.purge import purge_todo_item
 from origin.serializers.chat.todo_serializers import (
     ToDoCategorySerializer,
     ToDoGroupSerializer,
@@ -222,6 +223,10 @@ class ToDoItemDetailView(AuthenticatedAPIView):
         with transaction.atomic():
             item.delete()
             _recompute_group_completion(group_id)
+        # Best-effort: drop the item's chunk from OpenSearch — chunkers
+        # never revisit deleted rows. The orphan sweep retries if this
+        # fails.
+        purge_todo_item(item_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
