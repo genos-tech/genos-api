@@ -1,12 +1,26 @@
 """Tests for the Stripe billing layer (service + endpoints + webhook).
 
-Stripe's SDK is mocked at the service seam — `handle_event` operates
-on plain dicts (what `construct_event` yields), and the views are
-tested with the service functions patched, so no network and no real
-keys. The tier writes are asserted against the DB, including the
-effective-tier cache eviction.
+Two layers, deliberately:
+
+  * Most tests mock at the service seam (no network, no real keys) and
+    feed `handle_event` plain dicts — fast coverage of the tier-write
+    matrix.
+  * `VerifyWebhookRealSdkTests` runs the REAL
+    `stripe.Webhook.construct_event` over a genuinely HMAC-signed body.
+    This layer exists because the mocked layer alone shipped a 500:
+    the mocks asserted the dict shape we *assumed*, while the SDK
+    actually returns a non-dict `StripeObject`. Any test that mocks
+    `verify_webhook` is asserting our own assumption — the real-SDK
+    class is what pins the contract with Stripe.
+
+Tier writes are asserted against the DB, including the effective-tier
+cache eviction.
 """
 
+import hashlib
+import hmac
+import json
+import time
 from unittest import mock
 
 from django.test import override_settings
@@ -185,6 +199,91 @@ class WebhookViewTests(BillingTestBase):
         ):
             res = self.client.post(WEBHOOK_URL, data=b"{}", content_type="application/json")
         self.assertEqual(res.status_code, 200)
+
+
+@override_settings(STRIPE=STRIPE_TEST_SETTINGS)
+class VerifyWebhookRealSdkTests(BillingTestBase):
+    """The REAL `stripe.Webhook.construct_event` — no mock.
+
+    Regression: every other test here mocks `verify_webhook` and feeds
+    `handle_event` a plain dict, so the whole suite passed while the
+    production path 500'd on the first real webhook. `construct_event`
+    returns a `stripe.Event` (`StripeObject`), which is NOT a dict
+    subclass in stripe 5.x+, so `event.get(...)` raised AttributeError.
+    These tests pin the contract `handle_event` actually relies on:
+    verify_webhook returns PLAIN nested dicts, whatever the SDK's
+    object model does next.
+    """
+
+    def signed(self, payload_dict) -> tuple[bytes, str]:
+        """Body + a genuinely valid Stripe-Signature header for it."""
+        body = json.dumps(payload_dict).encode()
+        ts = int(time.time())
+        secret = STRIPE_TEST_SETTINGS["WEBHOOK_SECRET"]
+        sig = hmac.new(secret.encode(), b"%d." % ts + body, hashlib.sha256).hexdigest()
+        return body, f"t={ts},v1={sig}"
+
+    def event_payload(self, **over):
+        payload = {
+            "id": "evt_real_1",
+            "object": "event",  # construct_event reads this
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "client_reference_id": str(self.user.id),
+                    "customer": "cus_real",
+                    "metadata": {"plan": "pro"},
+                }
+            },
+        }
+        payload.update(over)
+        return payload
+
+    def test_returns_plain_nested_dicts(self):
+        body, sig = self.signed(self.event_payload())
+        event = stripe_billing.verify_webhook(body, sig)
+        self.assertIs(type(event), dict)
+        self.assertIs(type(event["data"]), dict)
+        self.assertIs(type(event["data"]["object"]), dict)
+        self.assertIs(type(event["data"]["object"]["metadata"]), dict)
+        # The exact API handle_event + the view's error path use.
+        self.assertEqual(event.get("type"), "checkout.session.completed")
+        self.assertEqual(event.get("id"), "evt_real_1")
+        self.assertEqual((event.get("data") or {}).get("object", {}).get("customer"), "cus_real")
+
+    def test_real_event_flows_through_handle_event(self):
+        """End-to-end on the real SDK output: the exact path that 500'd."""
+        body, sig = self.signed(self.event_payload())
+        event = stripe_billing.verify_webhook(body, sig)
+        summary = stripe_billing.handle_event(event)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "pro")
+        self.assertEqual(self.user.stripe_customer_id, "cus_real")
+        self.assertIn("pro", summary)
+
+    def test_real_webhook_through_the_view(self):
+        body, sig = self.signed(self.event_payload(type="customer.subscription.deleted"))
+        # deleted → free; bind the customer first so it resolves.
+        self.user.tier = "pro"
+        self.user.stripe_customer_id = "cus_real"
+        self.user.save(update_fields=["tier", "stripe_customer_id"])
+        res = self.client.post(
+            WEBHOOK_URL, data=body, content_type="application/json", HTTP_STRIPE_SIGNATURE=sig
+        )
+        self.assertEqual(res.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "free")
+
+    def test_tampered_body_rejected(self):
+        body, sig = self.signed(self.event_payload())
+        with self.assertRaises(stripe_billing.BillingError):
+            stripe_billing.verify_webhook(body + b" ", sig)
+
+    def test_wrong_secret_rejected(self):
+        body, sig = self.signed(self.event_payload())
+        with override_settings(STRIPE={**STRIPE_TEST_SETTINGS, "WEBHOOK_SECRET": "whsec_other"}):
+            with self.assertRaises(stripe_billing.BillingError):
+                stripe_billing.verify_webhook(body, sig)
 
 
 @override_settings(STRIPE=STRIPE_TEST_SETTINGS)
