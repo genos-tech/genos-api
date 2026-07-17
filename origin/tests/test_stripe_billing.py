@@ -33,6 +33,7 @@ from .test_base import BaseAPITestCase
 CONFIG_URL = "/api/v2/billing/config/"
 CHECKOUT_URL = "/api/v2/billing/checkout/"
 PORTAL_URL = "/api/v2/billing/portal/"
+REFRESH_URL = "/api/v2/billing/refresh/"
 WEBHOOK_URL = "/api/v2/billing/stripe/webhook/"
 
 STRIPE_TEST_SETTINGS = {
@@ -386,3 +387,156 @@ class HandleEventTests(BillingTestBase):
     def test_unknown_event_type_ignored(self):
         summary = stripe_billing.handle_event({"type": "invoice.paid", "data": {"object": {}}})
         self.assertIn("ignored", summary)
+
+
+@override_settings(STRIPE=STRIPE_TEST_SETTINGS)
+class ReconcileTests(BillingTestBase):
+    """`reconcile_from_stripe` — the pull-based repair for lost webhooks.
+
+    The `Subscription.list` mocks return REAL SDK objects
+    (`stripe.ListObject.construct_from`), never plain dicts: the service
+    JSON-renders whatever the SDK hands back, and a plain-dict mock
+    would assert a shape the SDK doesn't produce — the exact mistake
+    that shipped the webhook 500. These tests double as the pin on
+    `str(StripeObject)` being a JSON rendering.
+    """
+
+    def _bind(self, tier="free", customer="cus_abc"):
+        self.user.tier = tier
+        self.user.stripe_customer_id = customer
+        self.user.save(update_fields=["tier", "stripe_customer_id"])
+
+    @staticmethod
+    def _sub(status_="active", price="price_pro_123"):
+        return {
+            "id": "sub_x",
+            "object": "subscription",
+            "status": status_,
+            "items": {"data": [{"price": {"id": price}}]},
+        }
+
+    @staticmethod
+    def _list_mock(*subs):
+        import stripe  # noqa: PLC0415 — lazy like the service itself
+
+        payload = {
+            "object": "list",
+            "data": list(subs),
+            "has_more": False,
+            "url": "/v1/subscriptions",
+        }
+        return mock.patch(
+            "stripe.Subscription.list",
+            return_value=stripe.ListObject.construct_from(payload, "sk_test_x"),
+        )
+
+    def test_no_customer_is_noop(self):
+        summary = stripe_billing.reconcile_from_stripe(self.user)
+        self.assertIn("no billing account", summary)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "free")
+
+    def test_active_subscription_sets_tier(self):
+        self._bind(tier="pro")
+        with self._list_mock(self._sub(price="price_max_456")) as listed:
+            summary = stripe_billing.reconcile_from_stripe(self.user)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "max")
+        self.assertIn("max", summary)
+        # Effective tier resolves immediately (cache evicted on write).
+        self.assertEqual(quota.get_effective_tier(self.user.id), "max")
+        self.assertEqual(listed.call_args.kwargs["customer"], "cus_abc")
+        self.assertEqual(listed.call_args.kwargs["status"], "all")
+
+    def test_best_of_multiple_active_wins(self):
+        self._bind()
+        with self._list_mock(self._sub(price="price_pro_123"), self._sub(price="price_max_456")):
+            stripe_billing.reconcile_from_stripe(self.user)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "max")
+
+    def test_all_canceled_downgrades_to_free(self):
+        self._bind(tier="max")
+        with self._list_mock(self._sub(status_="canceled", price="price_max_456")):
+            summary = stripe_billing.reconcile_from_stripe(self.user)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "free")
+        self.assertIn("free", summary)
+
+    def test_no_subscriptions_downgrades_to_free(self):
+        self._bind(tier="pro")
+        with self._list_mock():
+            stripe_billing.reconcile_from_stripe(self.user)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "free")
+
+    def test_past_due_only_keeps_tier(self):
+        self._bind(tier="pro")
+        with self._list_mock(self._sub(status_="past_due")):
+            summary = stripe_billing.reconcile_from_stripe(self.user)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "pro")
+        self.assertIn("unchanged", summary)
+
+    def test_active_unmapped_price_unchanged(self):
+        self._bind(tier="pro")
+        with self._list_mock(self._sub(price="price_other")):
+            summary = stripe_billing.reconcile_from_stripe(self.user)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "pro")
+        self.assertIn("unmapped", summary)
+
+    def test_enterprise_never_touched(self):
+        self._bind(tier="enterprise")
+        with self._list_mock(self._sub(status_="canceled")) as listed:
+            summary = stripe_billing.reconcile_from_stripe(self.user)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "enterprise")
+        self.assertIn("operator-managed", summary)
+        listed.assert_not_called()
+
+    def test_stripe_error_raises_billing_error(self):
+        self._bind()
+        with mock.patch("stripe.Subscription.list", side_effect=RuntimeError("api down")):
+            with self.assertRaises(stripe_billing.BillingError):
+                stripe_billing.reconcile_from_stripe(self.user)
+
+
+@override_settings(STRIPE=STRIPE_TEST_SETTINGS)
+class RefreshViewTests(BillingTestBase):
+    def test_refresh_applies_and_returns_tier(self):
+        def fake_reconcile(user):
+            user.tier = "max"
+            user.save(update_fields=["tier"])
+            return "tier set to max"
+
+        with mock.patch.object(
+            stripe_billing, "reconcile_from_stripe", side_effect=fake_reconcile
+        ):
+            res = self.client.post(REFRESH_URL, {}, format="json")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["personal_tier"], "max")
+        self.assertIn("max", res.data["detail"])
+
+    def test_refresh_billing_error_maps_to_503(self):
+        with mock.patch.object(
+            stripe_billing,
+            "reconcile_from_stripe",
+            side_effect=stripe_billing.BillingError("boom"),
+        ):
+            res = self.client.post(REFRESH_URL, {}, format="json")
+        self.assertEqual(res.status_code, 503)
+
+    def test_refresh_disabled_with_customer_503(self):
+        # No mocking: `_stripe()` itself raises with an empty SECRET_KEY.
+        self.user.stripe_customer_id = "cus_abc"
+        self.user.save(update_fields=["stripe_customer_id"])
+        with override_settings(STRIPE=STRIPE_DISABLED_SETTINGS):
+            res = self.client.post(REFRESH_URL, {}, format="json")
+        self.assertEqual(res.status_code, 503)
+
+    def test_refresh_disabled_without_customer_noops_200(self):
+        with override_settings(STRIPE=STRIPE_DISABLED_SETTINGS):
+            res = self.client.post(REFRESH_URL, {}, format="json")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("no billing account", res.data["detail"])

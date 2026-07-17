@@ -85,6 +85,26 @@ class BillingPortalView(AuthenticatedAPIView):
         return Response({"url": url})
 
 
+class BillingRefreshView(AuthenticatedAPIView):
+    """POST /api/v2/billing/refresh/ → {"detail": ..., "personal_tier": ...}
+
+    Pull-based reconcile: re-reads the user's subscriptions from Stripe
+    and rewrites the tier (`stripe_billing.reconcile_from_stripe`). The
+    frontend fires this when the browser returns from checkout or the
+    customer portal, so the tier is correct even when the webhook was
+    lost or simply hasn't arrived yet.
+    """
+
+    def post(self, request):
+        try:
+            summary = stripe_billing.reconcile_from_stripe(request.user)
+        except stripe_billing.BillingError as e:
+            logger.warning("billing refresh failed for %s: %s", request.user.email, e)
+            return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        logger.info("billing refresh for %s: %s", request.user.email, summary)
+        return Response({"detail": summary, "personal_tier": request.user.tier or "free"})
+
+
 @method_decorator(csrf_exempt, name="dispatch")
 class StripeWebhookView(APIView):
     """POST /api/v2/billing/stripe/webhook/
