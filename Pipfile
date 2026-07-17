@@ -31,6 +31,8 @@ openai = "==2.5.0"
 google-genai = "==2.3.0"
 anthropic = "==0.102.0"
 tavily-python = "*"
+# --- Billing ---
+stripe = "*"
 # NOTE: `trino` is imported in backend_django/** but absent from the current Pipfile.
 # Confirm whether it's actually reachable before adding:  trino = "*"
 
