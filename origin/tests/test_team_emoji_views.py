@@ -158,6 +158,38 @@ class TeamEmojiViewTests(BaseAPITestCase):
         self.client.delete(URL, {"emoji_id": emoji_id})
         self.assertEqual(self.client.delete(URL, {"emoji_id": emoji_id}).status_code, 404)
 
+    # -- global defaults -------------------------------------------------
+
+    def _make_global(self, name="global-parrot"):
+        emoji = TeamEmojiMaster(team=None, name=name, created_by=None)
+        emoji.image_ext = "gif"
+        emoji.image.save(f"{name}.gif", _gif(), save=True)
+        return emoji
+
+    def test_global_defaults_appear_in_every_team_catalog(self):
+        self._make_global()
+        resp = self.client.get(URL, {"team_id": str(self.team.team_id)})
+        names = [e["name"] for e in resp.json()["teamEmoji"]]
+        self.assertIn("global-parrot", names)
+
+    def test_team_emoji_overrides_same_name_global(self):
+        self._make_global(name="party-blob")
+        team_emoji = self._post(name="party-blob").json()
+        resp = self.client.get(URL, {"team_id": str(self.team.team_id)})
+        rows = [e for e in resp.json()["teamEmoji"] if e["name"] == "party-blob"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["emojiId"], team_emoji["emojiId"])
+
+    def test_global_emoji_cannot_be_deleted_via_api(self):
+        emoji = self._make_global()
+        resp = self.client.delete(URL, {"emoji_id": emoji.emoji_id})
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(TeamEmojiMaster.objects.get(emoji_id=emoji.emoji_id).is_deleted)
+
+    def test_global_files_live_under_the_global_scope(self):
+        emoji = self._make_global()
+        self.assertTrue(emoji.image.name.startswith("team_emoji/global/"))
+
     # -- integration points ---------------------------------------------
 
     def test_team_emoji_media_prefix_is_public(self):

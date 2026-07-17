@@ -141,9 +141,17 @@ class TeamEmojiView(AuthenticatedAPIView):
             )
         team = _verify_team_member(request.user, team_id)
 
-        emoji_qs = TeamEmojiMaster.objects.filter(team=team, is_deleted=False).order_by("name")
+        # Team catalog + the global defaults (team=NULL, seeded starter
+        # packs). A team emoji with the same name overrides the global
+        # one, so a team can "replace" a default by uploading over it.
+        team_rows = list(TeamEmojiMaster.objects.filter(team=team, is_deleted=False))
+        team_names = {e.name for e in team_rows}
+        global_rows = TeamEmojiMaster.objects.filter(team__isnull=True, is_deleted=False).exclude(
+            name__in=team_names
+        )
+        combined = sorted([*team_rows, *global_rows], key=lambda e: e.name)
         return Response(
-            {"teamEmoji": [_serialize_emoji(request, e) for e in emoji_qs]},
+            {"teamEmoji": [_serialize_emoji(request, e) for e in combined]},
             status=status.HTTP_200_OK,
         )
 
@@ -158,6 +166,13 @@ class TeamEmojiView(AuthenticatedAPIView):
             emoji = TeamEmojiMaster.objects.get(emoji_id=emoji_id, is_deleted=False)
         except (TeamEmojiMaster.DoesNotExist, ValueError):
             raise Http404("Emoji not found.")
+        if emoji.team_id is None:
+            # Global defaults have no uploader; they're managed via
+            # `seed_team_emoji --global`, never through the API.
+            return Response(
+                {"error": "Default emoji are managed by the server."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         # Membership first (existence-hiding for outsiders), then the
         # uploader check (a fellow member gets an honest 403).
         _verify_team_member(request.user, emoji.team_id)
