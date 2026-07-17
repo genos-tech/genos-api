@@ -85,6 +85,24 @@ class BillingPortalView(AuthenticatedAPIView):
         return Response({"url": url})
 
 
+class BillingSubscriptionView(AuthenticatedAPIView):
+    """GET /api/v2/billing/subscription/ → {"subscription": {...} | null}
+
+    Renewal/expiry state for the Plan & Usage tab: which plan the
+    user's live subscription is on, when the current period ends, and
+    whether a cancellation is scheduled. Null when there is nothing to
+    show (no billing account, billing disabled, no live subscription).
+    """
+
+    def get(self, request):
+        try:
+            overview = stripe_billing.subscription_overview(request.user)
+        except stripe_billing.BillingError as e:
+            logger.warning("billing subscription lookup failed for %s: %s", request.user.email, e)
+            return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response({"subscription": overview})
+
+
 class BillingRefreshView(AuthenticatedAPIView):
     """POST /api/v2/billing/refresh/ → {"detail": ..., "personal_tier": ...}
 
