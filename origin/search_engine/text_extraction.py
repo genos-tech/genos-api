@@ -135,6 +135,12 @@ def _walk_inline(inline):
         props = inline.get("props") or {}
         name = props.get("userName") or props.get("name")
         return [f"@{name}"] if name else []
+    if t == "customEmoji":
+        # Team custom emoji — index the shortcode so ":party-blob:" is
+        # searchable, mirroring how mentions index as "@name".
+        props = inline.get("props") or {}
+        name = props.get("name")
+        return [f":{name}:"] if name else []
     if t == "link":
         # Links embed their own content array.
         nested = inline.get("content") or []

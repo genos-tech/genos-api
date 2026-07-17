@@ -50,6 +50,11 @@ PUBLIC_MEDIA_PREFIXES = (
     "project_profiles/",
     "gm_profiles/",
     "channel_profiles/",
+    # Custom emoji render dozens of times per viewport (message lists,
+    # reaction chips), so the per-request RefreshToken DB read of the
+    # authed path would be the hot case, not the exception. Filenames
+    # are uuid4-prefixed (unguessable) and the content is sticker-grade.
+    "team_emoji/",
 )
 
 

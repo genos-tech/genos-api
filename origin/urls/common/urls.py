@@ -45,6 +45,7 @@ from origin.views.common.oauth_views import (
     OAuthInitiateView,
 )
 from origin.views.common.runtime_config_views import RuntimeConfigView
+from origin.views.common.team_emoji_views import TeamEmojiView
 from origin.views.common.team_views import *
 from origin.views.common.user_views import *
 from origin.views.utils.extract_page_title_view import get_page_title
@@ -280,6 +281,8 @@ urlpatterns = [
         MentionGroupResolveView.as_view(),
         name="mention_group_resolve",
     ),
+    # Team custom emoji (Slack-style :name: images, incl. animated GIFs).
+    path("api/v2/team-emoji/", TeamEmojiView.as_view(), name="team_emoji"),
     # Inbox
     path("api/v2/inbox/", InboxItemView.as_view(), name="inbox_item"),
     path(
