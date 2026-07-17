@@ -970,17 +970,23 @@ SEARCH_ENGINE = {
             "message_retention_days": 90,
             "upload_max_mb": 10,
         },
+        # Paid-tier model caps follow one rule: worst-case monthly COGS
+        # at cap must stay within ~2-3x the plan price (pro JPY1,200 /
+        # max JPY2,500). Flash-class asks cost ~JPY0.5-1 so they can be
+        # the generous headline number; sonnet/gemini-pro-class run
+        # ~JPY3-8 and opus-class ~JPY15-50 per ask, so THOSE caps are
+        # the actual cost lever, not `llm_ask_daily`.
         "pro": {
             "llm_ask_daily": 100,
-            "web_search_daily": 50,
+            "web_search_daily": 25,
             "model_daily": {
                 # "gemini-2.5-flash": 100,
                 # "gemini-2.5-pro": 30,
                 "gemini-3.5-flash": 100,
-                "gemini-3.1-pro-preview": 50,
+                "gemini-3.1-pro-preview": 30,
                 "claude-haiku-4-5": 100,
-                "claude-sonnet-4-6": 50,
-                "claude-opus-4-7": 20,
+                "claude-sonnet-4-6": 30,
+                "claude-opus-4-7": 5,
             },
             "task_create_monthly": 2000,
             "note_create_monthly": 1000,
@@ -989,15 +995,15 @@ SEARCH_ENGINE = {
         },
         "max": {
             "llm_ask_daily": 1000,
-            "web_search_daily": 500,
+            "web_search_daily": 100,
             "model_daily": {
                 # "gemini-2.5-flash": 1000,
                 # "gemini-2.5-pro": 500,
                 "gemini-3.5-flash": 1000,
-                "gemini-3.1-pro-preview": 500,
+                "gemini-3.1-pro-preview": 150,
                 "claude-haiku-4-5": 1000,
-                "claude-sonnet-4-6": 500,
-                "claude-opus-4-7": 200,
+                "claude-sonnet-4-6": 150,
+                "claude-opus-4-7": 20,
             },
             "task_create_monthly": 10000,
             "note_create_monthly": 5000,
