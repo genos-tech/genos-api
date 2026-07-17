@@ -33,6 +33,7 @@ from .test_base import BaseAPITestCase
 CONFIG_URL = "/api/v2/billing/config/"
 CHECKOUT_URL = "/api/v2/billing/checkout/"
 PORTAL_URL = "/api/v2/billing/portal/"
+PLANS_URL = "/api/v2/billing/plans/"
 REFRESH_URL = "/api/v2/billing/refresh/"
 SUBSCRIPTION_URL = "/api/v2/billing/subscription/"
 WEBHOOK_URL = "/api/v2/billing/stripe/webhook/"
@@ -657,3 +658,94 @@ class SubscriptionOverviewTests(BillingTestBase):
         with mock.patch("stripe.Subscription.list", side_effect=RuntimeError("api down")):
             res = self.client.get(SUBSCRIPTION_URL)
         self.assertEqual(res.status_code, 503)
+
+
+@override_settings(STRIPE=STRIPE_TEST_SETTINGS)
+class PlansViewTests(BillingTestBase):
+    """GET /billing/plans/ + `price_display`.
+
+    Price mocks return real SDK objects (`stripe.Price.construct_from`)
+    — same discipline as the other real-SDK mocks in this file.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # price_display caches per price id — evict so one test's mock
+        # can't satisfy the next test from cache.
+        from django.core.cache import cache  # noqa: PLC0415
+
+        cache.delete("stripe_price_display:price_pro_123")
+        cache.delete("stripe_price_display:price_max_456")
+
+    @staticmethod
+    def _price_mock(amount=1200, currency="jpy"):
+        import stripe  # noqa: PLC0415
+
+        return mock.patch(
+            "stripe.Price.retrieve",
+            return_value=stripe.Price.construct_from(
+                {
+                    "id": "price_x",
+                    "object": "price",
+                    "unit_amount": amount,
+                    "currency": currency,
+                    "recurring": {"interval": "month"},
+                },
+                "sk_test_x",
+            ),
+        )
+
+    def test_price_display_reads_stripe(self):
+        with self._price_mock(amount=2500):
+            self.assertEqual(
+                stripe_billing.price_display("max"),
+                {"amount": 2500, "currency": "jpy", "interval": "month"},
+            )
+
+    def test_price_display_fail_soft(self):
+        with mock.patch("stripe.Price.retrieve", side_effect=RuntimeError("api down")):
+            self.assertIsNone(stripe_billing.price_display("pro"))
+
+    def test_price_display_none_when_disabled(self):
+        with override_settings(STRIPE=STRIPE_DISABLED_SETTINGS):
+            self.assertIsNone(stripe_billing.price_display("pro"))
+
+    def test_plans_payload_mirrors_tier_quotas(self):
+        from django.conf import settings as dj_settings  # noqa: PLC0415
+
+        with self._price_mock():
+            res = self.client.get(PLANS_URL)
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.data["billing_enabled"])
+        tiers = {t["tier"]: t for t in res.data["tiers"]}
+        self.assertEqual(list(tiers), ["free", "pro", "max", "enterprise"])
+        quotas = dj_settings.SEARCH_ENGINE["TIER_QUOTAS"]
+        for name, t in tiers.items():
+            self.assertEqual(t["limits"]["llm_ask_daily"], quotas[name]["llm_ask_daily"])
+            self.assertEqual(
+                t["limits"]["message_retention_days"], quotas[name]["message_retention_days"]
+            )
+        self.assertNotIn("model_daily", tiers["pro"]["limits"])
+
+    def test_plans_flags_and_prices(self):
+        with self._price_mock():
+            res = self.client.get(PLANS_URL)
+        tiers = {t["tier"]: t for t in res.data["tiers"]}
+        self.assertFalse(tiers["free"]["purchasable"])
+        self.assertEqual(tiers["free"]["price"]["amount"], 0)
+        self.assertTrue(tiers["pro"]["purchasable"])
+        self.assertTrue(tiers["max"]["purchasable"])
+        self.assertFalse(tiers["enterprise"]["purchasable"])
+        self.assertTrue(tiers["enterprise"]["contact_sales"])
+        self.assertIsNone(tiers["enterprise"]["price"])
+
+    def test_plans_render_without_stripe(self):
+        with override_settings(STRIPE=STRIPE_DISABLED_SETTINGS):
+            res = self.client.get(PLANS_URL)
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(res.data["billing_enabled"])
+        tiers = {t["tier"]: t for t in res.data["tiers"]}
+        # Limits still render; paid prices are null; nothing purchasable.
+        self.assertEqual(len(tiers), 4)
+        self.assertIsNone(tiers["pro"]["price"])
+        self.assertFalse(tiers["pro"]["purchasable"])

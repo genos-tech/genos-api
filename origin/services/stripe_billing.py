@@ -44,6 +44,7 @@ import json
 import logging
 
 from django.conf import settings
+from django.core.cache import cache
 
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.quota import invalidate_effective_tier
@@ -109,6 +110,36 @@ def tier_for_price(price_id: str | None) -> str | None:
 def purchasable_plans() -> list[str]:
     """Plans with a configured price — what the frontend may offer."""
     return [p for p in PURCHASABLE_PLANS if price_for_plan(p)]
+
+
+def price_display(plan: str) -> dict | None:
+    """`{"amount", "currency", "interval"}` for a purchasable plan,
+    read from its Stripe price so the page can never advertise an
+    amount Stripe won't charge. Cached for an hour, and fail-SOFT:
+    billing disabled, unmapped plan, or a Stripe error all return None
+    — the plans page then renders limits without a price line rather
+    than failing. `amount` is in the currency's smallest unit as Stripe
+    stores it (JPY is zero-decimal: 1200 == ¥1,200)."""
+    price_id = price_for_plan(plan)
+    if not price_id or not billing_enabled():
+        return None
+    cache_key = f"stripe_price_display:{price_id}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
+    try:
+        stripe = _stripe()
+        price = json.loads(str(stripe.Price.retrieve(price_id)))
+        out = {
+            "amount": price.get("unit_amount"),
+            "currency": price.get("currency"),
+            "interval": ((price.get("recurring") or {}).get("interval")) or "month",
+        }
+    except Exception as e:  # noqa: BLE001
+        log.warning("stripe price lookup failed for plan %s: %s", plan, e)
+        return None
+    cache.set(cache_key, out, 3600)
+    return out
 
 
 def _set_personal_tier(user: CustomUser, tier: str, *, reason: str) -> None:
