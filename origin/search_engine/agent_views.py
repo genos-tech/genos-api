@@ -89,12 +89,17 @@ from origin.search_engine.llm.choice import (
 from origin.search_engine.models import AgentRun, AgentRunFeedback, AgentSession, AgentStep
 from origin.search_engine.quota import (
     LLM_ASK_KEY,
+    NOTE_CREATE_KEY,
+    TASK_CREATE_KEY,
     WEB_SEARCH_KEY,
     check_remaining,
+    check_remaining_monthly,
+    get_message_retention_days,
     get_quota,
+    get_upload_max_bytes,
     get_used_today,
-    get_user_tier,
     increment_usage,
+    resolve_effective_tier,
 )
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
@@ -1455,10 +1460,19 @@ class ThreadSummaryView(AuthenticatedAPIView):
 
 
 def _tier_limit_block(user_id: str, key: str) -> dict:
-    """Helper: return `{"used": int, "limit": int|null}` for one quota
-    dimension, used by AgentUsageView / AgentFeaturesView / AgentModelsView."""
+    """Helper: return `{"used": int, "limit": int|null}` for one DAILY
+    quota dimension, used by AgentUsageView / AgentFeaturesView /
+    AgentModelsView."""
     _, used, limit = check_remaining(user_id, key)
     return {"used": used, "limit": limit}
+
+
+def _tier_month_block(user_id: str, key: str) -> dict:
+    """Same shape for a MONTHLY dimension, plus `"period": "month"` so
+    the Plan & Usage UI can label the window without hardcoding which
+    keys are monthly."""
+    _, used, limit = check_remaining_monthly(user_id, key)
+    return {"used": used, "limit": limit, "period": "month"}
 
 
 class AgentUsageView(AuthenticatedAPIView):
@@ -1495,16 +1509,23 @@ class AgentUsageView(AuthenticatedAPIView):
 class AgentFeaturesView(AuthenticatedAPIView):
     """GET /api/v2/agent/features/
 
-    Returns the calling user's tier + the two cross-cutting daily
-    quotas (LLM ask + web search). The frontend uses this to surface
-    "your web search quota is exhausted" warnings up front instead of
-    letting the user hit a mid-stream ToolError.
+    The single fetch behind the Settings "Plan & Usage" tab: the
+    calling user's EFFECTIVE tier (personal tier or a paying team's
+    plan — whichever is higher) plus every metered/limited dimension.
+    Also still used to surface "your web search quota is exhausted"
+    warnings up front instead of a mid-stream ToolError.
 
-    Response schema:
+    Response schema (all additions are additive for old clients):
         {
-            "tier":       "free" | "pro" | "max",
-            "llm_ask":    {"used": int, "limit": int | null},
-            "web_search": {"used": int, "limit": int | null}
+            "tier":        "free" | "pro" | "max" | "enterprise",
+            "tier_source": "personal" | "team",
+            "tier_team":   str | null,    # granting team's name when source=team
+            "llm_ask":     {"used": int, "limit": int | null},
+            "web_search":  {"used": int, "limit": int | null},
+            "task_create": {"used": int, "limit": int | null, "period": "month"},
+            "note_create": {"used": int, "limit": int | null, "period": "month"},
+            "message_retention_days": int | null,   # null = unlimited history
+            "upload_max_mb":          int | null    # null = no tier file cap
         }
     """
 
@@ -1512,11 +1533,21 @@ class AgentFeaturesView(AuthenticatedAPIView):
         user_id = str(getattr(request.user, "id", ""))
         if not user_id:
             return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
+        resolved = resolve_effective_tier(user_id)
+        upload_max_bytes = get_upload_max_bytes(user_id)
         return Response(
             {
-                "tier": get_user_tier(user_id),
+                "tier": resolved["tier"],
+                "tier_source": resolved["source"],
+                "tier_team": resolved["team_name"],
                 "llm_ask": _tier_limit_block(user_id, LLM_ASK_KEY),
                 "web_search": _tier_limit_block(user_id, WEB_SEARCH_KEY),
+                "task_create": _tier_month_block(user_id, TASK_CREATE_KEY),
+                "note_create": _tier_month_block(user_id, NOTE_CREATE_KEY),
+                "message_retention_days": get_message_retention_days(user_id),
+                "upload_max_mb": (
+                    upload_max_bytes // (1024 * 1024) if upload_max_bytes is not None else None
+                ),
             }
         )
 
@@ -1558,7 +1589,9 @@ class AgentModelsView(AuthenticatedAPIView):
         if not user_id:
             return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
 
-        tier = get_user_tier(user_id)
+        # Effective tier (personal or team plan) — matches what the
+        # per-model quota resolution below actually applies.
+        tier = resolve_effective_tier(user_id)["tier"]
         catalog = settings.SEARCH_ENGINE.get("MODEL_CATALOG") or []
 
         models_payload = []
