@@ -34,6 +34,11 @@ from origin.search_engine.agent.acl import owns_personal_folder, task_acl_user_i
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
+from origin.search_engine.quota import (
+    NOTE_CREATE_KEY,
+    check_remaining_monthly,
+    increment_usage,
+)
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK, ROLE_OWNER
 from origin.views.utils.note_version import snapshot_note_version
 
@@ -69,9 +74,7 @@ def _wrap_blocknote(text: str, ctx: ToolContext) -> list[dict[str, Any]]:
     resolved team-scoped — see `blocknote_md` / `entity_links`."""
     return markdown_to_blocks(
         text,
-        entity_link_resolver=lambda token: resolve_note_entity_link(
-            token, team_id=ctx.team_id
-        ),
+        entity_link_resolver=lambda token: resolve_note_entity_link(token, team_id=ctx.team_id),
     )
 
 
@@ -109,9 +112,22 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     folder_id = _resolve_folder_id(args, note_type, ctx)
 
+    # Tier quota: monthly note-creation cap (shared across personal /
+    # task / chat notes). Pre-flight (fail-open on infra errors);
+    # charged after the create succeeds.
+    allowed, _used, note_limit = check_remaining_monthly(ctx.user_id, NOTE_CREATE_KEY)
+    if not allowed:
+        raise ToolError(
+            f"You've created all {note_limit} notes for this month. "
+            "Upgrade your plan to keep going."
+        )
+
     if note_type == "personal":
-        return _create_personal(title=title, body=body, folder_id=folder_id, ctx=ctx)
-    return _create_task_note(args=args, title=title, body=body, ctx=ctx)
+        result = _create_personal(title=title, body=body, folder_id=folder_id, ctx=ctx)
+    else:
+        result = _create_task_note(args=args, title=title, body=body, ctx=ctx)
+    increment_usage(ctx.user_id, NOTE_CREATE_KEY)
+    return result
 
 
 def _create_personal(*, title: str, body, folder_id, ctx: ToolContext) -> dict[str, Any]:
@@ -272,7 +288,7 @@ CREATE_NOTE = Tool(
                 "type": "STRING",
                 "enum": ["personal", "task"],
                 "description": (
-                    "'personal' for a private note, 'task' for a " "project / task-attached note."
+                    "'personal' for a private note, 'task' for a project / task-attached note."
                 ),
             },
             "title": {

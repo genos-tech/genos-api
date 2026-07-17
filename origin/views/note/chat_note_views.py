@@ -5,6 +5,7 @@ from rest_framework.response import Response
 
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.user_models import CustomUser
+from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
@@ -21,6 +22,7 @@ from origin.views.utils.note_version import (
     delete_note_versions,
     snapshot_note_version,
 )
+from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 NOTE_TYPE = 3  # Chat Notes
@@ -234,9 +236,7 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
 
             user_id_to_name = {
                 str(u["id"]): u["username"]
-                for u in CustomUser.objects.filter(id__in=partner_user_ids).values(
-                    "id", "username"
-                )
+                for u in CustomUser.objects.filter(id__in=partner_user_ids).values("id", "username")
             }
             for chan_id, partner_id in partner_by_chan.items():
                 dm_partner_names[chan_id] = user_id_to_name.get(str(partner_id), "Direct Message")
@@ -363,6 +363,11 @@ class ChatNoteMasterView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["owner"])):
             return res
 
+        # Tier quota: monthly note-creation cap (shared across
+        # personal / task / chat notes).
+        if res := check_monthly_creation_quota(request_user_id, NOTE_CREATE_KEY, "note_create"):
+            return res
+
         # Assigned AFTER validate_request_data: `is_thread` coerces to a
         # Python bool and `thread_root_id` is None for non-thread notes —
         # validate_request_data 400s on any None value, so these must not
@@ -484,6 +489,8 @@ class ChatNoteMasterView(AuthenticatedAPIView):
                     {"error": "Failed to create note and role.", "details": str(e)},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
+
+            increment_usage(str(request_user_id), NOTE_CREATE_KEY)
 
             # If the transaction is successful, return the created note data
             return Response(note, status=status.HTTP_201_CREATED)
@@ -860,9 +867,7 @@ class ChatNoteMoveView(AuthenticatedAPIView):
             frontier = [note.note_id]
             while frontier:
                 child_ids = list(
-                    ChatNoteMaster.objects.filter(
-                        team=data["team_id"], parent_note_id__in=frontier
-                    )
+                    ChatNoteMaster.objects.filter(team=data["team_id"], parent_note_id__in=frontier)
                     .exclude(note_id__in=visited)
                     .values_list("note_id", flat=True)
                 )

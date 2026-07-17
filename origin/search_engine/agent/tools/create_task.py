@@ -32,6 +32,11 @@ from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.quota import (
+    TASK_CREATE_KEY,
+    check_remaining_monthly,
+    increment_usage,
+)
 
 _DEFAULT_STATUS = "Open"
 # Canonical enum lives on the frontend in `taskMeta.ts`. Keep this in
@@ -131,10 +136,22 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if due_date:
         create_kwargs["due_date"] = due_date
 
+    # Tier quota: monthly task-creation cap. Pre-flight (fail-open on
+    # infra errors); charged after the row exists so a failed create
+    # doesn't burn quota — same pattern as search_web's daily gate.
+    allowed, _used, task_limit = check_remaining_monthly(ctx.user_id, TASK_CREATE_KEY)
+    if not allowed:
+        raise ToolError(
+            f"You've created all {task_limit} tasks for this month. "
+            "Upgrade your plan to keep going."
+        )
+
     try:
         task = TaskMaster.objects.create(**create_kwargs)
     except Exception as e:  # noqa: BLE001 — surface as ToolError for the model
         raise ToolError(f"Failed to create task: {e}")
+
+    increment_usage(ctx.user_id, TASK_CREATE_KEY)
 
     return {
         "task_id": task.task_id,

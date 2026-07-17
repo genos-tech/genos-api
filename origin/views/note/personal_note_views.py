@@ -3,6 +3,7 @@ from django.db.models import F, IntegerField, Value
 from rest_framework import status
 from rest_framework.response import Response
 
+from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
@@ -17,6 +18,7 @@ from origin.views.utils.note_version import (
     delete_note_versions,
     snapshot_note_version,
 )
+from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 NOTE_TYPE = 1  # Personal Notes
@@ -122,6 +124,11 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["owner"])):
             return res
 
+        # Tier quota: monthly note-creation cap (shared across
+        # personal / task / chat notes).
+        if res := check_monthly_creation_quota(request_user_id, NOTE_CREATE_KEY, "note_create"):
+            return res
+
         data["parent_note_id"] = request.data.get("parent_note_id")
 
         # Optional folder placement — "New note here" on a sidebar
@@ -188,6 +195,8 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
                     {"error": "Failed to create note and role.", "details": str(e)},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
+
+            increment_usage(str(request_user_id), NOTE_CREATE_KEY)
 
             # If the transaction is successful, return the created note data
             return Response(note, status=status.HTTP_201_CREATED)
