@@ -1,15 +1,17 @@
-"""Per-user usage counters for LLM model selection.
+"""Per-user usage counters for tier quotas.
 
-`ModelUsageCounter` enforces daily per-model quotas configured in
-`SEARCH_ENGINE["MODEL_DAILY_QUOTAS"]`. One row per (user, model, UTC
-day); incremented at user-initiated agent asks only (not for internal
-sub-calls like the query rewriter or reranker), so the surfaced
-"X / Y used today" matches the user's mental model of "how many asks
-I've done."
+`ModelUsageCounter` backs every metered quota dimension configured in
+`SEARCH_ENGINE["TIER_QUOTAS"]`. One row per (user, key, UTC day),
+where `model_name` is a polymorphic key: a real model id (per-model
+daily asks) or a sentinel — `__llm_ask__`, `__web_search__` (daily),
+`__task_create__`, `__note_create__` (summed over the calendar month
+by `quota.get_used_month`). See `origin.search_engine.quota`.
 
-Counting semantics: incremented on the FIRST `answer_delta` event of
-a run — i.e. once the user has received a real response. Disconnects
-or empty-response failures before that don't charge.
+Ask counters increment at user-initiated agent asks only (not for
+internal sub-calls like the query rewriter or reranker), on the FIRST
+meaningful event of a run — so disconnects or empty-response failures
+don't charge. Creation counters increment after a successful create;
+deleting the resource never refunds quota.
 """
 
 from __future__ import annotations

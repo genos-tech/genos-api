@@ -1,12 +1,18 @@
-"""`python manage.py feature_access` — manage user tier + legacy grants.
+"""`python manage.py feature_access` — manage user tier + team plan + legacy grants.
 
-Primary subaction:
+Primary subactions:
 
-    # Set a user's subscription tier (replaces all three legacy grants).
-    # Tier drives the daily quotas for LLM ask, web search, and
-    # per-model usage via SEARCH_ENGINE["TIER_QUOTAS"].
+    # Set a user's PERSONAL subscription tier. Tier drives every quota
+    # dimension (LLM ask, web search, per-model, monthly task/note
+    # creations, retention, upload size) via SEARCH_ENGINE["TIER_QUOTAS"].
     python manage.py feature_access set-tier --email user@example.com \\
-        --tier pro          # one of: free | pro | max
+        --tier pro          # one of: free | pro | max | enterprise
+
+    # Set a TEAM's plan (one payer, every member benefits). A member's
+    # effective tier is the best of their own tier and their teams'
+    # plans — see `origin.search_engine.quota.get_effective_tier`.
+    python manage.py feature_access set-team-plan --team-id <uuid> \\
+        --plan pro
 
 Legacy subactions (kept for backward-compat on historical UserFeatureAccess
 rows — the two surviving FEATURE_* values are no longer read by app code):
@@ -18,10 +24,13 @@ rows — the two surviving FEATURE_* values are no longer read by app code):
 
 from __future__ import annotations
 
+from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 
 from origin.models.common.feature_models import UserFeatureAccess
+from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import TIER_CHOICES, CustomUser
+from origin.search_engine.quota import invalidate_effective_tier
 
 _KNOWN_FEATURES = [f for f, _ in UserFeatureAccess.FEATURE_CHOICES]
 _KNOWN_TIERS = [t for t, _ in TIER_CHOICES]
@@ -36,7 +45,7 @@ class Command(BaseCommand):
         # ---- set-tier (primary) ----
         set_tier = sub.add_parser(
             "set-tier",
-            help="Set a user's subscription tier (free | pro | max).",
+            help=f"Set a user's subscription tier ({' | '.join(_KNOWN_TIERS)}).",
         )
         set_tier.add_argument("--email", required=True, help="User email address.")
         set_tier.add_argument(
@@ -46,6 +55,24 @@ class Command(BaseCommand):
             help=f"Target tier. One of: {', '.join(_KNOWN_TIERS)}",
         )
         set_tier.add_argument(
+            "--note",
+            default="",
+            help="Optional comment for the operator log (not persisted).",
+        )
+
+        # ---- set-team-plan ----
+        set_team_plan = sub.add_parser(
+            "set-team-plan",
+            help="Set a team's plan — every active member inherits it as their effective tier.",
+        )
+        set_team_plan.add_argument("--team-id", required=True, help="TeamMaster UUID.")
+        set_team_plan.add_argument(
+            "--plan",
+            required=True,
+            choices=_KNOWN_TIERS,
+            help=f"Target plan. One of: {', '.join(_KNOWN_TIERS)}",
+        )
+        set_team_plan.add_argument(
             "--note",
             default="",
             help="Optional comment for the operator log (not persisted).",
@@ -93,6 +120,8 @@ class Command(BaseCommand):
         action = options["action"]
         if action == "set-tier":
             self._set_tier(options)
+        elif action == "set-team-plan":
+            self._set_team_plan(options)
         elif action == "grant":
             self._grant(options)
         elif action == "revoke":
@@ -121,11 +150,53 @@ class Command(BaseCommand):
 
         user.tier = new_tier
         user.save(update_fields=["tier"])
+        invalidate_effective_tier([user.id])
 
         note = options.get("note") or ""
         suffix = f"  Note: {note}" if note else ""
         self.stdout.write(
             self.style.SUCCESS(f"Tier for {user.email}: '{previous}' → '{new_tier}'.{suffix}")
+        )
+
+    def _set_team_plan(self, options):
+        team_id = options["team_id"]
+        try:
+            team = TeamMaster.objects.get(team_id=team_id, is_deleted=False)
+        except TeamMaster.DoesNotExist:
+            raise CommandError(f"No active team with id '{team_id}'.")
+        except (ValueError, ValidationError):
+            raise CommandError(f"'{team_id}' is not a valid team UUID.")
+
+        new_plan = options["plan"]
+        previous = team.plan or "free"
+
+        if previous == new_plan:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"Team '{team.team_name}' is already on plan '{new_plan}'. No change."
+                )
+            )
+            return
+
+        team.plan = new_plan
+        team.save(update_fields=["plan"])
+
+        # Evict members' cached effective tiers so the change lands
+        # immediately instead of after the 60s cache TTL.
+        member_ids = list(
+            TeamMembers.objects.filter(team=team, is_deleted=False).values_list(
+                "attendee_id", flat=True
+            )
+        )
+        invalidate_effective_tier(member_ids)
+
+        note = options.get("note") or ""
+        suffix = f"  Note: {note}" if note else ""
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Plan for team '{team.team_name}': '{previous}' → '{new_plan}' "
+                f"({len(member_ids)} active member(s) affected).{suffix}"
+            )
         )
 
     def _grant(self, options):
