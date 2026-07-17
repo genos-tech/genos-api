@@ -51,6 +51,11 @@ from origin.search_engine.agent.tools.task_enums import (
     VALID_EFFORTS,
     VALID_PRIORITIES,
 )
+from origin.search_engine.quota import (
+    TASK_CREATE_KEY,
+    check_remaining_monthly,
+    increment_usage,
+)
 from origin.services.milestone_service import create_milestone, ensure_backing_task
 from origin.services.task_cache import invalidate_project_tasks_cache
 
@@ -132,9 +137,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     milestone_spec = args.get("milestone")
     raw_existing_id = args.get("existing_milestone_id")
     raw_parent_task_id = args.get("parent_task_id")
-    modes_given = sum(
-        x is not None for x in (milestone_spec, raw_existing_id, raw_parent_task_id)
-    )
+    modes_given = sum(x is not None for x in (milestone_spec, raw_existing_id, raw_parent_task_id))
     if modes_given > 1:
         raise ToolError(
             "Pass at most ONE of `milestone` (create new), `existing_milestone_id`, "
@@ -157,8 +160,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             raise ToolError("Not authorized: parent task is in a different team.")
         if parent_task.project_id != project_id:
             raise ToolError(
-                f"Task {parent_id} belongs to project {parent_task.project_id}, "
-                f"not {project_id}."
+                f"Task {parent_id} belongs to project {parent_task.project_id}, not {project_id}."
             )
 
     existing_milestone: MilestoneMaster | None = None
@@ -166,7 +168,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         try:
             existing_id = int(raw_existing_id)
         except (TypeError, ValueError):
-            raise ToolError(f"`existing_milestone_id` must be an integer (got {raw_existing_id!r}).")
+            raise ToolError(
+                f"`existing_milestone_id` must be an integer (got {raw_existing_id!r})."
+            )
         try:
             existing_milestone = MilestoneMaster.objects.select_related("task").get(
                 milestone_id=existing_id, is_deleted=False
@@ -189,7 +193,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             raise ToolError("`milestone` must be an object.")
         if not (milestone_spec.get("title") or "").strip():
             errors.append("milestone: `title` is required.")
-        _check_enum(milestone_spec.get("priority"), VALID_PRIORITIES, "milestone", "priority", errors)
+        _check_enum(
+            milestone_spec.get("priority"), VALID_PRIORITIES, "milestone", "priority", errors
+        )
         _check_enum(
             milestone_spec.get("effort_level"), VALID_EFFORTS, "milestone", "effort_level", errors
         )
@@ -240,9 +246,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     f"{where}: `parent_index` must reference an EARLIER task "
                     f"(0..{i - 1}), got {parent_index}. Order parents before children."
                 )
-            elif isinstance(tasks[parent_index], dict) and tasks[parent_index].get(
-                "parent_index"
-            ) is not None:
+            elif (
+                isinstance(tasks[parent_index], dict)
+                and tasks[parent_index].get("parent_index") is not None
+            ):
                 errors.append(
                     f"{where}: parent tasks[{parent_index}] is itself a sub-task — "
                     "only one level of nesting below top-level tasks is supported."
@@ -293,6 +300,22 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     if errors:
         raise ToolError("Plan validation failed:\n- " + "\n- ".join(errors[:25]))
+
+    # Tier quota: the plan mints len(tasks) rows — plus one backing
+    # task when it creates a NEW milestone — in a single approval, so
+    # check the whole batch up front (a plan must not blow past the
+    # monthly cap one approval at a time). `ensure_backing_task` on an
+    # EXISTING milestone can lazily mint one extra row; that edge is
+    # left uncharged.
+    n_creates = len(tasks) + (1 if milestone_spec is not None else 0)
+    allowed, used, task_limit = check_remaining_monthly(ctx.user_id, TASK_CREATE_KEY, n=n_creates)
+    if not allowed:
+        remaining = max(0, (task_limit or 0) - used)
+        raise ToolError(
+            f"This plan would create {n_creates} tasks, but only {remaining} of "
+            f"your {task_limit} monthly task creations remain. Upgrade your "
+            "plan, or split the plan into a smaller one."
+        )
 
     # ---- execute: all-or-nothing ----
     try:
@@ -380,6 +403,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001 — surface as ToolError for the model
         raise ToolError(f"Failed to create the plan (nothing was created): {e}")
 
+    # Charge after commit — the whole batch, including a new
+    # milestone's backing task.
+    increment_usage(
+        ctx.user_id,
+        TASK_CREATE_KEY,
+        amount=len(created) + (1 if milestone_spec is not None else 0),
+    )
+
     # The backing task (and every plan task) is a new row in the project
     # task table — drop the cached listing after commit.
     invalidate_project_tasks_cache(ctx.team_id, project_id)
@@ -414,9 +445,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     n_deps = len(dependencies)
     if milestone_spec is not None:
-        summary = (
-            f'Created milestone "{milestone.title}" with {len(created)} task(s)'
-            + (f", {n_deps} dependency(ies)" if n_deps else "")
+        summary = f'Created milestone "{milestone.title}" with {len(created)} task(s)' + (
+            f", {n_deps} dependency(ies)" if n_deps else ""
         )
     elif parent_task is not None:
         summary = f"Created {len(created)} sub-task(s) under {parent_task.display_id}" + (
@@ -554,8 +584,7 @@ CREATE_TASK_PLAN = Tool(
                         "type": "ARRAY",
                         "items": {"type": "STRING"},
                         "description": (
-                            "Optional assignee user UUIDs (milestones support "
-                            "multiple assignees)."
+                            "Optional assignee user UUIDs (milestones support multiple assignees)."
                         ),
                     },
                 },
@@ -584,8 +613,7 @@ CREATE_TASK_PLAN = Tool(
                 "type": "ARRAY",
                 "items": _TASK_ITEM_SCHEMA,
                 "description": (
-                    f"1-{_MAX_PLAN_TASKS} tasks, parents ordered before their "
-                    "sub-tasks."
+                    f"1-{_MAX_PLAN_TASKS} tasks, parents ordered before their sub-tasks."
                 ),
             },
         },

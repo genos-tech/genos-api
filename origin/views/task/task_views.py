@@ -14,6 +14,7 @@ from rest_framework.response import Response
 
 from origin.models.project.prj_models import *
 from origin.models.task.task_models import *
+from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
 from origin.serializers.task.task_serializers import *
 from origin.services import unified_writer
 from origin.services.github_webhooks import ensure_webhooks_for_links
@@ -30,6 +31,7 @@ from origin.views.utils.incremental import (
     check_since,
 )
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
+from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 from .common_color import EFFORT_LEVEL_COLOR_MAP, PRIORITY_COLOR_MAP, status_color
@@ -208,6 +210,13 @@ def _cascade_milestone_to_subtasks(parent_task_id, milestone_id, depth_limit=10)
 
 class TaskMasterView(AuthenticatedAPIView):
     def post(self, request):
+        # Tier quota: monthly task-creation cap. Charged to the
+        # authenticated creator (not the `reporter` field). Note the
+        # create-form bootstrap row (`is_init_task`) is a real create
+        # and charges a unit — deleting it later doesn't refund.
+        if res := check_monthly_creation_quota(request.user.id, TASK_CREATE_KEY, "task_create"):
+            return res
+
         # Two-way bridge between `milestone` and `parent_task_id`:
         #   1. If the client passes a `milestone` id and no
         #      `parent_task_id`, promote the milestone's backing task
@@ -335,6 +344,7 @@ class TaskMasterView(AuthenticatedAPIView):
         serializer = TaskMasterSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
+            increment_usage(str(request.user.id), TASK_CREATE_KEY)
             # Drop the project-tasks cache so the next sidebar fetch
             # sees the new row. `data["team"]` / `data["project"]` are
             # the FK target values (team_id / project_id, given the
@@ -1487,7 +1497,6 @@ class TaskAttachmentsView(AuthenticatedAPIView):
 
         # Add only a new attachment
         if attachment_id != "" and int(attachment_id) == -1:
-
             curr_attachments_id = TaskAttachments.objects.filter(task=task).aggregate(
                 Max("attachment_id")
             )["attachment_id__max"]
@@ -1651,9 +1660,7 @@ class TaskCommentsView(AuthenticatedAPIView):
 
                     sender = mirror.sender
                     comment_body = request.data["comment_body"] or []
-                    mentioned_ids = set(
-                        mention_extractor.extract_mentioned_user_ids(comment_body)
-                    )
+                    mentioned_ids = set(mention_extractor.extract_mentioned_user_ids(comment_body))
                     group_ids = mention_extractor.extract_mention_group_ids(comment_body)
                     if group_ids:
                         mentioned_ids |= resolve_group_members(group_ids)
@@ -1821,7 +1828,6 @@ class TaskCommentsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if task_id:
-
             # Fetch ALL reactions for this task in a single SQL (JOIN via the
             # double-underscore traversal on sender). Group by comment_id in
             # Python so the per-comment loop below just looks up a dict
@@ -2035,9 +2041,7 @@ class TaskCommentMentionView(AuthenticatedAPIView):
 
         if not team_id or not mentioned_user_ids or not task_id or not comment_id:
             return Response(
-                {
-                    "error": "`team_id`, `mentioned_user_ids`, `task_id`, `comment_id` are required."
-                },
+                {"error": "`team_id`, `mentioned_user_ids`, `task_id`, `comment_id` are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
