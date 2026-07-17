@@ -190,6 +190,18 @@ class CheckoutAndPortalViewTests(BillingTestBase):
         kwargs = self._create_session_kwargs(STRIPE_TEST_SETTINGS)
         self.assertNotIn("consent_collection", kwargs)
 
+    def test_return_urls_land_inside_the_workspace(self):
+        """Regression: these pointed at the app ROOT, which is the
+        guest-only sign-in route — GuestGuard bounced signed-in users
+        to /jointeam and dropped the ?billing= param, so the return
+        toast and the tier reconcile never ran in a real browser."""
+        kwargs = self._create_session_kwargs(STRIPE_TEST_SETTINGS)
+        for key in ("success_url", "cancel_url"):
+            self.assertIn(
+                stripe_billing.RETURN_PATH + "?billing=", kwargs[key], f"{key} must land in-app"
+            )
+        self.assertTrue(stripe_billing.RETURN_PATH.startswith("/workspace/"))
+
     def test_checkout_tos_consent_flag_adds_required_checkbox(self):
         kwargs = self._create_session_kwargs({**STRIPE_TEST_SETTINGS, "TOS_CONSENT": True})
         self.assertEqual(kwargs["consent_collection"], {"terms_of_service": "required"})
