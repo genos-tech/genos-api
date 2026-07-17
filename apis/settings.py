@@ -1075,6 +1075,12 @@ STRIPE = {
     # tax settings (origin address, registrations) are configured in
     # the dashboard — Stripe rejects session creation otherwise.
     "AUTOMATIC_TAX": os.environ.get("STRIPE_AUTOMATIC_TAX", "false").lower() == "true",
+    # Require a terms-of-service checkbox on checkout (links to the
+    # /legal page — cancellation/refund policy). Leave off until the
+    # account's terms-of-service URL is set in the dashboard (Settings
+    # → Business → Public details) — Stripe rejects session creation
+    # otherwise, exactly like AUTOMATIC_TAX above.
+    "TOS_CONSENT": os.environ.get("STRIPE_TOS_CONSENT", "false").lower() == "true",
 }
 
 # How long a password-reset URL is valid for, in minutes. Short enough

@@ -188,23 +188,31 @@ def create_checkout_session(user: CustomUser, plan: str) -> str:
     stripe = _stripe()
     customer_id = ensure_customer(user)
     base = settings.FRONTEND_BASE_URL.rstrip("/")
+    params = {
+        "mode": "subscription",
+        "customer": customer_id,
+        "line_items": [{"price": price_id, "quantity": 1}],
+        # The webhook resolves the user from this — never from
+        # anything the browser can influence.
+        "client_reference_id": str(user.id),
+        "metadata": {"genos_user_id": str(user.id), "plan": plan},
+        "success_url": f"{base}/?billing=success&plan={plan}",
+        "cancel_url": f"{base}/?billing=cancelled",
+        # Stripe Tax: activates only when enabled on the account
+        # (dashboard: Settings → Tax). Harmless flag otherwise per
+        # Stripe docs; if account setup is incomplete Stripe returns
+        # a clear error at session-create time, surfaced as a 503.
+        "automatic_tax": {"enabled": settings.STRIPE.get("AUTOMATIC_TAX", False)},
+    }
+    # "I agree to the terms" checkbox on the Stripe-hosted page. The
+    # linked terms URL comes from the ACCOUNT (dashboard: Settings →
+    # Business → Public details → terms of service = the /legal page,
+    # which carries the cancellation/refund policy). Gated because
+    # Stripe rejects session creation when the URL isn't configured.
+    if settings.STRIPE.get("TOS_CONSENT"):
+        params["consent_collection"] = {"terms_of_service": "required"}
     try:
-        session = stripe.checkout.Session.create(
-            mode="subscription",
-            customer=customer_id,
-            line_items=[{"price": price_id, "quantity": 1}],
-            # The webhook resolves the user from this — never from
-            # anything the browser can influence.
-            client_reference_id=str(user.id),
-            metadata={"genos_user_id": str(user.id), "plan": plan},
-            success_url=f"{base}/?billing=success&plan={plan}",
-            cancel_url=f"{base}/?billing=cancelled",
-            # Stripe Tax: activates only when enabled on the account
-            # (dashboard: Settings → Tax). Harmless flag otherwise per
-            # Stripe docs; if account setup is incomplete Stripe returns
-            # a clear error at session-create time, surfaced as a 503.
-            automatic_tax={"enabled": settings.STRIPE.get("AUTOMATIC_TAX", False)},
-        )
+        session = stripe.checkout.Session.create(**params)
     except Exception as e:  # noqa: BLE001
         raise BillingError(f"Could not start checkout: {e}")
     return session["url"]

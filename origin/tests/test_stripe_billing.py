@@ -162,6 +162,36 @@ class CheckoutAndPortalViewTests(BillingTestBase):
         res = self.client.post(PORTAL_URL, {}, format="json")
         self.assertEqual(res.status_code, 503)
 
+    def _create_session_kwargs(self, stripe_settings):
+        """Run create_checkout_session against a REAL-SDK-shaped mock
+        and return the kwargs Stripe would have received."""
+        import stripe  # noqa: PLC0415
+
+        self.user.stripe_customer_id = "cus_abc"
+        self.user.save(update_fields=["stripe_customer_id"])
+        session = stripe.checkout.Session.construct_from(
+            {"id": "cs_x", "object": "checkout.session", "url": "https://stripe/cs_x"},
+            "sk_test_x",
+        )
+        with (
+            override_settings(STRIPE=stripe_settings),
+            mock.patch("stripe.checkout.Session.create", return_value=session) as create,
+        ):
+            url = stripe_billing.create_checkout_session(self.user, "pro")
+        self.assertEqual(url, "https://stripe/cs_x")
+        return create.call_args.kwargs
+
+    def test_checkout_tos_consent_off_by_default(self):
+        kwargs = self._create_session_kwargs(STRIPE_TEST_SETTINGS)
+        self.assertNotIn("consent_collection", kwargs)
+
+    def test_checkout_tos_consent_flag_adds_required_checkbox(self):
+        kwargs = self._create_session_kwargs({**STRIPE_TEST_SETTINGS, "TOS_CONSENT": True})
+        self.assertEqual(kwargs["consent_collection"], {"terms_of_service": "required"})
+        # The flag must not disturb the load-bearing params.
+        self.assertEqual(kwargs["client_reference_id"], str(self.user.id))
+        self.assertEqual(kwargs["mode"], "subscription")
+
     def test_portal_returns_url(self):
         with mock.patch.object(
             stripe_billing, "create_portal_session", return_value="https://stripe/bps_1"
