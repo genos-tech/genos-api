@@ -300,15 +300,20 @@ class DefaultConfigShapeTests(TestCase):
                 f"tier '{tier}' missing keys: {self.REQUIRED_KEYS - set(cfg.keys())}",
             )
 
-    def test_new_dimensions_ship_dark(self):
-        # The four new dimensions must stay None (unlimited) until the
-        # deliberate enable PR — flipping them is a product decision,
-        # not a side effect.
-        for tier, cfg in settings.SEARCH_ENGINE["TIER_QUOTAS"].items():
-            for key in (
-                "task_create_monthly",
-                "note_create_monthly",
-                "message_retention_days",
-                "upload_max_mb",
-            ):
-                self.assertIsNone(cfg[key], f"{tier}.{key} flipped early")
+    def test_shipped_limits_match_documented_targets(self):
+        # The enable PR flipped the four dimensions live. These are the
+        # documented values (SUBSCRIPTION_TIERS.md §1) — changing them
+        # is a product decision that should update the doc too.
+        tq = settings.SEARCH_ENGINE["TIER_QUOTAS"]
+        expected = {
+            "free": (200, 100, 90, 10),
+            "pro": (2000, 1000, None, 25),
+            "max": (10000, 5000, None, 100),
+            "enterprise": (None, None, None, 200),
+        }
+        for tier, (task, note, retention, upload) in expected.items():
+            cfg = tq[tier]
+            self.assertEqual(cfg["task_create_monthly"], task, f"{tier} task cap")
+            self.assertEqual(cfg["note_create_monthly"], note, f"{tier} note cap")
+            self.assertEqual(cfg["message_retention_days"], retention, f"{tier} retention")
+            self.assertEqual(cfg["upload_max_mb"], upload, f"{tier} upload cap")

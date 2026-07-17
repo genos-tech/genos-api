@@ -17,6 +17,7 @@ final test class.
 
 from datetime import timedelta
 
+from django.conf import settings
 from django.test import override_settings
 from django.utils import timezone
 
@@ -155,13 +156,25 @@ class PaidTierRetentionTests(RetentionTestBase):
         self.assertNotIn("retention", res.data)
 
 
-class DefaultsAreDarkRetentionTests(RetentionTestBase):
-    """SHIPPED config: message_retention_days=None for every tier —
-    full history for everyone, no envelope change."""
+class ShippedDefaultsRetentionTests(RetentionTestBase):
+    """SHIPPED config (enable PR): free = 90-day window; paid tiers
+    unlimited."""
 
-    def test_free_user_sees_everything_by_default(self):
-        self.make_message("ancient", days_ago=400)
+    def test_free_user_default_window_is_90_days(self):
+        self.assertEqual(
+            settings.SEARCH_ENGINE["TIER_QUOTAS"]["free"]["message_retention_days"], 90
+        )
+        self.make_message("ancient", days_ago=120)
         self.make_message("recent")
         res = self.delta()
-        self.assertEqual(self.message_texts(res), ["ancient", "recent"])
+        self.assertEqual(self.message_texts(res), ["recent"])
+        self.assertTrue(res.data["retention"]["truncated"])
+
+    def test_pro_default_is_unlimited(self):
+        self.user.tier = "pro"
+        self.user.save(update_fields=["tier"])
+        quota.invalidate_effective_tier([self.user.id])
+        self.make_message("ancient", days_ago=400)
+        res = self.delta()
+        self.assertEqual(self.message_texts(res), ["ancient"])
         self.assertNotIn("retention", res.data)
