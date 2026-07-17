@@ -309,3 +309,79 @@ def handle_event(event) -> str:
         return "tier set to free"
 
     return f"ignored event type {etype!r}"
+
+
+# --------------------------------------------------------------------------- #
+# Reconciliation (pull)                                                       #
+# --------------------------------------------------------------------------- #
+
+
+def reconcile_from_stripe(user: CustomUser) -> str:
+    """Pull the user's subscriptions from Stripe and recompute the tier.
+
+    The webhook projection is push-only and events CAN be lost: locally
+    whenever `stripe listen` isn't running (the CLI never retries missed
+    events), and in prod when the handler crashes (the webhook view
+    deliberately acks 200 to stop retry loops). This is the pull-based
+    repair. The frontend calls it whenever the browser lands back with
+    `?billing=success` / `?billing=portal_return`, so returning from
+    checkout or the portal self-heals regardless of webhook delivery —
+    it also beats the redirect-vs-webhook race right after checkout.
+
+    Write policy mirrors `handle_event`:
+      * best active/trialing mapped price wins (checkout + portal keep
+        one subscription per customer, but "best of active" is the safe
+        read if a duplicate ever appears),
+      * active subscription with an UNMAPPED price → unchanged (env
+        misconfiguration; don't guess),
+      * only grace statuses (past_due / incomplete / paused) → unchanged
+        (dunning may still recover; a terminal webhook will follow),
+      * nothing live at all → free,
+      * `enterprise` is operator-managed and never touched here.
+    """
+    if (user.tier or "free") == "enterprise":
+        return "skipped: enterprise is operator-managed"
+    if not user.stripe_customer_id:
+        return "no billing account"
+    stripe = _stripe()
+    try:
+        resp = stripe.Subscription.list(
+            customer=user.stripe_customer_id, status="all", limit=100
+        )
+    except Exception as e:  # noqa: BLE001
+        raise BillingError(f"Could not list subscriptions: {e}")
+    # Same plain-dict discipline as `verify_webhook`: `str()` of a
+    # StripeObject is its JSON rendering (pinned by test), and plain
+    # dicts keep this module off the SDK's object-model churn — the
+    # exact churn that broke `.get()` on webhook events once already.
+    subs = (json.loads(str(resp)) or {}).get("data") or []
+
+    active_tiers: list[str] = []
+    unmapped_active = False
+    in_grace = False
+    for sub in subs:
+        status_ = (sub or {}).get("status") or ""
+        if status_ in ("active", "trialing"):
+            tier = tier_for_price(_subscription_price_id(sub))
+            if tier is None:
+                unmapped_active = True
+            else:
+                active_tiers.append(tier)
+        elif status_ in ("past_due", "incomplete", "paused"):
+            in_grace = True
+
+    if active_tiers:
+        best = max(active_tiers, key=PURCHASABLE_PLANS.index)
+        _set_personal_tier(user, best, reason="reconcile")
+        return f"tier set to {best}"
+    if unmapped_active:
+        log.warning(
+            "stripe reconcile: %s has an active subscription with an unmapped price"
+            " — tier NOT changed",
+            user.email,
+        )
+        return "unchanged: active subscription with unmapped price"
+    if in_grace:
+        return "unchanged: subscription in dunning grace"
+    _set_personal_tier(user, "free", reason="reconcile")
+    return "tier set to free"

@@ -5,6 +5,7 @@ from origin.views.common.billing_views import (
     BillingCheckoutView,
     BillingConfigView,
     BillingPortalView,
+    BillingRefreshView,
     StripeWebhookView,
 )
 from origin.views.common.calendar_views import (
@@ -124,6 +125,7 @@ urlpatterns = [
     path("api/v2/billing/config/", BillingConfigView.as_view(), name="billing_config"),
     path("api/v2/billing/checkout/", BillingCheckoutView.as_view(), name="billing_checkout"),
     path("api/v2/billing/portal/", BillingPortalView.as_view(), name="billing_portal"),
+    path("api/v2/billing/refresh/", BillingRefreshView.as_view(), name="billing_refresh"),
     path(
         "api/v2/billing/stripe/webhook/",
         StripeWebhookView.as_view(),
