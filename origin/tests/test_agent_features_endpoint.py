@@ -69,15 +69,15 @@ class AgentFeaturesPayloadTests(FeaturesTestBase):
         self.assertEqual(data["upload_max_mb"], 100)
 
 
-class AgentFeaturesDarkDefaultsTests(FeaturesTestBase):
-    """SHIPPED config: the new dimensions are all None (unlimited)."""
+class AgentFeaturesShippedDefaultsTests(FeaturesTestBase):
+    """SHIPPED config (enable PR): the free tier's limits are live."""
 
-    def test_new_dimensions_null_by_default(self):
+    def test_shipped_free_limits_populated(self):
         res = self.client.get(URL)
         data = res.data
-        self.assertIsNone(data["task_create"]["limit"])
-        self.assertIsNone(data["note_create"]["limit"])
-        self.assertIsNone(data["message_retention_days"])
-        self.assertIsNone(data["upload_max_mb"])
+        self.assertEqual(data["task_create"]["limit"], 200)
+        self.assertEqual(data["note_create"]["limit"], 100)
+        self.assertEqual(data["message_retention_days"], 90)
+        self.assertEqual(data["upload_max_mb"], 10)
         # Daily AI quotas keep their existing live values.
         self.assertIsNotNone(data["llm_ask"]["limit"])

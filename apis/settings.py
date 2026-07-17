@@ -949,9 +949,9 @@ SEARCH_ENGINE = {
     #     restores them).
     #   - `upload_max_mb`: per-file attachment size ceiling.
     # A limit value of `None` (or a missing key) means unlimited.
-    # The four new dimensions ship as `None` (dark) — flip to the
-    # commented target values when the frontend limit UI is live.
-    # Daily numbers are placeholders — tune as needed.
+    # All dimensions are LIVE. Tune per environment without a deploy
+    # via the TIER_QUOTAS_JSON env override below; canonical rationale
+    # for the numbers: genos-docs operations/SUBSCRIPTION_TIERS.md.
     "TIER_QUOTAS": {
         "free": {
             "llm_ask_daily": 20,
@@ -965,10 +965,10 @@ SEARCH_ENGINE = {
                 "claude-sonnet-4-6": 10,
                 "claude-opus-4-7": 0,
             },
-            "task_create_monthly": None,  # target: 200
-            "note_create_monthly": None,  # target: 100
-            "message_retention_days": None,  # target: 90
-            "upload_max_mb": None,  # target: 10
+            "task_create_monthly": 200,
+            "note_create_monthly": 100,
+            "message_retention_days": 90,
+            "upload_max_mb": 10,
         },
         "pro": {
             "llm_ask_daily": 100,
@@ -982,10 +982,10 @@ SEARCH_ENGINE = {
                 "claude-sonnet-4-6": 50,
                 "claude-opus-4-7": 20,
             },
-            "task_create_monthly": None,  # target: 2000
-            "note_create_monthly": None,  # target: 1000
+            "task_create_monthly": 2000,
+            "note_create_monthly": 1000,
             "message_retention_days": None,  # unlimited on paid tiers
-            "upload_max_mb": None,  # target: 25
+            "upload_max_mb": 25,
         },
         "max": {
             "llm_ask_daily": 1000,
@@ -999,10 +999,10 @@ SEARCH_ENGINE = {
                 "claude-sonnet-4-6": 500,
                 "claude-opus-4-7": 200,
             },
-            "task_create_monthly": None,  # target: 10000
-            "note_create_monthly": None,  # target: 5000
+            "task_create_monthly": 10000,
+            "note_create_monthly": 5000,
             "message_retention_days": None,  # unlimited on paid tiers
-            "upload_max_mb": None,  # target: 100
+            "upload_max_mb": 100,
         },
         # Contact-sales tier: everything unlimited except an absolute
         # per-file ceiling. Set manually via `feature_access set-tier`
@@ -1014,7 +1014,7 @@ SEARCH_ENGINE = {
             "task_create_monthly": None,
             "note_create_monthly": None,
             "message_retention_days": None,
-            "upload_max_mb": None,  # target: 200
+            "upload_max_mb": 200,
         },
     },
 }

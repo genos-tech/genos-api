@@ -16,6 +16,7 @@ per month). The shipped defaults are `None` (dark) — covered by
 `DefaultsAreDarkTests`.
 """
 
+from django.conf import settings
 from django.test import override_settings
 from django.utils import timezone
 
@@ -219,16 +220,21 @@ class CreateTaskPlanCapTests(CreationCapTestBase):
         self.assertEqual(quota.get_used_month(self.user.id, quota.TASK_CREATE_KEY), 3)
 
 
-class DefaultsAreDarkTests(CreationCapTestBase):
-    """With the SHIPPED config (all new limits None) nothing is capped."""
+class ShippedDefaultsTests(CreationCapTestBase):
+    """The SHIPPED config carries live free-tier caps (enable PR):
+    200 tasks / 100 notes per month."""
 
-    def test_task_create_unlimited_by_default(self):
-        self.seed_usage(quota.TASK_CREATE_KEY, 10_000)
+    def test_task_create_capped_at_shipped_default(self):
+        limit = settings.SEARCH_ENGINE["TIER_QUOTAS"]["free"]["task_create_monthly"]
+        self.assertEqual(limit, 200)
+        self.seed_usage(quota.TASK_CREATE_KEY, limit)
         res = self.client.post("/api/v2/task/", self.task_payload(), format="json")
-        self.assertEqual(res.status_code, 201)
+        self.assert_limit_429(res, "task_create")
 
-    def test_note_create_unlimited_by_default(self):
-        self.seed_usage(quota.NOTE_CREATE_KEY, 10_000)
+    def test_note_create_capped_at_shipped_default(self):
+        limit = settings.SEARCH_ENGINE["TIER_QUOTAS"]["free"]["note_create_monthly"]
+        self.assertEqual(limit, 100)
+        self.seed_usage(quota.NOTE_CREATE_KEY, limit)
         res = self.client.post(
             "/api/v2/note/personal/",
             {
@@ -239,4 +245,4 @@ class DefaultsAreDarkTests(CreationCapTestBase):
             },
             format="json",
         )
-        self.assertEqual(res.status_code, 201)
+        self.assert_limit_429(res, "note_create")

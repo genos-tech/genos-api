@@ -76,11 +76,24 @@ class CheckUploadSizeHelperTests(UploadTestBase):
 
 
 class FallbackBehaviorTests(UploadTestBase):
-    """With the SHIPPED config (upload_max_mb=None, dark) the chat
-    endpoints keep their historical 25 MiB flat cap and everything
-    else gets only the absolute ceiling."""
+    """With the SHIPPED config (enable PR) the free tier's 10 MB cap
+    beats the chat endpoints' historical 25 MiB fallback; the fallback
+    and the absolute ceiling only apply to tiers WITHOUT a file cap
+    (exercised via TEST_QUOTAS' unlimited enterprise tier)."""
 
-    def test_chat_fallback_preserved_while_dark(self):
+    def test_shipped_free_cap_beats_chat_fallback(self):
+        res = check_upload_size(self.user, _stub_file(11 * MIB), fallback_bytes=25 * MIB)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.data["limit_mb"], 10)
+        self.assertIsNone(
+            check_upload_size(self.user, _stub_file(9 * MIB), fallback_bytes=25 * MIB)
+        )
+
+    @override_settings(SEARCH_ENGINE=_search_engine_with_quotas(TEST_QUOTAS))
+    def test_fallback_applies_when_tier_has_no_cap(self):
+        self.user.tier = "enterprise"  # upload_max_mb None in TEST_QUOTAS
+        self.user.save(update_fields=["tier"])
+        quota.invalidate_effective_tier([self.user.id])
         fallback = 25 * MIB
         self.assertIsNone(
             check_upload_size(self.user, _stub_file(24 * MIB), fallback_bytes=fallback)
@@ -89,7 +102,11 @@ class FallbackBehaviorTests(UploadTestBase):
         self.assertIsNotNone(res)
         self.assertEqual(res.data["limit_mb"], 25)
 
-    def test_ceiling_when_no_fallback(self):
+    @override_settings(SEARCH_ENGINE=_search_engine_with_quotas(TEST_QUOTAS))
+    def test_ceiling_when_no_tier_cap_and_no_fallback(self):
+        self.user.tier = "enterprise"
+        self.user.save(update_fields=["tier"])
+        quota.invalidate_effective_tier([self.user.id])
         self.assertIsNone(check_upload_size(self.user, _stub_file(ABSOLUTE_MAX_UPLOAD_BYTES)))
         res = check_upload_size(self.user, _stub_file(ABSOLUTE_MAX_UPLOAD_BYTES + 1))
         self.assertIsNotNone(res)
