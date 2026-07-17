@@ -18,7 +18,8 @@ def _team_emoji_path(instance, filename):
     message bodies that baked its URL keep rendering).
     """
     ext = instance.image_ext or "png"
-    return f"team_emoji/{instance.team_id}/{uuid.uuid4()}-{instance.name}.{ext}"
+    scope = instance.team_id or "global"
+    return f"team_emoji/{scope}/{uuid.uuid4()}-{instance.name}.{ext}"
 
 
 class TeamEmojiMaster(models.Model):
@@ -30,6 +31,12 @@ class TeamEmojiMaster(models.Model):
     Soft delete keeps the image file so old content keeps rendering;
     only the catalog (GET) hides deleted rows, which makes new inserts
     and reaction rendering fall back gracefully.
+
+    `team=NULL` rows are GLOBAL DEFAULTS (the seeded starter packs):
+    every team's catalog includes them automatically — current and
+    future teams alike — and a team emoji with the same name overrides
+    the global one. They're managed via `seed_team_emoji --global`,
+    never through the API (no uploader ⇒ the DELETE endpoint refuses).
     """
 
     team = models.ForeignKey(
@@ -69,5 +76,13 @@ class TeamEmojiMaster(models.Model):
                 fields=["team", "name"],
                 condition=Q(is_deleted=False),
                 name="uniq_active_team_emoji_name",
-            )
+            ),
+            # Postgres treats NULLs as distinct in unique indexes, so
+            # the constraint above never dedupes GLOBAL (team=NULL)
+            # rows — this one does.
+            models.UniqueConstraint(
+                fields=["name"],
+                condition=Q(team__isnull=True, is_deleted=False),
+                name="uniq_active_global_emoji_name",
+            ),
         ]

@@ -110,3 +110,20 @@ class SeedTeamEmojiTests(BaseAPITestCase):
             call_command("seed_team_emoji")
         with self.assertRaises(CommandError):
             call_command("seed_team_emoji", f"--team-id={self.team.team_id}", "--all-teams")
+        with self.assertRaises(CommandError):
+            call_command("seed_team_emoji", f"--team-id={self.team.team_id}", "--global")
+
+    def test_global_mode_seeds_ownerless_team_null_rows(self):
+        out = StringIO()
+        with patch("requests.get", side_effect=_fake_get):
+            call_command("seed_team_emoji", "--global", "--packs=parrots", stdout=out, stderr=out)
+
+        rows = TeamEmojiMaster.objects.filter(team__isnull=True, is_deleted=False)
+        self.assertEqual({e.name for e in rows}, {"partyparrot", "party-blob"})
+        self.assertTrue(all(e.created_by_id is None for e in rows))
+        self.assertIn("GLOBAL defaults", out.getvalue())
+
+        # Idempotent, and independent of any per-team rows.
+        with patch("requests.get", side_effect=_fake_get):
+            call_command("seed_team_emoji", "--global", "--packs=parrots", stdout=out, stderr=out)
+        self.assertEqual(TeamEmojiMaster.objects.filter(team__isnull=True).count(), 2)

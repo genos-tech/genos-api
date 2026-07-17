@@ -8,10 +8,16 @@ picker's Team Emoji category, reactions). Rows are created with
 `created_by = team owner` so the owner can delete them through the
 normal uploader-only DELETE.
 
+    python manage.py seed_team_emoji --global --packs parrots,meow   # DEFAULTS for every team
     python manage.py seed_team_emoji --team-id <uuid> --packs parrots,meow
     python manage.py seed_team_emoji --team-id <uuid>              # ALL packs (~1000+)
     python manage.py seed_team_emoji --all-teams --packs parrots --limit 30
     python manage.py seed_team_emoji --team-id <uuid> --dry-run
+
+`--global` is the recommended mode: it seeds team=NULL rows that every
+team's catalog — current AND FUTURE teams — includes automatically (a
+team emoji with the same name overrides the global one), so it runs
+exactly once per environment instead of per team.
 
 Idempotent: an emoji whose (sanitized) name is already active in the
 team is skipped, so re-runs only fill gaps. Every file goes through the
@@ -65,6 +71,13 @@ class Command(BaseCommand):
             help="Seed every non-deleted team instead of --team-id.",
         )
         parser.add_argument(
+            "--global",
+            dest="global_defaults",
+            action="store_true",
+            help="Seed GLOBAL defaults (team=NULL) that every current and "
+            "future team sees automatically. Runs once per environment.",
+        )
+        parser.add_argument(
             "--packs",
             default="",
             help="Comma-separated pack names (repo subdirs of emoji/, e.g. "
@@ -85,10 +98,17 @@ class Command(BaseCommand):
     def handle(self, *args, **opts):
         import requests
 
-        if bool(opts.get("team_id")) == bool(opts.get("all_teams")):
-            raise CommandError("Pass exactly one of --team-id or --all-teams.")
+        modes = [
+            bool(opts.get("team_id")),
+            bool(opts.get("all_teams")),
+            bool(opts.get("global_defaults")),
+        ]
+        if sum(modes) != 1:
+            raise CommandError("Pass exactly one of --team-id, --all-teams or --global.")
 
-        if opts["all_teams"]:
+        if opts["global_defaults"]:
+            teams = [None]
+        elif opts["all_teams"]:
             teams = list(TeamMaster.objects.filter(is_deleted=False))
         else:
             try:
@@ -132,6 +152,7 @@ class Command(BaseCommand):
             self._seed_team(requests, team, catalog, dry_run=opts["dry_run"])
 
     def _seed_team(self, requests, team, catalog, *, dry_run):
+        """`team=None` seeds the global defaults."""
         existing = set(
             TeamEmojiMaster.objects.filter(team=team, is_deleted=False).values_list(
                 "name", flat=True
@@ -140,7 +161,8 @@ class Command(BaseCommand):
         created = skipped_dup = skipped_bad = 0
         # Team owner as creator: the uploader-only DELETE rule then lets
         # the owner prune the pack through the normal Settings panel.
-        owner = team.owner
+        # Global defaults have no owner — the API refuses to delete them.
+        owner = team.owner if team is not None else None
 
         for pack, entries in catalog.items():
             for name, ext, url in entries:
@@ -174,9 +196,9 @@ class Command(BaseCommand):
                 created += 1
 
         label = "would create" if dry_run else "created"
+        scope = team.team_name if team is not None else "GLOBAL defaults"
         self.stdout.write(
             self.style.SUCCESS(
-                f"{team.team_name}: {label} {created}, "
-                f"skipped {skipped_dup} existing, {skipped_bad} invalid"
+                f"{scope}: {label} {created}, skipped {skipped_dup} existing, {skipped_bad} invalid"
             )
         )
