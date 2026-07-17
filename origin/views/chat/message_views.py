@@ -27,6 +27,8 @@ the checkpoint) so the client can apply tombstones without parsing every
 message row.
 """
 
+from datetime import timedelta
+
 from django.db import transaction
 from django.db.models import F, Max
 from django.http import Http404
@@ -43,6 +45,7 @@ from origin.models.chat.unified_models import (
     MessageMention,
     MessageReaction,
 )
+from origin.search_engine.quota import get_message_retention_days
 from origin.serializers.chat.unified_serializers import (
     MessageAttachmentSerializer,
     MessageSerializer,
@@ -59,6 +62,45 @@ from origin.views.utils.incremental import (
     check_since,
 )
 from origin.views.utils.mention_handler import resolve_group_members
+
+
+def _retention_cutoff(user):
+    """Return `(days, cutoff_dt)` for the VIEWING user's message-history
+    window, or `(None, None)` when their plan has unlimited history.
+
+    Retention is per-viewer (Slack model): messages older than the
+    window are HIDDEN from reads, never deleted — upgrading instantly
+    restores them. `get_message_retention_days` resolves the effective
+    tier (personal tier or a paying team's plan) and fails open to
+    None, so an infra hiccup shows full history rather than hiding
+    data.
+    """
+    days = get_message_retention_days(user.id)
+    if days is None:
+        return None, None
+    return days, timezone.now() - timedelta(days=days)
+
+
+def _apply_retention(qs, channel, user, *, is_thread_reply):
+    """Apply the viewer's retention window to a delta queryset.
+
+    Returns `(qs, retention_dict_or_None)`. Applied AFTER the
+    reaction-union so a fresh reaction on an out-of-window message
+    can't resurrect it. The `truncated` flag is one indexed EXISTS —
+    it drives the client banner only when there actually is hidden
+    history in this channel.
+    """
+    days, cutoff = _retention_cutoff(user)
+    if cutoff is None:
+        return qs, None
+    qs = qs.filter(ts_sent_at__gte=cutoff)
+    truncated = Message.objects.filter(
+        channel=channel,
+        is_thread_reply=is_thread_reply,
+        deleted_at__isnull=True,
+        ts_sent_at__lt=cutoff,
+    ).exists()
+    return qs, {"days": days, "cutoff": cutoff.isoformat(), "truncated": truncated}
 
 
 def _apply_message_since_filter(qs, since):
@@ -456,6 +498,11 @@ class MessagesDeltaView(AuthenticatedAPIView):
                     )
                     qs = qs | extra
 
+        # Tier retention: hide history beyond the viewer's window.
+        # After the reaction-union (a reaction can't resurrect an
+        # out-of-window message), before the row-count cap.
+        qs, retention = _apply_retention(qs, channel, request.user, is_thread_reply=False)
+
         qs = qs.distinct().order_by("ts_sent_at")
 
         # Cap the row count so a single delta response is bounded in
@@ -476,7 +523,9 @@ class MessagesDeltaView(AuthenticatedAPIView):
             "messages": messages_data,
             "deletes": [],
         }
-        return Response(build_delta_response(envelope_data, server_time, force_full))
+        return Response(
+            build_delta_response(envelope_data, server_time, force_full, retention=retention)
+        )
 
     def post(self, request, channel_id):
         """POST /api/v3/channels/{channel_id}/messages/
@@ -578,6 +627,9 @@ class ThreadMessagesDeltaView(AuthenticatedAPIView):
                     )
                     qs = qs | extra
 
+        # Tier retention — same placement as the top-level delta view.
+        qs, retention = _apply_retention(qs, channel, request.user, is_thread_reply=True)
+
         qs = qs.distinct().order_by("ts_sent_at")
 
         # Cap row count so an over-active thread can't blow up the wire
@@ -591,6 +643,7 @@ class ThreadMessagesDeltaView(AuthenticatedAPIView):
                 {"messages": MessageSerializer(qs, many=True).data, "deletes": []},
                 server_time,
                 force_full,
+                retention=retention,
             )
         )
 
@@ -624,6 +677,12 @@ class MessageDetailView(AuthenticatedAPIView):
 
     def get(self, request, message_id):
         message = self._fetch_for_user(message_id, request.user)
+        # Tier retention: an out-of-window message is hidden — 404, the
+        # same existence-hiding rule used for non-members, so deep
+        # links and the delta views agree on what the viewer can see.
+        _days, cutoff = _retention_cutoff(request.user)
+        if cutoff is not None and message.ts_sent_at < cutoff:
+            raise Http404("Message not found.")
         return Response(MessageSerializer(message).data)
 
     def patch(self, request, message_id):
