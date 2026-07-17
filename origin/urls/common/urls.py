@@ -9,6 +9,9 @@ from origin.views.common.billing_views import (
     BillingRefreshView,
     BillingSubscriptionView,
     StripeWebhookView,
+    TeamBillingCheckoutView,
+    TeamBillingConfigView,
+    TeamBillingPortalView,
 )
 from origin.views.common.calendar_views import (
     CalendarEventDetailView,
@@ -133,6 +136,21 @@ urlpatterns = [
         "api/v2/billing/subscription/",
         BillingSubscriptionView.as_view(),
         name="billing_subscription",
+    ),
+    path(
+        "api/v2/billing/team/config/",
+        TeamBillingConfigView.as_view(),
+        name="team_billing_config",
+    ),
+    path(
+        "api/v2/billing/team/checkout/",
+        TeamBillingCheckoutView.as_view(),
+        name="team_billing_checkout",
+    ),
+    path(
+        "api/v2/billing/team/portal/",
+        TeamBillingPortalView.as_view(),
+        name="team_billing_portal",
     ),
     path(
         "api/v2/billing/stripe/webhook/",

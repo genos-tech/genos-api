@@ -39,6 +39,17 @@ class TeamMaster(models.Model):
         default="free",
         db_index=True,
     )
+    # The team's Stripe customer (per-seat subscription). Mirrors
+    # CustomUser.stripe_customer_id: bound on first team checkout,
+    # never cleared on cancellation — the customer is reused for
+    # re-subscribes, and subscription webhooks resolve back to the
+    # team through this column.
+    stripe_customer_id = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        db_index=True,
+    )
     is_deleted = models.BooleanField(default=False)
     is_demo = models.BooleanField(default=False, db_index=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
