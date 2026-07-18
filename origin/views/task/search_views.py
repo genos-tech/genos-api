@@ -70,6 +70,7 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
                 "root_task_id",
                 "project__code",
                 "project_task_number",
+                "is_milestone",
             )
             .order_by("ts_updated_at")
             .reverse()
@@ -124,6 +125,7 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
                     "taskId": task[3],
                     "displayId": _display_id,
                     "title": task[4],
+                    "isMilestone": bool(task[10]),
                     "status": {
                         "code": 0,
                         "status": task[5],
