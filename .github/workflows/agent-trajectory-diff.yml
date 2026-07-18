@@ -27,9 +27,10 @@
 #     not the ask loop the suite drives.
 #   - citation_resolver.py — post-answer citation resolution; runs
 #     after tool selection is over.
-#   - evals/: only cases.yaml, fixture.py, trajectory*.{py,json} and
-#     runner.py shape this suite; judge.py and the retrieval/summary
-#     case files belong to the other suites.
+#   - evals/: only cases.yaml, fixture.py, trajectory.py and runner.py
+#     shape this suite; judge.py and the retrieval/summary case files
+#     belong to the other suites. trajectory_baseline.json is the diff
+#     *reference*, not an input — refreshing it must not re-trigger.
 #
 # Bootstrap / accepting changes: run this workflow manually
 # (workflow_dispatch, write_baseline=true) → download the
@@ -56,7 +57,9 @@ on:
       - "origin/search_engine/agent/evals/fixture.py"
       - "origin/search_engine/agent/evals/runner.py"
       - "origin/search_engine/agent/evals/trajectory.py"
-      - "origin/search_engine/agent/evals/trajectory_baseline.json"
+      # NOT trajectory_baseline.json: it's the diff reference (see the
+      # header note), so a write-baseline regen PR that only refreshes it
+      # falls back to the evals/** exclusion and does not re-trigger.
   workflow_dispatch:
     inputs:
       write_baseline:
