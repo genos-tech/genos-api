@@ -1165,3 +1165,15 @@ class PlansViewTests(BillingTestBase):
         self.assertEqual(len(tiers), 4)
         self.assertIsNone(tiers["pro"]["price"])
         self.assertFalse(tiers["pro"]["purchasable"])
+
+    def test_plans_public_without_auth(self):
+        # The public marketing pricing page renders this while logged
+        # out, so the endpoint must answer 200 with no Authorization.
+        self.client.credentials()  # drop the Bearer set in setUp
+        with self._price_mock():
+            res = self.client.get(PLANS_URL)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            [t["tier"] for t in res.data["tiers"]],
+            ["free", "pro", "max", "enterprise"],
+        )
