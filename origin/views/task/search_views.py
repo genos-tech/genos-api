@@ -43,7 +43,6 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
         include_all = request.GET.get("include_all", "false") == "true"
 
         team_tasks = []
-        finished_task_ids = set()
 
         # Get all tasks in all project
         if project_id == -1:
@@ -52,67 +51,60 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
                     Q(team=team_id, attendee=request_user_id)
                 ).values_list("project_id", flat=True)
             )
-
-            tasks = (
-                TaskMaster.objects.filter(
-                    team=team_id, status__in=statuses, project__in=project_ids, is_init_task=False
-                )
-                .values_list(
-                    "project__project_id",
-                    "project__project_name",
-                    "tags",
-                    "task_id",
-                    "title",
-                    "status",
-                    "ts_updated_at",
-                    "root_task_id",
-                    "project__code",
-                    "project_task_number",
-                )
-                .order_by("ts_updated_at")
-                .reverse()
-            )
-
-            if statuses != ["Closed"] and statuses != ["Deleted"] and include_all == False:
-                finished_task_ids = set(
-                    TaskMaster.objects.filter(
-                        team=team_id, project__in=project_ids, is_init_task=False
-                    )
-                    .filter(Q(status__in=["Deleted", "Closed"]))
-                    .values_list("task_id", flat=True)
-                )
+            scope_filter = Q(project__in=project_ids)
         else:
-            tasks = (
-                TaskMaster.objects.filter(
-                    team=team_id, status__in=statuses, project=project_id, is_init_task=False
-                )
-                .values_list(
-                    "project__project_id",
-                    "project__project_name",
-                    "tags",
-                    "task_id",
-                    "title",
-                    "status",
-                    "ts_updated_at",
-                    "root_task_id",
-                    "project__code",
-                    "project_task_number",
-                )
-                .order_by("ts_updated_at")
-                .reverse()
-            )
+            scope_filter = Q(project=project_id)
 
-            if statuses != ["Closed"] and statuses != ["Deleted"] and include_all == False:
-                finished_task_ids = set(
-                    TaskMaster.objects.filter(team=team_id, project=project_id, is_init_task=False)
-                    .filter(Q(status__in=["Deleted", "Closed"]))
-                    .values_list("task_id", flat=True)
-                )
+        tasks = (
+            TaskMaster.objects.filter(
+                scope_filter, team=team_id, status__in=statuses, is_init_task=False
+            )
+            .values_list(
+                "project__project_id",
+                "project__project_name",
+                "tags",
+                "task_id",
+                "title",
+                "status",
+                "ts_updated_at",
+                "root_task_id",
+                "project__code",
+                "project_task_number",
+            )
+            .order_by("ts_updated_at")
+            .reverse()
+        )
+
+        # Unless the caller explicitly asked for finished tasks (or for
+        # everything via include_all), hide tasks that live under a
+        # Closed/Deleted container: walking the full parent chain covers
+        # both "sub-task of a closed task" and "task in a closed
+        # milestone" (closing a milestone mirrors Closed onto its
+        # backing task, which is the children's parent).
+        parent_by_id: dict[int, int | None] = {}
+        finished_task_ids: set[int] = set()
+        if statuses != ["Closed"] and statuses != ["Deleted"] and include_all == False:
+            for _tid, _pid, _status in TaskMaster.objects.filter(
+                scope_filter, team=team_id, is_init_task=False
+            ).values_list("task_id", "parent_task_id", "status"):
+                parent_by_id[_tid] = _pid
+                if _status in ("Closed", "Deleted"):
+                    finished_task_ids.add(_tid)
+
+        def has_finished_ancestor(task_id: int) -> bool:
+            seen = set()
+            ancestor = parent_by_id.get(task_id)
+            while ancestor is not None and ancestor not in seen:
+                if ancestor in finished_task_ids:
+                    return True
+                seen.add(ancestor)
+                ancestor = parent_by_id.get(ancestor)
+            return False
 
         _team_tasks = defaultdict(list)
         for task in list(tasks)[: top_n if top_n != -1 else 100000]:
-            # If the task is closed or deleted, skip the task
-            if task[7] in finished_task_ids:
+            # Skip tasks whose parent chain contains a closed/deleted task
+            if has_finished_ancestor(task[3]):
                 continue
 
             # Compute display id from the tuple positions added above.
