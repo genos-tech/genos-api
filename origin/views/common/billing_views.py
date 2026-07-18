@@ -108,7 +108,16 @@ class BillingPlansView(AuthenticatedAPIView):
     quota engine doesn't apply. Prices come from Stripe (cached,
     fail-soft null). Enterprise is contact-sales: no price, never
     purchasable.
+
+    Public (AllowAny): the marketing pricing page renders this while
+    logged out. Safe because the response is user-agnostic — tier
+    limits and public Stripe prices only, no request.user access, and
+    the Stripe price lookup is process-cached (1h) so it can't be
+    flooded into a per-request Stripe call.
     """
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes: list = []
 
     def get(self, request):
         quotas = settings.SEARCH_ENGINE.get("TIER_QUOTAS") or {}
