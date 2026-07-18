@@ -1,0 +1,37 @@
+# Railway config for the `opensearch-maintenance` cron service.
+#
+# Same Docker image as the `backend-django` service, run daily as a cron
+# (container starts, runs to completion, exits — no gunicorn).
+#
+# What this does:
+#   The chunk index is update-heavy: every re-ingest of a changed chunk
+#   is a Lucene delete + re-add and every purge is a delete, so deleted
+#   docs accumulate inside segments — bloating disk AND slowing the k-NN
+#   lane (deleted vectors stay in each segment's HNSW graph until a
+#   merge). This job logs index health (docs / deleted ratio / segments
+#   / disk) and runs `_forcemerge?only_expunge_deletes=true` when the
+#   deleted share is >= 5%. Below the threshold it's stats-only — a
+#   quiet day costs one stats call.
+#
+# See `origin/search_engine/maintenance.py` for the full rationale and
+# `manage.py opensearch_maintain --help` for the manual knobs
+# (--dry-run / --force / --max-num-segments).
+#
+# All env vars from `backend-django` (OPENSEARCH_HOST, DATABASE_URL,
+# etc.) must also be set on this service.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Daily 05:00 UTC — the established low-traffic window, staggered after
+# demo-user-cleanup (03:00) and agent-judge-sampler (04:00) so the
+# background jobs don't stack.
+#
+# The startCommand goes through the entrypoint wrapper rather than
+# calling manage.py directly: a cron's startCommand REPLACES the
+# Dockerfile CMD (see the entrypoint header for what must be repeated).
+cronSchedule = "0 5 * * *"
+startCommand = "sh /app/railway-opensearch-maintenance-entrypoint.sh"
+restartPolicyType = "NEVER"
