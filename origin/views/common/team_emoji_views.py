@@ -69,6 +69,11 @@ def _serialize_emoji(request, emoji: TeamEmojiMaster) -> dict:
         "url": _absolute_https_url(request, emoji.image.url),
         "createdBy": str(emoji.created_by_id) if emoji.created_by_id else None,
         "tsCreatedAt": emoji.ts_created_at.isoformat() if emoji.ts_created_at else None,
+        # Global defaults (team=NULL, seed_default_emoji). The picker /
+        # `:` suggestions / reactions use them like any other emoji, but
+        # the Settings management panel hides them — defaults aren't
+        # user-managed custom emoji.
+        "isDefault": emoji.team_id is None,
     }
 
 
@@ -141,9 +146,10 @@ class TeamEmojiView(AuthenticatedAPIView):
             )
         team = _verify_team_member(request.user, team_id)
 
-        # Team catalog + the global defaults (team=NULL, seeded starter
-        # packs). A team emoji with the same name overrides the global
-        # one, so a team can "replace" a default by uploading over it.
+        # Team catalog + the global defaults (team=NULL, the curated
+        # bundle synced by `seed_default_emoji`). A team emoji with the
+        # same name overrides the global one, so a team can "replace" a
+        # default by uploading over it.
         team_rows = list(TeamEmojiMaster.objects.filter(team=team, is_deleted=False))
         team_names = {e.name for e in team_rows}
         global_rows = TeamEmojiMaster.objects.filter(team__isnull=True, is_deleted=False).exclude(
@@ -168,7 +174,7 @@ class TeamEmojiView(AuthenticatedAPIView):
             raise Http404("Emoji not found.")
         if emoji.team_id is None:
             # Global defaults have no uploader; they're managed via
-            # `seed_team_emoji --global`, never through the API.
+            # `seed_default_emoji`, never through the API.
             return Response(
                 {"error": "Default emoji are managed by the server."},
                 status=status.HTTP_403_FORBIDDEN,

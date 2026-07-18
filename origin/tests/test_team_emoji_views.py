@@ -66,6 +66,7 @@ class TeamEmojiViewTests(BaseAPITestCase):
         self.assertEqual(body["createdBy"], str(self.user.id))
         self.assertIn("emojiId", body)
         self.assertIn("tsCreatedAt", body)
+        self.assertFalse(body["isDefault"])
 
     def test_upload_applies_https_fixup_behind_proxy(self):
         resp = self.client.post(
@@ -169,8 +170,10 @@ class TeamEmojiViewTests(BaseAPITestCase):
     def test_global_defaults_appear_in_every_team_catalog(self):
         self._make_global()
         resp = self.client.get(URL, {"team_id": str(self.team.team_id)})
-        names = [e["name"] for e in resp.json()["teamEmoji"]]
-        self.assertIn("global-parrot", names)
+        rows = {e["name"]: e for e in resp.json()["teamEmoji"]}
+        # Flagged so the Settings management panel can hide defaults
+        # while the picker / reactions keep using them.
+        self.assertTrue(rows["global-parrot"]["isDefault"])
 
     def test_team_emoji_overrides_same_name_global(self):
         self._make_global(name="party-blob")
