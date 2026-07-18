@@ -34,6 +34,16 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if entity_types is not None and not isinstance(entity_types, list):
         entity_types = None
 
+    # Spotlight filter chips — the user's explicit scope wins over the
+    # LLM's choice. The model may narrow WITHIN the pin (its subset is
+    # kept); anything outside it is discarded, and an empty/foreign
+    # choice falls back to the full pinned set. Server-trusted: the pin
+    # arrives via ToolContext from the validated /ask/ body, never from
+    # LLM args.
+    if ctx.pinned_entity_types:
+        pinned = list(ctx.pinned_entity_types)
+        entity_types = [t for t in (entity_types or []) if t in pinned] or pinned
+
     try:
         limit = int(args.get("limit", 10))
     except (TypeError, ValueError):

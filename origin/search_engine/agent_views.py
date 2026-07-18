@@ -642,6 +642,31 @@ class AgentAskView(AuthenticatedAPIView):
                 ctx, resolved_mentions=tuple(m.as_json() for m in resolved_mentions)
             )
 
+        # Spotlight filter chips — an explicit user scope for this ask's
+        # searches. Whitelisted to the workspace types the chips map to:
+        # the pin must never opt the agent into lanes that default-search
+        # deliberately excludes (`conversation`, `spotlight_answer` — the
+        # answer→grounding loop guard). Invalid entries are dropped, not
+        # fatal; an empty result leaves the ask unscoped. The pin rides
+        # ToolContext (server-trusted) and `search_knowledge_base`
+        # hard-scopes every search to it; the system-prompt line lets the
+        # model explain the restriction instead of hallucinating an
+        # empty-workspace answer when the scoped search comes up empty.
+        raw_entity_types = data.get("entity_types")
+        if isinstance(raw_entity_types, list):
+            allowed = {"chat", "task", "milestone", "note", "todo"}
+            pinned = tuple(t for t in raw_entity_types if isinstance(t, str) and t in allowed)
+            if pinned:
+                ctx = dataclasses.replace(ctx, pinned_entity_types=pinned)
+                scope_extra = (
+                    "The user has restricted this question's workspace searches "
+                    f"to these content types only: {', '.join(pinned)}. Results "
+                    "from other types are intentionally excluded — if you find "
+                    "nothing, say so in terms of the selected types rather than "
+                    "claiming the workspace has no relevant content."
+                )
+                system_extra = f"{system_extra}\n\n{scope_extra}" if system_extra else scope_extra
+
         # `chosen` is captured in the worker closure so the contextvar
         # is set inside the controller's threading.Thread — a bare
         # thread does NOT inherit contextvars from its parent.
