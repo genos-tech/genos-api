@@ -245,6 +245,18 @@ class TestTaskViews(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(blocked["task_id"], {t["taskId"] for t in response.data})
 
+    def test_search_team_tasks_carries_is_milestone(self):
+        from origin.models.task.task_models import TaskMaster
+
+        plain = self._create_task(title="Plain task").data["task"]
+        backing = self._create_task(title="Milestone backing task").data["task"]
+        TaskMaster.objects.filter(task_id=backing["task_id"]).update(is_milestone=True)
+
+        response = self._search_team_tasks()
+        by_id = {t["taskId"]: t for t in response.data}
+        self.assertFalse(by_id[plain["task_id"]]["isMilestone"])
+        self.assertTrue(by_id[backing["task_id"]]["isMilestone"])
+
     def test_search_team_tasks_hides_children_of_closed_parent(self):
         parent = self._create_task(title="Closed parent", status="Closed").data["task"]
         child = self._create_task(title="Open child", parent_task_id=parent["task_id"]).data["task"]
