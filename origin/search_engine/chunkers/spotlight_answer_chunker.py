@@ -9,8 +9,14 @@ agent re-deriving it. This is the team-shared sibling of `conversation_chunker`
   * ACL = the INTERSECTION of every source's ACL (see
     `agent/source_visibility.py`) — the answer is visible only to users who
     could have seen ALL of its evidence. Answers built from any unclassifiable
-    or single-person source are dropped (fail-closed). This matters because the
-    answer *body* can quote a source, not just the chips.
+    source are dropped (fail-closed). This matters because the answer *body*
+    can quote a source, not just the chips. An audience of ONE (the asker) is
+    collectible — the answer then resurfaces only in the asker's own
+    typeahead (self-reuse; the norm in solo/small-team workspaces).
+  * ANONYMOUS by design (product decision 2026-07-18): the chunk carries no
+    asker identity — no `author_id` / `author_name` — and the frontend
+    "Previous answer" card renders without attribution. Viewers see the
+    question + answer, never who asked. Do not add author fields here.
   * Provenance: `related_entity_ids` + `answer_sources` (the SpotlightResult-
     shaped source dicts) + `answer_text` so the frontend can render the past
     answer with clickable source chips and inline citations.
@@ -106,7 +112,7 @@ def iter_spotlight_answer_chunks(since: Optional[datetime] = None) -> Iterator[E
             continue
 
         sources = _hydrate_task_display_ids(reconstruct_sources_for_run(run))
-        acl = shareable_acl_for_sources(sources)
+        acl = shareable_acl_for_sources(sources, asker_id=str(run.user_id) if run.user_id else None)
         if acl is None:
             # Built from private / unclassifiable / single-person sources.
             # Emit a tombstone so any previously-indexed copy is purged.
