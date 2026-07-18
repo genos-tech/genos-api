@@ -12,9 +12,24 @@
 # always succeeds and the reviewer reads the diff as a signal. Gating
 # on it would flap red and train everyone to ignore it.
 #
-# Cost control: runs ONLY when the PR touches the agent package (paths
-# filter) — the one time the delta is worth a judge-less behavior-suite
-# run (~58 cases through the full agent loop against Vertex).
+# Cost control: runs ONLY when the PR touches files that can actually
+# change WHICH tools the agent picks — the one time the delta is worth
+# a judge-less behavior-suite run (~70 cases through the full agent
+# loop against Vertex, 10-35 min of real Gemini spend). The paths
+# below start from agent/** and NEGATE the provably-inert files (last
+# match wins), so NEW agent files default to triggering (fail-safe
+# toward running):
+#   - source_visibility.py — collection ACL for spotlight_answer
+#     chunks; that lane is excluded from agent grounding, so it cannot
+#     alter trajectories (a change here burned a full 33-min run on
+#     PR #119 for zero signal).
+#   - note_summary.py / thread_summary.py — separate summary endpoints,
+#     not the ask loop the suite drives.
+#   - citation_resolver.py — post-answer citation resolution; runs
+#     after tool selection is over.
+#   - evals/: only cases.yaml, fixture.py, trajectory*.{py,json} and
+#     runner.py shape this suite; judge.py and the retrieval/summary
+#     case files belong to the other suites.
 #
 # Bootstrap / accepting changes: run this workflow manually
 # (workflow_dispatch, write_baseline=true) → download the
@@ -32,6 +47,16 @@ on:
   pull_request:
     paths:
       - "origin/search_engine/agent/**"
+      - "!origin/search_engine/agent/source_visibility.py"
+      - "!origin/search_engine/agent/note_summary.py"
+      - "!origin/search_engine/agent/thread_summary.py"
+      - "!origin/search_engine/agent/citation_resolver.py"
+      - "!origin/search_engine/agent/evals/**"
+      - "origin/search_engine/agent/evals/cases.yaml"
+      - "origin/search_engine/agent/evals/fixture.py"
+      - "origin/search_engine/agent/evals/runner.py"
+      - "origin/search_engine/agent/evals/trajectory.py"
+      - "origin/search_engine/agent/evals/trajectory_baseline.json"
   workflow_dispatch:
     inputs:
       write_baseline:
