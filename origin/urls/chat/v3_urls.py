@@ -40,6 +40,13 @@ URL shape (see plan §2):
     DELETE /api/v3/channels/{id}/pin/                     unpin
     POST   /api/v3/messages/{id}/flag/                    flag message
     DELETE /api/v3/messages/{id}/flag/                    unflag
+
+  Personal tags (per-user PRIVATE labels on GM channels)
+    GET    /api/v3/personal-tags/                         tags + assignments + default chips
+    POST   /api/v3/personal-tags/                         create a tag
+    PATCH  /api/v3/personal-tags/{tag_id}/                rename / recolor / pin
+    DELETE /api/v3/personal-tags/{tag_id}/                delete (assignments cascade)
+    PUT    /api/v3/channels/{id}/personal-tags/           replace the channel's tag set
 """
 
 from django.urls import path
@@ -66,6 +73,11 @@ from origin.views.chat.message_views import (
     MessagesDeltaView,
     TaskCardMessageView,
     ThreadMessagesDeltaView,
+)
+from origin.views.chat.personal_tag_views import (
+    ChannelPersonalTagsView,
+    PersonalTagDetailView,
+    PersonalTagListView,
 )
 from origin.views.chat.pin_flag_views import FlagListView, FlagView, PinView
 from origin.views.chat.reaction_views_v3 import MessageReactionsView
@@ -164,6 +176,22 @@ urlpatterns = [
         "api/v3/flags/",
         FlagListView.as_view(),
         name="v3_flag_list",
+    ),
+    # Personal tags (per-user PRIVATE labels on GM channels)
+    path(
+        "api/v3/personal-tags/",
+        PersonalTagListView.as_view(),
+        name="v3_personal_tag_list",
+    ),
+    path(
+        "api/v3/personal-tags/<int:tag_id>/",
+        PersonalTagDetailView.as_view(),
+        name="v3_personal_tag_detail",
+    ),
+    path(
+        "api/v3/channels/<uuid:channel_id>/personal-tags/",
+        ChannelPersonalTagsView.as_view(),
+        name="v3_channel_personal_tags",
     ),
     # Activity feed
     path(

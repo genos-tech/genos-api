@@ -315,6 +315,11 @@ class Message(models.Model):
             models.Index(fields=["channel", "ts_updated_at"], name="msg_channel_updated_idx"),
             # PM: lookup by (channel, task) for the groupByTask selector.
             models.Index(fields=["channel", "task"], name="msg_channel_task_idx"),
+            # "GMs I recently responded in" (personal-tag default chips):
+            # scan proportional to the USER'S own recent sends, instead
+            # of a per-channel walk of msg_channel_ts_idx with sender as
+            # a heap filter (degrades badly on chatty GMs).
+            models.Index(fields=["sender", "ts_sent_at"], name="msg_sender_ts_idx"),
             # Legacy join surface: (chat_type, chat_id, message_id) →
             # (channel.kind, channel_id, seq). The (channel, seq) unique
             # index above already covers the seq half; add an index on
