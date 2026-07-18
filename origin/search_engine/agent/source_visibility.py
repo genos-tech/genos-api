@@ -1,15 +1,18 @@
 """Decide the shareable audience of a collected Spotlight answer.
 
-A completed `AgentRun` becomes a team-shareable `spotlight_answer` chunk only
-if EVERY source it used is visible to more than one person, and it is then
-stored visible to exactly the INTERSECTION of those sources' ACLs — the set of
-users who could have seen *all* of the answer's evidence.
+A completed `AgentRun` becomes a `spotlight_answer` chunk stored visible to
+exactly the INTERSECTION of its sources' ACLs — the set of users who could
+have seen *all* of the answer's evidence. That set may be just the asker
+(personal todos, single-member projects): the answer then resurfaces only in
+the asker's own typeahead.
 
 This is the "Source-audience" privacy rule:
   * Leak-proof: a viewer never sees an answer derived from content they can't
     access (the answer body itself can quote a source, not just the chips).
   * Fail-closed: a source we can't classify (or whose row is gone) drops the
     whole run rather than risk over-sharing.
+  * Anonymous: collected answers carry no asker identity — teammates inside
+    the audience see the question + answer, never who asked.
 
 It reuses the membership helpers in `agent/acl.py` — the same rules the
 chunkers use to populate `acl_user_ids` at index time — so the audience of a
@@ -39,11 +42,16 @@ from origin.search_engine.chunkers.base import (
     NOTE_TYPE_TASK,
 )
 
-# Minimum audience for a collected answer to be worth sharing. The asker is
-# always inside the intersection (the agent only ever retrieves content the
-# asker is allowed to see), so `< 2` means "nobody but the asker" — which
-# carries no reuse value beyond the existing per-user `conversation` lane.
-_MIN_SHARE_AUDIENCE = 2
+# Minimum audience for a collected answer. The asker is always inside the
+# intersection (the agent only ever retrieves content the asker is allowed to
+# see), so `1` means "at least the asker themselves": an audience-of-one
+# answer is still collected and resurfaces in the asker's OWN typeahead as a
+# "Previous answer" — valuable in solo/small-team workspaces where almost no
+# source set is visible to a second person. (Was 2 — "shared or nothing" —
+# which collected ~nothing in single-member projects; relaxed 2026-07-18.)
+# The per-user `conversation` lane remains the agent-side memory; this lane
+# is the search-side one.
+_MIN_SHARE_AUDIENCE = 1
 
 _CHAT_CODE_BY_LABEL = {label: code for code, label in CHAT_TYPE_LABEL.items()}
 _NOTE_CODE_BY_LABEL = {
@@ -60,16 +68,52 @@ def _int_or_none(value: Any) -> Optional[int]:
         return None
 
 
-def source_acl_user_ids(source: dict[str, Any]) -> Optional[set[str]]:
+def source_acl_user_ids(
+    source: dict[str, Any], asker_id: Optional[str] = None
+) -> Optional[set[str]]:
     """Users allowed to read one reconstructed source, or `None` if we can't
     resolve it (the caller fails closed on `None`).
 
-    Mirrors the per-entity ACL the chunkers store. Only chat / task / note /
-    project sources are ACL-resolvable; `todo` (personal), the per-user
-    `conversation` memory lane, and anything unrecognised return `None` so the
-    answer they helped build is never team-shared.
+    Mirrors the per-entity ACL the chunkers store. chat / task / milestone /
+    project / note sources resolve from their rows; `todo` resolves to exactly
+    the asker (todos are personal, and the agent only reads the asker's own —
+    so a todo-citing answer is collectible but visible only to its asker).
+    The per-user `conversation` memory lane and anything unrecognised return
+    `None` so the answer they helped build is never shared.
     """
     etype = source.get("entity_type")
+
+    if etype == "todo":
+        # No owner rides on the reconstructed source; the agent's todo tools
+        # only ever read the asker's own items, so the audience is the asker.
+        return {asker_id} if asker_id else None
+
+    if etype == "milestone":
+        # Milestones are project-scoped. Their index ACL is project members +
+        # assignees + reporter; resolving members-only here keeps the answer's
+        # audience a SUBSET of the milestone chunk's own audience (never
+        # over-shares). Legacy sources without a project_id fall back to the
+        # backing task's ACL.
+        pid = _int_or_none(source.get("project_id"))
+        if pid is not None:
+            return {
+                str(uid)
+                for uid in ProjectMembers.objects.filter(project_id=pid).values_list(
+                    "attendee_id", flat=True
+                )
+                if uid
+            }
+        tid = _int_or_none(source.get("task_id"))
+        if tid is None:
+            return None
+        row = (
+            TaskMaster.objects.filter(task_id=tid)
+            .values("project_id", "assignee_id", "reporter_id")
+            .first()
+        )
+        if row is None:
+            return None
+        return task_acl_user_ids(row["project_id"], row["assignee_id"], row["reporter_id"])
 
     if etype == "chat":
         code = _CHAT_CODE_BY_LABEL.get(source.get("chat_type"))
@@ -115,9 +159,7 @@ def source_acl_user_ids(source: dict[str, Any]) -> Optional[set[str]]:
             return personal_note_acl_user_ids(owner_id=row["owner_id"], note_id=nid)
         if code == NOTE_TYPE_TASK:
             row = (
-                TaskNoteMaster.objects.filter(note_id=nid)
-                .values("owner_id", "project_id")
-                .first()
+                TaskNoteMaster.objects.filter(note_id=nid).values("owner_id", "project_id").first()
             )
             if row is None:
                 return None
@@ -139,11 +181,13 @@ def source_acl_user_ids(source: dict[str, Any]) -> Optional[set[str]]:
             note_id=nid,
         )
 
-    # todo / conversation / web / anything new → not shareable. Fail closed.
+    # conversation / web / anything new → not shareable. Fail closed.
     return None
 
 
-def shareable_acl_for_sources(sources: list[dict[str, Any]]) -> Optional[list[str]]:
+def shareable_acl_for_sources(
+    sources: list[dict[str, Any]], asker_id: Optional[str] = None
+) -> Optional[list[str]]:
     """The sorted users who may see an answer built from `sources`, or `None`
     if the answer must NOT be collected.
 
@@ -151,14 +195,15 @@ def shareable_acl_for_sources(sources: list[dict[str, Any]]) -> Optional[list[st
     classified (fail-closed), or when the intersection of all source ACLs is
     below `_MIN_SHARE_AUDIENCE`. The chunker passes the same reconstructed
     source list it stores as provenance, so the audience is always a subset of
-    every chip's own audience.
+    every chip's own audience. `asker_id` (the run's user) resolves personal
+    sources (todos) — a todo-citing answer collapses the audience to the asker.
     """
     if not sources:
         return None
 
     intersection: Optional[set[str]] = None
     for src in sources:
-        acl = source_acl_user_ids(src)
+        acl = source_acl_user_ids(src, asker_id)
         if acl is None:
             return None  # unclassifiable source → fail closed
         intersection = acl if intersection is None else (intersection & acl)
@@ -179,4 +224,6 @@ def shareable_acl_for_run(run) -> Optional[list[str]]:
     # circular-import risk via the ingestion graph.
     from origin.search_engine.agent.controller import reconstruct_sources_for_run
 
-    return shareable_acl_for_sources(reconstruct_sources_for_run(run))
+    return shareable_acl_for_sources(
+        reconstruct_sources_for_run(run), asker_id=str(run.user_id) if run.user_id else None
+    )
