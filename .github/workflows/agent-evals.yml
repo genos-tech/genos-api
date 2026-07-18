@@ -48,6 +48,10 @@ on:
   pull_request:
     paths:
       - "origin/search_engine/**" # agent, chunkers, embeddings, llm, eval harness + cases
+      # ...but not a baseline-only refresh: trajectory_baseline.json is the
+      # trajectory-diff reference and never moves retrieval/behavior scores,
+      # so it must not trigger a Vertex eval run (last match wins).
+      - "!origin/search_engine/agent/evals/trajectory_baseline.json"
       - "apis/settings.py" # EMBEDDING_PROVIDER / GEMINI_USE_VERTEX / RAG knobs
       - "Pipfile"
       - "Pipfile.lock"
