@@ -104,10 +104,12 @@ class SeedDefaultEmojiTests(BaseAPITestCase):
         # the same validation the command applies (name rule, extension
         # allowlist, magic bytes, size cap), at the curated count.
         bundle = Command()._load_bundle(BUNDLED_ZIP)
-        self.assertEqual(len(bundle), 680)
+        self.assertEqual(len(bundle), 717)
         # The category-suffixed names carry duplicate shortcodes from the
         # curated list whose images differ per category (e.g. the Skype
-        # facepalm emoticon vs the HD-pack glove one).
+        # facepalm emoticon vs the HD-pack glove vs the Meme/Random
+        # bald-guy). Variants are capped by how many times the shortcode
+        # appears in the source list.
         for expected in (
             "partyparrot",
             "claude-code",
@@ -116,6 +118,8 @@ class SeedDefaultEmojiTests(BaseAPITestCase):
             "facepalm",
             "facepalm-skype",
             "facepalm-hd-emojis",
+            "facepalm-meme",
             "jets-nfl",
+            "partyparrot-random",
         ):
             self.assertIn(expected, bundle)
