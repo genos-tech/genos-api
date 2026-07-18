@@ -37,6 +37,16 @@ class ToolContext:
     # run, keeping all existing call sites unchanged. Populate via
     # `dataclasses.replace` (frozen).
     resolved_mentions: tuple[dict[str, Any], ...] = ()
+    # Spotlight filter chips — the user's explicit service scope for this
+    # ask (`entity_types` on /ask/, validated in the view — never from the
+    # LLM). When non-empty, `search_knowledge_base` hard-scopes every
+    # search to these entity types regardless of what the model asks for
+    # (the model may still narrow WITHIN the pin). Empty tuple = no scope
+    # (the default for every ask without active chips). Not persisted on
+    # AgentRun, so a /decide/-resumed run searches unscoped — acceptable:
+    # resumes exist to finish a paused write, and the pre-pause searches
+    # already ran scoped. Populate via `dataclasses.replace` (frozen).
+    pinned_entity_types: tuple[str, ...] = ()
 
 
 class ToolError(Exception):
