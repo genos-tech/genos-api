@@ -227,6 +227,59 @@ class TestTaskViews(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def _search_team_tasks(self, statuses="open,wip,blocked,pending", include_all="false"):
+        return self.client.get(
+            "/api/v2/search/teamTasks/",
+            {
+                "team_id": str(self.team.team_id),
+                "project_id": self.project.project_id,
+                "statuses": statuses,
+                "top_n": -1,
+                "include_all": include_all,
+            },
+        )
+
+    def test_search_team_tasks_includes_blocked(self):
+        blocked = self._create_task(title="Blocked task", status="Blocked").data["task"]
+        response = self._search_team_tasks()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(blocked["task_id"], {t["taskId"] for t in response.data})
+
+    def test_search_team_tasks_hides_children_of_closed_parent(self):
+        parent = self._create_task(title="Closed parent", status="Closed").data["task"]
+        child = self._create_task(title="Open child", parent_task_id=parent["task_id"]).data["task"]
+        grandchild = self._create_task(
+            title="Open grandchild", parent_task_id=child["task_id"]
+        ).data["task"]
+        top = self._create_task(title="Open top-level").data["task"]
+
+        response = self._search_team_tasks()
+        ids = {t["taskId"] for t in response.data}
+        self.assertIn(top["task_id"], ids)
+        self.assertNotIn(child["task_id"], ids)
+        self.assertNotIn(grandchild["task_id"], ids)
+
+    def test_search_team_tasks_hides_subtask_of_closed_intermediate_parent(self):
+        # Root open, middle closed, leaf open: the old root-only check
+        # let the leaf through; the parent-chain walk must hide it.
+        root = self._create_task(title="Open root").data["task"]
+        middle = self._create_task(
+            title="Closed middle", status="Closed", parent_task_id=root["task_id"]
+        ).data["task"]
+        leaf = self._create_task(title="Open leaf", parent_task_id=middle["task_id"]).data["task"]
+
+        response = self._search_team_tasks()
+        ids = {t["taskId"] for t in response.data}
+        self.assertIn(root["task_id"], ids)
+        self.assertNotIn(leaf["task_id"], ids)
+
+    def test_search_team_tasks_include_all_keeps_closed_parent_children(self):
+        parent = self._create_task(title="Closed parent", status="Closed").data["task"]
+        child = self._create_task(title="Open child", parent_task_id=parent["task_id"]).data["task"]
+
+        response = self._search_team_tasks(include_all="true")
+        self.assertIn(child["task_id"], {t["taskId"] for t in response.data})
+
     # ── GetTaskView missing params ─────────────────────────────────
 
     def test_get_task_missing_params(self):
