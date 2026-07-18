@@ -32,11 +32,13 @@ class TeamEmojiMaster(models.Model):
     only the catalog (GET) hides deleted rows, which makes new inserts
     and reaction rendering fall back gracefully.
 
-    `team=NULL` rows are GLOBAL DEFAULTS (the seeded starter packs):
-    every team's catalog includes them automatically — current and
-    future teams alike — and a team emoji with the same name overrides
-    the global one. They're managed via `seed_team_emoji --global`,
-    never through the API (no uploader ⇒ the DELETE endpoint refuses).
+    `team=NULL` rows are GLOBAL DEFAULTS (the curated catalog bundled
+    at `fixtures/default_emoji.zip`): every team's catalog includes
+    them automatically — current and future teams alike — and a team
+    emoji with the same name overrides the global one. They're managed
+    via `seed_default_emoji`, never through the API (no uploader ⇒ the
+    DELETE endpoint refuses), and the client hides them from the
+    Settings management panel via the serialized `isDefault` flag.
     """
 
     team = models.ForeignKey(
