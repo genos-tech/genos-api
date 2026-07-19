@@ -68,6 +68,32 @@ def _catalog_has(provider: str, model: str) -> bool:
     return any(e.get("provider") == provider and e.get("model") == model for e in catalog)
 
 
+def cheaper_models_same_provider(chosen: LlmChoice) -> list[str]:
+    """Same-provider catalog models cheaper than `chosen`, NEAREST-first.
+
+    Cost order is `MODEL_CATALOG` order: the catalog is curated
+    cheap→expensive within each provider (flash→pro, haiku→sonnet→opus),
+    a contract already relied on by the frontend picker and the
+    `catalog[0]` stale-preference fallback. So the models *before*
+    `chosen` in its provider's slice are exactly the cheaper ones.
+
+    Returned nearest-first (the rung just below `chosen` first), so a
+    quota-fallback caller steps down one rung at a time and preserves as
+    much of the user's chosen quality as headroom allows — a pro user
+    who exhausts opus drops to sonnet, not all the way to haiku.
+
+    Empty when `chosen` is already its provider's cheapest model, or when
+    `chosen` isn't in the catalog at all (stale preference — the caller
+    has already been resolved to a server default by then, but be safe).
+    """
+    catalog = settings.SEARCH_ENGINE.get("MODEL_CATALOG") or []
+    same = [e["model"] for e in catalog if e.get("provider") == chosen.provider and e.get("model")]
+    if chosen.model not in same:
+        return []
+    idx = same.index(chosen.model)
+    return list(reversed(same[:idx]))
+
+
 def _server_default_choice() -> LlmChoice:
     """The choice implied by env vars when no user preference applies."""
     cfg = settings.SEARCH_ENGINE
