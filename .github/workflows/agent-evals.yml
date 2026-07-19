@@ -22,13 +22,16 @@
 name: agent-evals
 
 on:
-  # NOT path-filtered, deliberately. The `deploy` job below lives in this
-  # workflow and is `needs: agent-evals`, so a `paths:` filter here would skip
-  # the whole workflow — and the deploy — on a non-agent merge. Instead the
-  # merge run is gated at the JOB level (see the `agent-evals` job's `if:`): on
-  # push it runs only when it actually gates a Cloud Run deploy
-  # (DEPLOY_TO_GCP == 'true'). With the flag off (Railway-only) the deploy is
-  # skipped, so the Vertex-billed gate would gate nothing — the job skips too.
+  # NOT path-filtered at the `on:` level, deliberately. The `deploy` job below
+  # lives in this workflow and is `needs: agent-evals`, so a `paths:` filter
+  # here would skip the whole workflow — and the deploy — on a non-agent merge.
+  # Instead: (1) the merge run is gated at the JOB level (the agent-evals `if:`)
+  # so it only runs when it actually gates a Cloud Run deploy
+  # (DEPLOY_TO_GCP == 'true') — flag off (Railway-only) → deploy skipped → the
+  # job skips too; and (2) inside the job, the Vertex-billed eval STEPS are
+  # skipped when the merge changed nothing in the eval's dependency surface (the
+  # `changes` step). Either way the job/workflow still runs to SUCCESS and the
+  # deploy is never skipped, so `deploy: needs: agent-evals` stays valid.
   push:
     branches: [main]
   # PRs only run the evals when the change can actually move the numbers. This
@@ -86,14 +89,17 @@ jobs:
   agent-evals:
     name: agent-evals (quality gate)
     # On PRs the `on: pull_request: paths:` filter above already limits this to
-    # agent-quality changes — a cheap early warning. On push to main the gate is
-    # only worth its Vertex spend when it actually gates a deploy: with
-    # DEPLOY_TO_GCP unset/false (Railway-only) the `deploy` job below is skipped,
-    # so a merge run would gate nothing. Skip the whole job (skipped-via-`if`
-    # reports SUCCESS, so no required-check deadlock). Coverage is preserved: the
-    # PR already ran this gate, and agent-evals-nightly.yml still trends the full
-    # numbers daily. There is no cheaper merge subset to keep — even the
-    # "deterministic" retrieval gate reindexes with Vertex embeddings.
+    # agent-quality changes — a cheap early warning. On push to main the job runs
+    # only when it gates a deploy (DEPLOY_TO_GCP == 'true'); with the flag off
+    # (Railway-only) the `deploy` job below is skipped, so a merge run would gate
+    # nothing — skip the whole job (skipped-via-`if` reports SUCCESS, no
+    # required-check deadlock). When it DOES run on a merge, the Vertex-billed
+    # steps are further skipped unless the merge touched the eval's dependency
+    # surface (the `changes` step below). Coverage for a step-skipped eval: the
+    # PR already ran the gate, agent-evals-nightly.yml trends the full numbers
+    # daily, and the deploy's post-deploy smoke runs a real agent query on the
+    # live revision. GCP is the parallel env (Railway is live), so the residual
+    # risk of an unlisted path moving retrieval numbers is bounded.
     if: github.event_name == 'pull_request' || vars.DEPLOY_TO_GCP == 'true'
     runs-on: ubuntu-latest
     env:
@@ -126,16 +132,64 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
+      # Decide whether this run needs the (Vertex-billed, multi-minute) eval.
+      # PRs reach here only via the path-filtered `on: pull_request` trigger, so
+      # they always run. On a push to main we diff the merge and skip the heavy
+      # steps when nothing in the eval's dependency surface changed — the hard
+      # retrieval gate = the chunkers + search (`origin/search_engine`, which
+      # read `origin/models`) over seeded demo data (`origin/services/demo_seeder.py`,
+      # via the eval fixture) under RAG knobs (`apis/settings.py`) + deps
+      # (`Pipfile*`). A merge touching none of those can't move the numbers.
+      # FAIL-OPEN: any ambiguity (unknown base, API hiccup, empty diff) runs the
+      # full eval. Skipped-case coverage: agent-evals-nightly.yml still trends
+      # the full numbers daily, and the deploy job's post-deploy smoke runs a
+      # real agent query on the live revision. The job still finishes SUCCESS
+      # when skipped, so `deploy: needs: agent-evals` is unaffected and a future
+      # required-check can't deadlock (the concern in the `on:` comment).
+      - name: Decide if the eval is needed (path relevance)
+        id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "PR run — the on.pull_request paths filter already gated this."
+            echo "relevant=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          files=$(gh api \
+            "repos/${{ github.repository }}/compare/${{ github.event.before }}...${{ github.sha }}" \
+            --paginate --jq '.files[].filename' 2>/dev/null || true)
+          if [ -z "$files" ]; then
+            echo "No file list (new base / API hiccup) — fail open, run the eval."
+            echo "relevant=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "changed files:"; printf '%s\n' "$files"
+          # Keep in sync with the eval's real dependency surface (see comment above).
+          if printf '%s\n' "$files" | grep -Eq \
+            '^(origin/search_engine/|origin/models/|origin/services/demo_seeder\.py$|apis/settings\.py$|Pipfile$|Pipfile\.lock$|\.github/workflows/agent-evals\.yml$)'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No eval-relevant paths changed — skipping the Vertex eval."
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: No eval-relevant changes — deterministic gate auto-passes
+        if: steps.changes.outputs.relevant != 'true'
+        run: echo "Skipping the Vertex eval for this merge (no eval-relevant paths). Nightly + post-deploy smoke still cover retrieval. Gate passes."
+
       - uses: actions/checkout@v4
+        if: steps.changes.outputs.relevant == 'true'
 
       - name: Authenticate to Google Cloud (keyless WIF)
+        if: steps.changes.outputs.relevant == 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.GCP_DEPLOY_SA }}
       - uses: google-github-actions/setup-gcloud@v2
+        if: steps.changes.outputs.relevant == 'true'
 
       - name: Start multilingual OpenSearch (prod image)
+        if: steps.changes.outputs.relevant == 'true'
         run: |
           gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
           docker run -d --name opensearch -p 9200:9200 \
@@ -151,15 +205,19 @@ jobs:
           done
 
       - uses: actions/setup-python@v5
+        if: steps.changes.outputs.relevant == 'true'
         with:
           python-version: "3.11"
       - run: pip install --upgrade pip pipenv
+        if: steps.changes.outputs.relevant == 'true'
       - name: Install deps
+        if: steps.changes.outputs.relevant == 'true'
         run: |
           pipenv sync
           pipenv run pip install -r requirements-dev.txt
 
       - name: Migrate + set up OpenSearch index + seed fixture (Vertex reindex)
+        if: steps.changes.outputs.relevant == 'true'
         run: |
           pipenv run python manage.py migrate --noinput
           # MUST run before any write: creates knowledge_chunks_* with the
@@ -171,6 +229,7 @@ jobs:
 
       # --- HARD GATE: deterministic retrieval suite ---
       - name: Retrieval evals — deterministic quality gate
+        if: steps.changes.outputs.relevant == 'true'
         run: |
           set -o pipefail
           # The suite exits 1 on the documented-red cases, so capture instead of
@@ -199,6 +258,7 @@ jobs:
 
       # --- REPORT-ONLY: behavior smoke + LLM judge (non-deterministic) ---
       - name: Behavior + judge smoke — report-only (non-blocking)
+        if: steps.changes.outputs.relevant == 'true'
         continue-on-error: true
         # One representative case proves the full agent loop (Gemini generation
         # + tool use + judge) works, without hammering Vertex with the whole
