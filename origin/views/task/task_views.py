@@ -1018,36 +1018,6 @@ class ChildTaskView(AuthenticatedAPIView):
         return Response(response_data, status=status.HTTP_200_OK)
 
 
-def _task_crumb_context_fields(t) -> dict:
-    """Container-ancestry names for the task detail payloads.
-
-    The chat thread header renders the same Project → Milestone →
-    (parent Task →) Task breadcrumb the task-note header shows, and
-    a DM/GM thread's task may live in a project the client has not
-    loaded — so the names must ride on the task payload itself.
-    One extra `.only()` query when the task has a parent; the
-    milestone name comes off the `milestone` FK (select_related'd by
-    both callers).
-    """
-    milestone_title = t.milestone.title if t.milestone_id and t.milestone else None
-    parent_task_title = None
-    parent_task_is_milestone = None
-    if t.parent_task_id is not None:
-        parent = (
-            TaskMaster.objects.filter(task_id=t.parent_task_id)
-            .only("title", "is_milestone")
-            .first()
-        )
-        if parent is not None:
-            parent_task_title = parent.title
-            parent_task_is_milestone = parent.is_milestone
-    return {
-        "milestoneTitle": milestone_title,
-        "parentTaskTitle": parent_task_title,
-        "parentTaskIsMilestone": parent_task_is_milestone,
-    }
-
-
 def _serialize_task_attachments(task, *, meta_only: bool, include_ids: bool) -> list[dict]:
     """Serialize a task's attachments for the getTask / thread detail
     responses.
@@ -1147,7 +1117,6 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                 "team",
                 "assignee",
                 "reporter",
-                "milestone",
             )
             .prefetch_related("task_attachments")
             .filter(
@@ -1270,7 +1239,6 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                     "isMilestone": t.is_milestone,
                     "milestoneId": t.milestone_id,
                     "sprintId": t.sprint_id,
-                    **_task_crumb_context_fields(t),
                 },
             )
 
@@ -1310,7 +1278,6 @@ class GetTaskView(AuthenticatedAPIView):
                 "team",
                 "assignee",
                 "reporter",
-                "milestone",
             )
             .prefetch_related("task_attachments")
             .filter(team=team_id, project_id=project_id, task_id=task_id, is_init_task=False)
@@ -1422,7 +1389,6 @@ class GetTaskView(AuthenticatedAPIView):
                     "isMilestone": t.is_milestone,
                     "milestoneId": t.milestone_id,
                     "sprintId": t.sprint_id,
-                    **_task_crumb_context_fields(t),
                 },
             )
 

@@ -1,13 +1,12 @@
 """Chat-thread ↔ task linkage: one-task-per-thread guard, milestone
-linkage persistence, crumb-context fields, by-thread lookup hygiene,
-and the `repair_task_thread_links` command.
+linkage persistence, by-thread lookup hygiene, and the
+`repair_task_thread_links` command.
 
 Background: `TaskMaster.chat_type/chat_id/thread_id` record which chat
-thread a task was created from. The create paths now enforce that a
-thread can be the origin of at most one live task, milestones persist
-the same linkage on their backing task row, and the detail endpoints
-carry the ancestry names (`milestoneTitle` / `parentTaskTitle`) the
-thread-header breadcrumb renders.
+thread a task was created from. The create paths enforce that a thread
+can be the origin of at most one live task, milestones persist the same
+linkage on their backing task row, and the by-thread lookup serves the
+task's chat fields so the thread header can render its task pill.
 """
 
 import uuid
@@ -19,7 +18,6 @@ from rest_framework import status
 
 from origin.models.chat.unified_models import Channel, ChannelKind, Message
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
-from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.tests.test_base import BaseAPITestCase
 
@@ -182,49 +180,14 @@ class GetTaskByThreadIdHygieneTests(ThreadLinkTestBase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data[0]["id"], first.task_id)
 
-    def test_response_carries_chat_and_crumb_fields(self):
-        milestone = MilestoneMaster.objects.create(
-            team=self.team,
-            project=self.project,
-            reporter=self.user,
-            title="Crumb milestone",
-            status="Open",
-        )
-        self.make_task(thread=self.thread_root, milestone=milestone)
+    def test_response_carries_chat_fields(self):
+        self.make_task(thread=self.thread_root)
         resp = self.by_thread()
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         row = resp.data[0]
         self.assertEqual(row["chatType"], self.channel.kind)
         self.assertEqual(row["chatId"], str(self.channel.id))
         self.assertEqual(row["threadId"], str(self.thread_root.id))
-        self.assertEqual(row["milestoneTitle"], "Crumb milestone")
-
-
-class GetTaskCrumbFieldTests(ThreadLinkTestBase):
-    def test_get_task_returns_parent_and_milestone_titles(self):
-        parent = self.make_task(title="Parent task")
-        milestone = MilestoneMaster.objects.create(
-            team=self.team,
-            project=self.project,
-            reporter=self.user,
-            title="Ancestry milestone",
-            status="Open",
-        )
-        child = self.make_task(
-            title="Child task",
-            parent_task_id=parent.task_id,
-            milestone=milestone,
-        )
-        query = (
-            f"team_id={self.team.team_id}&project_id={self.project.project_id}"
-            f"&task_id={child.task_id}&attachments=meta"
-        )
-        resp = self.client.get(f"{reverse('get_task')}?{query}")
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        row = resp.data[0]
-        self.assertEqual(row["milestoneTitle"], "Ancestry milestone")
-        self.assertEqual(row["parentTaskTitle"], "Parent task")
-        self.assertFalse(row["parentTaskIsMilestone"])
 
 
 class RepairCommandTests(ThreadLinkTestBase):
