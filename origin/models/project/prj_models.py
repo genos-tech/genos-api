@@ -58,6 +58,15 @@ class ProjectMaster(models.Model):
     # client, which falls back to the built-in default.
     default_task_template = models.CharField(max_length=40, blank=True, null=True)
     default_milestone_template = models.CharField(max_length=40, blank=True, null=True)
+    # Owner-configured creation rules for task/milestone metadata fields,
+    # keyed by the frontend's camelCase field names, e.g.
+    #   {"dueDate": {"required": true, "defaultOffsetDays": 7},
+    #    "tags": {"required": true, "defaultTagNames": ["debug"]}}
+    # Keys/shape are whitelisted in ProjectTaskFieldRulesView; empty dict
+    # = no rules. Enforcement is UI-only by design: task/milestone create
+    # endpoints never consult this, so agent and internal creation paths
+    # (and the is_init_task bootstrap row) stay unaffected.
+    task_field_rules = models.JSONField(default=dict, blank=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 

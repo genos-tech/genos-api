@@ -865,6 +865,147 @@ class ProjectTemplateDefaultsView(AuthenticatedAPIView):
         return Response(self._payload(project), status=status.HTTP_200_OK)
 
 
+class ProjectTaskFieldRulesView(AuthenticatedAPIView):
+    """Owner-configured required/default rules for the metadata fields of
+    tasks and milestones created under a project (ProjectMaster.
+    task_field_rules). GET is member-gated — every member's create form
+    needs the rules (and ownerUserId, so the client can gate the
+    customize UI without a second fetch). PUT is OWNER-gated and
+    shape-validates the whole blob, which it replaces atomically (an
+    empty dict clears all rules). Enforcement is UI-only: task/milestone
+    creation endpoints never consult these rules.
+    """
+
+    ALLOWED_STATUS = {"Open", "WIP", "Blocked", "Pending", "Closed"}
+    ALLOWED_PRIORITY = {"Minimal", "Low", "Normal", "High", "Critical"}
+    ALLOWED_EFFORT = {"Minimal", "Low", "Moderate", "High", "Extensive"}
+    # NOTE: no "sprint" (deliberately dropped from the feature) and no
+    # "project" (always required, never stored).
+    ALLOWED_FIELDS = {
+        "dueDate",
+        "status",
+        "effortLevel",
+        "priority",
+        "tags",
+        "reporter",
+        "assignee",
+    }
+
+    @staticmethod
+    def _is_member(project_id, user):
+        return ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+
+    @staticmethod
+    def _payload(project):
+        return {
+            "rules": project.task_field_rules or {},
+            "ownerUserId": str(project.owner.id) if project.owner else None,
+        }
+
+    @classmethod
+    def _validate_default(cls, field, cfg):
+        """Per-field default-value checks. Returns an error string or None."""
+        if field == "dueDate":
+            offset = cfg.get("defaultOffsetDays")
+            # bool is an int subclass — reject it explicitly.
+            if offset is not None and (
+                isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 3650
+            ):
+                return "'defaultOffsetDays' must be null or an integer between 0 and 3650."
+            return None
+        if field == "tags":
+            names = cfg.get("defaultTagNames")
+            if names is None:
+                return None
+            if not isinstance(names, list) or any(
+                not isinstance(n, str) or not n for n in names
+            ):
+                return "'defaultTagNames' must be a list of non-empty strings."
+            return None
+        default = cfg.get("default")
+        if default is None:
+            return None
+        if field in ("status", "effortLevel", "priority"):
+            allowed = {
+                "status": cls.ALLOWED_STATUS,
+                "effortLevel": cls.ALLOWED_EFFORT,
+                "priority": cls.ALLOWED_PRIORITY,
+            }[field]
+            if default not in allowed:
+                return f"'{default}' is not a valid default for '{field}'."
+            return None
+        # assignee / reporter: "creator" or a user id. Ids are validated
+        # shape-only — the client drops ids that left the team live.
+        if not isinstance(default, str) or not default:
+            return f"'default' for '{field}' must be null, 'creator', or a user id."
+        return None
+
+    @classmethod
+    def _validate(cls, rules):
+        """Whitelist-validate the whole blob. Returns an error string or None."""
+        if not isinstance(rules, dict):
+            return "rules must be an object."
+        for field, cfg in rules.items():
+            if field not in cls.ALLOWED_FIELDS:
+                return f"Unknown field '{field}'."
+            if not isinstance(cfg, dict):
+                return f"Config for '{field}' must be an object."
+            allowed_cfg = {"required"}
+            if field == "dueDate":
+                allowed_cfg |= {"defaultOffsetDays"}
+            elif field == "tags":
+                allowed_cfg |= {"defaultTagNames"}
+            else:
+                allowed_cfg |= {"default"}
+            for key in cfg:
+                if key not in allowed_cfg:
+                    return f"Unknown key '{key}' for '{field}'."
+            if "required" in cfg and not isinstance(cfg["required"], bool):
+                return f"'required' for '{field}' must be a boolean."
+            if err := cls._validate_default(field, cfg):
+                return err
+        return None
+
+    def get(self, request):
+        project_id = request.GET.get("project_id")
+        if not project_id:
+            return Response(
+                {"error": "project_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not self._is_member(project_id, request.user):
+            return Response(
+                {"error": "Not a member of this project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        project = ProjectMaster.objects.filter(project_id=project_id).first()
+        if not project:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(self._payload(project), status=status.HTTP_200_OK)
+
+    def put(self, request):
+        project_id = request.data.get("project_id")
+        rules = request.data.get("rules")
+        if not project_id or rules is None:
+            return Response(
+                {"error": "project_id and rules are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        project = ProjectMaster.objects.filter(project_id=project_id).first()
+        if not project:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not project.owner or str(project.owner.id) != str(request.user.id):
+            return Response(
+                {"error": "Only the project owner can configure task field rules."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if err := self._validate(rules):
+            return Response({"error": err}, status=status.HTTP_400_BAD_REQUEST)
+        project.task_field_rules = rules
+        project.save(update_fields=["task_field_rules", "ts_updated_at"])
+        return Response(self._payload(project), status=status.HTTP_200_OK)
+
+
 class ProjectProfileImageView(AuthenticatedAPIView):
     parser_classes = [MultiPartParser]
 
