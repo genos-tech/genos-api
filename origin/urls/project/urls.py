@@ -20,6 +20,11 @@ urlpatterns = [
     ),
     path("api/v2/project/tag/", ProjectTagsView.as_view(), name="project_tag"),
     path(
+        "api/v2/project/task-template/",
+        ProjectTaskTemplateView.as_view(),
+        name="project_task_template",
+    ),
+    path(
         "api/v2/project/profile/",
         ProjectMasterView.as_view(),
         name="project_profile",

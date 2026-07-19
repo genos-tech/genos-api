@@ -120,3 +120,54 @@ class ProjectTags(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["project", "tag_name"], name="unique_project_tag")
         ]
+
+
+class ProjectTaskTemplate(models.Model):
+    """A project-scoped, reusable task/milestone body scaffold.
+
+    Members of a project author named BlockNote bodies (a "Design doc"
+    scaffold, a "Bug report" checklist, …) that show up in the create
+    form's template picker alongside the built-in defaults. Shared
+    project-wide and managed by any member — the same trust model as
+    ProjectTags; `created_by` is a display hint, not an ownership gate.
+
+    A template's `body` is COPIED into the task/milestone at creation
+    time; the task keeps no reference back to it. So editing or deleting
+    a template never touches existing tasks (unlike tag renames, which
+    rewrite every referencing task).
+    """
+
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="team_task_templates",
+        to_field="team_id",
+    )
+    project = models.ForeignKey(
+        ProjectMaster,
+        on_delete=models.CASCADE,
+        null=True,
+        related_name="project_task_templates",
+        to_field="project_id",
+    )
+    template_name = models.CharField(max_length=60)
+    # BlockNote PartialBlock[] — same storage/shape as TaskMaster.content.
+    body = models.JSONField()
+    created_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="created_task_templates",
+        to_field="id",
+    )
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "template_name"],
+                name="unique_project_task_template",
+            )
+        ]
