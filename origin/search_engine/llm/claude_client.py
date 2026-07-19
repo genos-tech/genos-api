@@ -56,6 +56,50 @@ def _get_client() -> anthropic.Anthropic:
     return _client
 
 
+# --------------------------------------------------------------------------- #
+# Usage / cache observability                                                 #
+# --------------------------------------------------------------------------- #
+
+
+def _log_usage(usage: Any, model: str) -> None:
+    """Log Claude response usage so we can attribute per-model cost and
+    see whether prompt caching is firing. Mirrors
+    `gemini_client._log_usage` (same `LLM_LOG_USAGE_METADATA` gate).
+
+    Anthropic reports `input_tokens` as the *uncached* prompt remainder;
+    the cached prefix (system + tools + earlier turns) shows up as
+    `cache_read_input_tokens` (billed ~0.1x) and freshly-written cache as
+    `cache_creation_input_tokens` (~1.25x). Total prompt =
+    input + cache_read + cache_write. Both cache fields stay 0 until
+    `cache_control` breakpoints are added to the request, so a nonzero
+    `cache_read` is the signal that prompt caching
+    (LLM_TIER_COST_OPTIMIZATION.md §8.2) actually works on this backend.
+
+    Gated on `LLM_LOG_USAGE_METADATA` (default off) so production logs
+    stay quiet unless an operator flips it on.
+    """
+    if usage is None:
+        return
+    if not settings.SEARCH_ENGINE.get("LLM_LOG_USAGE_METADATA", False):
+        return
+    input_n = getattr(usage, "input_tokens", None) or 0
+    output_n = getattr(usage, "output_tokens", None) or 0
+    cache_write_n = getattr(usage, "cache_creation_input_tokens", None) or 0
+    cache_read_n = getattr(usage, "cache_read_input_tokens", None) or 0
+    billed_input = input_n + cache_write_n + cache_read_n
+    cache_pct = round((cache_read_n / billed_input) * 100) if billed_input else 0
+    log.info(
+        "claude usage model=%s input=%d cache_write=%d cache_read=%d "
+        "(%d%% cached) output=%d",
+        model,
+        input_n,
+        cache_write_n,
+        cache_read_n,
+        cache_pct,
+        output_n,
+    )
+
+
 class ClaudeClient:
     """`ModelClient` adapter backed by Anthropic's Messages API."""
 
@@ -133,6 +177,13 @@ class ClaudeClient:
                     # input_json_delta, content_block_start, etc.) are
                     # informational — the high-level helpers above give
                     # us all we need.
+                # Usage telemetry, after the stream is fully drained.
+                # Observability only — a logging failure must never break
+                # generation, so swallow everything here.
+                try:
+                    _log_usage(stream.get_final_message().usage, model)
+                except Exception:
+                    log.debug("Claude usage logging failed", exc_info=True)
         except Exception:
             log.exception("Claude generate_step failed")
             raise
