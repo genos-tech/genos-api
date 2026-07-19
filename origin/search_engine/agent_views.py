@@ -82,6 +82,7 @@ from origin.search_engine.agent.thread_summary import (
 from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.llm.choice import (
     LlmChoice,
+    cheaper_models_same_provider,
     reset_llm_choice,
     resolve_user_choice,
     set_llm_choice,
@@ -274,6 +275,27 @@ def _load_prior_turns(session: AgentSession, max_turns: int) -> list[tuple[str, 
 # --------------------------------------------------------------------------- #
 
 
+def _resolve_quota_fallback(user_id: str, chosen: LlmChoice) -> LlmChoice | None:
+    """Next-cheaper same-provider model with daily headroom, or None.
+
+    Called only when `chosen`'s own per-model daily cap is exhausted but
+    the umbrella `llm_ask_daily` still has room. Walks the catalog's
+    cheaper-than-`chosen` models nearest-first (see
+    `cheaper_models_same_provider`) and returns the first with remaining
+    quota — so the swap gives up as little quality as headroom allows.
+
+    Returns None when nothing cheaper has room (or `chosen` is already the
+    cheapest); the caller then falls back to the existing 429. A model
+    whose cap is 0 (e.g. free-tier opus) reports no headroom and is
+    skipped, so a disabled model is never silently re-enabled.
+    """
+    for candidate in cheaper_models_same_provider(chosen):
+        ok, _used, _limit = check_remaining(user_id, candidate)
+        if ok:
+            return LlmChoice(provider=chosen.provider, model=candidate)
+    return None
+
+
 class AgentAskView(AuthenticatedAPIView):
     def post(self, request):
         data = request.data or {}
@@ -329,22 +351,48 @@ class AgentAskView(AuthenticatedAPIView):
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
 
+        # `fallback_note` rides the terminal `done` event (see
+        # `_stream_ndjson`) so a client can later surface "answered with
+        # <cheaper model> — your <chosen> quota is used up". None on the
+        # common no-swap path.
+        fallback_note: dict | None = None
         model_ok, model_used, model_limit = check_remaining(user_id, chosen.model)
         if not model_ok:
-            return Response(
-                {
-                    "error": (
-                        f"You've used all {model_limit} {chosen.model} asks for today. "
-                        "Switch to another model or upgrade your plan to keep going."
-                    ),
-                    "limit_reached": True,
-                    "used": model_used,
-                    "limit": model_limit,
-                    "category": "model",
-                    "model": chosen.model,
-                },
-                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            # Per-model cap exhausted but LLM_ASK still has room (checked
+            # above). When enabled, drop to the next-cheaper same-provider
+            # model with headroom instead of 429'ing the ask outright.
+            fallback = (
+                _resolve_quota_fallback(user_id, chosen)
+                if settings.SEARCH_ENGINE.get("MODEL_QUOTA_FALLBACK")
+                else None
             )
+            if fallback is None:
+                return Response(
+                    {
+                        "error": (
+                            f"You've used all {model_limit} {chosen.model} asks for today. "
+                            "Switch to another model or upgrade your plan to keep going."
+                        ),
+                        "limit_reached": True,
+                        "used": model_used,
+                        "limit": model_limit,
+                        "category": "model",
+                        "model": chosen.model,
+                    },
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+            log.info(
+                "model %s daily cap reached for user %s; falling back to %s",
+                chosen.model,
+                user_id,
+                fallback.model,
+            )
+            fallback_note = {"requested_model": chosen.model, "used_model": fallback.model}
+            # Reassign BEFORE the run/quota plumbing below so the model we
+            # actually serve is the model we charge (`quota_keys` and
+            # `set_llm_choice` both read this `chosen`) — never the
+            # rejected one.
+            chosen = fallback
 
         # Phase 8 — session memory. Non-fatal: if session machinery
         # fails for any reason we fall back to a stateless single-turn.
@@ -675,6 +723,7 @@ class AgentAskView(AuthenticatedAPIView):
             # NOT count toward quota — only the user-initiated ask does.
             user_id_for_quota=user_id,
             quota_keys=[LLM_ASK_KEY, chosen.model],
+            fallback_note=fallback_note,
         )
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
@@ -812,6 +861,7 @@ def _stream_ndjson(
     session_id=None,
     user_id_for_quota: str | None = None,
     quota_keys: list[str] | None = None,
+    fallback_note: dict | None = None,
 ) -> Iterator[bytes]:
     """Bridge a controller callback into chunked NDJSON.
 
@@ -824,6 +874,10 @@ def _stream_ndjson(
     `session_id`, when present, is injected into the `done` event
     as `"session_id"`. The frontend uses this value in subsequent
     /ask/ calls to thread conversation history (Phase 8).
+
+    `fallback_note`, when present, is injected into the `done` event as
+    `"model_fallback"` — `{requested_model, used_model}` for a
+    quota-driven downgrade (see `_resolve_quota_fallback`).
 
     `run`, when present, is closed at end-of-stream:
         * `paused=True`     → status="awaiting_approval", token stored
@@ -908,6 +962,14 @@ def _stream_ndjson(
             # pending-approval event.)
             if run is not None:
                 event = {**event, "run_id": str(run.run_id)}
+            # Surface a quota-driven model downgrade so the client can
+            # note it. Rides `done` (not a new event type) to stay within
+            # the frozen NDJSON event vocabulary — see
+            # test_agent_event_contract. Write-tool asks pause before any
+            # `done`, so those runs won't carry the note even though the
+            # swap + charge already happened correctly.
+            if fallback_note is not None:
+                event = {**event, "model_fallback": fallback_note}
         elif event_type == "error":
             msg = event.get("message") or ""
             final_error = msg

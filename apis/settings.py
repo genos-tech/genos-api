@@ -1154,6 +1154,17 @@ _tier_quotas_json = os.environ.get("TIER_QUOTAS_JSON", "")
 if _tier_quotas_json:
     SEARCH_ENGINE["TIER_QUOTAS"] = json.loads(_tier_quotas_json)
 
+# When a user's chosen model has exhausted its per-model daily cap
+# (`model_daily`) but the umbrella `llm_ask_daily` still has headroom,
+# fall back to the next-cheaper same-provider model that has room instead
+# of returning 429. Dark-shipped OFF: flipping it silently changes which
+# model answers a paid user's ask, so it stays a deliberate ops toggle.
+# The umbrella `llm_ask_daily` gate is unaffected (no model swap can beat
+# a total-ask cap). See origin.search_engine.agent_views._resolve_quota_fallback.
+SEARCH_ENGINE["MODEL_QUOTA_FALLBACK"] = (
+    os.environ.get("MODEL_QUOTA_FALLBACK", "false").lower() == "true"
+)
+
 # --- Email ---
 # Dev default: print emails to the runserver console so engineers don't
 # need credentials locally. In production, send via Resend's HTTPS API
