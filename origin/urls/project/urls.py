@@ -30,6 +30,11 @@ urlpatterns = [
         name="project_template_defaults",
     ),
     path(
+        "api/v2/project/task-field-rules/",
+        ProjectTaskFieldRulesView.as_view(),
+        name="project_task_field_rules",
+    ),
+    path(
         "api/v2/project/profile/",
         ProjectMasterView.as_view(),
         name="project_profile",
