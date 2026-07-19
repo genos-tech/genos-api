@@ -178,6 +178,47 @@ class TaskIsolationTests(ProjectTaskTemplateTestBase):
         self.assertEqual(task.content, BODY)
 
 
+class TemplateDefaultsTests(ProjectTaskTemplateTestBase):
+    def defaults_url(self):
+        return reverse("project_template_defaults")
+
+    def get_defaults(self):
+        return self.client.get(f"{self.defaults_url()}?project_id={self.project.project_id}")
+
+    def set_default(self, kind, value):
+        return self.client.put(
+            self.defaults_url(),
+            {"project_id": self.project.project_id, "kind": kind, "value": value},
+            format="json",
+        )
+
+    def test_defaults_start_null(self):
+        resp = self.get_defaults()
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data, {"task": None, "milestone": None})
+
+    def test_set_task_and_milestone_defaults_independently(self):
+        self.assertEqual(self.set_default("task", "custom:5").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.set_default("milestone", "milestone").status_code, status.HTTP_200_OK)
+        resp = self.get_defaults()
+        self.assertEqual(resp.data, {"task": "custom:5", "milestone": "milestone"})
+
+    def test_empty_value_clears_a_default(self):
+        self.set_default("task", "bug")
+        cleared = self.set_default("task", "")
+        self.assertEqual(cleared.status_code, status.HTTP_200_OK)
+        self.assertIsNone(cleared.data["task"])
+
+    def test_invalid_kind_is_rejected(self):
+        resp = self.set_default("epic", "bug")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_non_member_cannot_read_or_set_defaults(self):
+        self.authenticate(self.user2)
+        self.assertEqual(self.get_defaults().status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(self.set_default("task", "bug").status_code, status.HTTP_403_FORBIDDEN)
+
+
 class CrossProjectIsolationTests(ProjectTaskTemplateTestBase):
     def test_templates_are_scoped_to_their_project(self):
         other_project = ProjectMaster.objects.create(

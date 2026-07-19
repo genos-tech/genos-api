@@ -803,6 +803,68 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class ProjectTemplateDefaultsView(AuthenticatedAPIView):
+    """Per-project default body template, one for tasks (and subtasks) and
+    one for milestones. The value is a create-form picker string (a
+    built-in id or a custom "custom:{id}") — see ProjectMaster. Any
+    project member may read or set them, mirroring the template CRUD.
+    """
+
+    @staticmethod
+    def _is_member(project_id, user):
+        return ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+
+    @staticmethod
+    def _payload(project):
+        return {
+            "task": project.default_task_template,
+            "milestone": project.default_milestone_template,
+        }
+
+    def get(self, request):
+        project_id = request.GET.get("project_id")
+        if not project_id:
+            return Response(
+                {"error": "project_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not self._is_member(project_id, request.user):
+            return Response(
+                {"error": "Not a member of this project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        project = ProjectMaster.objects.filter(project_id=project_id).first()
+        if not project:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(self._payload(project), status=status.HTTP_200_OK)
+
+    def put(self, request):
+        project_id = request.data.get("project_id")
+        kind = request.data.get("kind")
+        # `value` may be omitted / null to CLEAR a default (fall back to
+        # the built-in). An empty string is normalized to None.
+        value = request.data.get("value") or None
+
+        if not project_id or kind not in ("task", "milestone"):
+            return Response(
+                {"error": "project_id and kind ('task'|'milestone') are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not self._is_member(project_id, request.user):
+            return Response(
+                {"error": "Not a member of this project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        project = ProjectMaster.objects.filter(project_id=project_id).first()
+        if not project:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        field = "default_task_template" if kind == "task" else "default_milestone_template"
+        setattr(project, field, value)
+        project.save(update_fields=[field, "ts_updated_at"])
+        return Response(self._payload(project), status=status.HTTP_200_OK)
+
+
 class ProjectProfileImageView(AuthenticatedAPIView):
     parser_classes = [MultiPartParser]
 

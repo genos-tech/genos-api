@@ -25,6 +25,11 @@ urlpatterns = [
         name="project_task_template",
     ),
     path(
+        "api/v2/project/task-template/defaults/",
+        ProjectTemplateDefaultsView.as_view(),
+        name="project_template_defaults",
+    ),
+    path(
         "api/v2/project/profile/",
         ProjectMasterView.as_view(),
         name="project_profile",

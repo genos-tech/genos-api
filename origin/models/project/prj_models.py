@@ -49,6 +49,15 @@ class ProjectMaster(models.Model):
     # on create (see services/project_code.py) but editable later via
     # the project settings UI.
     code = models.CharField(max_length=6, blank=True, null=True)
+    # Per-project default body template applied to newly created tasks
+    # (and subtasks) / milestones. Stores the create-form picker value:
+    # a built-in id ("default"/"bug"/"spike"/"milestone") or a custom
+    # template's namespaced "custom:{id}". Null = fall back to the
+    # built-in default. Not a FK on purpose — it also names built-ins,
+    # and a dangling "custom:{id}" (template deleted) is tolerated by the
+    # client, which falls back to the built-in default.
+    default_task_template = models.CharField(max_length=40, blank=True, null=True)
+    default_milestone_template = models.CharField(max_length=40, blank=True, null=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
