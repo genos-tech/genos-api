@@ -33,6 +33,7 @@ from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMas
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskAttachments, TaskComments, TaskMaster
+from origin.services.activity_suppression import activity_suppressed
 from origin.services.calendar_sync import (
     LINK_ONLY_FIELDS,
     delete_task_event,
@@ -208,6 +209,12 @@ def _record(
     or partial saves don't blow up.
     """
 
+    # Bulk teardown (demo cleanup) suppresses auditing: a delete-signal
+    # inserting an activity row mid-cascade orphans it against the task
+    # being deleted → deferred-FK IntegrityError at COMMIT. See
+    # origin.services.activity_suppression.
+    if activity_suppressed():
+        return
     if task is None or task.pk is None:
         return
     TaskActivity.objects.create(

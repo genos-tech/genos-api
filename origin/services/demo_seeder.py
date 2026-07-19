@@ -60,6 +60,7 @@ from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMas
 from origin.models.task.sprint_models import Sprint, SprintConfig
 from origin.models.task.task_models import TaskComments, TaskDependency, TaskMaster
 from origin.search_engine.models import RagChunk
+from origin.services.activity_suppression import suppress_task_activity
 
 BOT_PROFILES = [
     {"first": "Alice", "last": "Chen", "role": "Product Lead"},
@@ -3431,7 +3432,12 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
     # raise — cleanup must complete even when the search index is down.
     _delete_demo_team_search_chunks(team_id)
 
-    with transaction.atomic():
+    # suppress_task_activity: deleting TaskComments/TaskAttachments here
+    # fires post_delete receivers that INSERT a TaskActivity row for the
+    # task being torn down; mid-cascade those orphan against origin_taskmaster
+    # and trip the deferred FK at COMMIT. Suppress auditing for the teardown
+    # (we're deleting everything anyway). See activity_suppression.
+    with transaction.atomic(), suppress_task_activity():
         # Pre-collect parent IDs once so children can be filtered by
         # them without triggering N+1 lookups.
         # Legacy chat ids (still the key on the kept Mention/Reaction fact
@@ -3512,8 +3518,12 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
         PersonalNoteMaster.objects.filter(team=team_id).delete()
         PersonalNoteFolder.objects.filter(team=team_id).delete()
 
-        # Tasks (TaskActivity cascades on task delete; comments/tags/
-        # attachments are SET_NULL so delete explicitly).
+        # Tasks. TaskActivity / TaskComments / TaskAttachments all CASCADE
+        # on task delete, so TaskMaster.delete() sweeps them. The explicit
+        # TaskComments delete stays (cheaper first pass), but the real
+        # orphan-safety comes from suppress_task_activity() above: without
+        # it, the comment/attachment post_delete receivers would re-insert
+        # a TaskActivity mid-cascade and trip the deferred FK at COMMIT.
         TaskComments.objects.filter(task_id__in=task_ids).delete()
         TaskMaster.objects.filter(team=team_id).delete()
 
