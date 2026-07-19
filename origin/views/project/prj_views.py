@@ -3,7 +3,7 @@ import time
 from collections import defaultdict
 
 from django.core.cache import cache
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Exists, OuterRef, Q
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
@@ -53,9 +53,7 @@ class ProjectMasterView(AuthenticatedAPIView):
                 )
             if not _PROJECT_CODE_RE.match(new_code):
                 return Response(
-                    {
-                        "error": "Code must be 2-6 uppercase letters/digits, starting with a letter."
-                    },
+                    {"error": "Code must be 2-6 uppercase letters/digits, starting with a letter."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             if (
@@ -649,6 +647,222 @@ class ProjectTagsView(AuthenticatedAPIView):
             task.save(update_fields=["tags"])
 
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ProjectTaskTemplateView(AuthenticatedAPIView):
+    """CRUD for project-scoped custom task/milestone body templates.
+
+    Shared project-wide and managed by any project member (same trust
+    model as ProjectTags). Unlike tag rename/delete, edit/delete here
+    NEVER touch existing tasks: a template's body is copied into the
+    task at creation, so no task holds a reference to rewrite.
+    """
+
+    @staticmethod
+    def _is_member(project_id, user):
+        return ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+
+    @staticmethod
+    def _serialize(template):
+        return {
+            "id": template.id,
+            "templateName": template.template_name,
+            "body": template.body,
+            "createdBy": template.created_by_id,
+            "tsUpdatedAt": template.ts_updated_at,
+        }
+
+    def post(self, request):
+        project_id = request.data.get("project_id")
+        template_name = (request.data.get("template_name") or "").strip()
+        body = request.data.get("body")
+
+        if not project_id or not template_name or body is None:
+            return Response(
+                {"error": "project_id, template_name and body are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not self._is_member(project_id, request.user):
+            return Response(
+                {"error": "Not a member of this project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        data = {
+            "team": request.data.get("team_id"),
+            "project": project_id,
+            "template_name": template_name,
+            "body": body,
+            "created_by": request.user.id,
+        }
+        serializer = ProjectTaskTemplateSerializer(data=data)
+        if serializer.is_valid():
+            instance = serializer.save()
+            return Response(self._serialize(instance), status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        project_id = request.GET.get("project_id")
+
+        if not team_id or not project_id:
+            return Response(
+                {"error": "team_id and project_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not self._is_member(project_id, request.user):
+            return Response(
+                {"error": "Not a member of this project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        templates = (
+            ProjectTaskTemplate.objects.filter(team=team_id, project=project_id)
+            .order_by("ts_updated_at")
+            .reverse()
+        )
+        return Response(
+            [self._serialize(t) for t in templates],
+            status=status.HTTP_200_OK,
+        )
+
+    def put(self, request):
+        template_id = request.data.get("id")
+        project_id = request.data.get("project_id")
+
+        if not template_id or not project_id:
+            return Response(
+                {"error": "id and project_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not self._is_member(project_id, request.user):
+            return Response(
+                {"error": "Not a member of this project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        template = ProjectTaskTemplate.objects.filter(id=template_id, project=project_id).first()
+        if not template:
+            return Response(
+                {"error": "Template not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if "template_name" in request.data:
+            name = (request.data.get("template_name") or "").strip()
+            if not name:
+                return Response(
+                    {"error": "template_name cannot be empty."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            template.template_name = name
+        if "body" in request.data:
+            template.body = request.data["body"]
+
+        # Surface a duplicate name as a clean 400 rather than a 500. The
+        # unique (project, template_name) constraint is DB-enforced.
+        try:
+            template.save()
+        except IntegrityError:
+            return Response(
+                {"error": "A template with this name already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Deliberately does NOT touch TaskMaster: a template's body is
+        # copied into tasks at creation, so no existing task references
+        # this template. (This is the key difference from tag rename,
+        # which rewrites every referencing task.)
+        return Response(self._serialize(template), status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        template_id = request.data.get("id")
+        project_id = request.data.get("project_id")
+
+        if not template_id or not project_id:
+            return Response(
+                {"error": "id and project_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not self._is_member(project_id, request.user):
+            return Response(
+                {"error": "Not a member of this project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        template = ProjectTaskTemplate.objects.filter(id=template_id, project=project_id).first()
+        if not template:
+            return Response(
+                {"error": "Template not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        template.delete()
+        # Plain row delete — existing tasks created from this template
+        # keep their bodies.
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ProjectTemplateDefaultsView(AuthenticatedAPIView):
+    """Per-project default body template, one for tasks (and subtasks) and
+    one for milestones. The value is a create-form picker string (a
+    built-in id or a custom "custom:{id}") — see ProjectMaster. Any
+    project member may read or set them, mirroring the template CRUD.
+    """
+
+    @staticmethod
+    def _is_member(project_id, user):
+        return ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+
+    @staticmethod
+    def _payload(project):
+        return {
+            "task": project.default_task_template,
+            "milestone": project.default_milestone_template,
+        }
+
+    def get(self, request):
+        project_id = request.GET.get("project_id")
+        if not project_id:
+            return Response(
+                {"error": "project_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not self._is_member(project_id, request.user):
+            return Response(
+                {"error": "Not a member of this project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        project = ProjectMaster.objects.filter(project_id=project_id).first()
+        if not project:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(self._payload(project), status=status.HTTP_200_OK)
+
+    def put(self, request):
+        project_id = request.data.get("project_id")
+        kind = request.data.get("kind")
+        # `value` may be omitted / null to CLEAR a default (fall back to
+        # the built-in). An empty string is normalized to None.
+        value = request.data.get("value") or None
+
+        if not project_id or kind not in ("task", "milestone"):
+            return Response(
+                {"error": "project_id and kind ('task'|'milestone') are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not self._is_member(project_id, request.user):
+            return Response(
+                {"error": "Not a member of this project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        project = ProjectMaster.objects.filter(project_id=project_id).first()
+        if not project:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        field = "default_task_template" if kind == "task" else "default_milestone_template"
+        setattr(project, field, value)
+        project.save(update_fields=[field, "ts_updated_at"])
+        return Response(self._payload(project), status=status.HTTP_200_OK)
 
 
 class ProjectProfileImageView(AuthenticatedAPIView):
