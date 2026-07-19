@@ -18,6 +18,7 @@ from origin.services.milestone_service import (
     sync_milestone_assignees,
 )
 from origin.services.task_cache import invalidate_project_tasks_cache
+from origin.services.thread_link import find_thread_link_conflict
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import resolve_group_members
 from origin.views.utils.request_validators import validate_request_data
@@ -72,6 +73,25 @@ def _serialize_milestone(m: MilestoneMaster, *, with_aggregates: bool = True) ->
         # extra lookup. Falls back to None when the milestone has no
         # backing task yet (legacy rows lazy-backfilled below).
         "displayId": m.task.display_id if m.task_id is not None and m.task else None,
+        # Chat-thread origin, carried on the backing TaskMaster row —
+        # set when the milestone was created from a DM/GM/MDM thread.
+        # Same `-1` legacy-junk normalization as GetTaskView. Drives
+        # the milestone preview's "Check thread" affordance.
+        "chatType": (
+            m.task.chat_type
+            if m.task_id is not None and m.task and m.task.chat_type and m.task.chat_type != -1
+            else None
+        ),
+        "chatId": (
+            m.task.chat_id
+            if m.task_id is not None and m.task and m.task.chat_id and m.task.chat_id != "-1"
+            else None
+        ),
+        "threadId": (
+            m.task.thread_id
+            if m.task_id is not None and m.task and m.task.thread_id and m.task.thread_id != "-1"
+            else None
+        ),
         "projectId": m.project_id,
         "teamId": m.team_id,
         "sprintId": m.sprint_id,
@@ -216,6 +236,25 @@ class MilestoneView(AuthenticatedAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+        # Chat-thread origin (milestone created from a DM/GM/MDM thread).
+        # Stored on the backing TaskMaster row — same columns and same
+        # one-task-per-thread rule as regular task creation, since the
+        # backing row IS a task row.
+        chat_type = request.data.get("chat_type")
+        chat_id = request.data.get("chat_id")
+        thread_id = request.data.get("thread_id")
+        if chat_id and thread_id:
+            conflict_task_id = find_thread_link_conflict(project.team_id, chat_id, thread_id)
+            if conflict_task_id is not None:
+                return Response(
+                    {
+                        "error": "This thread is already linked to a task.",
+                        "code": "thread_already_has_task",
+                        "existing_task_id": conflict_task_id,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         with transaction.atomic():
             milestone = create_milestone(
                 project,
@@ -235,6 +274,12 @@ class MilestoneView(AuthenticatedAPIView):
                 links=request.data.get("links"),
                 assignee_ids=request.data.get("assignee_ids") or [],
             )
+            if chat_id and thread_id:
+                backing = _ensure_backing_task(milestone)
+                backing.chat_type = chat_type
+                backing.chat_id = str(chat_id)
+                backing.thread_id = str(thread_id)
+                backing.save(update_fields=["chat_type", "chat_id", "thread_id", "ts_updated_at"])
 
         # Creating a milestone always writes a backing TaskMaster row,
         # which the project task table renders alongside regular tasks.

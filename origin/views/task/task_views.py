@@ -25,6 +25,7 @@ from origin.services.task_cache import (
     invalidate_project_tasks_cache,
     set_cached_project_tasks,
 )
+from origin.services.thread_link import find_thread_link_conflict
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
     build_delta_response,
@@ -324,6 +325,22 @@ class TaskMasterView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # One task per chat thread. The frontend hides its "Create task"
+        # action once a thread has a task, but that gate is client state —
+        # stale menus / concurrent members can still submit a second one.
+        conflict_task_id = find_thread_link_conflict(
+            data["team"], data.get("chat_id"), data.get("thread_id")
+        )
+        if conflict_task_id is not None:
+            return Response(
+                {
+                    "error": "This thread is already linked to a task.",
+                    "code": "thread_already_has_task",
+                    "existing_task_id": conflict_task_id,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         newly_mentioned_user_ids = []
         if "content" in request.data and request.data["content"] is not None:
             extract_user_handler = extractMentionedUsers()
@@ -436,6 +453,29 @@ class TaskMasterView(AuthenticatedAPIView):
         for key, val in request.data.items():
             if val is None:
                 update_data.pop(key)
+
+        # One task per chat thread. Enforced only when this PUT *claims*
+        # a (new) thread linkage — the create-form finalize path — so
+        # ordinary edits that re-send their existing linkage (or legacy
+        # rows that share a thread from the pre-guard era) keep saving.
+        if update_data.get("thread_id") and str(update_data.get("thread_id")) != str(
+            task.thread_id or ""
+        ):
+            conflict_task_id = find_thread_link_conflict(
+                task.team_id,
+                update_data.get("chat_id") or task.chat_id,
+                update_data.get("thread_id"),
+                exclude_task_id=task.task_id,
+            )
+            if conflict_task_id is not None:
+                return Response(
+                    {
+                        "error": "This thread is already linked to a task.",
+                        "code": "thread_already_has_task",
+                        "existing_task_id": conflict_task_id,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         newly_mentioned_user_ids = []
         all_mentioned_user_ids = []
@@ -1034,19 +1074,33 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
 
         # `chat_id` / `thread_id` are CharField post-v3 cutover and
         # carry the v3 UUIDs; pass them through unchanged. Filters by
-        # exact string match.
-        target_task = TaskMaster.objects.filter(
-            is_init_task=False,
-            team=team_id,
-            chat_type=chat_type,
-            chat_id=raw_chat_id,
-            thread_id=raw_thread_id,
-        ).values_list("project", "task_id")
+        # exact string match. Soft-deleted tasks are excluded so a
+        # deleted task frees its thread (the header stops offering
+        # "Open task" for a task that 404s).
+        target_task = list(
+            TaskMaster.objects.filter(
+                is_init_task=False,
+                is_deleted=False,
+                team=team_id,
+                chat_type=chat_type,
+                chat_id=raw_chat_id,
+                thread_id=raw_thread_id,
+            )
+            .order_by("task_id")
+            .values_list("project", "task_id")
+        )
 
         if len(target_task) > 1:
-            return Response(
-                {"error": "Duplicated tasks found"},
-                status=status.HTTP_400_BAD_REQUEST,
+            # Legacy data from before the one-task-per-thread create
+            # guard can hold several tasks claiming the same thread.
+            # Serving the oldest keeps the thread usable; a 400 here
+            # made the thread header treat the thread as task-less,
+            # which then allowed creating yet another duplicate.
+            logger.warning(
+                "getTaskByThreadId: %d tasks linked to thread %s/%s; serving oldest",
+                len(target_task),
+                raw_chat_id,
+                raw_thread_id,
             )
 
         if len(target_task) == 0:
@@ -1058,7 +1112,11 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
         # five extra queries.
         task_attachments = (
             TaskMaster.objects.select_related(
-                "project", "project__project_system_user", "team", "assignee", "reporter"
+                "project",
+                "project__project_system_user",
+                "team",
+                "assignee",
+                "reporter",
             )
             .prefetch_related("task_attachments")
             .filter(
@@ -1165,6 +1223,10 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                     "attachments": attached_files,
                     "parentTaskId": t.parent_task_id,
                     "rootTaskId": t.root_task_id,
+                    # Same normalization as GetTaskView: legacy rows
+                    # stored `-1` for "no linkage".
+                    "chatType": t.chat_type if t.chat_type and t.chat_type != -1 else None,
+                    "chatId": t.chat_id if t.chat_id and t.chat_id != -1 else None,
                     "threadId": t.thread_id,
                     # Milestone hooks: TaskPreview's reroute branch
                     # relies on `currentPreviewTask.isMilestone` to
@@ -1211,7 +1273,11 @@ class GetTaskView(AuthenticatedAPIView):
         # cache refresh), so the extra queries were paid constantly.
         task = (
             TaskMaster.objects.select_related(
-                "project", "project__project_system_user", "team", "assignee", "reporter"
+                "project",
+                "project__project_system_user",
+                "team",
+                "assignee",
+                "reporter",
             )
             .prefetch_related("task_attachments")
             .filter(team=team_id, project_id=project_id, task_id=task_id, is_init_task=False)
