@@ -1072,40 +1072,58 @@ SEARCH_ENGINE = {
             "message_retention_days": 90,
             "upload_max_mb": 10,
         },
-        # Paid-tier model caps follow one rule: worst-case monthly COGS
-        # at cap must stay within ~2-3x the plan price (pro JPY1,200 /
-        # max JPY2,500). Flash-class asks cost ~JPY0.5-1 so they can be
-        # the generous headline number; sonnet/gemini-pro-class run
-        # ~JPY3-8 and opus-class ~JPY15-50 per ask, so THOSE caps are
-        # the actual cost lever, not `llm_ask_daily`.
+        # Paid-tier LLM caps are set by a value-based X/Y/Z tiering model,
+        # not a profit gate — genos-docs/operations/LLM_TIER_COST_OPTIMIZATION.md
+        # (2026-07-19) supersedes the old "worst-case COGS <= 2-3x price"
+        # rule in SUBSCRIPTION_TIERS.md §1. We're pre-revenue-scale: a
+        # deficit is accepted deliberately to win adoption.
+        #   X - cost floor: a bounded subsidy, not a ceiling. opus stays
+        #     single-digit/day (it's the ~JPY60/ask outlier) so no single
+        #     user's worst-case blast radius is catastrophic; flash is
+        #     ~free so it can be the generous headline number.
+        #   Y - value fence: the metric is asks/day + premium-model access.
+        #     Every dimension steps pro -> max by the SAME ratio so the
+        #     upgrade is legible ("max is triple pro").
+        #   Z - market anchor: both tiers undercut ChatGPT Plus / Claude
+        #     Pro (~$20 / ~JPY3,000); max is priced at ~2.08x pro but
+        #     given 3x the limits (Good-Better-Best) so it reads as the
+        #     better-value tier and anchors pro as the default buy.
+        # Flash-class asks cost ~JPY0.5-1, sonnet/gemini-pro-class
+        # ~JPY3-8, opus-class ~JPY15-50 per ask, so the sonnet/gemini-pro
+        # and opus caps are the real subsidy lever, not `llm_ask_daily`.
         "pro": {
             "llm_ask_daily": 100,
             "web_search_daily": 25,
             "model_daily": {
                 # "gemini-2.5-flash": 100,
-                # "gemini-2.5-pro": 30,
+                # "gemini-2.5-pro": 20,
                 "gemini-3.5-flash": 100,
-                "gemini-3.1-pro-preview": 30,
+                "gemini-3.1-pro-preview": 20,
                 "claude-haiku-4-5": 100,
-                "claude-sonnet-4-6": 30,
-                "claude-opus-4-7": 5,
+                "claude-sonnet-4-6": 20,
+                "claude-opus-4-7": 3,
             },
             "task_create_monthly": 1000,
             "note_create_monthly": 500,
             "message_retention_days": None,  # unlimited on paid tiers
             "upload_max_mb": 25,
         },
+        # max = pro x3 on every LLM dimension (the value-fence ratio from
+        # the X/Y/Z model above) -- NOT pro x2 to match the 2.08x price
+        # ratio. A max tier that only doubled pro's limits would be a
+        # weak, dominated upgrade nobody buys; the deliberate value > price
+        # gap (3x limits for ~2x price) is what makes max the anchor.
         "max": {
-            "llm_ask_daily": 1000,
+            "llm_ask_daily": 300,
             "web_search_daily": 100,
             "model_daily": {
-                # "gemini-2.5-flash": 1000,
-                # "gemini-2.5-pro": 500,
-                "gemini-3.5-flash": 1000,
-                "gemini-3.1-pro-preview": 150,
-                "claude-haiku-4-5": 1000,
-                "claude-sonnet-4-6": 150,
-                "claude-opus-4-7": 20,
+                # "gemini-2.5-flash": 300,
+                # "gemini-2.5-pro": 60,
+                "gemini-3.5-flash": 300,
+                "gemini-3.1-pro-preview": 60,
+                "claude-haiku-4-5": 300,
+                "claude-sonnet-4-6": 60,
+                "claude-opus-4-7": 9,
             },
             "task_create_monthly": 5000,
             "note_create_monthly": 3000,
