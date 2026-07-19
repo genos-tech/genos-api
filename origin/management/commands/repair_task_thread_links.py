@@ -77,8 +77,15 @@ class Command(BaseCommand):
                 continue
 
             if not UUID_RE.match(thread_id):
-                # Pre-v3 numeric linkage — still resolved by the legacy
-                # seq lookup path; nothing to validate against here.
+                # Pre-v3 numeric linkage (legacy per-type dm/gm/pm id +
+                # message seq). These predate the v3 channel model — the
+                # thread they reference wasn't necessarily migrated, so
+                # there's no v3 Message to validate or re-point against.
+                # The task detail endpoints already normalize their junk
+                # chat_type=-1 to null on read, which hides the (dead)
+                # "Check thread" affordance — the correct end state for a
+                # thread with no reachable v3 counterpart. Left untouched
+                # on purpose; reported so the count is visible.
                 skipped_legacy += 1
                 continue
 
