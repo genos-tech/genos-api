@@ -876,14 +876,13 @@ class ProjectTaskFieldRulesView(AuthenticatedAPIView):
     creation endpoints never consult these rules.
     """
 
-    ALLOWED_STATUS = {"Open", "WIP", "Blocked", "Pending", "Closed"}
     ALLOWED_PRIORITY = {"Minimal", "Low", "Normal", "High", "Critical"}
     ALLOWED_EFFORT = {"Minimal", "Low", "Moderate", "High", "Extensive"}
-    # NOTE: no "sprint" (deliberately dropped from the feature) and no
+    # NOTE: no "sprint" (dropped from the feature), no "status" (always
+    # auto-set to "Open" at creation — never customizable), and no
     # "project" (always required, never stored).
     ALLOWED_FIELDS = {
         "dueDate",
-        "status",
         "effortLevel",
         "priority",
         "tags",
@@ -925,9 +924,8 @@ class ProjectTaskFieldRulesView(AuthenticatedAPIView):
         default = cfg.get("default")
         if default is None:
             return None
-        if field in ("status", "effortLevel", "priority"):
+        if field in ("effortLevel", "priority"):
             allowed = {
-                "status": cls.ALLOWED_STATUS,
                 "effortLevel": cls.ALLOWED_EFFORT,
                 "priority": cls.ALLOWED_PRIORITY,
             }[field]

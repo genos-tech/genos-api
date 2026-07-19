@@ -59,7 +59,8 @@ class ProjectMaster(models.Model):
     default_task_template = models.CharField(max_length=40, blank=True, null=True)
     default_milestone_template = models.CharField(max_length=40, blank=True, null=True)
     # Owner-configured creation rules for task/milestone metadata fields,
-    # keyed by the frontend's camelCase field names, e.g.
+    # keyed by the frontend's camelCase field names (dueDate, effortLevel,
+    # priority, tags, reporter, assignee — not status/sprint/project), e.g.
     #   {"dueDate": {"required": true, "defaultOffsetDays": 7},
     #    "tags": {"required": true, "defaultTagNames": ["debug"]}}
     # Keys/shape are whitelisted in ProjectTaskFieldRulesView; empty dict

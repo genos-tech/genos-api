@@ -15,7 +15,6 @@ from origin.tests.test_base import BaseAPITestCase
 
 FULL_RULES = {
     "dueDate": {"required": True, "defaultOffsetDays": 0},
-    "status": {"required": False, "default": "Open"},
     "priority": {"default": "High"},
     "effortLevel": {"required": True, "default": None},
     "tags": {"required": True, "defaultTagNames": ["debug"]},
@@ -66,6 +65,13 @@ class ReadWriteTests(ProjectTaskFieldRulesTestBase):
         self.assertEqual(got.status_code, status.HTTP_200_OK)
         self.assertEqual(got.data["rules"], FULL_RULES)
         self.assertEqual(got.data["ownerUserId"], str(self.user.id))
+
+    def test_status_is_not_a_configurable_field(self):
+        # Status is always auto-set at creation — not customizable.
+        resp = self.put_rules({"status": {"required": True}})
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        resp = self.put_rules({"status": {"default": "Open"}})
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_put_empty_dict_clears_rules(self):
         self.put_rules(FULL_RULES)
@@ -124,9 +130,11 @@ class ValidationTests(ProjectTaskFieldRulesTestBase):
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_unknown_field_keys_rejected(self):
-        # "sprint" was deliberately dropped from the feature and
-        # "project" is always-required/never stored — both must 400.
+        # "sprint" was dropped from the feature, "status" is always
+        # auto-set, and "project" is always-required/never stored —
+        # all must 400.
         self.assert_rejected({"sprint": {"required": True}})
+        self.assert_rejected({"status": {"required": True}})
         self.assert_rejected({"project": {"required": True}})
         self.assert_rejected({"milestone": {"required": True}})
 
@@ -152,7 +160,6 @@ class ValidationTests(ProjectTaskFieldRulesTestBase):
         self.assertEqual(ok.status_code, status.HTTP_200_OK)
 
     def test_vocabulary_defaults_validated(self):
-        self.assert_rejected({"status": {"default": "Deleted"}})
         self.assert_rejected({"priority": {"default": "Urgent"}})
         self.assert_rejected({"effortLevel": {"default": "Huge"}})
 
