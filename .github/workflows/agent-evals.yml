@@ -24,8 +24,11 @@ name: agent-evals
 on:
   # NOT path-filtered, deliberately. The `deploy` job below lives in this
   # workflow and is `needs: agent-evals`, so a `paths:` filter here would skip
-  # the whole workflow on a non-agent merge — silently stopping the api from
-  # deploying to Cloud Run. Every merge runs the gate, and every merge deploys.
+  # the whole workflow — and the deploy — on a non-agent merge. Instead the
+  # merge run is gated at the JOB level (see the `agent-evals` job's `if:`): on
+  # push it runs only when it actually gates a Cloud Run deploy
+  # (DEPLOY_TO_GCP == 'true'). With the flag off (Railway-only) the deploy is
+  # skipped, so the Vertex-billed gate would gate nothing — the job skips too.
   push:
     branches: [main]
   # PRs only run the evals when the change can actually move the numbers. This
@@ -82,6 +85,16 @@ env:
 jobs:
   agent-evals:
     name: agent-evals (quality gate)
+    # On PRs the `on: pull_request: paths:` filter above already limits this to
+    # agent-quality changes — a cheap early warning. On push to main the gate is
+    # only worth its Vertex spend when it actually gates a deploy: with
+    # DEPLOY_TO_GCP unset/false (Railway-only) the `deploy` job below is skipped,
+    # so a merge run would gate nothing. Skip the whole job (skipped-via-`if`
+    # reports SUCCESS, so no required-check deadlock). Coverage is preserved: the
+    # PR already ran this gate, and agent-evals-nightly.yml still trends the full
+    # numbers daily. There is no cheaper merge subset to keep — even the
+    # "deterministic" retrieval gate reindexes with Vertex embeddings.
+    if: github.event_name == 'pull_request' || vars.DEPLOY_TO_GCP == 'true'
     runs-on: ubuntu-latest
     env:
       PIPENV_VENV_IN_PROJECT: "1"
@@ -192,13 +205,17 @@ jobs:
         # suite on every PR. Trend the full behavior suite on a schedule instead.
         run: pipenv run python manage.py agent_eval --case simple_rag_wip_tasks --judge
 
-  # COST SWITCH: the eval gate (agent-evals job above) ALWAYS runs — it's the
-  # quality gate, independent of deploy target. This deploy step ships to GCP
-  # only when the repo/org variable DEPLOY_TO_GCP is "true". Unset (the default)
-  # = OFF → Railway-only, no GCP deploy. NOTE: this only stops shipping new
-  # revisions — it does NOT reduce the running GCP bill (Cloud SQL / OpenSearch
-  # VM / Redis / warm Cloud Run keep billing). To cut cost, pause or tear down
-  # the infra (see genos-docs operations/ENVIRONMENTS.md "Going Railway-only").
+  # COST SWITCH: DEPLOY_TO_GCP now gates BOTH the eval gate and this deploy. The
+  # agent-evals job (above) exists to protect this deploy, so on push to main it
+  # runs only when DEPLOY_TO_GCP == 'true'; with the flag off (Railway-only) it
+  # would gate nothing and is skipped (PRs still run it, path-filtered; the
+  # nightly suite still trends). This deploy step ships to GCP only when the
+  # repo/org variable DEPLOY_TO_GCP is "true". Unset (the default) = OFF →
+  # Railway-only, no GCP deploy. NOTE: turning the flag off only stops shipping
+  # new revisions AND the per-merge Vertex eval spend — it does NOT reduce the
+  # running GCP bill (Cloud SQL / OpenSearch VM / Redis / warm Cloud Run keep
+  # billing). To cut that, pause or tear down the infra (see genos-docs
+  # operations/ENVIRONMENTS.md "Going Railway-only").
   deploy:
     name: deploy to Cloud Run (gated on evals)
     needs: agent-evals
