@@ -72,6 +72,21 @@ class TeamMembers(models.Model):
         to_field="id",
     )
     is_deleted = models.BooleanField(default=False)
+    # Permission role within this team: "editor" or "viewer". See
+    # `origin/services/member_roles.py` for the full contract.
+    #
+    # NOT `role` — `CustomUser.role` already exists and means the user's
+    # self-declared JOB TITLE. The two are serialized side by side as
+    # `role` and `memberRole`.
+    #
+    # "owner" is deliberately NOT stored here: `TeamMaster.owner` is the
+    # single source of truth for ownership, so the owner's own row keeps
+    # the `viewer` default. Read this column only through
+    # `resolve_team_role`, never directly, or you will deny the owner.
+    #
+    # The default backfills every existing member as `viewer`, which is
+    # the intended migration behaviour.
+    member_role = models.CharField(max_length=16, default="viewer")
     ts_joined_at = models.DateTimeField(auto_now_add=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

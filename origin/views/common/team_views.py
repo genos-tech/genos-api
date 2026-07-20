@@ -22,6 +22,13 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.serializers.common.team_serializers import TeamMasterSerializer, TeamMembersSerializer
 from origin.services.email import send_templated_email
+from origin.services.member_roles import (
+    ASSIGNABLE_ROLES,
+    OWNER,
+    can_manage,
+    is_assignable,
+    resolve_team_role,
+)
 from origin.services.team_membership import InviteAcceptError, accept_invite
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
@@ -87,14 +94,23 @@ class TeamMasterView(AuthenticatedAPIView):
         except TeamMaster.DoesNotExist:
             return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if not team.owner or str(team.owner.id) != str(request.user.id):
+        # Split gate. Renaming is ordinary management, so editors may do
+        # it; handing the team to someone else is ownership itself and
+        # stays with the owner. Previously both were owner-only.
+        actor_role = resolve_team_role(team, request.user.id)
+        if not can_manage(actor_role):
             return Response(
-                {"error": "Only the team owner can edit the team."},
+                {"error": "Only the team owner or an editor can edit the team."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
         new_name = request.data.get("team_name")
         new_owner_id = request.data.get("owner_id")
+        if new_owner_id is not None and actor_role != OWNER:
+            return Response(
+                {"error": "Only the team owner can transfer ownership."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         update_fields = []
 
         if new_name is not None:
@@ -105,9 +121,7 @@ class TeamMasterView(AuthenticatedAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             collision = (
-                TeamMaster.objects.filter(team_name=new_name)
-                .exclude(team_id=team.team_id)
-                .exists()
+                TeamMaster.objects.filter(team_name=new_name).exclude(team_id=team.team_id).exists()
             )
             if collision:
                 return Response(
@@ -160,7 +174,20 @@ class TeamProfileImageView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        team_data = TeamMaster.objects.get(team_id=team_id)
+        try:
+            team_data = TeamMaster.objects.get(team_id=team_id)
+        except TeamMaster.DoesNotExist:
+            return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # This endpoint previously had NO authorization check at all —
+        # any authenticated user could replace any team's avatar. The FE
+        # only ever showed the button to the owner, so the hole was
+        # invisible. Gated to owner/editor now, matching rename.
+        if not can_manage(resolve_team_role(team_data, request.user.id)):
+            return Response(
+                {"error": "Only the team owner or an editor can change the team image."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         # Only update the FileField
         new_profile_image_data = {
@@ -360,11 +387,12 @@ class InviteTeamMembersView(AuthenticatedAPIView):
         except TeamMaster.DoesNotExist:
             return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Owner-only — mirrors TeamMasterView.put. The codebase has no
-        # "admin" role, so the owner is the only one who can grow the team.
-        if not team.owner or str(team.owner.id) != str(request.user.id):
+        # Owner OR editor — mirrors TeamMasterView.put. This gate used to
+        # be owner-only, which made a single person the bottleneck for
+        # every new hire; the editor role exists precisely to lift it.
+        if not can_manage(resolve_team_role(team, request.user.id)):
             return Response(
-                {"error": "Only the team owner can invite members."},
+                {"error": "Only the team owner or an editor can invite members."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -549,6 +577,11 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 customStatus=F("attendee__custom_status"),
                 isOfflineForced=F("attendee__is_offline_forced"),
                 role=F("attendee__role"),
+                # Permission role (editor/viewer) — NOT `role` above,
+                # which is the user's job title. The owner's row still
+                # reads "viewer" here by design; the client overlays
+                # "owner" using `teamOwnerId`. See services/member_roles.
+                memberRole=F("member_role"),
                 baseCountry=F("attendee__base_country"),
                 isSystemUser=F("attendee__is_system_user"),
             )
@@ -564,6 +597,7 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 "customStatus",
                 "isOfflineForced",
                 "role",
+                "memberRole",
                 "baseCountry",
                 "isSystemUser",
             )
@@ -642,6 +676,7 @@ class GetTeamMembersView(AuthenticatedAPIView):
             .order_by("attendee__email")
             .values(
                 "is_deleted",
+                "member_role",
                 "attendee__id",
                 "attendee__username",
                 "attendee__email",
@@ -672,6 +707,10 @@ class GetTeamMembersView(AuthenticatedAPIView):
                         else ""
                     ),
                     "role": (attendee["attendee__role"] if attendee["attendee__role"] else ""),
+                    # Permission role. Distinct from "role" above (job
+                    # title). Owner's row reads "viewer"; the client
+                    # overlays "owner" via teamOwnerId.
+                    "memberRole": attendee["member_role"],
                     "baseCountry": (
                         attendee["attendee__base_country"]
                         if attendee["attendee__base_country"]
@@ -729,6 +768,7 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
                 "attendee__profile_image_file_name",
                 "attendee__is_offline_forced",
                 "attendee__role",
+                "member_role",
                 "attendee__base_country",
                 "attendee__custom_status",
                 "attendee__is_system_user",
@@ -759,6 +799,7 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
             "tsJoined": "",
             "isOfflineForced": member_info.get("attendee__is_offline_forced", ""),
             "role": member_info.get("attendee__role", ""),
+            "memberRole": member_info.get("member_role", "viewer"),
             "baseCountry": member_info.get("attendee__base_country", ""),
             "customStatus": member_info.get("attendee__custom_status", ""),
             "isSystemUser": member_info.get("attendee__is_system_user", None),
@@ -766,3 +807,74 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
 
         cache.set(cache_key, response_data, timeout=60)
         return Response(response_data, status=status.HTTP_200_OK)
+
+
+class TeamMemberRoleView(AuthenticatedAPIView):
+    """Set another member's permission role within a team.
+
+    Owner or editor may call it (an editor can promote a viewer, which is
+    the whole point — role management must not funnel back through one
+    person). Two invariants make it impossible to corrupt ownership:
+
+      * the target must not be the owner. Ownership lives in
+        `TeamMaster.owner`, not in this column, so "changing the owner's
+        role" is meaningless here — demoting an owner is a transfer.
+      * the new role must be assignable (editor/viewer). Minting an
+        owner is a transfer too, and goes through `TeamMasterView.put`.
+
+    The `TeamMembers` post_save receiver in `signals/cache_invalidation`
+    clears `team:my_teams:{attendee}` and `team:member_info:{team}:{attendee}`,
+    so the write self-invalidates both cached payloads that carry
+    `memberRole`.
+    """
+
+    def put(self, request):
+        team_id = request.data.get("team_id")
+        user_id = request.data.get("user_id")
+        member_role = request.data.get("member_role")
+
+        if not team_id or not user_id or not member_role:
+            return Response(
+                {"error": "team_id, user_id and member_role are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            team = TeamMaster.objects.get(team_id=team_id)
+        except (TeamMaster.DoesNotExist, DjangoValidationError, ValueError):
+            return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if not can_manage(resolve_team_role(team, request.user.id)):
+            return Response(
+                {"error": "Only the team owner or an editor can change member roles."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not is_assignable(member_role):
+            return Response(
+                {"error": f"member_role must be one of {list(ASSIGNABLE_ROLES)}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if team.owner_id is not None and str(team.owner_id) == str(user_id):
+            return Response(
+                {"error": "The team owner's role cannot be changed. Transfer ownership instead."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        row = TeamMembers.objects.filter(
+            team_id=team_id, attendee_id=user_id, is_deleted=False
+        ).first()
+        if row is None:
+            return Response(
+                {"error": "That user is not a member of this team."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        row.member_role = member_role
+        row.save(update_fields=["member_role", "ts_updated_at"])
+
+        return Response(
+            {"userId": str(user_id), "memberRole": member_role},
+            status=status.HTTP_200_OK,
+        )
