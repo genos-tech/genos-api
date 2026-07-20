@@ -33,12 +33,37 @@ from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 @receiver(post_save, sender=TeamMembers)
 @receiver(post_delete, sender=TeamMembers)
 def _invalidate_team_members(sender, instance, **kwargs):
+    """A membership write invalidates the roster for EVERY team member.
+
+    `team:member_info:{team}:{attendee}` is per-member, so only the
+    changed row's key needs clearing there.
+
+    `team:my_teams:{attendee}` is not: its payload embeds the whole
+    `teamMembers` roster, so one member joining, leaving, or changing
+    their `member_role` makes every OTHER member's cached copy stale
+    too. Clearing only the changed attendee's key left everyone else
+    reading a stale roster for the rest of the 60s TTL — visible as a
+    role edit that appears not to take, and (pre-existing) a new joiner
+    who doesn't show up. Fan out across the team, mirroring
+    `_invalidate_project_list`.
+    """
     attendee_id = getattr(instance, "attendee_id", None)
     team_id = getattr(instance, "team_id", None)
+    if attendee_id is not None and team_id is not None:
+        cache.delete(f"team:member_info:{team_id}:{attendee_id}")
+    if team_id is None:
+        if attendee_id is not None:
+            cache.delete(f"team:my_teams:{attendee_id}")
+        return
+    attendee_ids = set(
+        TeamMembers.objects.filter(team_id=team_id).values_list("attendee_id", flat=True)
+    )
     if attendee_id is not None:
-        cache.delete(f"team:my_teams:{attendee_id}")
-        if team_id is not None:
-            cache.delete(f"team:member_info:{team_id}:{attendee_id}")
+        # A post_delete instance is already gone from the query above.
+        attendee_ids.add(attendee_id)
+    keys = [f"team:my_teams:{uid}" for uid in attendee_ids if uid]
+    if keys:
+        cache.delete_many(keys)
 
 
 @receiver(post_save, sender=ProjectMembers)

@@ -264,6 +264,13 @@ urlpatterns = [
     ),
     path("api/v2/team/getMyTeams/", GetMyTeamsView.as_view(), name="get_my_team"),
     path("api/v2/team/getTeamMembers/", GetTeamMembersView.as_view(), name="get_team_members"),
+    # Permission role (editor/viewer) of one member. Not the user's
+    # `role` job title — see services/member_roles.py.
+    path(
+        "api/v2/team/member-role/",
+        TeamMemberRoleView.as_view(),
+        name="team_member_role",
+    ),
     path(
         "api/v2/team/getTeamMemberInfo/",
         GetTeamMemberInfoView.as_view(),
