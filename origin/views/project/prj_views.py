@@ -11,6 +11,7 @@ from rest_framework.response import Response
 
 from origin.models.chat.unified_models import Channel
 from origin.models.common.inbox_models import InboxItems
+from origin.models.common.team_models import TeamMembers
 from origin.models.project.prj_models import *
 from origin.serializers.project.prj_serializers import *
 from origin.services.project_code import derive_project_code
@@ -208,6 +209,18 @@ class ProjectMasterView(AuthenticatedAPIView):
                     }
                 )
 
+            # Labels currently assigned to THIS project. Uncached
+            # endpoint (the profile modal refetches on every open), so
+            # unlike `ProjectsView` there's nothing to invalidate here.
+            project_labels = [
+                _label_payload(assignment.label)
+                for assignment in ProjectLabelAssignment.objects.filter(
+                    project=project_data["project_id"]
+                )
+                .select_related("label")
+                .order_by("label__name")
+            ]
+
             res = {
                 "projectId": project_data["project_id"],
                 "projectName": project_data["project_name"],
@@ -217,6 +230,7 @@ class ProjectMasterView(AuthenticatedAPIView):
                 "isPrivate": project_data["is_private"],
                 "tsCreatedAt": project_data["ts_created_at"],
                 "projectMembers": project_members,
+                "projectLabels": project_labels,
             }
 
             return Response(res, status=status.HTTP_200_OK)
@@ -332,11 +346,26 @@ class ProjectsView(AuthenticatedAPIView):
                     }
                 )
 
+        # Team-scoped labels applied to each project (the sidebar chips).
+        # One grouped query over the join table — `select_related("label")`
+        # keeps it off the N+1 path. Same shape as the `project_tags` loop
+        # above, but note these are a DIFFERENT axis: `projectTags` are
+        # tags for the TASKS inside a project, `projectLabels` tag the
+        # project itself.
+        project_labels = defaultdict(list)
+        for assignment in (
+            ProjectLabelAssignment.objects.filter(label__team=team_id)
+            .select_related("label")
+            .order_by("label__name")
+        ):
+            project_labels[assignment.project_id].append(_label_payload(assignment.label))
+
         team_projects = [
             {
                 "projectId": project.project_id,
                 "projectName": str(project.project_name),
                 "projectTags": project_tags[project.project_id],
+                "projectLabels": project_labels[project.project_id],
                 "isPrivate": project.is_private,
                 "isJoined": project.is_joined,
                 "systemUserId": project.project_system_user.id,
@@ -916,9 +945,7 @@ class ProjectTaskFieldRulesView(AuthenticatedAPIView):
             names = cfg.get("defaultTagNames")
             if names is None:
                 return None
-            if not isinstance(names, list) or any(
-                not isinstance(n, str) or not n for n in names
-            ):
+            if not isinstance(names, list) or any(not isinstance(n, str) or not n for n in names):
                 return "'defaultTagNames' must be a list of non-empty strings."
             return None
         default = cfg.get("default")
@@ -1055,3 +1082,280 @@ class ProjectProfileImageView(AuthenticatedAPIView):
             return Response(ProjectMasterSerializer(saved_user).data, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+def _label_payload(label):
+    """Serialize one `ProjectLabel` into the frontend's camelCase shape.
+
+    `labelId` is the contract: assignment and every mutation address a
+    label by id, never by name. `ProjectTagsView` keys on `tag_name`,
+    which is why a rename there has to rewrite every referencing task.
+    """
+    return {
+        "labelId": label.label_id,
+        "name": label.name,
+        "color": label.color,
+        "textColor": label.text_color,
+    }
+
+
+def _require_project_owner(request, project_id):
+    """Resolve a project and assert the caller owns it.
+
+    Returns `(project, None)` on success or `(None, Response)` to return
+    verbatim. The catalog is TEAM-shared and any project owner may edit
+    it, so the gate is "you own the project you're acting from" — the UI
+    only ever exposes these actions inside ModalProjectProfile, which
+    always has a project in hand. Mirrors the 403 in
+    `ProjectMasterView.put`: the UI hides the controls, and the server
+    re-checks so a hand-crafted request can't bypass them.
+    """
+    if not project_id:
+        return None, Response(
+            {"error": "project_id is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        project = ProjectMaster.objects.get(project_id=project_id)
+    except (ProjectMaster.DoesNotExist, ValueError, TypeError):
+        return None, Response(
+            {"error": "Project not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    if not project.owner or str(project.owner.id) != str(request.user.id):
+        return None, Response(
+            {"error": "Only the project owner can manage project labels."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return project, None
+
+
+def _invalidate_label_project_list(team_id):
+    """Wipe every team member's cached `/project/projects/` payload.
+
+    That payload embeds `projectLabels`, so any catalog rename/recolor/
+    delete or assignment change makes it stale for up to the 60s TTL.
+    Enumerated + `delete_many` rather than `delete_pattern`, matching
+    `_invalidate_project_list`: exact, and it works on the LocMemCache
+    the test suite uses (where `delete_pattern` is a silent no-op).
+
+    Called explicitly from the mutating views rather than wired as a
+    `post_save`/`post_delete` receiver in `signals/cache_invalidation.py`
+    like the other project keys. Two reasons: the assignment replace path
+    uses `bulk_create`, which fires NO `post_save` at all (a receiver
+    would silently miss exactly the most common mutation); and
+    `ProjectLabelAssignment` carries no `team` column, so a `post_delete`
+    receiver firing under a label cascade would have to re-read a row
+    that is being deleted to find the team. The views already hold
+    `project.team_id`, so doing it here is both correct and cheaper.
+    """
+    if team_id is None:
+        return
+    attendee_ids = TeamMembers.objects.filter(team_id=team_id).values_list("attendee_id", flat=True)
+    keys = [f"project:list:{team_id}:{attendee_id}" for attendee_id in attendee_ids if attendee_id]
+    if keys:
+        cache.delete_many(keys)
+
+
+class ProjectLabelsView(AuthenticatedAPIView):
+    """Team-scoped catalog of labels used to organize PROJECTS.
+
+    GET is open to any authenticated team member (the chips render for
+    everyone); every mutation is owner-gated via `_require_project_owner`.
+
+    Note this is a different axis from `ProjectTagsView` — that one
+    manages tags applied to TASKS within a single project. See the
+    `ProjectLabel` model docstring.
+    """
+
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        if not team_id:
+            return Response(
+                {"error": "team_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        labels = ProjectLabel.objects.filter(team=team_id).order_by("name")
+        # Assigned-project counts so the manage UI can warn about the
+        # blast radius before a delete ("used by 4 projects"). One
+        # grouped query — not a per-label count().
+        counts = defaultdict(int)
+        for label_id in ProjectLabelAssignment.objects.filter(label__team=team_id).values_list(
+            "label_id", flat=True
+        ):
+            counts[label_id] += 1
+
+        return Response(
+            [{**_label_payload(label), "projectCount": counts[label.label_id]} for label in labels],
+            status=status.HTTP_200_OK,
+        )
+
+    def post(self, request):
+        """Create a catalog label. Owner-gated via the acting project."""
+        project, err = _require_project_owner(request, request.data.get("project_id"))
+        if err:
+            return err
+
+        name = (request.data.get("name") or "").strip()
+        if not name:
+            return Response(
+                {"error": "name is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(name) > 30:
+            return Response(
+                {"error": "name must be 30 characters or fewer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # The DB constraint is case-sensitive; block case-variant
+        # duplicates here so "Client" / "client" can't both exist.
+        if ProjectLabel.objects.filter(team=project.team_id, name__iexact=name).exists():
+            return Response(
+                {"error": "A label with that name already exists in this team."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        label = ProjectLabel.objects.create(
+            team_id=project.team_id,
+            name=name,
+            color=request.data.get("color") or "#7c3aed",
+            text_color=request.data.get("text_color") or "#ffffff",
+            created_by=request.user,
+        )
+        # A brand-new label is unassigned, so no project's payload
+        # changed yet — nothing to invalidate here (assign does it).
+        return Response(
+            {**_label_payload(label), "projectCount": 0},
+            status=status.HTTP_201_CREATED,
+        )
+
+    def put(self, request):
+        """Rename / recolor a catalog label.
+
+        Applies team-wide: every project carrying this label re-renders
+        with the new value. That's the point of the normalized model —
+        no per-referrer rewrite like `ProjectTagsView.put` needs.
+        """
+        project, err = _require_project_owner(request, request.data.get("project_id"))
+        if err:
+            return err
+
+        label_id = request.data.get("label_id")
+        try:
+            label = ProjectLabel.objects.get(label_id=label_id, team=project.team_id)
+        except (ProjectLabel.DoesNotExist, ValueError, TypeError):
+            return Response({"error": "Label not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        update_fields = []
+        if "name" in request.data:
+            name = (request.data.get("name") or "").strip()
+            if not name:
+                return Response(
+                    {"error": "name cannot be empty."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if len(name) > 30:
+                return Response(
+                    {"error": "name must be 30 characters or fewer."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            collision = (
+                ProjectLabel.objects.filter(team=project.team_id, name__iexact=name)
+                .exclude(label_id=label.label_id)
+                .exists()
+            )
+            if collision:
+                return Response(
+                    {"error": "A label with that name already exists in this team."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            label.name = name
+            update_fields.append("name")
+        if "color" in request.data:
+            label.color = request.data.get("color") or label.color
+            update_fields.append("color")
+        if "text_color" in request.data:
+            label.text_color = request.data.get("text_color") or label.text_color
+            update_fields.append("text_color")
+
+        if update_fields:
+            update_fields.append("ts_updated_at")
+            label.save(update_fields=update_fields)
+            _invalidate_label_project_list(project.team_id)
+
+        return Response(_label_payload(label), status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        """Remove a label from the catalog.
+
+        Assignments cascade away, so every project simply stops showing
+        the chip. Nothing else is rewritten — projects reference the
+        label by FK, so there is no denormalized copy to clean up.
+        """
+        project, err = _require_project_owner(
+            request, request.data.get("project_id") or request.GET.get("project_id")
+        )
+        if err:
+            return err
+
+        label_id = request.data.get("label_id") or request.GET.get("label_id")
+        try:
+            label = ProjectLabel.objects.get(label_id=label_id, team=project.team_id)
+        except (ProjectLabel.DoesNotExist, ValueError, TypeError):
+            return Response({"error": "Label not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        label.delete()
+        _invalidate_label_project_list(project.team_id)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ProjectLabelAssignmentView(AuthenticatedAPIView):
+    """Which catalog labels apply to ONE project. Owner-gated."""
+
+    def put(self, request):
+        """Replace this project's label set with `label_ids` (full set).
+
+        A full-set PUT rather than add/remove deltas: the picker UI is a
+        multi-select whose state IS the desired set, and replacing
+        idempotently avoids the double-click / stale-checkbox races an
+        incremental API invites.
+        """
+        project, err = _require_project_owner(request, request.data.get("project_id"))
+        if err:
+            return err
+
+        raw_ids = request.data.get("label_ids")
+        if not isinstance(raw_ids, list):
+            return Response(
+                {"error": "label_ids must be a list."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Scope to the project's OWN team so a caller can't attach
+        # another team's label by guessing an id.
+        valid_labels = ProjectLabel.objects.filter(team=project.team_id, label_id__in=raw_ids)
+        valid_ids = set(valid_labels.values_list("label_id", flat=True))
+
+        with transaction.atomic():
+            ProjectLabelAssignment.objects.filter(project=project.project_id).exclude(
+                label_id__in=valid_ids
+            ).delete()
+            existing = set(
+                ProjectLabelAssignment.objects.filter(project=project.project_id).values_list(
+                    "label_id", flat=True
+                )
+            )
+            ProjectLabelAssignment.objects.bulk_create(
+                [
+                    ProjectLabelAssignment(label_id=lid, project_id=project.project_id)
+                    for lid in valid_ids - existing
+                ],
+                ignore_conflicts=True,
+            )
+
+        _invalidate_label_project_list(project.team_id)
+        return Response(
+            [_label_payload(label) for label in valid_labels.order_by("name")],
+            status=status.HTTP_200_OK,
+        )
