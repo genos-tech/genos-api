@@ -368,3 +368,24 @@ jobs:
           gcloud run services update-traffic genos-api \
             --project "$GCP_PROJECT" --region "$GCP_REGION" \
             --to-revisions "${{ steps.prev.outputs.rev }}=100" --quiet
+
+      # Cloud Run JOBS (the crons) pin their image DIGEST at deploy time and
+      # are NOT touched by `gcloud run deploy` (which moves only the SERVICE),
+      # and `terraform apply` is a no-op while var.images.api stays `:latest`
+      # (config == state == the tag). So without this, a merged fix that runs
+      # in a cron — cleanup_demo_users, opensearch_reindex, … — never reaches
+      # the jobs and they drift stale (genos-docs operations/GCP_DEPLOY.md
+      # §Scheduled jobs). Re-pin every job to the exact image we just built AND
+      # verified via the smoke, so the crons move in lockstep with the service.
+      # Guarded on smoke SUCCESS: a bad revision is auto-reverted above and must
+      # never be pinned onto the jobs. Uses the immutable `:${GITHUB_SHA}` tag,
+      # not `:latest`, so each job pins the verified digest deterministically.
+      - name: Re-pin cron jobs to the new image
+        if: steps.smoke.outcome == 'success'
+        run: |
+          for j in genos-reindexer genos-demo-cleanup genos-judge-sampler genos-os-maintenance; do
+            echo "re-pinning $j → api:${GITHUB_SHA}"
+            gcloud run jobs update "$j" \
+              --project "$GCP_PROJECT" --region "$GCP_REGION" \
+              --image "$AR/api:${GITHUB_SHA}"
+          done
