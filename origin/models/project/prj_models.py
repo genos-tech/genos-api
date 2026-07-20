@@ -190,3 +190,80 @@ class ProjectTaskTemplate(models.Model):
                 name="unique_project_task_template",
             )
         ]
+
+
+class ProjectLabel(models.Model):
+    """A TEAM-scoped tag used to organize PROJECTS.
+
+    Not to be confused with `ProjectTags` above, which is the opposite
+    relation: those are tags scoped to ONE project and applied to the
+    TASKS inside it. These label whole projects ("Client Work", "Q3",
+    "Internal") so a team with dozens of projects can group them.
+
+    Deliberately normalized — a catalog row plus an M2M assignment —
+    where `ProjectTags` denormalizes tag name/color into every
+    referencing `TaskMaster.tags` JSON blob. That choice is why
+    `ProjectTagsView.put` has to hand-rewrite every task's JSON on a
+    rename (and why a recolor can silently miss rows). Here a rename or
+    recolor is a single UPDATE and every assigned project sees it,
+    because assignment is by FK id, never by name.
+    """
+
+    label_id = models.BigAutoField(primary_key=True)
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.CASCADE,
+        related_name="project_labels",
+        to_field="team_id",
+    )
+    name = models.CharField(max_length=30)
+    # Preset-palette values, mirrors ProjectTags.tag_color/tag_text_color
+    # so the frontend can reuse the same ColorPickerMenu + chip visuals.
+    color = models.CharField(max_length=10)
+    text_color = models.CharField(max_length=10)
+    # Display hint only — the catalog is team-shared and any project
+    # owner may edit it. Never used as an authorization gate (same trust
+    # model as ProjectTaskTemplate.created_by).
+    created_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="created_project_labels",
+        to_field="id",
+    )
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            # Case-sensitive at the DB; the view adds an iexact check so
+            # "Client" / "client" can't coexist in practice.
+            models.UniqueConstraint(fields=["team", "name"], name="uniq_project_label"),
+        ]
+
+
+class ProjectLabelAssignment(models.Model):
+    """Join row: this project carries this label."""
+
+    assignment_id = models.BigAutoField(primary_key=True)
+    label = models.ForeignKey(
+        ProjectLabel,
+        on_delete=models.CASCADE,
+        related_name="assignments",
+    )
+    project = models.ForeignKey(
+        ProjectMaster,
+        on_delete=models.CASCADE,
+        related_name="label_assignments",
+        to_field="project_id",
+    )
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["label", "project"], name="uniq_project_label_assignment"
+            ),
+        ]
+        # No denormalized `team` column: the team is always `label.team`,
+        # and deleting a label cascades its assignments away.

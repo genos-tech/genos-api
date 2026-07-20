@@ -19,6 +19,15 @@ urlpatterns = [
         name="project_members",
     ),
     path("api/v2/project/tag/", ProjectTagsView.as_view(), name="project_tag"),
+    # Team-scoped labels applied to PROJECTS (organize the project list).
+    # Distinct from `project/tag/` above, which is per-project tags
+    # applied to TASKS. See the ProjectLabel model docstring.
+    path("api/v2/project/label/", ProjectLabelsView.as_view(), name="project_label"),
+    path(
+        "api/v2/project/label/assign/",
+        ProjectLabelAssignmentView.as_view(),
+        name="project_label_assign",
+    ),
     path(
         "api/v2/project/task-template/",
         ProjectTaskTemplateView.as_view(),
