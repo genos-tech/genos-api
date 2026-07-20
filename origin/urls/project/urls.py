@@ -23,6 +23,13 @@ urlpatterns = [
     # Distinct from `project/tag/` above, which is per-project tags
     # applied to TASKS. See the ProjectLabel model docstring.
     path("api/v2/project/label/", ProjectLabelsView.as_view(), name="project_label"),
+    # Permission role (editor/viewer) of one project member. Not the
+    # user's `role` job title — see services/member_roles.py.
+    path(
+        "api/v2/project/member-role/",
+        ProjectMemberRoleView.as_view(),
+        name="project_member_role",
+    ),
     path(
         "api/v2/project/label/assign/",
         ProjectLabelAssignmentView.as_view(),

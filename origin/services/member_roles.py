@@ -78,3 +78,19 @@ def resolve_team_role(team, user_id, member_row_role: str | None = None) -> str:
         team_id=team.team_id, attendee_id=user_id, is_deleted=False
     ).first()
     return row.member_role if row else VIEWER
+
+
+def resolve_project_role(project, user_id, member_row_role: str | None = None) -> str:
+    """Effective role of `user_id` in `project`. Mirrors `resolve_team_role`."""
+    if (
+        project is not None
+        and project.owner_id is not None
+        and str(project.owner_id) == str(user_id)
+    ):
+        return OWNER
+    if member_row_role is not None:
+        return member_row_role
+    from origin.models.project.prj_models import ProjectMembers
+
+    row = ProjectMembers.objects.filter(project_id=project.project_id, attendee_id=user_id).first()
+    return row.member_role if row else VIEWER
