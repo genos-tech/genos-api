@@ -41,6 +41,14 @@ from origin.serializers.chat.unified_serializers import (
     ChannelSerializer,
     MessageSerializer,
 )
+from origin.services.member_roles import (
+    ASSIGNABLE_ROLES,
+    OWNER,
+    can_manage,
+    is_assignable,
+    member_role_to_channel_role,
+    resolve_gm_role,
+)
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.upload_limits import check_upload_size
 
@@ -496,9 +504,13 @@ class ChannelDetailView(AuthenticatedAPIView):
             )
         if channel.kind == ChannelKind.PM:
             return self._patch_pm_title(request, channel)
-        if not channel.owner_id or str(channel.owner_id) != str(request.user.id):
+        # Owner OR editor for ordinary metadata (title / image /
+        # visibility). Ownership transfer, handled further down, stays
+        # owner-only.
+        actor_role = resolve_gm_role(channel, request.user.id)
+        if not can_manage(actor_role):
             return Response(
-                {"error": "Only the channel owner can edit metadata."},
+                {"error": "Only the channel owner or an editor can edit metadata."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -535,6 +547,13 @@ class ChannelDetailView(AuthenticatedAPIView):
             update_fields.append("is_private")
         new_owner_user_id = body.get("owner_user_id") if "owner_user_id" in body else None
         if "owner_user_id" in body:
+            # The outer gate now admits editors; ownership itself must
+            # not. Without this an editor could hand the channel away.
+            if actor_role != OWNER:
+                return Response(
+                    {"error": "Only the channel owner can transfer ownership."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             if not new_owner_user_id:
                 return Response(
                     {"error": "owner_user_id must be a non-empty user id."},
@@ -801,6 +820,68 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
     owner can remove anyone. Otherwise 403.
     """
 
+    def patch(self, request, channel_id, user_id):
+        """Set this member's permission role (editor / viewer).
+
+        Owner or editor may call it. Two invariants mirror the Team and
+        Project endpoints: the target must not be the channel owner
+        (that's a transfer, handled by `ChannelDetailView.patch`), and
+        the new role must be assignable — never owner.
+
+        Roles are written into the EXISTING `ChannelMember.role` column
+        via the vocabulary mapping in `services/member_roles.py`
+        (editor -> "admin", viewer -> "member"), so no migration and no
+        change to the messaging write paths.
+
+        PM channels are rejected: their membership mirrors
+        `ProjectMembers`, so the project is the one place a PM role is
+        set (`/api/v2/project/member-role/`). Allowing both would create
+        two sources of truth for the same person.
+        """
+        channel = _get_channel_for_user(channel_id, request.user)
+        if channel.kind == ChannelKind.DM:
+            return Response(
+                {"error": "DM channels have no roles."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if channel.kind == ChannelKind.PM:
+            return Response(
+                {"error": "PM channel roles are managed via the project."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not can_manage(resolve_gm_role(channel, request.user.id)):
+            return Response(
+                {"error": "Only the channel owner or an editor can change member roles."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        member_role = (request.data or {}).get("member_role")
+        if not is_assignable(member_role):
+            return Response(
+                {"error": f"member_role must be one of {list(ASSIGNABLE_ROLES)}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if channel.owner_id is not None and str(channel.owner_id) == str(user_id):
+            return Response(
+                {
+                    "error": "The channel owner's role cannot be changed. "
+                    "Transfer ownership instead."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            member = ChannelMember.objects.get(channel=channel, user_id=user_id, is_deleted=False)
+        except ChannelMember.DoesNotExist:
+            raise Http404("Member not found.")
+
+        member.role = member_role_to_channel_role(member_role)
+        member.save(update_fields=["role", "ts_updated_at"])
+
+        return Response(ChannelMemberSerializer(member).data, status=status.HTTP_200_OK)
+
     def delete(self, request, channel_id, user_id):
         channel = _get_channel_for_user(channel_id, request.user)
         if channel.kind == ChannelKind.DM:
@@ -815,10 +896,9 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
             )
 
         is_self = str(user_id) == str(request.user.id)
-        is_owner = channel.owner_id and str(channel.owner_id) == str(request.user.id)
-        if not (is_self or is_owner):
+        if not (is_self or can_manage(resolve_gm_role(channel, request.user.id))):
             return Response(
-                {"error": "Only the channel owner can remove other members."},
+                {"error": "Only the channel owner or an editor can remove other members."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -869,9 +949,9 @@ class ChannelProfileImageView(AuthenticatedAPIView):
                 {"error": ("PM channels mirror the project avatar; edit the project instead.")},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if not channel.owner_id or str(channel.owner_id) != str(request.user.id):
+        if not can_manage(resolve_gm_role(channel, request.user.id)):
             return Response(
-                {"error": "Only the channel owner can change the avatar."},
+                {"error": "Only the channel owner or an editor can change the avatar."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 

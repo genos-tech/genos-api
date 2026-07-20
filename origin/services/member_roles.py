@@ -94,3 +94,64 @@ def resolve_project_role(project, user_id, member_row_role: str | None = None) -
 
     row = ProjectMembers.objects.filter(project_id=project.project_id, attendee_id=user_id).first()
     return row.member_role if row else VIEWER
+
+
+# ── GM / channel mapping ───────────────────────────────────────────
+#
+# `ChannelMember.role` predates this feature with its own vocabulary
+# (`owner | admin | member | system`) and is load-bearing for messaging,
+# so it is NOT migrated. Instead the two vocabularies are mapped at the
+# API boundary: `admin` (a value that existed but was never written)
+# becomes `editor`, and `member` — what every current non-owner already
+# is — becomes `viewer`. That means zero migration and zero changes to
+# the chat write paths.
+#
+# `system` deliberately has no mapping: system users aren't people and
+# must never appear as assignable.
+CHANNEL_ROLE_EDITOR = "admin"
+CHANNEL_ROLE_VIEWER = "member"
+
+_CHANNEL_TO_MEMBER_ROLE = {
+    CHANNEL_ROLE_EDITOR: EDITOR,
+    CHANNEL_ROLE_VIEWER: VIEWER,
+}
+_MEMBER_TO_CHANNEL_ROLE = {
+    EDITOR: CHANNEL_ROLE_EDITOR,
+    VIEWER: CHANNEL_ROLE_VIEWER,
+}
+
+
+def channel_role_to_member_role(channel_role: str | None) -> str:
+    """Map a stored `ChannelMember.role` onto the shared vocabulary.
+
+    Note `"owner"` maps to VIEWER here, not OWNER. Unlike Team and
+    Project, the channel table DOES store an owner value — so there are
+    two sources of truth and they can disagree (an ownership transfer
+    that updated `Channel.owner_id` but left a stale row behind). The FK
+    is authoritative, so a row claiming ownership without backing from
+    `Channel.owner_id` is treated as an ordinary member and the
+    disagreement self-heals. Callers that need the owner overlay use
+    `resolve_gm_role` (server) or `resolveDisplayRole` (client).
+    """
+    return _CHANNEL_TO_MEMBER_ROLE.get(channel_role, VIEWER)
+
+
+def member_role_to_channel_role(member_role: str) -> str:
+    """Inverse of the above, for writes. Only assignable roles map."""
+    return _MEMBER_TO_CHANNEL_ROLE[member_role]
+
+
+def resolve_gm_role(channel, user_id, member_row_role: str | None = None) -> str:
+    """Effective role of `user_id` in `channel`. FK wins over the column."""
+    if (
+        channel is not None
+        and channel.owner_id is not None
+        and str(channel.owner_id) == str(user_id)
+    ):
+        return OWNER
+    if member_row_role is not None:
+        return channel_role_to_member_role(member_row_role)
+    from origin.models.chat.unified_models import ChannelMember
+
+    row = ChannelMember.objects.filter(channel=channel, user_id=user_id, is_deleted=False).first()
+    return channel_role_to_member_role(row.role) if row else VIEWER

@@ -30,6 +30,7 @@ from origin.models.chat.unified_models import (
     Pin,
     ReadCursor,
 )
+from origin.services.member_roles import channel_role_to_member_role
 
 
 class UserLiteSerializer(serializers.Serializer):
@@ -243,9 +244,7 @@ class MessageSerializer(serializers.ModelSerializer):
             .values("c")
         )
         return qs.annotate(
-            task_comment_count=Coalesce(
-                Subquery(comment_count_sq, output_field=IntegerField()), 0
-            )
+            task_comment_count=Coalesce(Subquery(comment_count_sq, output_field=IntegerField()), 0)
         )
 
     def get_taskCommentCount(self, obj):
@@ -276,10 +275,22 @@ class ChannelMemberSerializer(serializers.ModelSerializer):
     # inline; keep parity here so the v3 → legacy adapter can populate
     # them without a join.
     user = UserLiteSerializer(read_only=True)
+    # Shared permission vocabulary (editor/viewer), derived from `role`
+    # above rather than replacing it: `role` keeps its own
+    # owner/admin/member/system values and is load-bearing for
+    # messaging. See `services/member_roles.py` for the mapping.
+    #
+    # The OWNER is not encoded here — `Channel.owner_id` is
+    # authoritative, so a row is only ever editor/viewer and the client
+    # overlays `owner` (same rule as Team and Project).
+    memberRole = serializers.SerializerMethodField()
 
     class Meta:
         model = ChannelMember
-        fields = ["id", "userId", "role", "tsJoined", "user"]
+        fields = ["id", "userId", "role", "memberRole", "tsJoined", "user"]
+
+    def get_memberRole(self, obj) -> str:
+        return channel_role_to_member_role(obj.role)
 
 
 class ChannelSerializer(serializers.ModelSerializer):
