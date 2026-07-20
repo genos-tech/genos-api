@@ -14,6 +14,13 @@ from origin.models.common.inbox_models import InboxItems
 from origin.models.common.team_models import TeamMembers
 from origin.models.project.prj_models import *
 from origin.serializers.project.prj_serializers import *
+from origin.services.member_roles import (
+    ASSIGNABLE_ROLES,
+    OWNER,
+    can_manage,
+    is_assignable,
+    resolve_project_role,
+)
 from origin.services.project_code import derive_project_code
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data
@@ -45,6 +52,24 @@ class ProjectMasterView(AuthenticatedAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Gate split three ways. `code` used to be open to ANY
+        # authenticated caller — not even project membership was checked
+        # — so anyone could rewrite any project's display-id prefix. It
+        # joins rename under owner/editor. Transfer stays owner-only.
+        actor_role = resolve_project_role(project, request.user.id)
+        if (
+            new_code is not None or new_name is not None or new_owner_id is not None
+        ) and not can_manage(actor_role):
+            return Response(
+                {"error": "Only the project owner or an editor can edit the project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if new_owner_id is not None and actor_role != OWNER:
+            return Response(
+                {"error": "Only the project owner can transfer ownership."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         if new_code is not None:
             new_code = (new_code or "").strip().upper()
             if not new_code:
@@ -69,16 +94,9 @@ class ProjectMasterView(AuthenticatedAPIView):
             project.code = new_code
             project.save(update_fields=["code", "ts_updated_at"])
 
-        # Owner-only edits: project_name + owner transfer. Re-check the
-        # ownership server-side even though the UI hides the inputs —
-        # protects against hand-crafted requests.
+        # Authorization for these two happened above (rename => manager,
+        # transfer => owner). What is left here is validation.
         if new_name is not None or new_owner_id is not None:
-            if not project.owner or str(project.owner.id) != str(request.user.id):
-                return Response(
-                    {"error": "Only the project owner can change name or owner."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-
             owner_update_fields = []
             if new_name is not None:
                 new_name = (new_name or "").strip()
@@ -170,6 +188,7 @@ class ProjectMasterView(AuthenticatedAPIView):
                     "attendee__profile_image_file_name",
                     "attendee__is_offline_forced",
                     "attendee__role",
+                    "member_role",
                     "attendee__base_country",
                     "attendee__custom_status",
                     "attendee__ts_created_at",
@@ -194,6 +213,10 @@ class ProjectMasterView(AuthenticatedAPIView):
                             else ""
                         ),
                         "role": (attendee["attendee__role"] if attendee["attendee__role"] else ""),
+                        # Permission role. Distinct from "role" above
+                        # (job title). The owner's row reads "viewer";
+                        # the client overlays "owner" via ownerUserId.
+                        "memberRole": attendee["member_role"],
                         "baseCountry": (
                             attendee["attendee__base_country"]
                             if attendee["attendee__base_country"]
@@ -1019,9 +1042,9 @@ class ProjectTaskFieldRulesView(AuthenticatedAPIView):
         project = ProjectMaster.objects.filter(project_id=project_id).first()
         if not project:
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
-        if not project.owner or str(project.owner.id) != str(request.user.id):
+        if not can_manage(resolve_project_role(project, request.user.id)):
             return Response(
-                {"error": "Only the project owner can configure task field rules."},
+                {"error": "Only the project owner or an editor can configure task field rules."},
                 status=status.HTTP_403_FORBIDDEN,
             )
         if err := self._validate(rules):
@@ -1046,7 +1069,20 @@ class ProjectProfileImageView(AuthenticatedAPIView):
         if res := validate_request_data(data):
             return res
 
-        project_data = ProjectMaster.objects.get(project_id=project_id)
+        try:
+            project_data = ProjectMaster.objects.get(project_id=project_id)
+        except (ProjectMaster.DoesNotExist, ValueError, TypeError):
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # This endpoint had NO authorization check at all — any
+        # authenticated user could replace any project's avatar. The FE
+        # never surfaced that, so the hole was invisible. Same class as
+        # the team-image hole closed in the Team PR.
+        if not can_manage(resolve_project_role(project_data, request.user.id)):
+            return Response(
+                {"error": "Only the project owner or an editor can change the project image."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         # Only update the FileField
         new_profile_image_data = {
@@ -1099,8 +1135,8 @@ def _label_payload(label):
     }
 
 
-def _require_project_owner(request, project_id):
-    """Resolve a project and assert the caller owns it.
+def _require_project_manager(request, project_id):
+    """Resolve a project and assert the caller may manage it.
 
     Returns `(project, None)` on success or `(None, Response)` to return
     verbatim. The catalog is TEAM-shared and any project owner may edit
@@ -1122,9 +1158,9 @@ def _require_project_owner(request, project_id):
             {"error": "Project not found."},
             status=status.HTTP_404_NOT_FOUND,
         )
-    if not project.owner or str(project.owner.id) != str(request.user.id):
+    if not can_manage(resolve_project_role(project, request.user.id)):
         return None, Response(
-            {"error": "Only the project owner can manage project labels."},
+            {"error": "Only the project owner or an editor can manage project labels."},
             status=status.HTTP_403_FORBIDDEN,
         )
     return project, None
@@ -1193,7 +1229,7 @@ class ProjectLabelsView(AuthenticatedAPIView):
 
     def post(self, request):
         """Create a catalog label. Owner-gated via the acting project."""
-        project, err = _require_project_owner(request, request.data.get("project_id"))
+        project, err = _require_project_manager(request, request.data.get("project_id"))
         if err:
             return err
 
@@ -1237,7 +1273,7 @@ class ProjectLabelsView(AuthenticatedAPIView):
         with the new value. That's the point of the normalized model —
         no per-referrer rewrite like `ProjectTagsView.put` needs.
         """
-        project, err = _require_project_owner(request, request.data.get("project_id"))
+        project, err = _require_project_manager(request, request.data.get("project_id"))
         if err:
             return err
 
@@ -1293,7 +1329,7 @@ class ProjectLabelsView(AuthenticatedAPIView):
         the chip. Nothing else is rewritten — projects reference the
         label by FK, so there is no denormalized copy to clean up.
         """
-        project, err = _require_project_owner(
+        project, err = _require_project_manager(
             request, request.data.get("project_id") or request.GET.get("project_id")
         )
         if err:
@@ -1321,7 +1357,7 @@ class ProjectLabelAssignmentView(AuthenticatedAPIView):
         idempotently avoids the double-click / stale-checkbox races an
         incremental API invites.
         """
-        project, err = _require_project_owner(request, request.data.get("project_id"))
+        project, err = _require_project_manager(request, request.data.get("project_id"))
         if err:
             return err
 
@@ -1357,5 +1393,70 @@ class ProjectLabelAssignmentView(AuthenticatedAPIView):
         _invalidate_label_project_list(project.team_id)
         return Response(
             [_label_payload(label) for label in valid_labels.order_by("name")],
+            status=status.HTTP_200_OK,
+        )
+
+
+class ProjectMemberRoleView(AuthenticatedAPIView):
+    """Set another member's permission role within a project.
+
+    Mirrors `TeamMemberRoleView` — owner or editor may call it, the
+    target must not be the owner (that's a transfer), and the new role
+    must be assignable (editor/viewer, never owner).
+
+    No cache invalidation needed: `/project/profile/` — the only payload
+    carrying `memberRole` — is uncached, and `/project/projects/` (which
+    is cached) carries no member rows.
+    """
+
+    def put(self, request):
+        project_id = request.data.get("project_id")
+        user_id = request.data.get("user_id")
+        member_role = request.data.get("member_role")
+
+        if not project_id or not user_id or not member_role:
+            return Response(
+                {"error": "project_id, user_id and member_role are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            project = ProjectMaster.objects.get(project_id=project_id)
+        except (ProjectMaster.DoesNotExist, ValueError, TypeError):
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if not can_manage(resolve_project_role(project, request.user.id)):
+            return Response(
+                {"error": "Only the project owner or an editor can change member roles."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not is_assignable(member_role):
+            return Response(
+                {"error": f"member_role must be one of {list(ASSIGNABLE_ROLES)}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if project.owner_id is not None and str(project.owner_id) == str(user_id):
+            return Response(
+                {
+                    "error": "The project owner's role cannot be changed. "
+                    "Transfer ownership instead."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        row = ProjectMembers.objects.filter(project_id=project_id, attendee_id=user_id).first()
+        if row is None:
+            return Response(
+                {"error": "That user is not a member of this project."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        row.member_role = member_role
+        row.save(update_fields=["member_role", "ts_updated_at"])
+
+        return Response(
+            {"userId": str(user_id), "memberRole": member_role},
             status=status.HTTP_200_OK,
         )

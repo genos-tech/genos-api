@@ -103,6 +103,14 @@ class ProjectMembers(models.Model):
         related_name="attending_projects",
         to_field="id",
     )
+    # Permission role within this project: "editor" or "viewer". See
+    # `origin/services/member_roles.py`.
+    #
+    # NOT `role` — `CustomUser.role` is the user's job title. "owner" is
+    # never stored here: `ProjectMaster.owner` is the single source of
+    # truth, so the owner's own row keeps the `viewer` default. Read it
+    # only through `resolve_project_role` or you will deny the owner.
+    member_role = models.CharField(max_length=16, default="viewer")
     ts_joined_at = models.DateTimeField(auto_now_add=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
