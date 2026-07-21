@@ -102,6 +102,7 @@ from origin.search_engine.quota import (
     increment_usage,
     resolve_effective_tier,
 )
+from origin.services.webpush_dispatch import schedule_push_to_user
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 log = logging.getLogger(__name__)
@@ -848,6 +849,76 @@ class AgentDecideView(AuthenticatedAPIView):
 
 
 # --------------------------------------------------------------------------- #
+# Backgrounded-run completion push                                            #
+# --------------------------------------------------------------------------- #
+
+# Runs faster than this never push. The presence gate inside `_queue_push`
+# already suppresses anyone with a visible tab, but a question answered in
+# three seconds isn't something the user meaningfully "left running" — an
+# OS card for it reads as noise. Tuned for "I asked, switched apps, and
+# want to know when it's back", not for every ask.
+_RUN_COMPLETE_PUSH_MIN_SECONDS = 15
+
+# chat_type int -> the route token the frontend router understands.
+# Same mapping the note source-chip builder above uses.
+_CHAT_KIND_TOKEN = {1: "dm", 2: "gm", 3: "pm", 4: "mdm"}
+
+
+def _run_complete_url(session) -> str:
+    """Best-effort deep link for the completion push.
+
+    A thread- or note-scoped session links back to the surface the ask was
+    made from; the Ask modal there restores its conversation from the
+    server on open. A plain Spotlight run has no addressable surface (the
+    overlay is a Cmd-K layer, not a route), so it falls back to the app
+    root — the overlay restores its own turns from localStorage once the
+    user reopens it.
+    """
+    if session is None:
+        return "/workspace/chat"
+    token = _CHAT_KIND_TOKEN.get(session.chat_type or 0)
+    if token and session.chat_id:
+        return f"/workspace/chat/{token}/{session.chat_id}"
+    if session.note_type == 1 and session.note_id:
+        return f"/workspace/notes/my/{session.note_id}"
+    return "/workspace/chat"
+
+
+def _push_run_complete(run, *, failed: bool) -> None:
+    """Tell an away user their backgrounded agent answer has landed.
+
+    All three Ask surfaces deliberately keep streaming after their window
+    is dismissed, so an answer can arrive long after the user moved on.
+    The in-app half of this lives in the frontend (`agentRunNotice.ts`);
+    this is the away half. Gating (category preference, push master,
+    presence, active subscriptions) all happens inside `_queue_push` —
+    the only policy here is the duration floor.
+
+    Best-effort: never raises, and never affects the run's stored state.
+    """
+    try:
+        if not run.started_at:
+            return
+        elapsed = (timezone.now() - run.started_at).total_seconds()
+        if elapsed < _RUN_COMPLETE_PUSH_MIN_SECONDS:
+            return
+        query = (run.query or "").strip()
+        if len(query) > 90:
+            query = query[:89].rstrip() + "…"
+        schedule_push_to_user(
+            recipient_id=run.user_id,
+            category="agent_run_done",
+            title=("Your AI answer didn't finish" if failed else "Your AI answer is ready"),
+            url=_run_complete_url(run.session),
+            # Keyed on the run so a retry of the same ask still gets its
+            # own card, but a duplicate close can't double-notify.
+            tag=f"agent_run_done:{run.run_id}",
+        )
+    except Exception:  # noqa: BLE001 — a push must never fail a run
+        log.exception("Completion push failed for run %s", getattr(run, "run_id", "?"))
+
+
+# --------------------------------------------------------------------------- #
 # Shared streaming adapter                                                    #
 # --------------------------------------------------------------------------- #
 
@@ -1019,6 +1090,11 @@ def _stream_ndjson(
                 "finished_at",
             ]
         )
+
+        # The ask survives its window being closed on every surface, so
+        # tell an away user the answer landed. No-ops for anyone with a
+        # visible tab (presence) or with the category switched off.
+        _push_run_complete(run, failed=(final_status != "done"))
 
         # C1 near-real-time memory (§4.7): index this conversation into
         # the per-user recall lane the moment it completes, so a fact
