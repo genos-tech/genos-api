@@ -32,6 +32,11 @@ _PUSH_DEFAULTS = {
     # decision to notify on all messages; presence + per-chat mute
     # (`muted_chats`) + the `enable_chats` coarse toggle keep it in check.
     "chats": True,
+    # A Spotlight / thread / note agent run that finished after the user
+    # closed its window. Fired from the run-close path in
+    # `agent_views._stream_ndjson`. Low volume by construction — one per
+    # backgrounded ask, and only for runs slow enough to be worth it.
+    "agent_run_done": True,
 }
 
 # Fine category -> the coarse-group boolean column that hard-gates it
@@ -49,6 +54,11 @@ _COARSE_FIELD = {
     "task_comments": "enable_task_comments",
     "inbox": "enable_inbox",
     "chats": "enable_chats",
+    # Rides the `inbox` coarse column (mirrors the frontend registry in
+    # `categories.ts`, where `agent_run_done` is grouped under `inbox`).
+    # Both are "a system notice addressed to just this user", and reusing
+    # the column avoids a migration for a sixth master switch.
+    "agent_run_done": "enable_inbox",
 }
 
 
