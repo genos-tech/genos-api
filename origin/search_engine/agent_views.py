@@ -878,7 +878,11 @@ def _run_complete_url(session) -> str:
         return "/workspace/chat"
     token = _CHAT_KIND_TOKEN.get(session.chat_type or 0)
     if token and session.chat_id:
-        return f"/workspace/chat/{token}/{session.chat_id}"
+        base = f"/workspace/chat/{token}/{session.chat_id}"
+        # Carry the thread root when the session is thread-scoped —
+        # landing on the channel and making the user hunt for the thread
+        # they asked about defeats the point of the deep link.
+        return f"{base}/thread/{session.thread_id}" if session.thread_id else base
     if session.note_type == 1 and session.note_id:
         return f"/workspace/notes/my/{session.note_id}"
     return "/workspace/chat"
@@ -893,6 +897,13 @@ def _push_run_complete(run, *, failed: bool) -> None:
     this is the away half. Gating (category preference, push master,
     presence, active subscriptions) all happens inside `_queue_push` —
     the only policy here is the duration floor.
+
+    The page ALSO raises its own card for this category (it can't see the
+    gates below, so deferring would risk notifying nobody). The two are
+    kept from stacking by the shared `tag`: the frontend builds the same
+    `agent_run_done:<run_id>` string as its intent id, and a same-tag
+    notification replaces rather than adds. Change the format on one side
+    and the user starts getting two cards for one answer.
 
     Best-effort: never raises, and never affects the run's stored state.
     """

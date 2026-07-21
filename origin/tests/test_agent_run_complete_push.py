@@ -51,16 +51,27 @@ class AgentRunDoneGatingTests(BaseAPITestCase):
 
 
 class RunCompleteUrlTests(BaseAPITestCase):
-    def test_thread_scoped_session_links_to_the_channel(self):
+    def test_thread_scoped_session_links_all_the_way_to_the_thread(self):
+        # Landing on the channel would make the user hunt for the thread
+        # they asked about — the route supports the deeper form.
         session = SimpleNamespace(
-            chat_type=3, chat_id="0f8f-channel", note_type=None, note_id=None
+            chat_type=3, chat_id="0f8f-channel", thread_id="99-root", note_type=None, note_id=None
         )
         self.assertEqual(
-            agent_views._run_complete_url(session), "/workspace/chat/pm/0f8f-channel"
+            agent_views._run_complete_url(session),
+            "/workspace/chat/pm/0f8f-channel/thread/99-root",
         )
 
+    def test_channel_scoped_session_without_a_thread_stops_at_the_channel(self):
+        session = SimpleNamespace(
+            chat_type=3, chat_id="0f8f-channel", thread_id=None, note_type=None, note_id=None
+        )
+        self.assertEqual(agent_views._run_complete_url(session), "/workspace/chat/pm/0f8f-channel")
+
     def test_personal_note_session_links_to_the_note(self):
-        session = SimpleNamespace(chat_type=None, chat_id=None, note_type=1, note_id=42)
+        session = SimpleNamespace(
+            chat_type=None, chat_id=None, thread_id=None, note_type=1, note_id=42
+        )
         self.assertEqual(agent_views._run_complete_url(session), "/workspace/notes/my/42")
 
     def test_plain_spotlight_run_falls_back_to_the_app_root(self):
@@ -69,7 +80,9 @@ class RunCompleteUrlTests(BaseAPITestCase):
         self.assertEqual(agent_views._run_complete_url(None), "/workspace/chat")
 
     def test_unknown_chat_type_falls_back_rather_than_building_a_broken_link(self):
-        session = SimpleNamespace(chat_type=99, chat_id="x", note_type=None, note_id=None)
+        session = SimpleNamespace(
+            chat_type=99, chat_id="x", thread_id=None, note_type=None, note_id=None
+        )
         self.assertEqual(agent_views._run_complete_url(session), "/workspace/chat")
 
 
