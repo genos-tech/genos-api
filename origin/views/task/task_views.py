@@ -821,10 +821,20 @@ class GetTeamTasksView(AuthenticatedAPIView):
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
                     "status": t.status,
-                    "assigneeId": t.assignee.id,
-                    "assigneeEmail": t.assignee.email,
-                    "assigneeName": t.assignee.username,
-                    "assigneeImgPath": t.assignee.profile_image_file_name,
+                    # This is a TEAM-WIDE list, so it hits rows whose nullable
+                    # FKs are actually null — an unassigned task (assignee),
+                    # and a task with no project. Guard EVERY FK attribute
+                    # access; an unguarded `t.assignee.id` / `t.project.project_id`
+                    # raised AttributeError and 500'd the whole list. (`team`
+                    # is the query filter so it's always set, but guarded too
+                    # for symmetry.) Mirrors the null-safe pattern the
+                    # project-tasks views already use.
+                    "assigneeId": t.assignee.id if t.assignee else None,
+                    "assigneeEmail": t.assignee.email if t.assignee else None,
+                    "assigneeName": t.assignee.username if t.assignee else None,
+                    "assigneeImgPath": (
+                        t.assignee.profile_image_file_name if t.assignee else None
+                    ),
                     "parentTaskId": t.parent_task_id,
                     "rootTaskId": t.root_task_id,
                     "threadId": t.thread_id,
@@ -834,8 +844,8 @@ class GetTeamTasksView(AuthenticatedAPIView):
                         if t.tags
                         else None
                     ),
-                    "teamId": str(t.team.team_id),
-                    "projectId": t.project.project_id,
+                    "teamId": str(t.team.team_id) if t.team else None,
+                    "projectId": t.project.project_id if t.project else None,
                     "isMilestone": t.is_milestone,
                     "milestoneId": t.milestone_id,
                     "sprintId": t.sprint_id,

@@ -157,6 +157,29 @@ class TestTaskViews(TestCase):
         response = self.client.get("/api/v2/task/getTeamTasks/")
         self.assertEqual(response.status_code, 400)
 
+    def test_get_team_tasks_handles_null_fks(self):
+        # Regression: this is a TEAM-WIDE list, so it hits rows with null
+        # nullable FKs — an unassigned task (assignee), and a task whose
+        # project was orphaned (project SET_NULL on an old project delete).
+        # Every unguarded `t.<fk>.<attr>` used to 500 the whole list the
+        # moment one such row existed. Null the FKs via ORM (bypassing the
+        # create endpoint's own validation) to reproduce both.
+        from origin.models.task.task_models import TaskMaster
+
+        create_resp = self._create_task()
+        task_id = create_resp.data["task"]["task_id"]
+        TaskMaster.objects.filter(task_id=task_id).update(assignee=None, project=None)
+
+        response = self.client.get(
+            "/api/v2/task/getTeamTasks/",
+            {"team_id": str(self.team.team_id)},
+        )
+        self.assertEqual(response.status_code, 200)
+        row = next(r for r in response.data if str(r["id"]) == str(task_id))
+        self.assertIsNone(row["assigneeId"])
+        self.assertIsNone(row["assigneeName"])
+        self.assertIsNone(row["projectId"])
+
     # ── Task Comments ──────────────────────────────────────────────
 
     def test_post_task_comment(self):
