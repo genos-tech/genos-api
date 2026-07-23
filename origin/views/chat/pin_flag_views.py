@@ -11,6 +11,7 @@ JSON lists), so a deleted channel's pins are auto-removed on cascade.
 
 `POST   /api/v3/channels/{channel_id}/pin/`     pin a channel
 `DELETE /api/v3/channels/{channel_id}/pin/`     unpin
+`GET    /api/v3/pins/`                          list the user's pins
 
 `POST   /api/v3/messages/{message_id}/flag/`    flag a message
 `PATCH  /api/v3/messages/{message_id}/flag/`    mark done / reopen
@@ -56,6 +57,34 @@ class PinView(AuthenticatedAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class PinListView(AuthenticatedAPIView):
+    """GET /api/v3/pins/
+
+    List the requesting user's pinned channels, newest pin first.
+
+    Pins were write-only before this: `PinView` persisted them, and the
+    client learned about new ones from the `pin.added` / `pin.removed`
+    socket broadcasts, but there was no way to READ the existing set
+    back. The client's only source was its own IndexedDB cache, so a
+    fresh browser, a second device, or a cleared cache showed no pins at
+    all even though the rows were sitting in the database — the data was
+    durable but unreachable. Mirrors `FlagListView`.
+    """
+
+    def get(self, request):
+        qs = (
+            Pin.objects.filter(user=request.user)
+            .select_related("channel")
+            .order_by("-ts_created_at")
+        )
+        return Response(
+            {
+                "pins": PinSerializer(qs, many=True).data,
+                "server_time": timezone.now().isoformat(),
+            }
+        )
+
+
 class FlagView(AuthenticatedAPIView):
     """POST   /api/v3/messages/{message_id}/flag/   flag / re-flag
     PATCH  /api/v3/messages/{message_id}/flag/   mark done / reopen
@@ -86,9 +115,7 @@ class FlagView(AuthenticatedAPIView):
         try:
             flag = Flag.objects.get(user=request.user, message=message)
         except Flag.DoesNotExist:
-            return Response(
-                {"error": "Flag not found."}, status=status.HTTP_404_NOT_FOUND
-            )
+            return Response({"error": "Flag not found."}, status=status.HTTP_404_NOT_FOUND)
         completed = bool(request.data.get("completed", False))
         flag.completed_at = timezone.now() if completed else None
         flag.save(update_fields=["completed_at"])
@@ -112,9 +139,7 @@ class FlagListView(AuthenticatedAPIView):
 
     def get(self, request):
         status_param = request.GET.get("status", "active")
-        qs = Flag.objects.filter(user=request.user).select_related(
-            "message", "message__sender"
-        )
+        qs = Flag.objects.filter(user=request.user).select_related("message", "message__sender")
         if status_param == "completed":
             qs = qs.filter(completed_at__isnull=False).order_by("-completed_at")
         else:
