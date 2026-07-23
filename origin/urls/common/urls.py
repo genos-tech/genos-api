@@ -20,6 +20,7 @@ from origin.views.common.calendar_views import (
 )
 from origin.views.common.gif_views import GifSearchView
 from origin.views.common.github_views import (
+    GithubAccessibleReposView,
     GithubBranchesForTaskView,
     GithubMyPullsView,
     GithubPullDetailView,
@@ -117,6 +118,11 @@ urlpatterns = [
     ),
     # GitHub PRs (read-only)
     path("api/v2/github/pulls/", GithubMyPullsView.as_view(), name="github_pulls"),
+    path(
+        "api/v2/github/accessible-repos/",
+        GithubAccessibleReposView.as_view(),
+        name="github_accessible_repos",
+    ),
     path(
         "api/v2/github/pulls/<str:owner>/<str:repo>/<str:number>/",
         GithubPullDetailView.as_view(),

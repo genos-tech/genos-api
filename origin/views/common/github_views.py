@@ -106,6 +106,97 @@ class GithubMyPullsView(APIView):
         )
 
 
+class GithubAccessibleReposView(APIView):
+    """GET /api/v2/github/accessible-repos/
+
+    What can Genos actually reach on GitHub right now, grouped by owner.
+
+    This exists because our GitHub integration is a classic **OAuth App**
+    with the account-wide `repo` scope, not a GitHub App. There is no
+    per-repo selection to expose: a repo the user creates in their own
+    account is reachable immediately. ORGANIZATION repos are the
+    exception — an OAuth App only sees an org's repos once that org has
+    granted (or an owner has approved) access, and that grant is made on
+    GitHub, at authorization time or from the app's settings page.
+
+    So "add another repo" is really "confirm what's reachable, and grant
+    the org that isn't". This endpoint answers the first half; the
+    `manage_url` it returns is where the second half happens.
+
+    `manage_url` is built server-side because the OAuth client id lives
+    in backend settings and the frontend has no other way to construct
+    the per-application settings link.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    # One page is plenty to answer "can Genos see this org at all?", and
+    # bounds the response for accounts with hundreds of repos. Sorted by
+    # recent activity so a freshly-added org's repos surface at the top.
+    _PER_PAGE = 100
+
+    def get(self, request: Request):
+        account = _connected_account(request.user)
+        if account is None:
+            return _not_connected()
+
+        resp = _github_get(
+            account,
+            "/user/repos",
+            params={
+                "per_page": self._PER_PAGE,
+                "sort": "updated",
+                # Everything the token can reach, including repos the user
+                # only has org-membership access to — which is exactly the
+                # set this endpoint is meant to reveal.
+                "affiliation": "owner,collaborator,organization_member",
+            },
+        )
+        if not resp.ok:
+            logger.warning("GitHub repo list failed: %s %s", resp.status_code, resp.text)
+            return Response(
+                {"detail": "github_api_error", "upstream_status": resp.status_code},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        repos = []
+        owners: dict[str, dict] = {}
+        for item in resp.json() or []:
+            owner_login = (item.get("owner") or {}).get("login") or ""
+            owner_type = (item.get("owner") or {}).get("type") or "User"
+            repos.append(
+                {
+                    "full_name": item.get("full_name"),
+                    "name": item.get("name"),
+                    "owner": owner_login,
+                    "private": item.get("private", False),
+                    "html_url": item.get("html_url"),
+                    "updated_at": item.get("updated_at"),
+                }
+            )
+            entry = owners.setdefault(
+                owner_login,
+                {"login": owner_login, "type": owner_type, "repo_count": 0},
+            )
+            entry["repo_count"] += 1
+
+        client_id = settings.GITHUB_OAUTH_CLIENT_ID
+        return Response(
+            {
+                "repos": repos,
+                # Sorted so organizations read as a stable list rather than
+                # in GitHub's activity order.
+                "owners": sorted(owners.values(), key=lambda o: o["login"].lower()),
+                "truncated": len(repos) >= self._PER_PAGE,
+                "manage_url": (
+                    f"https://github.com/settings/connections/applications/{client_id}"
+                    if client_id
+                    else None
+                ),
+            }
+        )
+
+
 class GithubPullDetailView(APIView):
     """Single PR: metadata + combined status of the head commit so the
     UI can show a green/yellow/red CI badge."""
@@ -981,9 +1072,7 @@ class GithubPullsForTaskView(APIView):
         repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
         bypass_cache = request.GET.get("fresh") == "1"
         repo_branches = _collect_repo_branches(account, repos, bypass_cache=bypass_cache)
-        pulls = _pulls_for_task(
-            account, task, display_id, repo_branches, bypass_cache=bypass_cache
-        )
+        pulls = _pulls_for_task(account, task, display_id, repo_branches, bypass_cache=bypass_cache)
         return Response({"pulls": pulls})
 
 
