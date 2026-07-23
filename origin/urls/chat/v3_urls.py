@@ -38,6 +38,7 @@ URL shape (see plan §2):
   Pin / Flag
     POST   /api/v3/channels/{id}/pin/                     pin channel
     DELETE /api/v3/channels/{id}/pin/                     unpin
+    GET    /api/v3/pins/                                  list pinned channels
     POST   /api/v3/messages/{id}/flag/                    flag message
     DELETE /api/v3/messages/{id}/flag/                    unflag
 
@@ -79,7 +80,12 @@ from origin.views.chat.personal_tag_views import (
     PersonalTagDetailView,
     PersonalTagListView,
 )
-from origin.views.chat.pin_flag_views import FlagListView, FlagView, PinView
+from origin.views.chat.pin_flag_views import (
+    FlagListView,
+    FlagView,
+    PinListView,
+    PinView,
+)
 from origin.views.chat.reaction_views_v3 import MessageReactionsView
 from origin.views.chat.read_cursor_views import ReadCursorView
 from origin.views.chat.search_views_v3 import SearchTeamMembersAndGroupsView
@@ -176,6 +182,11 @@ urlpatterns = [
         "api/v3/flags/",
         FlagListView.as_view(),
         name="v3_flag_list",
+    ),
+    path(
+        "api/v3/pins/",
+        PinListView.as_view(),
+        name="v3_pin_list",
     ),
     # Personal tags (per-user PRIVATE labels on GM channels)
     path(

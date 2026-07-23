@@ -25,6 +25,9 @@ send endpoint, so the reaction view's `v3_activity` producer is the only
 side-effect and it is pure-DB (writes an Activity row). No mocking needed.
 """
 
+from datetime import timedelta
+
+from django.contrib.auth import get_user_model
 from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -44,6 +47,8 @@ from origin.models.chat.unified_models import (
 )
 from origin.models.common.notification_models import NotificationPreference
 from origin.tests.test_base import BaseAPITestCase
+
+User = get_user_model()
 
 
 class _ChannelMixin:
@@ -149,9 +154,7 @@ class ReadCursorViewTests(_ChannelMixin, BaseAPITestCase):
         other = self._make_gm(members=("user",))
         other_msg = self._make_message(other, seq=1)
         self.authenticate()
-        resp = self.client.put(
-            self.url, {"last_read_message_id": str(other_msg.id)}, format="json"
-        )
+        resp = self.client.put(self.url, {"last_read_message_id": str(other_msg.id)}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
     # ----- membership 404 ----------------------------------------------
@@ -269,16 +272,12 @@ class FlagViewTests(_ChannelMixin, BaseAPITestCase):
         resp = self.client.patch(self.url, {"completed": True}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(resp.data["completedAt"])
-        self.assertIsNotNone(
-            Flag.objects.get(user=self.user, message=self.message).completed_at
-        )
+        self.assertIsNotNone(Flag.objects.get(user=self.user, message=self.message).completed_at)
 
         resp2 = self.client.patch(self.url, {"completed": False}, format="json")
         self.assertEqual(resp2.status_code, status.HTTP_200_OK)
         self.assertIsNone(resp2.data["completedAt"])
-        self.assertIsNone(
-            Flag.objects.get(user=self.user, message=self.message).completed_at
-        )
+        self.assertIsNone(Flag.objects.get(user=self.user, message=self.message).completed_at)
 
     def test_patch_nonexistent_flag_returns_404(self):
         self.authenticate()
@@ -298,6 +297,67 @@ class FlagViewTests(_ChannelMixin, BaseAPITestCase):
 
 
 # ---------------------------------------------------------------------------
+# PinListView — GET /api/v3/pins/
+# ---------------------------------------------------------------------------
+class PinListViewTests(_ChannelMixin, BaseAPITestCase):
+    """Pins used to be write-only: persisted, broadcast, but never
+    readable. A fresh browser or a second device therefore showed no
+    pins at all. These cover the read path that closes that."""
+
+    def setUp(self):
+        super().setUp()
+        self.channel_a = self._make_gm(members=("user",))
+        self.channel_b = self._make_gm(members=("user",))
+        self.url = reverse("v3_pin_list")
+
+    def test_unauthenticated_returns_401(self):
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_returns_the_users_pins(self):
+        self.authenticate()
+        Pin.objects.create(user=self.user, channel=self.channel_a)
+        Pin.objects.create(user=self.user, channel=self.channel_b)
+
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        ids = {p["channelId"] for p in resp.data["pins"]}
+        self.assertEqual(ids, {str(self.channel_a.id), str(self.channel_b.id)})
+
+    def test_empty_when_nothing_pinned(self):
+        self.authenticate()
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["pins"], [])
+
+    def test_newest_pin_first(self):
+        self.authenticate()
+        older = Pin.objects.create(user=self.user, channel=self.channel_a)
+        newer = Pin.objects.create(user=self.user, channel=self.channel_b)
+        Pin.objects.filter(pk=older.pk).update(ts_created_at=timezone.now() - timedelta(days=1))
+        Pin.objects.filter(pk=newer.pk).update(ts_created_at=timezone.now())
+
+        resp = self.client.get(self.url)
+        self.assertEqual(
+            [p["channelId"] for p in resp.data["pins"]],
+            [str(self.channel_b.id), str(self.channel_a.id)],
+        )
+
+    def test_does_not_leak_another_users_pins(self):
+        """Pins are per-user — the list must be scoped to the caller."""
+        other = User.objects.create_user(
+            username="pin-outsider",
+            email="pin-outsider@example.com",
+            password="outsiderpass123",
+        )
+        Pin.objects.create(user=other, channel=self.channel_a)
+
+        self.authenticate()
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.data["pins"], [])
+
+
+# ---------------------------------------------------------------------------
 # FlagListView — GET /api/v3/flags/?status=active|completed
 # ---------------------------------------------------------------------------
 class FlagListViewTests(_ChannelMixin, BaseAPITestCase):
@@ -307,9 +367,7 @@ class FlagListViewTests(_ChannelMixin, BaseAPITestCase):
         self.active_msg = self._make_message(self.channel, seq=1)
         self.done_msg = self._make_message(self.channel, seq=2)
         Flag.objects.create(user=self.user, message=self.active_msg)
-        Flag.objects.create(
-            user=self.user, message=self.done_msg, completed_at=timezone.now()
-        )
+        Flag.objects.create(user=self.user, message=self.done_msg, completed_at=timezone.now())
         self.url = reverse("v3_flag_list")
 
     def test_active_status_returns_only_active(self):
