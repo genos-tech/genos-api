@@ -24,13 +24,24 @@ _MEDIA_ROOT = tempfile.mkdtemp()
 
 URL = "/api/v2/team-emoji/"
 
-# Minimal valid headers per format (the sniffer reads 12 bytes).
+# Minimal valid headers per format (the raster sniffers read 12 bytes;
+# SVG gets a 1 KiB window because its root element sits behind the XML
+# declaration).
 GIF_BYTES = b"GIF89a" + b"\x00" * 20
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20
+SVG_BYTES = (
+    b'<?xml version="1.0" encoding="UTF-8"?>\n'
+    b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">'
+    b'<circle cx="8" cy="8" r="8" fill="#7c3aed"/></svg>'
+)
 
 
 def _gif(name="party.gif", content=GIF_BYTES):
     return SimpleUploadedFile(name, content, content_type="image/gif")
+
+
+def _svg(name="party.svg", content=SVG_BYTES):
+    return SimpleUploadedFile(name, content, content_type="image/svg+xml")
 
 
 @override_settings(MEDIA_ROOT=_MEDIA_ROOT)
@@ -108,6 +119,35 @@ class TeamEmojiViewTests(BaseAPITestCase):
     def test_magic_byte_mismatch_rejected(self):
         # PNG content wearing a .gif extension.
         resp = self._post(file=_gif(name="fake.gif", content=PNG_BYTES))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_svg_upload_accepted(self):
+        resp = self._post(name="vector-blob", file=_svg())
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertTrue(resp.data["url"].endswith(".svg"))
+
+    def test_svg_accepted_with_bom_and_leading_whitespace(self):
+        # Windows editors emit a UTF-8 BOM ahead of the XML declaration;
+        # some exporters emit a leading newline. Neither is a bad file.
+        resp = self._post(name="bom-blob", file=_svg(content=b"\xef\xbb\xbf\n  " + SVG_BYTES))
+        self.assertEqual(resp.status_code, 201, resp.data)
+
+    def test_svg_without_root_element_rejected(self):
+        # HTML wearing a .svg extension — markup, but not an SVG.
+        resp = self._post(file=_svg(content=b"<html><body>hi</body></html>"))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_svg_with_script_rejected(self):
+        hostile = SVG_BYTES.replace(b"</svg>", b'<script>alert("x")</script></svg>')
+        resp = self._post(file=_svg(content=hostile))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_svg_with_event_handler_rejected(self):
+        # The payload sits well past the 1 KiB sniff window, so this also
+        # asserts the active-content scan reads the whole document.
+        padding = b"<!--" + b"p" * 4096 + b"-->"
+        hostile = SVG_BYTES.replace(b"</svg>", padding + b'<circle onload="alert(1)"/></svg>')
+        resp = self._post(file=_svg(content=hostile))
         self.assertEqual(resp.status_code, 400)
 
     def test_oversized_file_rejected(self):

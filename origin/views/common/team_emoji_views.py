@@ -18,17 +18,64 @@ _NAME_RE = re.compile(r"[a-z0-9_+-]{1,50}")
 # viewport, so "small" is the feature, not a quota.
 MAX_EMOJI_BYTES = 512 * 1024  # 512 KiB
 
-# extension -> magic-byte predicate over the first 12 bytes. Both checks
-# must pass: the extension names the stored file (it ends up in the URL
-# the frontend bakes into bodies), the sniff stops content smuggling
-# (e.g. an HTML file named .png).
+# How much of the file the sniffers see. The raster formats only need
+# the first 12 bytes, but SVG is text: its `<svg` root can sit behind an
+# XML declaration, a DOCTYPE and/or comments, so it needs a wider window.
+_SNIFF_BYTES = 1024
+
+# UTF-8 BOM. Editors (notably on Windows) emit it ahead of the XML
+# declaration, which would otherwise fail the `startswith(b"<")` check.
+_BOM_UTF8 = b"\xef\xbb\xbf"
+
+
+def _sniff_svg(head: bytes) -> bool:
+    """True when `head` looks like an SVG document.
+
+    Unlike the raster formats, SVG has no magic number — it's XML. The
+    best available structural signal is "starts with markup, and the
+    `<svg` root element appears within the sniff window".
+    """
+    text = head.lstrip(_BOM_UTF8).lstrip()
+    return text.startswith(b"<") and b"<svg" in text.lower()
+
+
+# extension -> content predicate over the first `_SNIFF_BYTES` bytes.
+# Both checks must pass: the extension names the stored file (it ends up
+# in the URL the frontend bakes into bodies), the sniff stops content
+# smuggling (e.g. an HTML file named .png).
 _MAGIC_SNIFFERS = {
     "gif": lambda h: h.startswith((b"GIF87a", b"GIF89a")),
     "png": lambda h: h.startswith(b"\x89PNG\r\n\x1a\n"),
     "jpg": lambda h: h.startswith(b"\xff\xd8\xff"),
     "jpeg": lambda h: h.startswith(b"\xff\xd8\xff"),
     "webp": lambda h: h.startswith(b"RIFF") and h[8:12] == b"WEBP",
+    "svg": _sniff_svg,
 }
+
+_ALLOWED_EXT_LABEL = ".png, .jpg, .jpeg, .gif, .webp or .svg"
+
+# Active-content markers rejected in uploaded SVG.
+#
+# This is DEFENCE IN DEPTH, not the control that makes SVG emoji safe.
+# Two properties already close the stored-XSS path, and both must stay
+# true if this list is ever relaxed:
+#
+#   1. `serve_media` (origin/views/common/media_views.py) forces
+#      `Content-Disposition: attachment` on every `/media/` response, so
+#      navigating straight to an emoji URL downloads it instead of
+#      rendering it in the API's origin.
+#   2. The frontend only ever renders emoji through `<img src>`
+#      (`CustomEmojiImg`), and browsers treat SVG-in-`<img>` as a
+#      non-scripted, non-interactive context: no scripts, no external
+#      fetches.
+#
+# A blocklist over XML text can always be evaded (entity encoding,
+# namespace tricks), so it is deliberately not load-bearing — it just
+# means the obvious hostile file doesn't get stored in the first place.
+_SVG_ACTIVE_CONTENT_RE = re.compile(
+    rb"<\s*script|<\s*foreignObject|\bon[a-z]+\s*=|javascript\s*:",
+    re.IGNORECASE,
+)
 
 
 def _verify_team_member(user, team_id):
@@ -113,16 +160,27 @@ class TeamEmojiView(AuthenticatedAPIView):
         sniffer = _MAGIC_SNIFFERS.get(ext)
         if sniffer is None:
             return Response(
-                {"error": "Emoji images must be .png, .jpg, .jpeg, .gif or .webp."},
+                {"error": f"Emoji images must be {_ALLOWED_EXT_LABEL}."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        head = file.read(12)
+        head = file.read(_SNIFF_BYTES)
         file.seek(0)
         if not sniffer(head):
             return Response(
                 {"error": "File content does not match its extension."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # SVG only: scan the WHOLE document, not just the sniff window —
+        # the payload is usually far past the first KiB. Affordable here
+        # because MAX_EMOJI_BYTES already caps the read at 512 KiB.
+        if ext == "svg":
+            body = file.read()
+            file.seek(0)
+            if _SVG_ACTIVE_CONTENT_RE.search(body):
+                return Response(
+                    {"error": "SVG emoji must not contain scripts or event handlers."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         if TeamEmojiMaster.objects.filter(team=team, name=name, is_deleted=False).exists():
             return Response(
