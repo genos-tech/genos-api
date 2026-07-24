@@ -13,6 +13,8 @@ Rules under test:
   * a blocker REOPENING re-blocks its dependents
 """
 
+from origin.models.project.prj_models import ProjectMaster
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster
 
 from .test_base import BaseAPITestCase
@@ -21,6 +23,12 @@ from .test_base import BaseAPITestCase
 class TaskBlockingAutoStatusTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()
+        self.project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Blocking Project",
+            owner=self.user,
+            project_system_user=self.user,
+        )
         self.blocker = TaskMaster.objects.create(
             team=self.team, title="Blocker", assignee=self.user, reporter=self.user, status="Open"
         )
@@ -64,17 +72,53 @@ class TaskBlockingAutoStatusTests(BaseAPITestCase):
         self._dep()
         self.assertEqual(self._status(self.task), "Closed")
 
-    def test_milestone_backing_task_is_skipped(self):
+    def _milestone(self, status="Open"):
+        """A milestone + its backing TaskMaster row (is_milestone=True).
+        The canonical status is MilestoneMaster.status; the backing row
+        mirrors it (what the task table reads)."""
         backing = TaskMaster.objects.create(
             team=self.team,
             title="Milestone backing",
             assignee=self.user,
             reporter=self.user,
-            status="Open",
+            status=status,
             is_milestone=True,
         )
+        milestone = MilestoneMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            title="Milestone",
+            reporter=self.user,
+            task=backing,
+            status=status,
+        )
+        return milestone, backing
+
+    def test_adding_open_blocker_blocks_a_milestone(self):
+        # Reverses the old "milestones are skipped" rule (fe request):
+        # a milestone blocked by an open task auto-goes "Blocked" on BOTH
+        # its own status field and the backing mirror.
+        milestone, backing = self._milestone()
         self._dep(blocked=backing)
+        milestone.refresh_from_db()
+        self.assertEqual(milestone.status, "Blocked")
+        self.assertEqual(self._status(backing), "Blocked")
+
+    def test_clearing_last_blocker_reopens_a_milestone(self):
+        milestone, backing = self._milestone()
+        dep = self._dep(blocked=backing)
+        milestone.refresh_from_db()
+        self.assertEqual(milestone.status, "Blocked")
+        dep.delete()
+        milestone.refresh_from_db()
+        self.assertEqual(milestone.status, "Open")
         self.assertEqual(self._status(backing), "Open")
+
+    def test_closed_milestone_is_not_auto_blocked(self):
+        milestone, backing = self._milestone(status="Closed")
+        self._dep(blocked=backing)
+        milestone.refresh_from_db()
+        self.assertEqual(milestone.status, "Closed")
 
     # ----- unblocking --------------------------------------------------
 

@@ -17,10 +17,17 @@ blockers is never touched. The known ambiguity: a task blocked both by
 a task AND a non-task reason will auto-revert to Open when the task
 blocker clears — the system can't see the second reason.
 
-Auto-transitions only apply to plain tasks in active states:
+Auto-transitions apply to plain tasks AND milestones in active states:
 
-  * `is_milestone` backing rows are skipped (milestones keep their own
-    Open/WIP/Pending/Closed vocabulary).
+  * **Milestones ARE auto-transitioned** (changed 2026-07-25, fe request
+    — reverses the original "milestones keep their own vocabulary"
+    exclusion). A milestone's canonical status lives on
+    `MilestoneMaster.status`, NOT the backing `TaskMaster.status` (which
+    is a mirror the table reads and `sync_backing_task` overwrites on the
+    next PATCH), so we write BOTH: the milestone's own status field and
+    its backing row, keeping preview (reads MilestoneMaster) and table
+    (reads backing) in agreement. Milestone aggregations already treat
+    "Blocked" as a valid milestone status (`get_milestone_*` tools).
   * Soft-deleted and init-draft rows are skipped.
   * Auto-Blocked fires only from Open/WIP/Pending — it never reopens a
     Closed/Deleted task.
@@ -65,13 +72,28 @@ def _has_open_blocker(task_id: int) -> bool:
     )
 
 
-def sync_blocked_status(blocked_task_ids: Iterable[int]) -> int:
-    """Recompute the auto-Blocked state for the given tasks.
+def _next_status(current: str | None, blocked: bool) -> str | None:
+    """The auto-transition target for `current`, or None for a no-op.
 
-    Returns the number of tasks whose status was changed. Never raises —
+    Blocked gain → "Blocked" (only from Open/WIP/Pending); last blocker
+    cleared → "Open" (only from exactly "Blocked"). Everything else is a
+    no-op so a manual override (WIP, hand-set Blocked, Closed) survives.
+    """
+    if blocked and current in AUTO_BLOCKABLE_STATUSES:
+        return "Blocked"
+    if not blocked and current == "Blocked":
+        return "Open"
+    return None
+
+
+def sync_blocked_status(blocked_task_ids: Iterable[int]) -> int:
+    """Recompute the auto-Blocked state for the given tasks / milestones.
+
+    Returns the number of rows whose status was changed. Never raises —
     a failed sync must not break the dependency/status write that
     triggered it (the next dependency event self-heals).
     """
+    from origin.models.task.milestone_models import MilestoneMaster  # noqa: PLC0415
     from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
 
     changed = 0
@@ -82,15 +104,37 @@ def sync_blocked_status(blocked_task_ids: Iterable[int]) -> int:
                 .only("task_id", "status", "is_deleted", "is_init_task", "is_milestone")
                 .first()
             )
-            if task is None or task.is_deleted or task.is_init_task or task.is_milestone:
+            if task is None or task.is_deleted or task.is_init_task:
                 continue
             blocked = _has_open_blocker(task_id)
-            if blocked and task.status in AUTO_BLOCKABLE_STATUSES:
-                task.status = "Blocked"
+
+            if task.is_milestone:
+                # Canonical milestone status is MilestoneMaster.status; the
+                # backing TaskMaster.status is a mirror. Transition off the
+                # milestone's own status, then write BOTH so preview and
+                # table agree. `Open↔Blocked` doesn't cross the closed
+                # boundary, so the backing save's blocker signal is a
+                # no-op — recursion still terminates.
+                milestone = (
+                    MilestoneMaster.objects.filter(task_id=task_id, is_deleted=False)
+                    .only("milestone_id", "status")
+                    .first()
+                )
+                if milestone is None:
+                    continue
+                new_status = _next_status(milestone.status, blocked)
+                if new_status is None:
+                    continue
+                milestone.status = new_status
+                milestone.save(update_fields=["status", "ts_updated_at"])
+                task.status = new_status
                 task.save(update_fields=["status", "ts_updated_at"])
                 changed += 1
-            elif not blocked and task.status == "Blocked":
-                task.status = "Open"
+            else:
+                new_status = _next_status(task.status, blocked)
+                if new_status is None:
+                    continue
+                task.status = new_status
                 task.save(update_fields=["status", "ts_updated_at"])
                 changed += 1
         except Exception:  # noqa: BLE001 — see docstring
