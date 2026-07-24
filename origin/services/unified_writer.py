@@ -642,13 +642,86 @@ def write_task_comment_as_thread_reply(
             .first()
         )
         if parent is None:
-            logger.warning(
-                "[unified_writer] task_comment mirror: no task-header Message "
-                "for task_id=%s in PM channel %s",
-                task_id,
-                channel.id,
+            # Lazily create the PM task-card header. Headerless tasks —
+            # sub-tasks, tasks predating the PM-card feature, or ones whose
+            # create-time card send failed (it's best-effort + swallowed on
+            # the client) — otherwise have nothing for the comment to thread
+            # under, so this returns None and the ENTIRE comment fan-out
+            # (assignee + collaborators + prior commenters) silently notifies
+            # no one. That's why task comments failed to notify while
+            # milestones (which always post a header) worked.
+            #
+            # Minimal title-only body: the client's `card-message` PATCH
+            # backfills the full card on the task's next metadata save. Sender
+            # is the task's reporter (the card's author), never the commenter.
+            from origin.models.task.task_models import TaskMaster
+
+            task_row = (
+                TaskMaster.objects.only("reporter_id", "assignee_id", "title")
+                .filter(task_id=task_id)
+                .first()
             )
-            return None
+            if task_row is None:
+                logger.warning(
+                    "[unified_writer] task_comment mirror: task_id=%s not found "
+                    "for lazy header creation",
+                    task_id,
+                )
+                return None
+            with transaction.atomic():
+                # Lock the channel + re-check under it: the client's own card
+                # send may land between the lookup above and here, so we must
+                # not insert a duplicate header.
+                Channel.objects.select_for_update().filter(pk=channel.pk).first()
+                parent = (
+                    Message.objects.filter(
+                        channel=channel, task_id=task_id, is_thread_reply=False
+                    )
+                    .only("id", "reply_count")
+                    .first()
+                )
+                if parent is None:
+                    header_seq = (
+                        Message.objects.filter(channel=channel)
+                        .order_by("-seq")
+                        .values_list("seq", flat=True)
+                        .first()
+                        or 0
+                    ) + 1
+                    title = task_row.title or "Task"
+                    parent = Message.objects.create(
+                        channel=channel,
+                        seq=header_seq,
+                        sender_id=(
+                            task_row.reporter_id or task_row.assignee_id or sender_id
+                        ),
+                        body=[
+                            {
+                                "type": "heading",
+                                "props": {
+                                    "level": 3,
+                                    "textColor": "default",
+                                    "textAlignment": "left",
+                                    "backgroundColor": "default",
+                                },
+                                "content": [
+                                    {"type": "text", "text": f"🧾 {title}", "styles": {}}
+                                ],
+                                "children": [],
+                            }
+                        ],
+                        body_text=title,
+                        task_id=task_id,
+                        is_thread_reply=False,
+                        metadata={"taskId": task_id},
+                        reply_count=0,
+                    )
+                    logger.info(
+                        "[unified_writer] lazily created PM task-card header for "
+                        "headerless task_id=%s in channel %s",
+                        task_id,
+                        channel.id,
+                    )
 
         deterministic_id = task_comment_message_uuid(task_id, comment_id)
 
