@@ -50,6 +50,13 @@ urlpatterns = [
         ProjectTaskFieldRulesView.as_view(),
         name="project_task_field_rules",
     ),
+    # Per-project custom task fields (definitions only — values ride on
+    # the task rows as TaskMaster.custom_field_values).
+    path(
+        "api/v2/project/custom-fields/",
+        ProjectCustomFieldsView.as_view(),
+        name="project_custom_fields",
+    ),
     path(
         "api/v2/project/profile/",
         ProjectMasterView.as_view(),

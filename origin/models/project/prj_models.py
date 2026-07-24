@@ -200,6 +200,74 @@ class ProjectTaskTemplate(models.Model):
         ]
 
 
+class ProjectCustomField(models.Model):
+    """A user-defined task metadata field, scoped to ONE project.
+
+    Owners/editors define fields ("Customer", "Review date", "QA owner",
+    …) and every task / sub-task / milestone under the project gets a
+    value slot for each. Four `field_type`s:
+
+      tag     multi-select of the options defined in `options`
+      text    free text
+      date    ISO "YYYY-MM-DD"
+      member  a team member's user id
+
+    Values do NOT live here — they live on
+    `TaskMaster.custom_field_values`, a JSON map keyed by
+    `str(field_id)`. Tag values reference option **ids** (never labels),
+    following the `ProjectLabel` lesson above: renaming or recoloring an
+    option is a single UPDATE on this row and no task JSON is ever
+    rewritten. Deleting a field (or an option) leaves orphaned ids in
+    task JSON; readers drop unknown ids at render time.
+
+    `options` is a list of `{"id", "label", "color", "textColor"}`
+    objects (empty for non-tag types). Option ids are opaque strings
+    minted by the client (`opt-<ts>-<rand>`), unique within the field.
+    """
+
+    field_id = models.BigAutoField(primary_key=True)
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="team_custom_fields",
+        to_field="team_id",
+    )
+    project = models.ForeignKey(
+        ProjectMaster,
+        on_delete=models.CASCADE,
+        null=True,
+        related_name="project_custom_fields",
+        to_field="project_id",
+    )
+    field_name = models.CharField(max_length=40)
+    field_type = models.CharField(max_length=10)
+    options = models.JSONField(default=list, blank=True)
+    # Display order in the task preview's "Custom fields" section and
+    # the default append order of the table columns. Managed by the
+    # reorder action in ProjectCustomFieldsView.
+    sort_order = models.IntegerField(default=0)
+    # Display hint only, never an authorization gate (same trust model
+    # as ProjectTaskTemplate.created_by).
+    created_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="created_custom_fields",
+        to_field="id",
+    )
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "field_name"],
+                name="unique_project_custom_field",
+            )
+        ]
+
+
 class ProjectLabel(models.Model):
     """A TEAM-scoped tag used to organize PROJECTS.
 

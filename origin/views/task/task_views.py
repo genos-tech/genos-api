@@ -18,6 +18,7 @@ from origin.search_engine.purge import purge_task, purge_task_comment
 from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
 from origin.serializers.task.task_serializers import *
 from origin.services import unified_writer
+from origin.services.custom_fields import sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.task_cache import (
     get_cached_project_tasks,
@@ -325,6 +326,20 @@ class TaskMasterView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Per-project custom field values. Optional — quick-add and the
+        # bootstrap `is_init_task` POST never send the key; those rows
+        # store NULL (read back as {}).
+        raw_custom_values = request.data.get("custom_field_values")
+        cleaned_values = None
+        if raw_custom_values is not None:
+            cleaned_values = sanitize_custom_field_values(raw_custom_values)
+            if cleaned_values is None:
+                return Response(
+                    {"error": "custom_field_values must be an object."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        data["custom_field_values"] = cleaned_values
+
         # One task per chat thread. The frontend hides its "Create task"
         # action once a thread has a task, but that gate is client state —
         # stale menus / concurrent members can still submit a second one.
@@ -453,6 +468,19 @@ class TaskMasterView(AuthenticatedAPIView):
         for key, val in request.data.items():
             if val is None:
                 update_data.pop(key)
+
+        # Shape-validate custom field values before they reach the
+        # serializer (JSONField accepts anything). Key-absent = leave
+        # the stored map untouched; a dict (incl. {}) REPLACES it —
+        # the client always sends the complete map, mirroring tags.
+        if "custom_field_values" in update_data:
+            cleaned_values = sanitize_custom_field_values(update_data["custom_field_values"])
+            if cleaned_values is None:
+                return Response(
+                    {"error": "custom_field_values must be an object."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            update_data["custom_field_values"] = cleaned_values
 
         # One task per chat thread. Enforced only when this PUT *claims*
         # a (new) thread linkage — the create-form finalize path — so
@@ -854,6 +882,7 @@ class GetTeamTasksView(AuthenticatedAPIView):
                     # row and the table is the only place this view's
                     # output lands.
                     "links": t.links or [],
+                    "customFieldValues": t.custom_field_values or {},
                 },
             )
 
@@ -1249,6 +1278,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                     "isMilestone": t.is_milestone,
                     "milestoneId": t.milestone_id,
                     "sprintId": t.sprint_id,
+                    "customFieldValues": t.custom_field_values or {},
                 },
             )
 
@@ -1399,6 +1429,7 @@ class GetTaskView(AuthenticatedAPIView):
                     "isMilestone": t.is_milestone,
                     "milestoneId": t.milestone_id,
                     "sprintId": t.sprint_id,
+                    "customFieldValues": t.custom_field_values or {},
                 },
             )
 
@@ -1501,6 +1532,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
                     "isMilestone": t.is_milestone,
                     "milestoneId": t.milestone_id,
                     "sprintId": t.sprint_id,
+                    "customFieldValues": t.custom_field_values or {},
                     # Tombstone flag for incremental sync; only set when
                     # the client provided ?since= and a soft-deleted row
                     # is being surfaced for eviction.

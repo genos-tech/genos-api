@@ -92,6 +92,18 @@ class TaskMaster(models.Model):
     # timeline UI. Always nullable so existing tasks remain valid.
     start_date = models.DateField(blank=True, null=True)
     tags = models.JSONField(blank=True, null=True)
+    # Values for the project's custom fields (ProjectCustomField), keyed
+    # by str(field_id):
+    #   tag    -> list of option-id strings (ids, never labels — option
+    #             renames must not require rewriting task rows)
+    #   text   -> string
+    #   date   -> "YYYY-MM-DD" string
+    #   member -> user-id string
+    # Entries for deleted fields / options are left orphaned on purpose
+    # (readers resolve against the live field defs and drop unknowns);
+    # a field delete must never fan out into a task-table rewrite.
+    # Shape-validated by origin/services/custom_fields.py on write.
+    custom_field_values = models.JSONField(blank=True, null=True)
     mentioned_user_ids = models.JSONField(blank=True, null=True)
     # Google Calendar linkage. When a user schedules a task on their
     # Calendar (manual "Schedule on Calendar" button, or opt-in
