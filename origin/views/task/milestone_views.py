@@ -10,6 +10,7 @@ from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.purge import purge_milestone, purge_task
 from origin.services import mention_extractor
+from origin.services.custom_fields import sanitize_custom_field_values
 from origin.services.milestone_service import (
     create_milestone,
     ensure_backing_task,
@@ -111,6 +112,14 @@ def _serialize_milestone(m: MilestoneMaster, *, with_aggregates: bool = True) ->
         "dueDate": _format_due_date(m.due_date),
         "tags": m.tags,
         "links": m.links,
+        # Custom field values live ONLY on the backing task row (so
+        # `sync_backing_task` — which rewrites the backing row from
+        # milestone fields — can never clobber them, and the project
+        # task table gets them with no extra plumbing). Serialized here
+        # so the milestone preview can edit them like a task does.
+        "customFieldValues": (
+            (m.task.custom_field_values or {}) if m.task_id is not None and m.task else {}
+        ),
         "isDeleted": m.is_deleted,
         "tsCreatedAt": m.ts_created_at,
         "tsUpdatedAt": m.ts_updated_at,
@@ -281,6 +290,16 @@ class MilestoneView(AuthenticatedAPIView):
                 backing.thread_id = str(thread_id)
                 backing.save(update_fields=["chat_type", "chat_id", "thread_id", "ts_updated_at"])
 
+            # Seed custom field values from the create form. Stored on
+            # the backing task only — see _serialize_milestone.
+            raw_custom_values = request.data.get("custom_field_values")
+            if raw_custom_values is not None:
+                cleaned_values = sanitize_custom_field_values(raw_custom_values)
+                if cleaned_values:
+                    backing = _ensure_backing_task(milestone)
+                    backing.custom_field_values = cleaned_values
+                    backing.save(update_fields=["custom_field_values", "ts_updated_at"])
+
         # Creating a milestone always writes a backing TaskMaster row,
         # which the project task table renders alongside regular tasks.
         invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
@@ -294,6 +313,21 @@ class MilestoneView(AuthenticatedAPIView):
             milestone = MilestoneMaster.objects.get(milestone_id=milestone_id, is_deleted=False)
         except MilestoneMaster.DoesNotExist:
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Validate custom field values BEFORE the transaction below —
+        # rejecting them mid-transaction (after milestone.save()) would
+        # return a 400 for a patch that had already half-applied.
+        custom_values_in_request = "custom_field_values" in request.data
+        cleaned_custom_values = None
+        if custom_values_in_request:
+            cleaned_custom_values = sanitize_custom_field_values(
+                request.data.get("custom_field_values")
+            )
+            if cleaned_custom_values is None:
+                return Response(
+                    {"error": "custom_field_values must be an object."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         with transaction.atomic():
             # Sprint move support: explicit `sprint_id` key (including
@@ -342,6 +376,16 @@ class MilestoneView(AuthenticatedAPIView):
 
             milestone.save()
             _sync_backing_task(milestone)
+
+            # Custom field values are stored on the backing task only —
+            # written AFTER _sync_backing_task so this save is never
+            # overwritten by the mirror pass (which doesn't touch the
+            # column). Replace-whole-map semantics, same as the task PUT.
+            # (Validated before the transaction opened.)
+            if custom_values_in_request:
+                backing = _ensure_backing_task(milestone)
+                backing.custom_field_values = cleaned_custom_values
+                backing.save(update_fields=["custom_field_values", "ts_updated_at"])
 
             # Tasks linked to this milestone inherit the milestone's
             # sprint by convention (the frontend doesn't expose a

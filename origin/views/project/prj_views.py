@@ -14,6 +14,7 @@ from origin.models.common.inbox_models import InboxItems
 from origin.models.common.team_models import TeamMembers
 from origin.models.project.prj_models import *
 from origin.serializers.project.prj_serializers import *
+from origin.services.custom_fields import CUSTOM_FIELD_TYPES, validate_field_options
 from origin.services.member_roles import (
     ASSIGNABLE_ROLES,
     OWNER,
@@ -1052,6 +1053,250 @@ class ProjectTaskFieldRulesView(AuthenticatedAPIView):
         project.task_field_rules = rules
         project.save(update_fields=["task_field_rules", "ts_updated_at"])
         return Response(self._payload(project), status=status.HTTP_200_OK)
+
+
+class ProjectCustomFieldsView(AuthenticatedAPIView):
+    """CRUD for per-project custom task fields (ProjectCustomField).
+
+    GET is member-gated — every member's task preview / table renders
+    the fields (the response also carries `canManage` so the client can
+    gate the manage UI without a second fetch). Mutations are gated on
+    `can_manage(resolve_project_role(...))` — owner or editor — matching
+    ProjectTaskFieldRulesView's PUT.
+
+    Field VALUES live on `TaskMaster.custom_field_values`; nothing here
+    ever touches task rows. Deleting a field (or removing an option)
+    deliberately leaves orphaned entries in task JSON — readers resolve
+    against the live defs and drop unknowns. That no-cascade rule is the
+    same one ProjectTaskTemplateView pins with tests, and the reason
+    values reference option IDS instead of labels (see ProjectLabel's
+    docstring for the denormalization lesson).
+    """
+
+    @staticmethod
+    def _is_member(project_id, user):
+        return ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+
+    @staticmethod
+    def _serialize(field):
+        return {
+            "fieldId": field.field_id,
+            "fieldName": field.field_name,
+            "fieldType": field.field_type,
+            "options": field.options or [],
+            "sortOrder": field.sort_order,
+        }
+
+    @classmethod
+    def _field_list_payload(cls, project, user_id):
+        fields = ProjectCustomField.objects.filter(project=project).order_by(
+            "sort_order", "field_id"
+        )
+        return {
+            "fields": [cls._serialize(f) for f in fields],
+            "canManage": can_manage(resolve_project_role(project, user_id)),
+        }
+
+    def _load_project_for_mutation(self, request):
+        """Shared mutation preamble: resolve the project and enforce the
+        manage gate. Returns (project, None) or (None, error_response)."""
+        project_id = request.data.get("project_id")
+        if not project_id:
+            return None, Response(
+                {"error": "project_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        project = ProjectMaster.objects.filter(project_id=project_id).first()
+        if not project:
+            return None, Response(
+                {"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND
+            )
+        if not can_manage(resolve_project_role(project, request.user.id)):
+            return None, Response(
+                {"error": "Only the project owner or an editor can manage custom fields."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return project, None
+
+    def get(self, request):
+        project_id = request.GET.get("project_id")
+        if not project_id:
+            return Response(
+                {"error": "project_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not self._is_member(project_id, request.user):
+            return Response(
+                {"error": "Not a member of this project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        project = ProjectMaster.objects.filter(project_id=project_id).first()
+        if not project:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            self._field_list_payload(project, request.user.id), status=status.HTTP_200_OK
+        )
+
+    def post(self, request):
+        project, err = self._load_project_for_mutation(request)
+        if err:
+            return err
+
+        field_name = (request.data.get("field_name") or "").strip()
+        field_type = request.data.get("field_type")
+        options = request.data.get("options") or []
+
+        if not field_name:
+            return Response(
+                {"error": "field_name is required."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        if len(field_name) > 40:
+            return Response(
+                {"error": "field_name cannot exceed 40 characters."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if field_type not in CUSTOM_FIELD_TYPES:
+            return Response(
+                {"error": f"field_type must be one of {sorted(CUSTOM_FIELD_TYPES)}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if field_type != "tag" and options:
+            return Response(
+                {"error": "Only tag fields carry options."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if err_msg := validate_field_options(options):
+            return Response({"error": err_msg}, status=status.HTTP_400_BAD_REQUEST)
+
+        next_order = (
+            ProjectCustomField.objects.filter(project=project).count()
+        )  # append at the end; reorder normalizes indices anyway
+        try:
+            # Savepoint so a duplicate-name IntegrityError doesn't
+            # poison an enclosing transaction (TestCase wraps each test
+            # in one; the same applies to any future atomic caller).
+            with transaction.atomic():
+                field = ProjectCustomField.objects.create(
+                    team=project.team,
+                    project=project,
+                    field_name=field_name,
+                    field_type=field_type,
+                    options=options,
+                    sort_order=next_order,
+                    created_by=request.user,
+                )
+        except IntegrityError:
+            return Response(
+                {"error": "A field with this name already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(self._serialize(field), status=status.HTTP_201_CREATED)
+
+    def put(self, request):
+        project, err = self._load_project_for_mutation(request)
+        if err:
+            return err
+
+        # Bulk reorder: `{"project_id": ..., "order": [field_id, ...]}`.
+        # Ids missing from the list keep their relative order after the
+        # listed ones; unknown ids are ignored.
+        if "order" in request.data:
+            order = request.data.get("order")
+            if not isinstance(order, list) or not all(
+                isinstance(i, int) and not isinstance(i, bool) for i in order
+            ):
+                return Response(
+                    {"error": "'order' must be a list of field ids."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            fields = list(
+                ProjectCustomField.objects.filter(project=project).order_by(
+                    "sort_order", "field_id"
+                )
+            )
+            rank = {fid: idx for idx, fid in enumerate(order)}
+            fields.sort(
+                key=lambda f: (rank.get(f.field_id, len(order)), f.sort_order, f.field_id)
+            )
+            for idx, f in enumerate(fields):
+                if f.sort_order != idx:
+                    f.sort_order = idx
+                    f.save(update_fields=["sort_order", "ts_updated_at"])
+            return Response(
+                self._field_list_payload(project, request.user.id), status=status.HTTP_200_OK
+            )
+
+        field_id = request.data.get("field_id")
+        if not field_id:
+            return Response(
+                {"error": "field_id is required."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        field = ProjectCustomField.objects.filter(field_id=field_id, project=project).first()
+        if not field:
+            return Response({"error": "Field not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if "field_type" in request.data and request.data.get("field_type") != field.field_type:
+            # Type changes would silently re-interpret every stored
+            # value (a text value read as an option-id list, …). Create
+            # a new field instead.
+            return Response(
+                {"error": "field_type cannot be changed after creation."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if "field_name" in request.data:
+            name = (request.data.get("field_name") or "").strip()
+            if not name:
+                return Response(
+                    {"error": "field_name cannot be empty."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if len(name) > 40:
+                return Response(
+                    {"error": "field_name cannot exceed 40 characters."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            field.field_name = name
+        if "options" in request.data:
+            if field.field_type != "tag":
+                return Response(
+                    {"error": "Only tag fields carry options."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            options = request.data.get("options") or []
+            if err_msg := validate_field_options(options):
+                return Response({"error": err_msg}, status=status.HTTP_400_BAD_REQUEST)
+            # Removed options leave orphaned ids in task JSON by design
+            # (readers drop them); renames/recolors need no task writes
+            # at all because values reference ids.
+            field.options = options
+
+        try:
+            with transaction.atomic():
+                field.save()
+        except IntegrityError:
+            return Response(
+                {"error": "A field with this name already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(self._serialize(field), status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        project, err = self._load_project_for_mutation(request)
+        if err:
+            return err
+        field_id = request.data.get("field_id")
+        if not field_id:
+            return Response(
+                {"error": "field_id is required."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        field = ProjectCustomField.objects.filter(field_id=field_id, project=project).first()
+        if not field:
+            return Response({"error": "Field not found."}, status=status.HTTP_404_NOT_FOUND)
+        field.delete()
+        # Task rows keep their (now orphaned) values — see the class
+        # docstring. No task-table walk, ever.
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ProjectProfileImageView(AuthenticatedAPIView):
