@@ -17,6 +17,7 @@ from origin.models.chat.unified_models import (
     ActivityType,
     Channel,
     ChannelKind,
+    ChannelMember,
     Message,
 )
 from origin.models.common.team_models import TeamMembers
@@ -285,3 +286,134 @@ class CollaboratorNotificationFanoutTests(BaseAPITestCase):
         self.assertIn(self.user.id, recipients)
         # The commenter (actor) never self-notifies.
         self.assertNotIn(self.user2.id, recipients)
+
+
+class HeaderlessTaskCommentFanoutTests(BaseAPITestCase):
+    """A comment on a task that has NO PM card header must STILL notify the
+    assignee + collaborators. Regression for the gap where headerless tasks
+    (sub-tasks, tasks predating the PM-card feature, card-send failures)
+    silently notified nobody because the comment mirror needs a header to
+    thread under — which is why task comments failed while milestones (which
+    always have a header) worked."""
+
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Headerless",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        self.user3 = User.objects.create_user(
+            username="hcollab", email="hcollab@example.com", password="hcollabpass123"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=self.user3)
+        self.task = TaskMaster.objects.create(
+            team=self.team, project=self.project, title="T", status="Open", assignee=self.user
+        )
+        self.task.collaborators.set([self.user3.id])
+        # NOTE: deliberately NO PM header Message created here.
+        self.authenticate(self.user2)
+
+    def test_headerless_task_comment_still_notifies_participants(self):
+        resp = self.client.post(
+            "/api/v2/task/comment/",
+            {
+                "task_id": self.task.task_id,
+                "project_id": self.project.project_id,
+                "sender_id": str(self.user2.id),
+                "comment_body": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "hi"}]}
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
+        recipients = set(
+            Activity.objects.filter(activity_type=ActivityType.THREAD_REPLY).values_list(
+                "recipient_id", flat=True
+            )
+        )
+        self.assertIn(self.user.id, recipients)  # assignee
+        self.assertIn(self.user3.id, recipients)  # collaborator
+
+
+class RealCardPathCommentTests(BaseAPITestCase):
+    """End-to-end sanity: a task whose PM card is posted through the REAL
+    message endpoint (task_id resolved from metadata.taskId) notifies
+    participants on comment, and the lazy-header path does NOT add a second
+    header when a real one already exists."""
+
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="RealCard",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        self.user3 = User.objects.create_user(
+            username="rc3", email="rc3@example.com", password="rc3pass123"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=self.user3)
+        self.task = TaskMaster.objects.create(
+            team=self.team, project=self.project, title="RT", status="Open", assignee=self.user
+        )
+        self.task.collaborators.set([self.user3.id])
+        self.channel = Channel.objects.get(
+            project_id=self.project.project_id, kind=ChannelKind.PM
+        )
+        ChannelMember.objects.get_or_create(channel=self.channel, user=self.user)
+
+    def test_real_card_then_comment_notifies_without_duplicate_header(self):
+        # Post the PM task card the way the client does: a top-level message
+        # carrying metadata.taskId, which the server resolves onto
+        # Message.task — this is the header the comment mirror threads under.
+        self.authenticate(self.user)  # project owner is a PM-channel member
+        card = self.client.post(
+            f"/api/v3/channels/{self.channel.id}/messages/",
+            {
+                "body": [
+                    {
+                        "type": "paragraph",
+                        "props": {},
+                        "content": [{"type": "text", "text": "card", "styles": {}}],
+                        "children": [],
+                    }
+                ],
+                "body_text": "card",
+                "metadata": {"taskId": self.task.task_id},
+            },
+            format="json",
+        )
+        self.assertEqual(card.status_code, status.HTTP_201_CREATED, card.data)
+
+        self.authenticate(self.user2)
+        comment = self.client.post(
+            "/api/v2/task/comment/",
+            {
+                "task_id": self.task.task_id,
+                "project_id": self.project.project_id,
+                "sender_id": str(self.user2.id),
+                "comment_body": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "hi"}]}
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(comment.status_code, status.HTTP_201_CREATED, comment.data)
+
+        recipients = set(
+            Activity.objects.filter(activity_type=ActivityType.THREAD_REPLY).values_list(
+                "recipient_id", flat=True
+            )
+        )
+        self.assertIn(self.user.id, recipients)  # assignee
+        self.assertIn(self.user3.id, recipients)  # collaborator
+
+        # Exactly one top-level header — lazy creation must NOT duplicate the
+        # real card.
+        headers = Message.objects.filter(
+            channel=self.channel, task_id=self.task.task_id, is_thread_reply=False
+        )
+        self.assertEqual(headers.count(), 1)
