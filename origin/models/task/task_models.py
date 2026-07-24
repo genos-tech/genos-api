@@ -77,6 +77,19 @@ class TaskMaster(models.Model):
         related_name="reported_tasks_master",
         to_field="id",
     )
+    # Additional members who work on this task alongside the single
+    # `assignee`. Purely additive metadata: they don't own the task
+    # (the assignee column stays the source of truth for "who it's
+    # assigned to"), but they DO join the task's notification audience
+    # — the task-comment participant fan-out treats them exactly like
+    # the assignee (see TaskMasterView comment fan-out). `blank=True`
+    # so the DRF serializer never requires it; the view sets the M2M
+    # explicitly after save rather than through the serializer.
+    collaborators = models.ManyToManyField(
+        CustomUser,
+        blank=True,
+        related_name="collaborating_tasks_master",
+    )
     title = models.CharField(max_length=255)
     priority = models.CharField(blank=True, null=True)
     effort_level = models.CharField(blank=True, null=True)

@@ -26,6 +26,7 @@ from origin.services.task_cache import (
     invalidate_project_tasks_cache,
     set_cached_project_tasks,
 )
+from origin.services.task_collaborators import sync_task_collaborators
 from origin.services.thread_link import find_thread_link_conflict
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
@@ -378,6 +379,9 @@ class TaskMasterView(AuthenticatedAPIView):
         serializer = TaskMasterSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
+            # Collaborators ride outside the serializer (M2M) — set them
+            # once the row exists. Absent key => no collaborators.
+            sync_task_collaborators(serializer.instance, request.data.get("collaborators"))
             increment_usage(str(request.user.id), TASK_CREATE_KEY)
             # Drop the project-tasks cache so the next sidebar fetch
             # sees the new row. `data["team"]` / `data["project"]` are
@@ -468,6 +472,16 @@ class TaskMasterView(AuthenticatedAPIView):
         for key, val in request.data.items():
             if val is None:
                 update_data.pop(key)
+
+        # Collaborators are a M2M synced explicitly after serializer.save()
+        # (see below) — pop them AFTER the None-strip so the fields="__all__"
+        # serializer doesn't also try to own the relation. Ordering matters:
+        # `collaborators: null` is removed by the strip loop above (which
+        # pop()s with no default), so popping here first would double-pop
+        # that key and KeyError. `pop(..., None)` also no-ops when the strip
+        # already removed it. The original value is still read from
+        # `request.data` below, so "absent vs [] vs list" intent survives.
+        update_data.pop("collaborators", None)
 
         # Shape-validate custom field values before they reach the
         # serializer (JSONField accepts anything). Key-absent = leave
@@ -617,6 +631,12 @@ class TaskMasterView(AuthenticatedAPIView):
         serializer = TaskMasterSerializer(task, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
+
+            # Collaborators M2M: absent key => leave untouched, a list
+            # (incl. []) => wholesale replace. Read from request.data (not
+            # the popped/stripped update_data) so an explicit clear ([])
+            # still lands.
+            sync_task_collaborators(task, request.data.get("collaborators"))
 
             # Re-claim a number in the destination project (see the null-out
             # above). Runs before the blocks below so their
@@ -860,9 +880,7 @@ class GetTeamTasksView(AuthenticatedAPIView):
                     "assigneeId": t.assignee.id if t.assignee else None,
                     "assigneeEmail": t.assignee.email if t.assignee else None,
                     "assigneeName": t.assignee.username if t.assignee else None,
-                    "assigneeImgPath": (
-                        t.assignee.profile_image_file_name if t.assignee else None
-                    ),
+                    "assigneeImgPath": (t.assignee.profile_image_file_name if t.assignee else None),
                     "parentTaskId": t.parent_task_id,
                     "rootTaskId": t.root_task_id,
                     "threadId": t.thread_id,
@@ -1157,7 +1175,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                 "assignee",
                 "reporter",
             )
-            .prefetch_related("task_attachments")
+            .prefetch_related("task_attachments", "collaborators")
             .filter(
                 team=team_id,
                 project_id=target_task[0][0],
@@ -1216,6 +1234,22 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                         if t.reporter
                         else None
                     ),
+                    # Additional members working on the task (empty for
+                    # tasks with none). Same UserProps shape the frontend
+                    # picker consumes; prefetched above to avoid an N+1.
+                    "collaborators": [
+                        {
+                            "teamId": t.team.team_id,
+                            "userId": c.id,
+                            "userName": c.username,
+                            "userEmail": c.email,
+                            "avatarImgPath": c.profile_image_file_name,
+                            "tsLastSeen": "",
+                            "tsJoined": "",
+                            "customStatus": "",
+                        }
+                        for c in t.collaborators.all()
+                    ],
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
@@ -1319,7 +1353,7 @@ class GetTaskView(AuthenticatedAPIView):
                 "assignee",
                 "reporter",
             )
-            .prefetch_related("task_attachments")
+            .prefetch_related("task_attachments", "collaborators")
             .filter(team=team_id, project_id=project_id, task_id=task_id, is_init_task=False)
         )
 
@@ -1373,6 +1407,22 @@ class GetTaskView(AuthenticatedAPIView):
                         if t.reporter
                         else None
                     ),
+                    # Additional members working on the task (empty for
+                    # tasks with none). Same UserProps shape the frontend
+                    # picker consumes; prefetched above to avoid an N+1.
+                    "collaborators": [
+                        {
+                            "teamId": t.team.team_id,
+                            "userId": c.id,
+                            "userName": c.username,
+                            "userEmail": c.email,
+                            "avatarImgPath": c.profile_image_file_name,
+                            "tsLastSeen": "",
+                            "tsJoined": "",
+                            "customStatus": "",
+                        }
+                        for c in t.collaborators.all()
+                    ],
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
                     "dueDate": str(t.due_date) if t.due_date else None,
@@ -1805,6 +1855,15 @@ class TaskCommentsView(AuthenticatedAPIView):
                     )
                     if assignee_id is not None:
                         participant_ids.add(str(assignee_id))
+                    # Collaborators are notified on task activity exactly
+                    # like the assignee — add them to the participant set.
+                    for collab_id in (
+                        TaskMaster.objects.filter(task_id=task_id_int)
+                        .values_list("collaborators__id", flat=True)
+                        .distinct()
+                    ):
+                        if collab_id is not None:
+                            participant_ids.add(str(collab_id))
                     for cid in (
                         TaskComments.objects.filter(task=task_id_int, is_deleted=False)
                         .values_list("sender_id", flat=True)
@@ -1812,6 +1871,9 @@ class TaskCommentsView(AuthenticatedAPIView):
                     ):
                         if cid is not None:
                             participant_ids.add(str(cid))
+                    # Excluding @-mentioned users AFTER adding collaborators
+                    # so a mentioned collaborator gets the MENTION activity
+                    # (more specific), never a duplicate THREAD_REPLY.
                     participant_ids -= mentioned_set
                     comment_acts = v3_activity.create_comment_participant_activities(
                         message=mirror,

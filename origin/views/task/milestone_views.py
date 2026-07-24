@@ -19,6 +19,7 @@ from origin.services.milestone_service import (
     sync_milestone_assignees,
 )
 from origin.services.task_cache import invalidate_project_tasks_cache
+from origin.services.task_collaborators import sync_task_collaborators
 from origin.services.thread_link import find_thread_link_conflict
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import resolve_group_members
@@ -120,6 +121,16 @@ def _serialize_milestone(m: MilestoneMaster, *, with_aggregates: bool = True) ->
         "customFieldValues": (
             (m.task.custom_field_values or {}) if m.task_id is not None and m.task else {}
         ),
+        # Collaborators also live on the backing task row (M2M), same as
+        # custom field values — so the milestone preview edits them like a
+        # task does and the notification fan-out (keyed on the backing
+        # task) already covers them. `_serialize_user` shape matches the
+        # reporter / assignees embeds on this payload.
+        "collaborators": (
+            [_serialize_user(c) for c in m.task.collaborators.all()]
+            if m.task_id is not None and m.task
+            else []
+        ),
         "isDeleted": m.is_deleted,
         "tsCreatedAt": m.ts_created_at,
         "tsUpdatedAt": m.ts_updated_at,
@@ -166,7 +177,7 @@ class ProjectMilestonesView(AuthenticatedAPIView):
         qs = (
             MilestoneMaster.objects.filter(project=project, is_deleted=False)
             .select_related("task", "reporter")
-            .prefetch_related("milestone_assignees__user")
+            .prefetch_related("milestone_assignees__user", "task__collaborators")
             .order_by("-ts_updated_at")
         )
 
@@ -207,7 +218,7 @@ class MilestoneView(AuthenticatedAPIView):
                 MilestoneMaster.objects.select_related(
                     "project", "team", "sprint", "task", "reporter"
                 )
-                .prefetch_related("milestone_assignees__user")
+                .prefetch_related("milestone_assignees__user", "task__collaborators")
                 .get(milestone_id=milestone_id, is_deleted=False)
             )
         except MilestoneMaster.DoesNotExist:
@@ -300,6 +311,13 @@ class MilestoneView(AuthenticatedAPIView):
                     backing.custom_field_values = cleaned_values
                     backing.save(update_fields=["custom_field_values", "ts_updated_at"])
 
+            # Seed collaborators from the create form onto the backing
+            # task M2M (absent key => none). Same backing-task-only storage
+            # as custom fields above.
+            if "collaborators" in request.data:
+                backing = _ensure_backing_task(milestone)
+                sync_task_collaborators(backing, request.data.get("collaborators"))
+
         # Creating a milestone always writes a backing TaskMaster row,
         # which the project task table renders alongside regular tasks.
         invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
@@ -387,6 +405,15 @@ class MilestoneView(AuthenticatedAPIView):
                 backing.custom_field_values = cleaned_custom_values
                 backing.save(update_fields=["custom_field_values", "ts_updated_at"])
 
+            # Collaborators live on the backing task M2M (see
+            # _serialize_milestone). Absent key => leave untouched, a list
+            # (incl. []) => wholesale replace — same contract as the task
+            # PUT. Independent of _sync_backing_task, which only mirrors
+            # scalar milestone columns and never touches the M2M.
+            if "collaborators" in request.data:
+                backing = _ensure_backing_task(milestone)
+                sync_task_collaborators(backing, request.data.get("collaborators"))
+
             # Tasks linked to this milestone inherit the milestone's
             # sprint by convention (the frontend doesn't expose a
             # direct sprint picker on tasks). When the milestone moves
@@ -405,7 +432,9 @@ class MilestoneView(AuthenticatedAPIView):
 
         # Re-read with prefetch to render the latest assignee list.
         milestone = (
-            MilestoneMaster.objects.prefetch_related("milestone_assignees__user")
+            MilestoneMaster.objects.prefetch_related(
+                "milestone_assignees__user", "task__collaborators"
+            )
             .select_related("task", "reporter")
             .get(milestone_id=milestone.milestone_id)
         )
@@ -514,7 +543,9 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
         _sync_backing_task(milestone)
         invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
         milestone = (
-            MilestoneMaster.objects.prefetch_related("milestone_assignees__user")
+            MilestoneMaster.objects.prefetch_related(
+                "milestone_assignees__user", "task__collaborators"
+            )
             .select_related("task", "reporter")
             .get(milestone_id=milestone_id)
         )
@@ -534,7 +565,9 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
         _sync_backing_task(milestone)
         invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
         milestone = (
-            MilestoneMaster.objects.prefetch_related("milestone_assignees__user")
+            MilestoneMaster.objects.prefetch_related(
+                "milestone_assignees__user", "task__collaborators"
+            )
             .select_related("task", "reporter")
             .get(milestone_id=milestone_id)
         )
