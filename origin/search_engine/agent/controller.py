@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
@@ -52,12 +53,13 @@ from origin.search_engine.agent.prompts import (
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError
 from origin.search_engine.llm import (
     AgentMessage,
+    CallUsage,
     FunctionCall,
     ToolDeclaration,
     get_model_client,
 )
 from origin.search_engine.llm.choice import _server_default_choice, get_llm_choice
-from origin.search_engine.models import AgentRun, AgentStep
+from origin.search_engine.models import AgentLlmCall, AgentRun, AgentStep
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +87,49 @@ def _persist_step(run_id: UUID | None, **fields: Any) -> AgentStep | None:
     except Exception:  # noqa: BLE001 — must not fail the response stream
         log.exception("Failed to persist AgentStep for run %s", run_id)
         return None
+
+
+def _persist_llm_call(
+    run_id: UUID | None,
+    team_id: str,
+    *,
+    step_index: int,
+    purpose: str,
+    latency_ms: int,
+    usage: CallUsage,
+) -> None:
+    """Best-effort write of one `AgentLlmCall` telemetry row.
+
+    Same contract as `_persist_step`: observability must NEVER break the
+    user-facing stream, so a failed insert is logged and swallowed.
+    No-ops when there's no run (eval / test / sessionless callers) or
+    when metric collection is turned off via
+    `SEARCH_ENGINE["AGENT_COLLECT_METRICS"]` (default on) — the flag lets
+    an operator kill the writes without a deploy.
+    """
+    if run_id is None:
+        return
+    if not settings.SEARCH_ENGINE.get("AGENT_COLLECT_METRICS", True):
+        return
+    try:
+        AgentLlmCall.objects.create(
+            run_id=run_id,
+            team_id=team_id or "",
+            step_index=step_index,
+            purpose=purpose,
+            provider=usage.provider,
+            model=usage.model,
+            latency_ms=latency_ms,
+            prompt_tokens=usage.prompt_tokens,
+            cached_tokens=usage.cached_tokens,
+            cache_write_tokens=usage.cache_write_tokens,
+            output_tokens=usage.output_tokens,
+            thought_tokens=usage.thought_tokens,
+            tool_prompt_tokens=usage.tool_prompt_tokens,
+            total_tokens=usage.total_tokens,
+        )
+    except Exception:  # noqa: BLE001 — must not fail the response stream
+        log.exception("Failed to persist AgentLlmCall for run %s", run_id)
 
 
 # One-shot latch so the kill-switch state is logged once per worker
@@ -1561,14 +1606,17 @@ def _run_tool_guarded(tool: Any, call_name: str, call_args: dict[str, Any], ctx:
 
 def _execute_batch_parallel(
     calls: list[FunctionCall], ctx: ToolContext
-) -> list[tuple[str, Any]]:
+) -> list[tuple[tuple[str, Any], int]]:
     """E1 — run a batch of read-only tool calls concurrently.
 
-    Returns outcomes IN CALL ORDER (pool.map preserves it), so the
-    caller's emit/persist/messages sequence stays byte-deterministic
-    regardless of completion order — `AgentStep` rows and the message
-    transcript must not depend on thread scheduling (resume rebuilds
-    from them). Wall-clock is bounded by the slowest call either way.
+    Returns `(outcome, duration_ms)` per call IN CALL ORDER (pool.map
+    preserves it), so the caller's emit/persist/messages sequence stays
+    byte-deterministic regardless of completion order — `AgentStep` rows
+    and the message transcript must not depend on thread scheduling
+    (resume rebuilds from them). Wall-clock is bounded by the slowest
+    call either way. `duration_ms` is each tool's own execution time
+    (they overlap; the sum can exceed the batch wall-clock — that's the
+    point, it's the tool-side bottleneck signal).
 
     Each worker closes its Django DB connections in `finally`:
     short-lived executor threads would otherwise leak a connection per
@@ -1580,9 +1628,11 @@ def _execute_batch_parallel(
         len(calls), int(settings.SEARCH_ENGINE.get("RAG_PARALLEL_TOOLS_MAX_WORKERS", 4))
     )
 
-    def _task(call: FunctionCall) -> tuple[str, Any]:
+    def _task(call: FunctionCall) -> tuple[tuple[str, Any], int]:
+        started = time.monotonic()
         try:
-            return _run_tool_guarded(REGISTRY.get(call.name), call.name, dict(call.args), ctx)
+            outcome = _run_tool_guarded(REGISTRY.get(call.name), call.name, dict(call.args), ctx)
+            return outcome, int((time.monotonic() - started) * 1000)
         finally:
             try:
                 connections.close_all()
@@ -1638,6 +1688,7 @@ def _collect_step(
     emit: Callable[[dict[str, Any]], None],
     model_override: str | None = None,
     emit_deltas: bool = True,
+    usage_sink: CallUsage | None = None,
 ) -> tuple[list[str], list[FunctionCall]]:
     """Run ONE model turn and collect `(text_parts, function_calls)`.
 
@@ -1646,6 +1697,11 @@ def _collect_step(
     DRAFT that will be discarded and re-generated on the user's model;
     streaming it would show the user an answer that then gets replaced.
     Exceptions propagate to the caller (the loop owns error handling).
+
+    `usage_sink`, when passed, is handed to the adapter and populated
+    with this call's token/model telemetry once the stream is drained
+    (the `for` loop below fully consumes it, so the sink is filled by
+    the time this returns).
     """
     text_parts: list[str] = []
     calls: list[FunctionCall] = []
@@ -1654,6 +1710,7 @@ def _collect_step(
         tools=tools,
         system_instruction=system_instruction,
         model_override=model_override,
+        usage_sink=usage_sink,
     )
     for text_chunk, function_call in stream:
         if function_call is not None:
@@ -1712,27 +1769,59 @@ def _drive_loop(
     if system_extra:
         system_instruction = f"{AGENT_SYSTEM_PROMPT}\n\n{system_extra}"
 
+    def _collect_and_record(
+        step_index: int,
+        purpose: str,
+        *,
+        model_override: str | None = None,
+        emit_deltas: bool = True,
+    ) -> tuple[list[str], list[FunctionCall]]:
+        """Run one model turn AND record its per-call telemetry.
+
+        Wraps `_collect_step` with a `CallUsage` sink + a monotonic
+        latency clock, then writes one `AgentLlmCall` row. Best-effort
+        (`_persist_llm_call` swallows failures), so telemetry can't break
+        the loop. A raising `_collect_step` propagates to the loop's
+        error handler WITHOUT recording a row — an errored call has no
+        usage to attribute.
+        """
+        sink = CallUsage()
+        started = time.monotonic()
+        parts, fcalls = _collect_step(
+            client,
+            messages=messages,
+            tools=tools,
+            system_instruction=system_instruction,
+            emit=emit,
+            model_override=model_override,
+            emit_deltas=emit_deltas,
+            usage_sink=sink,
+        )
+        latency_ms = int((time.monotonic() - started) * 1000)
+        _persist_llm_call(
+            run_id,
+            ctx.team_id,
+            step_index=step_index,
+            purpose=purpose,
+            latency_ms=latency_ms,
+            usage=sink,
+        )
+        return parts, fcalls
+
     for step in range(starting_step, max_steps):
         try:
             if planning_model is None:
-                accumulated_text_parts, accumulated_function_calls = _collect_step(
-                    client,
-                    messages=messages,
-                    tools=tools,
-                    system_instruction=system_instruction,
-                    emit=emit,
+                accumulated_text_parts, accumulated_function_calls = _collect_and_record(
+                    step, "loop"
                 )
             else:
                 # Planning pass on the fast model, deltas BUFFERED — a
                 # step is only known to be planning vs synthesis after
                 # the model responds, and a synthesis draft from the
                 # fast model must never reach the user.
-                accumulated_text_parts, accumulated_function_calls = _collect_step(
-                    client,
-                    messages=messages,
-                    tools=tools,
-                    system_instruction=system_instruction,
-                    emit=emit,
+                accumulated_text_parts, accumulated_function_calls = _collect_and_record(
+                    step,
+                    "planning",
                     model_override=planning_model,
                     emit_deltas=False,
                 )
@@ -1750,13 +1839,12 @@ def _drive_loop(
                     # win: every planning round-trip at fast-model
                     # latency. If the smart model instead decides to dig
                     # further (it's the better judge), its calls flow
-                    # into normal tool execution below.
-                    accumulated_text_parts, accumulated_function_calls = _collect_step(
-                        client,
-                        messages=messages,
-                        tools=tools,
-                        system_instruction=system_instruction,
-                        emit=emit,
+                    # into normal tool execution below. Recorded as a
+                    # SEPARATE call row (the discarded planning draft is
+                    # already recorded above — so a run's llm_calls show
+                    # the true two-call cost of a B3 synthesis step).
+                    accumulated_text_parts, accumulated_function_calls = _collect_and_record(
+                        step, "synthesis"
                     )
         except Exception as e:  # noqa: BLE001 — surface as stream error
             log.exception("Agent step %d LLM call failed", step)
@@ -1853,6 +1941,10 @@ def _drive_loop(
         # write/unknown tools are never consulted.
         precomputed: dict[int, tuple[str, Any]] = {}
         cached_indices: set[int] = set()
+        # Per-call tool execution wall time (ms), keyed by call index —
+        # filled by the serial path inline and the parallel executor
+        # below. Missing/0 for cache hits and no-execution rows.
+        tool_durations: dict[int, int] = {}
         if session_id and tool_cache.enabled():
             for i, c in enumerate(accumulated_function_calls):
                 t = REGISTRY.get(c.name)
@@ -1897,8 +1989,9 @@ def _drive_loop(
                 )
             starts_pre_emitted = True
             miss_calls = [accumulated_function_calls[i] for i in miss_indices]
-            for i, outcome in zip(miss_indices, _execute_batch_parallel(miss_calls, ctx)):
+            for i, (outcome, dur_ms) in zip(miss_indices, _execute_batch_parallel(miss_calls, ctx)):
                 precomputed[i] = outcome
+                tool_durations[i] = dur_ms
 
         for call_idx, call in enumerate(accumulated_function_calls):
             call_args = dict(call.args)
@@ -1987,7 +2080,9 @@ def _drive_loop(
             if call_idx in precomputed:
                 kind, payload = precomputed[call_idx]
             else:
+                _tool_started = time.monotonic()
                 kind, payload = _run_tool_guarded(tool, call_name, call_args, ctx)
+                tool_durations[call_idx] = int((time.monotonic() - _tool_started) * 1000)
             from_cache = call_idx in cached_indices
 
             if kind != "ok":
@@ -2007,6 +2102,7 @@ def _drive_loop(
                     arguments_json=call_args,
                     thought_signature=call.thought_signature,
                     error=err,
+                    latency_ms=tool_durations.get(call_idx, 0),
                 )
                 if trace_hook is not None:
                     try:
@@ -2043,6 +2139,7 @@ def _drive_loop(
                 thought_signature=call.thought_signature,
                 summary=summary,
                 result_json=result,
+                latency_ms=tool_durations.get(call_idx, 0),
             )
             if trace_hook is not None:
                 try:

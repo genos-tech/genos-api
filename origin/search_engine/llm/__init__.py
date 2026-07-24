@@ -30,6 +30,7 @@ from origin.search_engine.llm.base import ModelClient
 from origin.search_engine.llm.choice import LlmChoice, get_llm_choice
 from origin.search_engine.llm.types import (
     AgentMessage,
+    CallUsage,
     FunctionCall,
     ToolDeclaration,
 )
@@ -70,6 +71,7 @@ class _ChoiceWrappedClient:
         system_instruction: str,
         *,
         model_override: str | None = None,
+        usage_sink: CallUsage | None = None,
     ) -> Iterator[tuple[str | None, FunctionCall | None]]:
         effective_override = model_override or self._choice.model or None
         return self._inner.generate_step(
@@ -77,6 +79,7 @@ class _ChoiceWrappedClient:
             tools,
             system_instruction,
             model_override=effective_override,
+            usage_sink=usage_sink,
         )
 
 
@@ -101,6 +104,7 @@ def get_model_client() -> ModelClient:
 
 __all__ = [
     "AgentMessage",
+    "CallUsage",
     "FunctionCall",
     "ModelClient",
     "ToolDeclaration",

@@ -15,7 +15,12 @@ from __future__ import annotations
 
 from typing import Iterator, Protocol
 
-from origin.search_engine.llm.types import AgentMessage, FunctionCall, ToolDeclaration
+from origin.search_engine.llm.types import (
+    AgentMessage,
+    CallUsage,
+    FunctionCall,
+    ToolDeclaration,
+)
 
 
 class ModelClient(Protocol):
@@ -42,6 +47,7 @@ class ModelClient(Protocol):
         system_instruction: str,
         *,
         model_override: str | None = None,
+        usage_sink: CallUsage | None = None,
     ) -> Iterator[tuple[str | None, FunctionCall | None]]:
         """Run one model turn.
 
@@ -49,5 +55,11 @@ class ModelClient(Protocol):
         point the same client at a faster / cheaper model for that one
         call without mutating shared settings. None = use the
         provider's default (the configured `*_MODEL` setting).
+
+        `usage_sink`, when provided, is populated with this call's
+        token/model telemetry once the stream is drained (see
+        `CallUsage`). Optional and observational — callers that don't
+        care about metrics pass nothing, and a provider that can't read
+        usage simply leaves the sink at its zero defaults.
         """
         ...

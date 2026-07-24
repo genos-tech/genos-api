@@ -253,6 +253,13 @@ class AgentStep(models.Model):
     result_json = models.JSONField(blank=True, null=True)
     answer_text = models.TextField(blank=True, default="")
     error = models.TextField(blank=True, default="")
+    # Tool-execution wall time in milliseconds, for tool-side bottleneck
+    # attribution (F-perf). Only meaningful on tool-call steps; 0 on
+    # text-only / approval / step-cap / unknown-tool rows where no tool
+    # actually ran. LLM-call latency lives on `AgentLlmCall`, not here,
+    # because one loop step can issue two model calls (the B3 planning
+    # split).
+    latency_ms = models.IntegerField(default=0)
     # Opaque Gemini 3+ "thought signature" bytes captured alongside a
     # function_call part. Must be echoed back when the assistant turn is
     # replayed (e.g. after a write-tool approval resume) or Gemini 3
@@ -265,6 +272,68 @@ class AgentStep(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["run", "step_index"]),
+        ]
+
+
+class AgentLlmCall(models.Model):
+    """One row per LLM API call inside an `AgentRun` (F-perf telemetry).
+
+    The gap this fills: `AgentRun.started_at/finished_at` already give
+    end-to-end elapsed, and `AgentStep` records which tools ran — but
+    nothing captured per-model-call latency or token usage, so we
+    couldn't say which LLM round-trip (or which model) drove a run's
+    latency and cost. This does, with one row per call.
+
+    Granularity is per-CALL, not per-step, on purpose: the B3 planning
+    split fires two calls in a single loop step (a fast planning pass +
+    the user-model synthesis), so `step_index` is denormalized here and
+    a step can own several of these rows, each with its own `purpose`.
+
+    Capture is cheap (numbers the provider already returns in
+    `usage_metadata` + a `monotonic` delta) and happens on the worker
+    thread alongside `AgentStep` writes — NEVER on a hot aggregation
+    path. Rollups (latency percentiles, token sums, DERIVED cost) are
+    computed OFFLINE by the `agent_run_metrics` management command;
+    prices are intentionally NOT stored here — only ground-truth tokens
+    — because per-token cost changes with the price sheet and the fixed
+    infra floor dominates the bill (see LLM_SPEND_ANATOMY).
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    run = models.ForeignKey(AgentRun, on_delete=models.CASCADE, related_name="llm_calls")
+    # Denormalized from the run so per-team rollups don't need a join
+    # (mirrors AgentRunJudgement.team_id / AgentRunFeedback.team_id).
+    team_id = models.CharField(max_length=64, db_index=True)
+    # The loop step this call belongs to (matches AgentStep.step_index).
+    step_index = models.IntegerField(default=0)
+    # Role of the call within the loop: "loop" (single-model step),
+    # "planning" (B3 fast pass) or "synthesis" (B3 user-model final).
+    # Free-form so new call kinds don't need a migration.
+    purpose = models.CharField(max_length=32, blank=True, default="")
+    provider = models.CharField(max_length=32, blank=True, default="")
+    model = models.CharField(max_length=64, blank=True, default="")
+    # Wall time of the call as the controller sees it — INCLUDING
+    # streaming delivery (the per-chunk emit for loop/synthesis; the
+    # planning pass buffers, so if `emit` ever blocks on client
+    # backpressure a planning call could read slightly faster than a
+    # synthesis call on the same model). emit is a queue append, so this
+    # is normally negligible — noted so a bottleneck read isn't misled.
+    latency_ms = models.IntegerField(default=0)
+    # Provider-neutral token counts (see llm/types.CallUsage). Raw
+    # ground truth; cost is derived offline from `model`.
+    prompt_tokens = models.IntegerField(default=0)
+    cached_tokens = models.IntegerField(default=0)
+    cache_write_tokens = models.IntegerField(default=0)
+    output_tokens = models.IntegerField(default=0)
+    thought_tokens = models.IntegerField(default=0)
+    tool_prompt_tokens = models.IntegerField(default=0)
+    total_tokens = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["team_id", "-created_at"], name="se_llmcall_team_created_idx"),
+            models.Index(fields=["run"], name="se_llmcall_run_idx"),
         ]
 
 
