@@ -43,7 +43,9 @@ class _ScriptedClient:
         self._script = list(script)
         self.overrides: list[str | None] = []
 
-    def generate_step(self, messages, tools, system_instruction, *, model_override=None):
+    def generate_step(
+        self, messages, tools, system_instruction, *, model_override=None, usage_sink=None
+    ):
         self.overrides.append(model_override)
         yield from self._script.pop(0)
 

@@ -28,7 +28,12 @@ from typing import Any, Iterator
 from django.conf import settings
 from google import genai
 
-from origin.search_engine.llm.types import AgentMessage, FunctionCall, ToolDeclaration
+from origin.search_engine.llm.types import (
+    AgentMessage,
+    CallUsage,
+    FunctionCall,
+    ToolDeclaration,
+)
 
 log = logging.getLogger(__name__)
 
@@ -132,6 +137,7 @@ class GeminiClient:
         system_instruction: str,
         *,
         model_override: str | None = None,
+        usage_sink: CallUsage | None = None,
     ) -> Iterator[tuple[str | None, FunctionCall | None]]:
         """Stream one model turn against the given history.
 
@@ -214,6 +220,8 @@ class GeminiClient:
                             yield (text, None)
 
             _log_usage(last_usage_metadata, model)
+            if usage_sink is not None:
+                _fill_usage_sink(usage_sink, last_usage_metadata, model)
         except Exception:
             log.exception("Gemini generate_step failed")
             raise
@@ -257,6 +265,32 @@ def _log_usage(usage: Any, model: str) -> None:
         tool_n,
         total_n,
     )
+
+
+def _fill_usage_sink(sink: CallUsage, usage: Any, model: str) -> None:
+    """Copy Gemini `usage_metadata` into the neutral per-call sink.
+
+    Best-effort and total-swallow: metric capture must never break
+    generation. `prompt_token_count` is Gemini's TOTAL prompt including
+    the cached prefix, so the uncached remainder is prompt - cached (the
+    neutral schema keeps the two split, matching Anthropic's shape).
+    """
+    sink.provider = "gemini"
+    sink.model = model
+    if usage is None:
+        return
+    try:
+        prompt_n = int(getattr(usage, "prompt_token_count", None) or 0)
+        cached_n = int(getattr(usage, "cached_content_token_count", None) or 0)
+        sink.cached_tokens = cached_n
+        # Neutral `prompt_tokens` = uncached remainder (never negative).
+        sink.prompt_tokens = max(prompt_n - cached_n, 0)
+        sink.output_tokens = int(getattr(usage, "candidates_token_count", None) or 0)
+        sink.thought_tokens = int(getattr(usage, "thoughts_token_count", None) or 0)
+        sink.tool_prompt_tokens = int(getattr(usage, "tool_use_prompt_token_count", None) or 0)
+        sink.total_tokens = int(getattr(usage, "total_token_count", None) or 0)
+    except Exception:  # noqa: BLE001 — metrics must not break generation
+        log.debug("Gemini usage sink fill failed", exc_info=True)
 
 
 # --------------------------------------------------------------------------- #

@@ -70,6 +70,43 @@ class AgentMessage:
     function_response: dict[str, Any] | None = None
 
 
+@dataclass
+class CallUsage:
+    """Mutable per-call sink the adapter fills at end-of-stream.
+
+    The agent controller passes a FRESH instance into each
+    `generate_step` call and reads it back after draining the stream —
+    it is never shared across calls or threads, which is what keeps the
+    module-singleton SDK clients (Gemini / Anthropic) thread-safe under
+    concurrent runs. Fields are provider-neutral token counts; a given
+    provider populates the ones it reports and leaves the rest at 0
+    (e.g. Gemini has no explicit `cache_write_tokens`, Claude no
+    `tool_prompt_tokens`). Raw counts only — cost is derived OFFLINE
+    from `model` in the aggregation command, never on the request path.
+    """
+
+    provider: str = ""
+    model: str = ""
+    # Uncached prompt tokens actually sent this call.
+    prompt_tokens: int = 0
+    # Prompt prefix served from cache (Gemini implicit cache /
+    # Anthropic cache_read) — billed at the cheap cached rate.
+    cached_tokens: int = 0
+    # Freshly-written cache (Anthropic cache_creation, ~1.25x); Gemini's
+    # implicit cache has no separate write line so this stays 0 there.
+    cache_write_tokens: int = 0
+    # Generated output tokens.
+    output_tokens: int = 0
+    # Reasoning / "thinking" tokens billed separately (Gemini
+    # thoughts_token_count); 0 for providers that fold these into output.
+    thought_tokens: int = 0
+    # Tool-declaration prompt overhead (Gemini tool_use_prompt_token_count).
+    tool_prompt_tokens: int = 0
+    # Provider-reported grand total when available (else 0; the
+    # aggregator can sum the parts).
+    total_tokens: int = 0
+
+
 @dataclass(frozen=True)
 class ToolDeclaration:
     """A tool the model may call.

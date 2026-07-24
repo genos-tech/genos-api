@@ -34,7 +34,12 @@ import anthropic
 from anthropic.lib.streaming import TextEvent
 from django.conf import settings
 
-from origin.search_engine.llm.types import AgentMessage, FunctionCall, ToolDeclaration
+from origin.search_engine.llm.types import (
+    AgentMessage,
+    CallUsage,
+    FunctionCall,
+    ToolDeclaration,
+)
 
 log = logging.getLogger(__name__)
 
@@ -100,6 +105,36 @@ def _log_usage(usage: Any, model: str) -> None:
     )
 
 
+def _fill_usage_sink(sink: CallUsage, usage: Any, model: str) -> None:
+    """Copy Anthropic usage into the neutral per-call sink.
+
+    Anthropic reports `input_tokens` as the uncached prompt remainder,
+    the cached prefix as `cache_read_input_tokens`, and freshly-written
+    cache as `cache_creation_input_tokens` — a natural fit for the
+    neutral schema's prompt / cached / cache_write split. `output_tokens`
+    already folds in extended-thinking tokens, so `thought_tokens` stays
+    0. Best-effort; never raises.
+    """
+    sink.provider = "claude"
+    sink.model = model
+    if usage is None:
+        return
+    try:
+        input_n = int(getattr(usage, "input_tokens", None) or 0)
+        cache_read_n = int(getattr(usage, "cache_read_input_tokens", None) or 0)
+        cache_write_n = int(getattr(usage, "cache_creation_input_tokens", None) or 0)
+        output_n = int(getattr(usage, "output_tokens", None) or 0)
+        sink.prompt_tokens = input_n
+        sink.cached_tokens = cache_read_n
+        sink.cache_write_tokens = cache_write_n
+        sink.output_tokens = output_n
+        # Anthropic reports no grand total — sum the parts so the
+        # aggregator has a consistent field across providers.
+        sink.total_tokens = input_n + cache_read_n + cache_write_n + output_n
+    except Exception:  # noqa: BLE001 — metrics must not break generation
+        log.debug("Claude usage sink fill failed", exc_info=True)
+
+
 class ClaudeClient:
     """`ModelClient` adapter backed by Anthropic's Messages API."""
 
@@ -110,6 +145,7 @@ class ClaudeClient:
         system_instruction: str,
         *,
         model_override: str | None = None,
+        usage_sink: CallUsage | None = None,
     ) -> Iterator[tuple[str | None, FunctionCall | None]]:
         """Stream one model turn against the given history.
 
@@ -181,7 +217,10 @@ class ClaudeClient:
                 # Observability only — a logging failure must never break
                 # generation, so swallow everything here.
                 try:
-                    _log_usage(stream.get_final_message().usage, model)
+                    final_usage = stream.get_final_message().usage
+                    _log_usage(final_usage, model)
+                    if usage_sink is not None:
+                        _fill_usage_sink(usage_sink, final_usage, model)
                 except Exception:
                     log.debug("Claude usage logging failed", exc_info=True)
         except Exception:
