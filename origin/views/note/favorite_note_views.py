@@ -1,4 +1,5 @@
-from django.db.models import F, IntegerField, Value
+from django.db.models import Case, CharField, F, IntegerField, Q, Value, When
+from django.db.models.functions import Concat
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -79,6 +80,26 @@ class AllFavoriteNotesMetaView(AuthenticatedAPIView):
                     projectId=F("project"),
                     projectName=F("project__project_name"),
                     taskTitle=F("task__title"),
+                    # Mirror `TaskMaster.display_id` at the DB level so the
+                    # favorites sidebar shows "<code>-<n>" (e.g. "GEN-42")
+                    # instead of the raw "#<taskId>". NULL when either side
+                    # is missing — frontend `formatTaskDisplayId` falls back
+                    # to "#<taskId>". Same annotation as the task-note tree
+                    # meta view.
+                    displayId=Case(
+                        When(
+                            Q(task__project__code__isnull=False)
+                            & Q(task__project_task_number__isnull=False),
+                            then=Concat(
+                                F("task__project__code"),
+                                Value("-"),
+                                F("task__project_task_number"),
+                                output_field=CharField(),
+                            ),
+                        ),
+                        default=Value(None),
+                        output_field=CharField(),
+                    ),
                     tsUpdated=F("ts_updated_at"),
                 )
                 .values(
@@ -89,6 +110,7 @@ class AllFavoriteNotesMetaView(AuthenticatedAPIView):
                     "taskId",
                     "projectName",
                     "taskTitle",
+                    "displayId",
                     "title",
                     "tsUpdated",
                 )
