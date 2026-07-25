@@ -96,6 +96,15 @@ class AgentRun(models.Model):
         done                — clean exit, model produced a final answer
         error               — fatal mid-stream (Gemini failure, etc.)
         step_cap            — hit MAX_STEPS without a final answer
+        cancelled           — the client disconnected mid-stream. NOT an
+                              error: nothing failed, the reader left.
+                              Kept distinct so cost-per-completed-run can
+                              exclude abandoned work instead of counting
+                              it as a success. Before this status existed
+                              such runs stayed `running` with a NULL
+                              finished_at forever, and the worker thread
+                              kept billing tokens to a stream nobody was
+                              reading.
         awaiting_approval   — Phase 7: paused on a requires_approval
                               tool; resume via POST /api/v2/agent/decide/
         rejected            — Phase 7: user rejected the pending tool

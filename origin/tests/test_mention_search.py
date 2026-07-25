@@ -13,6 +13,7 @@ Covers the full plumbing chain with no OpenSearch / LLM / network:
     /decide/ rehydrates them from the persisted `AgentRun.mentions`.
 """
 
+import threading
 import uuid
 from unittest.mock import patch
 
@@ -237,7 +238,7 @@ class ViewCtxThreadingTests(BaseAPITestCase):
                 },
                 format="json",
             )
-            captured["worker"](lambda event: None)
+            captured["worker"](lambda event: None, threading.Event())
         self.assertEqual(resp.status_code, 200)
         ctx = captured["ctx"]
         self.assertEqual(len(ctx.resolved_mentions), 1)
@@ -260,7 +261,7 @@ class ViewCtxThreadingTests(BaseAPITestCase):
             captured["worker"] = worker
             return iter([b""])
 
-        def fake_resume(run_arg, decision, ctx, emit):
+        def fake_resume(run_arg, decision, ctx, emit, **kwargs):
             captured["ctx"] = ctx
             emit({"type": "done"})
 
@@ -277,7 +278,7 @@ class ViewCtxThreadingTests(BaseAPITestCase):
                 },
                 format="json",
             )
-            captured["worker"](lambda event: None)
+            captured["worker"](lambda event: None, threading.Event())
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
             captured["ctx"].resolved_mentions,
