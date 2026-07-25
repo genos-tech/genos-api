@@ -49,6 +49,7 @@ PRIMARY_AUTH_CHOICES = [
 # only — never sold self-serve.
 TIER_CHOICES = [
     ("free", "Free"),
+    ("core", "Core"),
     ("pro", "Pro"),
     ("max", "Max"),
     ("enterprise", "Enterprise"),
@@ -169,7 +170,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         max_length=32,
         blank=True,
         default="",
-        help_text="'gemini', 'claude', or '' to use the server default.",
+        help_text="'gemini', 'claude', 'openai', or '' to use the server default.",
     )
     preferred_llm_model = models.CharField(
         max_length=128,

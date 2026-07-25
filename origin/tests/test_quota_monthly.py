@@ -293,12 +293,48 @@ class DefaultConfigShapeTests(TestCase):
 
     def test_all_tiers_have_all_dimensions(self):
         tier_quotas = settings.SEARCH_ENGINE["TIER_QUOTAS"]
-        self.assertEqual(set(tier_quotas.keys()), {"free", "pro", "max", "enterprise"})
+        self.assertEqual(set(tier_quotas.keys()), {"free", "core", "pro", "max", "enterprise"})
         for tier, cfg in tier_quotas.items():
             self.assertTrue(
                 self.REQUIRED_KEYS.issubset(cfg.keys()),
                 f"tier '{tier}' missing keys: {self.REQUIRED_KEYS - set(cfg.keys())}",
             )
+
+    def test_every_catalog_model_is_capped_in_every_paid_tier(self):
+        """A model MISSING from `model_daily` is UNLIMITED, not zero.
+
+        So adding a rung to MODEL_CATALOG without adding it to every
+        tier silently uncaps that model for those tiers — no error, no
+        429, just an unbounded premium-model subsidy. `enterprise` is
+        exempt: it is deliberately unlimited across the board.
+        """
+        tq = settings.SEARCH_ENGINE["TIER_QUOTAS"]
+        catalog_models = {
+            e["model"] for e in settings.SEARCH_ENGINE["MODEL_CATALOG"] if e.get("model")
+        }
+        self.assertTrue(catalog_models, "MODEL_CATALOG is empty")
+        for tier, cfg in tq.items():
+            if tier == "enterprise":
+                continue
+            missing = catalog_models - set(cfg.get("model_daily") or {})
+            self.assertEqual(
+                missing,
+                set(),
+                f"tier '{tier}' has no model_daily cap for {sorted(missing)} "
+                f"— those models are UNLIMITED for that tier",
+            )
+
+    def test_tier_ladder_is_monotonic_on_llm_asks(self):
+        """free < core < pro < max on the headline ask cap.
+
+        Guards the ordering the pricing page and the upgrade story both
+        assume; an inverted rung would advertise a downgrade as an upgrade.
+        """
+        tq = settings.SEARCH_ENGINE["TIER_QUOTAS"]
+        ladder = [tq[t]["llm_ask_daily"] for t in ("free", "core", "pro", "max")]
+        self.assertEqual(ladder, sorted(ladder))
+        self.assertEqual(len(set(ladder)), len(ladder), "tiers must differ")
+        self.assertIsNone(tq["enterprise"]["llm_ask_daily"], "enterprise is unlimited")
 
     def test_shipped_limits_match_documented_targets(self):
         # The enable PR flipped the four dimensions live. These are the
@@ -307,8 +343,9 @@ class DefaultConfigShapeTests(TestCase):
         tq = settings.SEARCH_ENGINE["TIER_QUOTAS"]
         expected = {
             "free": (200, 100, 90, 10),
-            "pro": (1000, 500, None, 25),
-            "max": (5000, 3000, None, 100),
+            "core": (1000, 500, None, 25),
+            "pro": (3000, 1500, None, 50),
+            "max": (8000, 4000, None, 100),
             "enterprise": (None, None, None, 200),
         }
         for tier, (task, note, retention, upload) in expected.items():

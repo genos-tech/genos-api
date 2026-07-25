@@ -17,6 +17,7 @@ OpenSearch / embeddings / network / LLM calls happen.
 from __future__ import annotations
 
 import datetime
+import json
 from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase, override_settings
@@ -31,7 +32,7 @@ from origin.search_engine.friendly_titles import (
     friendly_chat_title,
 )
 from origin.search_engine.llm.choice import LlmChoice, resolve_user_choice
-from origin.search_engine.llm.types import FunctionCall
+from origin.search_engine.llm.types import AgentMessage, FunctionCall
 from origin.tests.test_base import BaseAPITestCase
 
 # Deterministic, self-contained tier-quota config so the assertions don't
@@ -355,8 +356,10 @@ class ResolveUserChoiceTests(SimpleTestCase):
         self.assertEqual(choice, LlmChoice("gemini", "gemini-3.5-flash"))
 
     def test_unknown_provider_falls_back_with_warning(self):
+        # NB: "openai" is a REAL provider now (GPT rungs in
+        # MODEL_CATALOG), so this uses a provider we don't ship at all.
         with self.assertLogs("origin.search_engine.llm.choice", level="WARNING") as cm:
-            choice = self._run("openai", "gpt-4")
+            choice = self._run("mistral", "mistral-large")
         self.assertEqual(choice, LlmChoice("gemini", "gemini-2.5-flash"))
         self.assertTrue(any("unknown preferred_llm_provider" in m for m in cm.output))
 
@@ -426,6 +429,161 @@ class DefaultModelsInCatalogTests(SimpleTestCase):
             in_catalog("claude", claude_default),
             f"Default CLAUDE_MODEL={claude_default!r} is not in MODEL_CATALOG.",
         )
+
+        openai_default = cfg.get("OPENAI_MODEL")
+        self.assertTrue(
+            in_catalog("openai", openai_default),
+            f"Default OPENAI_MODEL={openai_default!r} is not in MODEL_CATALOG.",
+        )
+
+
+# --------------------------------------------------------------------------- #
+# openai_client.py — message translation + tool-call assembly                  #
+# --------------------------------------------------------------------------- #
+
+
+class OpenAIMessageTranslationTests(SimpleTestCase):
+    """`_messages_to_openai` must emit a Chat-Completions-valid history.
+
+    The correlation between an assistant `tool_calls[].id` and the
+    following `role: "tool"` message's `tool_call_id` is synthesized from
+    message ORDER (our neutral AgentMessage carries no id). Get it wrong
+    and OpenAI rejects the whole request — so it is worth pinning.
+    """
+
+    def test_system_instruction_leads_the_list(self):
+        from origin.search_engine.llm.openai_client import _messages_to_openai
+
+        out = _messages_to_openai([AgentMessage(role="user", text="hi")], "be terse")
+        self.assertEqual(out[0], {"role": "system", "content": "be terse"})
+        self.assertEqual(out[1], {"role": "user", "content": "hi"})
+
+    def test_blank_system_instruction_is_omitted(self):
+        from origin.search_engine.llm.openai_client import _messages_to_openai
+
+        out = _messages_to_openai([AgentMessage(role="user", text="hi")], "")
+        self.assertEqual(out[0]["role"], "user")
+
+    def test_tool_call_and_response_share_a_synthesized_id(self):
+        from origin.search_engine.llm.openai_client import _messages_to_openai
+
+        out = _messages_to_openai(
+            [
+                AgentMessage(role="user", text="weather?"),
+                AgentMessage(
+                    role="assistant",
+                    function_call=FunctionCall(name="get_weather", args={"city": "Tokyo"}),
+                ),
+                AgentMessage(
+                    role="tool_response",
+                    function_response_name="get_weather",
+                    function_response={"temp": 30},
+                ),
+            ],
+            "sys",
+        )
+        assistant = next(m for m in out if m["role"] == "assistant")
+        tool = next(m for m in out if m["role"] == "tool")
+        self.assertEqual(assistant["content"], None)
+        call = assistant["tool_calls"][0]
+        self.assertEqual(call["type"], "function")
+        self.assertEqual(call["function"]["name"], "get_weather")
+        # Arguments go over the wire as a JSON STRING, not an object.
+        self.assertEqual(json.loads(call["function"]["arguments"]), {"city": "Tokyo"})
+        self.assertEqual(tool["tool_call_id"], call["id"])
+
+    def test_two_tool_rounds_do_not_reuse_an_id(self):
+        from origin.search_engine.llm.openai_client import _messages_to_openai
+
+        msgs = []
+        for i in range(2):
+            msgs += [
+                AgentMessage(role="assistant", function_call=FunctionCall(name=f"t{i}", args={})),
+                AgentMessage(
+                    role="tool_response", function_response_name=f"t{i}", function_response={}
+                ),
+            ]
+        out = _messages_to_openai(msgs, "sys")
+        ids = [m["tool_calls"][0]["id"] for m in out if m["role"] == "assistant"]
+        self.assertEqual(len(set(ids)), 2, "each tool round needs its own id")
+        # Each tool result must point at its OWN round, not the latest one.
+        tool_ids = [m["tool_call_id"] for m in out if m["role"] == "tool"]
+        self.assertEqual(tool_ids, ids)
+
+    def test_unknown_role_raises(self):
+        from origin.search_engine.llm.openai_client import _messages_to_openai
+
+        bad = AgentMessage(role="user", text="x")
+        object.__setattr__(bad, "role", "nonsense")
+        with self.assertRaises(ValueError):
+            _messages_to_openai([bad], "sys")
+
+
+class OpenAIToolArgParsingTests(SimpleTestCase):
+    """Streamed tool arguments arrive as JSON fragments; a truncated or
+    malformed join must degrade to `{}` rather than kill the agent turn."""
+
+    def test_valid_json_object(self):
+        from origin.search_engine.llm.openai_client import _parse_args
+
+        self.assertEqual(_parse_args('{"a": 1}'), {"a": 1})
+
+    def test_empty_and_malformed_yield_empty_dict(self):
+        from origin.search_engine.llm.openai_client import _parse_args
+
+        self.assertEqual(_parse_args(""), {})
+        self.assertEqual(_parse_args('{"a": '), {})  # truncated stream
+
+    def test_non_object_json_yields_empty_dict(self):
+        from origin.search_engine.llm.openai_client import _parse_args
+
+        self.assertEqual(_parse_args("[1, 2]"), {})
+        self.assertEqual(_parse_args('"hello"'), {})
+
+
+class OpenAIUsageTests(SimpleTestCase):
+    """OpenAI reports `prompt_tokens` INCLUDING the cached prefix — the
+    opposite of Anthropic. The sink must store the uncached remainder or
+    the offline cost report bills cached tokens at the full input rate."""
+
+    @staticmethod
+    def _usage(prompt, cached, completion, reasoning=0, total=None):
+        return MagicMock(
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+            total_tokens=total if total is not None else prompt + completion,
+            prompt_tokens_details=MagicMock(cached_tokens=cached),
+            completion_tokens_details=MagicMock(reasoning_tokens=reasoning),
+        )
+
+    def test_cached_tokens_are_subtracted_from_prompt(self):
+        from origin.search_engine.llm.openai_client import _fill_usage_sink
+        from origin.search_engine.llm.types import CallUsage
+
+        sink = CallUsage()
+        _fill_usage_sink(sink, self._usage(1000, 800, 200), "gpt-5.6-terra")
+        self.assertEqual(sink.prompt_tokens, 200, "uncached remainder")
+        self.assertEqual(sink.cached_tokens, 800)
+        self.assertEqual(sink.provider, "openai")
+
+    def test_reasoning_tokens_are_not_added_to_output(self):
+        from origin.search_engine.llm.openai_client import _fill_usage_sink
+        from origin.search_engine.llm.types import CallUsage
+
+        sink = CallUsage()
+        # reasoning is a SUBSET of completion_tokens on OpenAI.
+        _fill_usage_sink(sink, self._usage(100, 0, 500, reasoning=300), "gpt-5.6-sol")
+        self.assertEqual(sink.output_tokens, 500)
+        self.assertEqual(sink.thought_tokens, 300)
+
+    def test_missing_usage_does_not_raise(self):
+        from origin.search_engine.llm.openai_client import _fill_usage_sink
+        from origin.search_engine.llm.types import CallUsage
+
+        sink = CallUsage()
+        _fill_usage_sink(sink, None, "gpt-5.6-luna")
+        self.assertEqual(sink.model, "gpt-5.6-luna")
+        self.assertEqual(sink.prompt_tokens, 0)
 
 
 # --------------------------------------------------------------------------- #

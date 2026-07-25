@@ -41,16 +41,24 @@ WEBHOOK_URL = "/api/v2/billing/stripe/webhook/"
 STRIPE_TEST_SETTINGS = {
     "SECRET_KEY": "sk_test_x",
     "WEBHOOK_SECRET": "whsec_x",
+    "PRICE_CORE": "price_core_789",
     "PRICE_PRO": "price_pro_123",
     "PRICE_MAX": "price_max_456",
+    # Pre-repricing ids: pro used to be JPY1,200 and max JPY2,500.
+    # Subscriptions bought at those prices keep renewing on them.
+    "PRICE_PRO_LEGACY": "price_pro_old_1200",
+    "PRICE_MAX_LEGACY": "price_max_old_2500",
     "AUTOMATIC_TAX": False,
 }
 
 STRIPE_DISABLED_SETTINGS = {
     "SECRET_KEY": "",
     "WEBHOOK_SECRET": "",
+    "PRICE_CORE": "",
     "PRICE_PRO": "",
     "PRICE_MAX": "",
+    "PRICE_PRO_LEGACY": "",
+    "PRICE_MAX_LEGACY": "",
     "AUTOMATIC_TAX": False,
 }
 
@@ -116,7 +124,7 @@ class BillingConfigTests(BillingTestBase):
     def test_config_enabled_with_plans(self):
         res = self.client.get(CONFIG_URL)
         self.assertTrue(res.data["enabled"])
-        self.assertEqual(res.data["plans"], ["pro", "max"])
+        self.assertEqual(res.data["plans"], ["core", "pro", "max"])
 
     def test_enterprise_never_purchasable(self):
         self.assertNotIn("enterprise", stripe_billing.PURCHASABLE_PLANS)
@@ -124,7 +132,36 @@ class BillingConfigTests(BillingTestBase):
     def test_partial_price_config_limits_plans(self):
         with override_settings(STRIPE={**STRIPE_TEST_SETTINGS, "PRICE_MAX": ""}):
             res = self.client.get(CONFIG_URL)
-            self.assertEqual(res.data["plans"], ["pro"])
+            self.assertEqual(res.data["plans"], ["core", "pro"])
+
+    def test_legacy_price_resolves_to_grandfathered_plan(self):
+        """A subscription bought before the repricing must keep its plan.
+
+        Stripe never repoints an existing subscription at a new price
+        object, so renewals arrive carrying the ORIGINAL price id. If
+        those stopped resolving, every grandfathered subscriber would
+        silently decay to free on their next renewal event.
+        """
+        self.assertEqual(stripe_billing.tier_for_price("price_pro_old_1200"), "pro")
+        self.assertEqual(stripe_billing.tier_for_price("price_max_old_2500"), "max")
+
+    def test_legacy_prices_are_not_purchasable(self):
+        """Grandfathered ids resolve on webhooks but are never sold."""
+        self.assertEqual(stripe_billing.price_for_plan("pro"), "price_pro_123")
+        self.assertEqual(stripe_billing.price_for_plan("max"), "price_max_456")
+        self.assertEqual(stripe_billing.price_for_plan("core"), "price_core_789")
+
+    def test_legacy_pro_price_does_not_become_core(self):
+        """The old pro price is numerically today's CORE price (JPY1,200).
+
+        It must still grant `pro` — grandfathered subscribers keep the
+        plan they bought, not the plan that now costs what they pay.
+        """
+        self.assertNotEqual(stripe_billing.tier_for_price("price_pro_old_1200"), "core")
+
+    def test_unmapped_price_still_returns_none(self):
+        self.assertIsNone(stripe_billing.tier_for_price("price_never_seen"))
+        self.assertIsNone(stripe_billing.tier_for_price(None))
 
     def test_has_billing_account_reflects_customer_id(self):
         self.user.stripe_customer_id = "cus_abc"
@@ -215,6 +252,168 @@ class CheckoutAndPortalViewTests(BillingTestBase):
         ):
             res = self.client.post(PORTAL_URL, {}, format="json")
         self.assertEqual(res.data["url"], "https://stripe/bps_1")
+
+
+@override_settings(STRIPE=STRIPE_TEST_SETTINGS)
+class PortalFlowTests(BillingTestBase):
+    """Deep-linked portal flows — what the plans page's per-tier
+    upgrade / switch / cancel buttons call.
+
+    The load-bearing property is that an EXISTING subscriber's plan
+    change goes through `subscription_update_confirm` on their current
+    subscription. Routing it through Checkout instead would open a
+    second parallel subscription on the same customer, and
+    `reconcile_from_stripe` (best active tier wins) would show nothing
+    amiss while the user paid twice.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user.tier = "core"
+        self.user.stripe_customer_id = "cus_abc"
+        self.user.save(update_fields=["tier", "stripe_customer_id"])
+
+    @staticmethod
+    def _list_mock(*subs):
+        import stripe  # noqa: PLC0415 — lazy like the service itself
+
+        payload = {
+            "object": "list",
+            "data": list(subs),
+            "has_more": False,
+            "url": "/v1/subscriptions",
+        }
+        return mock.patch(
+            "stripe.Subscription.list",
+            return_value=stripe.ListObject.construct_from(payload, "sk_test_x"),
+        )
+
+    @staticmethod
+    def _sub(status_="active", price="price_core_789", quantity=1):
+        return {
+            "id": "sub_x",
+            "object": "subscription",
+            "status": status_,
+            "created": 1,
+            "items": {"data": [{"id": "si_x", "price": {"id": price}, "quantity": quantity}]},
+        }
+
+    @staticmethod
+    def _session_mock():
+        import stripe  # noqa: PLC0415
+
+        return mock.patch(
+            "stripe.billing_portal.Session.create",
+            return_value=stripe.billing_portal.Session.construct_from(
+                {"id": "bps_x", "object": "billing_portal.session", "url": "https://stripe/bps_x"},
+                "sk_test_x",
+            ),
+        )
+
+    def _portal_kwargs(self, *, flow=None, plan=None, subs=(None,), create=None):
+        """Run create_portal_session and return the kwargs Stripe got."""
+        subs = tuple(s for s in subs if s is not None)
+        with self._list_mock(*subs), (create or self._session_mock()) as created:
+            url = stripe_billing.create_portal_session(self.user, flow=flow, plan=plan)
+        self.assertEqual(url, "https://stripe/bps_x")
+        return created.call_args.kwargs
+
+    def test_no_flow_opens_the_portal_home(self):
+        kwargs = self._portal_kwargs(subs=(self._sub(),))
+        self.assertNotIn("flow_data", kwargs)
+        self.assertEqual(kwargs["customer"], "cus_abc")
+
+    def test_update_flow_targets_the_existing_subscription(self):
+        kwargs = self._portal_kwargs(flow="update", plan="max", subs=(self._sub(),))
+        confirm = kwargs["flow_data"]["subscription_update_confirm"]
+        self.assertEqual(kwargs["flow_data"]["type"], "subscription_update_confirm")
+        self.assertEqual(confirm["subscription"], "sub_x")
+        # The subscription ITEM id, not the price id — Stripe rejects
+        # anything else, and the two are easy to confuse.
+        self.assertEqual(confirm["items"][0]["id"], "si_x")
+        self.assertEqual(confirm["items"][0]["price"], "price_max_456")
+
+    def test_update_flow_preserves_quantity(self):
+        """Team subscriptions carry seats as `quantity`; a confirm flow
+        that dropped it would resize the team as a side effect of a
+        plan change."""
+        kwargs = self._portal_kwargs(flow="update", plan="pro", subs=(self._sub(quantity=7),))
+        confirm = kwargs["flow_data"]["subscription_update_confirm"]
+        self.assertEqual(confirm["items"][0]["quantity"], 7)
+
+    def test_update_flow_never_offers_a_legacy_price(self):
+        """Grandfathered ids resolve INBOUND only. Switching plan must
+        move the subscriber onto the current price — selling into a
+        retired one would re-grandfather them at today's click."""
+        kwargs = self._portal_kwargs(flow="update", plan="pro", subs=(self._sub(),))
+        confirm = kwargs["flow_data"]["subscription_update_confirm"]
+        self.assertEqual(confirm["items"][0]["price"], "price_pro_123")
+
+    def test_switch_flow_is_the_picker_and_names_no_price(self):
+        """The team row has one row for ALL tiers, so it can't name a
+        target plan; the picker also leaves `quantity` (= seats) to
+        Stripe rather than restating it."""
+        kwargs = self._portal_kwargs(flow="switch", subs=(self._sub(quantity=7),))
+        self.assertEqual(kwargs["flow_data"]["type"], "subscription_update")
+        self.assertEqual(kwargs["flow_data"]["subscription_update"]["subscription"], "sub_x")
+        self.assertNotIn("items", kwargs["flow_data"]["subscription_update"])
+
+    def test_switch_flow_needs_no_plan(self):
+        res = self.client.post(PORTAL_URL, {"flow": "switch"}, format="json")
+        self.assertNotEqual(res.status_code, 400)
+
+    def test_cancel_flow(self):
+        kwargs = self._portal_kwargs(flow="cancel", subs=(self._sub(),))
+        self.assertEqual(kwargs["flow_data"]["type"], "subscription_cancel")
+        self.assertEqual(kwargs["flow_data"]["subscription_cancel"]["subscription"], "sub_x")
+
+    def test_flow_returns_the_browser_to_the_app(self):
+        """A deep-linked flow otherwise ends on Stripe's own screen; the
+        redirect is what triggers the in-app reconcile."""
+        kwargs = self._portal_kwargs(flow="cancel", subs=(self._sub(),))
+        after = kwargs["flow_data"]["after_completion"]
+        self.assertEqual(after["type"], "redirect")
+        self.assertIn(stripe_billing.RETURN_PATH, after["redirect"]["return_url"])
+
+    def test_no_live_subscription_degrades_to_the_portal_home(self):
+        kwargs = self._portal_kwargs(flow="update", plan="max", subs=(self._sub("canceled"),))
+        self.assertNotIn("flow_data", kwargs)
+
+    def test_rejected_flow_falls_back_to_the_portal_home(self):
+        """The portal CONFIGURATION (a dashboard setting, invisible from
+        here) can refuse a plan change. Landing the user on the portal
+        home still lets them act; a 503 doesn't."""
+        import stripe  # noqa: PLC0415
+
+        ok = stripe.billing_portal.Session.construct_from(
+            {"id": "bps_x", "object": "billing_portal.session", "url": "https://stripe/bps_x"},
+            "sk_test_x",
+        )
+        create = mock.patch(
+            "stripe.billing_portal.Session.create",
+            side_effect=[Exception("no such configuration feature"), ok],
+        )
+        kwargs = self._portal_kwargs(
+            flow="update", plan="max", subs=(self._sub(),), create=create
+        )
+        self.assertNotIn("flow_data", kwargs)
+
+    def test_view_rejects_an_unknown_flow(self):
+        res = self.client.post(PORTAL_URL, {"flow": "delete_everything"}, format="json")
+        self.assertEqual(res.status_code, 400)
+
+    def test_view_rejects_update_without_a_purchasable_plan(self):
+        for body in ({"flow": "update"}, {"flow": "update", "plan": "enterprise"}):
+            res = self.client.post(PORTAL_URL, body, format="json")
+            self.assertEqual(res.status_code, 400, body)
+
+    def test_view_passes_the_flow_through(self):
+        with mock.patch.object(
+            stripe_billing, "create_portal_session", return_value="https://stripe/bps_1"
+        ) as create:
+            res = self.client.post(PORTAL_URL, {"flow": "update", "plan": "max"}, format="json")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(create.call_args.kwargs, {"flow": "update", "plan": "max"})
 
 
 @override_settings(STRIPE=STRIPE_TEST_SETTINGS)
@@ -1134,7 +1333,7 @@ class PlansViewTests(BillingTestBase):
         self.assertEqual(res.status_code, 200)
         self.assertTrue(res.data["billing_enabled"])
         tiers = {t["tier"]: t for t in res.data["tiers"]}
-        self.assertEqual(list(tiers), ["free", "pro", "max", "enterprise"])
+        self.assertEqual(list(tiers), ["free", "core", "pro", "max", "enterprise"])
         quotas = dj_settings.SEARCH_ENGINE["TIER_QUOTAS"]
         for name, t in tiers.items():
             self.assertEqual(t["limits"]["llm_ask_daily"], quotas[name]["llm_ask_daily"])
@@ -1162,7 +1361,7 @@ class PlansViewTests(BillingTestBase):
         self.assertFalse(res.data["billing_enabled"])
         tiers = {t["tier"]: t for t in res.data["tiers"]}
         # Limits still render; paid prices are null; nothing purchasable.
-        self.assertEqual(len(tiers), 4)
+        self.assertEqual(len(tiers), 5)
         self.assertIsNone(tiers["pro"]["price"])
         self.assertFalse(tiers["pro"]["purchasable"])
 
@@ -1175,5 +1374,5 @@ class PlansViewTests(BillingTestBase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(
             [t["tier"] for t in res.data["tiers"]],
-            ["free", "pro", "max", "enterprise"],
+            ["free", "core", "pro", "max", "enterprise"],
         )

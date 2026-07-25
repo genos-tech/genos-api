@@ -116,6 +116,18 @@ jobs:
       GEMINI_PROJECT: amplified-album-496413-t2
       GEMINI_LOCATION: asia-northeast1
       EMBEDDING_PROVIDER: vertex
+      # Cost: pin CI evals to the cheap Flash rung rather than inheriting
+      # the server default (gemini-3.5-flash, $1.50/$9.00 per 1M).
+      # gemini-2.5-flash is $0.30/$2.50 — ~5x/3.6x cheaper — and
+      # LLM_SPEND_MAP.md §7 already names it as the eval/mechanical-task
+      # model of choice. The HARD gate (retrieval suite) makes no LLM
+      # calls at all, so this cannot affect what blocks a deploy; it only
+      # touches the report-only behavior suite + judge.
+      # NB: a step-change in judge scores right after this landed is the
+      # cheaper judge, not a quality regression — re-baseline the trend.
+      # If a run starts 404-ing, 2.5-flash has been retired on Vertex:
+      # drop this line to fall back to the server default.
+      GEMINI_MODEL: gemini-2.5-flash
       # Reranker OFF for the gate: it adds a Gemini call per query
       # (non-deterministic, slow, Vertex-quota-bound). The gate tests the
       # deterministic retrieval core (BM25 + vector + RRF).

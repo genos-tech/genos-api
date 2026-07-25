@@ -39,7 +39,7 @@ from origin.search_engine.agent.tools import REGISTRY
 WRITE_PREFIXES = ("create_", "update_", "delete_", "assign_", "add_")
 
 # Schema `type` values both provider adapters accept. Tools are authored
-# in Gemini's UPPERCASE form; `claude_client._normalize_schema` maps
+# in Gemini's UPPERCASE form; `llm.schema.normalize_schema` maps
 # UPPERCASE → lowercase and passes standard lowercase through, so both
 # spellings are wire-safe. Anything else (a typo like "STIRNG") only
 # blows up at request time against the live model.

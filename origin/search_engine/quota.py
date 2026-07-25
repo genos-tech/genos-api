@@ -74,14 +74,14 @@ _MONTHLY_CFG_KEYS = {
 }
 
 # Tier ladder for effective-tier resolution (higher wins).
-_TIER_RANK = {"free": 0, "pro": 1, "max": 2, "enterprise": 3}
+_TIER_RANK = {"free": 0, "core": 1, "pro": 2, "max": 3, "enterprise": 4}
 
 _EFFECTIVE_TIER_CACHE_SECONDS = 60
 _EFFECTIVE_TIER_CACHE_PREFIX = "effective_tier:"
 
 
 def get_user_tier(user_id: str) -> str:
-    """Return the user's own tier ('free' | 'pro' | 'max' | 'enterprise').
+    """Return the user's own tier ('free' | 'core' | 'pro' | 'max' | 'enterprise').
 
     This is the PERSONAL tier only — quota resolution should almost
     always go through `get_effective_tier`, which also considers team
