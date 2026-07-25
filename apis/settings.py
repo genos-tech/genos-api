@@ -493,7 +493,8 @@ SEARCH_ENGINE = {
     # truncated to 1536 dims via Matryoshka so it drops into the
     # existing 1536-dim OpenSearch index without recreating it. Bump
     # VERTEX_EMBEDDING_DIMENSIONS (and the index) if you want full 3072.
-    "VERTEX_EMBEDDING_MODEL": os.environ.get("VERTEX_EMBEDDING_MODEL", "gemini-embedding-001"),
+    "VERTEX_EMBEDDING_MODEL": os.environ.get("VERTEX_EMBEDDING_MODEL")
+    or "gemini-embedding-001",
     # NB `... or "1536"`, not a get() default. `os.environ.get(k, d)` returns
     # the default only when the key is ABSENT — a key that is present but
     # EMPTY yields "" and int("") raises at import, taking the whole process
@@ -534,7 +535,7 @@ SEARCH_ENGINE = {
     "GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY", ""),
     "GEMINI_USE_VERTEX": os.environ.get("GEMINI_USE_VERTEX", "false").lower() == "true",
     "GEMINI_PROJECT": os.environ.get("GEMINI_PROJECT", ""),
-    "GEMINI_LOCATION": os.environ.get("GEMINI_LOCATION", "us-central1"),
+    "GEMINI_LOCATION": os.environ.get("GEMINI_LOCATION") or "us-central1",
     # Optional per-role Vertex region override for the LLM (agent /
     # reranker / rewriter) client ONLY. Falls back to GEMINI_LOCATION
     # when unset, so existing single-region deploys are unchanged. This
@@ -564,7 +565,7 @@ SEARCH_ENGINE = {
     # default (it's an operator escape hatch), so a stale default here ships
     # silently: the loop runs it while the Settings picker only offers the
     # catalog. `test_default_models_are_in_catalog` guards against that drift.
-    "GEMINI_MODEL": os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
+    "GEMINI_MODEL": os.environ.get("GEMINI_MODEL") or "gemini-3.5-flash",
     # How many retrieved chunks to stuff into the Gemini prompt as
     # grounding. Larger = better recall, more cost / latency.
     "AGENT_CONTEXT_CHUNKS": int(os.environ.get("AGENT_CONTEXT_CHUNKS", "12")),
