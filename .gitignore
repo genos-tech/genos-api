@@ -37,3 +37,6 @@ infra/deployments/kafka-connect-custom
 
 # Secrets
 secrets
+
+# Generated cost dashboards — real user ids and spend, never committed
+ai_cost_dashboard.html
