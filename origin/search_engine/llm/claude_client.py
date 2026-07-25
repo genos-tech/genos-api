@@ -39,6 +39,7 @@ from origin.search_engine.llm.types import (
     AgentMessage,
     CallUsage,
     FunctionCall,
+    GenerationParams,
     ToolDeclaration,
 )
 
@@ -147,6 +148,7 @@ class ClaudeClient:
         *,
         model_override: str | None = None,
         usage_sink: CallUsage | None = None,
+        params: GenerationParams | None = None,
     ) -> Iterator[tuple[str | None, FunctionCall | None]]:
         """Stream one model turn against the given history.
 
@@ -165,7 +167,11 @@ class ClaudeClient:
         ]
 
         model = model_override or settings.SEARCH_ENGINE["CLAUDE_MODEL"]
-        max_tokens = int(settings.SEARCH_ENGINE.get("CLAUDE_MAX_TOKENS", 4096))
+        # Per-call cap wins; the env cap stays the fallback so a
+        # params-less call is byte-identical to pre-GenerationParams.
+        max_tokens = (params.max_output_tokens if params else None) or int(
+            settings.SEARCH_ENGINE.get("CLAUDE_MAX_TOKENS", 4096)
+        )
 
         # Extended-thinking models reject `temperature` outright (400
         # invalid_request_error); the rest honour the 0.2

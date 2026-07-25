@@ -108,6 +108,26 @@ class CallUsage:
 
 
 @dataclass(frozen=True)
+class GenerationParams:
+    """Per-call generation knobs, threaded through `generate_step`.
+
+    A dataclass rather than a bare int so future knobs (temperature,
+    thinking budget) extend it without touching every adapter
+    signature again. `None` anywhere — including the whole object —
+    means "the adapter's existing default behavior", which keeps every
+    legacy call site byte-identical: adapters MUST treat
+    `params=None` exactly like the parameter not existing.
+
+    `max_output_tokens`: per-call output ceiling. Providers differ on
+    the default it replaces (claude/openai have env-configured caps;
+    gemini is uncapped today), so adapters resolve
+    `params.max_output_tokens or <their existing default>`.
+    """
+
+    max_output_tokens: int | None = None
+
+
+@dataclass(frozen=True)
 class ToolDeclaration:
     """A tool the model may call.
 

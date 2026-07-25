@@ -52,6 +52,7 @@ from origin.search_engine.llm.types import (
     AgentMessage,
     CallUsage,
     FunctionCall,
+    GenerationParams,
     ToolDeclaration,
 )
 
@@ -168,6 +169,7 @@ class OpenAIClient:
         *,
         model_override: str | None = None,
         usage_sink: CallUsage | None = None,
+        params: GenerationParams | None = None,
     ) -> Iterator[tuple[str | None, FunctionCall | None]]:
         """Stream one model turn against the given history.
 
@@ -189,7 +191,11 @@ class OpenAIClient:
         ]
 
         model = model_override or settings.SEARCH_ENGINE["OPENAI_MODEL"]
-        max_tokens = int(settings.SEARCH_ENGINE.get("OPENAI_MAX_TOKENS", 4096))
+        # Per-call cap wins; the env cap stays the fallback so a
+        # params-less call is byte-identical to pre-GenerationParams.
+        max_tokens = (params.max_output_tokens if params else None) or int(
+            settings.SEARCH_ENGINE.get("OPENAI_MAX_TOKENS", 4096)
+        )
 
         create_kwargs: dict[str, Any] = {
             "model": model,

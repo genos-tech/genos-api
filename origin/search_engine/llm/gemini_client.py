@@ -32,6 +32,7 @@ from origin.search_engine.llm.types import (
     AgentMessage,
     CallUsage,
     FunctionCall,
+    GenerationParams,
     ToolDeclaration,
 )
 
@@ -138,6 +139,7 @@ class GeminiClient:
         *,
         model_override: str | None = None,
         usage_sink: CallUsage | None = None,
+        params: GenerationParams | None = None,
     ) -> Iterator[tuple[str | None, FunctionCall | None]]:
         """Stream one model turn against the given history.
 
@@ -151,11 +153,17 @@ class GeminiClient:
         sdk_tools = _tools_to_sdk(tools, types) if tools else None
         model = model_override or settings.SEARCH_ENGINE["GEMINI_MODEL"]
 
-        config = types.GenerateContentConfig(
-            tools=sdk_tools,
-            system_instruction=system_instruction,
-            temperature=0.2,
-        )
+        # Gemini has NO env-configured output cap (server-side default
+        # applies), so the config kwarg is added only when a per-call
+        # cap is requested — a params-less call stays byte-identical.
+        config_kwargs: dict[str, Any] = {
+            "tools": sdk_tools,
+            "system_instruction": system_instruction,
+            "temperature": 0.2,
+        }
+        if params and params.max_output_tokens:
+            config_kwargs["max_output_tokens"] = params.max_output_tokens
+        config = types.GenerateContentConfig(**config_kwargs)
 
         try:
             stream = _get_client().models.generate_content_stream(
