@@ -14,6 +14,7 @@ import tempfile
 from datetime import timedelta
 from io import StringIO
 from pathlib import Path
+from unittest import mock
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -337,7 +338,7 @@ class WindowTests(_Fixture):
 
 
 class ArchiveDirTests(_Fixture):
-    """What the scheduled Cloud Run jobs write into the GCS mount."""
+    """What the scheduled jobs write. Filesystem form (Cloud Run FUSE)."""
 
     def _archive(self, tmp: str, *args: str) -> list[str]:
         err = StringIO()
@@ -408,3 +409,91 @@ class ArchiveDirTests(_Fixture):
                 stderr=StringIO(),
             )
             self.assertFalse(out.exists())
+
+
+class GcsArchiveTests(_Fixture):
+    """The `gs://` form, used on Railway — which has no FUSE, so the
+    upload happens in-process."""
+
+    def _run(self, uri: str, *args: str, status: int = 200):
+        """Patch the authorized session, not `requests`: the point is
+        that the upload goes out signed with resolved credentials."""
+        posted: list[dict] = []
+
+        class _Resp:
+            status_code = status
+            text = "boom" if status >= 400 else ""
+
+        class _Session:
+            def __init__(self, credentials):
+                self.credentials = credentials
+
+            def post(self, url, **kw):
+                posted.append({"url": url, **kw})
+                return _Resp()
+
+        with mock.patch(
+            "google.auth.transport.requests.AuthorizedSession", _Session
+        ), mock.patch(
+            "origin.search_engine.management.commands.ai_cost_dashboard."
+            "_gcs_credentials",
+            return_value=mock.sentinel.creds,
+        ):
+            call_command(
+                "ai_cost_dashboard",
+                *(args or ("--days", "1")),
+                "--archive-dir",
+                uri,
+                stderr=StringIO(),
+            )
+        return posted
+
+    def test_uploads_the_same_two_objects_under_the_prefix(self):
+        day = timezone.now().strftime("%Y-%m-%d")
+        posted = self._run("gs://my-bucket/daily")
+
+        self.assertEqual(len(posted), 2)
+        self.assertEqual(
+            [p["params"]["name"] for p in posted],
+            [f"daily/ai-cost-{day}.html", "daily/latest.html"],
+        )
+        self.assertTrue(all("my-bucket" in p["url"] for p in posted))
+
+    def test_sends_html_bytes_with_an_html_content_type(self):
+        """Uploaded as text/html or a browser opening the object URL
+        downloads it instead of rendering it."""
+        posted = self._run("gs://my-bucket/daily")
+        self.assertIn("text/html", posted[0]["headers"]["Content-Type"])
+        self.assertTrue(posted[0]["data"].startswith(b"<!doctype html>"))
+
+    def test_a_bucket_with_no_prefix_writes_at_the_root(self):
+        posted = self._run("gs://my-bucket")
+        self.assertEqual(posted[1]["params"]["name"], "latest.html")
+
+    def test_a_rejected_upload_fails_the_job(self):
+        """Same rule as the filesystem path: the archive is the only
+        thing the run produces, so a 403 from a missing IAM grant must
+        not exit 0."""
+        with self.assertRaises(CommandError):
+            self._run("gs://my-bucket/daily", status=403)
+
+    def test_a_uri_with_no_bucket_is_rejected(self):
+        with self.assertRaises(CommandError):
+            call_command(
+                "ai_cost_dashboard", "--days", "1", "--archive-dir", "gs://", stderr=StringIO()
+            )
+
+    def test_credentials_are_scoped_to_storage_writes_only(self):
+        """A token that could do more is a token that could do more by
+        accident — this job only ever writes two HTML objects."""
+        from origin.search_engine.management.commands import ai_cost_dashboard as cmd
+
+        with mock.patch("google.oauth2.service_account.Credentials") as creds:
+            with override_settings(
+                SEARCH_ENGINE={"GEMINI_SERVICE_ACCOUNT_FILE": "/tmp/sa.json"}
+            ):
+                cmd._gcs_credentials()
+        _args, kwargs = creds.from_service_account_file.call_args
+        self.assertEqual(
+            kwargs["scopes"], ["https://www.googleapis.com/auth/devstorage.read_write"]
+        )

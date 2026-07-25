@@ -1,0 +1,29 @@
+# Railway config for the `ai-cost-dashboard-monthly` cron service.
+#
+# The monthly cadence of the AI cost dashboard. See
+# `railway-ai-cost-dashboard-daily.toml` for what the job does, the
+# object layout, and the full env requirements — the three configs
+# differ only in schedule and reporting window.
+#
+#   AI_COST_ARCHIVE_URI = gs://<project>-ai-cost-reports/monthly
+#
+# Its own directory because all three cadences write a `latest.html`.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# 1st of the month, 06:45 UTC, after the daily run at 06:15.
+#
+# `--last-month` reports the PREVIOUS COMPLETE calendar month, not the
+# last 31 days. Provider invoices are calendar months and reconciling
+# against them is the ledger's whole purpose: a window that is nearly a
+# month cannot be checked against a bill that is exactly one.
+#
+# Firing on the 1st means the archived file is dated with the last day
+# of the month it describes, never the day it ran — so a filename never
+# claims a period it holds no data from.
+cronSchedule = "45 6 1 * *"
+startCommand = "sh /app/railway-ai-cost-dashboard-entrypoint.sh --last-month"
+restartPolicyType = "NEVER"

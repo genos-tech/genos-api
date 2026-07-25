@@ -6,6 +6,7 @@
     python manage.py ai_cost_dashboard --last-month           # June, complete
     python manage.py ai_cost_dashboard --stdout > ai.html
     python manage.py ai_cost_dashboard --archive-dir /mnt/ai-cost-reports/daily
+    python manage.py ai_cost_dashboard --archive-dir gs://my-bucket/daily
 
 The same ledger `ai_cost_report` prints, rendered for looking at rather
 than reading. Use the report when you want an exit code (it is the
@@ -37,11 +38,16 @@ Three cadences run in production, each into its OWN directory —
 separation is per-directory rather than per-filename so that each series
 keeps one obvious "current" object.
 
-The directory is a plain filesystem path, so this command knows nothing
-about GCS. In production it is a GCS FUSE volume mount and the two
-writes land as bucket objects — same as how `seed_default_emoji` writes
-media. Keeping the storage out of the command is what lets it run
-identically on a laptop, on Railway, and on Cloud Run.
+`--archive-dir` takes either a filesystem path or a `gs://bucket/prefix`
+URI, because the two deployments reach GCS by different routes:
+
+    Cloud Run   a FUSE volume, so the destination is a PATH and this
+                command needs to know nothing about object storage
+    Railway     no FUSE, so the destination is the `gs://` URI and the
+                upload happens here
+
+One flag rather than two, so a cadence is described the same way in both
+places and neither deployment is the special case.
 
 Flat, not `YYYY/MM/` nested: GCS FUSE has to synthesise directories, and
 the nesting would buy nothing at ~365 small files a year.
@@ -52,6 +58,7 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 
+from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
@@ -59,6 +66,37 @@ from origin.search_engine import cost_dashboard
 
 _DEFAULT_OUT = "ai_cost_dashboard.html"
 _LATEST = "latest.html"
+_GCS_SCHEME = "gs://"
+_GCS_SCOPE = "https://www.googleapis.com/auth/devstorage.read_write"
+
+
+def _parse_gcs_uri(uri: str) -> tuple[str, str]:
+    """`gs://bucket/a/b` -> `("bucket", "a/b")`. Prefix may be empty."""
+    rest = uri[len(_GCS_SCHEME) :].strip("/")
+    if not rest:
+        raise CommandError(f"{uri!r} names no bucket. Expected gs://bucket[/prefix].")
+    bucket, _, prefix = rest.partition("/")
+    return bucket, prefix
+
+
+def _gcs_credentials():
+    """The same credentials Vertex uses — explicit SA file, else ADC.
+
+    Scoped to `devstorage.read_write` rather than `cloud-platform`: this
+    command only ever writes two HTML objects, and a token that could do
+    more is a token that could do more by accident.
+    """
+    sa_file = settings.SEARCH_ENGINE.get("GEMINI_SERVICE_ACCOUNT_FILE") or ""
+    if sa_file:
+        from google.oauth2 import service_account  # noqa: PLC0415
+
+        return service_account.Credentials.from_service_account_file(
+            sa_file, scopes=[_GCS_SCOPE]
+        )
+    import google.auth  # noqa: PLC0415
+
+    credentials, _project = google.auth.default(scopes=[_GCS_SCOPE])
+    return credentials
 
 
 class Command(BaseCommand):
@@ -98,9 +136,10 @@ class Command(BaseCommand):
             "--archive-dir",
             default="",
             help=(
-                "Write ai-cost-YYYY-MM-DD.html AND latest.html into this "
-                "directory instead of --out. In production this is a GCS "
-                "FUSE mount, so both land as bucket objects."
+                "Write ai-cost-YYYY-MM-DD.html AND latest.html here instead "
+                "of --out. Either a filesystem path (a GCS FUSE mount on "
+                "Cloud Run) or a gs://bucket/prefix URI (Railway, which has "
+                "no FUSE — the upload happens in-process)."
             ),
         )
 
@@ -182,12 +221,52 @@ class Command(BaseCommand):
         """
         until = data.get("until") or timezone.now()
         day = (until - timedelta(microseconds=1)).strftime("%Y-%m-%d")
+        names = [f"ai-cost-{day}.html", _LATEST]
+
+        if directory.startswith(_GCS_SCHEME):
+            return self._upload_gcs(directory, names, page)
+
         base = Path(directory).expanduser().resolve()
         try:
             base.mkdir(parents=True, exist_ok=True)
-            return [
-                self._write(base / f"ai-cost-{day}.html", page),
-                self._write(base / _LATEST, page),
-            ]
+            return [self._write(base / name, page) for name in names]
         except OSError as exc:
             raise CommandError(f"Could not write the archive to {base}: {exc}") from exc
+
+    def _upload_gcs(self, uri: str, names: list[str], page: str) -> list[str]:
+        """Upload the same two objects straight to GCS.
+
+        Railway has no FUSE, so there is no path to write to. Rather than
+        pull in `google-cloud-storage` for two 11 KB text objects, this
+        uses `AuthorizedSession` from `google-auth` — already a
+        dependency — over the JSON API's simple media upload. Resumable
+        uploads exist for large payloads; a rendered page is not one.
+
+        Credentials resolve exactly as Vertex's do (see
+        `vertex_embedder`): an explicit `GEMINI_SERVICE_ACCOUNT_FILE`
+        when set, Application Default Credentials otherwise. Reusing that
+        resolution is deliberate — it is the same service account, and a
+        second credential path would be a second thing to get wrong.
+        """
+        from google.auth.transport.requests import AuthorizedSession  # noqa: PLC0415
+
+        bucket, prefix = _parse_gcs_uri(uri)
+        session = AuthorizedSession(_gcs_credentials())
+        body = page.encode("utf-8")
+        written: list[str] = []
+        for name in names:
+            obj = f"{prefix}/{name}" if prefix else name
+            resp = session.post(
+                f"https://storage.googleapis.com/upload/storage/v1/b/{bucket}/o",
+                params={"uploadType": "media", "name": obj},
+                data=body,
+                headers={"Content-Type": "text/html; charset=utf-8"},
+                timeout=60,
+            )
+            if resp.status_code >= 400:
+                raise CommandError(
+                    f"GCS upload of gs://{bucket}/{obj} failed "
+                    f"({resp.status_code}): {resp.text[:300]}"
+                )
+            written.append(f"gs://{bucket}/{obj}")
+        return written
