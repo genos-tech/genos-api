@@ -1,0 +1,49 @@
+# Railway config for the `ai-cost-dashboard-daily` cron service.
+#
+# Same Docker image as the `backend-django` service, run daily as a cron
+# (container starts, runs to completion, exits — no gunicorn).
+#
+# What this does:
+#   Renders the AI cost ledger (AiSpendEvent / AiRequestCost) as one
+#   self-contained HTML page and uploads it to GCS:
+#
+#       $AI_COST_ARCHIVE_URI/ai-cost-YYYY-MM-DD.html   immutable record
+#       $AI_COST_ARCHIVE_URI/latest.html               stable name
+#
+#   The date is the LAST DAY THE REPORT COVERS, not the day it ran.
+#
+# Three cadences exist — daily / weekly / monthly — each with its own
+# service and its own $AI_COST_ARCHIVE_URI, because all three write a
+# `latest.html` and would otherwise overwrite each other.
+#
+# This is the RECORD, not the alarm. `ai_cost_report --alert` is what
+# fails a run when spend is over budget; this is what you open once it
+# does. Rendering a page must never be able to fire an alarm, which is
+# why the command is a plain BaseCommand and not a CronCommand.
+#
+# ⚠️ Collects nothing until AI_COST_METER=true on `backend-django` (and
+# on any cron that makes paid calls). The page says so rather than
+# looking broken.
+#
+# Required env beyond the backend-django set (DATABASE_URL,
+# DJANGO_SECRET_KEY, JWT_SECRET_KEY, ALLOWED_HOSTS):
+#   AI_COST_ARCHIVE_URI   gs://<project>-ai-cost-reports/daily
+#   GEMINI_SA_BASE64      the SA key, decoded by the entrypoint
+#   GEMINI_SERVICE_ACCOUNT_FILE=/tmp/gemini-sa.json
+# The service account needs `roles/storage.objectAdmin` on that bucket.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Daily 06:15 UTC. After the 06:00 slot the cost report occupies on GCP,
+# so if a budget alarm fires there is already a fresh page behind it.
+#
+# The startCommand goes through the entrypoint wrapper rather than
+# calling manage.py directly: a cron's startCommand REPLACES the
+# Dockerfile CMD, including the service-account decode this job needs to
+# authenticate to GCS (see the entrypoint header).
+cronSchedule = "15 6 * * *"
+startCommand = "sh /app/railway-ai-cost-dashboard-entrypoint.sh --days 1"
+restartPolicyType = "NEVER"

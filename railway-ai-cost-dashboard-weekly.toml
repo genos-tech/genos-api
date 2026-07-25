@@ -1,0 +1,25 @@
+# Railway config for the `ai-cost-dashboard-weekly` cron service.
+#
+# The weekly cadence of the AI cost dashboard. See
+# `railway-ai-cost-dashboard-daily.toml` for what the job does, the
+# object layout, and the full env requirements — the three configs
+# differ only in schedule and reporting window.
+#
+#   AI_COST_ARCHIVE_URI = gs://<project>-ai-cost-reports/weekly
+#
+# Its own directory because all three cadences write a `latest.html`.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Mondays 06:30 UTC, after the daily run at 06:15.
+#
+# A 7-day ROLLING window rather than an ISO calendar week: the point of
+# this cadence is the trend, and no invoice is denominated in weeks. The
+# calendar-exact window is the monthly one, because that is the period
+# providers actually bill.
+cronSchedule = "30 6 * * 1"
+startCommand = "sh /app/railway-ai-cost-dashboard-entrypoint.sh --days 7"
+restartPolicyType = "NEVER"
