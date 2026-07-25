@@ -53,7 +53,7 @@ from typing import Any
 
 from django.conf import settings
 
-from origin.search_engine.llm import AgentMessage, get_model_client
+from origin.search_engine.llm import AgentMessage, get_model_client, spend
 from origin.search_engine.llm.choice import get_llm_choice, subprocess_model_override
 from origin.search_engine.llm.spend import spend_purpose
 
@@ -389,6 +389,7 @@ def _rerank_cohere(
             "Content-Type": "application/json",
         }
 
+        started = _time.monotonic()
         with httpx.Client(timeout=timeout) as client:
             resp = client.post(url, headers=headers, json=payload)
             attempts = 1
@@ -403,6 +404,20 @@ def _rerank_cohere(
                 _time.sleep(wait_s)
                 resp = client.post(url, headers=headers, json=payload)
                 attempts += 1
+
+        # Ledger. `attempts` counts every POST, but only a 200 is a
+        # billed rerank: the retries above fire exclusively on 429, and
+        # a rejected request is not charged by any provider. So units is
+        # 1-or-0, and `attempt_no` exists on the row purely so that
+        # invariant stays demonstrable from the data.
+        spend.record_units(
+            unit_kind=spend.UNIT_RERANK,
+            units=1 if resp.status_code == 200 else 0,
+            provider="cohere",
+            model=str(payload.get("model") or ""),
+            latency_ms=int((_time.monotonic() - started) * 1000),
+            error="" if resp.status_code == 200 else f"HTTP {resp.status_code}",
+        )
 
         if resp.status_code != 200:
             log.warning(

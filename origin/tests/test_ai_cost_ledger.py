@@ -455,3 +455,109 @@ class AdapterFinallyTests(_RestoresRecorder, TestCase):
         self.assertEqual(row.provider, "gemini")
         self.assertTrue(row.model)
         self.assertEqual(row.cost_basis, "incomplete")
+
+
+class NonLlmSourceTests(_RestoresRecorder, TestCase):
+    """Paid calls that are not measured in tokens.
+
+    These bill per call or per document, so they carry `units` and an
+    explicit `unpriced` basis rather than an invented per-unit price.
+    Recording them keeps invoice reconciliation complete — each is a
+    separate billing line — without putting an estimate into a table
+    whose whole value is that it contains none.
+    """
+
+    @METER_ON
+    def test_web_search_records_two_credits_but_charges_one_quota_unit(self):
+        """The gap is deliberate. `web_search_daily` is a product
+        promise — "N searches a day" — and making each search cost two
+        of them would halve every tier's allowance to fix an accounting
+        problem. The 2x belongs in the ledger, not the quota."""
+        from origin.search_engine.agent.tools import web_search
+
+        charged = []
+        fake_client = mock.Mock()
+        fake_client.search.return_value = {"results": []}
+
+        with mock.patch.object(
+            web_search, "check_remaining", return_value=(True, 0, 10)
+        ), mock.patch.object(
+            web_search, "increment_usage", side_effect=lambda uid, key: charged.append(key)
+        ), mock.patch.dict(
+            __import__("django.conf", fromlist=["settings"]).settings.SEARCH_ENGINE,
+            {"TAVILY_API_KEY": "tvly-test"},
+        ), mock.patch.dict(
+            "sys.modules", {"tavily": mock.Mock(TavilyClient=lambda api_key: fake_client)}
+        ):
+            ctx = mock.Mock(user_id="u1", team_id="t1")
+            with spend.spend_context(surface="ask", user_id="u1"):
+                web_search._run({"query": "django migrations"}, ctx)
+
+        self.assertEqual(charged, ["__web_search__"], "one quota unit per search")
+        row = AiSpendEvent.objects.get()
+        self.assertEqual(row.provider, "tavily")
+        self.assertEqual(row.units, 2, "advanced search bills Tavily 2 credits")
+        self.assertEqual(row.unit_kind, "search")
+
+    @METER_ON
+    def test_a_failed_web_search_records_zero_units(self):
+        """Tavily does not bill a failed search, but the row is what
+        makes 'how much spend came from failures' answerable."""
+        from origin.search_engine.agent.tools.base import ToolError
+        from origin.search_engine.agent.tools import web_search
+
+        fake_client = mock.Mock()
+        fake_client.search.side_effect = RuntimeError("upstream down")
+
+        with mock.patch.object(
+            web_search, "check_remaining", return_value=(True, 0, 10)
+        ), mock.patch.object(web_search, "increment_usage"), mock.patch.dict(
+            __import__("django.conf", fromlist=["settings"]).settings.SEARCH_ENGINE,
+            {"TAVILY_API_KEY": "tvly-test"},
+        ), mock.patch.dict(
+            "sys.modules", {"tavily": mock.Mock(TavilyClient=lambda api_key: fake_client)}
+        ):
+            ctx = mock.Mock(user_id="u1", team_id="t1")
+            with spend.spend_context(surface="ask", user_id="u1"):
+                with self.assertRaises(ToolError):
+                    web_search._run({"query": "x"}, ctx)
+
+        row = AiSpendEvent.objects.get()
+        self.assertEqual(row.units, 0)
+        self.assertIn("upstream down", row.error)
+
+    @METER_ON
+    def test_embeddings_are_recorded_at_the_wire_not_the_cache(self):
+        """`embed_one` sits on an L1 lru_cache wrapping an L2 Redis
+        lookup. Instrumenting the API surface would invent spend for
+        calls that never left the process — so a second identical embed
+        must NOT produce a second row."""
+        from origin.search_engine import embeddings
+
+        calls = {"n": 0}
+
+        def fake_embed(texts, task_type=None):
+            calls["n"] += 1
+            with spend.spend_context(surface="search"):
+                spend.record_units(
+                    unit_kind=spend.UNIT_EMBED,
+                    units=len(texts),
+                    provider="vertex",
+                    model="gemini-embedding-001",
+                )
+            return [[0.0] * 4 for _ in texts]
+
+        fake_embedder = mock.Mock(model_name="gemini-embedding-001")
+        fake_embedder.embed.side_effect = fake_embed
+
+        embeddings._embed_one_cached.cache_clear()
+        with mock.patch.object(embeddings, "_get_embedder", return_value=fake_embedder):
+            embeddings.embed_one("same text")
+            embeddings.embed_one("same text")
+
+        self.assertEqual(calls["n"], 1, "the cache should have served the second call")
+        self.assertEqual(
+            AiSpendEvent.objects.count(),
+            1,
+            "a cache hit must not manufacture a ledger row",
+        )

@@ -19,6 +19,7 @@ from django.conf import settings
 from openai import OpenAI
 
 from origin.search_engine.embeddings.base import TaskType
+from origin.search_engine.llm import spend
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +68,32 @@ class OpenAIEmbedder:
 def _embed_with_retry(client: OpenAI, batch: list[str], model: str, max_retries: int = 3):
     delay = 1.0
     for attempt in range(max_retries):
+        started = time.monotonic()
         try:
             resp = client.embeddings.create(model=model, input=batch)
-            return [d.embedding for d in resp.data]
+            out = [d.embedding for d in resp.data]
+            # Ledger. Instrumented HERE — at the wire — and NOT at
+            # `embed_one` / `embed_texts`, which sit on an L1 lru_cache
+            # wrapping an L2 Redis lookup. Recording at the API surface
+            # would invent spend for calls that never left the process.
+            # Only a SUCCESS is recorded: the retries above fire on
+            # transient faults, and providers do not bill a rejected
+            # request.
+            #
+            # `units` is texts embedded, not tokens. Embeddings are a
+            # separate billing line (~0.4% of spend) and there is no
+            # token count to price here, so these rows are deliberately
+            # `unpriced` with exact units rather than carrying an
+            # invented per-unit estimate into a table whose whole value
+            # is that it does not contain estimates.
+            spend.record_units(
+                unit_kind=spend.UNIT_EMBED,
+                units=len(batch),
+                provider="openai",
+                model=model,
+                latency_ms=int((time.monotonic() - started) * 1000),
+            )
+            return out
         except Exception as e:  # noqa: BLE001 — rate-limit, transient net, etc.
             if attempt == max_retries - 1:
                 raise
