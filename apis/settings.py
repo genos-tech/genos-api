@@ -1269,6 +1269,23 @@ SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
 # a code edit — its docstring still claims an operator can flip it.
 SEARCH_ENGINE["AI_COST_METER"] = os.environ.get("AI_COST_METER", "false").lower() == "true"
 
+# Monthly AI budget in YEN, for `ai_cost_report --alert`. The command
+# pro-rates it to the reporting window and logs at ERROR when spend is
+# over — which fails the cron run via CronCommand's tripwire.
+#
+# 0 (the default) means NO budget is configured and nothing is checked.
+# Deliberately opt-in: a threshold guessed before any real measurement
+# exists would either cry wolf on day one or never fire at all.
+#
+# This is the only cross-provider budget alarm that can exist here.
+# A GCP billing budget is structurally blind to Anthropic and OpenAI,
+# which bill outside GCP entirely.
+#
+# `or "0"` rather than a get() default — docker-compose passes optional
+# vars as `${VAR:-}`, so the key is always PRESENT and possibly empty,
+# and float("") raises at import (see the note at the top of this file).
+SEARCH_ENGINE["AI_MONTHLY_BUDGET_JPY"] = float(os.environ.get("AI_MONTHLY_BUDGET_JPY") or "0")
+
 # --- Email ---
 # Dev default: print emails to the runserver console so engineers don't
 # need credentials locally. In production, send via Resend's HTTPS API
