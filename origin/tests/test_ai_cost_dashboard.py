@@ -10,10 +10,13 @@ vacuous test that had to be rewritten in the ceiling suite.
 from __future__ import annotations
 
 import re
+import tempfile
 from datetime import timedelta
 from io import StringIO
+from pathlib import Path
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
@@ -277,9 +280,6 @@ class EmptyStateTests(TestCase):
 
 class CommandTests(_Fixture):
     def test_writes_a_file_and_summarises_to_stderr(self):
-        import tempfile  # noqa: PLC0415
-        from pathlib import Path  # noqa: PLC0415
-
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "nested" / "dash.html"
             err = StringIO()
@@ -295,3 +295,116 @@ class CommandTests(_Fixture):
         call_command("ai_cost_dashboard", "--days", "1", "--stdout", stdout=out, stderr=err)
         self.assertTrue(out.getvalue().startswith("<!doctype html>"))
         self.assertTrue(out.getvalue().rstrip().endswith("</html>"))
+
+
+class WindowTests(_Fixture):
+    """Four windows: --days N, --month, --last-month.
+
+    Only --last-month is CLOSED, and that difference is the whole reason
+    the collector carries an exclusive `until` at all."""
+
+    def test_last_month_excludes_this_month(self):
+        """A June report generated in July that quietly includes July
+        cannot be reconciled against June's invoice — which is the only
+        reason this window exists."""
+        d = cost_dashboard.collect(last_month=True)
+        self.assertFalse(d["has_data"], "the fixture is all in the current month")
+        first_of_this_month = timezone.now().replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        self.assertEqual(d["until"], first_of_this_month)
+        self.assertLess(d["cutoff"], d["until"])
+
+    def test_last_month_picks_up_rows_from_that_month(self):
+        last_month_day = timezone.now().replace(day=1) - timedelta(days=3)
+        AiSpendEvent.objects.all().update(created_at=last_month_day)
+        d = cost_dashboard.collect(last_month=True)
+        self.assertTrue(d["has_data"])
+        self.assertEqual(d["totals"]["calls"], 5)
+        self.assertIn(last_month_day.strftime("%B"), d["window"])
+
+    def test_a_closed_window_does_not_trail_empty_days_up_to_today(self):
+        """Bars running from the end of the window to today would read
+        as 'the meter stopped', not 'the window ended'."""
+        last_month_day = timezone.now().replace(day=1) - timedelta(days=3)
+        AiSpendEvent.objects.all().update(created_at=last_month_day)
+        d = cost_dashboard.collect(last_month=True)
+        self.assertLess(d["daily"][-1]["day"], timezone.now().replace(day=1).date())
+
+    def test_month_to_date_still_runs_to_now(self):
+        d = cost_dashboard.collect(month=True)
+        self.assertEqual(d["daily"][-1]["day"], timezone.now().date())
+
+
+class ArchiveDirTests(_Fixture):
+    """What the scheduled Cloud Run jobs write into the GCS mount."""
+
+    def _archive(self, tmp: str, *args: str) -> list[str]:
+        err = StringIO()
+        call_command(
+            "ai_cost_dashboard", *(args or ("--days", "1")), "--archive-dir", tmp, stderr=err
+        )
+        return sorted(p.name for p in Path(tmp).iterdir())
+
+    def test_writes_both_a_dated_record_and_a_stable_latest(self):
+        """Both, not one. Dated-only has no address a runbook can point
+        at; latest-only cannot answer 'what did this look like before
+        the price change', which is the reason to keep a series."""
+        day = timezone.now().strftime("%Y-%m-%d")
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self._archive(tmp), [f"ai-cost-{day}.html", "latest.html"])
+            self.assertEqual(
+                (Path(tmp) / f"ai-cost-{day}.html").read_text(encoding="utf-8"),
+                (Path(tmp) / "latest.html").read_text(encoding="utf-8"),
+            )
+
+    def test_the_date_is_the_last_day_covered_not_the_day_it_ran(self):
+        """The monthly job fires on the 1st. If the filename used the
+        run date, every monthly file would be stamped with a month it
+        contains no data from."""
+        with tempfile.TemporaryDirectory() as tmp:
+            names = self._archive(tmp, "--last-month")
+            dated = next(n for n in names if n != "latest.html")
+            last_day_of_last_month = (
+                timezone.now().replace(day=1) - timedelta(days=1)
+            ).strftime("%Y-%m-%d")
+            self.assertEqual(dated, f"ai-cost-{last_day_of_last_month}.html")
+
+    def test_creates_the_directory_when_it_does_not_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = str(Path(tmp) / "does-not-exist-yet")
+            self.assertEqual(len(self._archive(target)), 2)
+
+    def test_a_second_run_on_the_same_day_overwrites_rather_than_duplicates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._archive(tmp)
+            self.assertEqual(len(self._archive(tmp)), 2, "one file per day, not one per run")
+
+    def test_an_unwritable_archive_fails_the_job(self):
+        """The archive is the ONLY thing the nightly job produces. A run
+        that renders nothing and still exits 0 is indistinguishable from
+        a quiet day — so this must not be best-effort."""
+        with self.assertRaises(CommandError):
+            call_command(
+                "ai_cost_dashboard",
+                "--days",
+                "1",
+                "--archive-dir",
+                "/proc/cannot-create-this",
+                stderr=StringIO(),
+            )
+
+    def test_archive_dir_wins_over_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "should-not-exist.html"
+            call_command(
+                "ai_cost_dashboard",
+                "--days",
+                "1",
+                "-o",
+                str(out),
+                "--archive-dir",
+                str(Path(tmp) / "archive"),
+                stderr=StringIO(),
+            )
+            self.assertFalse(out.exists())

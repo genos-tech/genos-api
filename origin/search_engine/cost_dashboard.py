@@ -53,26 +53,53 @@ _RECENT_REQUESTS = 25
 # --------------------------------------------------------------------- #
 
 
-def collect(*, days: int = 7, month: bool = False, by_user: bool = False) -> dict:
-    """Aggregate the ledger for a window. Returns plain data, no HTML."""
-    now = timezone.now()
+def _window(now, *, days: int, month: bool, last_month: bool):
+    """`(cutoff, until, label, span_days)` for one of the four windows.
+
+    `until` is EXCLUSIVE. Only `--last-month` closes a window in the
+    past; everything else runs up to `now`.
+
+    Why a previous-CALENDAR-month option exists at all rather than
+    "--days 31" on the 1st: provider invoices are calendar months, and
+    reconciliation against them is the ledger's stated purpose. A window
+    that is nearly a month cannot be reconciled against a bill that is
+    exactly one.
+    """
+    if last_month:
+        this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        # Any day inside the previous month, normalised back to its 1st.
+        cutoff = (this_month - timedelta(days=1)).replace(day=1)
+        return cutoff, this_month, f"{cutoff:%B %Y} (complete)", max((this_month - cutoff).days, 1)
     if month:
         cutoff = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        window = f"month to date ({cutoff:%Y-%m-%d} →)"
-        window_days = max((now - cutoff).days, 1)
-    else:
-        days = max(1, int(days))
-        cutoff = now - timedelta(days=days)
-        window = f"last {days} day(s)"
-        window_days = days
+        return cutoff, now, f"month to date ({cutoff:%Y-%m-%d} →)", max((now - cutoff).days, 1)
+    days = max(1, int(days))
+    return now - timedelta(days=days), now, f"last {days} day(s)", days
 
-    events = AiSpendEvent.objects.filter(created_at__gte=cutoff)
-    requests = AiRequestCost.objects.filter(started_at__gte=cutoff)
+
+def collect(
+    *,
+    days: int = 7,
+    month: bool = False,
+    last_month: bool = False,
+    by_user: bool = False,
+) -> dict:
+    """Aggregate the ledger for a window. Returns plain data, no HTML."""
+    now = timezone.now()
+    cutoff, until, window, window_days = _window(now, days=days, month=month,
+                                                 last_month=last_month)
+
+    # `until` is exclusive and is `now` for every window except
+    # --last-month, which is the only CLOSED one. Without it a report of
+    # June, generated in July, would quietly include July.
+    events = AiSpendEvent.objects.filter(created_at__gte=cutoff, created_at__lt=until)
+    requests = AiRequestCost.objects.filter(started_at__gte=cutoff, started_at__lt=until)
 
     data: dict = {
         "window": window,
         "window_days": window_days,
         "cutoff": cutoff,
+        "until": until,
         "generated_at": now,
         "meter_enabled": bool(settings.SEARCH_ENGINE.get("AI_COST_METER", False)),
         "budget_jpy_month": float(settings.SEARCH_ENGINE.get("AI_MONTHLY_BUDGET_JPY", 0) or 0),
@@ -82,7 +109,7 @@ def collect(*, days: int = 7, month: bool = False, by_user: bool = False) -> dic
         return data
 
     data["totals"] = _totals(events, requests)
-    data["daily"] = _daily(events, cutoff, now)
+    data["daily"] = _daily(events, cutoff, until)
     data["providers"] = _group(events, "provider", with_usd=True)
     data["models"] = _models(events)
     data["purposes"] = _group(events, "purpose")
@@ -131,11 +158,15 @@ def _totals(events, requests) -> dict:
     }
 
 
-def _daily(events, cutoff, now) -> list[dict]:
+def _daily(events, cutoff, until) -> list[dict]:
     """One row per calendar day, INCLUDING days with no spend.
 
     A gap has to render as a zero bar rather than a missing column, or a
     quiet day and a broken meter look identical.
+
+    Bounded by `until`, not by today: a closed window drawn up to the
+    current date would trail a run of empty bars that look like the
+    meter stopped.
     """
     rows = {
         r["day"]: r
@@ -145,7 +176,10 @@ def _daily(events, cutoff, now) -> list[dict]:
     }
     out: list[dict] = []
     day = cutoff.date()
-    while day <= now.date():
+    # `until` is exclusive, so a window ending exactly at midnight must
+    # not draw that day.
+    last = (until - timedelta(microseconds=1)).date()
+    while day <= last:
         r = rows.get(day)
         out.append(
             {
