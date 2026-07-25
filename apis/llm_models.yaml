@@ -272,3 +272,93 @@ tier_caps:
     max: { light: 500, middle: 50, highend: 10 }
     # Contact-sales tier: no per-model caps at all.
     enterprise: unlimited
+
+# =====================================================================
+#  Effort levels
+# =====================================================================
+#
+#  Users pick a PROVIDER + EFFORT (low / medium / high) — never a model.
+#  Each effort maps to:
+#    * a synthesis model: the provider's list above, indexed by `rung`
+#      (0 = cheapest; clamped to the last entry for a shorter list), and
+#    * the loop parameters below.
+#
+#  `rung` is a LIST INDEX, deliberately not `class`: gemini's three
+#  rungs are class light/light/middle, so a class-keyed mapping has no
+#  "high" for gemini at all. The price-order assert at boot is what
+#  keeps list position meaningful as a quality ladder.
+#
+#  ── THE MEDIUM INVARIANT ─────────────────────────────────────────────
+#  `medium` must be byte-identical to today's default experience:
+#  rung 1 == the GEMINI_MODEL server default, and every parameter equal
+#  to the corresponding env default (AGENT_MAX_STEPS,
+#  RAG_REWRITE_NUM_VARIANTS, RAG_USE_RERANKER, RAG_CRITIQUE_MAX_STEPS,
+#  no output cap). That is the proof that flipping AGENT_EFFORT_LEVELS
+#  changes nothing for users who never touched the picker — pinned by
+#  test_llm_catalog_yaml's medium-invariant test, which fails CI if
+#  either side moves. Tune low/high freely; touching medium means you
+#  are changing the DEFAULT experience and must re-run the eval gates.
+#
+#  Fields (all required):
+#    rung               int, 0-2 — synthesis model index (clamped)
+#    max_steps          int — agent loop ceiling (AGENT_MAX_STEPS analog)
+#    rewrite_variants   int — query-rewrite variants per search; 0 means
+#                       the rewrite LLM call is SKIPPED entirely
+#    use_reranker       bool — LLM rerank pass on/off (the reranker's
+#                       MODEL is pinned by `subprocesses` below, so
+#                       leaving this on at low effort is still fast)
+#    critique_steps     int — extra loop budget for the self-critique
+#                       pass; only consulted when RAG_AGENT_SELF_CRITIQUE
+#                       is on (off by default)
+#    max_output_tokens  int or null — per-call output cap; null = the
+#                       provider's existing default behavior (claude/
+#                       openai env caps, gemini uncapped)
+#
+#  rung, max_steps and rewrite_variants must be NON-DECREASING
+#  low -> medium -> high (boot-asserted): a mis-edit must never make
+#  "high" do less work than "low".
+# =====================================================================
+
+efforts:
+    low:
+        rung: 0
+        max_steps: 6
+        rewrite_variants: 1
+        use_reranker: true
+        critique_steps: 1
+        max_output_tokens: 4096
+    medium:
+        rung: 1
+        max_steps: 10
+        rewrite_variants: 3
+        use_reranker: true
+        critique_steps: 2
+        max_output_tokens: null
+    high:
+        rung: 2
+        max_steps: 10
+        rewrite_variants: 3
+        use_reranker: true
+        critique_steps: 2
+        max_output_tokens: null
+
+# ---------------------------------------------------------------------
+#  Sub-process model pins — rung INDICES into the user's provider list
+#  (indices, not model ids: ids rot on every catalog swap; an index
+#  survives them). Same-provider by construction, so no cross-provider
+#  adapter hazard.
+#
+#  These are the calls that today silently INHERIT the user's synthesis
+#  model — an Opus user pays Opus rates for JSON-array reranking, once
+#  per search. Rung 0 is the documented intent (LLM_SPEND_MAP.md §7
+#  levers 2-3: light model ~3x faster at equivalent rerank quality).
+#
+#  Operator escape hatch: RAG_REWRITE_MODEL / RAG_RERANKER_MODEL env
+#  vars still WIN over these pins when set (per-subprocess rollback
+#  without a deploy).
+# ---------------------------------------------------------------------
+
+subprocesses:
+    rewrite: 0
+    rerank: 0
+    summaries: 0
