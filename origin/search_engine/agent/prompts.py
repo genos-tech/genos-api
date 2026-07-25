@@ -1,7 +1,8 @@
 """System prompt for the agent loop.
 
-The registry now has ~46 tools across several phases. Rather than
-enumerate every tool here, the prompt gives the model:
+The registry holds 57 tools (the generated directory below never lets
+that count drift again). Rather than enumerate every tool here, the
+prompt gives the model:
   1. A "TOOL SELECTION CHEAT-SHEET" that maps common user phrasings
      to the right tool family — this is the load-bearing section for
      routing accuracy, especially the me-scoped ("me/my/I") tools the
@@ -12,6 +13,19 @@ enumerate every tool here, the prompt gives the model:
 The model still reads each tool's own `description` for parameters
 and edge cases — descriptions are the source of truth; this prompt
 just biases which tool gets picked first.
+
+Two sections are REGISTRY-GENERATED under `AGENT_CHEATSHEET_FROM_REGISTRY`
+(default off; flag off serves the legacy string byte-identically):
+
+  * the WRITE-tools name list — previously a hand-maintained duplicate
+    of the `requires_approval` flags, and it HAD drifted (the two todo
+    write tools were missing from it);
+  * a per-category TOOL DIRECTORY built from `tools/categories.py`,
+    with the true count.
+
+The hand-written phrasing→tool cheat-sheet stays hand-written on
+purpose: it is the load-bearing routing text, and generating it would
+regress exactly the judgment it encodes.
 
 Phase 3.2 also adds the self-critique system + template used by the
 optional `_drive_loop_with_critique` wrapper (gated on
@@ -370,6 +384,108 @@ Formatting:
           **QRD-8: Define Q3 OKRs draft** [task:8], due 2026-06-20
           **QRD-6: Roadmap proposal v1** [task:6], due 2026-06-16
 """
+
+
+# --------------------------------------------------------------------------- #
+# Registry-generated prompt sections (AGENT_CHEATSHEET_FROM_REGISTRY)         #
+# --------------------------------------------------------------------------- #
+# Two hand-maintained pieces of the prompt above are derivable from code
+# and had ALREADY drifted when this landed: the WRITE-tools name list
+# was missing both todo write tools, and the "~46 tools" count was off
+# by eleven. The builders below derive them from the registry at import
+# time; `agent_system_prompt()` is the flag-gated selector the
+# controller calls (flag off → the legacy constant, byte-identical).
+#
+# Import-time generation is safe: the registry is a module-level
+# constant populated at tools/__init__ import, and the strings are
+# process-stable — which also keeps the prompt inside the cacheable
+# prefix (it must not vary per request).
+
+# The exact hand-written names blob inside AGENT_SYSTEM_PROMPT — the
+# replacement anchor for the generated write-tools list. If someone
+# edits that blob by hand, `_build_registry_prompt` raises at import
+# (see below) rather than silently serving a half-generated prompt.
+_WRITE_TOOLS_LEGACY_BLOCK = """\
+  create_task, create_task_plan, update_task, update_tasks_bulk,
+  add_comment, create_note, update_note, assign_task,
+  create_calendar_event, update_calendar_event, delete_calendar_event.
+"""
+
+
+def _generated_write_tools_block() -> str:
+    """The requires_approval names, wrapped like the hand-written blob."""
+    from origin.search_engine.agent.tools import REGISTRY  # noqa: PLC0415
+
+    names = sorted(t.name for t in REGISTRY.values() if t.requires_approval)
+    lines: list[str] = []
+    line = " "
+    for name in names:
+        candidate = f"{line} {name},"
+        if len(candidate) > 72:
+            lines.append(line)
+            line = f"  {name},"
+        else:
+            line = candidate
+    lines.append(line.rstrip(",") + ".")
+    return "\n".join(lines) + "\n"
+
+
+def _generated_tool_directory() -> str:
+    """A compact per-category directory with the TRUE tool count."""
+    from origin.search_engine.agent.tools import REGISTRY  # noqa: PLC0415
+    from origin.search_engine.agent.tools.categories import (  # noqa: PLC0415
+        CATEGORIES,
+        TOOL_CATEGORY,
+    )
+
+    by_category: dict[str, list[str]] = {c: [] for c in CATEGORIES}
+    for name in REGISTRY:
+        by_category[TOOL_CATEGORY[name]].append(name)
+    lines = [
+        "",
+        f"TOOL DIRECTORY — all {len(REGISTRY)} tools by category (parameters",
+        "and edge cases live in each tool's own description):",
+        "",
+    ]
+    for category in CATEGORIES:
+        names = sorted(by_category[category])
+        if names:
+            lines.append(f"  {category}: {', '.join(names)}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _build_registry_prompt() -> str:
+    if _WRITE_TOOLS_LEGACY_BLOCK not in AGENT_SYSTEM_PROMPT:
+        raise RuntimeError(
+            "prompts.py: the hand-written WRITE-tools blob no longer matches "
+            "_WRITE_TOOLS_LEGACY_BLOCK — update the anchor (or drop the legacy "
+            "constant entirely) instead of letting the generated prompt "
+            "silently keep a stale name list."
+        )
+    return (
+        AGENT_SYSTEM_PROMPT.replace(_WRITE_TOOLS_LEGACY_BLOCK, _generated_write_tools_block())
+        + _generated_tool_directory()
+    )
+
+
+AGENT_SYSTEM_PROMPT_REGISTRY = _build_registry_prompt()
+
+
+def agent_system_prompt() -> str:
+    """The active system prompt — flag-gated, model-visible.
+
+    `AGENT_CHEATSHEET_FROM_REGISTRY` off (default) serves the legacy
+    hand-written constant byte-identically; on serves the version with
+    the generated write-tools list + tool directory. The flip changes
+    the prompt the model reads → gated on cases.yaml +
+    agent-trajectory-diff, like any model-visible change.
+    """
+    from django.conf import settings  # noqa: PLC0415 — keep module import Django-free
+
+    if settings.SEARCH_ENGINE.get("AGENT_CHEATSHEET_FROM_REGISTRY"):
+        return AGENT_SYSTEM_PROMPT_REGISTRY
+    return AGENT_SYSTEM_PROMPT
 
 
 # --------------------------------------------------------------------------- #
