@@ -23,11 +23,13 @@ No ACL required — web search results are public by definition.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from django.conf import settings
 
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.llm import spend
 from origin.search_engine.quota import (
     WEB_SEARCH_KEY,
     check_remaining,
@@ -36,6 +38,11 @@ from origin.search_engine.quota import (
 
 _MAX_CONTENT_CHARS = 600
 _MAX_LIMIT = 10
+
+# Tavily bills `search_depth="advanced"` at 2 credits per call. This is
+# the LEDGER's unit, not the user's: `web_search_daily` still counts one
+# search per search. Change this only if the search_depth above changes.
+_TAVILY_CREDITS_PER_CALL = 2
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG001
@@ -79,16 +86,42 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
         )
 
     client = TavilyClient(api_key=api_key)
+    started = time.monotonic()
     try:
         resp = client.search(query, max_results=limit, search_depth="advanced")
     except Exception as e:  # noqa: BLE001
+        # Record the failed attempt before surfacing it. Tavily does not
+        # bill a failed search, so units are 0 — but the row is what
+        # makes "how much spend came from failures" answerable at all.
+        spend.record_units(
+            unit_kind=spend.UNIT_SEARCH,
+            units=0,
+            provider="tavily",
+            latency_ms=int((time.monotonic() - started) * 1000),
+            error=f"{type(e).__name__}: {e}"[:200],
+        )
         raise ToolError(f"Web search failed: {e}")
 
     # Successful Tavily call → charge one unit against the user's daily
     # web search quota. The increment is best-effort (logs + swallows
     # exceptions inside increment_usage), so a counter outage never
     # blocks the agent from returning results.
+    #
+    # ONE quota unit but TWO billed credits, and that gap is deliberate.
+    # `web_search_daily` is a product promise — "N web searches a day" —
+    # and quietly making each search cost two of them would halve every
+    # tier's allowance to fix an accounting problem. The real bill
+    # belongs in the ledger instead: `search_depth="advanced"` costs
+    # Tavily 2 credits per call (see the module docstring), so the
+    # ledger records 2 while the user's counter moves by 1.
     increment_usage(ctx.user_id, WEB_SEARCH_KEY)
+    spend.record_units(
+        unit_kind=spend.UNIT_SEARCH,
+        units=_TAVILY_CREDITS_PER_CALL,
+        provider="tavily",
+        model="advanced",
+        latency_ms=int((time.monotonic() - started) * 1000),
+    )
 
     items = [
         {
