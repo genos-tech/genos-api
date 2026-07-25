@@ -29,6 +29,15 @@ Every new-tool PR ships with:
   a new write *verb* must be added to `WRITE_PREFIXES` in
   `origin/tests/test_agent_tool_registry.py` (that test tells you when).
 
+- [ ] **Category** — add the tool's name to `TOOL_CATEGORY` in
+  [`categories.py`](categories.py). The registry test fails with the
+  missing name spelled out until you do. Categories drive the
+  registry-generated prompt directory and the peripheral-family
+  subsetting map — pick the existing category that matches the tool's
+  *purpose* (add a new one only with a real new domain, and note that
+  `PERIPHERAL_FAMILIES` membership decides whether `RAG_TOOL_SUBSETTING`
+  may drop it).
+
 - [ ] **Quota / tier accounting** — external or per-call-expensive tools
   (network APIs, LLM-heavy work) are wired into the tier quotas
   (`SEARCH_ENGINE["TIER_QUOTAS"]` in `apis/settings.py`), not left
@@ -41,7 +50,8 @@ Every new-tool PR ships with:
   `spotlight/SPOTLIGHT_EVALS_CI.md` §6.1).
 
 - [ ] **Description says *when*, not just what** — the model chooses among
-  ~50 tools by description alone (see the `Tool.description` docstring in
+  all 57 registered tools by description alone (count enforced honest by
+  the generated TOOL DIRECTORY in `prompts.py`) (see the `Tool.description` docstring in
   [`base.py`](base.py)).
 
 Rollout / rollback: a risky tool can ship dark and be switched off without

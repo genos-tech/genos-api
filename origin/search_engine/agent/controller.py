@@ -48,9 +48,10 @@ from origin.search_engine.agent.prompts import (
     AGENT_CRITIQUE_RETRIEVAL_DIRECTIVE,
     AGENT_SELF_CRITIQUE_PROMPT_TEMPLATE,
     AGENT_SELF_CRITIQUE_SYSTEM,
-    AGENT_SYSTEM_PROMPT,
+    agent_system_prompt,
 )
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError
+from origin.search_engine.agent.tools.categories import PERIPHERAL_FAMILIES, TOOL_CATEGORY
 from origin.search_engine.llm import (
     AgentMessage,
     CallUsage,
@@ -221,16 +222,17 @@ _PERIPHERAL_FAMILY_KEYWORDS: dict[str, "re.Pattern[str]"] = {
 
 def _tool_family(name: str) -> str | None:
     """Map a tool name to its peripheral family, or None for a core tool
-    (core tools are never subset out)."""
-    if name == "fetch_pr" or name.startswith("list_pr_"):
-        return "pr"
-    if "calendar" in name:
-        return "calendar"
-    if "todo" in name:
-        return "todo"
-    if name.startswith("get_my_") or name.startswith("list_my_"):
-        return "me"
-    return None
+    (core tools are never subset out).
+
+    Reads the declared `TOOL_CATEGORY` map rather than the old
+    name-substring heuristics — a new tool now gets its family from the
+    reviewed taxonomy (which the registry test forces to be complete)
+    instead of from whatever its name happens to contain. Same four
+    families as before; parity with the old heuristic is pinned by
+    `test_agent_tool_categories`.
+    """
+    category = TOOL_CATEGORY.get(name)
+    return category if category in PERIPHERAL_FAMILIES else None
 
 
 def _irrelevant_tool_families(query: str) -> set[str]:
@@ -1794,9 +1796,13 @@ def _drive_loop(
     # behavior, byte-identical to the pre-B3 loop.
     planning_model = _resolve_planning_override()
     tools = _build_tool_declarations(disabled_tools)
-    system_instruction = AGENT_SYSTEM_PROMPT
+    # Flag-gated prompt variant (AGENT_CHEATSHEET_FROM_REGISTRY) —
+    # resolved per run, stable within it (and across runs for a given
+    # flag state, keeping the cacheable prefix stable).
+    base_prompt = agent_system_prompt()
+    system_instruction = base_prompt
     if system_extra:
-        system_instruction = f"{AGENT_SYSTEM_PROMPT}\n\n{system_extra}"
+        system_instruction = f"{base_prompt}\n\n{system_extra}"
 
     def _collect_and_record(
         step_index: int,

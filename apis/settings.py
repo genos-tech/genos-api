@@ -1239,6 +1239,15 @@ SEARCH_ENGINE["AGENT_EFFORT_LEVELS"] = (
 # bill ~0.1x and prefill faster on steps 2+ of every ask. Default ON:
 # caching cannot change sampled output, only cost/latency; this env var
 # is the kill-switch if the backend ever rejects the parameter.
+# Registry-generated system-prompt sections (write-tool list + tool
+# directory) instead of the hand-maintained copies that had drifted.
+# Model-visible (the prompt string changes), so dark-shipped OFF and
+# flipped only after cases.yaml + agent-trajectory-diff pass — see
+# origin/search_engine/agent/prompts.py `agent_system_prompt()`.
+SEARCH_ENGINE["AGENT_CHEATSHEET_FROM_REGISTRY"] = (
+    os.environ.get("AGENT_CHEATSHEET_FROM_REGISTRY", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )
