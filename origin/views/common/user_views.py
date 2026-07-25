@@ -270,9 +270,13 @@ class LlmModelPreferenceView(AuthenticatedAPIView):
         model = model.strip()
         # Reject obviously wrong provider values up front. Specific
         # model strings are NOT validated here — see docstring.
-        if provider and provider not in ("gemini", "claude"):
+        # Keep this in sync with `resolve_user_choice`'s allowlist in
+        # llm/choice.py and with MODEL_CATALOG's providers — the picker
+        # is fed by the catalog, so a provider missing HERE renders a
+        # selectable model that 400s on save.
+        if provider and provider not in ("gemini", "claude", "openai"):
             return Response(
-                {"error": "provider must be 'gemini', 'claude', or empty."},
+                {"error": "provider must be 'gemini', 'claude', 'openai', or empty."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         request.user.preferred_llm_provider = provider

@@ -31,7 +31,11 @@ Shape differences vs. the other two adapters:
 
 4. **JSON Schema types**: tool definitions use Gemini's UPPERCASE form
    ("OBJECT", "STRING", ...). OpenAI accepts only standard lowercase
-   JSON Schema, so we reuse `claude_client._normalize_schema`.
+   JSON Schema, so we share `llm/schema.normalize_schema` with the
+   Claude adapter. It lives in its own module rather than in
+   `claude_client` so that selecting GPT doesn't drag in `anthropic` —
+   `llm/__init__.py` imports adapters lazily precisely so a missing SDK
+   for an unused provider can't break the app.
 """
 
 from __future__ import annotations
@@ -43,7 +47,7 @@ from typing import Any, Iterator
 from django.conf import settings
 from openai import OpenAI
 
-from origin.search_engine.llm.claude_client import _normalize_schema
+from origin.search_engine.llm.schema import normalize_schema
 from origin.search_engine.llm.types import (
     AgentMessage,
     CallUsage,
@@ -178,7 +182,7 @@ class OpenAIClient:
                 "function": {
                     "name": t.name,
                     "description": t.description,
-                    "parameters": _normalize_schema(t.parameters_schema),
+                    "parameters": normalize_schema(t.parameters_schema),
                 },
             }
             for t in tools

@@ -170,7 +170,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         max_length=32,
         blank=True,
         default="",
-        help_text="'gemini', 'claude', or '' to use the server default.",
+        help_text="'gemini', 'claude', 'openai', or '' to use the server default.",
     )
     preferred_llm_model = models.CharField(
         max_length=128,

@@ -72,10 +72,17 @@ def cheaper_models_same_provider(chosen: LlmChoice) -> list[str]:
     """Same-provider catalog models cheaper than `chosen`, NEAREST-first.
 
     Cost order is `MODEL_CATALOG` order: the catalog is curated
-    cheap→expensive within each provider (flash→pro, haiku→sonnet→opus),
-    a contract already relied on by the frontend picker and the
-    `catalog[0]` stale-preference fallback. So the models *before*
-    `chosen` in its provider's slice are exactly the cheaper ones.
+    cheap→expensive within each provider (flash→pro, haiku→sonnet→opus,
+    luna→terra→sol), a contract already relied on by the frontend picker
+    and the `catalog[0]` stale-preference fallback. So the models
+    *before* `chosen` in its provider's slice are never more expensive.
+
+    ⚠️ Non-decreasing, NOT strictly increasing: the slice may contain
+    EQUAL-cost rungs. `claude-opus-4-7` and `claude-opus-4-8` are the
+    same price per ask — 4-8 is a capability rung, not a cost one — so
+    stepping down from 4-8 lands on 4-7 at the same cost, freeing quota
+    without saving money. A step down preserves cost order; it does not
+    guarantee a cheaper ask.
 
     Returned nearest-first (the rung just below `chosen` first), so a
     quota-fallback caller steps down one rung at a time and preserves as

@@ -20,8 +20,8 @@ Two notable shape differences vs. Gemini:
 
 3. **JSON Schema types**: the existing tool definitions use Gemini's
    UPPERCASE form ("OBJECT", "STRING", ...). Anthropic accepts only
-   standard lowercase JSON Schema. We normalize in `_normalize_schema`
-   below — the tool definitions stay unchanged.
+   standard lowercase JSON Schema. We normalize via
+   `llm/schema.normalize_schema` — the tool definitions stay unchanged.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ import anthropic
 from anthropic.lib.streaming import TextEvent
 from django.conf import settings
 
+from origin.search_engine.llm.schema import normalize_schema
 from origin.search_engine.llm.types import (
     AgentMessage,
     CallUsage,
@@ -158,7 +159,7 @@ class ClaudeClient:
             {
                 "name": t.name,
                 "description": t.description,
-                "input_schema": _normalize_schema(t.parameters_schema),
+                "input_schema": normalize_schema(t.parameters_schema),
             }
             for t in tools
         ]
@@ -308,32 +309,4 @@ def _messages_to_anthropic(messages: list[AgentMessage]) -> list[dict[str, Any]]
     return out
 
 
-# JSON Schema type names → lowercase. Gemini's tool schemas use the
-# uppercase protobuf-derived form ("OBJECT", "STRING", "ARRAY",
-# "INTEGER", ...). Anthropic only accepts standard JSON Schema, which
-# is lowercase. We rewrite the schema recursively so tool definitions
-# stay unchanged.
-_TYPE_MAP = {
-    "OBJECT": "object",
-    "STRING": "string",
-    "INTEGER": "integer",
-    "NUMBER": "number",
-    "BOOLEAN": "boolean",
-    "ARRAY": "array",
-    "NULL": "null",
-}
 
-
-def _normalize_schema(schema: Any) -> Any:
-    """Recursively lowercase any uppercase JSON-Schema `type` values."""
-    if isinstance(schema, dict):
-        out: dict[str, Any] = {}
-        for k, v in schema.items():
-            if k == "type" and isinstance(v, str) and v in _TYPE_MAP:
-                out[k] = _TYPE_MAP[v]
-            else:
-                out[k] = _normalize_schema(v)
-        return out
-    if isinstance(schema, list):
-        return [_normalize_schema(x) for x in schema]
-    return schema
