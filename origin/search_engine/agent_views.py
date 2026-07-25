@@ -34,6 +34,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import threading
 from contextlib import contextmanager
 from datetime import timedelta
 from typing import Any, Callable, Iterator
@@ -778,13 +779,14 @@ class AgentAskView(AuthenticatedAPIView):
         # `chosen` is captured in the worker closure so the contextvar
         # is set inside the controller's threading.Thread — a bare
         # thread does NOT inherit contextvars from its parent.
-        def worker(emit):
+        def worker(emit, cancel_event):
             token = set_llm_choice(chosen)
             try:
                 return run_agent(
                     query,
                     ctx,
                     emit,
+                    cancel_event=cancel_event,
                     run_id=run.run_id if run else None,
                     prior_turns=prior_turns,
                     prior_summary=prior_summary,
@@ -909,10 +911,10 @@ class AgentDecideView(AuthenticatedAPIView):
         # behavior — the user's *current* preference is what counts.
         resumed_choice = _resolve_choice_for(request.user)
 
-        def worker(emit):
+        def worker(emit, cancel_event):
             token = set_llm_choice(resumed_choice)
             try:
-                return resume_agent(run, decision, ctx, emit)
+                return resume_agent(run, decision, ctx, emit, cancel_event=cancel_event)
             finally:
                 reset_llm_choice(token)
 
@@ -1016,7 +1018,7 @@ def _push_run_complete(run, *, failed: bool) -> None:
 
 
 def _stream_ndjson(
-    worker_target: Callable[[Callable[[dict], None]], dict | None],
+    worker_target: Callable[[Callable[[dict], None], threading.Event], dict | None],
     *,
     run: AgentRun | None = None,
     rejected: bool = False,
@@ -1028,7 +1030,7 @@ def _stream_ndjson(
 ) -> Iterator[bytes]:
     """Bridge a controller callback into chunked NDJSON.
 
-    `worker_target(emit)` is the controller function to run on a
+    `worker_target(emit, cancel_event)` is the controller function to run on a
     background thread. It must call `emit(event_dict)` for each
     NDJSON line it wants to send and return either `None` (clean
     finish) or a `{"paused": True, "approval_token": UUID, ...}`
@@ -1053,15 +1055,20 @@ def _stream_ndjson(
     its `answer_delta` events onto the run's existing `final_answer_text`
     rather than overwriting (the first `/ask/` call already wrote some
     text for the paused step).
+
+    `worker_target` receives a `threading.Event` alongside `emit`. It is
+    set when the client disconnects; the controller checks it between
+    loop steps and stops. See the CANCELLATION note on the yield loop
+    below for why this is the only way to stop the spend.
     """
     import queue  # noqa: PLC0415
-    import threading  # noqa: PLC0415
 
     def line(obj: dict) -> bytes:
         return (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
 
     event_q: "queue.Queue[dict | None]" = queue.Queue()
     pause_descriptor: dict | None = None
+    cancel_event = threading.Event()
 
     def emit(event: dict) -> None:
         event_q.put(event)
@@ -1069,7 +1076,7 @@ def _stream_ndjson(
     def worker():
         nonlocal pause_descriptor
         try:
-            pause_descriptor = worker_target(emit)
+            pause_descriptor = worker_target(emit, cancel_event)
         except Exception as e:  # noqa: BLE001
             log.exception("Agent worker crashed")
             event_q.put({"type": "error", "message": f"Agent crashed: {e}"})
@@ -1101,124 +1108,176 @@ def _stream_ndjson(
             increment_usage(user_id_for_quota, key)
         quota_charged = True
 
-    while True:
-        event = event_q.get()
-        if event is None:
-            break
-        event_type = event.get("type")
-        if event_type == "answer_delta":
-            text = event.get("text") or ""
-            if text:
-                answer_parts.append(text)
-                _charge_once()
-        elif event_type in ("tool_call_start", "tool_call_pending_approval"):
-            _charge_once()
-        elif event_type == "done":
-            final_status = "done"
-            # Inject session_id so the frontend can thread the next ask.
-            if session_id is not None:
-                event = {**event, "session_id": str(session_id)}
-            # Inject run_id so the frontend can attach 👍/👎 feedback to
-            # this turn (F1 — SPOTLIGHT_QUALITY_ARCHITECTURE.md §Q0). The
-            # run row is persisted with this id; the feedback endpoint keys
-            # on it. (The approval path already exposes run_id via the
-            # pending-approval event.)
-            if run is not None:
-                event = {**event, "run_id": str(run.run_id)}
-            # Surface a quota-driven model downgrade so the client can
-            # note it. Rides `done` (not a new event type) to stay within
-            # the frozen NDJSON event vocabulary — see
-            # test_agent_event_contract. Write-tool asks pause before any
-            # `done`, so those runs won't carry the note even though the
-            # swap + charge already happened correctly.
-            if fallback_note is not None:
-                event = {**event, "model_fallback": fallback_note}
-        elif event_type == "error":
-            msg = event.get("message") or ""
-            final_error = msg
-            final_status = "step_cap" if "did not reach a final answer" in msg else "error"
-        yield line(event)
+    def _close_run(was_cancelled: bool) -> None:
+        """Write the run's terminal state. Runs from the `finally` below,
+        so it fires on a clean finish AND on a disconnect — the case the
+        old post-loop code silently skipped."""
+        # `final_status` is assigned below (the rejected/error default),
+        # which without this would make it local to THIS function and
+        # turn the read above it into an UnboundLocalError — swallowed
+        # by the except at the bottom, leaving every run stuck at
+        # "running". That is not hypothetical: it is what this code did
+        # until the clean-finish test caught it.
+        nonlocal final_status
+        if run is None:
+            return
+        try:
+            if was_cancelled:
+                # The client is gone. This is a real terminal state, not
+                # an error: nothing failed, the reader left. Recorded as
+                # its own status so cost-per-completed-run can exclude it
+                # rather than counting an abandoned run as a success.
+                run.status = "cancelled"
+                if answer_parts:
+                    partial = "".join(answer_parts)
+                    run.final_answer_text = (
+                        (run.final_answer_text or "") + partial
+                        if append_to_existing_answer
+                        else partial
+                    )
+                run.finished_at = timezone.now()
+                run.save(update_fields=["status", "final_answer_text", "finished_at"])
+                return
 
-    # Decide the row's final state. Pause beats every other outcome —
-    # if the controller paused, we don't care if it also emitted some
-    # text first; the run is "awaiting_approval" until /decide/ fires.
-    if run is None:
-        return
+            if pause_descriptor and pause_descriptor.get("paused"):
+                # Pause beats every other non-cancelled outcome — if the
+                # controller paused, we don't care that it also emitted some
+                # text first; the run is "awaiting_approval" until /decide/.
+                run.status = "awaiting_approval"
+                run.pending_approval_token = pause_descriptor["approval_token"]
+                if answer_parts:
+                    if append_to_existing_answer:
+                        run.final_answer_text = (run.final_answer_text or "") + "".join(answer_parts)
+                    else:
+                        run.final_answer_text = "".join(answer_parts)
+                run.save(
+                    update_fields=[
+                        "status",
+                        "pending_approval_token",
+                        "final_answer_text",
+                    ]
+                )
+                return
 
-    try:
-        if pause_descriptor and pause_descriptor.get("paused"):
-            run.status = "awaiting_approval"
-            run.pending_approval_token = pause_descriptor["approval_token"]
-            if answer_parts:
-                if append_to_existing_answer:
-                    run.final_answer_text = (run.final_answer_text or "") + "".join(answer_parts)
-                else:
-                    run.final_answer_text = "".join(answer_parts)
+            # Terminal close.
+            if final_status is None:
+                final_status = "rejected" if rejected else "error"
+            run.status = final_status
+            new_text = "".join(answer_parts)
+            if append_to_existing_answer and new_text:
+                run.final_answer_text = (run.final_answer_text or "") + new_text
+            elif new_text:
+                run.final_answer_text = new_text
+            run.error_message = final_error
+            run.finished_at = timezone.now()
             run.save(
                 update_fields=[
                     "status",
-                    "pending_approval_token",
                     "final_answer_text",
+                    "error_message",
+                    "finished_at",
                 ]
             )
-            return
 
-        # Terminal close.
-        if final_status is None:
-            final_status = "rejected" if rejected else "error"
-        run.status = final_status
-        new_text = "".join(answer_parts)
-        if append_to_existing_answer and new_text:
-            run.final_answer_text = (run.final_answer_text or "") + new_text
-        elif new_text:
-            run.final_answer_text = new_text
-        run.error_message = final_error
-        run.finished_at = timezone.now()
-        run.save(
-            update_fields=[
-                "status",
-                "final_answer_text",
-                "error_message",
-                "finished_at",
-            ]
-        )
+            # The ask survives its window being closed on every surface, so
+            # tell an away user the answer landed. No-ops for anyone with a
+            # visible tab (presence) or with the category switched off.
+            _push_run_complete(run, failed=(final_status != "done"))
 
-        # The ask survives its window being closed on every surface, so
-        # tell an away user the answer landed. No-ops for anyone with a
-        # visible tab (presence) or with the category switched off.
-        _push_run_complete(run, failed=(final_status != "done"))
+            # C1 near-real-time memory (§4.7): index this conversation into
+            # the per-user recall lane the moment it completes, so a fact
+            # from a run that ended seconds ago is already recallable in the
+            # next session. Runs AFTER the stream's last byte (this whole
+            # block executes post-yield), so its ~1 embed call adds zero
+            # user-visible latency — it only holds the worker briefly.
+            # Best-effort by design: a failure here must never mark the run
+            # failed, and the 10-minute incremental reindexer remains the
+            # backstop (hash-diff makes the overlap a no-op). A cancelled
+            # run returns above and is deliberately NOT indexed — an
+            # abandoned answer is not a conversation worth recalling.
+            if (
+                final_status == "done"
+                and run.final_answer_text
+                and settings.SEARCH_ENGINE.get("RAG_CONVERSATION_INDEX_ON_COMPLETE", True)
+            ):
+                try:
+                    from origin.search_engine.ingestion import (  # noqa: PLC0415 — lazy: heavy module
+                        ingest_conversation_run,
+                    )
 
-        # C1 near-real-time memory (§4.7): index this conversation into
-        # the per-user recall lane the moment it completes, so a fact
-        # from a run that ended seconds ago is already recallable in the
-        # next session. Runs AFTER the stream's last byte (this whole
-        # block executes post-yield), so its ~1 embed call adds zero
-        # user-visible latency — it only holds the worker briefly.
-        # Best-effort by design: a failure here must never mark the run
-        # failed, and the 10-minute incremental reindexer remains the
-        # backstop (hash-diff makes the overlap a no-op). Known gap,
-        # shared with the run-close code above: a client disconnect that
-        # kills the generator skips this block — the cron catches those.
-        if (
-            final_status == "done"
-            and run.final_answer_text
-            and settings.SEARCH_ENGINE.get("RAG_CONVERSATION_INDEX_ON_COMPLETE", True)
-        ):
-            try:
-                from origin.search_engine.ingestion import (  # noqa: PLC0415 — lazy: heavy module
-                    ingest_conversation_run,
-                )
+                    ingest_conversation_run(run)
+                except Exception:  # noqa: BLE001
+                    log.exception(
+                        "Post-completion conversation indexing failed for %s "
+                        "(the periodic reindex will pick it up)",
+                        run.run_id,
+                    )
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to close AgentRun %s", run.run_id)
 
-                ingest_conversation_run(run)
-            except Exception:  # noqa: BLE001
-                log.exception(
-                    "Post-completion conversation indexing failed for %s "
-                    "(the periodic reindex will pick it up)",
-                    run.run_id,
-                )
-    except Exception:  # noqa: BLE001
-        log.exception("Failed to close AgentRun %s", run.run_id)
 
+
+    # CANCELLATION. A client disconnect raises `GeneratorExit` AT the
+    # `yield` below — and `GeneratorExit` is a BaseException, so the old
+    # `except Exception` around the close block never saw it. The run row
+    # stayed "running" with finished_at NULL forever, nothing reaped it,
+    # and (the expensive part) the daemon worker thread kept calling the
+    # model to completion on a stream nobody was reading.
+    #
+    # Note what was NOT broken and is deliberately unchanged: `_charge_once`
+    # runs BEFORE the yield, so quota was already charged, and the worker
+    # writes its AgentLlmCall rows on its own thread either way. The
+    # damage was wasted spend plus a permanently poisoned denominator for
+    # every "cost per completed run" figure.
+    cancelled = False
+    try:
+        while True:
+            event = event_q.get()
+            if event is None:
+                break
+            event_type = event.get("type")
+            if event_type == "answer_delta":
+                text = event.get("text") or ""
+                if text:
+                    answer_parts.append(text)
+                    _charge_once()
+            elif event_type in ("tool_call_start", "tool_call_pending_approval"):
+                _charge_once()
+            elif event_type == "done":
+                final_status = "done"
+                # Inject session_id so the frontend can thread the next ask.
+                if session_id is not None:
+                    event = {**event, "session_id": str(session_id)}
+                # Inject run_id so the frontend can attach 👍/👎 feedback to
+                # this turn (F1 — SPOTLIGHT_QUALITY_ARCHITECTURE.md §Q0). The
+                # run row is persisted with this id; the feedback endpoint keys
+                # on it. (The approval path already exposes run_id via the
+                # pending-approval event.)
+                if run is not None:
+                    event = {**event, "run_id": str(run.run_id)}
+                # Surface a quota-driven model downgrade so the client can
+                # note it. Rides `done` (not a new event type) to stay within
+                # the frozen NDJSON event vocabulary — see
+                # test_agent_event_contract. Write-tool asks pause before any
+                # `done`, so those runs won't carry the note even though the
+                # swap + charge already happened correctly.
+                if fallback_note is not None:
+                    event = {**event, "model_fallback": fallback_note}
+            elif event_type == "error":
+                msg = event.get("message") or ""
+                final_error = msg
+                final_status = "step_cap" if "did not reach a final answer" in msg else "error"
+            yield line(event)
+    except BaseException:
+        # GeneratorExit (client gone) or a genuine fault. Either way the
+        # consumer is no longer reading, so tell the worker to stop at
+        # its next step boundary. Re-raised so Django still tears the
+        # response down normally; the `finally` below closes the row.
+        cancelled = True
+        cancel_event.set()
+        raise
+    finally:
+        _close_run(cancelled)
 
 # --------------------------------------------------------------------------- #
 # /thread-summary/ — generate or fetch a cached chat-thread summary           #

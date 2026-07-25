@@ -17,6 +17,7 @@ resolved mentions reach `run_agent` via system_extra/seed_sources
 resolved list is persisted on `AgentRun.mentions`.
 """
 
+import threading
 from datetime import date
 from unittest.mock import patch
 
@@ -487,7 +488,7 @@ class AskViewMentionTests(BaseAPITestCase):
         ):
             resp = self.client.post(ASK_URL, payload, format="json")
             if "worker" in captured:
-                captured["worker"](lambda event: None)
+                captured["worker"](lambda event: None, threading.Event())
         return resp, captured
 
     def _base_payload(self, **extra):

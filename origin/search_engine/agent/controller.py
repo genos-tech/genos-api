@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -1248,8 +1249,13 @@ def run_agent(
     seed_sources: list[dict[str, Any]] | None = None,
     trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
     session_id: str | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any] | None:
     """Drive the agent loop from a fresh user query.
+
+    `cancel_event`, when set by the caller mid-run, stops the loop
+    before its next model call (see `_drive_loop`). The streaming view
+    sets it when the client disconnects.
 
     `prior_turns` is an ordered list of (user_query, assistant_answer)
     pairs from earlier turns in the same session (Phase 8). When
@@ -1345,6 +1351,7 @@ def run_agent(
                 system_extra=system_extra,
                 trace_hook=trace_fn,
                 session_id=session_id,
+                cancel_event=cancel_event,
             )
         return _drive_loop(
             messages=messages,
@@ -1357,6 +1364,7 @@ def run_agent(
             system_extra=system_extra,
             trace_hook=trace_fn,
             session_id=session_id,
+            cancel_event=cancel_event,
         )
 
     # §4.1 abstention gate — only on a fresh workspace query. With
@@ -1378,6 +1386,8 @@ def resume_agent(
     decision: str,
     ctx: ToolContext,
     emit: Callable[[dict[str, Any]], None],
+    *,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any] | None:
     """Resume a paused agent run after the user has approved or rejected.
 
@@ -1583,6 +1593,7 @@ def resume_agent(
         starting_step=step_index + 1,
         seen_sources_by_id=resumed_sources,
         session_id=str(run.session_id) if run.session_id else None,
+        cancel_event=cancel_event,
     )
 
 
@@ -1750,6 +1761,7 @@ def _drive_loop(
     trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
     max_steps: int | None = None,
     session_id: str | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any] | None:
     """The core agent loop, shared by `run_agent` and `resume_agent`.
 
@@ -1845,6 +1857,24 @@ def _drive_loop(
         return parts, fcalls
 
     for step in range(starting_step, max_steps):
+        # Cooperative cancellation. A Python thread cannot be killed, so
+        # the only way to stop burning tokens after the client is gone is
+        # to ask between steps. Checked HERE (before the LLM call) rather
+        # than after, so a cancel that lands during step N stops step N+1
+        # from ever being paid for.
+        #
+        # Bounded, not instant: an in-flight call finishes. The bound is
+        # one model turn plus its tools, which is what makes this worth
+        # doing at all — the alternative was a worker that ran to
+        # AGENT_MAX_STEPS on a stream nobody was reading.
+        if cancel_event is not None and cancel_event.is_set():
+            log.info(
+                "Agent run %s cancelled at step %s — client disconnected; "
+                "stopping before the next model call",
+                run_id,
+                step,
+            )
+            return None
         try:
             if planning_model is None:
                 accumulated_text_parts, accumulated_function_calls = _collect_and_record(
@@ -2264,6 +2294,7 @@ def _drive_loop_with_critique(
     system_extra: str | None = None,
     trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
     session_id: str | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any] | None:
     """Run `_drive_loop` with captured events, then optionally rewrite
     the draft answer via a single self-critique LLM call.
@@ -2314,6 +2345,7 @@ def _drive_loop_with_critique(
         system_extra=system_extra,
         trace_hook=_capture_trace,
         session_id=session_id,
+        cancel_event=cancel_event,
     )
 
     if pause_descriptor is not None:
@@ -2349,6 +2381,7 @@ def _drive_loop_with_critique(
             system_extra=system_extra,
             trace_hook=trace_hook,
             session_id=session_id,
+            cancel_event=cancel_event,
         ):
             emit(e)
         return None
@@ -2442,6 +2475,7 @@ def _critique_with_retrieval(
     system_extra: str | None,
     trace_hook: Callable[[str, dict[str, Any], dict[str, Any]], None] | None,
     session_id: str | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> list[dict[str, Any]]:
     """Retrieval-capable critique: re-enter `_drive_loop` for a short,
     read-only continuation so the model can fix a *completeness* gap with
@@ -2496,6 +2530,7 @@ def _critique_with_retrieval(
             trace_hook=trace_hook,
             max_steps=next_step + crit_steps,
             session_id=session_id,
+            cancel_event=cancel_event,
         )
     except Exception:  # noqa: BLE001 — never lose the draft on a critique fault
         log.exception("Critique-with-retrieval continuation failed; keeping draft")
