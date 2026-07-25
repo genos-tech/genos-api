@@ -143,6 +143,51 @@ rate_card:
     label: "2026-07-25"
     fx_jpy_per_usd: 150
 
+# =====================================================================
+#  Embedding models — PRICES ONLY, never a user-facing choice.
+# =====================================================================
+#
+#  Deliberately NOT under `providers:`. That section drives the Settings
+#  model picker and the per-tier daily quotas, so an embedding model
+#  listed there would appear as something a user can pick to chat with,
+#  and would need a `class` and caps that mean nothing for it.
+#
+#  These feed exactly one thing: `price_for()`, so the ledger can price
+#  an embedding call like any other row. They also join the rate-card
+#  fingerprint, which is what it means for a price change here to
+#  separate old rows from new ones.
+#
+#  `output` is 0 for all of them: an embedding has no output tokens, it
+#  returns a vector. Cached/cache-write are 0 for the same reason.
+#
+#  ⚠️ SURFACE CAVEAT for gemini-embedding-001. $0.15/1M input tokens is
+#  the published GEMINI DEVELOPER API (AI Studio) rate. Production runs
+#  Vertex (GEMINI_USE_VERTEX=true), which bills through GCP and is
+#  priced on its own page — one this rate has NOT been confirmed
+#  against. It is a starting rate, not a verified one:
+#
+#    * embeddings are ~0.4% of spend, so the error bound is small;
+#    * every row records `rate_card_version`, so a correction separates
+#      cleanly from what came before;
+#    * `ai_cost_report --rebuild` re-derives the rollups from the
+#      events, so fixing the number is a config change plus one
+#      command, not lost history;
+#    * the events also carry the provider's own `billable_units`
+#      (Vertex reports `billable_character_count`), so even a change of
+#      BILLING UNIT is recoverable from data already stored.
+#
+#  Confirm it against the first GCP invoice — that is the reconciliation
+#  step in AI_COST_METER.md section 4 — and correct it here if it differs.
+#
+embeddings:
+    - model: gemini-embedding-001
+      provider: vertex
+      price: { input: 0.15, output: 0, cached_input: 0, cache_write: 0 }
+
+    - model: text-embedding-3-small
+      provider: openai
+      price: { input: 0.02, output: 0, cached_input: 0, cache_write: 0 }
+
 providers:
     # -----------------------------------------------------------------
     # Gemini — via Vertex AI in prod (GEMINI_USE_VERTEX=true). This is

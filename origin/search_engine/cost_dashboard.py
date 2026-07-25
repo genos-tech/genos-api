@@ -498,8 +498,11 @@ def _coverage_banner(cov: dict) -> str:
                 f"{_e(r['key'])} ×{r['calls']} ({r['units']:,} units)"
                 for r in cov["unpriced"]
             )
-            + ". Embeddings, web search and rerank are billed per unit against their "
-            "own invoices; a cost of 0 for them is a gap that is named, not a real 0."
+            + ". Web search and rerank bill per unit with no rate in the catalog, and "
+            "reconcile against their own invoices; a cost of 0 for them is a gap that "
+            "is named, not a real 0. Embeddings <strong>are</strong> priced — an "
+            "embedding model appearing here has no entry under <code>embeddings:</code> "
+            "in <code>llm_models.yaml</code>."
         )
     if cov["incomplete_calls"]:
         detail.append(

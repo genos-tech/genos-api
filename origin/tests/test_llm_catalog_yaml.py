@@ -56,6 +56,10 @@ subprocesses:
     rewrite: 0
     rerank: 0
     summaries: 0
+embeddings:
+    - model: e-embed
+      provider: vertex
+      price: {input: 0.15, output: 0, cached_input: 0, cache_write: 0}
 """
 
 
@@ -527,3 +531,113 @@ class ShippedRateCardTests(SimpleTestCase):
         self.assertTrue(rc.label)
         self.assertGreater(rc.fx_jpy_per_usd, 0)
         self.assertEqual(len(rc.fingerprint), 12)
+
+
+class EmbeddingPricesTests(SimpleTestCase):
+    """Embedding models are priced, but must never become selectable.
+
+    `providers:` drives the Settings picker AND the per-tier daily caps.
+    An embedding model listed there would show up as something a user
+    can pick to chat with, and would need a `class` and caps that mean
+    nothing for it. So they live in their own section and reach exactly
+    one thing: `price_for()`.
+    """
+
+    def setUp(self):
+        self.cat = settings.LLM_CATALOG
+        self.embed_models = ("gemini-embedding-001", "text-embedding-3-small")
+
+    def test_the_shipped_embedding_models_are_priced(self):
+        for model in self.embed_models:
+            p = self.cat.price_for(model)
+            self.assertIsNotNone(p, f"{model} has no rate — its calls would be unpriced")
+            self.assertGreater(p.input, 0, model)
+
+    def test_embeddings_have_no_output_rate(self):
+        """An embedding returns a vector, not tokens. A non-zero output
+        rate here would bill against a count that is always 0 — harmless
+        today, and exactly the kind of thing that stops being harmless."""
+        for model in self.embed_models:
+            self.assertEqual(self.cat.price_for(model).output, 0.0, model)
+
+    def test_they_are_not_offered_in_the_settings_picker(self):
+        offered = {e["model"] for e in self.cat.catalog}
+        for model in self.embed_models:
+            self.assertNotIn(model, offered, f"{model} must not be selectable")
+
+    def test_they_carry_no_daily_quota(self):
+        """A cap on an embedding model would be enforced against asks it
+        has nothing to do with."""
+        for tier, caps in self.cat.model_daily.items():
+            for model in self.embed_models:
+                self.assertNotIn(model, caps, f"{model} capped under {tier}")
+
+    def test_they_are_not_resolvable_as_a_user_preference(self):
+        for model in self.embed_models:
+            self.assertNotIn(model, self.cat.by_model)
+
+    def test_they_move_the_rate_card_fingerprint(self):
+        """The fingerprint is computed from ALL prices. If embedding
+        rates were excluded, changing one would silently mix two price
+        regimes under a single rate-card id."""
+        from apis.llm_catalog import _parse_rate_card
+
+        prices = dict(self.cat.prices)
+        baseline = _parse_rate_card(
+            {"rate_card": {"label": "x", "fx_jpy_per_usd": 150}}, prices
+        ).fingerprint
+
+        bumped = dict(prices)
+        m = "gemini-embedding-001"
+        bumped[m] = type(prices[m])(
+            input=prices[m].input * 2,
+            output=prices[m].output,
+            cached_input=prices[m].cached_input,
+            cache_write=prices[m].cache_write,
+        )
+        moved = _parse_rate_card(
+            {"rate_card": {"label": "x", "fx_jpy_per_usd": 150}}, bumped
+        ).fingerprint
+        self.assertNotEqual(baseline, moved)
+
+
+class EmbeddingSectionValidationTests(SimpleTestCase):
+    """Boot-fatal, like every other price in this file.
+
+    An absent section does not fail loudly at request time — it just
+    makes every embedding call `unpriced`, which is exactly the state
+    this section was added to end. Refusing to boot is the only way to
+    make deleting it a non-event you notice.
+    """
+
+    def test_a_missing_section_refuses_to_boot(self):
+        text = GOOD[: GOOD.index("embeddings:")]
+        with self.assertRaises(CatalogError) as cm:
+            _load(text)
+        self.assertIn("embeddings", str(cm.exception))
+
+    def test_an_embedding_model_may_not_also_be_a_chat_model(self):
+        """Listing it in both would give it a rung and a daily cap, and
+        make it selectable in the picker."""
+        text = GOOD.replace("      - model: e-embed", "      - model: g-cheap").replace(
+            "    - model: e-embed", "    - model: g-cheap"
+        )
+        with self.assertRaises(CatalogError) as cm:
+            _load(text)
+        self.assertIn("g-cheap", str(cm.exception))
+
+    def test_an_embedding_entry_needs_all_four_rates(self):
+        text = GOOD.replace(
+            "      price: {input: 0.15, output: 0, cached_input: 0, cache_write: 0}",
+            "      price: {input: 0.15}",
+        )
+        with self.assertRaises(CatalogError):
+            _load(text)
+
+    def test_a_priced_embedding_is_reachable_only_through_price_for(self):
+        cat = _load(GOOD)
+        self.assertIsNotNone(cat.price_for("e-embed"))
+        self.assertNotIn("e-embed", {e["model"] for e in cat.catalog})
+        self.assertNotIn("e-embed", cat.by_model)
+        for caps in cat.model_daily.values():
+            self.assertNotIn("e-embed", caps)

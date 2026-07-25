@@ -154,6 +154,7 @@ def record(rec: spend.SpendRecord) -> None:
             attempt_no=rec.attempt_no,
             unit_kind=rec.unit_kind,
             units=rec.units,
+            billable_units=getattr(rec, "billable_units", 0),
             cost_usd_micro=usd_micro,
             cost_jpy_milli=jpy_milli,
             cost_basis=basis,
