@@ -23,10 +23,18 @@ The derived shapes:
                      the effort-level resolution in llm/choice.py
                      (AGENT_EFFORT_LEVELS). `rung` values are LIST
                      INDICES into a provider's cheapest-first models.
+
+    prices / rate_card -> the ONLY price source for cost accounting,
+                     read via settings.LLM_CATALOG. `price_for()` is
+                     exact-id; `rate_card.version` is what a cost row
+                     stores so a later price change can never restate
+                     a past request.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -46,6 +54,13 @@ EFFORTS = ("low", "medium", "high")
 UNLIMITED = "unlimited"
 
 _REQUIRED_FIELDS = ("model", "class", "label", "note", "price")
+
+# Every rate a billable token can be charged at. All four are required
+# on every model: an absent cache rate has no safe default (assume
+# input and you over-bill the cached path ~10x, assume 0 and you
+# under-bill it), and neither error is visible in the output. Write 0
+# explicitly for "this provider does not bill this line".
+_PRICE_FIELDS = ("input", "output", "cached_input", "cache_write")
 
 _EFFORT_FIELDS = (
     "rung",
@@ -87,6 +102,49 @@ class EffortProfile:
 
 
 @dataclass(frozen=True)
+class ModelPrice:
+    """One model's USD-per-1M-token rates.
+
+    Mirrors the four billable lines the providers actually meter, and
+    the four `CallUsage` buckets the cost meter sums. `cached_input` is
+    the discounted re-read of a prompt prefix (~10% of `input` on all
+    three providers today); `cache_write` is Anthropic's cache_creation
+    surcharge (~125% of `input`) and is a real 0 for Gemini's implicit
+    cache and OpenAI's automatic cache, which bill no write line.
+    """
+
+    input: float
+    output: float
+    cached_input: float
+    cache_write: float
+
+
+@dataclass(frozen=True)
+class RateCard:
+    """The money metadata stamped onto every cost row.
+
+    `fingerprint` is DERIVED from every price plus `fx_jpy_per_usd`,
+    not declared — it is the grouping key for cost reports, and the
+    failure it exists to prevent is two different price regimes sharing
+    one identifier because someone edited a price and forgot to bump a
+    version string. `label` is the human name and carries no such duty.
+
+    `fx_jpy_per_usd` is pinned, never looked up live: historical totals
+    that drift with today's exchange rate cannot be reconciled against
+    an invoice.
+    """
+
+    label: str
+    fx_jpy_per_usd: float
+    fingerprint: str
+
+    @property
+    def version(self) -> str:
+        """`label+fingerprint` — what a ledger row should store."""
+        return f"{self.label}+{self.fingerprint}"
+
+
+@dataclass(frozen=True)
 class LlmCatalog:
     catalog: list[dict[str, str]]
     model_daily: dict[str, dict[str, int]]
@@ -101,6 +159,10 @@ class LlmCatalog:
     efforts: dict[str, EffortProfile] = field(default_factory=dict)
     # {"rewrite"|"rerank"|"summaries": rung index}
     subprocess_rungs: dict[str, int] = field(default_factory=dict)
+    # model id -> ModelPrice, exact-id keyed. See `price_for`.
+    prices: dict[str, ModelPrice] = field(default_factory=dict)
+    # The money metadata every cost row is stamped with.
+    rate_card: RateCard | None = None
     # provider -> ordered (cheapest-first) model ids; derived once at
     # load so request-time lookups never re-scan the catalog list.
     _provider_models: dict[str, list[str]] = field(default_factory=dict)
@@ -147,6 +209,27 @@ class LlmCatalog:
             return None
         return EFFORTS[min(models.index(model), len(EFFORTS) - 1)]
 
+    def price_for(self, model: str) -> ModelPrice | None:
+        """This model's rates, or None if it isn't in the catalog.
+
+        EXACT id match, never a prefix. The offline aggregator used to
+        do longest-prefix `str.startswith` against a hand-maintained
+        sheet, and the result was that `"gemini-3.6-flash"` did not
+        match `"gemini-3-flash"` (dot vs hyphen) — so in production,
+        where Gemini is the default provider, EVERY Gemini and every
+        GPT call priced as unknown and silently contributed 0 to the
+        cost report. A prefix scheme fails soft and looks plausible;
+        exact match fails loud and is checked by a test that walks the
+        whole catalog.
+
+        None is a real answer, not an error: an operator can pin a
+        preview model id via `GEMINI_MODEL` that was never added here.
+        Callers must record that as `unpriced` rather than 0 — an
+        unpriced call dropped from a total is how a whole provider
+        goes missing from a bill that still looks about right.
+        """
+        return self.prices.get(model)
+
     def supports_temperature(self, model: str) -> bool:
         """False for models whose API rejects `temperature`.
 
@@ -163,6 +246,73 @@ class LlmCatalog:
 
 def _fail(msg: str) -> None:
     raise CatalogError(f"llm_models.yaml: {msg}")
+
+
+def _parse_price(provider: str, entry: dict[str, Any]) -> ModelPrice:
+    """Validate one model's four rates. Boot-fatal on anything missing.
+
+    Deliberately strict about types: YAML happily reads `0.30` as a
+    float and `"0.30"` as a string, and a string rate would multiply
+    into a `TypeError` deep inside the cost meter at request time
+    rather than here at boot.
+    """
+    model = entry.get("model")
+    price = entry.get("price")
+    if not isinstance(price, dict):
+        _fail(f"{provider}/{model!r}: `price` must be a mapping")
+    unknown = set(price) - set(_PRICE_FIELDS)
+    if unknown:
+        _fail(f"{provider}/{model!r}: unknown price key(s) {sorted(unknown)}")
+    values: dict[str, float] = {}
+    for key in _PRICE_FIELDS:
+        if key not in price:
+            _fail(
+                f"{provider}/{model!r}: price is missing `{key}`. All four rates are "
+                f"required — an absent cache rate has no safe default (assume `input` "
+                f"and the cached path over-bills ~10x; assume 0 and it under-bills), "
+                f"and neither shows up in the output. Write 0 explicitly if this "
+                f"provider does not bill that line."
+            )
+        v = price[key]
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            _fail(f"{provider}/{model!r}: price.{key} must be a number, got {v!r}")
+        if v < 0:
+            _fail(f"{provider}/{model!r}: price.{key} must not be negative, got {v!r}")
+        values[key] = float(v)
+    return ModelPrice(**values)
+
+
+def _parse_rate_card(raw: dict, prices: dict[str, ModelPrice]) -> RateCard:
+    """Build the rate card, fingerprinting every price + the FX rate.
+
+    The fingerprint is computed rather than declared so that editing a
+    price cannot leave two different price regimes sharing one
+    identifier in the ledger. Sorted keys keep it stable across YAML
+    reorderings — only an actual number moving changes it.
+    """
+    rc = raw.get("rate_card")
+    if not isinstance(rc, dict):
+        _fail("`rate_card` must be a mapping with `label` and `fx_jpy_per_usd`")
+    unknown = set(rc) - {"label", "fx_jpy_per_usd"}
+    if unknown:
+        _fail(f"rate_card has unknown key(s) {sorted(unknown)}")
+    label = rc.get("label")
+    if not isinstance(label, str) or not label.strip():
+        _fail("rate_card.label must be a non-empty string")
+    fx = rc.get("fx_jpy_per_usd")
+    if isinstance(fx, bool) or not isinstance(fx, (int, float)) or fx <= 0:
+        _fail(f"rate_card.fx_jpy_per_usd must be a positive number, got {fx!r}")
+
+    payload = {
+        "fx": float(fx),
+        "prices": {
+            model: [p.input, p.output, p.cached_input, p.cache_write]
+            for model, p in sorted(prices.items())
+        },
+    }
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    fingerprint = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]
+    return RateCard(label=label.strip(), fx_jpy_per_usd=float(fx), fingerprint=fingerprint)
 
 
 def _check_price_order(provider: str, entries: list[dict[str, Any]]) -> None:
@@ -235,6 +385,7 @@ def load_llm_catalog(path: str | Path) -> LlmCatalog:
     # --- models --------------------------------------------------------
     catalog: list[dict[str, str]] = []
     by_model: dict[str, dict[str, Any]] = {}
+    prices: dict[str, ModelPrice] = {}
     model_daily: dict[str, dict[str, int]] = {t: {} for t, c in tier_caps.items() if c is not None}
 
     for provider, entries in providers.items():
@@ -261,6 +412,7 @@ def load_llm_catalog(path: str | Path) -> LlmCatalog:
                 _fail(f"{model!r}: `caps` names unknown tier(s) {sorted(unknown_tiers)}")
 
             by_model[model] = entry
+            prices[model] = _parse_price(provider, entry)
             catalog.append(
                 {
                     "provider": provider,
@@ -286,6 +438,8 @@ def load_llm_catalog(path: str | Path) -> LlmCatalog:
         tier_caps={t: c for t, c in tier_caps.items() if c is not None},
         efforts=_parse_efforts(raw),
         subprocess_rungs=_parse_subprocesses(raw),
+        prices=prices,
+        rate_card=_parse_rate_card(raw, prices),
         _provider_models={
             p: [e["model"] for e in entries] for p, entries in providers.items()
         },
