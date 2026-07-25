@@ -165,6 +165,18 @@ class ClaudeClient:
             }
             for t in tools
         ]
+        # Prompt caching (§8.2): one breakpoint on the LAST tool caches
+        # everything up to and including the declarations block — the
+        # ~13k-token prefix that is identical on every agent call.
+        # Deliberately on the TOOLS block and not on `system`: tools
+        # precede system in Anthropic's prompt order, and the ask path
+        # appends per-run `system_extra` context to the system string —
+        # a system breakpoint would place the boundary after text that
+        # VARIES per run and never hit. `_log_usage` / the CallUsage
+        # sink already read cache_read/cache_creation tokens, so the
+        # effect is visible in AgentLlmCall telemetry immediately.
+        if sdk_tools and settings.SEARCH_ENGINE.get("CLAUDE_PROMPT_CACHE"):
+            sdk_tools[-1]["cache_control"] = {"type": "ephemeral"}
 
         model = model_override or settings.SEARCH_ENGINE["CLAUDE_MODEL"]
         # Per-call cap wins; the env cap stays the fallback so a
