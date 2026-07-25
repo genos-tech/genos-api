@@ -10,7 +10,7 @@ UNLIMITED, not zero; a mis-ordered rung makes quota fallback step
 *up* in price; a tier name typo uncaps that whole tier. None of those
 surface as errors at request time — they surface on the invoice.
 
-The two derived shapes:
+The derived shapes:
 
     catalog       -> SEARCH_ENGINE["MODEL_CATALOG"]
                      [{"provider", "model", "label", "note"}, ...]
@@ -18,6 +18,11 @@ The two derived shapes:
 
     model_daily   -> SEARCH_ENGINE["TIER_QUOTAS"][tier]["model_daily"]
                      {tier: {model: cap}}; {} for an unlimited tier.
+
+    efforts / subprocess_rungs -> consumed via settings.LLM_CATALOG by
+                     the effort-level resolution in llm/choice.py
+                     (AGENT_EFFORT_LEVELS). `rung` values are LIST
+                     INDICES into a provider's cheapest-first models.
 """
 
 from __future__ import annotations
@@ -32,14 +37,53 @@ import yaml
 # that a provider's rungs don't jump around.
 CLASSES = ("light", "middle", "highend")
 
+# Effort levels, cheapest first. Order matters: it is both the
+# monotonicity axis for profile validation and the ladder
+# `effort_for_model` collapses a legacy saved model onto.
+EFFORTS = ("low", "medium", "high")
+
 # Marker for a tier that gets no per-model caps at all.
 UNLIMITED = "unlimited"
 
 _REQUIRED_FIELDS = ("model", "class", "label", "note", "price")
 
+_EFFORT_FIELDS = (
+    "rung",
+    "max_steps",
+    "rewrite_variants",
+    "use_reranker",
+    "critique_steps",
+    "max_output_tokens",
+)
+
+# Sub-process kinds that may carry a rung pin. All three required in
+# the YAML: a missing kind would silently mean "inherit the synthesis
+# model", which is exactly the accidental-Opus-reranker behavior the
+# pins exist to end.
+SUBPROCESS_KINDS = ("rewrite", "rerank", "summaries")
+
 
 class CatalogError(Exception):
     """The catalog file is unusable. Raised at import time."""
+
+
+@dataclass(frozen=True)
+class EffortProfile:
+    """One effort level's loop parameters + synthesis-model rung.
+
+    `rung` is a LIST INDEX into the provider's cheapest-first model
+    list, resolved per provider at request time by `model_for_effort`
+    (clamped, so a 2-model provider still has a `high`). See the
+    MEDIUM INVARIANT note in llm_models.yaml before editing medium.
+    """
+
+    name: str
+    rung: int
+    max_steps: int
+    rewrite_variants: int
+    use_reranker: bool
+    critique_steps: int
+    max_output_tokens: int | None
 
 
 @dataclass(frozen=True)
@@ -53,6 +97,51 @@ class LlmCatalog:
     # model id -> the raw YAML entry, for adapters that need a
     # capability flag (see `supports_temperature`).
     by_model: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # {"low"|"medium"|"high": EffortProfile}
+    efforts: dict[str, EffortProfile] = field(default_factory=dict)
+    # {"rewrite"|"rerank"|"summaries": rung index}
+    subprocess_rungs: dict[str, int] = field(default_factory=dict)
+    # provider -> ordered (cheapest-first) model ids; derived once at
+    # load so request-time lookups never re-scan the catalog list.
+    _provider_models: dict[str, list[str]] = field(default_factory=dict)
+
+    def provider_models(self, provider: str) -> list[str]:
+        """The provider's model ids, cheapest first. [] for unknown."""
+        return list(self._provider_models.get(provider, ()))
+
+    def model_for_effort(self, provider: str, effort: str) -> str:
+        """The synthesis model for (provider, effort).
+
+        Clamps the profile's rung to the provider's list length, so a
+        provider with fewer rungs than efforts still resolves (its top
+        model serves both medium and high). Raises for an unknown
+        provider or effort — callers validate both first, and a silent
+        empty string here would propagate into an SDK 404.
+        """
+        profile = self.efforts.get(effort)
+        if profile is None:
+            raise CatalogError(f"unknown effort {effort!r}")
+        return self.model_for_rung(provider, profile.rung)
+
+    def model_for_rung(self, provider: str, rung: int) -> str:
+        """The provider's model at `rung`, clamped to the list end."""
+        models = self._provider_models.get(provider)
+        if not models:
+            raise CatalogError(f"unknown provider {provider!r}")
+        return models[min(rung, len(models) - 1)]
+
+    def effort_for_model(self, provider: str, model: str) -> str | None:
+        """The effort a LEGACY saved model maps onto, or None.
+
+        List index collapsed onto the effort ladder (index 3+ would
+        only exist if a provider grew a fourth rung — it maps to high).
+        None when the model isn't in the provider's list (stale saved
+        preference); the caller falls back to the default effort.
+        """
+        models = self._provider_models.get(provider, ())
+        if model not in models:
+            return None
+        return EFFORTS[min(models.index(model), len(EFFORTS) - 1)]
 
     def supports_temperature(self, model: str) -> bool:
         """False for models whose API rejects `temperature`.
@@ -191,4 +280,83 @@ def load_llm_catalog(path: str | Path) -> LlmCatalog:
         model_daily=model_daily,
         by_model=by_model,
         tier_caps={t: c for t, c in tier_caps.items() if c is not None},
+        efforts=_parse_efforts(raw),
+        subprocess_rungs=_parse_subprocesses(raw),
+        _provider_models={
+            p: [e["model"] for e in entries] for p, entries in providers.items()
+        },
     )
+
+
+def _parse_efforts(raw: dict) -> dict[str, EffortProfile]:
+    """Validate + build the three effort profiles. All failures boot-fatal.
+
+    The monotonicity asserts mirror `_check_price_order`'s rationale:
+    this file is hand-edited under time pressure, and the failure mode
+    of a swapped value is silent — "high" quietly doing less work than
+    "low" never raises at request time, it just answers worse.
+    """
+    efforts_raw = raw.get("efforts")
+    if not isinstance(efforts_raw, dict):
+        _fail("`efforts` must be a mapping of low/medium/high")
+    if set(efforts_raw) != set(EFFORTS):
+        _fail(f"`efforts` must define exactly {EFFORTS}, got {sorted(efforts_raw)}")
+
+    profiles: dict[str, EffortProfile] = {}
+    for name in EFFORTS:
+        p = efforts_raw[name]
+        if not isinstance(p, dict):
+            _fail(f"efforts.{name} must be a mapping")
+        unknown = set(p) - set(_EFFORT_FIELDS)
+        if unknown:
+            _fail(f"efforts.{name} has unknown key(s) {sorted(unknown)}")
+        missing = set(_EFFORT_FIELDS) - set(p)
+        if missing:
+            _fail(f"efforts.{name} is missing {sorted(missing)}")
+        for key in ("rung", "max_steps", "rewrite_variants", "critique_steps"):
+            v = p[key]
+            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                _fail(f"efforts.{name}.{key} must be a non-negative integer, got {v!r}")
+        if p["max_steps"] < 1:
+            _fail(f"efforts.{name}.max_steps must be >= 1")
+        if p["rung"] > len(EFFORTS) - 1:
+            _fail(f"efforts.{name}.rung must be 0-{len(EFFORTS) - 1}, got {p['rung']}")
+        if not isinstance(p["use_reranker"], bool):
+            _fail(f"efforts.{name}.use_reranker must be a boolean")
+        cap = p["max_output_tokens"]
+        if cap is not None and (not isinstance(cap, int) or isinstance(cap, bool) or cap < 1):
+            _fail(f"efforts.{name}.max_output_tokens must be a positive integer or null")
+        profiles[name] = EffortProfile(
+            name=name,
+            rung=p["rung"],
+            max_steps=p["max_steps"],
+            rewrite_variants=p["rewrite_variants"],
+            use_reranker=p["use_reranker"],
+            critique_steps=p["critique_steps"],
+            max_output_tokens=cap,
+        )
+
+    for key in ("rung", "max_steps", "rewrite_variants"):
+        values = [getattr(profiles[name], key) for name in EFFORTS]
+        if values != sorted(values):
+            _fail(
+                f"`{key}` must be non-decreasing low -> medium -> high, got {values} — "
+                f"a mis-edit must never make a higher effort do less work"
+            )
+    return profiles
+
+
+def _parse_subprocesses(raw: dict) -> dict[str, int]:
+    """Validate the sub-process rung pins. All three kinds required."""
+    sub_raw = raw.get("subprocesses")
+    if not isinstance(sub_raw, dict):
+        _fail("`subprocesses` must be a mapping")
+    if set(sub_raw) != set(SUBPROCESS_KINDS):
+        _fail(
+            f"`subprocesses` must define exactly {SUBPROCESS_KINDS}, got {sorted(sub_raw)} — "
+            f"a missing kind silently means 'inherit the user's synthesis model'"
+        )
+    for kind, rung in sub_raw.items():
+        if not isinstance(rung, int) or isinstance(rung, bool) or rung < 0:
+            _fail(f"subprocesses.{kind} must be a non-negative integer rung, got {rung!r}")
+    return dict(sub_raw)
