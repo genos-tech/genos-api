@@ -1,0 +1,8 @@
+Genos AI spend — {{ window }}
+
+{{ body }}
+
+--
+Sent by the ai_cost_report cron. Reconcile the Providers section against
+the Anthropic, OpenAI and GCP invoices; note that Anthropic and OpenAI
+bill outside GCP entirely.
