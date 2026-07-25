@@ -494,7 +494,13 @@ SEARCH_ENGINE = {
     # existing 1536-dim OpenSearch index without recreating it. Bump
     # VERTEX_EMBEDDING_DIMENSIONS (and the index) if you want full 3072.
     "VERTEX_EMBEDDING_MODEL": os.environ.get("VERTEX_EMBEDDING_MODEL", "gemini-embedding-001"),
-    "VERTEX_EMBEDDING_DIMENSIONS": int(os.environ.get("VERTEX_EMBEDDING_DIMENSIONS", "1536")),
+    # NB `... or "1536"`, not a get() default. `os.environ.get(k, d)` returns
+    # the default only when the key is ABSENT — a key that is present but
+    # EMPTY yields "" and int("") raises at import, taking the whole process
+    # down before Django starts. docker-compose passes every optional var as
+    # `${VAR:-}`, which always sets the key, so an unset var in .env arrives
+    # as "". Any int()/float() of an env var here needs the `or` form.
+    "VERTEX_EMBEDDING_DIMENSIONS": int(os.environ.get("VERTEX_EMBEDDING_DIMENSIONS") or "1536"),
     # Bulk-indexing batch size for OpenSearch _bulk requests.
     "BULK_BATCH_SIZE": int(os.environ.get("SEARCH_BULK_BATCH_SIZE", "200")),
     # Embedding batch size (max items per provider /embeddings request).
@@ -596,11 +602,13 @@ SEARCH_ENGINE = {
     # does NOT route through Vertex (there is no GPT path on Model
     # Garden), so it is a third billable LLM line outside GCP; see
     # genos-docs operations/LLM_SPEND_MAP.md §1.
-    "OPENAI_MODEL": os.environ.get("OPENAI_MODEL", "gpt-5.6-terra"),
+    # `or`, not a get() default — see the VERTEX_EMBEDDING_DIMENSIONS note
+    # above: compose passes unset vars as "", which shadows a get() default.
+    "OPENAI_MODEL": os.environ.get("OPENAI_MODEL") or "gpt-5.6-terra",
     # Mirrors CLAUDE_MAX_TOKENS: bound the per-call output ceiling so a
     # runaway generation can't blow past the per-ask cost class the tier
     # limits were sized against (output is the dominant cost term).
-    "OPENAI_MAX_TOKENS": int(os.environ.get("OPENAI_MAX_TOKENS", "4096")),
+    "OPENAI_MAX_TOKENS": int(os.environ.get("OPENAI_MAX_TOKENS") or "4096"),
     # Phase 6 — RAG quality knobs.
     # Exponential decay half-life (in days) for freshness scoring.
     # Each hit's RRF score is multiplied by exp(-age_days / half_life).
