@@ -39,6 +39,7 @@ import yaml
 from origin.search_engine.agent.abstention import is_abstention
 from origin.search_engine.agent.controller import _irrelevant_tool_families, run_agent
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
+from origin.search_engine.llm.spend import spend_purpose
 from origin.search_engine.search import search
 
 log = logging.getLogger(__name__)
@@ -1281,6 +1282,7 @@ def _check_retrieval_expectations(
 # persist through the same plumbing as the retrieval metrics.
 
 
+@spend_purpose("eval_summary")
 def _generate_summary(kind: str, source: str) -> str:
     """Summarise `source` with the production system prompt for `kind`
     (`thread` or `note`) — exercises the real summariser, not a stand-in.

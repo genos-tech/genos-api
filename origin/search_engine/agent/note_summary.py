@@ -50,6 +50,7 @@ from origin.search_engine.chunkers.base import (
     NOTE_TYPE_TASK,
 )
 from origin.search_engine.llm import AgentMessage, get_model_client
+from origin.search_engine.llm.spend import spend_purpose
 from origin.search_engine.models import NoteSummary
 from origin.search_engine.text_extraction import extract_text
 
@@ -277,6 +278,7 @@ def _format_note_for_prompt(record: NoteRecord) -> str:
     )
 
 
+@spend_purpose("summary")
 def summarise_note(
     record: NoteRecord, *, model_override: str | None = None
 ) -> tuple[str, str]:

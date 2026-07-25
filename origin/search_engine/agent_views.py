@@ -35,6 +35,7 @@ import dataclasses
 import json
 import logging
 import threading
+import uuid
 from contextlib import contextmanager
 from datetime import timedelta
 from typing import Any, Callable, Iterator
@@ -48,6 +49,7 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from apis.llm_catalog import EFFORTS
+from origin.search_engine import spend_recorder
 from origin.search_engine.agent.controller import (
     _chat_source,
     _note_source,
@@ -83,6 +85,7 @@ from origin.search_engine.agent.thread_summary import (
     regenerate_summary,
 )
 from origin.search_engine.agent.tools import ToolContext
+from origin.search_engine.llm import spend
 from origin.search_engine.llm.choice import (
     LlmChoice,
     cheaper_models_same_provider,
@@ -100,6 +103,7 @@ from origin.search_engine.quota import (
     WEB_SEARCH_KEY,
     check_remaining,
     check_remaining_monthly,
+    get_effective_tier,
     get_message_retention_days,
     get_quota,
     get_upload_max_bytes,
@@ -387,6 +391,53 @@ def _effort_choice_bound(chosen: LlmChoice):
         reset_llm_choice(token)
 
 
+def _spend_kwargs(
+    surface: str,
+    user_id: str,
+    team_id,
+    chosen: LlmChoice | None = None,
+) -> dict:
+    """Build the cost-meter binding for one logical request.
+
+    `plan` and `effort` are resolved ONCE here and denormalized onto
+    every spend row. Resolving them per row would put a tier lookup —
+    one 60s-cache miss away from a DB query — on the request path once
+    per LLM call, and an ask makes six to ten.
+    """
+    plan = ""
+    try:
+        plan = get_effective_tier(str(user_id)) if user_id else ""
+    except Exception:  # noqa: BLE001 — never fail a request over a label
+        log.debug("Could not resolve plan for spend context", exc_info=True)
+    return {
+        "surface": surface,
+        "request_id": str(uuid.uuid4()),
+        "user_id": str(user_id or ""),
+        "team_id": str(team_id or ""),
+        "plan": plan,
+        "effort": getattr(chosen, "effort", "") or "",
+    }
+
+
+def _open_spend_request(spend_kwargs: dict) -> None:
+    """Write the request's rollup row up front, with its quoted ceiling.
+
+    The quote must be written BEFORE any spend: it is the maximum we
+    promised not to exceed, and after the fact there is no way to prove
+    what it would have been. No-ops when the meter is off.
+    """
+    try:
+        ctx = spend.SpendContext(**spend_kwargs)
+        spend_recorder.open_request(
+            ctx,
+            quoted_max_jpy_milli=int(
+                settings.SEARCH_ENGINE.get("AI_REQUEST_MAX_JPY_MILLI", 0) or 0
+            ),
+        )
+    except Exception:  # noqa: BLE001 — accounting never breaks a request
+        log.debug("Failed to open spend request", exc_info=True)
+
+
 class AgentAskView(AuthenticatedAPIView):
     def post(self, request):
         data = request.data or {}
@@ -472,6 +523,19 @@ class AgentAskView(AuthenticatedAPIView):
             # `set_llm_choice` both read this `chosen`) — never the
             # rejected one.
             chosen = fallback
+
+        # Cost meter — mint the logical request id NOW, before any paid
+        # call. Everything this ask spends, on either thread, is grouped
+        # by it: the pre-worker summaries below, the whole agent loop,
+        # and the rewrite/rerank calls inside every search_kb.
+        #
+        # Deliberately NOT keyed on AgentRun: that row is created ~30
+        # lines below, and `build_prior_context` already makes an LLM
+        # call before it exists. Keying attribution on the run is what
+        # makes the existing AgentLlmCall telemetry blind to the entire
+        # eval suite.
+        spend_kwargs = _spend_kwargs("ask", user_id, team_id, chosen)
+        _open_spend_request(spend_kwargs)
 
         # Phase 8 — session memory. Non-fatal: if session machinery
         # fails for any reason we fall back to a stateless single-turn.
@@ -559,7 +623,7 @@ class AgentAskView(AuthenticatedAPIView):
             prior_turns_all = _load_prior_turns(session, load_cap)
             from origin.search_engine.agent.multi_turn import build_prior_context  # noqa: PLC0415
 
-            with _effort_choice_bound(chosen):
+            with spend.spend_context(**spend_kwargs), _effort_choice_bound(chosen):
                 prior_turns, prior_summary = build_prior_context(
                     prior_turns_all, model_override=summaries_pin
                 )
@@ -609,7 +673,7 @@ class AgentAskView(AuthenticatedAPIView):
             t_chat_id = thread_ctx_parsed["chat_id"]
             t_thread_id = thread_ctx_parsed["thread_id"]
             try:
-                with _effort_choice_bound(chosen):
+                with spend.spend_context(**spend_kwargs), _effort_choice_bound(chosen):
                     summary_text = load_or_generate_for_ask(
                         chat_type=t_chat_type,
                         chat_id=t_chat_id,
@@ -687,7 +751,7 @@ class AgentAskView(AuthenticatedAPIView):
             n_note_type = note_ctx_parsed["note_type"]
             n_note_id = note_ctx_parsed["note_id"]
             try:
-                with _effort_choice_bound(chosen):
+                with spend.spend_context(**spend_kwargs), _effort_choice_bound(chosen):
                     summary_text, note_record = load_or_generate_note_for_ask(
                         note_type=n_note_type,
                         note_id=n_note_id,
@@ -780,23 +844,30 @@ class AgentAskView(AuthenticatedAPIView):
         # is set inside the controller's threading.Thread — a bare
         # thread does NOT inherit contextvars from its parent.
         def worker(emit, cancel_event):
+            # Bare threads inherit NO contextvars, which is why both the
+            # LLM choice and the spend context are re-bound here rather
+            # than assumed. Same `request_id` as the pre-worker phase, so
+            # the summaries above and the whole loop below roll up as one
+            # logical request.
             token = set_llm_choice(chosen)
             try:
-                return run_agent(
-                    query,
-                    ctx,
-                    emit,
-                    cancel_event=cancel_event,
-                    run_id=run.run_id if run else None,
-                    prior_turns=prior_turns,
-                    prior_summary=prior_summary,
-                    disabled_tools=disabled_tools,
-                    system_extra=system_extra,
-                    seed_sources=seed_sources,
-                    # C3 — keys the session tool-result cache. None (no
-                    # session) disables caching for this run entirely.
-                    session_id=str(session.session_id) if session else None,
-                )
+                with spend.spend_context(**spend_kwargs):
+                    spend.bind_run_id(str(run.run_id) if run else None)
+                    return run_agent(
+                        query,
+                        ctx,
+                        emit,
+                        cancel_event=cancel_event,
+                        run_id=run.run_id if run else None,
+                        prior_turns=prior_turns,
+                        prior_summary=prior_summary,
+                        disabled_tools=disabled_tools,
+                        system_extra=system_extra,
+                        seed_sources=seed_sources,
+                        # C3 — keys the session tool-result cache. None (no
+                        # session) disables caching for this run entirely.
+                        session_id=str(session.session_id) if session else None,
+                    )
             finally:
                 reset_llm_choice(token)
 
@@ -811,6 +882,7 @@ class AgentAskView(AuthenticatedAPIView):
             user_id_for_quota=user_id,
             quota_keys=[LLM_ASK_KEY, chosen.model],
             fallback_note=fallback_note,
+            spend_kwargs=spend_kwargs,
         )
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
@@ -1027,6 +1099,7 @@ def _stream_ndjson(
     user_id_for_quota: str | None = None,
     quota_keys: list[str] | None = None,
     fallback_note: dict | None = None,
+    spend_kwargs: dict | None = None,
 ) -> Iterator[bytes]:
     """Bridge a controller callback into chunked NDJSON.
 
@@ -1107,6 +1180,35 @@ def _stream_ndjson(
         for key in quota_keys:
             increment_usage(user_id_for_quota, key)
         quota_charged = True
+
+    def _close_spend(was_cancelled: bool) -> None:
+        """Roll this request's spend up onto its AiRequestCost row.
+
+        Shares the run's terminal moment so the two can't disagree about
+        what happened. Derived from the ledger rows, not from any
+        in-memory total — the worker thread's context object is a
+        different instance from this one, and the DB is the only thing
+        both wrote to.
+        """
+        if not spend_kwargs:
+            return
+        try:
+            from origin.search_engine.models import AiRequestCost  # noqa: PLC0415
+
+            if was_cancelled:
+                result = AiRequestCost.RESULT_USER_CANCELLATION
+            elif final_status in ("done", "awaiting_approval", "rejected"):
+                result = AiRequestCost.RESULT_SUCCESS
+            elif final_status == "step_cap":
+                # Reached the step cap without answering. We spent the
+                # money and the user got nothing usable, so this is not
+                # a success — it is our cost to absorb.
+                result = AiRequestCost.RESULT_APPLICATION_FAILURE
+            else:
+                result = AiRequestCost.RESULT_PROVIDER_FAILURE
+            spend_recorder.close_request(spend.SpendContext(**spend_kwargs), result=result)
+        except Exception:  # noqa: BLE001 — accounting never breaks a response
+            log.debug("Failed to close spend request", exc_info=True)
 
     def _close_run(was_cancelled: bool) -> None:
         """Write the run's terminal state. Runs from the `finally` below,
@@ -1278,6 +1380,7 @@ def _stream_ndjson(
         raise
     finally:
         _close_run(cancelled)
+        _close_spend(cancelled)
 
 # --------------------------------------------------------------------------- #
 # /thread-summary/ — generate or fetch a cached chat-thread summary           #

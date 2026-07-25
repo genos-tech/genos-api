@@ -26,6 +26,7 @@ from django.conf import settings
 
 from origin.search_engine.llm import AgentMessage, get_model_client
 from origin.search_engine.llm.choice import get_llm_choice, subprocess_model_override
+from origin.search_engine.llm.spend import spend_purpose
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ Rules:
 """
 
 
+@spend_purpose("rewrite")
 def rewrite_query(query: str, *, num_variants: int = 3) -> list[str]:
     """Return `[query, *variants]` — the original first, then expansions.
 

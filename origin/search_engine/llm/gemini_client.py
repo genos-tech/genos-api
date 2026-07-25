@@ -23,11 +23,13 @@ Supports two authentication modes (chosen via Django settings):
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Iterator
 
 from django.conf import settings
 from google import genai
 
+from origin.search_engine.llm import spend
 from origin.search_engine.llm.types import (
     AgentMessage,
     CallUsage,
@@ -165,6 +167,24 @@ class GeminiClient:
             config_kwargs["max_output_tokens"] = params.max_output_tokens
         config = types.GenerateContentConfig(**config_kwargs)
 
+        # Cost accounting. The sink is filled and recorded in a
+        # `finally` so a stream that dies part-way through still lands
+        # in the ledger: the provider bills whatever it already
+        # generated, and this is a generator, so a mid-stream raise or a
+        # `GeneratorExit` skips anything written after the loop.
+        # `last_usage_metadata` is initialised HERE, before the try, or
+        # a failure to open the stream would make the finally raise
+        # NameError over the real exception.
+        sink = usage_sink if usage_sink is not None else CallUsage()
+        # Stamp identity on the sink NOW, not at fill time: an
+        # aborted call never reaches `_fill_usage_sink`, and a ledger
+        # row with no provider or model cannot be reconciled against
+        # any invoice.
+        sink.provider = "gemini"
+        sink.model = model
+        last_usage_metadata: Any = None
+        started = time.monotonic()
+        call_error = ""
         try:
             stream = _get_client().models.generate_content_stream(
                 model=model,
@@ -191,8 +211,10 @@ class GeminiClient:
             # only the final chunk carries the meaningful totals, but
             # peeking at every chunk avoids assuming chunk order. Logged
             # below the stream so we can verify Gemini implicit caching
-            # is actually firing (cached_content_token_count > 0).
-            last_usage_metadata: Any = None
+            # is actually firing (cached_content_token_count > 0). This
+            # per-chunk peek is also what makes partial cost capture
+            # free on an aborted stream — the last totals seen are
+            # already in hand when the finally runs.
             for chunk in stream:
                 usage = getattr(chunk, "usage_metadata", None)
                 if usage is not None:
@@ -228,11 +250,23 @@ class GeminiClient:
                             yield (text, None)
 
             _log_usage(last_usage_metadata, model)
-            if usage_sink is not None:
-                _fill_usage_sink(usage_sink, last_usage_metadata, model)
-        except Exception:
-            log.exception("Gemini generate_step failed")
+        except BaseException as exc:
+            # BaseException so a client disconnect (GeneratorExit) is
+            # recorded too — those calls were billed like any other.
+            call_error = f"{type(exc).__name__}: {exc}"[:200]
+            if isinstance(exc, Exception):
+                log.exception("Gemini generate_step failed")
             raise
+        finally:
+            try:
+                _fill_usage_sink(sink, last_usage_metadata, model)
+                spend.record_llm_call(
+                    sink,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                    error=call_error,
+                )
+            except Exception:  # noqa: BLE001 — accounting never breaks generation
+                log.debug("Gemini spend capture failed", exc_info=True)
 
 
 # --------------------------------------------------------------------------- #

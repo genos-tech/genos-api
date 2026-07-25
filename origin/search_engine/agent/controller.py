@@ -60,12 +60,14 @@ from origin.search_engine.llm import (
     GenerationParams,
     ToolDeclaration,
     get_model_client,
+    spend,
 )
 from origin.search_engine.llm.choice import (
     _server_default_choice,
     active_effort_profile,
     get_llm_choice,
 )
+from origin.search_engine.llm.spend import spend_purpose
 from origin.search_engine.models import AgentLlmCall, AgentRun, AgentStep
 
 log = logging.getLogger(__name__)
@@ -1657,8 +1659,26 @@ def _execute_batch_parallel(
             except Exception:  # noqa: BLE001 — cleanup must not eat the outcome
                 log.exception("close_all failed in parallel tool worker")
 
+    # Context propagation. `pool.map` does NOT carry contextvars into
+    # worker threads, so without this a parallel batch runs every
+    # `search_kb` — and therefore its rewrite and rerank LLM calls —
+    # with no spend context and no LlmChoice at all. That means the
+    # spend lands in `unattributed`, AND (a pre-existing bug this also
+    # closes) a Claude user's parallel-batch rewrites silently run on
+    # the server default provider instead of theirs.
+    #
+    # One Context PER CALL, snapshotted here on the parent thread: a
+    # Context object cannot be entered by two threads at once, and
+    # copying inside `_task` would capture the worker's empty context
+    # rather than ours.
+    snapshots = [spend.copy_context_for_thread() for _ in calls]
+
+    def _run_in_context(pair):
+        snapshot, call = pair
+        return snapshot.run(_task, call)
+
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        return list(pool.map(_task, calls))
+        return list(pool.map(_run_in_context, zip(snapshots, calls)))
 def _resolve_planning_override() -> str | None:
     """B3 provider tier split (SPOTLIGHT_FUTURE_ARCHITECTURE.md §3).
 
@@ -1834,17 +1854,22 @@ def _drive_loop(
         """
         sink = CallUsage()
         started = time.monotonic()
-        parts, fcalls = _collect_step(
-            client,
-            messages=messages,
-            tools=tools,
-            system_instruction=system_instruction,
-            emit=emit,
-            model_override=model_override,
-            emit_deltas=emit_deltas,
-            usage_sink=sink,
-            params=gen_params,
-        )
+        # Tag the cost ledger with the same purpose this row carries.
+        # The adapter records from a `finally` during generator
+        # consumption, so the tag has to stay bound across the call —
+        # not just around building it.
+        with spend_purpose(purpose):
+            parts, fcalls = _collect_step(
+                client,
+                messages=messages,
+                tools=tools,
+                system_instruction=system_instruction,
+                emit=emit,
+                model_override=model_override,
+                emit_deltas=emit_deltas,
+                usage_sink=sink,
+                params=gen_params,
+            )
         latency_ms = int((time.monotonic() - started) * 1000)
         _persist_llm_call(
             run_id,
@@ -2435,6 +2460,7 @@ def _critique_says_keep(text: str) -> bool:
     return text.strip().upper() == "KEEP"
 
 
+@spend_purpose("critique")
 def _run_self_critique(
     *,
     user_query: str,

@@ -55,6 +55,7 @@ from django.conf import settings
 
 from origin.search_engine.llm import AgentMessage, get_model_client
 from origin.search_engine.llm.choice import get_llm_choice, subprocess_model_override
+from origin.search_engine.llm.spend import spend_purpose
 
 log = logging.getLogger(__name__)
 
@@ -214,6 +215,7 @@ def rerank(
     return _rerank_llm(query=query, entities=entities, input_k=input_k, output_k=output_k)
 
 
+@spend_purpose("rerank")
 def _rerank_llm(
     *,
     query: str,

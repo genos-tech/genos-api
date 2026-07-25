@@ -31,6 +31,7 @@ import logging
 from django.conf import settings
 
 from origin.search_engine.llm import AgentMessage, get_model_client
+from origin.search_engine.llm.spend import spend_purpose
 
 log = logging.getLogger(__name__)
 
@@ -104,6 +105,7 @@ def build_prior_context(
     return verbatim, summary
 
 
+@spend_purpose("summary")
 def _summarise_turns(
     turns: list[tuple[str, str]], *, model_override: str | None = None
 ) -> str | None:

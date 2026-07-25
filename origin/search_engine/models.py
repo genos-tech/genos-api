@@ -428,3 +428,201 @@ class AgentRunFeedback(models.Model):
         indexes = [
             models.Index(fields=["team_id", "-created_at"], name="se_feedback_team_created_idx"),
         ]
+
+
+# --------------------------------------------------------------------------- #
+# Internal AI cost meter — the accounting ledger                              #
+# --------------------------------------------------------------------------- #
+#
+# Two tables, deliberately separate (AI_USAGE_METERING_STRATEGY_REVIEW §2.1):
+#
+#   AiSpendEvent  — one row per PROVIDER CALL. Cost only, never credits.
+#                   This is accounting infrastructure.
+#   AiRequestCost — one row per LOGICAL REQUEST. Cost AND the customer
+#                   credit charge. This is commercial policy layered on top.
+#
+# The split is what makes the customer-protection rules expressible rather
+# than merely asserted: "charge one logical request, not every provider
+# call" means the rollup is the unit; "failed requests are not charged" is a
+# constraint on one row; "retries and fallbacks don't increase the charge"
+# follows from deriving credits from the capped rollup instead of summing
+# events. With one table each of those would be re-derived in every query
+# forever.
+#
+# RELATIONSHIP TO AgentLlmCall: they overlap and neither supersedes the
+# other. AgentLlmCall is ask-path LATENCY telemetry, read by
+# `agent_run_metrics`; it exists only for runs and only for the agent loop.
+# This ledger is the COST source of truth and covers every paid call on
+# every surface. A report must never sum both — they describe the same
+# calls from two tables.
+
+
+class AiSpendEvent(models.Model):
+    """One paid provider call — LLM, embedding, web search, rerank.
+
+    Written from `llm/spend.py`'s recorder, which the adapters call from
+    a `finally`, so a call that streamed output and then died still lands
+    here. Best-effort: a failure to record must never break generation.
+
+    Cost is MATERIALIZED here rather than derived at read time, together
+    with the rate card that produced it. That is the whole point of the
+    accounting layer — a later price change or FX move must never
+    retroactively restate what a past request cost. Reports GROUP BY
+    `rate_card_version` rather than summing across a mid-period change.
+
+    Money is integer micros/millis, never float: this ledger's stated
+    purpose is to reconcile against provider invoices, and float
+    summation over a growing table drifts unboundedly and unauditably.
+    USD is what invoices are in (reconcile there, exactly); JPY is the
+    internal normalization (report there).
+    """
+
+    id = models.BigAutoField(primary_key=True)
+
+    # --- attribution -------------------------------------------------
+    # The primary key of attribution. Minted by the entry point before
+    # anything happens; NOT the AgentRun id, which does not exist yet
+    # when the first LLM call of an ask fires and never exists at all
+    # for search, summaries, crons or evals.
+    request_id = models.UUIDField(db_index=True)
+    # Nullable reference, late-bound when there is a run at all.
+    run_id = models.UUIDField(blank=True, null=True)
+    user_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    # Nullable, not blank-default: team is legitimately absent on eval
+    # and cron paths, and an empty string silently buckets those with
+    # real teams in a group-by.
+    team_id = models.CharField(max_length=64, blank=True, null=True, db_index=True)
+    # Where the request came from: ask / search / thread_summary /
+    # note_summary / judge / eval / unattributed.
+    surface = models.CharField(max_length=32, blank=True, default="")
+    # What the call was for within that surface: loop / planning /
+    # synthesis / rewrite / rerank / summary / critique / judge.
+    purpose = models.CharField(max_length=32, blank=True, default="")
+    # Denormalized once per request (never per row — that would put a
+    # tier lookup on the request path per call).
+    plan = models.CharField(max_length=32, blank=True, default="")
+    effort = models.CharField(max_length=16, blank=True, default="")
+
+    # --- what was called ---------------------------------------------
+    provider = models.CharField(max_length=32, blank=True, default="")
+    model = models.CharField(max_length=64, blank=True, default="")
+    # 1 for a first attempt. Providers do not bill rejected 429/5xx
+    # retries, so this is expected to stay 1 — it exists so that
+    # invariant is demonstrable from the data rather than assumed.
+    attempt_no = models.PositiveSmallIntegerField(default=1)
+
+    # --- what it consumed --------------------------------------------
+    # Token buckets mirror CallUsage exactly (see llm/types.py).
+    prompt_tokens = models.IntegerField(default=0)
+    cached_tokens = models.IntegerField(default=0)
+    cache_write_tokens = models.IntegerField(default=0)
+    output_tokens = models.IntegerField(default=0)
+    thought_tokens = models.IntegerField(default=0)
+    tool_prompt_tokens = models.IntegerField(default=0)
+    # Non-token spend: "search" (Tavily credits), "embed", "rerank".
+    # Empty means this row is measured in tokens.
+    unit_kind = models.CharField(max_length=16, blank=True, default="")
+    units = models.IntegerField(default=0)
+
+    # --- what it cost -------------------------------------------------
+    cost_usd_micro = models.BigIntegerField(default=0)
+    cost_jpy_milli = models.BigIntegerField(default=0)
+    # priced      — a rate existed and cost is real
+    # unpriced    — no rate for this model/unit; cost is 0 AND MEANINGLESS.
+    #               Must be reported as its own line, never folded into a
+    #               total, or a whole provider can vanish from a figure
+    #               that still looks about right.
+    # incomplete  — the call died before the provider reported usage.
+    cost_basis = models.CharField(max_length=16, blank=True, default="priced", db_index=True)
+    rate_card_version = models.CharField(max_length=64, blank=True, default="")
+    fx_jpy_per_usd = models.FloatField(default=0.0)
+
+    # --- outcome ------------------------------------------------------
+    latency_ms = models.IntegerField(default=0)
+    error = models.CharField(max_length=200, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["request_id"], name="se_spend_request_idx"),
+            models.Index(fields=["user_id", "-created_at"], name="se_spend_user_created_idx"),
+            # Invoice reconciliation walks per provider per period.
+            models.Index(fields=["provider", "-created_at"], name="se_spend_provider_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.provider}/{self.model} {self.purpose} {self.cost_jpy_milli}m¥"
+
+
+class AiRequestCost(models.Model):
+    """One logical user request — the rollup, and the charging unit.
+
+    Everything a customer is ever told about cost comes from this row,
+    never from `AiSpendEvent` directly. That is what makes the
+    customer-protection rules structural:
+
+      * charged for ONE logical request, not each provider call
+      * a failed request is not charged (`result != success` ⇒ 0)
+      * internal retries and provider fallbacks cannot inflate the
+        charge, because the charge derives from the capped rollup
+      * the charge cannot exceed the maximum quoted BEFORE the request
+        started; the excess is `absorbed_jpy_milli`, our cost
+
+    `quoted_max_jpy_milli` is written at request START. It is cheap now
+    and retroactively unprovable later — there is no way to reconstruct
+    what we would have quoted.
+
+    Credits are SHADOW ONLY at this stage: computed and stored, never
+    enforced, never shown. The credit unit is a placeholder until real
+    per-request cost is measured.
+    """
+
+    RESULT_SUCCESS = "success"
+    RESULT_USER_CANCELLATION = "user_cancellation"
+    RESULT_PROVIDER_FAILURE = "provider_failure"
+    RESULT_APPLICATION_FAILURE = "application_failure"
+    RESULT_SAFETY_REFUSAL = "safety_refusal"
+
+    id = models.BigAutoField(primary_key=True)
+    request_id = models.UUIDField(unique=True)
+    run_id = models.UUIDField(blank=True, null=True)
+    user_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    team_id = models.CharField(max_length=64, blank=True, null=True, db_index=True)
+    surface = models.CharField(max_length=32, blank=True, default="")
+    plan = models.CharField(max_length=32, blank=True, default="")
+    effort = models.CharField(max_length=16, blank=True, default="")
+    result = models.CharField(max_length=32, blank=True, default="", db_index=True)
+
+    # --- money --------------------------------------------------------
+    # Quoted before any spend; the ceiling we promised not to exceed.
+    quoted_max_jpy_milli = models.BigIntegerField(default=0)
+    # What it actually cost us (sum of this request's events).
+    computed_jpy_milli = models.BigIntegerField(default=0)
+    computed_usd_micro = models.BigIntegerField(default=0)
+    # What the customer would be charged (0 on a failure; never above
+    # the quote).
+    charged_jpy_milli = models.BigIntegerField(default=0)
+    # computed - charged. Our cost, deliberately taken on.
+    absorbed_jpy_milli = models.BigIntegerField(default=0)
+    # Shadow only. Milli-credits so a small request is not rounded up
+    # to a whole credit — fractional support is a stated requirement.
+    shadow_credits_milli = models.BigIntegerField(default=0)
+    credit_policy_version = models.CharField(max_length=32, blank=True, default="")
+    rate_card_version = models.CharField(max_length=64, blank=True, default="")
+
+    call_count = models.IntegerField(default=0)
+    # True when any event on this request was unpriced — the rollup is
+    # then a LOWER BOUND, and the report must not present it as exact.
+    has_unpriced = models.BooleanField(default=False)
+
+    started_at = models.DateTimeField(db_index=True)
+    finished_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user_id", "-started_at"], name="se_reqcost_user_started_idx"),
+            models.Index(fields=["surface", "-started_at"], name="se_reqcost_surface_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.request_id} {self.surface} {self.computed_jpy_milli}m¥"
