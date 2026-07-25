@@ -71,16 +71,48 @@ class BillingCheckoutView(AuthenticatedAPIView):
         return Response({"url": url})
 
 
+def _portal_flow_or_error(data):
+    """Validate the optional `flow` / `plan` deep-link params.
+
+    Returns `((flow, plan), None)` or `(None, Response)`. An absent flow
+    is valid and means the portal home.
+    """
+    flow = ((data or {}).get("flow") or "").strip() or None
+    if flow is not None and flow not in stripe_billing.PORTAL_FLOWS:
+        return None, Response(
+            {"error": f"Unknown portal flow {flow!r}."}, status=status.HTTP_400_BAD_REQUEST
+        )
+    plan = ((data or {}).get("plan") or "").strip() or None
+    if flow == "update" and plan not in stripe_billing.PURCHASABLE_PLANS:
+        return None, Response(
+            {"error": f"Unknown plan {plan!r}."}, status=status.HTTP_400_BAD_REQUEST
+        )
+    return (flow, plan), None
+
+
 class BillingPortalView(AuthenticatedAPIView):
     """POST /api/v2/billing/portal/ → {"url": ...}
 
-    Stripe customer portal: plan changes, cancellation, payment
-    method, invoice history. Available once a customer exists.
+    Body (all optional):
+        {"flow": "update", "plan": "max"}  → confirm-the-switch screen
+        {"flow": "cancel"}                 → cancel screen
+        {}                                 → portal home
+
+    Stripe customer portal: plan changes, cancellation, payment method,
+    invoice history. Available once a customer exists. The deep-link
+    flows are what the plans page's per-tier buttons use — an existing
+    subscriber must never be sent back through Checkout, which would
+    open a SECOND parallel subscription rather than change the one they
+    have.
     """
 
     def post(self, request):
+        parsed, err = _portal_flow_or_error(request.data)
+        if err:
+            return err
+        flow, plan = parsed
         try:
-            url = stripe_billing.create_portal_session(request.user)
+            url = stripe_billing.create_portal_session(request.user, flow=flow, plan=plan)
         except stripe_billing.BillingError as e:
             logger.warning("billing portal failed for %s: %s", request.user.email, e)
             return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -263,14 +295,21 @@ class TeamBillingCheckoutView(AuthenticatedAPIView):
 
 
 class TeamBillingPortalView(AuthenticatedAPIView):
-    """POST /api/v2/billing/team/portal/  {"team_id"} → {"url"} — owner-only."""
+    """POST /api/v2/billing/team/portal/ {"team_id", "flow"?, "plan"?} → {"url"}
+
+    Owner-only. Same optional deep-link flows as the personal portal.
+    """
 
     def post(self, request):
+        parsed, err = _portal_flow_or_error(request.data)
+        if err:
+            return err
+        flow, plan = parsed
         team, err = _owned_team_or_error(request, (request.data or {}).get("team_id"))
         if err:
             return err
         try:
-            url = stripe_billing.create_team_portal_session(team)
+            url = stripe_billing.create_team_portal_session(team, flow=flow, plan=plan)
         except stripe_billing.BillingError as e:
             logger.warning(
                 "team billing portal failed for %s / %s: %s",

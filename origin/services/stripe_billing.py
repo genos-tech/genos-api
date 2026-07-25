@@ -331,20 +331,150 @@ def create_checkout_session(user: CustomUser, plan: str) -> str:
     return session["url"]
 
 
-def create_portal_session(user: CustomUser) -> str:
-    """Customer-portal session URL (plan changes, cancel, invoices)."""
+# --------------------------------------------------------------------------- #
+# Customer portal (+ deep-link flows)                                         #
+# --------------------------------------------------------------------------- #
+#
+# Every plan CHANGE for an existing subscriber goes through the portal,
+# never through a second Checkout Session: checkout creates a *new*
+# subscription on the same customer, so a "downgrade" bought that way
+# leaves two live subscriptions billing in parallel while
+# `reconcile_from_stripe` (which takes the BEST active tier) shows
+# nothing wrong. The portal's update flow modifies the existing
+# subscription in place, with Stripe owning proration, tax and SCA.
+#
+# `flow_data` turns the portal into a deep link so the plans page can
+# offer a per-tier button instead of one generic "manage billing":
+#   "update" (+plan) → the confirm-this-exact-switch screen
+#   "switch"         → Stripe's own plan picker, for callers that have
+#                      no per-tier button to hang "update" off
+#   "cancel"         → the cancel screen
+# All are still Stripe-hosted and Stripe-validated (it rejects a
+# session whose customer doesn't own the subscription).
+
+PORTAL_FLOWS = ("update", "switch", "cancel")
+
+# Non-terminal subscription statuses, in relevance order — the ranking
+# used to pick the ONE subscription the overview reports and the portal
+# flows target.
+_LIVE_STATUS_RANK = {"active": 0, "trialing": 1, "past_due": 2, "paused": 3}
+
+
+def _best_live_subscription(stripe, customer_id: str) -> dict | None:
+    """The customer's most relevant non-terminal subscription, or None.
+
+    Plain dicts, same discipline as `verify_webhook` — see the note in
+    `reconcile_from_stripe`.
+    """
+    try:
+        resp = stripe.Subscription.list(customer=customer_id, status="all", limit=100)
+    except Exception as e:  # noqa: BLE001
+        raise BillingError(f"Could not list subscriptions: {e}")
+    subs = (json.loads(str(resp)) or {}).get("data") or []
+    candidates = [s for s in subs if (s or {}).get("status") in _LIVE_STATUS_RANK]
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda s: (_LIVE_STATUS_RANK[s.get("status")], -(s.get("created") or 0)),
+    )
+
+
+def _portal_flow_data(stripe, customer_id: str, flow: str, plan: str | None) -> dict | None:
+    """`flow_data` for a deep link, or None to use the portal home.
+
+    Returns None rather than raising whenever the deep link can't be
+    built (no live subscription, unpriced plan, item-less subscription):
+    a user who clicks "Switch to Max" and lands on the portal home can
+    still finish the job; one who gets a red error can't. Each None is
+    logged, because every one of them means the caller offered a button
+    the account can't actually service.
+    """
+    sub = _best_live_subscription(stripe, customer_id)
+    if sub is None:
+        log.warning("portal flow %r for customer %s: no live subscription", flow, customer_id)
+        return None
+    if flow == "cancel":
+        # Cancellation MODE (immediate vs at period end) is a property of
+        # the portal configuration, not of this call — ours is
+        # at_period_end, which is what the UI copy promises.
+        return {"type": "subscription_cancel", "subscription_cancel": {"subscription": sub["id"]}}
+    if flow == "switch":
+        # The picker, not a confirm screen: no price is named, so
+        # quantity is whatever Stripe carries over. This is the right
+        # flow whenever the caller can't name a target plan.
+        return {"type": "subscription_update", "subscription_update": {"subscription": sub["id"]}}
+    price_id = price_for_plan(plan or "")
+    if not price_id:
+        log.warning("portal flow 'update' for customer %s: plan %r has no price", customer_id, plan)
+        return None
+    items = (sub.get("items") or {}).get("data") or []
+    item = items[0] if items else {}
+    if not item.get("id"):
+        log.warning("portal flow 'update' for subscription %s: no items", sub.get("id"))
+        return None
+    return {
+        "type": "subscription_update_confirm",
+        "subscription_update_confirm": {
+            "subscription": sub["id"],
+            # `quantity` is carried over EXPLICITLY. It is 1 for a
+            # personal subscription but the SEAT COUNT for a team one,
+            # and a confirm flow that omits it would resize the team as
+            # a side effect of changing plan.
+            "items": [
+                {"id": item["id"], "price": price_id, "quantity": item.get("quantity") or 1}
+            ],
+        },
+    }
+
+
+def _portal_url(stripe, customer_id: str, flow: str | None, plan: str | None, what: str) -> str:
+    """Portal session URL, optionally deep-linked into `flow`."""
+    base = settings.FRONTEND_BASE_URL.rstrip("/")
+    return_url = f"{base}{RETURN_PATH}?billing=portal_return"
+    flow_data = _portal_flow_data(stripe, customer_id, flow, plan) if flow else None
+    if flow_data:
+        # A deep-linked flow otherwise ends on Stripe's own confirmation
+        # screen; send the browser back so the return handler runs its
+        # reconcile and the new tier lands without waiting on a webhook.
+        flow_data["after_completion"] = {
+            "type": "redirect",
+            "redirect": {"return_url": return_url},
+        }
+        try:
+            session = stripe.billing_portal.Session.create(
+                customer=customer_id, return_url=return_url, flow_data=flow_data
+            )
+            return session["url"]
+        except Exception as e:  # noqa: BLE001
+            # Overwhelmingly likely: the portal CONFIGURATION doesn't
+            # enable plan updates, or doesn't list this price. That's a
+            # dashboard setting, invisible from here and separate from
+            # STRIPE_PRICE_* — so degrade to the portal home (where the
+            # user can still act) and make the drift loud in the logs.
+            log.warning("portal flow %r failed for %s — using portal home instead: %s", flow, what, e)
+    try:
+        session = stripe.billing_portal.Session.create(
+            customer=customer_id, return_url=return_url
+        )
+    except Exception as e:  # noqa: BLE001
+        raise BillingError(f"Could not open the {what}: {e}")
+    return session["url"]
+
+
+def create_portal_session(
+    user: CustomUser, *, flow: str | None = None, plan: str | None = None
+) -> str:
+    """Customer-portal session URL (plan changes, cancel, invoices).
+
+    `flow="update"` + `plan` deep-links to the switch-to-that-plan
+    confirmation; `flow="cancel"` deep-links to the cancel flow; no
+    `flow` opens the portal home.
+    """
     if not user.stripe_customer_id:
         raise BillingError("No billing account for this user yet.")
     stripe = _stripe()
-    base = settings.FRONTEND_BASE_URL.rstrip("/")
-    try:
-        session = stripe.billing_portal.Session.create(
-            customer=user.stripe_customer_id,
-            return_url=f"{base}{RETURN_PATH}?billing=portal_return",
-        )
-    except Exception as e:  # noqa: BLE001
-        raise BillingError(f"Could not open the billing portal: {e}")
-    return session["url"]
+    return _portal_url(stripe, user.stripe_customer_id, flow, plan, "billing portal")
 
 
 def verify_webhook(raw_body: bytes, signature_header: str | None) -> dict:
@@ -604,21 +734,17 @@ def create_team_checkout_session(team: TeamMaster, plan: str) -> str:
     return session["url"]
 
 
-def create_team_portal_session(team: TeamMaster) -> str:
+def create_team_portal_session(
+    team: TeamMaster, *, flow: str | None = None, plan: str | None = None
+) -> str:
     """Customer portal for the TEAM's Stripe customer (owner-gated in
-    the view): seat/plan changes, cancel, invoices."""
+    the view): seat/plan changes, cancel, invoices. Same `flow` deep
+    links as the personal portal — the update flow preserves the
+    subscription's quantity, so switching plan can't resize the team."""
     if not team.stripe_customer_id:
         raise BillingError("No billing account for this team yet.")
     stripe = _stripe()
-    base = settings.FRONTEND_BASE_URL.rstrip("/")
-    try:
-        session = stripe.billing_portal.Session.create(
-            customer=team.stripe_customer_id,
-            return_url=f"{base}{RETURN_PATH}?billing=portal_return",
-        )
-    except Exception as e:  # noqa: BLE001
-        raise BillingError(f"Could not open the team billing portal: {e}")
-    return session["url"]
+    return _portal_url(stripe, team.stripe_customer_id, flow, plan, "team billing portal")
 
 
 def sync_team_subscription_quantity(team_id) -> str:
@@ -715,10 +841,6 @@ def reconcile_team_from_stripe(team: TeamMaster) -> str:
 # Subscription overview (read-only)                                           #
 # --------------------------------------------------------------------------- #
 
-# Non-terminal statuses the overview reports, in relevance order.
-_OVERVIEW_STATUS_RANK = {"active": 0, "trialing": 1, "past_due": 2, "paused": 3}
-
-
 def subscription_overview(user: CustomUser) -> dict | None:
     """The user's current subscription, shaped for the Plan & Usage tab.
 
@@ -737,19 +859,9 @@ def subscription_overview(user: CustomUser) -> dict | None:
     """
     if not billing_enabled() or not user.stripe_customer_id:
         return None
-    stripe = _stripe()
-    try:
-        resp = stripe.Subscription.list(customer=user.stripe_customer_id, status="all", limit=100)
-    except Exception as e:  # noqa: BLE001
-        raise BillingError(f"Could not list subscriptions: {e}")
-    subs = (json.loads(str(resp)) or {}).get("data") or []
-    candidates = [s for s in subs if (s or {}).get("status") in _OVERVIEW_STATUS_RANK]
-    if not candidates:
+    best = _best_live_subscription(_stripe(), user.stripe_customer_id)
+    if best is None:
         return None
-    best = min(
-        candidates,
-        key=lambda s: (_OVERVIEW_STATUS_RANK[s.get("status")], -(s.get("created") or 0)),
-    )
     items = (best.get("items") or {}).get("data") or []
     first_item = items[0] or {} if items else {}
     # Stripe API 2025-03-31 (Basil) moved current_period_end onto the
