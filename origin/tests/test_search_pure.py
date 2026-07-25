@@ -372,17 +372,42 @@ class ResolveUserChoiceTests(SimpleTestCase):
         choice = self._run("gemini", "")
         self.assertEqual(choice, LlmChoice("gemini", "gemini-2.5-flash"))
 
-    def test_stale_model_not_in_catalog_falls_back_with_warning(self):
-        with self.assertLogs("origin.search_engine.llm.choice", level="WARNING") as cm:
+    def test_stale_model_falls_back_to_that_providers_default(self):
+        with self.assertLogs("origin.search_engine.llm.choice", level="INFO") as cm:
             choice = self._run("gemini", "gemini-removed-model")
         self.assertEqual(choice, LlmChoice("gemini", "gemini-2.5-flash"))
-        self.assertTrue(any("not in MODEL_CATALOG" in m for m in cm.output))
+        self.assertTrue(any("no longer in MODEL_CATALOG" in m for m in cm.output))
+
+    def test_stale_model_resolves_to_a_real_model_for_every_provider(self):
+        """Against the SHIPPED settings, not the rig — the rig supplies
+        its own GEMINI/CLAUDE defaults, so it can't catch a provider
+        whose `*_MODEL` default is missing or blank. That would resolve
+        to `LlmChoice(provider, "")` and fail at the SDK, not here.
+        """
+        for provider in ("gemini", "claude", "openai"):
+            choice = resolve_user_choice(provider, f"{provider}-retired-model")
+            self.assertEqual(choice.provider, provider)
+            self.assertTrue(choice.model, f"{provider} has no usable default model")
+
+    def test_stale_model_KEEPS_a_non_default_provider(self):
+        """The load-bearing case once models are refreshed often.
+
+        Models live in `apis/llm_models.yaml` so they can be swapped
+        whenever a provider ships something new — which means saved
+        preferences go stale in BULK, routinely. Resolving those to the
+        global server default would silently move every Claude and GPT
+        user onto Gemini (the default provider) — and the picker's own
+        same-provider fallback only fixes what is DISPLAYED, so the
+        person would see "Claude" selected while Gemini answered.
+        """
+        choice = self._run("claude", "claude-retired-model")
+        self.assertEqual(choice, LlmChoice("claude", "claude-sonnet-4-6"))
 
     def test_wrong_provider_for_model_falls_back(self):
         # claude-opus-4-7 exists in catalog but under provider 'claude',
-        # so (gemini, claude-opus-4-7) is NOT a catalog pair -> fallback.
-        with self.assertLogs("origin.search_engine.llm.choice", level="WARNING"):
-            choice = self._run("gemini", "claude-opus-4-7")
+        # so (gemini, claude-opus-4-7) is NOT a catalog pair -> fall back
+        # to gemini's default, not to claude's.
+        choice = self._run("gemini", "claude-opus-4-7")
         self.assertEqual(choice, LlmChoice("gemini", "gemini-2.5-flash"))
 
 

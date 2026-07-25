@@ -101,15 +101,26 @@ def cheaper_models_same_provider(chosen: LlmChoice) -> list[str]:
     return list(reversed(same[:idx]))
 
 
-def _server_default_choice() -> LlmChoice:
-    """The choice implied by env vars when no user preference applies."""
+def _provider_default_choice(provider: str) -> LlmChoice:
+    """That provider's server-configured default model.
+
+    Deliberately NOT catalog-validated: `*_MODEL` is an operator escape
+    hatch for pinning something the catalog doesn't list (a preview id,
+    a region-specific build). `test_default_models_are_in_catalog`
+    covers the committed defaults; an env override is on the operator.
+    """
     cfg = settings.SEARCH_ENGINE
-    provider = (cfg.get("LLM_PROVIDER") or "gemini").lower()
     if provider == "claude":
         return LlmChoice(provider="claude", model=cfg.get("CLAUDE_MODEL") or "")
     if provider == "openai":
         return LlmChoice(provider="openai", model=cfg.get("OPENAI_MODEL") or "")
     return LlmChoice(provider="gemini", model=cfg.get("GEMINI_MODEL") or "")
+
+
+def _server_default_choice() -> LlmChoice:
+    """The choice implied by env vars when no user preference applies."""
+    provider = (settings.SEARCH_ENGINE.get("LLM_PROVIDER") or "gemini").lower()
+    return _provider_default_choice(provider)
 
 
 def resolve_user_choice(
@@ -119,10 +130,10 @@ def resolve_user_choice(
     """Pick the effective `LlmChoice` for a user.
 
     - Both fields blank → server default.
-    - Provider unknown OR (provider, model) not in `MODEL_CATALOG` →
-      server default + warning. This is the stale-preference path: an
-      admin removed a model the user had saved. Falling back here keeps
-      the request working instead of bubbling an SDK error.
+    - Provider UNKNOWN → server default + warning.
+    - Provider known but model blank or stale → that PROVIDER's default
+      model. A stale model is the routine outcome of a catalog refresh,
+      and it must not change which provider answers the user.
     """
     provider = (preferred_provider or "").lower().strip()
     model = (preferred_model or "").strip()
@@ -137,22 +148,34 @@ def resolve_user_choice(
         )
         return _server_default_choice()
 
-    if not model:
-        # Provider chosen but no specific model — use that provider's
-        # server-configured default model.
-        cfg = settings.SEARCH_ENGINE
-        if provider == "claude":
-            return LlmChoice(provider="claude", model=cfg.get("CLAUDE_MODEL") or "")
-        if provider == "openai":
-            return LlmChoice(provider="openai", model=cfg.get("OPENAI_MODEL") or "")
-        return LlmChoice(provider="gemini", model=cfg.get("GEMINI_MODEL") or "")
-
-    if not _catalog_has(provider, model):
-        log.warning(
-            "User preference (%s, %s) not in MODEL_CATALOG; falling back to server default",
-            provider,
-            model,
-        )
-        return _server_default_choice()
+    if not model or not _catalog_has(provider, model):
+        if model:
+            # STALE MODEL, VALID PROVIDER — the common case after a
+            # catalog swap, which now happens routinely (models are
+            # managed in apis/llm_models.yaml precisely so they can be
+            # refreshed often). Keep the user on the provider they
+            # chose: falling through to `_server_default_choice()` would
+            # silently move every Claude and GPT user onto Gemini,
+            # because that is the server default. The picker's own
+            # same-provider fallback only fixes what's *displayed*, so
+            # the mismatch would be invisible — their asks would just
+            # quietly change model AND provider.
+            log.info(
+                "User preference (%s, %s) is no longer in MODEL_CATALOG; "
+                "falling back to that provider's default",
+                provider,
+                model,
+            )
+        return _provider_default_choice(provider)
 
     return LlmChoice(provider=provider, model=model)
+
+
+def _provider_default_choice(provider: str) -> LlmChoice:
+    """That provider's server-configured default model."""
+    cfg = settings.SEARCH_ENGINE
+    if provider == "claude":
+        return LlmChoice(provider="claude", model=cfg.get("CLAUDE_MODEL") or "")
+    if provider == "openai":
+        return LlmChoice(provider="openai", model=cfg.get("OPENAI_MODEL") or "")
+    return LlmChoice(provider="gemini", model=cfg.get("GEMINI_MODEL") or "")

@@ -74,18 +74,21 @@ jobs:
       GEMINI_PROJECT: amplified-album-496413-t2
       GEMINI_LOCATION: asia-northeast1
       EMBEDDING_PROVIDER: vertex
-      # Cost: pin CI evals to the cheap Flash rung rather than inheriting
-      # the server default (gemini-3.5-flash, $1.50/$9.00 per 1M).
-      # gemini-2.5-flash is $0.30/$2.50 — ~5x/3.6x cheaper — and
+      # Cost: pin CI evals to the cheap light rung rather than inheriting
+      # the server default (gemini-3.6-flash, $1.50/$7.50 per 1M).
+      # gemini-3.5-flash-lite is $0.30/$2.50 — ~5x/3x cheaper — and
       # LLM_SPEND_MAP.md §7 already names it as the eval/mechanical-task
-      # model of choice. The HARD gate (retrieval suite) makes no LLM
+      # model of choice. Unlike the gemini-2.5-flash it replaced, it is
+      # IN the catalog (apis/llm_models.yaml), so quota and per-model
+      # telemetry attribute eval runs correctly instead of to a model
+      # nothing else knows about. The HARD gate (retrieval suite) makes no LLM
       # calls at all, so this cannot affect what blocks a deploy; it only
       # touches the report-only behavior suite + judge.
       # NB: a step-change in judge scores right after this landed is the
       # cheaper judge, not a quality regression — re-baseline the trend.
-      # If a run starts 404-ing, 2.5-flash has been retired on Vertex:
+      # If a run starts 404-ing, the model has been retired on Vertex:
       # drop this line to fall back to the server default.
-      GEMINI_MODEL: gemini-2.5-flash
+      GEMINI_MODEL: gemini-3.5-flash-lite
       # NOTE: no RAG_USE_RERANKER override — prod default on purpose (see
       # header). The PR gate forces it off for determinism; the trend
       # wants prod parity.

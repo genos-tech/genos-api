@@ -167,10 +167,19 @@ class ClaudeClient:
         model = model_override or settings.SEARCH_ENGINE["CLAUDE_MODEL"]
         max_tokens = int(settings.SEARCH_ENGINE.get("CLAUDE_MAX_TOKENS", 4096))
 
-        # Opus 4.7 uses extended thinking and the Anthropic API rejects
-        # `temperature` on it (400 invalid_request_error). Skip the
-        # parameter for that family; the rest of the catalog still
-        # honors the 0.2 deterministic-leaning bias we want.
+        # Extended-thinking models reject `temperature` outright (400
+        # invalid_request_error); the rest honour the 0.2
+        # deterministic-leaning bias we want.
+        #
+        # Which models those are is DATA, declared per model in
+        # `apis/llm_models.yaml` — this used to be a
+        # `startswith("claude-opus-4-7")` string test, which silently
+        # stopped covering the family the moment a new thinking model was
+        # added to the catalog. That is precisely what happens on every
+        # model swap, so the check has to live next to the model list.
+        #
+        # An UNKNOWN model (operator pinned a preview id via CLAUDE_MODEL)
+        # keeps the old send-it behaviour — see `supports_temperature`.
         stream_kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
@@ -178,7 +187,7 @@ class ClaudeClient:
             "tools": sdk_tools or anthropic.NOT_GIVEN,
             "messages": sdk_messages,
         }
-        if not model.startswith("claude-opus-4-7"):
+        if settings.LLM_CATALOG.supports_temperature(model):
             stream_kwargs["temperature"] = 0.2
 
         try:

@@ -1,0 +1,274 @@
+# =====================================================================
+#  Genos LLM model catalog
+# =====================================================================
+#
+#  THE ONE FILE TO EDIT WHEN A PROVIDER SHIPS A NEW MODEL.
+#
+#  Everything downstream is derived from here at boot by
+#  `apis/llm_catalog.py`:
+#
+#    * SEARCH_ENGINE["MODEL_CATALOG"] — the Settings model picker
+#      (`GET /agent/models/`) and the `(provider, model)` allowlist that
+#      `resolve_user_choice` validates a saved preference against.
+#    * SEARCH_ENGINE["TIER_QUOTAS"][<tier>]["model_daily"] — the
+#      per-model daily caps the quota engine enforces.
+#
+#  That second one is why the caps live here rather than in settings.py.
+#  A model MISSING from `model_daily` is treated as UNLIMITED, not zero,
+#  so under the old hand-written table adding a rung and forgetting to
+#  add it to all four tiers silently uncapped a premium model — no
+#  error, no 429, just an unbounded subsidy. Here a model inherits its
+#  class's cap automatically, so that mistake is not expressible.
+#
+# ---------------------------------------------------------------------
+#  HOW TO SWAP A MODEL
+# ---------------------------------------------------------------------
+#
+#   1. Edit the entry below (or add one and delete the old one).
+#   2. Keep each provider's list ordered CHEAPEST FIRST. This is a
+#      contract, not a style choice — `cheaper_models_same_provider()`
+#      walks the list backwards for quota fallback, and the picker
+#      renders in this order. The loader ASSERTS non-decreasing price
+#      and refuses to boot otherwise, so a rung inserted in the wrong
+#      slot fails immediately instead of silently mis-ordering.
+#   3. If the new model is the provider's default, update
+#      GEMINI_MODEL / CLAUDE_MODEL / OPENAI_MODEL in settings.py —
+#      `test_default_models_are_in_catalog` fails if you forget.
+#   4. Run the api test suite. Nothing else needs touching: no
+#      migration, no frontend change (labels and notes are served from
+#      here), no per-tier quota edit.
+#
+#  Users who had the REMOVED model saved keep their provider — a stale
+#  model resolves to that provider's server default, not to Gemini.
+#  See `resolve_user_choice` in llm/choice.py.
+#
+#  Full runbook, incl. what to check on Vertex Model Garden first:
+#  genos-docs/operations/MODEL_SWITCHING.md
+#
+# ---------------------------------------------------------------------
+#  FIELDS
+# ---------------------------------------------------------------------
+#
+#   model    (req) exact id sent to the provider API.
+#   class    (req) light | middle | highend — picks the tier caps below.
+#
+#                  ⚠️ `class` is a COST bucket (yen per ask), NOT the
+#                  marketing tier and NOT the rung the user sees. Its
+#                  only job is to choose a daily cap, and caps exist to
+#                  bound worst-case spend — so a model belongs to the
+#                  class its ¥/ask lands in, full stop.
+#
+#                  The user-facing "light / middle / highend" choice is
+#                  simply LIST POSITION: three entries per provider,
+#                  cheapest first. The two usually agree. They do not
+#                  agree for Gemini, whose priciest model ($2/$12) is
+#                  still only mid-cost — so Gemini has no `highend`
+#                  entry at all, and that is correct: Gemini is the
+#                  cheap provider and its rungs get generous caps.
+#                  Classing them upward "to look symmetrical" would
+#                  meter the DEFAULT MODEL at 12 asks/day on core.
+#
+#   label    (req) shown in the Settings picker.
+#   note     (req) one-line help text under the label in the picker.
+#   price    (req) USD per 1M tokens, public list price. Used to ASSERT
+#                  the cheap→expensive ordering, and read by the offline
+#                  cost aggregator. `cached_input` optional.
+#   supports_temperature (opt, default true) — false for models whose
+#                  API rejects `temperature`. Read by
+#                  llm/claude_client.py.
+#
+#                  Anthropic returns a hard 400 "`temperature` is
+#                  deprecated for this model." on its newer families.
+#                  This is NOT theoretical: the adapter used to guard
+#                  with `startswith("claude-opus-4-7")`, so when
+#                  claude-opus-4-8 joined the catalog on 2026-07-25
+#                  EVERY opus-4-8 ask 400'd. Verified by calling the
+#                  API. Test a new model BOTH ways before listing it —
+#                  one request each, and it is the only proof.
+#
+#  Prices verified 2026-07-25. Re-check on every swap; they move.
+# =====================================================================
+
+version: 1
+
+providers:
+    # -----------------------------------------------------------------
+    # Gemini — via Vertex AI in prod (GEMINI_USE_VERTEX=true). This is
+    # the default provider and carries most volume.
+    # -----------------------------------------------------------------
+    gemini:
+        - model: gemini-3.5-flash-lite
+          class: light
+          label: Gemini 3.5 Flash-Lite
+          note: Fastest and cheapest — great for everyday questions.
+          price: { input: 0.30, output: 2.50 }
+          # Released 2026-07-21. Replaces gemini-3.5-flash as the light
+          # rung: 5x cheaper in, 3.6x cheaper out. Since Gemini is the
+          # server default and the free tier's headline number, this is
+          # the single largest real-spend lever in the catalog — and it
+          # is the model to point RAG_RERANKER_MODEL / RAG_REWRITE_MODEL
+          # at (LLM_SPEND_MAP.md section 7, levers 2 and 3).
+
+        - model: gemini-3.6-flash
+          class: light
+          label: Gemini 3.6 Flash
+          note: Balanced speed and quality — the default.
+          price: { input: 1.50, output: 7.50, cached_input: 0.15 }
+          # Released 2026-07-21. The server default (GEMINI_MODEL), and
+          # the direct successor to gemini-3.5-flash: same input price,
+          # 17% cheaper output, and it beats 3.1 Pro on coding.
+          #
+          # `light` because gemini-3.5-flash was flash-class (~JPY1-2 per
+          # ask) and this is cheaper still. Light caps equal the umbrella
+          # `llm_ask_daily`, i.e. the default model is effectively
+          # unmetered — which is exactly what it must be.
+          #
+          # The 10x cached-input discount matters more here than the
+          # headline rate: Genos re-sends 57 tool schemas on every call,
+          # which is precisely the stable prefix implicit caching rewards
+          # (LLM_SPEND_MAP.md section 2).
+
+        - model: gemini-3.1-pro-preview
+          class: middle
+          label: Gemini 3.1 Pro Preview
+          note: Extended thinking, for the hardest questions.
+          price: { input: 2.00, output: 12.00 }
+          # Gemini's TOP rung as the user sees it (third of three), but
+          # cost class `middle` — at $2/$12 it is nowhere near the
+          # ~JPY60-70/ask premium band that opus-5 and sol occupy, and a
+          # cap sized for those would be gratuitously tight here.
+          # Unchanged from the previous catalog, where it was also mid.
+          #
+          # Two caveats worth knowing:
+          #   * gemini-3.6-flash above reportedly beats it on coding at
+          #     lower cost, so this is a thinking-depth rung, not a
+          #     quality-dominance one.
+          #   * Price steps to $4.00/$18.00 above 200K context, and the
+          #     57-tool prefix means Genos reaches long contexts on
+          #     ordinary asks — the effective rate is often the higher
+          #     one. That is the main reason not to make it the default.
+          #
+          # Keep the `-preview` suffix: GA reporting is contradictory and
+          # this id is the one known to serve.
+          #
+          # Google currently ships nothing in the premium cost band, so
+          # Gemini has no `highend` entry. That is a fact about Google's
+          # lineup, not a gap to paper over.
+
+    # -----------------------------------------------------------------
+    # Claude — DIRECT to the Anthropic API (`anthropic.Anthropic(api_key
+    # =CLAUDE_API_KEY)` in llm/claude_client.py). Despite what older docs
+    # said, there is no Vertex Model Garden path in this codebase, so
+    # Model Garden availability is NOT the constraint on adding a model —
+    # anything the Anthropic API serves works. Bills to the Anthropic
+    # account, outside GCP, like OpenAI.
+    #
+    # All three ids below were called for real on 2026-07-25 before
+    # being listed. Do the same for any new one — it takes one request
+    # and it is the only thing that actually proves an id serves.
+    # -----------------------------------------------------------------
+    claude:
+        - model: claude-haiku-4-5
+          class: light
+          label: Claude Haiku 4.5
+          note: Fast and economical.
+          price: { input: 1.00, output: 5.00 }
+
+        - model: claude-sonnet-5
+          class: middle
+          label: Claude Sonnet 5
+          note: Near-Opus quality at a working-day price.
+          price: { input: 3.00, output: 15.00 }
+          supports_temperature: false
+          # Intro pricing $2.00/$10.00 through 2026-08-31; the list rate
+          # above is used for cap sizing so the caps don't have to move
+          # when the intro ends.
+
+        - model: claude-opus-5
+          class: highend
+          label: Claude Opus 5
+          note: Most capable Claude — slowest, for the hardest questions.
+          price: { input: 5.00, output: 25.00 }
+          supports_temperature: false
+          # Replaces the claude-opus-4-7 + 4-8 pair, which were the same
+          # price ($5/$25) and therefore two premium rungs for one cost
+          # step. Collapsing them REDUCES worst-case-at-cap exposure.
+          #
+          # Claude Fable 5 is deliberately NOT here. At $10/$50 it is 2x
+          # Opus for a workload that is agentic tool-calling and RAG
+          # synthesis, not long-form creative work — the one thing it is
+          # actually best at. It would also become the single most
+          # expensive rung in the whole catalog and force every premium
+          # cap down to protect the subsidy envelope.
+
+    # -----------------------------------------------------------------
+    # OpenAI — direct to api.openai.com. There is NO GPT path on Vertex
+    # Model Garden, so this is a THIRD billable line, outside GCP: it
+    # does not appear in the GCP cost console at all. See
+    # genos-docs/operations/LLM_SPEND_MAP.md section 1.
+    # -----------------------------------------------------------------
+    openai:
+        - model: gpt-5.6-luna
+          class: light
+          label: GPT-5.6 Luna
+          note: Fast and economical.
+          price: { input: 1.00, output: 6.00, cached_input: 0.10 }
+
+        - model: gpt-5.6-terra
+          class: middle
+          label: GPT-5.6 Terra
+          note: Higher quality, slower.
+          price: { input: 2.50, output: 15.00, cached_input: 0.25 }
+          caps:
+              # Held at 0 on free so that gaining a third provider does
+              # not silently inflate the free-tier subsidy: free's
+              # "taste of premium" budget is deliberately fixed at its
+              # historical size (one middle rung per legacy provider).
+              free: 0
+
+        - model: gpt-5.6-sol
+          class: highend
+          label: GPT-5.6 Sol
+          note: Very slow, but best for very complex questions.
+          price: { input: 5.00, output: 30.00, cached_input: 0.50 }
+          # The most expensive rung in the catalog, so it is the model
+          # worst-case-at-cap is sized on — the `highend` caps below are
+          # effectively "how much Sol per day".
+
+# =====================================================================
+#  Per-tier daily caps, BY CLASS
+# =====================================================================
+#
+#  A model's cap = its class's number for that tier, unless the model
+#  carries a `caps:` override above.
+#
+#  Cost classes, per ask (FX JPY150/USD):
+#    light   ~JPY1-2      middle  ~JPY10-18      highend  ~JPY60-70
+#  The middle and highend caps are the real subsidy lever, NOT
+#  `llm_ask_daily` — light is cheap enough to be the headline number,
+#  which is why every light cap equals that tier's umbrella.
+#
+#  Sizing rationale (worst-case-at-cap = fill the daily total with the
+#  priciest models still allowed) lives in
+#  genos-docs/operations/LLM_TIER_COST_OPTIMIZATION.md section 12. The
+#  numbers survive the 2026-07-25 model refresh unchanged because the
+#  worst case per class did not move:
+#    light   gpt-5.6-luna   $1/$6   (unchanged)
+#    middle  claude-sonnet-5 $3/$15 (was claude-sonnet-4-6, same price)
+#    highend gpt-5.6-sol    $5/$30  (unchanged)
+#  and the mid rung count is still 3, while premium DROPPED from 3 to 2
+#  (claude-opus-4-7 + 4-8 collapsed into claude-opus-5). Worst-case
+#  exposure therefore went down, not up.
+#
+#  Every tier in SEARCH_ENGINE["TIER_QUOTAS"] must appear here; the
+#  loader refuses to boot if the two disagree, so a renamed tier can't
+#  quietly fall through to "unlimited".
+# =====================================================================
+
+tier_caps:
+    free: { light: 20, middle: 10, highend: 0 }
+    core: { light: 100, middle: 12, highend: 2 }
+    pro: { light: 250, middle: 25, highend: 4 }
+    max: { light: 500, middle: 50, highend: 10 }
+    # Contact-sales tier: no per-model caps at all.
+    enterprise: unlimited

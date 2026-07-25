@@ -18,6 +18,8 @@ from pathlib import Path
 
 import dj_database_url
 
+from apis.llm_catalog import load_llm_catalog
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -565,7 +567,7 @@ SEARCH_ENGINE = {
     # default (it's an operator escape hatch), so a stale default here ships
     # silently: the loop runs it while the Settings picker only offers the
     # catalog. `test_default_models_are_in_catalog` guards against that drift.
-    "GEMINI_MODEL": os.environ.get("GEMINI_MODEL") or "gemini-3.5-flash",
+    "GEMINI_MODEL": os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash",
     # How many retrieved chunks to stuff into the Gemini prompt as
     # grounding. Larger = better recall, more cost / latency.
     "AGENT_CONTEXT_CHUNKS": int(os.environ.get("AGENT_CONTEXT_CHUNKS", "12")),
@@ -593,7 +595,9 @@ SEARCH_ENGINE = {
     "LLM_PROVIDER": (os.environ.get("LLM_PROVIDER", "gemini") or "gemini").lower(),
     # Anthropic Claude config (only used when LLM_PROVIDER=claude).
     "CLAUDE_API_KEY": os.environ.get("CLAUDE_API_KEY", ""),
-    "CLAUDE_MODEL": os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"),
+    # `or`, not a get() default — compose passes unset vars as "", which
+    # shadows a get() default (see VERTEX_EMBEDDING_DIMENSIONS above).
+    "CLAUDE_MODEL": os.environ.get("CLAUDE_MODEL") or "claude-sonnet-5",
     # Anthropic requires max_tokens to be set explicitly on every
     # call (unlike Gemini, which has a sensible server-side default).
     "CLAUDE_MAX_TOKENS": int(os.environ.get("CLAUDE_MAX_TOKENS", "4096")),
@@ -996,93 +1000,22 @@ SEARCH_ENGINE = {
     # Leave empty to disable web search — the agent will surface a clean
     # error rather than crashing when the key is absent.
     "TAVILY_API_KEY": os.environ.get("TAVILY_API_KEY", ""),
-    # User-selectable LLM provider/model catalog. Each entry is shown
-    # in the Settings → Spotlight → AI Model picker. `note` is a short
-    # one-liner shown beneath the model dropdown ("Slower — uses
-    # extended thinking" etc.). When a user removes their selection
-    # (or an admin removes a model from this list), `resolve_user_choice`
-    # in llm/choice.py falls back to the server default and logs a
-    # warning — no silent SDK error.
-    "MODEL_CATALOG": [
-        # {
-        #     "provider": "gemini",
-        #     "model": "gemini-2.5-flash",
-        #     "label": "Gemini 2.5 Flash",
-        #     "note": "Fast responses, good for simple questions.",
-        # },
-        # {
-        #     "provider": "gemini",
-        #     "model": "gemini-2.5-pro",
-        #     "label": "Gemini 2.5 Pro",
-        #     "note": "Slower — uses extended thinking for hard questions.",
-        # },
-        {
-            "provider": "gemini",
-            "model": "gemini-3.5-flash",
-            "label": "Gemini 3.5 Flash",
-            "note": "Fast responses, good for most questions.",
-        },
-        {
-            "provider": "gemini",
-            "model": "gemini-3.1-pro-preview",
-            "label": "Gemini 3.1 Pro Preview",
-            "note": "Slower — uses extended thinking for hard questions.",
-        },
-        {
-            "provider": "claude",
-            "model": "claude-haiku-4-5",
-            "label": "Claude Haiku 4.5",
-            "note": "Fast and economical.",
-        },
-        {
-            "provider": "claude",
-            "model": "claude-sonnet-4-6",
-            "label": "Claude Sonnet 4.6",
-            "note": "Higher quality, slower.",
-        },
-        {
-            "provider": "claude",
-            "model": "claude-opus-4-7",
-            "label": "Claude Opus 4.7",
-            "note": "Very slow, but best for very complex questions.",
-        },
-        # Top Claude rung — same list price as 4.7 ($5/$25 per 1M) but
-        # more capable, so it's the Max-tier value fence rather than a
-        # cost step. Newer Claude models (Opus 5, Fable 5) are NOT added
-        # here: prod reaches Claude through Vertex Model Garden and their
-        # availability on that surface is unverified — adding an id the
-        # Model Garden doesn't serve turns a user's model pick into a
-        # runtime 404. Promote them only after checking Model Garden.
-        {
-            "provider": "claude",
-            "model": "claude-opus-4-8",
-            "label": "Claude Opus 4.8",
-            "note": "Most capable Claude — slowest, for the hardest questions.",
-        },
-        # OpenAI GPT rungs. Unlike gemini/claude these do NOT route
-        # through Vertex — there is no GPT path on Model Garden — so they
-        # bill to a separate OpenAI account (OPENAI_API_KEY below). That
-        # makes OpenAI a third billable LLM line; see genos-docs
-        # operations/LLM_SPEND_MAP.md §1.
-        {
-            "provider": "openai",
-            "model": "gpt-5.6-luna",
-            "label": "GPT-5.6 Luna",
-            "note": "Fast and economical.",
-        },
-        {
-            "provider": "openai",
-            "model": "gpt-5.6-terra",
-            "label": "GPT-5.6 Terra",
-            "note": "Higher quality, slower.",
-        },
-        {
-            "provider": "openai",
-            "model": "gpt-5.6-sol",
-            "label": "GPT-5.6 Sol",
-            "note": "Very slow, but best for very complex questions.",
-        },
-    ],
+    # User-selectable LLM provider/model catalog — what the Settings →
+    # Spotlight → AI Model picker offers, and the allowlist a saved
+    # preference is validated against.
+    #
+    # Populated at the bottom of this file from `apis/llm_models.yaml`,
+    # which is THE file to edit when a provider ships a new model (it
+    # carries the per-model daily caps too — see the note on
+    # TIER_QUOTAS). Left as a placeholder here so the SEARCH_ENGINE
+    # literal still reads as the complete key set.
+    #
+    # When a user's saved model leaves the catalog — the routine outcome
+    # of a refresh — `resolve_user_choice` in llm/choice.py resolves them
+    # to THAT PROVIDER's default, deliberately not the global one: the
+    # global default is Gemini, so anything else would move every Claude
+    # and GPT user onto Gemini without them noticing.
+    "MODEL_CATALOG": [],
     # Quotas by subscription tier — free / core / pro / max / enterprise
     # — resolved from the user's *effective* tier (best of
     # `CustomUser.tier` and the `plan` of every team they belong to)
@@ -1095,7 +1028,9 @@ SEARCH_ENGINE = {
     #     successful tool execution).
     #   - `model_daily[<model>]`: per-model asks per day. A model
     #     missing from a tier's dict is treated as unlimited for that
-    #     tier.
+    #     tier. NOT written here — derived per class from
+    #     `apis/llm_models.yaml`, which is what makes that "missing =
+    #     unlimited" rule un-trippable when models change.
     # Monthly quotas (UTC calendar month; creations counted — deleting
     # a resource does not refund quota):
     #   - `task_create_monthly`: TaskMaster rows created per month.
@@ -1111,34 +1046,17 @@ SEARCH_ENGINE = {
     # via the TIER_QUOTAS_JSON env override below; canonical rationale
     # for the numbers: genos-docs operations/SUBSCRIPTION_TIERS.md.
     "TIER_QUOTAS": {
-        # NOTE: a model MISSING from a tier's `model_daily` means
-        # UNLIMITED for that tier, not zero. Every model in
-        # MODEL_CATALOG above must appear in EVERY tier's dict below
-        # (except `enterprise`, which is deliberately unlimited). Adding
-        # a catalog rung without adding it here silently uncaps it.
+        # `model_daily` is deliberately EMPTY in every tier below — it is
+        # filled from `apis/llm_models.yaml` at the bottom of this file.
+        # A model missing from `model_daily` is UNLIMITED (not zero), so
+        # under the old hand-written table adding a catalog rung and
+        # forgetting one of four tiers silently uncapped a premium model.
+        # Deriving it per class from the catalog makes that unexpressible.
+        # Everything else here — the per-tier totals — stays hand-set.
         "free": {
             "llm_ask_daily": 20,
             "web_search_daily": 10,
-            "model_daily": {
-                # "gemini-2.5-flash": 10,
-                # "gemini-2.5-pro": 5,
-                "gemini-3.5-flash": 20,
-                "gemini-3.1-pro-preview": 10,
-                "claude-haiku-4-5": 20,
-                "claude-sonnet-4-6": 10,
-                "claude-opus-4-7": 0,
-                "claude-opus-4-8": 0,
-                "gpt-5.6-luna": 20,
-                # Free's "taste of premium" budget is deliberately held
-                # at its historical size (10 gemini-pro + 10 sonnet).
-                # The new GPT mid rung is 0 here rather than 10 so that
-                # adding models doesn't silently inflate the free-tier
-                # subsidy — free's worst case stays ~JPY280/day exactly
-                # as before. Flash-class rungs are ~free, so luna is
-                # granted at the full 20.
-                "gpt-5.6-terra": 0,
-                "gpt-5.6-sol": 0,
-            },
+            "model_daily": {},  # filled from llm_models.yaml (see below)
             "task_create_monthly": 200,
             "note_create_monthly": 100,
             "message_retention_days": 90,
@@ -1195,21 +1113,7 @@ SEARCH_ENGINE = {
         "core": {
             "llm_ask_daily": 100,
             "web_search_daily": 25,
-            "model_daily": {
-                "gemini-3.5-flash": 100,
-                "gemini-3.1-pro-preview": 12,
-                "claude-haiku-4-5": 100,
-                "claude-sonnet-4-6": 12,
-                # claude-opus-4-8 is 0 here: exclusive access to the newest
-                # Opus is the pro/max value fence (the two Opus rungs cost
-                # the same per ask, so this is a packaging line, not a
-                # cost one).
-                "claude-opus-4-7": 2,
-                "claude-opus-4-8": 0,
-                "gpt-5.6-luna": 100,
-                "gpt-5.6-terra": 12,
-                "gpt-5.6-sol": 2,
-            },
+            "model_daily": {},  # filled from llm_models.yaml (see below)
             "task_create_monthly": 1000,
             "note_create_monthly": 500,
             "message_retention_days": None,  # unlimited on paid tiers
@@ -1218,17 +1122,7 @@ SEARCH_ENGINE = {
         "pro": {
             "llm_ask_daily": 250,
             "web_search_daily": 60,
-            "model_daily": {
-                "gemini-3.5-flash": 250,
-                "gemini-3.1-pro-preview": 25,
-                "claude-haiku-4-5": 250,
-                "claude-sonnet-4-6": 25,
-                "claude-opus-4-7": 4,
-                "claude-opus-4-8": 4,
-                "gpt-5.6-luna": 250,
-                "gpt-5.6-terra": 25,
-                "gpt-5.6-sol": 4,
-            },
+            "model_daily": {},  # filled from llm_models.yaml (see below)
             "task_create_monthly": 3000,
             "note_create_monthly": 1500,
             "message_retention_days": None,  # unlimited on paid tiers
@@ -1241,17 +1135,7 @@ SEARCH_ENGINE = {
         "max": {
             "llm_ask_daily": 500,
             "web_search_daily": 150,
-            "model_daily": {
-                "gemini-3.5-flash": 500,
-                "gemini-3.1-pro-preview": 50,
-                "claude-haiku-4-5": 500,
-                "claude-sonnet-4-6": 50,
-                "claude-opus-4-7": 10,
-                "claude-opus-4-8": 10,
-                "gpt-5.6-luna": 500,
-                "gpt-5.6-terra": 50,
-                "gpt-5.6-sol": 10,
-            },
+            "model_daily": {},  # filled from llm_models.yaml (see below)
             "task_create_monthly": 8000,
             "note_create_monthly": 4000,
             "message_retention_days": None,  # unlimited on paid tiers
@@ -1272,11 +1156,51 @@ SEARCH_ENGINE = {
     },
 }
 
+# --- LLM model catalog (apis/llm_models.yaml) -------------------------
+# The single file to edit when a provider ships a new model. It supplies
+# BOTH the picker catalog and the per-model daily caps, because those two
+# have to move together: a model absent from `model_daily` is UNLIMITED,
+# so a catalog-only edit is a silent uncapping. Caps are declared per
+# CLASS (light / middle / highend) there, so a swapped model inherits its
+# predecessor's cap automatically.
+#
+# Loads eagerly and raises on any problem — a bad catalog must not boot.
+# Override the path with LLM_MODELS_YAML (tests, or an ops experiment
+# with a different lineup).
+_llm_catalog = load_llm_catalog(
+    os.environ.get("LLM_MODELS_YAML") or (BASE_DIR / "apis" / "llm_models.yaml")
+)
+SEARCH_ENGINE["MODEL_CATALOG"] = _llm_catalog.catalog
+# Exposed whole (not just the catalog list) for per-model capability
+# flags — llm/claude_client.py asks it whether a model accepts
+# `temperature`. Top-level rather than inside SEARCH_ENGINE because it's
+# an object, and TIER_QUOTAS_JSON-style dict overrides shouldn't be able
+# to clobber it into something without those methods.
+LLM_CATALOG = _llm_catalog
+
+# Tier names must agree in both directions: a tier here with no caps in
+# the YAML would run uncapped, and a tier only in the YAML is a typo that
+# would otherwise sit unnoticed.
+_quota_tiers = set(SEARCH_ENGINE["TIER_QUOTAS"])
+_capped_tiers = set(_llm_catalog.model_daily)
+if not _capped_tiers <= _quota_tiers:
+    raise ValueError(
+        f"llm_models.yaml tier_caps names unknown tier(s) "
+        f"{sorted(_capped_tiers - _quota_tiers)}; TIER_QUOTAS has {sorted(_quota_tiers)}"
+    )
+for _tier, _cfg in SEARCH_ENGINE["TIER_QUOTAS"].items():
+    # Absent from the YAML == declared `unlimited` there (enterprise).
+    _cfg["model_daily"] = _llm_catalog.model_daily.get(_tier, {})
+
 # Optional full-replace override for the tier quota table, so ops can
 # tune limits per environment (or tests can rig tiny ones) without a
 # code change. Value = a JSON object with the same shape as the
 # default above. Invalid JSON fails loud at boot — better than
 # silently running with default limits.
+#
+# ⚠️ FULL replace, and it runs AFTER the YAML injection above — so an
+# override that omits `model_daily` uncaps every model for that tier.
+# The YAML's structural guarantee does not extend through this path.
 _tier_quotas_json = os.environ.get("TIER_QUOTAS_JSON", "")
 if _tier_quotas_json:
     SEARCH_ENGINE["TIER_QUOTAS"] = json.loads(_tier_quotas_json)
