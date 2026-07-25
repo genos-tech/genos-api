@@ -72,6 +72,17 @@ from origin.search_engine.models import AgentLlmCall, AgentRun, AgentStep
 
 log = logging.getLogger(__name__)
 
+# Emitted when a run stops on the per-request cost ceiling. A module
+# constant because `agent_views` classifies the run's outcome from it —
+# a ceiling stop is an APPLICATION failure (our decision, we spent the
+# money, the user got nothing usable), NOT a provider failure. Two
+# copies of this string would eventually drift and silently start
+# blaming the provider for our own ceiling.
+COST_CEILING_MESSAGE = (
+    "This request grew too large to finish. "
+    "Try narrowing it to a more specific question."
+)
+
 # Marker stored in AgentStep.summary while a write tool is awaiting the
 # user's decision. The resume path uses it to locate the pending row.
 PENDING_APPROVAL_MARKER = "awaiting_approval"
@@ -1899,6 +1910,34 @@ def _drive_loop(
                 run_id,
                 step,
             )
+            return None
+
+        # Per-request cost ceiling — the one safety control that BLOCKS.
+        # Same placement and the same bound as cancellation: checked
+        # before the model call, so an in-flight call finishes and real
+        # spend can exceed the ceiling by at most one call. That excess
+        # is ours, which is exactly what `absorbed_jpy_milli` records.
+        #
+        # This bounds the case a per-user daily cap structurally cannot:
+        # one pathological request looping to the step cap on the most
+        # expensive model can burn a day's budget faster than any daily
+        # check runs.
+        ceiling = int(settings.SEARCH_ENGINE.get("AI_REQUEST_MAX_JPY_MILLI", 0) or 0)
+        if ceiling > 0 and spend.request_cost_jpy_milli() >= ceiling:
+            spend.mark_ceiling_hit()
+            log.warning(
+                "Agent run %s hit the per-request cost ceiling at step %s "
+                "(%s of %s milli-yen); stopping before the next model call",
+                run_id,
+                step,
+                spend.request_cost_jpy_milli(),
+                ceiling,
+            )
+            # Deliberately says nothing about money. The user did not
+            # choose a budget and cannot act on a yen figure; what they
+            # CAN act on is asking something narrower.
+            emit({"type": "error", "message": COST_CEILING_MESSAGE})
+            _persist_step(run_id, step_index=step, error="cost_ceiling_reached")
             return None
         try:
             if planning_model is None:

@@ -51,6 +51,7 @@ from rest_framework.response import Response
 from apis.llm_catalog import EFFORTS
 from origin.search_engine import spend_recorder
 from origin.search_engine.agent.controller import (
+    COST_CEILING_MESSAGE,
     _chat_source,
     _note_source,
     reconstruct_sources_for_run,
@@ -419,6 +420,57 @@ def _spend_kwargs(
     }
 
 
+def _alert_if_user_spend_is_high(user_id: str) -> None:
+    """Log a WARNING when a user's day of ledger spend crosses a
+    threshold. Observation only — this never blocks.
+
+    Deliberately not enforced. The metering strategy is explicit that
+    blocking an early user costs more than their spend does, and at this
+    stage a founder learning WHY someone is expensive is worth more than
+    a wall they hit silently. The report's per-user section is the other
+    half of this; the log line is what makes it noticeable same-day.
+
+    Costs one aggregate query per ask, and only when configured —
+    threshold 0 short-circuits before touching the DB. Cached for 5
+    minutes per user so a burst of asks doesn't re-run it each time.
+    Fails open, like every other check here.
+    """
+    threshold_yen = float(settings.SEARCH_ENGINE.get("AI_USER_DAILY_ALERT_JPY", 0) or 0)
+    if threshold_yen <= 0 or not user_id:
+        return
+    try:
+        from django.core.cache import cache  # noqa: PLC0415
+        from django.db.models import Sum  # noqa: PLC0415
+
+        from origin.search_engine.models import AiSpendEvent  # noqa: PLC0415
+
+        cache_key = f"ai_spend_alert:{user_id}:{timezone.now():%Y%m%d}"
+        if cache.get(cache_key):
+            return
+
+        since = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        spent_milli = int(
+            AiSpendEvent.objects.filter(user_id=str(user_id), created_at__gte=since).aggregate(
+                s=Sum("cost_jpy_milli")
+            )["s"]
+            or 0
+        )
+        if spent_milli >= threshold_yen * 1000:
+            # WARNING, not ERROR: CronCommand's tripwire watches ERROR on
+            # the `origin` logger, and one expensive user is not a failed
+            # job.
+            log.warning(
+                "User %s has used ¥%.2f of AI today, over the ¥%.2f alert "
+                "threshold. Not blocked — see `ai_cost_report --by-user`.",
+                user_id,
+                spent_milli / 1000,
+                threshold_yen,
+            )
+            cache.set(cache_key, True, 300)
+    except Exception:  # noqa: BLE001 — a check that cannot run must not block
+        log.debug("Per-user spend alert check failed", exc_info=True)
+
+
 def _open_spend_request(spend_kwargs: dict) -> None:
     """Write the request's rollup row up front, with its quoted ceiling.
 
@@ -478,6 +530,23 @@ class AgentAskView(AuthenticatedAPIView):
         # summary calls below, never to the loop itself.
         summaries_pin = subprocess_model_override("summaries", chosen)
 
+        # Emergency kill switch — refuses NEW asks during a provider
+        # incident or an undiagnosed runaway. In-flight runs finish.
+        # This is the "stop everything" lever that AGENT_DISABLED_TOOLS
+        # (per-tool) and the model pins (per-model) cannot provide.
+        if settings.SEARCH_ENGINE.get("AI_AGENT_KILL_SWITCH"):
+            log.warning("Agent ask refused: AI_AGENT_KILL_SWITCH is on")
+            return Response(
+                {
+                    "error": (
+                        "AI assistance is temporarily unavailable. "
+                        "Please try again shortly."
+                    ),
+                    "category": "service_unavailable",
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         llm_ok, llm_used, llm_limit = check_remaining(user_id, LLM_ASK_KEY)
         if not llm_ok:
             return Response(
@@ -536,6 +605,7 @@ class AgentAskView(AuthenticatedAPIView):
         # eval suite.
         spend_kwargs = _spend_kwargs("ask", user_id, team_id, chosen)
         _open_spend_request(spend_kwargs)
+        _alert_if_user_spend_is_high(user_id)
 
         # Phase 8 — session memory. Non-fatal: if session machinery
         # fails for any reason we fall back to a stateless single-turn.
@@ -1199,7 +1269,7 @@ def _stream_ndjson(
                 result = AiRequestCost.RESULT_USER_CANCELLATION
             elif final_status in ("done", "awaiting_approval", "rejected"):
                 result = AiRequestCost.RESULT_SUCCESS
-            elif final_status == "step_cap":
+            elif final_status == "step_cap" or final_error == COST_CEILING_MESSAGE:
                 # Reached the step cap without answering. We spent the
                 # money and the user got nothing usable, so this is not
                 # a success — it is our cost to absorb.
