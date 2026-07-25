@@ -23,23 +23,26 @@ from apis.llm_catalog import CatalogError, load_llm_catalog
 
 GOOD = """
 version: 1
+rate_card:
+    label: "test-card"
+    fx_jpy_per_usd: 150
 providers:
     gemini:
         - model: g-cheap
           class: light
           label: G Cheap
           note: Fast.
-          price: {input: 0.30, output: 2.50}
+          price: {input: 0.30, output: 2.50, cached_input: 0.03, cache_write: 0}
         - model: g-mid
           class: middle
           label: G Mid
           note: Balanced.
-          price: {input: 1.50, output: 7.50}
+          price: {input: 1.50, output: 7.50, cached_input: 0.15, cache_write: 0}
         - model: g-top
           class: highend
           label: G Top
           note: Slow.
-          price: {input: 2.00, output: 12.00}
+          price: {input: 2.00, output: 12.00, cached_input: 0.20, cache_write: 0}
           supports_temperature: false
 tier_caps:
     free: {light: 20, middle: 10, highend: 0}
@@ -147,7 +150,7 @@ class LoaderRejectsTests(SimpleTestCase):
 
     def test_rejects_a_model_with_no_price(self):
         self.assertRejects(
-            GOOD.replace("          price: {input: 1.50, output: 7.50}\n", ""), "missing `price`"
+            GOOD.replace("          price: {input: 1.50, output: 7.50, cached_input: 0.15, cache_write: 0}\n", ""), "missing `price`"
         )
 
     def test_rejects_a_missing_file(self):
@@ -191,7 +194,7 @@ class EffortProfileTests(SimpleTestCase):
           class: highend
           label: G Top
           note: Slow.
-          price: {input: 2.00, output: 12.00}
+          price: {input: 2.00, output: 12.00, cached_input: 0.20, cache_write: 0}
           supports_temperature: false
 """,
             "",
@@ -388,3 +391,139 @@ class ShippedCatalogTests(SimpleTestCase):
         for tier, caps in settings.LLM_CATALOG.tier_caps.items():
             self.assertLessEqual(caps["highend"], caps["middle"], tier)
             self.assertLessEqual(caps["middle"], caps["light"], tier)
+
+
+class PriceTests(SimpleTestCase):
+    """The rate card — the money half of the catalog.
+
+    Prices moved into this loader because the offline aggregator kept a
+    SECOND, hand-maintained sheet matched by longest name prefix, and
+    it had rotted silently: `"gemini-3.6-flash"` does not start with
+    `"gemini-3-flash"` (dot vs hyphen), so in production — where Gemini
+    is the default provider — every Gemini and every GPT call priced as
+    unknown and was dropped from the cost total. Of the models that did
+    still match, Opus was listed at 3x its real rate.
+    """
+
+    def test_all_four_rates_parse(self):
+        p = _load(GOOD).price_for("g-mid")
+        self.assertEqual((p.input, p.output, p.cached_input, p.cache_write), (1.5, 7.5, 0.15, 0.0))
+
+    def test_price_for_is_exact_id_never_a_prefix(self):
+        """The whole point. A prefix scheme fails soft and plausibly."""
+        cat = _load(GOOD)
+        self.assertIsNotNone(cat.price_for("g-mid"))
+        self.assertIsNone(cat.price_for("g-mi"))
+        self.assertIsNone(cat.price_for("g-mid-preview"))
+
+    def test_unknown_model_is_none_not_zero(self):
+        """An operator can pin a preview id via env. None means
+        'unpriced' — a caller that turned it into 0 would drop the call
+        from a total that still looked about right."""
+        self.assertIsNone(_load(GOOD).price_for("some-preview-model"))
+
+    def test_rejects_a_missing_cache_rate(self):
+        """No safe default exists: assume `input` and the cached path
+        over-bills ~10x, assume 0 and it under-bills. Neither is visible
+        in the output, so both must be written deliberately."""
+        with self.assertRaises(CatalogError) as cm:
+            _load(GOOD.replace(", cached_input: 0.15, cache_write: 0", ""))
+        self.assertIn("missing `cached_input`", str(cm.exception))
+
+    def test_rejects_a_non_numeric_rate(self):
+        # A string rate would multiply into a TypeError deep in the cost
+        # meter at request time instead of failing here at boot.
+        with self.assertRaises(CatalogError) as cm:
+            _load(GOOD.replace("cache_write: 0}", "cache_write: 'free'}"))
+        self.assertIn("must be a number", str(cm.exception))
+
+    def test_rejects_a_negative_rate(self):
+        with self.assertRaises(CatalogError) as cm:
+            _load(GOOD.replace("cached_input: 0.15", "cached_input: -1"))
+        self.assertIn("must not be negative", str(cm.exception))
+
+    def test_rejects_an_unknown_price_key(self):
+        with self.assertRaises(CatalogError) as cm:
+            _load(GOOD.replace("cache_write: 0}", "cache_write: 0, cache_read: 0.1}"))
+        self.assertIn("unknown price key", str(cm.exception))
+
+
+class RateCardTests(SimpleTestCase):
+    def test_label_and_fx_parse(self):
+        rc = _load(GOOD).rate_card
+        self.assertEqual(rc.label, "test-card")
+        self.assertEqual(rc.fx_jpy_per_usd, 150.0)
+
+    def test_version_pairs_label_with_fingerprint(self):
+        rc = _load(GOOD).rate_card
+        self.assertEqual(rc.version, f"test-card+{rc.fingerprint}")
+
+    def test_fingerprint_moves_when_any_price_moves(self):
+        """The guarantee: two different price regimes can never share
+        one identifier, even if the editor forgets to touch `label`.
+        Cost rows are grouped by this."""
+        before = _load(GOOD).rate_card
+        after = _load(GOOD.replace("input: 1.50", "input: 1.60")).rate_card
+        self.assertEqual(before.label, after.label)
+        self.assertNotEqual(before.fingerprint, after.fingerprint)
+
+    def test_fingerprint_moves_when_fx_moves(self):
+        before = _load(GOOD).rate_card
+        after = _load(GOOD.replace("fx_jpy_per_usd: 150", "fx_jpy_per_usd: 160")).rate_card
+        self.assertNotEqual(before.fingerprint, after.fingerprint)
+
+    def test_fingerprint_is_stable_across_unrelated_edits(self):
+        # Otherwise every label or note tweak would fragment the ledger.
+        before = _load(GOOD).rate_card
+        after = _load(GOOD.replace("note: Balanced.", "note: Balanced and quick.")).rate_card
+        self.assertEqual(before.fingerprint, after.fingerprint)
+
+    def test_rejects_a_missing_rate_card(self):
+        with self.assertRaises(CatalogError) as cm:
+            _load(GOOD.replace('rate_card:\n    label: "test-card"\n    fx_jpy_per_usd: 150\n', ""))
+        self.assertIn("`rate_card` must be a mapping", str(cm.exception))
+
+    def test_rejects_a_nonsense_fx(self):
+        with self.assertRaises(CatalogError) as cm:
+            _load(GOOD.replace("fx_jpy_per_usd: 150", "fx_jpy_per_usd: 0"))
+        self.assertIn("must be a positive number", str(cm.exception))
+
+
+class ShippedRateCardTests(SimpleTestCase):
+    """Against the REAL `apis/llm_models.yaml`, not a fixture."""
+
+    def setUp(self):
+        self.cat = settings.LLM_CATALOG
+
+    def test_every_catalog_model_is_priced_by_exact_id(self):
+        """The regression that motivated all of this: in production the
+        aggregator priced NOTHING for the default provider, and said so
+        only by omitting it from a total."""
+        unpriced = [e["model"] for e in self.cat.catalog if self.cat.price_for(e["model"]) is None]
+        self.assertEqual(
+            unpriced,
+            [],
+            f"model(s) {unpriced} are in the catalog but have no price — every "
+            f"call they serve would be silently dropped from cost totals",
+        )
+
+    def test_every_model_declares_all_four_rates(self):
+        for entry in self.cat.catalog:
+            p = self.cat.price_for(entry["model"])
+            for field_name in ("input", "output", "cached_input", "cache_write"):
+                self.assertIsInstance(
+                    getattr(p, field_name), float, f"{entry['model']}.{field_name}"
+                )
+
+    def test_cached_input_is_never_dearer_than_fresh_input(self):
+        # A cache that costs more than a miss is always a typo, and it
+        # would inflate exactly the calls we optimized hardest.
+        for entry in self.cat.catalog:
+            p = self.cat.price_for(entry["model"])
+            self.assertLessEqual(p.cached_input, p.input, entry["model"])
+
+    def test_the_shipped_rate_card_is_complete(self):
+        rc = self.cat.rate_card
+        self.assertTrue(rc.label)
+        self.assertGreater(rc.fx_jpy_per_usd, 0)
+        self.assertEqual(len(rc.fingerprint), 12)

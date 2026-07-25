@@ -273,7 +273,7 @@ class AgentRunMetricsCommandTests(TestCase):
             step_index=0,
             purpose="loop",
             provider="gemini",
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash-lite",
             latency_ms=1200,
             prompt_tokens=1_000_000,
             cached_tokens=0,
@@ -287,11 +287,46 @@ class AgentRunMetricsCommandTests(TestCase):
         out = StringIO()
         call_command("agent_run_metrics", "--days", "7", "--team", "team-1", stdout=out)
         text = out.getvalue()
-        self.assertIn("gemini-2.5-flash", text)
+        self.assertIn("gemini-3.5-flash-lite", text)
         self.assertIn("search_knowledge_base", text)
         self.assertIn("estimated LLM-API cost", text)
-        # 1M input @ $0.30 + 0.5M output @ $2.50 = $0.30 + $1.25 = $1.55.
+        # 1M input @ $0.30 + 0.5M output @ $2.50 = $0.30 + $1.25 = $1.55,
+        # priced from the catalog rate card by exact model id.
         self.assertIn("1.55", text)
+        self.assertNotIn("UNPRICED", text)
+
+    def test_report_names_unpriced_models_instead_of_dropping_them(self):
+        """A model outside the catalog must be NAMED, not silently left
+        out of the total. The prefix-matching price sheet this replaced
+        did the silent thing, and the result was that in production
+        every Gemini and every GPT call — i.e. the default provider —
+        vanished from a cost figure that still looked plausible."""
+        from django.utils import timezone
+
+        run = AgentRun.objects.create(
+            team_id="team-2",
+            user_id="user-1",
+            query="q",
+            status="done",
+            finished_at=timezone.now(),
+        )
+        AgentLlmCall.objects.create(
+            run=run,
+            team_id="team-2",
+            step_index=0,
+            purpose="loop",
+            provider="gemini",
+            model="gemini-2.5-flash",  # retired; deliberately not in the catalog
+            latency_ms=10,
+            prompt_tokens=1_000,
+            output_tokens=100,
+        )
+
+        out = StringIO()
+        call_command("agent_run_metrics", "--days", "7", "--team", "team-2", stdout=out)
+        text = out.getvalue()
+        self.assertIn("UNPRICED", text)
+        self.assertIn("gemini-2.5-flash", text)
 
     def test_report_handles_empty_window(self):
         out = StringIO()

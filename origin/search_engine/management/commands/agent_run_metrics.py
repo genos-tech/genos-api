@@ -22,46 +22,29 @@ What it answers:
   * Which TOOLS are slow — per tool_name latency, from AgentStep.
   * How many tokens (and roughly how many dollars) a window burned.
 
-Cost is a DERIVED ESTIMATE from a hand-maintained price sheet below —
-it is LLM-API spend only and excludes the fixed infra floor that
-actually dominates the bill (see LLM_SPEND_ANATOMY). Tokens and latency
-are ground truth; treat the dollar figure as an order-of-magnitude
-guide and update `_PRICE_PER_MTOK` when the price sheet changes.
+Cost is a DERIVED ESTIMATE priced from the catalog rate card
+(`apis/llm_models.yaml`) — LLM-API spend only, excluding the fixed
+infra floor that actually dominates the bill (see LLM_SPEND_ANATOMY).
+Tokens and latency are ground truth; treat the dollar figure as an
+order-of-magnitude guide.
+
+This command reports LATENCY. It is not the accounting ledger, and it
+sees only the agent loop — the rewriter, reranker, summaries, evals,
+embeddings and paid tools never reach `AgentLlmCall`. Never add its
+totals to the cost ledger's: they describe overlapping calls from two
+different tables.
 """
 
 from __future__ import annotations
 
 from datetime import timedelta
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db.models import Count, Sum
 from django.utils import timezone
 
 from origin.search_engine.models import AgentLlmCall, AgentRun, AgentStep
-
-# USD per 1,000,000 tokens, as (input, cached_read, cache_write, output).
-# LIST PRICES, approximate, matched by longest model-name prefix. Update
-# when the price sheet moves. LLM-API cost ONLY — excludes the fixed
-# infra floor (see LLM_SPEND_ANATOMY), which dominates the real bill.
-_PRICE_PER_MTOK: dict[str, tuple[float, float, float, float]] = {
-    "gemini-2.5-flash": (0.30, 0.075, 0.30, 2.50),
-    "gemini-2.5-pro": (1.25, 0.3125, 1.25, 10.0),
-    "gemini-3-pro": (2.00, 0.20, 2.00, 12.0),
-    "gemini-3-flash": (0.30, 0.075, 0.30, 2.50),
-    "claude-haiku": (0.80, 0.08, 1.00, 4.00),
-    "claude-sonnet": (3.00, 0.30, 3.75, 15.00),
-    "claude-opus": (15.00, 1.50, 18.75, 75.00),
-}
-
-
-def _price_for(model: str) -> tuple[float, float, float, float] | None:
-    """Longest-prefix price lookup; None when the model isn't priced."""
-    best: tuple[float, float, float, float] | None = None
-    best_len = -1
-    for prefix, price in _PRICE_PER_MTOK.items():
-        if model.startswith(prefix) and len(prefix) > best_len:
-            best, best_len = price, len(prefix)
-    return best
 
 
 def _cost_usd(model: str, prompt: int, cached: int, cache_write: int, output: int) -> float | None:
@@ -69,13 +52,26 @@ def _cost_usd(model: str, prompt: int, cached: int, cache_write: int, output: in
 
     `thought`/`tool_prompt` tokens fold into `output`/`prompt` at the
     caller — this takes the four billable buckets directly.
+
+    Priced from the catalog by EXACT model id. This used to be a
+    hand-maintained sheet in this file matched by longest name prefix,
+    and it had rotted badly enough to be useless: `"gemini-3.6-flash"`
+    does not start with `"gemini-3-flash"` (dot vs hyphen), so in
+    production — where Gemini is the default provider — every Gemini
+    and every GPT call priced as unpriced and the report simply left
+    them out of the total. Of the models that did still match, Opus was
+    listed at 3x its real rate. One price source, exact ids, and a test
+    that walks the whole catalog is the fix for all of that.
     """
-    price = _price_for(model)
+    catalog = getattr(settings, "LLM_CATALOG", None)
+    price = catalog.price_for(model) if catalog is not None else None
     if price is None:
         return None
-    p_in, p_cached, p_write, p_out = price
     return (
-        prompt * p_in + cached * p_cached + cache_write * p_write + output * p_out
+        prompt * price.input
+        + cached * price.cached_input
+        + cache_write * price.cache_write
+        + output * price.output
     ) / 1_000_000.0
 
 
@@ -262,10 +258,16 @@ class Command(BaseCommand):
             for k in ("prompt", "cached", "cache_write", "output", "thought", "tool_prompt")
         )
         # Sum per-model derived cost so unpriced models simply don't
-        # contribute (rather than poisoning the total with a 0).
+        # contribute (rather than poisoning the total with a 0). But
+        # NAME them below — a silently-dropped model is how a whole
+        # provider goes missing from a total that still looks about
+        # right, which is exactly what the prefix-matching price sheet
+        # used to do to Gemini in production.
         est_cost = 0.0
         priced_any = False
+        unpriced: dict[str, int] = {}
         for r in calls.values("model").annotate(
+            n=Count("id"),
             prompt=Sum("prompt_tokens"),
             cached=Sum("cached_tokens"),
             cache_write=Sum("cache_write_tokens"),
@@ -273,8 +275,9 @@ class Command(BaseCommand):
             thought=Sum("thought_tokens"),
             tool_prompt=Sum("tool_prompt_tokens"),
         ):
+            model = r["model"] or ""
             c = _cost_usd(
-                r["model"] or "",
+                model,
                 (r["prompt"] or 0) + (r["tool_prompt"] or 0),
                 r["cached"] or 0,
                 r["cache_write"] or 0,
@@ -283,21 +286,33 @@ class Command(BaseCommand):
             if c is not None:
                 est_cost += c
                 priced_any = True
+            else:
+                unpriced[model] = r["n"] or 0
+
+        catalog = getattr(settings, "LLM_CATALOG", None)
+        rate_card = getattr(catalog, "rate_card", None)
 
         self.stdout.write("\n-- Totals --")
         self.stdout.write(f"  llm calls: {agg['n'] or 0}   total tokens: {total_tokens}")
         if priced_any:
+            card = f"  [rate card {rate_card.version}]" if rate_card else ""
             self.stdout.write(
                 self.style.NOTICE(
-                    f"  estimated LLM-API cost: ~${est_cost:.2f}  "
+                    f"  estimated LLM-API cost: ~${est_cost:.2f}{card}  "
                     "(list-price estimate; EXCLUDES the fixed infra floor "
                     "that dominates the real bill — see LLM_SPEND_ANATOMY)"
                 )
             )
         else:
             self.stdout.write(
+                self.style.WARNING("  cost estimate unavailable: no priced model in window.")
+            )
+        if unpriced:
+            listed = ", ".join(f"{m or '(blank)'} x{n}" for m, n in sorted(unpriced.items()))
+            self.stdout.write(
                 self.style.WARNING(
-                    "  cost estimate unavailable: no priced model in window "
-                    "(add it to _PRICE_PER_MTOK)."
+                    f"  UNPRICED, excluded from the total above: {listed}. "
+                    f"Add each to apis/llm_models.yaml, or the cost above understates "
+                    f"the window by however much these calls actually cost."
                 )
             )

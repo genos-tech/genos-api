@@ -71,8 +71,31 @@
 #   label    (req) shown in the Settings picker.
 #   note     (req) one-line help text under the label in the picker.
 #   price    (req) USD per 1M tokens, public list price. Used to ASSERT
-#                  the cheap→expensive ordering, and read by the offline
-#                  cost aggregator. `cached_input` optional.
+#                  the cheap→expensive ordering, and it is the ONLY
+#                  price source for the offline cost aggregator and the
+#                  internal cost ledger.
+#
+#                  ALL FOUR keys are required — `input`, `output`,
+#                  `cached_input`, `cache_write`. `cached_input` and
+#                  `cache_write` used to be optional, and the result was
+#                  that 5 of 9 models had no cache rate at all while
+#                  Claude prompt caching was live in production. A cache
+#                  rate that defaults to "same as input" silently
+#                  over-bills the cached path by 10x; one that defaults
+#                  to zero silently under-bills. Neither is detectable
+#                  from the output, so both are required and 0 must be
+#                  written deliberately.
+#
+#                  Use 0 for "this provider does not bill this line" —
+#                  Gemini's implicit cache and OpenAI's automatic cache
+#                  have no separate write charge, so their `cache_write`
+#                  is a real 0, not a missing value.
+#
+#                  Two conventions the current numbers follow (re-derive
+#                  rather than assume on a swap — providers change these
+#                  independently of the headline rate):
+#                    * cached_input = 10% of input, all three providers.
+#                    * Anthropic cache_write = 125% of input (5-min TTL).
 #   supports_temperature (opt, default true) — false for models whose
 #                  API rejects `temperature`. Read by
 #                  llm/claude_client.py.
@@ -91,6 +114,35 @@
 
 version: 1
 
+# =====================================================================
+#  RATE CARD — the money metadata every cost row is stamped with
+# =====================================================================
+#
+#  The cost ledger materializes yen at WRITE time and stores the rate
+#  card it used, so a later price change can never retroactively
+#  restate a past request. Reports GROUP BY the rate card rather than
+#  summing across a mid-period price change.
+#
+#  `label` is for humans. The grouping key is a `fingerprint` the
+#  loader COMPUTES from every price plus the FX rate — because the
+#  thing that must never happen is two different price regimes sharing
+#  one identifier, and relying on an editor to remember to bump a
+#  string is exactly how that happens. Edit any price and the
+#  fingerprint moves on its own; forget to touch `label` and the rows
+#  are still correctly separated.
+#
+#  `fx_jpy_per_usd` is a PINNED constant, deliberately not a live
+#  lookup: a ledger whose historical totals drift with today's
+#  exchange rate cannot be reconciled against an invoice. Bump it when
+#  you want new rows to use a new rate; old rows keep theirs.
+#
+#  Provider invoices are in USD, so reconcile in USD (exact) and read
+#  reports in JPY (normalized).
+#
+rate_card:
+    label: "2026-07-25"
+    fx_jpy_per_usd: 150
+
 providers:
     # -----------------------------------------------------------------
     # Gemini — via Vertex AI in prod (GEMINI_USE_VERTEX=true). This is
@@ -101,7 +153,7 @@ providers:
           class: light
           label: Gemini 3.5 Flash-Lite
           note: Fastest and cheapest — great for everyday questions.
-          price: { input: 0.30, output: 2.50 }
+          price: { input: 0.30, output: 2.50, cached_input: 0.03, cache_write: 0 }
           # Released 2026-07-21. Replaces gemini-3.5-flash as the light
           # rung: 5x cheaper in, 3.6x cheaper out. Since Gemini is the
           # server default and the free tier's headline number, this is
@@ -113,7 +165,7 @@ providers:
           class: light
           label: Gemini 3.6 Flash
           note: Balanced speed and quality — the default.
-          price: { input: 1.50, output: 7.50, cached_input: 0.15 }
+          price: { input: 1.50, output: 7.50, cached_input: 0.15, cache_write: 0 }
           # Released 2026-07-21. The server default (GEMINI_MODEL), and
           # the direct successor to gemini-3.5-flash: same input price,
           # 17% cheaper output, and it beats 3.1 Pro on coding.
@@ -132,7 +184,7 @@ providers:
           class: middle
           label: Gemini 3.1 Pro Preview
           note: Extended thinking, for the hardest questions.
-          price: { input: 2.00, output: 12.00 }
+          price: { input: 2.00, output: 12.00, cached_input: 0.20, cache_write: 0 }
           # Gemini's TOP rung as the user sees it (third of three), but
           # cost class `middle` — at $2/$12 it is nowhere near the
           # ~JPY60-70/ask premium band that opus-5 and sol occupy, and a
@@ -172,13 +224,13 @@ providers:
           class: light
           label: Claude Haiku 4.5
           note: Fast and economical.
-          price: { input: 1.00, output: 5.00 }
+          price: { input: 1.00, output: 5.00, cached_input: 0.10, cache_write: 1.25 }
 
         - model: claude-sonnet-5
           class: middle
           label: Claude Sonnet 5
           note: Near-Opus quality at a working-day price.
-          price: { input: 3.00, output: 15.00 }
+          price: { input: 3.00, output: 15.00, cached_input: 0.30, cache_write: 3.75 }
           supports_temperature: false
           # Intro pricing $2.00/$10.00 through 2026-08-31; the list rate
           # above is used for cap sizing so the caps don't have to move
@@ -188,7 +240,7 @@ providers:
           class: highend
           label: Claude Opus 5
           note: Most capable Claude — slowest, for the hardest questions.
-          price: { input: 5.00, output: 25.00 }
+          price: { input: 5.00, output: 25.00, cached_input: 0.50, cache_write: 6.25 }
           supports_temperature: false
           # Replaces the claude-opus-4-7 + 4-8 pair, which were the same
           # price ($5/$25) and therefore two premium rungs for one cost
@@ -212,13 +264,13 @@ providers:
           class: light
           label: GPT-5.6 Luna
           note: Fast and economical.
-          price: { input: 1.00, output: 6.00, cached_input: 0.10 }
+          price: { input: 1.00, output: 6.00, cached_input: 0.10, cache_write: 0 }
 
         - model: gpt-5.6-terra
           class: middle
           label: GPT-5.6 Terra
           note: Higher quality, slower.
-          price: { input: 2.50, output: 15.00, cached_input: 0.25 }
+          price: { input: 2.50, output: 15.00, cached_input: 0.25, cache_write: 0 }
           caps:
               # Held at 0 on free so that gaining a third provider does
               # not silently inflate the free-tier subsidy: free's
@@ -230,7 +282,7 @@ providers:
           class: highend
           label: GPT-5.6 Sol
           note: Very slow, but best for very complex questions.
-          price: { input: 5.00, output: 30.00, cached_input: 0.50 }
+          price: { input: 5.00, output: 30.00, cached_input: 0.50, cache_write: 0 }
           # The most expensive rung in the catalog, so it is the model
           # worst-case-at-cap is sized on — the `highend` caps below are
           # effectively "how much Sol per day".
