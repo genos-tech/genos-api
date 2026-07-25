@@ -55,10 +55,15 @@ from origin.search_engine.llm import (
     AgentMessage,
     CallUsage,
     FunctionCall,
+    GenerationParams,
     ToolDeclaration,
     get_model_client,
 )
-from origin.search_engine.llm.choice import _server_default_choice, get_llm_choice
+from origin.search_engine.llm.choice import (
+    _server_default_choice,
+    active_effort_profile,
+    get_llm_choice,
+)
 from origin.search_engine.models import AgentLlmCall, AgentRun, AgentStep
 
 log = logging.getLogger(__name__)
@@ -1695,6 +1700,7 @@ def _collect_step(
     model_override: str | None = None,
     emit_deltas: bool = True,
     usage_sink: CallUsage | None = None,
+    params: GenerationParams | None = None,
 ) -> tuple[list[str], list[FunctionCall]]:
     """Run ONE model turn and collect `(text_parts, function_calls)`.
 
@@ -1717,6 +1723,7 @@ def _collect_step(
         system_instruction=system_instruction,
         model_override=model_override,
         usage_sink=usage_sink,
+        params=params,
     )
     for text_chunk, function_call in stream:
         if function_call is not None:
@@ -1762,8 +1769,24 @@ def _drive_loop(
     args reuses the stored result. None (evals, tests, sessionless
     callers) bypasses the cache entirely.
     """
+    # Effort profile: per-request loop params (AGENT_EFFORT_LEVELS).
+    # None = flag off or no effort-carrying choice → the legacy env
+    # values, byte-identical. Resolved ONCE here — the profile cannot
+    # change mid-loop.
+    profile = active_effort_profile()
     if max_steps is None:
-        max_steps = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
+        # An explicit max_steps argument still wins over the profile:
+        # the critique continuation passes a computed budget that must
+        # not be re-derived.
+        if profile is not None:
+            max_steps = profile.max_steps
+        else:
+            max_steps = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
+    gen_params = (
+        GenerationParams(max_output_tokens=profile.max_output_tokens)
+        if profile is not None and profile.max_output_tokens
+        else None
+    )
     client = get_model_client()
     # B3 — planning-model split. When active, loop steps run on the fast
     # planning model and only the final synthesis is written by the
@@ -1802,6 +1825,7 @@ def _drive_loop(
             model_override=model_override,
             emit_deltas=emit_deltas,
             usage_sink=sink,
+            params=gen_params,
         )
         latency_ms = int((time.monotonic() - started) * 1000)
         _persist_llm_call(
@@ -2444,7 +2468,13 @@ def _critique_with_retrieval(
     steps_seen = [e["step"] for e in loop1_events if isinstance(e.get("step"), int)]
     last_step = max(steps_seen) if steps_seen else (starting_step - 1)
     next_step = last_step + 2
-    crit_steps = max(1, int(settings.SEARCH_ENGINE.get("RAG_CRITIQUE_MAX_STEPS", 2)))
+    profile = active_effort_profile()
+    crit_steps = max(
+        1,
+        profile.critique_steps
+        if profile is not None
+        else int(settings.SEARCH_ENGINE.get("RAG_CRITIQUE_MAX_STEPS", 2)),
+    )
 
     loop2_events: list[dict[str, Any]] = []
     try:

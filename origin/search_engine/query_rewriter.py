@@ -25,6 +25,7 @@ import re
 from django.conf import settings
 
 from origin.search_engine.llm import AgentMessage, get_model_client
+from origin.search_engine.llm.choice import get_llm_choice, subprocess_model_override
 
 log = logging.getLogger(__name__)
 
@@ -76,12 +77,17 @@ def rewrite_query(query: str, *, num_variants: int = 3) -> list[str]:
 
     try:
         client = get_model_client()
-        # Optional fast-model override (RAG_REWRITE_MODEL). The rewrite
-        # task — emit a few keyword variants — is trivial, so operators
-        # can run it on a fast model while the synthesis model stays
-        # heavy. Mirrors the reranker's RAG_RERANKER_MODEL override;
-        # empty/unset → None → the client's default model.
-        model_override = settings.SEARCH_ENGINE.get("RAG_REWRITE_MODEL") or None
+        # Model precedence for this trivial emit-a-few-variants task:
+        #   1. RAG_REWRITE_MODEL env — the operator escape hatch, and
+        #      the per-subprocess rollback lever (no deploy needed).
+        #   2. The effort pin (AGENT_EFFORT_LEVELS): the user's
+        #      provider's `subprocesses.rewrite` rung — same-provider
+        #      light model instead of silently inheriting the synthesis
+        #      model (an Opus user was paying Opus rates here).
+        #   3. None → inherit the synthesis model (legacy behavior).
+        model_override = (
+            settings.SEARCH_ENGINE.get("RAG_REWRITE_MODEL") or None
+        ) or subprocess_model_override("rewrite", get_llm_choice())
         chunks: list[str] = []
         for text, fc in client.generate_step(
             messages=msgs,

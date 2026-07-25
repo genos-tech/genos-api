@@ -277,8 +277,15 @@ def _format_note_for_prompt(record: NoteRecord) -> str:
     )
 
 
-def summarise_note(record: NoteRecord) -> tuple[str, str]:
-    """One LLM call. Returns `(summary_text, model_label)`."""
+def summarise_note(
+    record: NoteRecord, *, model_override: str | None = None
+) -> tuple[str, str]:
+    """One LLM call. Returns `(summary_text, model_label)`.
+
+    `model_override` is the effort-level "summaries" pin — see
+    `thread_summary.summarise_thread` for why only the ASK path
+    passes it.
+    """
     if not record.body_text.strip() and not record.title.strip():
         raise NoteSummaryError("Note has no summarisable content.")
 
@@ -291,6 +298,7 @@ def summarise_note(record: NoteRecord) -> tuple[str, str]:
             messages=[AgentMessage(role="user", text=prompt)],
             tools=[],
             system_instruction=_SUMMARY_SYSTEM_PROMPT,
+            model_override=model_override,
         ):
             if text:
                 chunks.append(text)
@@ -367,6 +375,7 @@ def regenerate_summary(
     note_id: int,
     user_id: str,
     record: NoteRecord,
+    model_override: str | None = None,
 ) -> NoteSummaryResult:
     """Force an LLM call and persist the result.
 
@@ -374,7 +383,7 @@ def regenerate_summary(
     idempotent at the row level — `update_or_create` lets the second
     writer win without raising.
     """
-    summary_text, model_label = summarise_note(record)
+    summary_text, model_label = summarise_note(record, model_override=model_override)
     fingerprint = compute_fingerprint(record)
     body_length = len(record.body_text)
 
@@ -453,6 +462,7 @@ def load_or_generate_for_ask(
     note_type: int,
     note_id: int,
     user_id: str,
+    model_override: str | None = None,
 ) -> tuple[str, NoteRecord]:
     """Helper used by AgentAskView's note-context branch.
 
@@ -475,6 +485,7 @@ def load_or_generate_for_ask(
         note_id=note_id,
         user_id=user_id,
         record=record,
+        model_override=model_override,
     )
     return result.summary, record
 

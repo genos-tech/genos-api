@@ -34,6 +34,7 @@ from django.conf import settings
 from opensearchpy.exceptions import NotFoundError
 
 from origin.search_engine.embeddings import embed_one
+from origin.search_engine.llm.choice import active_effort_profile
 from origin.search_engine.opensearch_client import get_client, get_index_alias
 from origin.search_engine.quota import get_message_retention_days
 
@@ -314,10 +315,23 @@ def search(
     # adds N alternative phrasings. With rewriting off we get a one-
     # element list and the loop below collapses to the pre-Phase-10
     # behavior exactly.
+    # Effort profile (AGENT_EFFORT_LEVELS): variants come from the
+    # request's profile when one is active; the env value otherwise.
+    # rewrite_variants == 0 must skip the rewrite LLM CALL entirely,
+    # not call the rewriter for zero variants — the whole point of a
+    # 0-variant profile is saving that round trip.
+    _profile = active_effort_profile()
     if rewrite:
+        num_variants = (
+            _profile.rewrite_variants
+            if _profile is not None
+            else int(settings.SEARCH_ENGINE.get("RAG_REWRITE_NUM_VARIANTS", 3))
+        )
+    else:
+        num_variants = 0
+    if num_variants > 0:
         from origin.search_engine.query_rewriter import rewrite_query  # noqa: PLC0415
 
-        num_variants = int(settings.SEARCH_ENGINE.get("RAG_REWRITE_NUM_VARIANTS", 3))
         variants = rewrite_query(query, num_variants=num_variants)
     else:
         variants = [query]
@@ -441,8 +455,13 @@ def search(
     # overlay stack). Flipping RAG_USE_RERANKER on by default (Q2.1, backed
     # by measured +0.118 recall on the agent path) therefore taxes neither
     # the as-you-type surface nor the eval baseline.
+    # Effort gate rides ON TOP of the env flag: the profile can turn
+    # the reranker off for a leaner effort, but never on where
+    # RAG_USE_RERANKER is globally off (None profile = env behavior).
+    _rerank_profile = active_effort_profile()
     if (
         settings.SEARCH_ENGINE.get("RAG_USE_RERANKER")
+        and (_rerank_profile is None or _rerank_profile.use_reranker)
         and grouped
         and mode != "typeahead"
         and overlays_enabled

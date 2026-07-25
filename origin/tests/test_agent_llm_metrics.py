@@ -50,7 +50,14 @@ class _UsageClient:
         self._usage = usage
 
     def generate_step(
-        self, messages, tools, system_instruction, *, model_override=None, usage_sink=None
+        self,
+        messages,
+        tools,
+        system_instruction,
+        *,
+        model_override=None,
+        usage_sink=None,
+        params=None,
     ):
         yield from self._script.pop(0)
         if usage_sink is not None:

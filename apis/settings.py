@@ -1216,6 +1216,21 @@ SEARCH_ENGINE["MODEL_QUOTA_FALLBACK"] = (
     os.environ.get("MODEL_QUOTA_FALLBACK", "false").lower() == "true"
 )
 
+# Effort levels: users pick provider + low/medium/high instead of a
+# model; (provider, effort) resolves through llm_models.yaml `efforts`
+# (synthesis model = the provider's rung, loop params from the profile)
+# and sub-process calls (rewrite/rerank/summaries) pin to the
+# `subprocesses` rungs. Dark-shipped OFF. The flip is a provable no-op
+# for users with no saved preference — the medium profile is pinned
+# byte-identical to today's env defaults by
+# test_llm_catalog_yaml.test_MEDIUM_INVARIANT_* — but it DOES change
+# sub-process models for everyone (rewrite/rerank move to the light
+# rung), so the flip is gated on the eval comparison in
+# genos-docs operations/EFFORT_LEVELS.md.
+SEARCH_ENGINE["AGENT_EFFORT_LEVELS"] = (
+    os.environ.get("AGENT_EFFORT_LEVELS", "false").lower() == "true"
+)
+
 # --- Email ---
 # Dev default: print emails to the runserver console so engineers don't
 # need credentials locally. In production, send via Resend's HTTPS API

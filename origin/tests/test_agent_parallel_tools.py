@@ -42,7 +42,14 @@ class _ScriptedClient:
         self._script = list(script)
 
     def generate_step(
-        self, messages, tools, system_instruction, *, model_override=None, usage_sink=None
+        self,
+        messages,
+        tools,
+        system_instruction,
+        *,
+        model_override=None,
+        usage_sink=None,
+        params=None,
     ):
         yield from self._script.pop(0)
 
