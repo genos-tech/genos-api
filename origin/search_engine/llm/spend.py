@@ -212,6 +212,25 @@ def bind_run_id(run_id: str | None) -> None:
         ctx.run_id = str(run_id)
 
 
+def request_cost_jpy_milli() -> int:
+    """Spend accumulated by the active request so far, in milli-yen.
+
+    In-memory and free to read — the recorder adds to it as each row is
+    written. The authoritative number is still the sum of the rows; this
+    exists so a per-request ceiling can be checked between agent loop
+    steps without a query on the request path.
+    """
+    ctx = _context.get()
+    return ctx.cost_jpy_milli if ctx is not None else 0
+
+
+def mark_ceiling_hit() -> None:
+    """Flag that a ceiling stopped this request, for the rollup."""
+    ctx = _context.get()
+    if ctx is not None:
+        ctx.ceiling_hit = True
+
+
 def copy_context_for_thread():
     """`contextvars.copy_context()` for handing to a worker thread.
 

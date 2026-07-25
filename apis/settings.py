@@ -1286,6 +1286,46 @@ SEARCH_ENGINE["AI_COST_METER"] = os.environ.get("AI_COST_METER", "false").lower(
 # and float("") raises at import (see the note at the top of this file).
 SEARCH_ENGINE["AI_MONTHLY_BUDGET_JPY"] = float(os.environ.get("AI_MONTHLY_BUDGET_JPY") or "0")
 
+# --- AI safety ceilings (Phase 0) ---
+# Three controls, deliberately at three different strengths. All fail
+# OPEN: a check that cannot run must never block a paying user.
+#
+# 1. PER-REQUEST CEILING — the only one that BLOCKS. Milli-yen; 0 = off.
+#    Checked between agent loop steps against this request's accumulated
+#    spend, so it bounds a runaway loop — the pathological case a per-user
+#    daily cap cannot catch, because a single request can burn a day's
+#    budget faster than any daily check runs.
+#
+#    It is ALSO the number quoted onto AiRequestCost.quoted_max_jpy_milli
+#    before the request starts, which is what makes "the charge never
+#    exceeds the quote, and we absorb the excess" enforceable rather than
+#    aspirational.
+#
+#    Not instant: an in-flight model call finishes, so real spend can
+#    exceed this by one call. Bounded, and the excess is ours.
+SEARCH_ENGINE["AI_REQUEST_MAX_JPY_MILLI"] = int(
+    os.environ.get("AI_REQUEST_MAX_JPY_MILLI") or "0"
+)
+# 2. PER-USER DAILY ALERT — observation only, never blocks. Yen; 0 = off.
+#    Logs a WARNING (not ERROR — that would red the cron) naming the user
+#    when their day's ledger spend crosses this. Deliberately not
+#    enforcing: the strategy doc is explicit that blocking an early user
+#    costs more than the spend does, and at this stage a founder learning
+#    why someone is expensive beats a wall they hit silently.
+#
+#    Costs one aggregate query per ask, and ONLY when configured — 0
+#    short-circuits before touching the DB.
+SEARCH_ENGINE["AI_USER_DAILY_ALERT_JPY"] = float(
+    os.environ.get("AI_USER_DAILY_ALERT_JPY") or "0"
+)
+# 3. KILL SWITCH — refuses new agent asks outright, for a provider
+#    incident or a runaway we have not diagnosed yet. In-flight runs
+#    finish. This is the "stop everything" lever that AGENT_DISABLED_TOOLS
+#    (per-tool) and the model pins (per-model) cannot provide.
+SEARCH_ENGINE["AI_AGENT_KILL_SWITCH"] = (
+    os.environ.get("AI_AGENT_KILL_SWITCH", "false").lower() == "true"
+)
+
 # --- Email ---
 # Dev default: print emails to the runserver console so engineers don't
 # need credentials locally. In production, send via Resend's HTTPS API
