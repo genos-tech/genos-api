@@ -19,6 +19,7 @@ from origin.search_engine.llm.types import (
     AgentMessage,
     CallUsage,
     FunctionCall,
+    GenerationParams,
     ToolDeclaration,
 )
 
@@ -48,6 +49,7 @@ class ModelClient(Protocol):
         *,
         model_override: str | None = None,
         usage_sink: CallUsage | None = None,
+        params: GenerationParams | None = None,
     ) -> Iterator[tuple[str | None, FunctionCall | None]]:
         """Run one model turn.
 
@@ -61,5 +63,12 @@ class ModelClient(Protocol):
         `CallUsage`). Optional and observational — callers that don't
         care about metrics pass nothing, and a provider that can't read
         usage simply leaves the sink at its zero defaults.
+
+        `params` carries per-call generation knobs (today just
+        `max_output_tokens`; effort profiles feed it). CONTRACT:
+        `params=None` — and any None field inside it — must produce a
+        request byte-identical to one made before this parameter
+        existed. Adapters resolve each field as
+        `params.<field> or <their pre-existing default>`.
         """
         ...
