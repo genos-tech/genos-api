@@ -1252,6 +1252,23 @@ SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )
 
+# --- Internal AI cost meter (Phase 0) ---
+# Writes the `AiSpendEvent` / `AiRequestCost` accounting ledger: one row
+# per paid provider call, plus a per-request rollup. Pure observation —
+# it never changes which model answers, how many steps run, or what a
+# user is allowed to do. Enforcement is a separate, later flag.
+#
+# Default OFF so the tables land and the code deploys before anything
+# writes, per the project's dark-ship convention. Flip it on right after
+# deploy: the meter's whole purpose is to replace per-ask cost estimates
+# that currently span an order of magnitude, and it collects nothing
+# while off.
+#
+# Declared HERE rather than read with a bare `.get(..., default)`
+# because AGENT_COLLECT_METRICS did that and became unsettable without
+# a code edit — its docstring still claims an operator can flip it.
+SEARCH_ENGINE["AI_COST_METER"] = os.environ.get("AI_COST_METER", "false").lower() == "true"
+
 # --- Email ---
 # Dev default: print emails to the runserver console so engineers don't
 # need credentials locally. In production, send via Resend's HTTPS API

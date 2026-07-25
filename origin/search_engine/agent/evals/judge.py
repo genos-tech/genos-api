@@ -44,6 +44,7 @@ import re
 from typing import Any
 
 from origin.search_engine.llm import get_model_client
+from origin.search_engine.llm.spend import spend_purpose
 from origin.search_engine.llm.types import AgentMessage
 
 log = logging.getLogger(__name__)
@@ -151,6 +152,7 @@ def extract_prose_citations(answer: str) -> list[tuple[str, str]]:
     return [(m.group(1), m.group(2)) for m in CITATION_LINK_RE.finditer(answer or "")]
 
 
+@spend_purpose("judge")
 def judge_answer(
     *,
     query: str,
@@ -437,6 +439,7 @@ _SUMMARY_SCORE_KEYS = ("fidelity", "coverage", "entity_preservation")
 _MAX_SOURCE_CHARS = 12000
 
 
+@spend_purpose("judge")
 def judge_summary(
     *,
     summary: str,

@@ -42,11 +42,13 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Iterator
 
 from django.conf import settings
 from openai import OpenAI
 
+from origin.search_engine.llm import spend
 from origin.search_engine.llm.schema import normalize_schema
 from origin.search_engine.llm.types import (
     AgentMessage,
@@ -191,6 +193,16 @@ class OpenAIClient:
         ]
 
         model = model_override or settings.SEARCH_ENGINE["OPENAI_MODEL"]
+        # Cost accounting — see the note in gemini_client. Recorded in a
+        # `finally` so a stream that dies part-way through still lands
+        # in the ledger. Identity is stamped now, not at fill time: an
+        # aborted call never reaches `_fill_usage_sink`, and a row with
+        # no provider or model cannot be reconciled against an invoice.
+        sink = usage_sink if usage_sink is not None else CallUsage()
+        sink.provider = "openai"
+        sink.model = model
+        started = time.monotonic()
+        call_error = ""
         # Per-call cap wins; the env cap stays the fallback so a
         # params-less call is byte-identical to pre-GenerationParams.
         max_tokens = (params.max_output_tokens if params else None) or int(
@@ -260,13 +272,25 @@ class OpenAIClient:
             # Usage telemetry. Observability only — never break generation.
             try:
                 _log_usage(final_usage, model)
-                if usage_sink is not None:
-                    _fill_usage_sink(usage_sink, final_usage, model)
+                _fill_usage_sink(sink, final_usage, model)
             except Exception:
                 log.debug("OpenAI usage logging failed", exc_info=True)
-        except Exception:
-            log.exception("OpenAI generate_step failed")
+        except BaseException as exc:
+            # BaseException so a client disconnect (GeneratorExit) is
+            # recorded too — that call was billed like any other.
+            call_error = f"{type(exc).__name__}: {exc}"[:200]
+            if isinstance(exc, Exception):
+                log.exception("OpenAI generate_step failed")
             raise
+        finally:
+            try:
+                spend.record_llm_call(
+                    sink,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                    error=call_error,
+                )
+            except Exception:  # noqa: BLE001 — accounting never breaks generation
+                log.debug("OpenAI spend capture failed", exc_info=True)
 
 
 # --------------------------------------------------------------------------- #

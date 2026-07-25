@@ -36,6 +36,7 @@ from origin.models.chat.unified_models import Channel, Message
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.acl import chat_acl_user_ids
 from origin.search_engine.llm import AgentMessage, get_model_client
+from origin.search_engine.llm.spend import spend_purpose
 from origin.search_engine.models import ThreadSummary
 from origin.search_engine.text_extraction import extract_text
 
@@ -236,6 +237,7 @@ def _format_messages_for_prompt(messages: list[ThreadMessageRecord]) -> str:
     )
 
 
+@spend_purpose("summary")
 def summarise_thread(
     messages: list[ThreadMessageRecord], *, model_override: str | None = None
 ) -> tuple[str, str]:
