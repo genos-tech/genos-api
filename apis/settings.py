@@ -1231,6 +1231,18 @@ SEARCH_ENGINE["AGENT_EFFORT_LEVELS"] = (
     os.environ.get("AGENT_EFFORT_LEVELS", "false").lower() == "true"
 )
 
+# Claude prompt caching (LLM_TIER_COST_OPTIMIZATION.md §8.2). Anthropic
+# does NOT cache automatically — a cache_control breakpoint must mark
+# the stable prefix. We mark the TOOL DECLARATIONS block (~13k tokens,
+# identical on every agent call by design — declarations never vary per
+# effort/request precisely so caches like this one hold). Cached reads
+# bill ~0.1x and prefill faster on steps 2+ of every ask. Default ON:
+# caching cannot change sampled output, only cost/latency; this env var
+# is the kill-switch if the backend ever rejects the parameter.
+SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
+    os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
+)
+
 # --- Email ---
 # Dev default: print emails to the runserver console so engineers don't
 # need credentials locally. In production, send via Resend's HTTPS API
