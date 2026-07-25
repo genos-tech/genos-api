@@ -503,8 +503,8 @@ class NonLlmSourceTests(_RestoresRecorder, TestCase):
     def test_a_failed_web_search_records_zero_units(self):
         """Tavily does not bill a failed search, but the row is what
         makes 'how much spend came from failures' answerable."""
-        from origin.search_engine.agent.tools.base import ToolError
         from origin.search_engine.agent.tools import web_search
+        from origin.search_engine.agent.tools.base import ToolError
 
         fake_client = mock.Mock()
         fake_client.search.side_effect = RuntimeError("upstream down")
