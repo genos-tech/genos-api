@@ -69,6 +69,7 @@ def build_prior_context(
     *,
     rolling_summary: bool | None = None,
     max_verbatim: int | None = None,
+    model_override: str | None = None,
 ) -> tuple[list[tuple[str, str]], str | None]:
     """Decide which prior turns travel verbatim and (optionally) build a
     rolling summary of the rest.
@@ -99,11 +100,13 @@ def build_prior_context(
 
     to_summarise = all_turns[:-max_verbatim]
     verbatim = all_turns[-max_verbatim:]
-    summary = _summarise_turns(to_summarise)
+    summary = _summarise_turns(to_summarise, model_override=model_override)
     return verbatim, summary
 
 
-def _summarise_turns(turns: list[tuple[str, str]]) -> str | None:
+def _summarise_turns(
+    turns: list[tuple[str, str]], *, model_override: str | None = None
+) -> str | None:
     """Render `turns` into a short paragraph via one LLM call. Returns
     `None` on any failure — caller must treat None as "fall back to
     verbatim-only behavior" (i.e. the summary is best-effort).
@@ -134,6 +137,7 @@ def _summarise_turns(turns: list[tuple[str, str]]) -> str | None:
             messages=[AgentMessage(role="user", text=user_prompt)],
             tools=[],
             system_instruction=_SUMMARY_SYSTEM,
+            model_override=model_override,
         ):
             if text:
                 chunks.append(text)

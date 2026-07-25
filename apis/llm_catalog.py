@@ -109,6 +109,10 @@ class LlmCatalog:
         """The provider's model ids, cheapest first. [] for unknown."""
         return list(self._provider_models.get(provider, ()))
 
+    def provider_order(self) -> list[str]:
+        """Provider names in YAML declaration order (stable for UIs)."""
+        return list(self._provider_models)
+
     def model_for_effort(self, provider: str, effort: str) -> str:
         """The synthesis model for (provider, effort).
 

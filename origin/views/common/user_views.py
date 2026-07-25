@@ -5,6 +5,7 @@ from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
+from apis.llm_catalog import EFFORTS
 from origin.models.common.user_models import CustomUser
 from origin.models.task.task_models import TaskMaster
 from origin.serializers.common.user_serializers import UserSerializer
@@ -254,20 +255,34 @@ class LlmModelPreferenceView(AuthenticatedAPIView):
             {
                 "provider": request.user.preferred_llm_provider or "",
                 "model": request.user.preferred_llm_model or "",
+                "effort": request.user.preferred_llm_effort or "",
             },
             status=status.HTTP_200_OK,
         )
 
     def patch(self, request):
         provider = request.data.get("provider", "")
+        # `model` and `effort` are both OPTIONAL and independent: the
+        # legacy FE PATCHes (provider, model), the effort FE PATCHes
+        # (provider, effort). An ABSENT key must not clear the other
+        # field — key presence, not value, decides what's written — so
+        # both UIs coexist across the deploy window.
+        model_given = "model" in request.data
         model = request.data.get("model", "")
-        if not isinstance(provider, str) or not isinstance(model, str):
+        effort_given = "effort" in request.data
+        effort = request.data.get("effort", "")
+        if (
+            not isinstance(provider, str)
+            or not isinstance(model, str)
+            or not isinstance(effort, str)
+        ):
             return Response(
-                {"error": "provider and model must be strings."},
+                {"error": "provider, model and effort must be strings."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         provider = provider.strip().lower()
         model = model.strip()
+        effort = effort.strip().lower()
         # Reject obviously wrong provider values up front. Specific
         # model strings are NOT validated here — see docstring.
         # Keep this in sync with `resolve_user_choice`'s allowlist in
@@ -279,11 +294,38 @@ class LlmModelPreferenceView(AuthenticatedAPIView):
                 {"error": "provider must be 'gemini', 'claude', 'openai', or empty."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Effort IS strictly validated (unlike model): it's a closed
+        # 3-value vocabulary we own, not a churning catalog — an
+        # unknown value here is a client bug, not a stale preference.
+        if effort and effort not in EFFORTS:
+            return Response(
+                {"error": "effort must be 'low', 'medium', 'high', or empty."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         request.user.preferred_llm_provider = provider
-        request.user.preferred_llm_model = model
-        request.user.save(update_fields=["preferred_llm_provider", "preferred_llm_model"])
+        update_fields = ["preferred_llm_provider"]
+        if model_given:
+            request.user.preferred_llm_model = model
+            update_fields.append("preferred_llm_model")
+            if not effort_given:
+                # A model write WITHOUT an effort key = a LEGACY client
+                # spoke, and that write is the user's newest intent. A
+                # previously saved explicit effort must not keep
+                # overriding it — reset to "" (= derive from the model's
+                # rung), which resolves to exactly the model that client
+                # just saved.
+                request.user.preferred_llm_effort = ""
+                update_fields.append("preferred_llm_effort")
+        if effort_given:
+            request.user.preferred_llm_effort = effort
+            update_fields.append("preferred_llm_effort")
+        request.user.save(update_fields=update_fields)
         return Response(
-            {"provider": provider, "model": model},
+            {
+                "provider": provider,
+                "model": request.user.preferred_llm_model or "",
+                "effort": request.user.preferred_llm_effort or "",
+            },
             status=status.HTTP_200_OK,
         )
 

@@ -34,6 +34,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+from contextlib import contextmanager
 from datetime import timedelta
 from typing import Any, Callable, Iterator
 
@@ -45,6 +46,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
+from apis.llm_catalog import EFFORTS
 from origin.search_engine.agent.controller import (
     _chat_source,
     _note_source,
@@ -85,7 +87,9 @@ from origin.search_engine.llm.choice import (
     cheaper_models_same_provider,
     reset_llm_choice,
     resolve_user_choice,
+    resolve_user_effort,
     set_llm_choice,
+    subprocess_model_override,
 )
 from origin.search_engine.models import AgentRun, AgentRunFeedback, AgentSession, AgentStep
 from origin.search_engine.quota import (
@@ -313,23 +317,73 @@ def _model_quota_429(chosen: LlmChoice, used: int, limit: int) -> Response:
     """The per-model daily-cap 429, shared by ask + both summary views.
 
     One builder so the copy can't drift between the three call sites —
-    it already had, and it will be re-worded once more when effort
-    levels land (the message will name the effort, not the model).
+    it already had. Under effort levels the message names the EFFORT
+    (the thing the user actually picked); the payload keeps the model
+    id either way, since quota is keyed on it.
     """
-    return Response(
-        {
-            "error": (
-                f"You've used all {limit} {_model_label(chosen.model)} asks for today. "
-                "Switch to another model or upgrade your plan to keep going."
-            ),
-            "limit_reached": True,
-            "used": used,
-            "limit": limit,
-            "category": "model",
-            "model": chosen.model,
-        },
-        status=status.HTTP_429_TOO_MANY_REQUESTS,
-    )
+    if chosen.effort:
+        message = (
+            f"You've used all {limit} {chosen.effort.capitalize()}-effort asks "
+            "for today. Switch to a lower effort or upgrade your plan to keep going."
+        )
+    else:
+        message = (
+            f"You've used all {limit} {_model_label(chosen.model)} asks for today. "
+            "Switch to another model or upgrade your plan to keep going."
+        )
+    body = {
+        "error": message,
+        "limit_reached": True,
+        "used": used,
+        "limit": limit,
+        "category": "model",
+        "model": chosen.model,
+    }
+    if chosen.effort:
+        body["effort"] = chosen.effort
+    return Response(body, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+
+def _resolve_choice_for(user) -> LlmChoice:
+    """The user's effective LlmChoice, effort-aware when the flag is on.
+
+    Flag off -> `resolve_user_choice` on the legacy (provider, model)
+    fields, byte-identical to before effort levels existed. Flag on ->
+    `resolve_user_effort`, which derives a missing effort from the
+    legacy model's rung so nobody's provider or model changes at the
+    flip.
+    """
+    if settings.SEARCH_ENGINE.get("AGENT_EFFORT_LEVELS"):
+        return resolve_user_effort(
+            user.preferred_llm_provider,
+            user.preferred_llm_effort,
+            user.preferred_llm_model,
+        )
+    return resolve_user_choice(user.preferred_llm_provider, user.preferred_llm_model)
+
+
+@contextmanager
+def _effort_choice_bound(chosen: LlmChoice):
+    """Bind `chosen` to the ContextVar for a pre-worker LLM call, but
+    ONLY when effort levels are on.
+
+    The ask path fires up to three LLM calls on the REQUEST thread
+    before the worker's own `set_llm_choice` (thread/note summary,
+    rolling multi-turn summary). Historically those silently ran on the
+    server default. Under effort levels they carry a same-provider
+    "summaries" pin as `model_override` — which requires the CLIENT to
+    be the user's provider's adapter, or a claude pin would be handed
+    to the gemini adapter. Flag off -> no binding, preserving the
+    legacy server-default behavior exactly.
+    """
+    if not settings.SEARCH_ENGINE.get("AGENT_EFFORT_LEVELS"):
+        yield
+        return
+    token = set_llm_choice(chosen)
+    try:
+        yield
+    finally:
+        reset_llm_choice(token)
 
 
 class AgentAskView(AuthenticatedAPIView):
@@ -366,10 +420,11 @@ class AgentAskView(AuthenticatedAPIView):
         # the frontend can render the right message. Numbers come from
         # SEARCH_ENGINE["TIER_QUOTAS"][user.tier]. A None limit means
         # "no quota applies" (treated as unlimited).
-        chosen = resolve_user_choice(
-            request.user.preferred_llm_provider,
-            request.user.preferred_llm_model,
-        )
+        chosen = _resolve_choice_for(request.user)
+        # The "summaries" sub-process pin (None when effort levels are
+        # off, or env overrides win) — applied to the pre-worker
+        # summary calls below, never to the loop itself.
+        summaries_pin = subprocess_model_override("summaries", chosen)
 
         llm_ok, llm_used, llm_limit = check_remaining(user_id, LLM_ASK_KEY)
         if not llm_ok:
@@ -503,7 +558,10 @@ class AgentAskView(AuthenticatedAPIView):
             prior_turns_all = _load_prior_turns(session, load_cap)
             from origin.search_engine.agent.multi_turn import build_prior_context  # noqa: PLC0415
 
-            prior_turns, prior_summary = build_prior_context(prior_turns_all)
+            with _effort_choice_bound(chosen):
+                prior_turns, prior_summary = build_prior_context(
+                    prior_turns_all, model_override=summaries_pin
+                )
         except Exception:  # noqa: BLE001
             log.exception("Session load failed; continuing without memory")
             prior_turns = []
@@ -550,13 +608,15 @@ class AgentAskView(AuthenticatedAPIView):
             t_chat_id = thread_ctx_parsed["chat_id"]
             t_thread_id = thread_ctx_parsed["thread_id"]
             try:
-                summary_text = load_or_generate_for_ask(
-                    chat_type=t_chat_type,
-                    chat_id=t_chat_id,
-                    thread_id=t_thread_id,
-                    team_id=str(team_id),
-                    user_id=user_id,
-                )
+                with _effort_choice_bound(chosen):
+                    summary_text = load_or_generate_for_ask(
+                        chat_type=t_chat_type,
+                        chat_id=t_chat_id,
+                        thread_id=t_thread_id,
+                        team_id=str(team_id),
+                        user_id=user_id,
+                        model_override=summaries_pin,
+                    )
             except ThreadSummaryError as e:
                 # Three failure flavors with distinct HTTP semantics:
                 #   - ACL denial / chat-not-found  → 403 (don't retry)
@@ -626,11 +686,13 @@ class AgentAskView(AuthenticatedAPIView):
             n_note_type = note_ctx_parsed["note_type"]
             n_note_id = note_ctx_parsed["note_id"]
             try:
-                summary_text, note_record = load_or_generate_note_for_ask(
-                    note_type=n_note_type,
-                    note_id=n_note_id,
-                    user_id=user_id,
-                )
+                with _effort_choice_bound(chosen):
+                    summary_text, note_record = load_or_generate_note_for_ask(
+                        note_type=n_note_type,
+                        note_id=n_note_id,
+                        user_id=user_id,
+                        model_override=summaries_pin,
+                    )
             except NoteSummaryError as e:
                 msg = str(e).lower()
                 if "authorized" in msg or "not found" in msg:
@@ -845,10 +907,7 @@ class AgentDecideView(AuthenticatedAPIView):
         # trips are typically seconds, so this is effectively never a
         # problem in practice; it's also the principle-of-least-surprise
         # behavior — the user's *current* preference is what counts.
-        resumed_choice = resolve_user_choice(
-            request.user.preferred_llm_provider,
-            request.user.preferred_llm_model,
-        )
+        resumed_choice = _resolve_choice_for(request.user)
 
         def worker(emit):
             token = set_llm_choice(resumed_choice)
@@ -1292,10 +1351,7 @@ class NoteSummaryView(AuthenticatedAPIView):
 
         force = bool(data.get("force_regenerate"))
 
-        chosen = resolve_user_choice(
-            request.user.preferred_llm_provider,
-            request.user.preferred_llm_model,
-        )
+        chosen = _resolve_choice_for(request.user)
 
         # 1. Cheap path: peek the cache. ACL is enforced here.
         try:
@@ -1477,10 +1533,7 @@ class ThreadSummaryView(AuthenticatedAPIView):
 
         # Resolve LLM choice up-front so both the quota key and the
         # actual generation use the same model.
-        chosen = resolve_user_choice(
-            request.user.preferred_llm_provider,
-            request.user.preferred_llm_model,
-        )
+        chosen = _resolve_choice_for(request.user)
 
         # 1. Cheap path: peek the cache. ACL is enforced here.
         try:
@@ -1754,10 +1807,7 @@ class AgentModelsView(AuthenticatedAPIView):
                 }
             )
 
-        resolved = resolve_user_choice(
-            request.user.preferred_llm_provider,
-            request.user.preferred_llm_model,
-        )
+        resolved = _resolve_choice_for(request.user)
 
         # Picker fallback: if the resolved model isn't in the catalog
         # (e.g. an operator left `GEMINI_MODEL` pointing at a preview
@@ -1781,19 +1831,48 @@ class AgentModelsView(AuthenticatedAPIView):
                 resolved = LlmChoice(
                     provider=same_provider["provider"],
                     model=same_provider["model"],
+                    effort=resolved.effort,
                 )
 
-        return Response(
-            {
-                "tier": tier,
-                "current": {"provider": resolved.provider, "model": resolved.model},
-                "models": models_payload,
-                "limits": {
-                    "llm_ask": _tier_limit_block(user_id, LLM_ASK_KEY),
-                    "web_search": _tier_limit_block(user_id, WEB_SEARCH_KEY),
-                },
-            }
-        )
+        payload: dict[str, Any] = {
+            "tier": tier,
+            "current": {"provider": resolved.provider, "model": resolved.model},
+            "models": models_payload,
+            "limits": {
+                "llm_ask": _tier_limit_block(user_id, LLM_ASK_KEY),
+                "web_search": _tier_limit_block(user_id, WEB_SEARCH_KEY),
+            },
+        }
+
+        # Effort levels: ADDITIVE payload. `efforts[]` + `current.effort`
+        # appear only when the flag is on — their presence is the
+        # frontend's render switch (effort picker vs legacy model
+        # picker), which makes deploys skew-proof in both directions.
+        # `models[]` stays verbatim for the legacy UI during transition.
+        # Per-effort quota rows are the mapped model's existing counters:
+        # quota stays keyed on model ids, this is a re-labeling.
+        if settings.SEARCH_ENGINE.get("AGENT_EFFORT_LEVELS"):
+            payload["current"]["effort"] = resolved.effort
+            efforts_payload = []
+            for entry_provider in settings.LLM_CATALOG.provider_order():
+                for effort_name in EFFORTS:
+                    mapped = settings.LLM_CATALOG.model_for_effort(
+                        entry_provider, effort_name
+                    )
+                    mapped_entry = settings.LLM_CATALOG.by_model.get(mapped) or {}
+                    efforts_payload.append(
+                        {
+                            "provider": entry_provider,
+                            "effort": effort_name,
+                            "model": mapped,
+                            "model_label": mapped_entry.get("label", mapped),
+                            "daily_limit": get_quota(user_id, mapped),
+                            "used_today": get_used_today(user_id, mapped),
+                        }
+                    )
+            payload["efforts"] = efforts_payload
+
+        return Response(payload)
 
 
 # Cap how many recent sessions the list endpoint returns. Keeps the

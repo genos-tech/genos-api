@@ -29,15 +29,24 @@ from dataclasses import dataclass
 
 from django.conf import settings
 
+from apis.llm_catalog import EFFORTS
+
 log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class LlmChoice:
-    """Provider + model id pair, normalized lowercase."""
+    """Provider + model id pair, normalized lowercase.
+
+    `effort` is set ONLY by `resolve_user_effort` (the
+    AGENT_EFFORT_LEVELS path). Empty everywhere else — every legacy
+    constructor site stays valid, and readers treat "" as "effort
+    machinery inactive for this request".
+    """
 
     provider: str  # 'gemini' | 'claude' | 'openai'
     model: str  # e.g. 'gemini-2.5-pro' / 'claude-sonnet-4-6' / 'gpt-5.6-terra'
+    effort: str = ""  # '' | 'low' | 'medium' | 'high'
 
 
 _current_choice: ContextVar[LlmChoice | None] = ContextVar("llm_choice", default=None)
@@ -169,3 +178,118 @@ def resolve_user_choice(
         return _provider_default_choice(provider)
 
     return LlmChoice(provider=provider, model=model)
+
+
+# --------------------------------------------------------------------------- #
+# Effort levels (AGENT_EFFORT_LEVELS)                                          #
+# --------------------------------------------------------------------------- #
+
+# The default when a user has never expressed ANY preference. Medium,
+# because the medium profile is pinned byte-identical to today's
+# default experience (the MEDIUM INVARIANT in llm_models.yaml) — so
+# defaulting here changes nothing for that cohort at the flag flip.
+DEFAULT_EFFORT = "medium"
+
+
+def resolve_user_effort(
+    preferred_provider: str | None,
+    preferred_effort: str | None,
+    preferred_model: str | None,
+) -> LlmChoice:
+    """Effort-aware successor to `resolve_user_choice`.
+
+    Only called when AGENT_EFFORT_LEVELS is on (callers keep using
+    `resolve_user_choice` otherwise — flag-off is byte-identical).
+
+    Resolution:
+      provider — validated exactly as `resolve_user_choice` does;
+        unknown → the server default provider (+ warning).
+      effort — the explicit field when valid; else DERIVED from the
+        legacy saved model's rung (`effort_for_model`) so existing
+        users keep the model they chose without any data migration;
+        else DEFAULT_EFFORT.
+      model — `model_for_effort(provider, effort)`, i.e. the rung.
+
+    The legacy fields are never written by this path — they are the
+    rollback substrate (flag off → `resolve_user_choice` reads them
+    exactly as before).
+    """
+    provider = (preferred_provider or "").lower().strip()
+    if provider not in ("gemini", "claude", "openai"):
+        if provider:
+            log.warning(
+                "User has unknown preferred_llm_provider=%r; falling back to server default",
+                preferred_provider,
+            )
+        provider = (settings.SEARCH_ENGINE.get("LLM_PROVIDER") or "gemini").lower()
+        if provider not in ("gemini", "claude", "openai"):
+            provider = "gemini"
+
+    effort = (preferred_effort or "").lower().strip()
+    if effort not in EFFORTS:
+        derived = settings.LLM_CATALOG.effort_for_model(
+            provider, (preferred_model or "").strip()
+        )
+        effort = derived or DEFAULT_EFFORT
+
+    return LlmChoice(
+        provider=provider,
+        model=settings.LLM_CATALOG.model_for_effort(provider, effort),
+        effort=effort,
+    )
+
+
+def active_effort_profile():
+    """The current request's `EffortProfile`, or None.
+
+    None means "run on the legacy env values" — flag off, or a code
+    path where no effort-carrying choice was resolved (evals, crons,
+    summary views on the legacy path). EVERY reader must treat None as
+    exactly today's behavior; that convention is what keeps the flag
+    flip inert outside the effort path.
+    """
+    if not settings.SEARCH_ENGINE.get("AGENT_EFFORT_LEVELS"):
+        return None
+    choice = get_llm_choice()
+    if choice is None or not choice.effort:
+        return None
+    return settings.LLM_CATALOG.efforts.get(choice.effort)
+
+
+def subprocess_model_override(kind: str, choice: LlmChoice | None) -> str | None:
+    """Same-provider model pin for a sub-process LLM call, or None.
+
+    `kind` ∈ {'rewrite', 'rerank', 'summaries'}. Precedence:
+
+      1. The operator env override (RAG_REWRITE_MODEL /
+         RAG_RERANKER_MODEL) — the per-subprocess rollback lever that
+         needs no deploy. Returning None here lets the CALLER apply it,
+         keeping today's code paths untouched.
+      2. Flag on + a provider to pin against → the provider's
+         `subprocesses` rung from llm_models.yaml. Same-provider by
+         construction, so the pin can never hand one provider's id to
+         another provider's adapter.
+      3. None — inherit the synthesis model (today's behavior).
+
+    Why callers pass `choice` explicitly instead of this reading the
+    ContextVar: the summary calls run on the request thread BEFORE
+    `set_llm_choice`, where the ContextVar is still unset — the exact
+    accident that had summaries silently running on the server default.
+    An explicit argument makes the model deliberate and testable.
+    """
+    env_key = {"rewrite": "RAG_REWRITE_MODEL", "rerank": "RAG_RERANKER_MODEL"}.get(kind)
+    if env_key and (settings.SEARCH_ENGINE.get(env_key) or "").strip():
+        return None  # caller's own env-override logic wins, unchanged
+    if not settings.SEARCH_ENGINE.get("AGENT_EFFORT_LEVELS"):
+        return None
+    provider = (choice.provider if choice else "") or ""
+    if not provider:
+        return None
+    rung = settings.LLM_CATALOG.subprocess_rungs.get(kind)
+    if rung is None:
+        return None
+    try:
+        return settings.LLM_CATALOG.model_for_rung(provider, rung)
+    except Exception:  # noqa: BLE001 — a pin failure must never kill the ask
+        log.warning("subprocess pin %r failed for provider %r", kind, provider)
+        return None

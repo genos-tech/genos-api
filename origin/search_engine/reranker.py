@@ -54,6 +54,7 @@ from typing import Any
 from django.conf import settings
 
 from origin.search_engine.llm import AgentMessage, get_model_client
+from origin.search_engine.llm.choice import get_llm_choice, subprocess_model_override
 
 log = logging.getLogger(__name__)
 
@@ -246,12 +247,16 @@ def _rerank_llm(
     msgs = [AgentMessage(role="user", text=prompt)]
 
     # Reranking is a narrow classification task — no tool use, no
-    # multi-step reasoning. A smaller / faster model usually matches
-    # the bigger one's quality at a fraction of the latency. Wire a
-    # per-call override so operators can point `RAG_RERANKER_MODEL` at
-    # e.g. `gemini-2.5-flash` for the agent path without changing the
-    # main `GEMINI_MODEL` used for answer generation.
-    model_override = settings.SEARCH_ENGINE.get("RAG_RERANKER_MODEL") or None
+    # multi-step reasoning. A smaller / faster model matches the bigger
+    # one's quality at a fraction of the latency. Precedence:
+    #   1. RAG_RERANKER_MODEL env — operator escape hatch / rollback.
+    #   2. The effort pin (AGENT_EFFORT_LEVELS): the user's provider's
+    #      `subprocesses.rerank` rung — same-provider light model
+    #      instead of silently inheriting the synthesis model.
+    #   3. None → inherit the synthesis model (legacy behavior).
+    model_override = (
+        settings.SEARCH_ENGINE.get("RAG_RERANKER_MODEL") or None
+    ) or subprocess_model_override("rerank", get_llm_choice())
 
     try:
         chunks: list[str] = []

@@ -236,12 +236,20 @@ def _format_messages_for_prompt(messages: list[ThreadMessageRecord]) -> str:
     )
 
 
-def summarise_thread(messages: list[ThreadMessageRecord]) -> tuple[str, str]:
+def summarise_thread(
+    messages: list[ThreadMessageRecord], *, model_override: str | None = None
+) -> tuple[str, str]:
     """One LLM call. Returns `(summary_text, model_label)`.
 
     `model_label` is a best-effort string capturing the active model
     (provider:model) for diagnostics. Empty when the LLM client doesn't
     expose its choice.
+
+    `model_override` is the effort-level "summaries" pin, passed only
+    by the ASK path (a summary is scaffolding there, not the product).
+    The standalone summary views never pass it — a user who explicitly
+    asked for a summary gets their chosen model, which is also the
+    model those views charge quota against.
     """
     if not messages:
         raise ThreadSummaryError("Thread has no summarisable content.")
@@ -255,6 +263,7 @@ def summarise_thread(messages: list[ThreadMessageRecord]) -> tuple[str, str]:
             messages=[AgentMessage(role="user", text=prompt)],
             tools=[],
             system_instruction=_SUMMARY_SYSTEM_PROMPT,
+            model_override=model_override,
         ):
             if text:
                 chunks.append(text)
@@ -270,7 +279,10 @@ def summarise_thread(messages: list[ThreadMessageRecord]) -> tuple[str, str]:
     try:
         # Best-effort. _ChoiceWrappedClient exposes ._choice; bare adapters don't.
         choice = getattr(client, "_choice", None)
-        if choice is not None:
+        if model_override:
+            provider = choice.provider if choice is not None else ""
+            model_label = f"{provider}:{model_override}" if provider else model_override
+        elif choice is not None:
             model_label = f"{choice.provider}:{choice.model}"
     except Exception:  # noqa: BLE001
         pass
@@ -337,6 +349,7 @@ def regenerate_summary(
     team_id: str,
     user_id: str,
     messages: list[ThreadMessageRecord],
+    model_override: str | None = None,
 ) -> ThreadSummaryResult:
     """Force an LLM call and persist the result.
 
@@ -344,7 +357,7 @@ def regenerate_summary(
     idempotent at the row level — `update_or_create` lets the second
     writer win without raising.
     """
-    summary_text, model_label = summarise_thread(messages)
+    summary_text, model_label = summarise_thread(messages, model_override=model_override)
     max_id = max(m.thread_message_id for m in messages)
     count = len(messages)
     max_edit = max((m.ts_updated for m in messages if m.ts_updated), default=None)
@@ -382,6 +395,7 @@ def get_or_generate_thread_summary(
     team_id: str,
     user_id: str,
     force_regenerate: bool = False,
+    model_override: str | None = None,
 ) -> ThreadSummaryResult:
     """Convenience orchestrator: cache-aware fetch + lazy regenerate.
 
@@ -407,6 +421,7 @@ def get_or_generate_thread_summary(
             team_id=team_id,
             user_id=user_id,
             messages=messages,
+            model_override=model_override,
         )
 
     cached, messages, _fp = peek_cached_summary(
@@ -424,6 +439,7 @@ def get_or_generate_thread_summary(
         team_id=team_id,
         user_id=user_id,
         messages=messages,
+        model_override=model_override,
     )
 
 
@@ -445,6 +461,7 @@ def load_or_generate_for_ask(
     thread_id: str,
     team_id: str,
     user_id: str,
+    model_override: str | None = None,
 ) -> str:
     """Helper used by AgentAskView's thread-context branch.
 
@@ -459,5 +476,6 @@ def load_or_generate_for_ask(
         team_id=team_id,
         user_id=user_id,
         force_regenerate=False,
+        model_override=model_override,
     )
     return result.summary

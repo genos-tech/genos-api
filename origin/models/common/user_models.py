@@ -178,6 +178,19 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         default="",
         help_text="Model id within the chosen provider; '' = provider default.",
     )
+    # Effort level (AGENT_EFFORT_LEVELS). Replaces model-picking as the
+    # user-facing choice: (provider, effort) resolves to a model via
+    # apis/llm_models.yaml. Empty = derive from the legacy
+    # preferred_llm_model's rung at read time (llm.choice), else the
+    # default effort — so existing users migrate lazily, with no data
+    # migration and no write to either legacy field (they stay intact
+    # as the rollback substrate).
+    preferred_llm_effort = models.CharField(
+        max_length=16,
+        blank=True,
+        default="",
+        help_text="'low', 'medium', 'high', or '' to derive from the legacy model pref.",
+    )
 
     # Django Auth Fields
     is_active = models.BooleanField(default=True)  # Can be disabled
