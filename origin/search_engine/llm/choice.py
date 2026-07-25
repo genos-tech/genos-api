@@ -169,13 +169,3 @@ def resolve_user_choice(
         return _provider_default_choice(provider)
 
     return LlmChoice(provider=provider, model=model)
-
-
-def _provider_default_choice(provider: str) -> LlmChoice:
-    """That provider's server-configured default model."""
-    cfg = settings.SEARCH_ENGINE
-    if provider == "claude":
-        return LlmChoice(provider="claude", model=cfg.get("CLAUDE_MODEL") or "")
-    if provider == "openai":
-        return LlmChoice(provider="openai", model=cfg.get("OPENAI_MODEL") or "")
-    return LlmChoice(provider="gemini", model=cfg.get("GEMINI_MODEL") or "")

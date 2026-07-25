@@ -568,9 +568,9 @@ SEARCH_ENGINE = {
     # silently: the loop runs it while the Settings picker only offers the
     # catalog. `test_default_models_are_in_catalog` guards against that drift.
     "GEMINI_MODEL": os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash",
-    # How many retrieved chunks to stuff into the Gemini prompt as
-    # grounding. Larger = better recall, more cost / latency.
-    "AGENT_CONTEXT_CHUNKS": int(os.environ.get("AGENT_CONTEXT_CHUNKS", "12")),
+    # (AGENT_CONTEXT_CHUNKS used to live here — removed as dead code.
+    # Nothing ever read it; the real context budget is search()'s
+    # max_chunks_per_entity × the per-tool entity limit.)
     # Phase 3 agent loop — hard cap on tool calls per request. The
     # roadmap recommends 5–8; we default to the conservative end.
     # The controller stops + emits an error if the model hasn't
