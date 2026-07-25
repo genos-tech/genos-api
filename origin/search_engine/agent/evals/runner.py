@@ -39,6 +39,7 @@ import yaml
 from origin.search_engine.agent.abstention import is_abstention
 from origin.search_engine.agent.controller import _irrelevant_tool_families, run_agent
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
+from origin.search_engine.llm import spend
 from origin.search_engine.llm.spend import spend_purpose
 from origin.search_engine.search import search
 
@@ -118,6 +119,20 @@ class CaseResult:
     # yet a continuous metric on this suite). Empty `{}` → no metric for
     # this case, so aggregators skip it.
     metrics: dict[str, float] = field(default_factory=dict)
+    # --- Cost, from the AI spend ledger (AI_COST_METER) -------------
+    # TOKENS ARE THE PRIMARY METRIC, yen is secondary. Yen moves when the
+    # rate card or the FX pin moves, which would make a price change read
+    # as an engineering regression — the exact confusion this metric
+    # exists to prevent. Tokens only move when the agent's behaviour
+    # does. `rate_card_version` is recorded so a yen trend can be
+    # segmented rather than silently spanning two price regimes.
+    #
+    # All zero when the meter is off (its default), so the suite behaves
+    # exactly as before.
+    llm_calls: int = 0
+    total_tokens: int = 0
+    cost_jpy_milli: int = 0
+    rate_card_version: str = ""
 
 
 def load_cases(path: Path = BEHAVIOR_CASES_PATH) -> list[dict[str, Any]]:
@@ -167,6 +182,68 @@ def _infra_failure(events: list[dict[str, Any]]) -> bool:
     return False
 
 
+
+def _case_cost() -> dict[str, Any]:
+    """Cost of the eval case currently in flight, from the ledger.
+
+    Called where the `CaseResult` is built — `run_agent` has returned by
+    then, so every row for this case exists. Reads the ACTIVE spend
+    context's request_id, which is why `run_behavior_case` is wrapped in
+    one.
+
+    This is what closes the eval suite's oldest blind spot: the runner
+    calls the controller with `run_id=None`, and `_persist_llm_call`
+    early-returns on that, so the 155-case suite has never recorded a
+    single token. The ledger keys on `request_id` instead of the run,
+    which is exactly why it can see what `AgentLlmCall` cannot.
+
+    Returns zeros when the meter is off (its default) or on any error —
+    an eval must never fail because accounting did.
+    """
+    blank = {
+        "llm_calls": 0,
+        "total_tokens": 0,
+        "cost_jpy_milli": 0,
+        "rate_card_version": "",
+    }
+    ctx = spend.current_context()
+    if ctx is None:
+        return blank
+    try:
+        from django.db.models import Count, Sum  # noqa: PLC0415
+
+        from origin.search_engine.models import AiSpendEvent  # noqa: PLC0415
+
+        rows = AiSpendEvent.objects.filter(request_id=ctx.request_id)
+        agg = rows.aggregate(
+            n=Count("id"),
+            jpy=Sum("cost_jpy_milli"),
+            prompt=Sum("prompt_tokens"),
+            cached=Sum("cached_tokens"),
+            output=Sum("output_tokens"),
+            thought=Sum("thought_tokens"),
+        )
+        card = rows.exclude(rate_card_version="").values_list(
+            "rate_card_version", flat=True
+        ).first()
+        return {
+            "llm_calls": int(agg["n"] or 0),
+            "total_tokens": sum(
+                int(agg[k] or 0) for k in ("prompt", "cached", "output", "thought")
+            ),
+            "cost_jpy_milli": int(agg["jpy"] or 0),
+            "rate_card_version": card or "",
+        }
+    except Exception:  # noqa: BLE001 — an eval must not fail on accounting
+        log.debug("Could not collect case cost", exc_info=True)
+        return blank
+
+
+# Bind one logical request per case so every LLM call it makes — loop
+# steps, rewrite, rerank, critique, summaries — rolls up under a single
+# request_id. Decorator form: the context manager is recreated per call,
+# so each case gets its own id.
+@spend.spend_context(surface="eval")
 def run_behavior_case(case: dict[str, Any]) -> CaseResult:
     """Execute one behavior case through the full agent loop.
 
@@ -356,6 +433,7 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
                 **_citation_style_metric(events, expect),
                 **_surface_metric(query),
             },
+            **_case_cost(),
         )
     finally:
         for handle in cleanup_handles:

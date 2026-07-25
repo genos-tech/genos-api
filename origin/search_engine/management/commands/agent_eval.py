@@ -340,6 +340,44 @@ class Command(BaseCommand):
                 drift.append(f"{fname}: live index is missing subfields {missing}")
         return drift
 
+    def _print_cost(self, results: list[CaseResult]) -> None:
+        """Suite cost, from the AI spend ledger.
+
+        TOKENS ARE THE HEADLINE and yen is parenthetical, deliberately.
+        Yen moves whenever the rate card or the FX pin moves, so a
+        price change would read as an engineering regression — the
+        exact confusion this metric exists to detect. Tokens move only
+        when the agent's behaviour does.
+
+        The rate card is printed alongside so a yen trend can be
+        segmented rather than silently spanning two price regimes.
+
+        Silent when the meter is off (its default) — the suite then
+        behaves exactly as it did before.
+        """
+        calls = sum(getattr(r, "llm_calls", 0) for r in results)
+        if not calls:
+            return
+        tokens = sum(getattr(r, "total_tokens", 0) for r in results)
+        jpy_milli = sum(getattr(r, "cost_jpy_milli", 0) for r in results)
+        cards = {getattr(r, "rate_card_version", "") for r in results if getattr(r, "rate_card_version", "")}
+        n = len(results) or 1
+
+        card_part = f"  [rate card {cards.pop()}]" if len(cards) == 1 else ""
+        self.stdout.write(
+            self.style.NOTICE(
+                f"\nSuite cost: {tokens:,} tokens over {calls} LLM call(s) "
+                f"— {tokens // n:,} tok/case  (¥{jpy_milli / 1000:,.2f}){card_part}"
+            )
+        )
+        if len(cards) > 1:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"  {len(cards)} rate cards in this run ({', '.join(sorted(cards))}) — "
+                    f"the yen figure spans two price regimes; compare TOKENS across runs."
+                )
+            )
+
     def _print_one(self, r: CaseResult) -> None:
         if r.passed:
             label = self.style.SUCCESS("PASS")
@@ -351,6 +389,10 @@ class Command(BaseCommand):
         else:
             label = self.style.ERROR("FAIL")
         ttft_part = f", ttft {r.ttft_ms} ms" if getattr(r, "ttft_ms", -1) >= 0 else ""
+        # Tokens, not yen — see the suite total below for why.
+        tok = getattr(r, "total_tokens", 0)
+        tok_part = f", {tok / 1000:.1f}k tok" if tok else ""
+        ttft_part += tok_part
         if r.tool_call_count > 0 or r.step_count > 0:
             detail = (
                 f"({r.step_count} step{'s' if r.step_count != 1 else ''}, "
@@ -439,6 +481,8 @@ class Command(BaseCommand):
                 parts.append(f"{k}={sum(vals) / len(vals):.3f} (n={len(vals)})")
             self.stdout.write(self.style.NOTICE("\nContinuous metrics: " + "  ".join(parts)))
 
+        self._print_cost(results)
+
     def _run_basename(self) -> str:
         """`<timestamp>-<short-sha>` stem shared by persisted run files.
 
@@ -516,6 +560,10 @@ class Command(BaseCommand):
                             "passed": r.passed,
                             "duration_ms": r.duration_ms,
                             "ttft_ms": r.ttft_ms,
+                            "llm_calls": getattr(r, "llm_calls", 0),
+                            "total_tokens": getattr(r, "total_tokens", 0),
+                            "cost_jpy_milli": getattr(r, "cost_jpy_milli", 0),
+                            "rate_card_version": getattr(r, "rate_card_version", ""),
                             "query": r.query,
                             "answer": r.answer,
                             "sources": [
