@@ -431,6 +431,29 @@ def load_llm_catalog(path: str | Path) -> LlmCatalog:
 
         _check_price_order(provider, entries)
 
+    # --- embedding prices ----------------------------------------------
+    # Priced, but NOT catalog entries: they never reach `by_model`,
+    # `catalog` or `model_daily`, so they cannot appear in the Settings
+    # picker or acquire a daily cap that would mean nothing for them.
+    # They join `prices` (and therefore the rate-card fingerprint)
+    # because that is the only thing they exist for.
+    embeddings = raw.get("embeddings")
+    if not isinstance(embeddings, list) or not embeddings:
+        _fail("`embeddings` must be a non-empty list of {model, provider, price}")
+    for entry in embeddings:
+        if not isinstance(entry, dict):
+            _fail("`embeddings` entries must be mappings")
+        model = entry.get("model")
+        provider = entry.get("provider") or "?"
+        if not model:
+            _fail("every `embeddings` entry needs a `model`")
+        if model in prices:
+            _fail(
+                f"{model!r} is listed under `embeddings` AND `providers`. "
+                f"An embedding model must not be a pickable chat model."
+            )
+        prices[model] = _parse_price(provider, entry)
+
     return LlmCatalog(
         catalog=catalog,
         model_daily=model_daily,

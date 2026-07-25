@@ -561,3 +561,85 @@ class NonLlmSourceTests(_RestoresRecorder, TestCase):
             1,
             "a cache hit must not manufacture a ledger row",
         )
+
+
+class EmbeddingPricingTests(_RestoresRecorder, TestCase):
+    """Embeddings are PRICED, not `unpriced`.
+
+    They were filed unpriced on the stated grounds that "there is no
+    token count to price here". There was: OpenAI returns
+    `usage.prompt_tokens` and Vertex returns `statistics.token_count`
+    per embedding. Discarding it put a real billing line permanently
+    outside every total the ledger produces.
+    """
+
+    @METER_ON
+    def test_a_token_count_makes_an_embedding_row_priced(self):
+        with spend.spend_context(surface="search"):
+            spend.record_units(
+                unit_kind=spend.UNIT_EMBED,
+                units=2,
+                tokens=1_000_000,
+                provider="vertex",
+                model="gemini-embedding-001",
+            )
+        row = AiSpendEvent.objects.get()
+        self.assertEqual(row.cost_basis, "priced")
+        self.assertEqual(row.prompt_tokens, 1_000_000)
+        # 1M tokens at the catalog's per-1M input rate, exactly.
+        from django.conf import settings as dj_settings  # noqa: PLC0415
+
+        rate = dj_settings.LLM_CATALOG.price_for("gemini-embedding-001").input
+        self.assertEqual(row.cost_usd_micro, int(round(rate * 1_000_000)))
+
+    @METER_ON
+    def test_units_still_counts_texts_not_tokens(self):
+        """`units` is what the call DID; tokens are what it COST. If
+        they merge, "how many things did we embed" stops being
+        answerable."""
+        with spend.spend_context(surface="search"):
+            spend.record_units(
+                unit_kind=spend.UNIT_EMBED,
+                units=3,
+                tokens=450,
+                provider="openai",
+                model="text-embedding-3-small",
+            )
+        row = AiSpendEvent.objects.get()
+        self.assertEqual((row.units, row.prompt_tokens), (3, 450))
+
+    @METER_ON
+    def test_the_providers_own_billable_quantity_is_kept(self):
+        """Vertex reports billable CHARACTERS alongside tokens, and only
+        the invoice settles which is charged. Storing it now is what
+        makes a change of billing unit a re-derive instead of a gap."""
+        with spend.spend_context(surface="search"):
+            spend.record_units(
+                unit_kind=spend.UNIT_EMBED,
+                units=1,
+                tokens=9,
+                billable_units=35,
+                provider="vertex",
+                model="gemini-embedding-001",
+            )
+        self.assertEqual(AiSpendEvent.objects.get().billable_units, 35)
+
+    @METER_ON
+    def test_no_token_count_still_records_unpriced_rather_than_nothing(self):
+        """A provider that stops reporting a count must cost us a priced
+        row, never the caller's embeddings."""
+        with spend.spend_context(surface="search"):
+            spend.record_units(
+                unit_kind=spend.UNIT_EMBED, units=1, provider="vertex", model="whatever"
+            )
+        row = AiSpendEvent.objects.get()
+        self.assertEqual(row.cost_basis, "unpriced")
+        self.assertEqual(row.units, 1)
+
+    @METER_ON
+    def test_tavily_stays_unpriced(self):
+        """Only embeddings gained a rate. Web search still has none, and
+        must not silently acquire one."""
+        with spend.spend_context(surface="ask"):
+            spend.record_units(unit_kind=spend.UNIT_SEARCH, units=2, provider="tavily")
+        self.assertEqual(AiSpendEvent.objects.get().cost_basis, "unpriced")

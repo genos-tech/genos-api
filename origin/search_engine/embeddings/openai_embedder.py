@@ -80,15 +80,16 @@ def _embed_with_retry(client: OpenAI, batch: list[str], model: str, max_retries:
             # transient faults, and providers do not bill a rejected
             # request.
             #
-            # `units` is texts embedded, not tokens. Embeddings are a
-            # separate billing line (~0.4% of spend) and there is no
-            # token count to price here, so these rows are deliberately
-            # `unpriced` with exact units rather than carrying an
-            # invented per-unit estimate into a table whose whole value
-            # is that it does not contain estimates.
+            # `units` is texts embedded — what the call DID. `tokens` is
+            # what it COST, and OpenAI reports it on every response.
+            # These rows used to be filed `unpriced` on the stated
+            # grounds that no token count existed here; it did, in this
+            # object, and discarding it put a real billing line
+            # permanently outside the totals.
             spend.record_units(
                 unit_kind=spend.UNIT_EMBED,
                 units=len(batch),
+                tokens=int(getattr(getattr(resp, "usage", None), "prompt_tokens", 0) or 0),
                 provider="openai",
                 model=model,
                 latency_ms=int((time.monotonic() - started) * 1000),

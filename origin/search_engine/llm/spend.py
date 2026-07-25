@@ -114,6 +114,10 @@ class SpendRecord:
     latency_ms: int
     error: str
     attempt_no: int
+    # The provider's own billable quantity when it is neither tokens nor
+    # `units` (Vertex embeddings bill characters). Defaulted so every
+    # existing construction stays valid.
+    billable_units: int = 0
 
 
 _context: ContextVar[SpendContext | None] = ContextVar("ai_spend_context", default=None)
@@ -319,17 +323,38 @@ def record_units(
     model: str = "",
     latency_ms: int = 0,
     error: str = "",
+    tokens: int = 0,
+    billable_units: int = 0,
 ) -> None:
     """Record non-token spend — a web search, an embedding, a rerank.
 
-    These bill per call or per document rather than per token, so they
-    carry `units` instead of a `CallUsage`. Cost may be unknown for
-    them; the recorder marks those `unpriced` rather than 0 so the
-    report can say so out loud.
+    `units` is the natural count for the call: documents reranked, texts
+    embedded, searches issued. It is what the call DID, and it is never
+    what the call COST.
+
+    `tokens`, when the provider reports one, is what it cost. Passing it
+    builds a `CallUsage`, which is all the recorder needs to price the
+    row from the catalog exactly like an LLM call — no second pricing
+    path. Embedding APIs do return this (OpenAI `usage.prompt_tokens`,
+    Vertex `statistics.token_count`); the ledger used to discard it and
+    file every embedding as `unpriced`, which put a real billing line
+    permanently outside the totals.
+
+    `billable_units` is the provider's OWN stated billable quantity when
+    it differs from tokens — Vertex embeddings report
+    `billable_character_count`. Stored unpriced, purely so that a change
+    of billing unit stays reconcilable from data already captured
+    instead of needing the calls to be made again.
     """
     purpose = _purpose.get()
     ctx, _ = _resolve(purpose)
     ctx.events += 1
+    usage = None
+    if tokens > 0:
+        usage = CallUsage()
+        usage.provider = provider
+        usage.model = model
+        usage.prompt_tokens = int(tokens)
     _emit(
         SpendRecord(
             request_id=ctx.request_id,
@@ -342,9 +367,10 @@ def record_units(
             run_id=ctx.run_id,
             provider=provider,
             model=model,
-            usage=None,
+            usage=usage,
             unit_kind=unit_kind,
             units=int(units),
+            billable_units=int(billable_units),
             latency_ms=latency_ms,
             error=error,
             attempt_no=1,

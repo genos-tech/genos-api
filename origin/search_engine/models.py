@@ -523,6 +523,14 @@ class AiSpendEvent(models.Model):
     # Empty means this row is measured in tokens.
     unit_kind = models.CharField(max_length=16, blank=True, default="")
     units = models.IntegerField(default=0)
+    # The provider's OWN stated billable quantity, when it is neither
+    # tokens nor `units`. Vertex embeddings report
+    # `billable_character_count` while also reporting a token count, and
+    # only the invoice settles which one is charged. Recorded so a
+    # change of billing unit is recoverable by re-deriving from these
+    # rows rather than by making the calls again — the same reason
+    # `quoted_max_jpy_milli` is written up front. 0 means "not reported".
+    billable_units = models.BigIntegerField(default=0)
 
     # --- what it cost -------------------------------------------------
     cost_usd_micro = models.BigIntegerField(default=0)

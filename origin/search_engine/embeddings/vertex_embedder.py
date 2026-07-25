@@ -126,6 +126,20 @@ class VertexEmbedder:
         return results
 
 
+def _token_count(resp) -> int:
+    """Total billable tokens across a batch response.
+
+    Vertex reports the count PER EMBEDDING (`statistics.token_count`,
+    a float), not once per response — summing is the whole job. Returns
+    0 rather than raising if the field is ever absent: a missing count
+    must cost us a priced row, never the caller's embeddings.
+    """
+    total = 0.0
+    for emb in getattr(resp, "embeddings", None) or ():
+        total += float(getattr(getattr(emb, "statistics", None), "token_count", 0) or 0)
+    return int(total)
+
+
 def _embed_with_retry(
     client: genai.Client,
     batch: list[str],
@@ -151,15 +165,23 @@ def _embed_with_retry(
             # transient faults, and providers do not bill a rejected
             # request.
             #
-            # `units` is texts embedded, not tokens. Embeddings are a
-            # separate billing line (~0.4% of spend) and there is no
-            # token count to price here, so these rows are deliberately
-            # `unpriced` with exact units rather than carrying an
-            # invented per-unit estimate into a table whose whole value
-            # is that it does not contain estimates.
+            # `units` is texts embedded — what the call DID. `tokens` is
+            # what it COST, and Vertex reports it per embedding in
+            # `statistics.token_count`. These rows used to be filed
+            # `unpriced` on the stated grounds that no token count
+            # existed here; it did, in this object.
+            #
+            # `billable_character_count` comes back alongside it, and
+            # only the GCP invoice settles which of the two is actually
+            # charged — so both are recorded and the rate card decides.
             spend.record_units(
                 unit_kind=spend.UNIT_EMBED,
                 units=len(batch),
+                tokens=_token_count(resp),
+                billable_units=int(
+                    getattr(getattr(resp, "metadata", None), "billable_character_count", 0)
+                    or 0
+                ),
                 provider="vertex",
                 model=model,
                 latency_ms=int((time.monotonic() - started) * 1000),
