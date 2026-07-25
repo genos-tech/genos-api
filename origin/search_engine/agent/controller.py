@@ -1667,7 +1667,13 @@ def _resolve_planning_override() -> str | None:
     synthesis_model = (choice.model or "").strip()
     if not synthesis_model or planning == synthesis_model:
         return None
-    provider_prefix = "claude" if choice.provider == "claude" else "gemini"
+    # Per-provider model-id prefixes. OpenAI is the trap: its models
+    # start with "gpt-", not "openai-" — the old two-way ternary here
+    # ("claude" else "gemini") made every openai user fail the prefix
+    # test, silently disabling the split for that whole provider.
+    provider_prefix = {"claude": "claude", "openai": "gpt", "gemini": "gemini"}.get(
+        choice.provider, "gemini"
+    )
     if not planning.startswith(provider_prefix):
         log.warning(
             "RAG_PLANNING_MODEL=%r does not match the active provider %r; "

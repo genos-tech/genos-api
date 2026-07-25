@@ -297,6 +297,41 @@ def _resolve_quota_fallback(user_id: str, chosen: LlmChoice) -> LlmChoice | None
     return None
 
 
+def _model_label(model_id: str) -> str:
+    """The catalog's display label for a model, or the raw id.
+
+    User-facing quota copy must never leak raw model ids (a user reads
+    "Claude Opus 5", not "claude-opus-5") — but a model outside the
+    catalog (operator env pin) still needs SOMETHING to show, so the id
+    is the fallback rather than an error.
+    """
+    entry = settings.LLM_CATALOG.by_model.get(model_id)
+    return (entry or {}).get("label") or model_id
+
+
+def _model_quota_429(chosen: LlmChoice, used: int, limit: int) -> Response:
+    """The per-model daily-cap 429, shared by ask + both summary views.
+
+    One builder so the copy can't drift between the three call sites —
+    it already had, and it will be re-worded once more when effort
+    levels land (the message will name the effort, not the model).
+    """
+    return Response(
+        {
+            "error": (
+                f"You've used all {limit} {_model_label(chosen.model)} asks for today. "
+                "Switch to another model or upgrade your plan to keep going."
+            ),
+            "limit_reached": True,
+            "used": used,
+            "limit": limit,
+            "category": "model",
+            "model": chosen.model,
+        },
+        status=status.HTTP_429_TOO_MANY_REQUESTS,
+    )
+
+
 class AgentAskView(AuthenticatedAPIView):
     def post(self, request):
         data = request.data or {}
@@ -368,20 +403,7 @@ class AgentAskView(AuthenticatedAPIView):
                 else None
             )
             if fallback is None:
-                return Response(
-                    {
-                        "error": (
-                            f"You've used all {model_limit} {chosen.model} asks for today. "
-                            "Switch to another model or upgrade your plan to keep going."
-                        ),
-                        "limit_reached": True,
-                        "used": model_used,
-                        "limit": model_limit,
-                        "category": "model",
-                        "model": chosen.model,
-                    },
-                    status=status.HTTP_429_TOO_MANY_REQUESTS,
-                )
+                return _model_quota_429(chosen, model_used, model_limit)
             log.info(
                 "model %s daily cap reached for user %s; falling back to %s",
                 chosen.model,
@@ -1344,20 +1366,7 @@ class NoteSummaryView(AuthenticatedAPIView):
             )
         model_ok, model_used, model_limit = check_remaining(user_id, chosen.model)
         if not model_ok:
-            return Response(
-                {
-                    "error": (
-                        f"You've used all {model_limit} {chosen.model} asks for today. "
-                        "Switch to another model or upgrade your plan to keep going."
-                    ),
-                    "limit_reached": True,
-                    "used": model_used,
-                    "limit": model_limit,
-                    "category": "model",
-                    "model": chosen.model,
-                },
-                status=status.HTTP_429_TOO_MANY_REQUESTS,
-            )
+            return _model_quota_429(chosen, model_used, model_limit)
 
         # 3. Generate.
         token = set_llm_choice(chosen)
@@ -1545,20 +1554,7 @@ class ThreadSummaryView(AuthenticatedAPIView):
             )
         model_ok, model_used, model_limit = check_remaining(user_id, chosen.model)
         if not model_ok:
-            return Response(
-                {
-                    "error": (
-                        f"You've used all {model_limit} {chosen.model} asks for today. "
-                        "Switch to another model or upgrade your plan to keep going."
-                    ),
-                    "limit_reached": True,
-                    "used": model_used,
-                    "limit": model_limit,
-                    "category": "model",
-                    "model": chosen.model,
-                },
-                status=status.HTTP_429_TOO_MANY_REQUESTS,
-            )
+            return _model_quota_429(chosen, model_used, model_limit)
 
         # 3. Generate. Set the LLM choice for the duration of the call so
         # the right provider/model fires.

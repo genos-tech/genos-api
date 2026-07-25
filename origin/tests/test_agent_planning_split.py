@@ -163,3 +163,34 @@ class PlanningSplitTests(SimpleTestCase):
         ):
             _run_loop(client)
         self.assertEqual(client.overrides, [None])
+
+    def test_openai_user_gets_the_split_with_a_gpt_planning_model(self):
+        """Regression: the provider guard used to be a two-way ternary
+        ("claude" else "gemini"), so an openai user could NEVER pass the
+        prefix test — the split silently disabled for the entire
+        provider. OpenAI ids start with "gpt-", not "openai-"."""
+        fast_draft = [("A mediocre draft.", None)]
+        client = _ScriptedClient([_TOOL_STEP, fast_draft, _FINAL_STEP])
+        with override_settings(
+            SEARCH_ENGINE=_se(
+                RAG_PLANNING_MODEL="gpt-5.6-luna",
+                LLM_PROVIDER="openai",
+                OPENAI_MODEL="gpt-5.6-sol",
+            )
+        ):
+            events = _run_loop(client)
+        self.assertEqual(client.overrides, ["gpt-5.6-luna", "gpt-5.6-luna", None])
+        self.assertNotIn("mediocre draft", _answer_text(events))
+
+    def test_openai_user_with_cross_provider_planning_model_skips(self):
+        """The guard still protects openai users from a gemini pin."""
+        client = _ScriptedClient([_FINAL_STEP])
+        with override_settings(
+            SEARCH_ENGINE=_se(
+                RAG_PLANNING_MODEL="gemini-3.5-flash-lite",
+                LLM_PROVIDER="openai",
+                OPENAI_MODEL="gpt-5.6-sol",
+            )
+        ):
+            _run_loop(client)
+        self.assertEqual(client.overrides, [None])
