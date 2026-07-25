@@ -5,7 +5,7 @@ The factory in `origin.search_engine.llm.__init__` consults the
 model adapter to return for the current request. When unset (no
 choice resolved yet, or a non-request code path), the factory falls
 back to `settings.SEARCH_ENGINE["LLM_PROVIDER"]` / `GEMINI_MODEL` /
-`CLAUDE_MODEL`.
+`CLAUDE_MODEL` / `OPENAI_MODEL`.
 
 Threading note: `AgentAskView` runs the controller loop on a
 `threading.Thread` (see `_stream_ndjson` in `agent_views.py`). Bare
@@ -36,8 +36,8 @@ log = logging.getLogger(__name__)
 class LlmChoice:
     """Provider + model id pair, normalized lowercase."""
 
-    provider: str  # 'gemini' | 'claude'
-    model: str  # e.g. 'gemini-2.5-pro' / 'claude-sonnet-4-6'
+    provider: str  # 'gemini' | 'claude' | 'openai'
+    model: str  # e.g. 'gemini-2.5-pro' / 'claude-sonnet-4-6' / 'gpt-5.6-terra'
 
 
 _current_choice: ContextVar[LlmChoice | None] = ContextVar("llm_choice", default=None)
@@ -100,6 +100,8 @@ def _server_default_choice() -> LlmChoice:
     provider = (cfg.get("LLM_PROVIDER") or "gemini").lower()
     if provider == "claude":
         return LlmChoice(provider="claude", model=cfg.get("CLAUDE_MODEL") or "")
+    if provider == "openai":
+        return LlmChoice(provider="openai", model=cfg.get("OPENAI_MODEL") or "")
     return LlmChoice(provider="gemini", model=cfg.get("GEMINI_MODEL") or "")
 
 
@@ -121,7 +123,7 @@ def resolve_user_choice(
     if not provider and not model:
         return _server_default_choice()
 
-    if provider not in ("gemini", "claude"):
+    if provider not in ("gemini", "claude", "openai"):
         log.warning(
             "User has unknown preferred_llm_provider=%r; falling back to server default",
             preferred_provider,
@@ -134,6 +136,8 @@ def resolve_user_choice(
         cfg = settings.SEARCH_ENGINE
         if provider == "claude":
             return LlmChoice(provider="claude", model=cfg.get("CLAUDE_MODEL") or "")
+        if provider == "openai":
+            return LlmChoice(provider="openai", model=cfg.get("OPENAI_MODEL") or "")
         return LlmChoice(provider="gemini", model=cfg.get("GEMINI_MODEL") or "")
 
     if not _catalog_has(provider, model):

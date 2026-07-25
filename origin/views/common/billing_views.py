@@ -123,7 +123,7 @@ class BillingPlansView(AuthenticatedAPIView):
         quotas = settings.SEARCH_ENGINE.get("TIER_QUOTAS") or {}
         purchasable = stripe_billing.purchasable_plans()
         tiers = []
-        for tier in ("free", "pro", "max", "enterprise"):
+        for tier in ("free", "core", "pro", "max", "enterprise"):
             cfg = quotas.get(tier)
             if cfg is None:
                 continue

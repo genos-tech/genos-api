@@ -579,9 +579,9 @@ SEARCH_ENGINE = {
     "AGENT_DISABLED_TOOLS": frozenset(
         t.strip() for t in os.environ.get("AGENT_DISABLED_TOOLS", "").split(",") if t.strip()
     ),
-    # Phase 5 — provider selection. "gemini" (default) or "claude".
-    # `get_model_client()` in origin.search_engine.llm reads this at
-    # request time; an unknown value raises rather than silently
+    # Phase 5 — provider selection. "gemini" (default), "claude", or
+    # "openai". `get_model_client()` in origin.search_engine.llm reads
+    # this at request time; an unknown value raises rather than silently
     # falling back.
     "LLM_PROVIDER": (os.environ.get("LLM_PROVIDER", "gemini") or "gemini").lower(),
     # Anthropic Claude config (only used when LLM_PROVIDER=claude).
@@ -590,6 +590,17 @@ SEARCH_ENGINE = {
     # Anthropic requires max_tokens to be set explicitly on every
     # call (unlike Gemini, which has a sensible server-side default).
     "CLAUDE_MAX_TOKENS": int(os.environ.get("CLAUDE_MAX_TOKENS", "4096")),
+    # OpenAI chat config (only used when the resolved provider is
+    # "openai"). Reuses the SAME `OPENAI_API_KEY` as the embedder above —
+    # one OpenAI account, one key, one bill. Unlike gemini/claude this
+    # does NOT route through Vertex (there is no GPT path on Model
+    # Garden), so it is a third billable LLM line outside GCP; see
+    # genos-docs operations/LLM_SPEND_MAP.md §1.
+    "OPENAI_MODEL": os.environ.get("OPENAI_MODEL", "gpt-5.6-terra"),
+    # Mirrors CLAUDE_MAX_TOKENS: bound the per-call output ceiling so a
+    # runaway generation can't blow past the per-ask cost class the tier
+    # limits were sized against (output is the dominant cost term).
+    "OPENAI_MAX_TOKENS": int(os.environ.get("OPENAI_MAX_TOKENS", "4096")),
     # Phase 6 — RAG quality knobs.
     # Exponential decay half-life (in days) for freshness scoring.
     # Each hit's RRF score is multiplied by exp(-age_days / half_life).
@@ -1026,9 +1037,45 @@ SEARCH_ENGINE = {
             "label": "Claude Opus 4.7",
             "note": "Very slow, but best for very complex questions.",
         },
+        # Top Claude rung — same list price as 4.7 ($5/$25 per 1M) but
+        # more capable, so it's the Max-tier value fence rather than a
+        # cost step. Newer Claude models (Opus 5, Fable 5) are NOT added
+        # here: prod reaches Claude through Vertex Model Garden and their
+        # availability on that surface is unverified — adding an id the
+        # Model Garden doesn't serve turns a user's model pick into a
+        # runtime 404. Promote them only after checking Model Garden.
+        {
+            "provider": "claude",
+            "model": "claude-opus-4-8",
+            "label": "Claude Opus 4.8",
+            "note": "Most capable Claude — slowest, for the hardest questions.",
+        },
+        # OpenAI GPT rungs. Unlike gemini/claude these do NOT route
+        # through Vertex — there is no GPT path on Model Garden — so they
+        # bill to a separate OpenAI account (OPENAI_API_KEY below). That
+        # makes OpenAI a third billable LLM line; see genos-docs
+        # operations/LLM_SPEND_MAP.md §1.
+        {
+            "provider": "openai",
+            "model": "gpt-5.6-luna",
+            "label": "GPT-5.6 Luna",
+            "note": "Fast and economical.",
+        },
+        {
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "label": "GPT-5.6 Terra",
+            "note": "Higher quality, slower.",
+        },
+        {
+            "provider": "openai",
+            "model": "gpt-5.6-sol",
+            "label": "GPT-5.6 Sol",
+            "note": "Very slow, but best for very complex questions.",
+        },
     ],
-    # Quotas by subscription tier — free / pro / max / enterprise —
-    # resolved from the user's *effective* tier (best of
+    # Quotas by subscription tier — free / core / pro / max / enterprise
+    # — resolved from the user's *effective* tier (best of
     # `CustomUser.tier` and the `plan` of every team they belong to)
     # by `origin.search_engine.quota`.
     #
@@ -1055,6 +1102,11 @@ SEARCH_ENGINE = {
     # via the TIER_QUOTAS_JSON env override below; canonical rationale
     # for the numbers: genos-docs operations/SUBSCRIPTION_TIERS.md.
     "TIER_QUOTAS": {
+        # NOTE: a model MISSING from a tier's `model_daily` means
+        # UNLIMITED for that tier, not zero. Every model in
+        # MODEL_CATALOG above must appear in EVERY tier's dict below
+        # (except `enterprise`, which is deliberately unlimited). Adding
+        # a catalog rung without adding it here silently uncaps it.
         "free": {
             "llm_ask_daily": 20,
             "web_search_daily": 10,
@@ -1066,6 +1118,17 @@ SEARCH_ENGINE = {
                 "claude-haiku-4-5": 20,
                 "claude-sonnet-4-6": 10,
                 "claude-opus-4-7": 0,
+                "claude-opus-4-8": 0,
+                "gpt-5.6-luna": 20,
+                # Free's "taste of premium" budget is deliberately held
+                # at its historical size (10 gemini-pro + 10 sonnet).
+                # The new GPT mid rung is 0 here rather than 10 so that
+                # adding models doesn't silently inflate the free-tier
+                # subsidy — free's worst case stays ~JPY280/day exactly
+                # as before. Flash-class rungs are ~free, so luna is
+                # granted at the full 20.
+                "gpt-5.6-terra": 0,
+                "gpt-5.6-sol": 0,
             },
             "task_create_monthly": 200,
             "note_create_monthly": 100,
@@ -1074,59 +1137,114 @@ SEARCH_ENGINE = {
         },
         # Paid-tier LLM caps are set by a value-based X/Y/Z tiering model,
         # not a profit gate — genos-docs/operations/LLM_TIER_COST_OPTIMIZATION.md
-        # (2026-07-19) supersedes the old "worst-case COGS <= 2-3x price"
-        # rule in SUBSCRIPTION_TIERS.md §1. We're pre-revenue-scale: a
-        # deficit is accepted deliberately to win adoption.
-        #   X - cost floor: a bounded subsidy, not a ceiling. opus stays
-        #     single-digit/day (it's the ~JPY60/ask outlier) so no single
-        #     user's worst-case blast radius is catastrophic; flash is
-        #     ~free so it can be the generous headline number.
+        # supersedes the old "worst-case COGS <= 2-3x price" rule in
+        # SUBSCRIPTION_TIERS.md §1. We're pre-revenue-scale: a deficit is
+        # accepted deliberately to win adoption.
+        #   X - cost floor: a bounded subsidy, not a ceiling. Premium
+        #     models stay single-digit/day per model (they're the
+        #     ~JPY60-70/ask outliers) so no single user's worst-case blast
+        #     radius is catastrophic; flash is ~free so it can be the
+        #     generous headline number.
         #   Y - value fence: the metric is asks/day + premium-model access.
-        #     Every dimension steps pro -> max by the SAME ratio so the
-        #     upgrade is legible ("max is triple pro").
-        #   Z - market anchor: both tiers undercut ChatGPT Plus / Claude
-        #     Pro (~$20 / ~JPY3,000); max is priced at ~2.08x pro but
-        #     given 3x the limits (Good-Better-Best) so it reads as the
-        #     better-value tier and anchors pro as the default buy.
-        # Flash-class asks cost ~JPY0.5-1, sonnet/gemini-pro-class
-        # ~JPY3-8, opus-class ~JPY15-50 per ask, so the sonnet/gemini-pro
-        # and opus caps are the real subsidy lever, not `llm_ask_daily`.
-        "pro": {
+        #     Every LLM dimension steps up by MORE than the price does, so
+        #     each upgrade reads as better value per yen.
+        #   Z - market anchor: core/pro undercut ChatGPT Plus / Claude Pro
+        #     (~$20 / ~JPY3,000); max sits above them as the power-user
+        #     anchor that makes pro the default buy (Good-Better-Best).
+        #
+        # Per-ask cost classes (FX JPY150/USD, LLM_TIER_COST_OPTIMIZATION §3):
+        #   flash-class ~JPY1-2  gemini-3.5-flash, claude-haiku-4-5, gpt-5.6-luna
+        #   mid-class   ~JPY10-18 gemini-3.1-pro-preview, claude-sonnet-4-6,
+        #                         gpt-5.6-terra
+        #   premium     ~JPY60-70 claude-opus-4-7, claude-opus-4-8, gpt-5.6-sol
+        # So the mid and premium caps are the real subsidy lever, not
+        # `llm_ask_daily`.
+        #
+        # IMPORTANT — why per-model mid caps SHRANK while the tier got
+        # more generous: there are now THREE mid rungs and THREE premium
+        # rungs instead of two and one. Worst-case-at-cap is "fill the
+        # daily total with the priciest models still allowed", so holding
+        # the per-model number constant while tripling the model count
+        # would triple the premium blast radius. The per-model caps below
+        # are sized so the CLASS budget (cap x number of rungs) lands
+        # where the tier intends. Ladder ratios and the resulting
+        # worst-case multiples:
+        #   dimension        core    pro     max    core->pro  pro->max
+        #   llm_ask_daily     100    250     500      2.5x       2.0x
+        #   mid   (each)       12     25      50      2.08x      2.0x
+        #   premium (each)      2      4      10      2.0x       2.5x
+        #   price          JPY1200 JPY2500 JPY4900    2.08x      1.96x
+        #   worst-case/mo   ~26.2k  ~62.2k ~135.6k
+        #   ratio to price   21.8x   24.9x   27.7x
+        # All three sit inside the ~20-29x band the current pro/max caps
+        # already run at, i.e. the accepted subsidy envelope is unchanged
+        # in shape — it is not widened by adding a tier or a provider.
+        #
+        # core = the entry paid plan (JPY1,200 — the price pro used to
+        # be). Limits are close to the old pro tier, trimmed at the mid
+        # class so there is real headroom to sell pro into.
+        "core": {
             "llm_ask_daily": 100,
             "web_search_daily": 25,
             "model_daily": {
-                # "gemini-2.5-flash": 100,
-                # "gemini-2.5-pro": 20,
                 "gemini-3.5-flash": 100,
-                "gemini-3.1-pro-preview": 20,
+                "gemini-3.1-pro-preview": 12,
                 "claude-haiku-4-5": 100,
-                "claude-sonnet-4-6": 20,
-                "claude-opus-4-7": 3,
+                "claude-sonnet-4-6": 12,
+                # claude-opus-4-8 is 0 here: exclusive access to the newest
+                # Opus is the pro/max value fence (the two Opus rungs cost
+                # the same per ask, so this is a packaging line, not a
+                # cost one).
+                "claude-opus-4-7": 2,
+                "claude-opus-4-8": 0,
+                "gpt-5.6-luna": 100,
+                "gpt-5.6-terra": 12,
+                "gpt-5.6-sol": 2,
             },
             "task_create_monthly": 1000,
             "note_create_monthly": 500,
             "message_retention_days": None,  # unlimited on paid tiers
             "upload_max_mb": 25,
         },
-        # max = pro x3 on every LLM dimension (the value-fence ratio from
-        # the X/Y/Z model above) -- NOT pro x2 to match the 2.08x price
-        # ratio. A max tier that only doubled pro's limits would be a
-        # weak, dominated upgrade nobody buys; the deliberate value > price
-        # gap (3x limits for ~2x price) is what makes max the anchor.
-        "max": {
-            "llm_ask_daily": 300,
-            "web_search_daily": 100,
+        "pro": {
+            "llm_ask_daily": 250,
+            "web_search_daily": 60,
             "model_daily": {
-                # "gemini-2.5-flash": 300,
-                # "gemini-2.5-pro": 60,
-                "gemini-3.5-flash": 300,
-                "gemini-3.1-pro-preview": 60,
-                "claude-haiku-4-5": 300,
-                "claude-sonnet-4-6": 60,
-                "claude-opus-4-7": 9,
+                "gemini-3.5-flash": 250,
+                "gemini-3.1-pro-preview": 25,
+                "claude-haiku-4-5": 250,
+                "claude-sonnet-4-6": 25,
+                "claude-opus-4-7": 4,
+                "claude-opus-4-8": 4,
+                "gpt-5.6-luna": 250,
+                "gpt-5.6-terra": 25,
+                "gpt-5.6-sol": 4,
             },
-            "task_create_monthly": 5000,
-            "note_create_monthly": 3000,
+            "task_create_monthly": 3000,
+            "note_create_monthly": 1500,
+            "message_retention_days": None,  # unlimited on paid tiers
+            "upload_max_mb": 50,
+        },
+        # max = 2x pro on the headline totals for ~1.96x the price, and
+        # 2.5x on the premium caps — the deliberate value > price gap is
+        # what makes max the anchor that sells pro. A max tier that only
+        # matched the price ratio would be a dominated upgrade nobody buys.
+        "max": {
+            "llm_ask_daily": 500,
+            "web_search_daily": 150,
+            "model_daily": {
+                "gemini-3.5-flash": 500,
+                "gemini-3.1-pro-preview": 50,
+                "claude-haiku-4-5": 500,
+                "claude-sonnet-4-6": 50,
+                "claude-opus-4-7": 10,
+                "claude-opus-4-8": 10,
+                "gpt-5.6-luna": 500,
+                "gpt-5.6-terra": 50,
+                "gpt-5.6-sol": 10,
+            },
+            "task_create_monthly": 8000,
+            "note_create_monthly": 4000,
             "message_retention_days": None,  # unlimited on paid tiers
             "upload_max_mb": 100,
         },
@@ -1200,8 +1318,30 @@ FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "http://localhost:3000")
 STRIPE = {
     "SECRET_KEY": os.environ.get("STRIPE_SECRET_KEY", ""),
     "WEBHOOK_SECRET": os.environ.get("STRIPE_WEBHOOK_SECRET", ""),
+    # CURRENT prices — what a new checkout is sold at.
+    # core JPY1,200 / pro JPY2,500 / max JPY4,900 per user/month.
+    "PRICE_CORE": os.environ.get("STRIPE_PRICE_CORE", ""),
     "PRICE_PRO": os.environ.get("STRIPE_PRICE_PRO", ""),
     "PRICE_MAX": os.environ.get("STRIPE_PRICE_MAX", ""),
+    # GRANDFATHERED prices — comma-separated `price_...` ids that still
+    # resolve to a plan on incoming subscription events but are never
+    # offered at checkout.
+    #
+    # Stripe never repoints an existing subscription at a new price
+    # object, so when pro was repriced JPY1,200 -> JPY2,500 (and max
+    # JPY2,500 -> JPY4,900) every existing subscriber kept renewing on
+    # the OLD price id. Without these, each renewal would arrive with an
+    # id `plan_for_price` no longer recognises, log "unmapped price",
+    # and silently leave the tier unchanged (eventually dropping the
+    # user to free). Put the pre-repricing ids here — one per mode, test
+    # and live ids differ.
+    #
+    # Note the old pro price (JPY1,200) is numerically today's CORE
+    # price but is deliberately mapped to `pro`: grandfathered
+    # subscribers keep the plan and limits they bought, not the plan
+    # that now costs what they pay.
+    "PRICE_PRO_LEGACY": os.environ.get("STRIPE_PRICE_PRO_LEGACY", ""),
+    "PRICE_MAX_LEGACY": os.environ.get("STRIPE_PRICE_MAX_LEGACY", ""),
     # Stripe Tax on checkout sessions. Leave off until the account's
     # tax settings (origin address, registrations) are configured in
     # the dashboard — Stripe rejects session creation otherwise.

@@ -37,7 +37,7 @@ from origin.search_engine.llm.types import (
 
 
 def _build_adapter(provider: str) -> ModelClient:
-    """Return a fresh adapter instance for `provider` ('gemini'|'claude')."""
+    """Return a fresh adapter for `provider` ('gemini'|'claude'|'openai')."""
     if provider == "gemini":
         from origin.search_engine.llm.gemini_client import GeminiClient  # noqa: PLC0415
 
@@ -46,9 +46,13 @@ def _build_adapter(provider: str) -> ModelClient:
         from origin.search_engine.llm.claude_client import ClaudeClient  # noqa: PLC0415
 
         return ClaudeClient()
+    if provider == "openai":
+        from origin.search_engine.llm.openai_client import OpenAIClient  # noqa: PLC0415
+
+        return OpenAIClient()
     raise RuntimeError(
-        f"Unknown LLM_PROVIDER {provider!r}. "
-        "Set SEARCH_ENGINE['LLM_PROVIDER'] to 'gemini' or 'claude'."
+        f"Unknown LLM_PROVIDER {provider!r}. Set SEARCH_ENGINE['LLM_PROVIDER'] "
+        "to 'gemini', 'claude', or 'openai'."
     )
 
 

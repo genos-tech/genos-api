@@ -49,6 +49,7 @@ PRIMARY_AUTH_CHOICES = [
 # only — never sold self-serve.
 TIER_CHOICES = [
     ("free", "Free"),
+    ("core", "Core"),
     ("pro", "Pro"),
     ("max", "Max"),
     ("enterprise", "Enterprise"),

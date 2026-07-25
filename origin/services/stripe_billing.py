@@ -6,10 +6,12 @@ Stripe-facing layer that performs exactly the writes the
 `feature_access` CLI does, driven by verified webhook events.
 
 Design:
-  * Checkout Session (mode=subscription) per plan — `pro` / `max` map
-    to the price ids in `settings.STRIPE`. `enterprise` is contact-
-    sales and never purchasable here. Team per-seat subscriptions
-    (→ `TeamMaster.plan`) are a later phase.
+  * Checkout Session (mode=subscription) per plan — `core` / `pro` /
+    `max` map to the price ids in `settings.STRIPE`. `enterprise` is
+    contact-sales and never purchasable here. Prices are versioned:
+    `PRICE_*` is what new checkouts are sold at, `PRICE_*_LEGACY` are
+    retired ids that still resolve for grandfathered subscribers (see
+    `tier_for_price`).
   * The TIER WRITE happens only in the webhook path — never on the
     success redirect (the redirect is unauthenticated evidence). The
     webhook verifies the `Stripe-Signature` header before anything
@@ -52,8 +54,24 @@ from origin.search_engine.quota import invalidate_effective_tier
 
 log = logging.getLogger(__name__)
 
-# Plans purchasable self-serve. Deliberately a subset of TIER_CHOICES.
-PURCHASABLE_PLANS = ("pro", "max")
+# Plans purchasable self-serve, cheapest first. Deliberately a subset
+# of TIER_CHOICES (`free` isn't sold; `enterprise` is contact-sales).
+PURCHASABLE_PLANS = ("core", "pro", "max")
+
+# Grandfathered price ids → the plan they still grant. Populated from
+# STRIPE_PRICE_*_LEGACY (comma-separated; blanks ignored). These are
+# recognised on incoming subscription events but NEVER offered at
+# checkout — see `price_for_plan` vs `tier_for_price` below.
+_LEGACY_PRICE_SETTINGS = {
+    "pro": "PRICE_PRO_LEGACY",
+    "max": "PRICE_MAX_LEGACY",
+}
+
+
+def _legacy_price_ids(plan: str) -> list[str]:
+    raw = settings.STRIPE.get(_LEGACY_PRICE_SETTINGS.get(plan, "")) or ""
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
 
 # Where Stripe sends the browser back to. MUST be a route inside the
 # authenticated workspace: the app root is the guest-only sign-in
@@ -134,7 +152,10 @@ def billing_enabled() -> bool:
 
 
 def price_for_plan(plan: str) -> str | None:
+    """The price a NEW checkout is sold at. Current prices only — never
+    a grandfathered one, so nobody can buy into a retired price."""
     return {
+        "core": settings.STRIPE.get("PRICE_CORE") or None,
         "pro": settings.STRIPE.get("PRICE_PRO") or None,
         "max": settings.STRIPE.get("PRICE_MAX") or None,
     }.get(plan)
@@ -143,11 +164,25 @@ def price_for_plan(plan: str) -> str | None:
 def tier_for_price(price_id: str | None) -> str | None:
     """Reverse map: Stripe price id → tier name. None for unknown ids
     (e.g. a price created in the dashboard but not wired into env) —
-    callers log-and-ignore rather than guessing."""
+    callers log-and-ignore rather than guessing.
+
+    Deliberately MANY-to-one: current prices AND grandfathered ones both
+    resolve, because Stripe never migrates an existing subscription onto
+    a new price object. After the repricing, an existing subscriber's
+    renewal still carries the price id they originally bought — if only
+    the current ids resolved here, every one of those renewals would log
+    "unmapped price" and quietly stop maintaining their tier.
+
+    Current ids are checked first so that if an id is somehow listed as
+    both, the live price wins.
+    """
     if not price_id:
         return None
     for plan in PURCHASABLE_PLANS:
         if price_for_plan(plan) == price_id:
+            return plan
+    for plan in PURCHASABLE_PLANS:
+        if price_id in _legacy_price_ids(plan):
             return plan
     return None
 
@@ -603,7 +638,11 @@ def sync_team_subscription_quantity(team_id) -> str:
     try:
         stripe = _stripe()
         resp = json.loads(
-            str(stripe.Subscription.list(customer=team.stripe_customer_id, status="active", limit=10))
+            str(
+                stripe.Subscription.list(
+                    customer=team.stripe_customer_id, status="active", limit=10
+                )
+            )
         )
         subs = resp.get("data") or []
         if not subs:
@@ -689,7 +728,7 @@ def subscription_overview(user: CustomUser) -> dict | None:
     (the view maps them to 503).
 
         {
-          "plan": "pro" | "max" | None,       # None = unmapped price
+          "plan": "core" | "pro" | "max" | None,  # None = unmapped price
           "status": "active" | "trialing" | "past_due" | "paused",
           "cancel_at_period_end": bool,
           "current_period_end": <unix ts> | None,
@@ -760,9 +799,7 @@ def reconcile_from_stripe(user: CustomUser) -> str:
         return "no billing account"
     stripe = _stripe()
     try:
-        resp = stripe.Subscription.list(
-            customer=user.stripe_customer_id, status="all", limit=100
-        )
+        resp = stripe.Subscription.list(customer=user.stripe_customer_id, status="all", limit=100)
     except Exception as e:  # noqa: BLE001
         raise BillingError(f"Could not list subscriptions: {e}")
     # Same plain-dict discipline as `verify_webhook`: `str()` of a
