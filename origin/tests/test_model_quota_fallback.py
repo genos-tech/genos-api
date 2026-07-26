@@ -50,6 +50,18 @@ def _se(*, model_daily=None, fallback=False, llm_ask_daily=20):
     se = dict(settings.SEARCH_ENGINE)
     se["MODEL_CATALOG"] = TEST_CATALOG
     se["MODEL_QUOTA_FALLBACK"] = fallback
+    # Pin the LEGACY daily-cap era END-TO-END, not by assumption. These
+    # tests rig per-model caps on the synthetic catalog above, which
+    # only bind when (a) the ask resolves the REQUESTED model — with
+    # AGENT_EFFORT_LEVELS on it resolves an effort rung from the real
+    # YAML catalog instead, so the rigged caps never match — and (b)
+    # daily caps are the active limit at all — credits-authoritative
+    # bypasses them by design. Unpinned, this suite's verdict depended
+    # on whatever flags the host env happened to run, and it went red
+    # the day the local container gained prod-parity flags.
+    se["AGENT_EFFORT_LEVELS"] = False
+    se["AI_CREDITS_SHADOW"] = False
+    se["AI_CREDITS_AUTHORITATIVE"] = False
     tq = {k: dict(v) for k, v in se["TIER_QUOTAS"].items()}
     tq["free"] = {**tq["free"], "llm_ask_daily": llm_ask_daily, "model_daily": model_daily or {}}
     se["TIER_QUOTAS"] = tq
