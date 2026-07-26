@@ -52,6 +52,7 @@ from origin.search_engine.agent.evals.runner import (
     run_behavior_case,
     run_retrieval_case,
 )
+from origin.search_engine.llm import spend
 from origin.search_engine.llm.choice import LlmChoice, reset_llm_choice, set_llm_choice
 
 
@@ -202,12 +203,18 @@ class Command(BaseCommand):
                 if token is not None:
                     reset_llm_choice(token)
             if run_judge and label == "behavior" and r.answer:
-                r.judge_scores = judge_answer(
-                    query=r.query,
-                    sources=r.sources,
-                    answer=r.answer,
-                    tool_results=r.tool_results,
-                )
+                # The case's own spend context exits when the runner
+                # returns, so an unwrapped judge call lands in
+                # `unattributed` — every judged compare run was firing
+                # the tripwire that is supposed to mean "uninstrumented
+                # production path". Same surface the judge cron uses.
+                with spend.spend_context(surface="judge"):
+                    r.judge_scores = judge_answer(
+                        query=r.query,
+                        sources=r.sources,
+                        answer=r.answer,
+                        tool_results=r.tool_results,
+                    )
             results.append(r)
             self.stdout.write(
                 f"  {'PASS' if r.passed else 'FAIL'}  {r.case_id:<48} ({r.duration_ms} ms)"
