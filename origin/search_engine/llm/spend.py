@@ -189,6 +189,21 @@ def spend_context(
         yield existing
         return
 
+    if not effort:
+        # Evals and the credit benchmark bind their context through the
+        # decorator form, whose arguments are static — but the effort
+        # under test lives on the active LlmChoice, set per benchmark
+        # cell. Reading it here (at bind time, per invocation) is what
+        # lets `ai_cost_report --by-effort` slice benchmark runs; every
+        # benchmark row used to land with effort="" and the anatomy
+        # table came back empty. Ask-path callers pass effort
+        # explicitly, and an explicit value always wins.
+        from origin.search_engine.llm.choice import get_llm_choice  # noqa: PLC0415
+
+        choice = get_llm_choice()
+        if choice is not None and choice.effort:
+            effort = choice.effort
+
     ctx = SpendContext(
         request_id=request_id or str(uuid.uuid4()),
         surface=surface,
