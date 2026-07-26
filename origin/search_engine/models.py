@@ -607,6 +607,13 @@ class AiRequestCost(models.Model):
     # What it actually cost us (sum of this request's events).
     computed_jpy_milli = models.BigIntegerField(default=0)
     computed_usd_micro = models.BigIntegerField(default=0)
+    # V2 layer 3 — the customer-billable slice of `computed`: 0 for a
+    # non-billable surface or any non-success result, capped at the
+    # policy's per-request max. Derived by the PURE functions in
+    # `credits.py` under the policy this row's `credit_policy_version`
+    # names, so it can be re-derived — unlike a posted credit charge,
+    # which is immutable and lives in its own ledger.
+    eligible_jpy_milli = models.BigIntegerField(default=0)
     # What the customer would be charged (0 on a failure; never above
     # the quote).
     charged_jpy_milli = models.BigIntegerField(default=0)
@@ -615,7 +622,12 @@ class AiRequestCost(models.Model):
     # Shadow only. Milli-credits so a small request is not rounded up
     # to a whole credit — fractional support is a stated requirement.
     shadow_credits_milli = models.BigIntegerField(default=0)
-    credit_policy_version = models.CharField(max_length=32, blank=True, default="")
+    # The two commercial regimes this row was computed under. Separate
+    # on purpose (V2 §5.3): changing how a credit is computed and
+    # changing what a plan grants are different commercial acts, and a
+    # row must say which of EACH it saw.
+    credit_policy_version = models.CharField(max_length=64, blank=True, default="")
+    plan_entitlement_version = models.CharField(max_length=64, blank=True, default="")
     rate_card_version = models.CharField(max_length=64, blank=True, default="")
 
     call_count = models.IntegerField(default=0)
