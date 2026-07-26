@@ -29,7 +29,7 @@ from typing import Any, Iterator
 from django.conf import settings
 from google import genai
 
-from origin.search_engine.llm import spend
+from origin.search_engine.llm import gemini_cache, spend
 from origin.search_engine.llm.types import (
     AgentMessage,
     CallUsage,
@@ -172,6 +172,27 @@ class GeminiClient:
             config_kwargs["thinking_config"] = types.ThinkingConfig(
                 thinking_budget=params.thinking_budget
             )
+        # Explicit prefix cache (GEMINI_EXPLICIT_CACHE, default off).
+        # When an entry exists/creates, the system prompt + tool
+        # declarations travel by reference and bill at the cached rate
+        # on EVERY step — implicit caching measurably misses about half
+        # the time on this exact prefix (see llm/gemini_cache.py). The
+        # cache carries system + tools, so both leave the per-call
+        # config; `None` from the helper means "send the full prefix",
+        # byte-identical to today.
+        cached_name: str | None = None
+        if sdk_tools and settings.SEARCH_ENGINE.get("GEMINI_EXPLICIT_CACHE"):
+            cached_name = gemini_cache.prefix_cache_name(
+                client=_get_client(),
+                model=model,
+                system_instruction=system_instruction,
+                tools=tools,
+                sdk_tools=sdk_tools,
+            )
+            if cached_name:
+                config_kwargs["cached_content"] = cached_name
+                config_kwargs.pop("tools")
+                config_kwargs.pop("system_instruction")
         config = types.GenerateContentConfig(**config_kwargs)
 
         # Cost accounting. The sink is filled and recorded in a
@@ -263,6 +284,13 @@ class GeminiClient:
             call_error = f"{type(exc).__name__}: {exc}"[:200]
             if isinstance(exc, Exception):
                 log.exception("Gemini generate_step failed")
+                # If this call referenced an explicit cache, assume the
+                # name went stale (expired/deleted server-side) and drop
+                # it — the NEXT step then recreates instead of failing
+                # on the same dead name for the rest of the loop. Cheap
+                # to be wrong: an unnecessary forget costs one create.
+                if cached_name:
+                    gemini_cache.forget(cached_name)
             raise
         finally:
             try:
