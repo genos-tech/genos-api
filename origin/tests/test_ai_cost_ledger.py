@@ -77,6 +77,33 @@ class ContextHygieneTests(SimpleTestCase):
             "land on the following loop step",
         )
 
+    def test_effort_defaults_from_the_active_llm_choice(self):
+        """The benchmark binds `spend_context(surface="eval")` through a
+        static decorator, but the effort under test lives on the active
+        LlmChoice, set per cell. Without this default every benchmark
+        row landed with effort="" and `ai_cost_report --by-effort`
+        returned an empty table for the exact runs it exists to read."""
+        from origin.search_engine.llm.choice import (
+            LlmChoice,
+            reset_llm_choice,
+            set_llm_choice,
+        )
+
+        token = set_llm_choice(
+            LlmChoice(provider="gemini", model="gemini-3.6-flash", effort="medium")
+        )
+        try:
+            with spend.spend_context(surface="eval") as ctx:
+                self.assertEqual(ctx.effort, "medium")
+            # An explicit effort always wins over the choice.
+            with spend.spend_context(surface="ask", effort="low") as ctx:
+                self.assertEqual(ctx.effort, "low")
+        finally:
+            reset_llm_choice(token)
+        # No choice bound → unchanged legacy behavior.
+        with spend.spend_context(surface="eval") as ctx:
+            self.assertEqual(ctx.effort, "")
+
     def test_nested_context_keeps_the_outer_request_id(self):
         """`search()` is called both by the search endpoint and by the
         search_kb tool inside an ask. The inner bind must not split one
