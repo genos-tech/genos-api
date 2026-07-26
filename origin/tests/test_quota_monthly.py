@@ -342,10 +342,13 @@ class DefaultConfigShapeTests(TestCase):
         # is a product decision that should update the doc too.
         tq = settings.SEARCH_ENGINE["TIER_QUOTAS"]
         expected = {
-            "free": (200, 100, 90, 10),
-            "core": (1000, 500, None, 25),
-            "pro": (3000, 1500, None, 50),
-            "max": (8000, 4000, None, 100),
+            "free": (100, 50, 180, 5),
+            "core": (500, 300, None, 25),
+            "pro": (1500, 1000, None, 50),
+            # Max is uncapped on task/note creation: at 200 AI credits a
+            # month the AI limit binds long before a create count could,
+            # so a second cap only ever surprises someone.
+            "max": (None, None, None, 100),
             "enterprise": (None, None, None, 200),
         }
         for tier, (task, note, retention, upload) in expected.items():

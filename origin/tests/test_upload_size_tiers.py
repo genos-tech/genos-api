@@ -76,17 +76,17 @@ class CheckUploadSizeHelperTests(UploadTestBase):
 
 
 class FallbackBehaviorTests(UploadTestBase):
-    """With the SHIPPED config (enable PR) the free tier's 10 MB cap
+    """With the SHIPPED config the free tier's 5 MB cap
     beats the chat endpoints' historical 25 MiB fallback; the fallback
     and the absolute ceiling only apply to tiers WITHOUT a file cap
     (exercised via TEST_QUOTAS' unlimited enterprise tier)."""
 
     def test_shipped_free_cap_beats_chat_fallback(self):
-        res = check_upload_size(self.user, _stub_file(11 * MIB), fallback_bytes=25 * MIB)
+        res = check_upload_size(self.user, _stub_file(6 * MIB), fallback_bytes=25 * MIB)
         self.assertIsNotNone(res)
-        self.assertEqual(res.data["limit_mb"], 10)
+        self.assertEqual(res.data["limit_mb"], 5)
         self.assertIsNone(
-            check_upload_size(self.user, _stub_file(9 * MIB), fallback_bytes=25 * MIB)
+            check_upload_size(self.user, _stub_file(4 * MIB), fallback_bytes=25 * MIB)
         )
 
     @override_settings(SEARCH_ENGINE=_search_engine_with_quotas(TEST_QUOTAS))
