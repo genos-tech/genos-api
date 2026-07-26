@@ -1295,6 +1295,31 @@ SEARCH_ENGINE["AI_CREDITS_SHADOW"] = (
     os.environ.get("AI_CREDITS_SHADOW", "false").lower() == "true"
 )
 
+# Graded actions for the per-account monthly yen ceilings (the values
+# live in credit_policy.yaml `monthly_ceiling_jpy`). BOTH default off:
+# over the ceiling always logs a WARNING, and these escalate it.
+#
+#   ROUTE_CHEAPEST — serve the cheapest same-provider model with quota
+#     headroom instead (the user keeps working, on our cheapest metal).
+#   PAUSE — 429 new asks with a money-free message. The strongest
+#     lever, for genuine abuse only: the strategy is explicit that
+#     blocking a real early user costs more than their spend does, so
+#     flip this only after a human has read `ai_cost_report --by-user`.
+SEARCH_ENGINE["AI_CEILING_ROUTE_CHEAPEST"] = (
+    os.environ.get("AI_CEILING_ROUTE_CHEAPEST", "false").lower() == "true"
+)
+SEARCH_ENGINE["AI_CEILING_PAUSE"] = (
+    os.environ.get("AI_CEILING_PAUSE", "false").lower() == "true"
+)
+
+# Per-workspace (team) monthly ceiling in YEN — alert-only, opt-in.
+# 0 = off. A team over the line logs a WARNING naming the team; there
+# is deliberately no blocking lever here, because pausing N users over
+# one member's spend is a human decision, not a threshold's.
+SEARCH_ENGINE["AI_TEAM_MONTHLY_CEILING_JPY"] = float(
+    os.environ.get("AI_TEAM_MONTHLY_CEILING_JPY") or "0"
+)
+
 # Monthly AI budget in YEN, for `ai_cost_report --alert`. The command
 # pro-rates it to the reporting window and logs at ERROR when spend is
 # over — which fails the cron run via CronCommand's tripwire.

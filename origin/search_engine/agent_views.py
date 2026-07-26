@@ -109,6 +109,7 @@ from origin.search_engine.quota import (
     WEB_SEARCH_KEY,
     check_remaining,
     check_remaining_monthly,
+    get_effective_tier,
     get_message_retention_days,
     get_quota,
     get_upload_max_bytes,
@@ -447,6 +448,137 @@ def _alert_if_user_spend_is_high(user_id: str) -> None:
         log.debug("Per-user spend alert check failed", exc_info=True)
 
 
+def _month_spend_milli(*, user_id: str = "", team_id: str = "") -> int:
+    """This UTC month's ledger spend for one user OR one team, in
+    milli-yen. Cached for 5 minutes — the ceiling drifts by at most a
+    few asks, which is fine for a monthly number. Raises on cache/DB
+    trouble; callers fail open."""
+    from django.core.cache import cache  # noqa: PLC0415
+    from django.db.models import Sum  # noqa: PLC0415
+
+    from origin.search_engine.models import AiSpendEvent  # noqa: PLC0415
+
+    key_id = f"u:{user_id}" if user_id else f"t:{team_id}"
+    cache_key = f"ai_spend_month:{key_id}:{timezone.now():%Y%m}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return int(cached)
+    since = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    qs = AiSpendEvent.objects.filter(created_at__gte=since)
+    qs = qs.filter(user_id=str(user_id)) if user_id else qs.filter(team_id=str(team_id))
+    spent = int(qs.aggregate(s=Sum("cost_jpy_milli"))["s"] or 0)
+    cache.set(cache_key, spent, 300)
+    return spent
+
+
+# 429 payload for a ceiling-driven pause. The copy deliberately says
+# nothing about money: the user never chose a budget and cannot act on
+# a yen figure — and the operational rule for early users is a manual
+# grant plus a conversation, not a wall (V2 §7).
+_CEILING_PAUSE_RESPONSE = {
+    "error": (
+        "AI assistance is temporarily paused for your account this month. "
+        "Please contact support if you need more."
+    ),
+    "limit_reached": True,
+    "category": "cost_ceiling",
+}
+
+
+def _enforce_monthly_ceilings(user_id: str, plan: str, team_id, chosen: LlmChoice):
+    """The V2 §3.7 financial circuit breaker — per-account (and
+    per-workspace) monthly YEN ceilings, with graded actions.
+
+    Returns `(response_or_None, fallback_note_or_None, chosen)`. The
+    grades, mildest first, each behind its own flag and all defaulting
+    to alert-only:
+
+      1. ALWAYS: over the ceiling logs a WARNING. Observation is free.
+      2. `AI_CEILING_ROUTE_CHEAPEST`: a non-light model steps down to
+         the cheapest same-provider rung with quota headroom, reusing
+         the quota-fallback plumbing and its `model_fallback` note —
+         the user keeps working, on our cheapest suitable metal.
+      3. `AI_CEILING_PAUSE`: new asks 429 with a money-free message.
+         The strongest lever, for genuine abuse — the strategy is
+         explicit that blocking a real early user costs more than
+         their spend does, so this ships OFF and should stay off
+         until a human has looked at `ai_cost_report --by-user`.
+
+    Ceiling values come from `credit_policy.yaml`'s
+    `monthly_ceiling_jpy` — the same versioned file as the rest of the
+    commercial numbers; `unlimited` (enterprise) skips everything.
+    These operate on ACTUAL yen from the ledger regardless of what
+    credits say — a credit-policy bug cannot take the business with it.
+
+    Fails open on any internal error, like every other check here: a
+    ceiling that cannot be read must never block a paying user.
+    """
+    try:
+        policy = getattr(settings, "CREDIT_POLICY", None)
+        if policy is None or not user_id:
+            return None, None, chosen
+
+        # Per-workspace ceiling: alert-only in v1 (a team is a report
+        # dimension, and blocking N users over one member's spend needs
+        # a human decision). Opt-in via a single global env value.
+        team_ceiling_yen = float(
+            settings.SEARCH_ENGINE.get("AI_TEAM_MONTHLY_CEILING_JPY", 0) or 0
+        )
+        if team_ceiling_yen > 0 and team_id:
+            team_spent = _month_spend_milli(team_id=str(team_id))
+            if team_spent >= team_ceiling_yen * 1000:
+                log.warning(
+                    "Team %s is over the monthly AI cost ceiling: ¥%.0f of ¥%.0f. "
+                    "Alert only — see `ai_cost_report` for the member breakdown.",
+                    team_id,
+                    team_spent / 1000,
+                    team_ceiling_yen,
+                )
+
+        ceiling_yen = policy.monthly_ceiling_jpy.get(plan or "free")
+        if ceiling_yen is None:  # unlimited (enterprise)
+            return None, None, chosen
+
+        spent_milli = _month_spend_milli(user_id=str(user_id))
+        if spent_milli < ceiling_yen * 1000:
+            return None, None, chosen
+
+        log.warning(
+            "User %s (%s) is over the monthly AI cost ceiling: ¥%.0f of ¥%.0f. "
+            "Graded levers: route_cheapest=%s pause=%s — see "
+            "`ai_cost_report --by-user` before enabling either.",
+            user_id,
+            plan or "free",
+            spent_milli / 1000,
+            ceiling_yen,
+            bool(settings.SEARCH_ENGINE.get("AI_CEILING_ROUTE_CHEAPEST")),
+            bool(settings.SEARCH_ENGINE.get("AI_CEILING_PAUSE")),
+        )
+
+        if settings.SEARCH_ENGINE.get("AI_CEILING_PAUSE"):
+            return (
+                Response(_CEILING_PAUSE_RESPONSE, status=status.HTTP_429_TOO_MANY_REQUESTS),
+                None,
+                chosen,
+            )
+
+        if settings.SEARCH_ENGINE.get("AI_CEILING_ROUTE_CHEAPEST"):
+            cheaper = cheaper_models_same_provider(chosen)
+            for candidate in reversed(cheaper):  # cheapest first
+                ok, _used, _limit = check_remaining(user_id, candidate)
+                if ok:
+                    note = {"requested_model": chosen.model, "used_model": candidate}
+                    return None, note, LlmChoice(provider=chosen.provider, model=candidate)
+            # Already on the cheapest rung (or nothing has headroom):
+            # nothing to route down to — serve as chosen, alert stands.
+            return None, None, chosen
+
+        return None, None, chosen
+    except Exception:  # noqa: BLE001 — a check that cannot run must not block
+        log.debug("Monthly ceiling check failed", exc_info=True)
+        return None, None, chosen
+
+
 class AgentAskView(AuthenticatedAPIView):
     def post(self, request):
         data = request.data or {}
@@ -549,6 +681,20 @@ class AgentAskView(AuthenticatedAPIView):
             # `set_llm_choice` both read this `chosen`) — never the
             # rejected one.
             chosen = fallback
+
+        # Financial circuit breaker — the monthly yen ceilings from
+        # credit_policy.yaml, graded (alert → route-cheapest → pause).
+        # Placed AFTER the quota fallback so the ceiling judges the
+        # model that will actually serve, and BEFORE the spend context
+        # so a paused ask leaves no dangling rollup. Runs on actual
+        # ledger yen, independent of anything credits say.
+        ceiling_resp, ceiling_note, chosen = _enforce_monthly_ceilings(
+            user_id, get_effective_tier(str(user_id)), team_id, chosen
+        )
+        if ceiling_resp is not None:
+            return ceiling_resp
+        if ceiling_note is not None:
+            fallback_note = ceiling_note
 
         # Cost meter — mint the logical request id NOW, before any paid
         # call. Everything this ask spends, on either thread, is grouped

@@ -177,6 +177,28 @@ class BudgetAlarmTests(TestCase):
         with override_settings(SEARCH_ENGINE=_se(AI_MONTHLY_BUDGET_JPY=30_000)):
             self.assertIn("-- Budget --", _report("--days", "1", "--alert"))
 
+    def test_fifty_percent_early_warning_keeps_the_cron_green(self):
+        """V2 §3.7's 50/80/100 ladder. The first sign of a hot month is
+        a WARNING line, not the alarm — the cron must stay green below
+        100%, or the red run stops meaning 'over budget'."""
+        # ¥1,000/day pro-rated; ¥600 spent = 60% -> over the 50% line.
+        _event(cost_jpy_milli=600_000, cost_usd_micro=4_000_000)
+        with override_settings(SEARCH_ENGINE=_se(AI_MONTHLY_BUDGET_JPY=30_000)):
+            out = _report("--days", "1", "--alert")  # must NOT raise
+        self.assertIn("50% early-warning", out)
+
+    def test_eighty_percent_names_its_own_line(self):
+        _event(cost_jpy_milli=900_000, cost_usd_micro=6_000_000)  # 90%
+        with override_settings(SEARCH_ENGINE=_se(AI_MONTHLY_BUDGET_JPY=30_000)):
+            out = _report("--days", "1", "--alert")
+        self.assertIn("80% early-warning", out)
+
+    def test_under_fifty_percent_stays_quiet(self):
+        _event(cost_jpy_milli=100_000, cost_usd_micro=700_000)  # 10%
+        with override_settings(SEARCH_ENGINE=_se(AI_MONTHLY_BUDGET_JPY=30_000)):
+            out = _report("--days", "1", "--alert")
+        self.assertNotIn("early-warning", out)
+
 
 class RebuildTests(TestCase):
     def test_rebuild_re_derives_rollups_from_events(self):
