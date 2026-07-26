@@ -106,6 +106,7 @@ class Command(BaseCommand):
             )
             return
 
+        self._policy_regime_section(requests)
         self._per_plan_section(requests, entries, period)
         self._request_shape_section(requests)
         self._divergence_section(requests)
@@ -114,6 +115,46 @@ class Command(BaseCommand):
             self._compare_policy(requests, options["compare_policy"])
 
     # ------------------------------------------------------------------ #
+
+    def _policy_regime_section(self, requests) -> None:
+        """Flag a window spanning more than one credit policy.
+
+        The cost report already refuses to sum across `rate_card_version`
+        boundaries without saying so — "two price regimes are not one
+        trend". The same rule has to hold for the CONVERSION policy, and
+        it did not: this section exists because the first real shadow
+        window mixed a Phase 0 `shadow-v0` row (¥2/credit, and no
+        `eligible` column at all — it defaulted to 0) with `cp-v1` rows
+        at ¥15/credit. The totals below added them, so the divergence
+        line read "eligible ¥0.00, credited ¥12.68", which cannot be
+        true of any single regime.
+
+        Rows from a superseded policy are still HISTORY and are never
+        rewritten (§3.6). They just must not be averaged with the
+        current one silently.
+        """
+        versions = sorted(
+            v
+            for v in requests.values_list("credit_policy_version", flat=True).distinct()
+            if v
+        )
+        if len(versions) <= 1:
+            return
+        from django.conf import settings  # noqa: PLC0415
+
+        current = settings.CREDIT_POLICY.version
+        stale = [v for v in versions if v != current]
+        self.stdout.write(
+            self.style.WARNING(
+                f"\n⚠ MULTIPLE CREDIT POLICIES IN THIS WINDOW: {', '.join(versions)}.\n"
+                f"  Every figure below sums across them. Rows under "
+                f"{', '.join(stale)} were charged by a DIFFERENT conversion and\n"
+                f"  are not comparable with {current} — a per-request credit "
+                f"figure spanning two policies is two answers added together.\n"
+                f"  Compare like with like using --period on a window inside one "
+                f"regime."
+            )
+        )
 
     def _per_plan_section(self, requests, entries, period: str) -> None:
         """The headline: per plan, who would have run out, and when."""

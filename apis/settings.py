@@ -1295,6 +1295,30 @@ SEARCH_ENGINE["AI_CREDITS_SHADOW"] = (
     os.environ.get("AI_CREDITS_SHADOW", "false").lower() == "true"
 )
 
+# PHASE 2 — make credits the CUSTOMER'S LIMIT, replacing the daily ask
+# count. Requires AI_CREDITS_SHADOW (without a ledger being written, a
+# balance only ever goes down by the monthly grant and every user reads
+# as full forever — enforcing on a ledger nobody writes to is worse
+# than not enforcing).
+#
+# What flipping this changes:
+#   * the ask + both summary surfaces gate on the credit BALANCE vs the
+#     request's quoted maximum, not on `llm_ask_daily`;
+#   * per-model daily caps and the web-search daily cap stop applying —
+#     both are cost-shaping devices that credits subsume, and enforcing
+#     them alongside credits would refuse requests the user has paid for;
+#   * Free keeps a quiet daily circuit breaker as ABUSE protection only
+#     (V2 §4.3) — never presented as a plan limit;
+#   * `/agent/features/` starts returning a `credits` block, which is
+#     what makes the frontend render credit rows instead of ask counts.
+#
+# Ships OFF. Flipping it is a commercial act — it changes what a
+# customer is allowed to do — and the strategy is explicit that it
+# should follow measured evidence, not precede it.
+SEARCH_ENGINE["AI_CREDITS_AUTHORITATIVE"] = (
+    os.environ.get("AI_CREDITS_AUTHORITATIVE", "false").lower() == "true"
+)
+
 # Graded actions for the per-account monthly yen ceilings (the values
 # live in credit_policy.yaml `monthly_ceiling_jpy`). BOTH default off:
 # over the ceiling always logs a WARNING, and these escalate it.
