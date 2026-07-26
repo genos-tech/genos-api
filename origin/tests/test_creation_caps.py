@@ -221,19 +221,26 @@ class CreateTaskPlanCapTests(CreationCapTestBase):
 
 
 class ShippedDefaultsTests(CreationCapTestBase):
-    """The SHIPPED config carries live free-tier caps (enable PR):
-    200 tasks / 100 notes per month."""
+    """The SHIPPED config carries live free-tier caps:
+    100 tasks / 50 notes per month.
+
+
+    Five modules assert the shipped tier table:
+      test_quota_monthly, test_creation_caps, test_message_retention,
+      test_upload_size_tiers, test_agent_features_endpoint.
+    Changing a cap means changing SUBSCRIPTION_TIERS.md and all five.
+    """
 
     def test_task_create_capped_at_shipped_default(self):
         limit = settings.SEARCH_ENGINE["TIER_QUOTAS"]["free"]["task_create_monthly"]
-        self.assertEqual(limit, 200)
+        self.assertEqual(limit, 100)
         self.seed_usage(quota.TASK_CREATE_KEY, limit)
         res = self.client.post("/api/v2/task/", self.task_payload(), format="json")
         self.assert_limit_429(res, "task_create")
 
     def test_note_create_capped_at_shipped_default(self):
         limit = settings.SEARCH_ENGINE["TIER_QUOTAS"]["free"]["note_create_monthly"]
-        self.assertEqual(limit, 100)
+        self.assertEqual(limit, 50)
         self.seed_usage(quota.NOTE_CREATE_KEY, limit)
         res = self.client.post(
             "/api/v2/note/personal/",

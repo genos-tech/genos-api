@@ -157,14 +157,19 @@ class PaidTierRetentionTests(RetentionTestBase):
 
 
 class ShippedDefaultsRetentionTests(RetentionTestBase):
-    """SHIPPED config (enable PR): free = 90-day window; paid tiers
-    unlimited."""
+    """SHIPPED config: free = 180-day window; paid tiers unlimited.
 
-    def test_free_user_default_window_is_90_days(self):
+    Five modules assert the shipped tier table:
+      test_quota_monthly, test_creation_caps, test_message_retention,
+      test_upload_size_tiers, test_agent_features_endpoint.
+    Changing a cap means changing SUBSCRIPTION_TIERS.md and all five.
+    """
+
+    def test_free_user_default_window_is_180_days(self):
         self.assertEqual(
-            settings.SEARCH_ENGINE["TIER_QUOTAS"]["free"]["message_retention_days"], 90
+            settings.SEARCH_ENGINE["TIER_QUOTAS"]["free"]["message_retention_days"], 180
         )
-        self.make_message("ancient", days_ago=120)
+        self.make_message("ancient", days_ago=200)
         self.make_message("recent")
         res = self.delta()
         self.assertEqual(self.message_texts(res), ["recent"])

@@ -1058,10 +1058,10 @@ SEARCH_ENGINE = {
             "llm_ask_daily": 20,
             "web_search_daily": 10,
             "model_daily": {},  # filled from llm_models.yaml (see below)
-            "task_create_monthly": 200,
-            "note_create_monthly": 100,
-            "message_retention_days": 90,
-            "upload_max_mb": 10,
+            "task_create_monthly": 100,
+            "note_create_monthly": 50,
+            "message_retention_days": 180,
+            "upload_max_mb": 5,
         },
         # Paid-tier LLM caps are set by a value-based X/Y/Z tiering model,
         # not a profit gate — genos-docs/operations/LLM_TIER_COST_OPTIMIZATION.md
@@ -1115,8 +1115,8 @@ SEARCH_ENGINE = {
             "llm_ask_daily": 100,
             "web_search_daily": 25,
             "model_daily": {},  # filled from llm_models.yaml (see below)
-            "task_create_monthly": 1000,
-            "note_create_monthly": 500,
+            "task_create_monthly": 500,
+            "note_create_monthly": 300,
             "message_retention_days": None,  # unlimited on paid tiers
             "upload_max_mb": 25,
         },
@@ -1124,8 +1124,8 @@ SEARCH_ENGINE = {
             "llm_ask_daily": 250,
             "web_search_daily": 60,
             "model_daily": {},  # filled from llm_models.yaml (see below)
-            "task_create_monthly": 3000,
-            "note_create_monthly": 1500,
+            "task_create_monthly": 1500,
+            "note_create_monthly": 1000,
             "message_retention_days": None,  # unlimited on paid tiers
             "upload_max_mb": 50,
         },
@@ -1137,8 +1137,8 @@ SEARCH_ENGINE = {
             "llm_ask_daily": 500,
             "web_search_daily": 150,
             "model_daily": {},  # filled from llm_models.yaml (see below)
-            "task_create_monthly": 8000,
-            "note_create_monthly": 4000,
+            "task_create_monthly": None,
+            "note_create_monthly": None,
             "message_retention_days": None,  # unlimited on paid tiers
             "upload_max_mb": 100,
         },

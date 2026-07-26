@@ -70,14 +70,20 @@ class AgentFeaturesPayloadTests(FeaturesTestBase):
 
 
 class AgentFeaturesShippedDefaultsTests(FeaturesTestBase):
-    """SHIPPED config (enable PR): the free tier's limits are live."""
+    """SHIPPED config: the free tier's limits are live.
+
+    Five modules assert the shipped tier table:
+      test_quota_monthly, test_creation_caps, test_message_retention,
+      test_upload_size_tiers, test_agent_features_endpoint.
+    Changing a cap means changing SUBSCRIPTION_TIERS.md and all five.
+    """
 
     def test_shipped_free_limits_populated(self):
         res = self.client.get(URL)
         data = res.data
-        self.assertEqual(data["task_create"]["limit"], 200)
-        self.assertEqual(data["note_create"]["limit"], 100)
-        self.assertEqual(data["message_retention_days"], 90)
-        self.assertEqual(data["upload_max_mb"], 10)
+        self.assertEqual(data["task_create"]["limit"], 100)
+        self.assertEqual(data["note_create"]["limit"], 50)
+        self.assertEqual(data["message_retention_days"], 180)
+        self.assertEqual(data["upload_max_mb"], 5)
         # Daily AI quotas keep their existing live values.
         self.assertIsNotNone(data["llm_ask"]["limit"])
