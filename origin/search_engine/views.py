@@ -22,6 +22,7 @@ do not need to pass user_id explicitly.
 from rest_framework import status
 from rest_framework.response import Response
 
+from origin.search_engine.metered import metered_request
 from origin.search_engine.search import search
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
@@ -91,15 +92,23 @@ class SearchView(AuthenticatedAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        result = search(
-            query=query,
-            team_id=str(team_id),
-            user_id=user_id,
-            entity_types=entity_types,
-            date_from=data.get("date_from"),
-            date_to=data.get("date_to"),
-            limit=limit,
-            use_vector=use_vector,
-            **extra_kwargs,
-        )
+        # Cost meter — a plain search is a logical request of its own:
+        # the query rewrite is a real LLM call and the query embedding
+        # is real Vertex/OpenAI spend, and before this bind both landed
+        # in `unattributed`. When `search()` runs INSIDE an ask (the
+        # `search_kb` tool calls the same function) the bind is a no-op
+        # and the spend stays grouped under the ask's request_id —
+        # that's `metered_request`'s re-entrancy, not an accident.
+        with metered_request(surface="search", user_id=user_id, team_id=team_id):
+            result = search(
+                query=query,
+                team_id=str(team_id),
+                user_id=user_id,
+                entity_types=entity_types,
+                date_from=data.get("date_from"),
+                date_to=data.get("date_to"),
+                limit=limit,
+                use_vector=use_vector,
+                **extra_kwargs,
+            )
         return Response(result, status=status.HTTP_200_OK)

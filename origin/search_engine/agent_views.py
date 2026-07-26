@@ -35,8 +35,7 @@ import dataclasses
 import json
 import logging
 import threading
-import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import timedelta
 from typing import Any, Callable, Iterator
 
@@ -49,7 +48,7 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from apis.llm_catalog import EFFORTS
-from origin.search_engine import spend_recorder
+from origin.search_engine import metered, spend_recorder
 from origin.search_engine.agent.controller import (
     COST_CEILING_MESSAGE,
     _chat_source,
@@ -96,7 +95,13 @@ from origin.search_engine.llm.choice import (
     set_llm_choice,
     subprocess_model_override,
 )
-from origin.search_engine.models import AgentRun, AgentRunFeedback, AgentSession, AgentStep
+from origin.search_engine.models import (
+    AgentRun,
+    AgentRunFeedback,
+    AgentSession,
+    AgentStep,
+    AiRequestCost,
+)
 from origin.search_engine.quota import (
     LLM_ASK_KEY,
     NOTE_CREATE_KEY,
@@ -104,7 +109,6 @@ from origin.search_engine.quota import (
     WEB_SEARCH_KEY,
     check_remaining,
     check_remaining_monthly,
-    get_effective_tier,
     get_message_retention_days,
     get_quota,
     get_upload_max_bytes,
@@ -392,34 +396,6 @@ def _effort_choice_bound(chosen: LlmChoice):
         reset_llm_choice(token)
 
 
-def _spend_kwargs(
-    surface: str,
-    user_id: str,
-    team_id,
-    chosen: LlmChoice | None = None,
-) -> dict:
-    """Build the cost-meter binding for one logical request.
-
-    `plan` and `effort` are resolved ONCE here and denormalized onto
-    every spend row. Resolving them per row would put a tier lookup —
-    one 60s-cache miss away from a DB query — on the request path once
-    per LLM call, and an ask makes six to ten.
-    """
-    plan = ""
-    try:
-        plan = get_effective_tier(str(user_id)) if user_id else ""
-    except Exception:  # noqa: BLE001 — never fail a request over a label
-        log.debug("Could not resolve plan for spend context", exc_info=True)
-    return {
-        "surface": surface,
-        "request_id": str(uuid.uuid4()),
-        "user_id": str(user_id or ""),
-        "team_id": str(team_id or ""),
-        "plan": plan,
-        "effort": getattr(chosen, "effort", "") or "",
-    }
-
-
 def _alert_if_user_spend_is_high(user_id: str) -> None:
     """Log a WARNING when a user's day of ledger spend crosses a
     threshold. Observation only — this never blocks.
@@ -469,25 +445,6 @@ def _alert_if_user_spend_is_high(user_id: str) -> None:
             cache.set(cache_key, True, 300)
     except Exception:  # noqa: BLE001 — a check that cannot run must not block
         log.debug("Per-user spend alert check failed", exc_info=True)
-
-
-def _open_spend_request(spend_kwargs: dict) -> None:
-    """Write the request's rollup row up front, with its quoted ceiling.
-
-    The quote must be written BEFORE any spend: it is the maximum we
-    promised not to exceed, and after the fact there is no way to prove
-    what it would have been. No-ops when the meter is off.
-    """
-    try:
-        ctx = spend.SpendContext(**spend_kwargs)
-        spend_recorder.open_request(
-            ctx,
-            quoted_max_jpy_milli=int(
-                settings.SEARCH_ENGINE.get("AI_REQUEST_MAX_JPY_MILLI", 0) or 0
-            ),
-        )
-    except Exception:  # noqa: BLE001 — accounting never breaks a request
-        log.debug("Failed to open spend request", exc_info=True)
 
 
 class AgentAskView(AuthenticatedAPIView):
@@ -603,8 +560,8 @@ class AgentAskView(AuthenticatedAPIView):
         # call before it exists. Keying attribution on the run is what
         # makes the existing AgentLlmCall telemetry blind to the entire
         # eval suite.
-        spend_kwargs = _spend_kwargs("ask", user_id, team_id, chosen)
-        _open_spend_request(spend_kwargs)
+        spend_kwargs = metered.spend_kwargs_for("ask", user_id, team_id, chosen)
+        metered.open_request(spend_kwargs)
         _alert_if_user_spend_is_high(user_id)
 
         # Phase 8 — session memory. Non-fatal: if session machinery
@@ -714,6 +671,16 @@ class AgentAskView(AuthenticatedAPIView):
             )
         except Exception:  # noqa: BLE001
             log.exception("Failed to create AgentRun row; continuing without persistence")
+
+        # Link the logical request to its run now that the run exists.
+        # Everything that rebinds from `spend_kwargs` — the worker
+        # thread, `_close_spend`'s rollup, the post-run embed — carries
+        # it from here on. (The two pre-run summary calls above already
+        # fired without it, correctly: no run existed yet.) Without this
+        # the rollup's `run_id` stays NULL and the /decide/ resume leg
+        # below has no way to find the original request to rejoin.
+        if run is not None:
+            spend_kwargs["run_id"] = str(run.run_id)
 
         # Per-request tool gates. Web search is gated by the user's
         # PERSISTED preference (see `_persisted_disabled_tools`), which is
@@ -1053,10 +1020,36 @@ class AgentDecideView(AuthenticatedAPIView):
         # behavior — the user's *current* preference is what counts.
         resumed_choice = _resolve_choice_for(request.user)
 
+        # Cost meter — the resumed leg is a CONTINUATION of the original
+        # ask, not a new logical request: no quota increments here, and
+        # under the credit design a user is charged for one logical
+        # request however many approval round-trips it takes. So rejoin
+        # the original request by its rollup row (linked via run_id at
+        # ask time) and let `_close_spend` re-derive the rollup over both
+        # legs' events. Only when no row exists — meter was off during
+        # the ask, or a pre-linkage run — does the leg get a fresh id,
+        # opened here so its quote/started_at are still written before
+        # any spend.
+        spend_kwargs = metered.spend_kwargs_for(
+            "ask", request_user_id, run.team_id, resumed_choice, run_id=run.run_id
+        )
+        try:
+            prior_cost_row = (
+                AiRequestCost.objects.filter(run_id=run.run_id).order_by("-started_at").first()
+            )
+        except Exception:  # noqa: BLE001 — accounting never breaks a resume
+            prior_cost_row = None
+            log.debug("Could not look up prior AiRequestCost for resume", exc_info=True)
+        if prior_cost_row is not None:
+            spend_kwargs["request_id"] = str(prior_cost_row.request_id)
+        else:
+            metered.open_request(spend_kwargs)
+
         def worker(emit, cancel_event):
             token = set_llm_choice(resumed_choice)
             try:
-                return resume_agent(run, decision, ctx, emit, cancel_event=cancel_event)
+                with spend.spend_context(**spend_kwargs):
+                    return resume_agent(run, decision, ctx, emit, cancel_event=cancel_event)
             finally:
                 reset_llm_choice(token)
 
@@ -1066,6 +1059,7 @@ class AgentDecideView(AuthenticatedAPIView):
             rejected=(decision == "reject"),
             append_to_existing_answer=True,
             session_id=run.session_id,
+            spend_kwargs=spend_kwargs,
         )
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
@@ -1263,8 +1257,6 @@ def _stream_ndjson(
         if not spend_kwargs:
             return
         try:
-            from origin.search_engine.models import AiRequestCost  # noqa: PLC0415
-
             if was_cancelled:
                 result = AiRequestCost.RESULT_USER_CANCELLATION
             elif final_status in ("done", "awaiting_approval", "rejected"):
@@ -1377,7 +1369,16 @@ def _stream_ndjson(
                         ingest_conversation_run,
                     )
 
-                    ingest_conversation_run(run)
+                    # This runs in the stream's `finally`, AFTER the
+                    # worker's spend context exited — so without a
+                    # rebind the ~1 embed call it makes was the one
+                    # spend of a completed ask that landed in
+                    # `unattributed` (the tripwire's first real catch).
+                    # It is part of what this ask cost; rebinding also
+                    # means `_close_spend` below (which runs after this)
+                    # folds it into the rollup.
+                    with spend.spend_context(**spend_kwargs) if spend_kwargs else nullcontext():
+                        ingest_conversation_run(run)
                 except Exception:  # noqa: BLE001
                     log.exception(
                         "Post-completion conversation indexing failed for %s "
@@ -1656,23 +1657,28 @@ class NoteSummaryView(AuthenticatedAPIView):
         if not model_ok:
             return _model_quota_429(chosen, model_used, model_limit)
 
-        # 3. Generate.
-        token = set_llm_choice(chosen)
-        try:
+        # 3. Generate. Metered exactly like ThreadSummaryView above —
+        # regeneration only, cache hits post nothing.
+        with metered.metered_request(
+            surface="note_summary", user_id=user_id, team_id=team_id, chosen=chosen
+        ) as outcome:
+            token = set_llm_choice(chosen)
             try:
-                result = regenerate_note_summary(
-                    note_type=note_type,
-                    note_id=note_id,
-                    user_id=user_id,
-                    record=record,
-                )
-            except NoteSummaryError as e:
-                return Response(
-                    {"error": str(e)},
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-        finally:
-            reset_llm_choice(token)
+                try:
+                    result = regenerate_note_summary(
+                        note_type=note_type,
+                        note_id=note_id,
+                        user_id=user_id,
+                        record=record,
+                    )
+                except NoteSummaryError as e:
+                    outcome.mark(AiRequestCost.RESULT_PROVIDER_FAILURE)
+                    return Response(
+                        {"error": str(e)},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
+            finally:
+                reset_llm_choice(token)
 
         # 4. Charge quota on success.
         for key in (LLM_ASK_KEY, chosen.model):
@@ -1842,25 +1848,39 @@ class ThreadSummaryView(AuthenticatedAPIView):
             return _model_quota_429(chosen, model_used, model_limit)
 
         # 3. Generate. Set the LLM choice for the duration of the call so
-        # the right provider/model fires.
-        token = set_llm_choice(chosen)
-        try:
+        # the right provider/model fires. The metered block wraps ONLY
+        # the regeneration: a cache hit above made no paid call and
+        # charged no quota, so opening a rollup for it would mint ¥0
+        # phantom requests into every per-request average. This is a
+        # charged surface (it consumes an LLM ask), so it must be its
+        # own logical request — before this bind its summary call landed
+        # in `unattributed`, which under credits means consuming quota
+        # and posting a zero charge.
+        with metered.metered_request(
+            surface="thread_summary", user_id=user_id, team_id=team_id, chosen=chosen
+        ) as outcome:
+            token = set_llm_choice(chosen)
             try:
-                result = regenerate_summary(
-                    chat_type=chat_type,
-                    chat_id=chat_id,
-                    thread_id=thread_id,
-                    team_id=str(team_id),
-                    user_id=user_id,
-                    messages=messages,
-                )
-            except ThreadSummaryError as e:
-                return Response(
-                    {"error": str(e)},
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-        finally:
-            reset_llm_choice(token)
+                try:
+                    result = regenerate_summary(
+                        chat_type=chat_type,
+                        chat_id=chat_id,
+                        thread_id=thread_id,
+                        team_id=str(team_id),
+                        user_id=user_id,
+                        messages=messages,
+                    )
+                except ThreadSummaryError as e:
+                    # Step 1 already returned the ACL/empty flavors, so a
+                    # raise here is the generation itself failing — the
+                    # same judgment the 503 below is making.
+                    outcome.mark(AiRequestCost.RESULT_PROVIDER_FAILURE)
+                    return Response(
+                        {"error": str(e)},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
+            finally:
+                reset_llm_choice(token)
 
         # 4. Charge quota on success.
         for key in (LLM_ASK_KEY, chosen.model):

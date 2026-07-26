@@ -46,6 +46,7 @@ from origin.search_engine.embeddings import (
     hash_text,
 )
 from origin.search_engine.index_config import INDEX_SCHEMA_VERSION
+from origin.search_engine.llm import spend
 from origin.search_engine.models import RagChunk
 from origin.search_engine.opensearch_client import get_client, get_index_alias
 
@@ -104,6 +105,22 @@ def ingest_all(
         "spotlight_answer",
     ]
 
+    # Cost meter — embeddings are priced spend now, and a reindex pass
+    # makes a lot of them. Attribute the pass to its own `index` surface
+    # instead of letting every cron embed land in `unattributed` (which
+    # is reserved for MISSING binds, not known infra work). Re-entrant:
+    # a caller that already bound a request keeps its own attribution.
+    with spend.spend_context(surface="index"), spend.spend_purpose("index"):
+        return _ingest_all_bound(stats, since=since, entity_types=entity_types, dry_run=dry_run)
+
+
+def _ingest_all_bound(
+    stats: IngestionStats,
+    *,
+    since: Optional[datetime],
+    entity_types: list[str],
+    dry_run: bool,
+) -> IngestionStats:
     if "chat" in entity_types:
         log.info("Ingesting chats (since=%s, dry_run=%s)...", since, dry_run)
         _ingest_stream(iter_all_chat_chunks(since=since), stats, dry_run=dry_run)
@@ -176,7 +193,12 @@ def ingest_conversation_run(run) -> bool:
     if entity is None:
         return False
     stats = IngestionStats()
-    _ingest_entity(entity, stats, dry_run=False)
+    # The ask path rebinds its own request around this call, so there the
+    # inner bind is a no-op and the embed is grouped — and priced — as
+    # part of what that ask cost. Any other caller (the cron backstop,
+    # a backfill) attributes to `index` rather than `unattributed`.
+    with spend.spend_context(surface="index"), spend.spend_purpose("index"):
+        _ingest_entity(entity, stats, dry_run=False)
     if not settings.SEARCH_ENGINE.get("RAG_BULK_REFRESH", False):
         try:
             get_client().indices.refresh(index=get_index_alias())
