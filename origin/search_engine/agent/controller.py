@@ -1842,9 +1842,20 @@ def _drive_loop(
             max_steps = profile.max_steps
         else:
             max_steps = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
+    # Thinking budget rides its own flag so it can flip (and roll back)
+    # independently of the effort system itself. `is not None` twice:
+    # 0 is a real budget ("thinking off"), absence means model default.
+    thinking_budget = (
+        profile.thinking_budget
+        if profile is not None and settings.SEARCH_ENGINE.get("AGENT_THINKING_BUDGETS")
+        else None
+    )
     gen_params = (
-        GenerationParams(max_output_tokens=profile.max_output_tokens)
-        if profile is not None and profile.max_output_tokens
+        GenerationParams(
+            max_output_tokens=profile.max_output_tokens,
+            thinking_budget=thinking_budget,
+        )
+        if profile is not None and (profile.max_output_tokens or thinking_budget is not None)
         else None
     )
     client = get_model_client()

@@ -165,6 +165,13 @@ class GeminiClient:
         }
         if params and params.max_output_tokens:
             config_kwargs["max_output_tokens"] = params.max_output_tokens
+        # Thinking bills at the OUTPUT rate ($7.50/1M on 3.6-flash) and
+        # is uncontrolled by default. `is not None` matters: 0 is a real
+        # value ("thinking off"), absence means the model's own default.
+        if params and params.thinking_budget is not None:
+            config_kwargs["thinking_config"] = types.ThinkingConfig(
+                thinking_budget=params.thinking_budget
+            )
         config = types.GenerateContentConfig(**config_kwargs)
 
         # Cost accounting. The sink is filled and recorded in a

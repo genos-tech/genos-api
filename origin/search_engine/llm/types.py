@@ -122,9 +122,21 @@ class GenerationParams:
     the default it replaces (claude/openai have env-configured caps;
     gemini is uncapped today), so adapters resolve
     `params.max_output_tokens or <their existing default>`.
+
+    `thinking_budget`: max thinking tokens for this call. Thinking is
+    billed at the OUTPUT rate and the anatomy report measured it at
+    ~12% of a medium request's cost — with the latency to match. None =
+    the provider's default behavior (dynamic thinking); 0 = thinking
+    off. **Gemini only for now**: the Claude and OpenAI adapters ignore
+    it deliberately — OpenAI already pins `reasoning_effort` on
+    tool-carrying calls for API-compatibility reasons (see
+    openai_client), and Claude's thinking is a separate experiment —
+    so a profile carrying a budget stays safe to resolve on any
+    provider.
     """
 
     max_output_tokens: int | None = None
+    thinking_budget: int | None = None
 
 
 @dataclass(frozen=True)

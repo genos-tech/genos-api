@@ -497,10 +497,18 @@ tier_caps:
 #    max_output_tokens  int or null — per-call output cap; null = the
 #                       provider's existing default behavior (claude/
 #                       openai env caps, gemini uncapped)
+#    thinking_budget    int or null — max thinking tokens per loop call
+#                       (0 = off, null = the model's default dynamic
+#                       thinking). Gemini-only today; other adapters
+#                       ignore it. Inert until AGENT_THINKING_BUDGETS
+#                       is on. Thinking bills at the OUTPUT rate — the
+#                       2026-07-26 anatomy measured it at ~12% of a
+#                       medium request's cost (1,323 thought tok/req).
 #
-#  rung, max_steps and rewrite_variants must be NON-DECREASING
-#  low -> medium -> high (boot-asserted): a mis-edit must never make
-#  "high" do less work than "low".
+#  rung, max_steps, rewrite_variants and thinking_budget (null =
+#  unbounded) must be NON-DECREASING low -> medium -> high
+#  (boot-asserted): a mis-edit must never make "high" do less work
+#  than "low".
 # =====================================================================
 
 efforts:
@@ -511,6 +519,9 @@ efforts:
         use_reranker: true
         critique_steps: 1
         max_output_tokens: 4096
+        # flash-lite doesn't think by default; 0 pins that so a future
+        # rung-0 model swap can't silently add thinking to "low".
+        thinking_budget: 0
     medium:
         rung: 1
         max_steps: 10
@@ -518,6 +529,9 @@ efforts:
         use_reranker: true
         critique_steps: 2
         max_output_tokens: null
+        # null (unchanged) until the A/B eval picks a value — medium is
+        # the DEFAULT experience; see the MEDIUM INVARIANT note above.
+        thinking_budget: null
     high:
         rung: 2
         max_steps: 10
@@ -525,6 +539,7 @@ efforts:
         use_reranker: true
         critique_steps: 2
         max_output_tokens: null
+        thinking_budget: null
 
 # ---------------------------------------------------------------------
 #  Sub-process model pins — rung INDICES into the user's provider list

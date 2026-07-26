@@ -1243,6 +1243,17 @@ SEARCH_ENGINE["AGENT_EFFORT_LEVELS"] = (
     os.environ.get("AGENT_EFFORT_LEVELS", "false").lower() == "true"
 )
 
+# Per-effort thinking budgets (llm_models.yaml `efforts.*.thinking_budget`)
+# applied to the agent loop's Gemini calls. Separate from
+# AGENT_EFFORT_LEVELS so it can flip — and roll back — without touching
+# the effort system. Thinking bills at the OUTPUT rate; the 2026-07-26
+# anatomy run measured 1,323 thought tokens/request at medium (~12% of
+# request cost) plus the time-to-first-token they take to produce.
+# Requires AGENT_EFFORT_LEVELS (no profile = no budget to read).
+SEARCH_ENGINE["AGENT_THINKING_BUDGETS"] = (
+    os.environ.get("AGENT_THINKING_BUDGETS", "false").lower() == "true"
+)
+
 # Claude prompt caching (LLM_TIER_COST_OPTIMIZATION.md §8.2). Anthropic
 # does NOT cache automatically — a cache_control breakpoint must mark
 # the stable prefix. We mark the TOOL DECLARATIONS block (~13k tokens,
