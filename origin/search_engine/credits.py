@@ -25,11 +25,11 @@ from __future__ import annotations
 
 from apis.credit_policy import CreditPolicy
 
-# The one result value that can carry a charge. Deliberately a literal
-# rather than an import: this module must stay importable with no
-# Django configured, and the value is pinned by a test against
-# `AiRequestCost.RESULT_SUCCESS` instead.
+# Deliberately literals rather than imports: this module must stay
+# importable with no Django configured. Both are pinned by tests against
+# the `AiRequestCost` constants instead.
 RESULT_SUCCESS = "success"
+RESULT_CREDITS_EXHAUSTED = "credits_exhausted"
 
 
 def eligible_jpy_milli(
@@ -47,9 +47,12 @@ def eligible_jpy_milli(
         anything not explicitly listed in the policy. An UNKNOWN
         surface excludes itself, so forgetting to classify a new one
         fails customer-favorably;
-      * any result other than success is 0 — provider failures,
-        application failures, cancellations and safety refusals are our
-        cost, structurally;
+      * a result outside `policy.billable_results` is 0 — provider
+        failures, application failures, cancellations and safety
+        refusals are our cost, structurally. Note this is a POLICY set,
+        not "success": a run the balance cut short really did spend the
+        tokens, and billing it 0 would make an empty balance the
+        cheapest way to ask;
       * the per-request cap: cost above `request_max_credits` worth of
         yen is ours (`absorbed`), not the customer's.
 
@@ -60,7 +63,7 @@ def eligible_jpy_milli(
     """
     if surface not in policy.billable_surfaces:
         return 0
-    if result != RESULT_SUCCESS:
+    if result not in policy.billable_results:
         return 0
     eligible = max(int(computed_jpy_milli), 0)
     return min(eligible, policy.request_max_jpy_milli())
@@ -90,3 +93,36 @@ def quote_max_credits_milli(policy: CreditPolicy) -> int:
     actual cost above it is absorbed, never charged.
     """
     return policy.request_max_credits_milli
+
+
+def request_budget_jpy_milli(balance_credits_milli: int | None, policy: CreditPolicy) -> int:
+    """How much this request may spend before it must stop, in milli-yen.
+
+    The reservation half of V2 §3.5, and the reason a user is no longer
+    refused for merely having less than the quote. Gating on
+    `balance >= quote` made the last `request_max_credits` of every plan
+    unspendable — on Free (10 credits, quote 5) that is HALF the
+    allowance, dead. Instead a request starts on any positive balance
+    and the agent loop stops itself when the running cost reaches this
+    number.
+
+    It is the LOWER of two independent limits, and both matter:
+
+      * the balance — spending past it charges a customer for credits
+        they do not have;
+      * the per-request cap — spending past it is money we absorb by
+        policy, so continuing is pure loss to us.
+
+    Returns 0 ("no budget enforcement") for an unlimited plan, where
+    there is no balance to run out of. 0 is also what every caller
+    passes when credits are not authoritative, so the check is inert on
+    the legacy path by construction rather than by a flag read.
+
+    Yen rather than credits because the running total the loop compares
+    against (`SpendContext.cost_jpy_milli`) is yen — converting once
+    here beats converting on every step.
+    """
+    if balance_credits_milli is None:
+        return 0
+    spendable = min(max(int(balance_credits_milli), 0), policy.request_max_credits_milli)
+    return int(round(spendable * policy.credit_jpy))

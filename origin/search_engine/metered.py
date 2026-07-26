@@ -67,6 +67,7 @@ def spend_kwargs_for(
     team_id=None,
     chosen=None,
     run_id=None,
+    credit_budget_jpy_milli: int = 0,
 ) -> dict:
     """Build the cost-meter binding for one logical request.
 
@@ -74,6 +75,12 @@ def spend_kwargs_for(
     spend row. Resolving them per row would put a tier lookup — one
     60s-cache miss away from a DB query — on the request path once per
     provider call, and an ask makes six to ten.
+
+    `credit_budget_jpy_milli` travels in the kwargs (rather than being
+    computed here) because every `spend_context(**spend_kwargs)` builds a
+    FRESH context — including the agent worker's, on another thread — and
+    the kwargs dict is the only thing all of them share. Default 0 keeps
+    every surface that does not pass one exactly as it was.
     """
     plan = ""
     try:
@@ -87,6 +94,7 @@ def spend_kwargs_for(
         "team_id": str(team_id or ""),
         "plan": plan,
         "effort": getattr(chosen, "effort", "") or "",
+        "credit_budget_jpy_milli": int(credit_budget_jpy_milli or 0),
     }
     if run_id:
         kwargs["run_id"] = str(run_id)

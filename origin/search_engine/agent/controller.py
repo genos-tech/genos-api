@@ -83,6 +83,21 @@ COST_CEILING_MESSAGE = (
     "Try narrowing it to a more specific question."
 )
 
+# Emitted when a run stops because the user's AI credits ran out
+# mid-request. Classified by `agent_views` the same way the ceiling
+# message is — but into a BILLABLE result, because unlike the ceiling
+# (our own cap, our own cost) these tokens were spent on work the user
+# asked for and can still read: the partial answer stays on screen.
+#
+# Says what happened, what it cost them, and when it comes back, because
+# all three are things the user can act on — unlike the ceiling message,
+# which deliberately hides a yen figure nobody agreed to.
+CREDITS_EXHAUSTED_MESSAGE = (
+    "You've run out of AI credits, so this request stopped partway. "
+    "Your credits reset at the start of next month — or upgrade your "
+    "plan to keep going now."
+)
+
 # Marker stored in AgentStep.summary while a write tool is awaiting the
 # user's decision. The resume path uses it to locate the pending row.
 PENDING_APPROVAL_MARKER = "awaiting_approval"
@@ -1938,6 +1953,35 @@ def _drive_loop(
             # CAN act on is asking something narrower.
             emit({"type": "error", "message": COST_CEILING_MESSAGE})
             _persist_step(run_id, step_index=step, error="cost_ceiling_reached")
+            return None
+
+        # The user's credit balance, enforced where it can actually be
+        # enforced. A cost-denominated limit cannot be checked up front —
+        # the cost is not known until the request runs — so the entry
+        # gate only asks for a positive balance and the real decision is
+        # made here, between steps, against what this run has actually
+        # spent.
+        #
+        # Same bound as the two checks above: an in-flight call finishes,
+        # so a run can end a little over budget. That overshoot is ours
+        # (the charge is capped at the per-request maximum regardless),
+        # which is the right direction to be wrong in — the opposite
+        # would cut users off before they had spent what they paid for.
+        #
+        # Whatever the run produced up to this point has already been
+        # streamed and stays on screen: stopping early degrades the
+        # answer, it does not discard it.
+        if spend.credit_budget_exhausted():
+            log.info(
+                "Agent run %s stopped at step %s — the user's AI credits ran out "
+                "mid-request (%s milli-yen spent). This run IS charged: the work "
+                "was performed.",
+                run_id,
+                step,
+                spend.request_cost_jpy_milli(),
+            )
+            emit({"type": "error", "message": CREDITS_EXHAUSTED_MESSAGE})
+            _persist_step(run_id, step_index=step, error="credits_exhausted")
             return None
         try:
             if planning_model is None:

@@ -44,6 +44,7 @@ policy:
     credit_jpy: 15
     request_max_credits: 5
     billable_surfaces: [ask, thread_summary, note_summary]
+    billable_results: [success, credits_exhausted]
     excluded_purposes: []
 entitlements:
     free: 10
@@ -75,6 +76,7 @@ def _policy(**overrides) -> CreditPolicy:
         credit_jpy=15.0,
         request_max_credits_milli=5000,
         billable_surfaces=frozenset({"ask", "thread_summary", "note_summary"}),
+        billable_results=frozenset({"success", "credits_exhausted"}),
         excluded_purposes=frozenset(),
         entitlements_milli={"free": 10_000},
         monthly_ceiling_jpy={"free": 150.0},

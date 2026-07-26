@@ -88,8 +88,16 @@ class ShadowDecisionAtOpenTests(_ShadowBase):
         self.assertFalse(row.would_have_blocked)
 
     @SHADOW_ON
-    def test_an_exhausted_balance_flags_would_have_blocked(self):
-        # Burn the free entitlement (10 credits) below the 5-credit quote.
+    def test_a_partial_balance_does_not_flag_would_have_blocked(self):
+        """`would_have_blocked` has to mirror the REAL gate.
+
+        It once asked "does the balance cover the quote", which was the
+        gate at the time. The gate now refuses only an exhausted balance.
+        Left as it was, this field would count every user under 5 credits
+        as blocked — inflating the single number in `ai_credit_report`
+        that the allowance decision gets made on, in the direction that
+        argues for raising allowances.
+        """
         credit_ledger.ensure_monthly_grant("u1", "free")
         credit_ledger.post_charge(
             request_id=str(uuid.uuid4()), user_id="u1", credits_milli=7_000
@@ -98,11 +106,19 @@ class ShadowDecisionAtOpenTests(_ShadowBase):
         spend_recorder.open_request(ctx)
         row = AiRequestCost.objects.get(request_id=ctx.request_id)
         self.assertEqual(row.balance_before_milli, 3_000)
-        self.assertTrue(
-            row.would_have_blocked,
-            "3 credits left < the 5-credit quoted max — an authoritative "
-            "system would have refused or degraded this request",
+        self.assertFalse(row.would_have_blocked)
+
+    @SHADOW_ON
+    def test_an_exhausted_balance_flags_would_have_blocked(self):
+        credit_ledger.ensure_monthly_grant("u1", "free")
+        credit_ledger.post_charge(
+            request_id=str(uuid.uuid4()), user_id="u1", credits_milli=10_000
         )
+        ctx = self._ctx(plan="free")
+        spend_recorder.open_request(ctx)
+        row = AiRequestCost.objects.get(request_id=ctx.request_id)
+        self.assertEqual(row.balance_before_milli, 0)
+        self.assertTrue(row.would_have_blocked)
 
     @SHADOW_ON
     def test_an_unlimited_plan_records_no_balance_and_never_blocks(self):

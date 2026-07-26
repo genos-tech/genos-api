@@ -88,6 +88,13 @@ class SpendContext:
     # Running total for this request. Read by the per-request ceiling;
     # the authoritative number is still the sum of the rows.
     cost_jpy_milli: int = 0
+    # What this request may spend before the agent loop must stop, in
+    # milli-yen; 0 disables the check. Carried on the CONTEXT rather than
+    # read from the ledger per step because the loop runs on a worker
+    # thread and a balance query between steps would put a DB round-trip
+    # on the request path — for a number that cannot change mid-request
+    # anyway, since the charge is not posted until the request ends.
+    credit_budget_jpy_milli: int = 0
     events: int = 0
     # Set when a ceiling stopped this request, for the rollup's result.
     ceiling_hit: bool = False
@@ -156,6 +163,7 @@ def spend_context(
     effort: str = "",
     run_id: str | None = None,
     request_id: str | None = None,
+    credit_budget_jpy_milli: int = 0,
 ) -> Iterator[SpendContext]:
     """Bind a logical request for the duration of the block.
 
@@ -184,6 +192,7 @@ def spend_context(
         plan=plan or "",
         effort=effort or "",
         run_id=str(run_id) if run_id else None,
+        credit_budget_jpy_milli=int(credit_budget_jpy_milli or 0),
     )
     token = _context.set(ctx)
     try:
@@ -226,6 +235,34 @@ def request_cost_jpy_milli() -> int:
     """
     ctx = _context.get()
     return ctx.cost_jpy_milli if ctx is not None else 0
+
+
+def credit_budget_exhausted() -> bool:
+    """Has this request spent everything the user's balance can cover?
+
+    False whenever no budget was bound (budget 0) — unlimited plans, the
+    legacy daily-limit path, and every non-billable surface — so the
+    caller needs no flag read of its own.
+
+    TWO deliberate under-counts, both erring toward letting the user
+    finish:
+
+      * the total is this CONTEXT's, and each `spend_context` block
+        builds a fresh one, so calls made before the agent worker starts
+        (thread/note summary, rolling multi-turn summary) are not in it;
+      * like the cost ceiling, this is checked BETWEEN steps, so an
+        in-flight call always completes.
+
+    Both mean a run can end slightly over budget. That overshoot is
+    OURS, not the customer's: `eligible_jpy_milli` caps the charge at
+    the per-request maximum regardless, so the extra lands in
+    `absorbed`. An over-count would have been the dangerous direction —
+    it would cut users off before they had spent what they paid for.
+    """
+    ctx = _context.get()
+    if ctx is None or ctx.credit_budget_jpy_milli <= 0:
+        return False
+    return ctx.cost_jpy_milli >= ctx.credit_budget_jpy_milli
 
 
 def mark_ceiling_hit() -> None:

@@ -63,6 +63,26 @@ policy:
         - thread_summary
         - note_summary
 
+    # The request outcomes that can carry a charge. The discriminator is
+    # NOT "did the user get what they wanted" — it is "did the provider
+    # perform the work", the same rule #181 settled for the benchmark: a
+    # run the provider never performed is an ABSENT request, not a cheap
+    # one, and its mirror image is that work really performed is not free
+    # merely because the request ended badly.
+    #
+    # `credits_exhausted` is here for that reason. A user may now START a
+    # request with any positive balance, and the agent loop stops mid-run
+    # when the running cost reaches it. Those tokens were genuinely
+    # spent, so if this result billed 0 the cheapest way to use Genos
+    # would be to run the balance to zero and keep asking — every
+    # subsequent request terminating early and costing the user nothing.
+    # Provider failures and cancellations stay off this list: there the
+    # work was NOT performed, and absorbing it is the customer protection
+    # V2 §4 asks for.
+    billable_results:
+        - success
+        - credits_exhausted
+
     # Purposes excluded from eligible cost even on a billable surface.
     # Empty today, and that is a STATEMENT, not an omission: the known
     # multi-turn summary waste (near-identical summary regenerated per
