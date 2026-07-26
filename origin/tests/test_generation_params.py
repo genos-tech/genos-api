@@ -67,6 +67,13 @@ class ClaudeParamsTests(SimpleTestCase):
         kwargs = self._stream_kwargs(params=GenerationParams())
         self.assertEqual(kwargs["max_tokens"], 4096)
 
+    def test_thinking_budget_is_ignored_not_crashed_on(self):
+        """Gemini-only knob. A profile carrying a budget must stay safe
+        to resolve on Claude — ignored, not translated, not a 400."""
+        kwargs = self._stream_kwargs(params=GenerationParams(thinking_budget=0))
+        self.assertNotIn("thinking", kwargs)
+        self.assertEqual(kwargs["max_tokens"], 4096)
+
 
 # --------------------------------------------------------------------------- #
 # OpenAI                                                                      #
@@ -95,6 +102,14 @@ class OpenAIParamsTests(SimpleTestCase):
     def test_per_call_cap_wins(self):
         kwargs = self._create_kwargs(params=GenerationParams(max_output_tokens=2048))
         self.assertEqual(kwargs["max_completion_tokens"], 2048)
+
+    def test_thinking_budget_is_ignored_not_crashed_on(self):
+        # OpenAI's reasoning control is `reasoning_effort`, already
+        # managed by the adapter for tool-carrying calls; the Gemini
+        # token budget must not leak into this API's kwargs.
+        kwargs = self._create_kwargs(params=GenerationParams(thinking_budget=0))
+        self.assertNotIn("thinking_config", kwargs)
+        self.assertEqual(kwargs["max_completion_tokens"], 4096)
 
 
 # --------------------------------------------------------------------------- #
@@ -128,6 +143,25 @@ class GeminiParamsTests(SimpleTestCase):
     def test_per_call_cap_is_applied(self):
         config = self._config(params=GenerationParams(max_output_tokens=4096))
         self.assertEqual(config.max_output_tokens, 4096)
+
+    def test_no_thinking_budget_means_no_thinking_config(self):
+        """Absence = the model's own default (dynamic thinking). Sending
+        an empty ThinkingConfig anyway would be a silent behavior change
+        on every call the flag was supposed to leave alone."""
+        self.assertIsNone(getattr(self._config(params=None), "thinking_config", None))
+        self.assertIsNone(
+            getattr(self._config(params=GenerationParams()), "thinking_config", None)
+        )
+
+    def test_zero_thinking_budget_turns_thinking_off(self):
+        # 0 is a real value, not falsy-absent: `thinking_budget or X`
+        # would silently re-enable thinking on the "off" profile.
+        config = self._config(params=GenerationParams(thinking_budget=0))
+        self.assertEqual(config.thinking_config.thinking_budget, 0)
+
+    def test_a_positive_thinking_budget_is_applied(self):
+        config = self._config(params=GenerationParams(thinking_budget=512))
+        self.assertEqual(config.thinking_config.thinking_budget, 512)
 
 
 # --------------------------------------------------------------------------- #

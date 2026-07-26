@@ -49,9 +49,9 @@ tier_caps:
     pro: {light: 250, middle: 25, highend: 4}
     enterprise: unlimited
 efforts:
-    low:    {rung: 0, max_steps: 6,  rewrite_variants: 1, use_reranker: true, critique_steps: 1, max_output_tokens: 4096}
-    medium: {rung: 1, max_steps: 10, rewrite_variants: 3, use_reranker: true, critique_steps: 2, max_output_tokens: null}
-    high:   {rung: 2, max_steps: 10, rewrite_variants: 3, use_reranker: true, critique_steps: 2, max_output_tokens: null}
+    low:    {rung: 0, max_steps: 6,  rewrite_variants: 1, use_reranker: true, critique_steps: 1, max_output_tokens: 4096, thinking_budget: 0}
+    medium: {rung: 1, max_steps: 10, rewrite_variants: 3, use_reranker: true, critique_steps: 2, max_output_tokens: null, thinking_budget: null}
+    high:   {rung: 2, max_steps: 10, rewrite_variants: 3, use_reranker: true, critique_steps: 2, max_output_tokens: null, thinking_budget: null}
 subprocesses:
     rewrite: 0
     rerank: 0
@@ -237,7 +237,8 @@ class EffortRejectsTests(SimpleTestCase):
         self.assertRejects(
             GOOD.replace(
                 "    high:   {rung: 2, max_steps: 10, rewrite_variants: 3, "
-                "use_reranker: true, critique_steps: 2, max_output_tokens: null}\n",
+                "use_reranker: true, critique_steps: 2, max_output_tokens: null, "
+                "thinking_budget: null}\n",
                 "",
             ),
             "exactly",
@@ -253,6 +254,32 @@ class EffortRejectsTests(SimpleTestCase):
         self.assertRejects(
             GOOD.replace("rung: 0, max_steps: 6, ", "rung: 0, "), "missing"
         )
+
+    def test_rejects_a_negative_thinking_budget(self):
+        self.assertRejects(
+            GOOD.replace("thinking_budget: 0", "thinking_budget: -1"),
+            "thinking_budget",
+        )
+
+    def test_rejects_thinking_that_decreases_with_effort(self):
+        """null = the model's own default = unbounded, so an explicit
+        budget at a HIGHER effort than a null is the swapped-value
+        mis-edit: high would think less than medium."""
+        self.assertRejects(
+            GOOD.replace(
+                "critique_steps: 2, max_output_tokens: null, thinking_budget: null}\n"
+                "subprocesses:",
+                "critique_steps: 2, max_output_tokens: null, thinking_budget: 16}\n"
+                "subprocesses:",
+            ),
+            "thinking_budget",
+        )
+
+    def test_zero_thinking_budget_is_legal(self):
+        # 0 means "thinking off", not "unset" — low ships with it.
+        cat = _load(GOOD)
+        self.assertEqual(cat.efforts["low"].thinking_budget, 0)
+        self.assertIsNone(cat.efforts["medium"].thinking_budget)
 
     def test_rejects_non_monotonic_efforts(self):
         """'High' must never do less work than 'low' — the swapped-value

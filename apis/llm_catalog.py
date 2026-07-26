@@ -69,6 +69,7 @@ _EFFORT_FIELDS = (
     "use_reranker",
     "critique_steps",
     "max_output_tokens",
+    "thinking_budget",
 )
 
 # Sub-process kinds that may carry a rung pin. All three required in
@@ -99,6 +100,11 @@ class EffortProfile:
     use_reranker: bool
     critique_steps: int
     max_output_tokens: int | None
+    #: Max thinking tokens per loop call; null = the model's default
+    #: (dynamic thinking), 0 = off. Gemini-only today — other adapters
+    #: ignore it (see GenerationParams). Applied only under the
+    #: AGENT_THINKING_BUDGETS flag.
+    thinking_budget: int | None
 
 
 @dataclass(frozen=True)
@@ -594,6 +600,12 @@ def _parse_efforts(raw: dict) -> dict[str, EffortProfile]:
         cap = p["max_output_tokens"]
         if cap is not None and (not isinstance(cap, int) or isinstance(cap, bool) or cap < 1):
             _fail(f"efforts.{name}.max_output_tokens must be a positive integer or null")
+        think = p["thinking_budget"]
+        if think is not None and (
+            not isinstance(think, int) or isinstance(think, bool) or think < 0
+        ):
+            # 0 is legal and meaningful: "thinking off".
+            _fail(f"efforts.{name}.thinking_budget must be a non-negative integer or null")
         profiles[name] = EffortProfile(
             name=name,
             rung=p["rung"],
@@ -602,6 +614,7 @@ def _parse_efforts(raw: dict) -> dict[str, EffortProfile]:
             use_reranker=p["use_reranker"],
             critique_steps=p["critique_steps"],
             max_output_tokens=cap,
+            thinking_budget=think,
         )
 
     for key in ("rung", "max_steps", "rewrite_variants"):
@@ -611,6 +624,17 @@ def _parse_efforts(raw: dict) -> dict[str, EffortProfile]:
                 f"`{key}` must be non-decreasing low -> medium -> high, got {values} — "
                 f"a mis-edit must never make a higher effort do less work"
             )
+    # Same invariant for thinking, with null = the model's own default =
+    # "as much as it wants" — so null sorts ABOVE any explicit budget.
+    budgets = [
+        p.thinking_budget if p.thinking_budget is not None else float("inf")
+        for p in (profiles[name] for name in EFFORTS)
+    ]
+    if budgets != sorted(budgets):
+        _fail(
+            f"`thinking_budget` must be non-decreasing low -> medium -> high "
+            f"(null = unbounded), got {[profiles[n].thinking_budget for n in EFFORTS]}"
+        )
     return profiles
 
 

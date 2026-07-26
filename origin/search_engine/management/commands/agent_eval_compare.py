@@ -52,6 +52,7 @@ from origin.search_engine.agent.evals.runner import (
     run_behavior_case,
     run_retrieval_case,
 )
+from origin.search_engine.llm.choice import LlmChoice, reset_llm_choice, set_llm_choice
 
 
 class Command(BaseCommand):
@@ -86,6 +87,25 @@ class Command(BaseCommand):
             default=None,
             help="Limit to a single case (matches `id:` in the YAML).",
         )
+        parser.add_argument(
+            "--provider",
+            default=None,
+            help="Bind an LlmChoice (with --effort) around BOTH arms.",
+        )
+        parser.add_argument(
+            "--effort",
+            default=None,
+            help=(
+                "Effort level to bind around both arms (requires "
+                "--provider). Without this, no effort profile activates "
+                "in either arm — AGENT_EFFORT_LEVELS needs an "
+                "effort-carrying choice — so a profile-driven lever "
+                "(thinking budgets, per-effort loop params) would "
+                "silently compare baseline against itself. Same binding "
+                "the credit benchmark uses, so the A/B measures the "
+                "code path a customer at that effort actually runs."
+            ),
+        )
 
     def handle(self, *args, **options):
         retrieval_only: bool = options.get("retrieval") or False
@@ -108,6 +128,22 @@ class Command(BaseCommand):
             self.stderr.write(self.style.ERROR(f"Invalid --b-overrides: {exc}"))
             sys.exit(2)
 
+        provider = (options.get("provider") or "").strip() or None
+        effort = (options.get("effort") or "").strip() or None
+        if bool(provider) != bool(effort):
+            self.stderr.write(self.style.ERROR("--provider and --effort go together."))
+            sys.exit(2)
+        choice = None
+        if provider:
+            try:
+                model = settings.LLM_CATALOG.model_for_effort(provider, effort)
+            except Exception as exc:  # noqa: BLE001 — bad CLI input, not a bug
+                self.stderr.write(
+                    self.style.ERROR(f"Cannot resolve {provider}/{effort}: {exc}")
+                )
+                sys.exit(2)
+            choice = LlmChoice(provider=provider, model=model, effort=effort)
+
         # Pick suite + runner.
         if retrieval_only:
             path = RETRIEVAL_CASES_PATH
@@ -125,20 +161,21 @@ class Command(BaseCommand):
                 self.stderr.write(self.style.ERROR(f"No case with id={case_id_filter!r}"))
                 sys.exit(2)
 
+        bound = f"bound choice: {provider}/{effort}\n" if choice else ""
         self.stdout.write(
             f"=== {label} suite: A (baseline) vs B (with overrides) ===\n"
-            f"B overrides: {overrides}\n"
+            f"B overrides: {overrides}\n{bound}"
             f"Running {len(cases)} cases × 2 = {2 * len(cases)} runs.\n"
         )
 
         # --- A run: untouched settings ---
         self.stdout.write(self.style.NOTICE("\n--- A (baseline) ---"))
-        results_a = self._run_suite(cases, runner, label, run_judge)
+        results_a = self._run_suite(cases, runner, label, run_judge, choice)
 
         # --- B run: settings with overrides applied, restored after ---
         self.stdout.write(self.style.NOTICE("\n--- B (with overrides) ---"))
         with _override_search_engine(overrides):
-            results_b = self._run_suite(cases, runner, label, run_judge)
+            results_b = self._run_suite(cases, runner, label, run_judge, choice)
 
         self._print_diff(results_a, results_b, run_judge=run_judge)
 
@@ -148,13 +185,22 @@ class Command(BaseCommand):
         runner,
         label: str,
         run_judge: bool,
+        choice: LlmChoice | None = None,
     ) -> list[CaseResult]:
         results: list[CaseResult] = []
         for case in cases:
-            # `runner` is destructive — `_resolve_fixture` mutates the
-            # case dict. Copy first so the B run starts from the same
-            # YAML shape as A did.
-            r = runner(dict(case))
+            # Bind per case, exactly like ai_credit_benchmark's cells —
+            # the proven pattern for making effort profiles active on
+            # the eval path.
+            token = set_llm_choice(choice) if choice is not None else None
+            try:
+                # `runner` is destructive — `_resolve_fixture` mutates
+                # the case dict. Copy first so the B run starts from the
+                # same YAML shape as A did.
+                r = runner(dict(case))
+            finally:
+                if token is not None:
+                    reset_llm_choice(token)
             if run_judge and label == "behavior" and r.answer:
                 r.judge_scores = judge_answer(
                     query=r.query,
