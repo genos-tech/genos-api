@@ -250,10 +250,10 @@ class Command(CronCommand):
             )
             out.append(
                 f"  unpriced (NOT in the totals above): {by_kind}. "
-                f"Web search and rerank bill per unit with no rate in the "
-                f"catalog, and reconcile against their own invoices. "
-                f"Embeddings ARE priced — if they appear here, the model has "
-                f"no entry under `embeddings:` in llm_models.yaml."
+                f"Every billed line has a rate now — embeddings under "
+                f"`embeddings:`, web search and rerank under `unit_prices:` "
+                f"in llm_models.yaml — so anything here means a MISSING "
+                f"entry for that exact model/unit, not a policy."
             )
 
         incomplete = events.filter(cost_basis="incomplete").count()

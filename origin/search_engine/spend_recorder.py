@@ -93,6 +93,32 @@ def price_llm_usage(usage) -> tuple[int, int, str]:
     return usd_micro, jpy_milli, basis
 
 
+def price_units(unit_kind: str, provider: str, model: str, units: int) -> tuple[int, int, str]:
+    """`(usd_micro, jpy_milli, basis)` for one per-unit-billed call.
+
+    `units` is the PROVIDER'S billable quantity (Tavily credits, Cohere
+    search units) — the call sites record it that way, so pricing is a
+    straight multiply with no unit conversion hidden here.
+
+    A zero-unit row with a known rate prices to 0 as `priced`, because
+    that 0 is TRUE: a failed search is not billed by anyone. That is
+    different from `unpriced`, whose 0 is meaningless — and it is what
+    stops every ask that merely *used* the web from being flagged
+    `has_unpriced` forever, which had made that flag mean nothing.
+    """
+    catalog = getattr(settings, "LLM_CATALOG", None)
+    card = _rate_card()
+    if catalog is None or card is None:
+        return 0, 0, _BASIS_UNPRICED
+    rate = catalog.unit_price_for(unit_kind, provider, model)
+    if rate is None:
+        return 0, 0, _BASIS_UNPRICED
+    usd = max(int(units), 0) * rate
+    usd_micro = int(round(usd * 1_000_000))
+    jpy_milli = int(round(usd * float(card.fx_jpy_per_usd) * 1000))
+    return usd_micro, jpy_milli, _BASIS_PRICED
+
+
 def shadow_credits_milli(jpy_milli: int) -> int:
     """Cost -> shadow credits, in MILLI-credits.
 
@@ -128,12 +154,16 @@ def record(rec: spend.SpendRecord) -> None:
                 "tool_prompt_tokens": max(int(usage.tool_prompt_tokens), 0),
             }
         else:
-            # Non-token spend. No rate sheet for these yet, so they are
-            # recorded with exact units and an explicit `unpriced`
-            # basis rather than an invented per-unit price — an
-            # estimate in a table whose whole value is that it isn't
-            # one would be worse than a gap we can name.
-            usd_micro, jpy_milli, basis = 0, 0, _BASIS_UNPRICED
+            # Non-token spend, priced per unit from the catalog's
+            # `unit_prices` table (exact (unit, provider, model) key, or
+            # `unpriced`). These rates are published list prices, not
+            # estimates — the "no estimates in the ledger" rule was
+            # never meant to exclude them, and excluding them made the
+            # cost of every ask that searched or reranked a silent
+            # lower bound.
+            usd_micro, jpy_milli, basis = price_units(
+                rec.unit_kind, rec.provider, rec.model, rec.units
+            )
             tokens = {}
 
         ctx = spend.current_context()

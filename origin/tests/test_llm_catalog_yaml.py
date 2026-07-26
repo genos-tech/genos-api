@@ -60,6 +60,9 @@ embeddings:
     - model: e-embed
       provider: vertex
       price: {input: 0.15, output: 0, cached_input: 0, cache_write: 0}
+unit_prices:
+    - {unit: search, provider: tavily, model: advanced, usd_per_unit: 0.008}
+    - {unit: rerank, provider: cohere, model: rerank-v3.5, usd_per_unit: 0.002}
 """
 
 
@@ -584,7 +587,7 @@ class EmbeddingPricesTests(SimpleTestCase):
 
         prices = dict(self.cat.prices)
         baseline = _parse_rate_card(
-            {"rate_card": {"label": "x", "fx_jpy_per_usd": 150}}, prices
+            {"rate_card": {"label": "x", "fx_jpy_per_usd": 150}}, prices, {}
         ).fingerprint
 
         bumped = dict(prices)
@@ -596,7 +599,7 @@ class EmbeddingPricesTests(SimpleTestCase):
             cache_write=prices[m].cache_write,
         )
         moved = _parse_rate_card(
-            {"rate_card": {"label": "x", "fx_jpy_per_usd": 150}}, bumped
+            {"rate_card": {"label": "x", "fx_jpy_per_usd": 150}}, bumped, {}
         ).fingerprint
         self.assertNotEqual(baseline, moved)
 
@@ -641,3 +644,74 @@ class EmbeddingSectionValidationTests(SimpleTestCase):
         self.assertNotIn("e-embed", cat.by_model)
         for caps in cat.model_daily.values():
             self.assertNotIn("e-embed", caps)
+
+
+class UnitPricesTests(SimpleTestCase):
+    """Per-unit rates for the services that bill per unit, not per token.
+
+    Phase 0 recorded web search and rerank `unpriced` on the "no
+    estimates in the ledger" rule — but these rates are PUBLISHED, not
+    estimated, and their absence made every ask that searched or
+    reranked a silent under-count flagged `has_unpriced` forever.
+    """
+
+    def test_lookup_is_exact_triple_never_partial(self):
+        cat = _load(GOOD)
+        self.assertEqual(cat.unit_price_for("search", "tavily", "advanced"), 0.008)
+        # Any one component off → None, not a near-match. An operator
+        # pinning a different COHERE_RERANK_MODEL must get visibly
+        # unpriced rows, never rows priced at another model's rate.
+        self.assertIsNone(cat.unit_price_for("search", "tavily", "basic"))
+        self.assertIsNone(cat.unit_price_for("search", "serpapi", "advanced"))
+        self.assertIsNone(cat.unit_price_for("rerank", "cohere", "rerank-v99"))
+
+    def test_the_shipped_card_prices_what_the_call_sites_record(self):
+        """The recorded (unit, provider, model) triples and the YAML
+        keys must agree, or rows go unpriced while the section looks
+        complete. Pins the exact strings the two call sites emit —
+        `web_search.py` records ("search", "tavily", "advanced") and
+        the reranker records ("rerank", "cohere", COHERE_RERANK_MODEL)."""
+        cat = settings.LLM_CATALOG
+        self.assertIsNotNone(cat.unit_price_for("search", "tavily", "advanced"))
+        rerank_model = settings.SEARCH_ENGINE.get("COHERE_RERANK_MODEL") or "rerank-v3.5"
+        self.assertIsNotNone(
+            cat.unit_price_for("rerank", "cohere", rerank_model),
+            f"COHERE_RERANK_MODEL={rerank_model!r} has no unit_prices entry — "
+            f"every rerank row is now silently unpriced",
+        )
+
+    def test_they_join_the_rate_card_fingerprint(self):
+        """A Tavily or Cohere rate correction must separate old rows
+        from new ones on its own, exactly like a token-price change."""
+        base = _load(GOOD).rate_card.fingerprint
+        moved = _load(GOOD.replace("usd_per_unit: 0.008", "usd_per_unit: 0.009"))
+        self.assertNotEqual(base, moved.rate_card.fingerprint)
+
+    def test_a_missing_section_refuses_to_boot(self):
+        """Same rationale as `embeddings:` — an absent section fails
+        nowhere at request time; it just returns every search and
+        rerank to `unpriced`, the exact state it exists to end."""
+        text = GOOD[: GOOD.index("unit_prices:")]
+        with self.assertRaises(CatalogError) as cm:
+            _load(text)
+        self.assertIn("unit_prices", str(cm.exception))
+
+    def test_rejects_a_duplicate_triple(self):
+        text = GOOD + "    - {unit: search, provider: tavily, model: advanced, usd_per_unit: 0.01}\n"
+        with self.assertRaises(CatalogError) as cm:
+            _load(text)
+        self.assertIn("duplicate", str(cm.exception))
+
+    def test_rejects_a_negative_or_non_numeric_rate(self):
+        with self.assertRaises(CatalogError):
+            _load(GOOD.replace("usd_per_unit: 0.008", "usd_per_unit: -0.008"))
+        with self.assertRaises(CatalogError):
+            _load(GOOD.replace("usd_per_unit: 0.008", 'usd_per_unit: "0.008"'))
+
+    def test_rejects_an_unknown_key(self):
+        text = GOOD.replace(
+            "usd_per_unit: 0.008}", "usd_per_unit: 0.008, per_call: 2}"
+        )
+        with self.assertRaises(CatalogError) as cm:
+            _load(text)
+        self.assertIn("unknown key", str(cm.exception))
