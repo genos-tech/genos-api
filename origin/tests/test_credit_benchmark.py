@@ -44,8 +44,17 @@ _CASES = [
 ]
 
 
-def _result(tokens=1000, jpy_milli=15_000, error=""):
-    return SimpleNamespace(total_tokens=tokens, cost_jpy_milli=jpy_milli, error=error)
+def _result(tokens=1000, jpy_milli=15_000, infra_error=False):
+    """A `CaseResult` stand-in.
+
+    Mirrors the REAL dataclass's fields — note there is no `error`
+    attribute on it, which is precisely what made the first version of
+    the failure check silently dead (`getattr(result, "error", "")` was
+    always ""). Keeping this fake honest is what would have caught it.
+    """
+    return SimpleNamespace(
+        total_tokens=tokens, cost_jpy_milli=jpy_milli, infra_error=infra_error
+    )
 
 
 def _run(*args, results=None, **opts) -> str:
@@ -99,10 +108,10 @@ class MatrixTests(SimpleTestCase):
 
     @METER_ON
     def test_failed_cells_are_reported_not_averaged(self):
-        calls = iter([_result(), _result(error="boom"), _result()])
+        calls = iter([_result(), _result(infra_error=True), _result()])
         out = _run(providers="gemini", efforts="medium", results=lambda case: next(calls))
         self.assertIn("1 failed cell(s)", out)
-        self.assertIn("not a typical request", out)
+        self.assertIn("not a cheap one", out)
 
     @METER_ON
     def test_a_raising_case_does_not_kill_the_matrix(self):
@@ -174,3 +183,66 @@ class BaselineTests(SimpleTestCase):
             bench.BASELINE_PATH.unlink(missing_ok=True)
             with self.assertRaises(CommandError):
                 _run(check_baseline=True)
+
+
+class ZeroTokenCellTests(SimpleTestCase):
+    """A run the provider never really performed is an ABSENT request,
+    not a cheap one.
+
+    Found live: every OpenAI rung 400s on function tools, so all 12
+    cells "completed" with zero tokens. `CaseResult` has no `error`
+    attribute, so the old check (`getattr(result, "error", "")`) was
+    always falsey and those zeros were averaged in as successful
+    requests — deflating credits-per-request from 0.60 to 0.40 and
+    inflating every plan's allowance by half. A provider that answers
+    nothing must never read as the most efficient provider we have.
+    """
+
+    @METER_ON
+    def test_zero_token_results_are_failures_not_free_requests(self):
+        out = _run(
+            providers="gemini",
+            efforts="medium",
+            results=lambda case: _result(tokens=0, jpy_milli=0),
+        )
+        self.assertIn("NO USABLE RUNS", out)
+        self.assertIn("not a cheap provider", out)
+        self.assertNotIn("tokens/case", out, "no table of zeros")
+        # With no usable runs anywhere there is no mean to state.
+        self.assertNotIn("request(s)/month", out)
+
+    @METER_ON
+    def test_a_dead_rung_does_not_deflate_another_rungs_mean(self):
+        """The exact live failure: one working provider, one dead one.
+        The allowance figure must reflect ONLY the working runs."""
+        def by_provider(case):
+            from origin.search_engine.llm.choice import get_llm_choice  # noqa: PLC0415
+
+            choice = get_llm_choice()
+            if choice and choice.provider == "openai":
+                return _result(tokens=0, jpy_milli=0)  # every call 400'd
+            return _result(tokens=1000, jpy_milli=15_000)  # 1.00cr
+
+        out = _run(providers="gemini,openai", efforts="medium", results=by_provider)
+        self.assertIn("NO USABLE RUNS", out)
+        self.assertIn(
+            "1.00cr per successful benchmark request",
+            out,
+            "the mean must be over the working provider alone — averaging the "
+            "dead rung's zeros in would halve it",
+        )
+        # pro = 100cr at 1.00cr/request = 100 requests, not 200.
+        self.assertIn("100 request(s)/month", out)
+
+    @METER_ON
+    def test_infra_errors_are_also_excluded(self):
+        calls = iter(
+            [
+                _result(tokens=1000, jpy_milli=15_000),
+                SimpleNamespace(total_tokens=5, cost_jpy_milli=1, infra_error=True),
+                _result(tokens=1000, jpy_milli=15_000),
+            ]
+        )
+        out = _run(providers="gemini", efforts="medium", results=lambda c: next(calls))
+        self.assertIn("1 failed cell(s)", out)
+        self.assertIn("infra_error", out)

@@ -155,6 +155,24 @@ class Command(BaseCommand):
                 credits_list = [c["credits_milli"] for c in ok]
                 all_credits.extend(credits_list)
                 self.stdout.write(f"\n-- {provider} / {effort} --")
+
+                if not ok:
+                    # An ENTIRELY dead cell. Say so instead of printing a
+                    # table of zeros: a rung that cannot serve a single
+                    # request is a capability failure to investigate, not
+                    # a measurement, and rendering it as 0.00cr invites
+                    # exactly the wrong reading.
+                    reasons = sorted({c["reason"] for c in cells if c["reason"]})
+                    self.stdout.write(
+                        self.style.ERROR(
+                            f"  NO USABLE RUNS — all {len(cells)} case(s) failed "
+                            f"({', '.join(reasons) or 'unknown'}). This rung is "
+                            f"excluded from every figure below; it is a capability "
+                            f"problem, not a cheap provider."
+                        )
+                    )
+                    continue
+
                 self.stdout.write(f"  tokens/case   {_percentiles(tokens)}")
                 self.stdout.write(
                     "  credits/case  "
@@ -175,10 +193,13 @@ class Command(BaseCommand):
                     )
                 )
                 if failed:
+                    reasons = sorted({c["reason"] for c in cells if c["reason"]})
                     self.stdout.write(
                         self.style.WARNING(
-                            f"  {failed} failed cell(s) — cost real, kept out of "
-                            f"the percentiles (a failure is not a typical request)"
+                            f"  {failed} failed cell(s) ({', '.join(reasons)}) — "
+                            f"excluded from the percentiles and from the mean. "
+                            f"A request the provider never really ran is an absent "
+                            f"request, not a cheap one."
                         )
                     )
 
@@ -230,7 +251,7 @@ class Command(BaseCommand):
                     {
                         "case": case.get("id"),
                         "failed": True,
-                        "error": str(e)[:120],
+                        "reason": f"raised: {type(e).__name__}",
                         "total_tokens": 0,
                         "cost_jpy_milli": 0,
                         "credits_milli": 0,
@@ -240,11 +261,32 @@ class Command(BaseCommand):
             finally:
                 reset_llm_choice(token)
             jpy = int(getattr(result, "cost_jpy_milli", 0) or 0)
+            tokens = int(getattr(result, "total_tokens", 0) or 0)
+            # A cell counts as FAILED when the provider never really ran
+            # it. Two signals, and the second is the one that matters:
+            #
+            #   * `infra_error` — the runner's own "provider 429/5xx".
+            #   * ZERO TOKENS — the run completed but no provider call
+            #     produced usage. That is not a cheap request, it is an
+            #     absent one, and averaging it in silently DEFLATES the
+            #     credit-per-request figure this command exists to
+            #     produce. It is how a provider that answers nothing
+            #     reads as the most efficient provider we have.
+            #
+            # Deliberately NOT `passed`: that is the eval ASSERTION, and
+            # a case can answer badly while costing exactly what a real
+            # request costs. Quality is not this command's question.
+            failed = bool(getattr(result, "infra_error", False)) or tokens == 0
             cells.append(
                 {
                     "case": case.get("id"),
-                    "failed": bool(getattr(result, "error", "")),
-                    "total_tokens": int(getattr(result, "total_tokens", 0) or 0),
+                    "failed": failed,
+                    "reason": (
+                        "infra_error"
+                        if getattr(result, "infra_error", False)
+                        else ("no provider usage" if tokens == 0 else "")
+                    ),
+                    "total_tokens": tokens,
                     "cost_jpy_milli": jpy,
                     "credits_milli": int(
                         round(jpy / settings.CREDIT_POLICY.credit_jpy)
