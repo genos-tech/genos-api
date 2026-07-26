@@ -1,0 +1,104 @@
+# =====================================================================
+#  Genos AI credit policy — the COMMERCIAL layer, versioned
+# =====================================================================
+#
+#  THE FILE TO EDIT WHEN A CREDIT DECISION CHANGES. Kept apart from
+#  `llm_models.yaml` on purpose: that file answers "what does a call
+#  cost US" (technical, provider-driven), this one answers "what do we
+#  ask the CUSTOMER to carry" (commercial, our decision). The two
+#  change for different reasons on different schedules, and a provider
+#  price edit must never look like a pricing decision in review.
+#
+#  Loaded at boot by `apis/credit_policy.py` into
+#  `settings.CREDIT_POLICY`; the arithmetic that consumes it lives in
+#  `origin/search_engine/credits.py` as PURE functions — policy in,
+#  numbers out, no settings reads at call time. That purity is what
+#  makes V2 §5.1 dual-policy comparison possible: replaying last
+#  month's requests under a candidate policy is a function call, not a
+#  deploy.
+#
+#  TWO fingerprints are derived from this file, deliberately separate
+#  (AI_USAGE_METERING_STRATEGY_AND_STAGE_ROADMAP_V2 §5.3):
+#
+#    * `credit_policy_version`   <- `policy:` (the conversion rules)
+#    * `plan_entitlement_version` <- `entitlements:` (what plans grant)
+#
+#  Changing how a credit is computed and changing what a plan includes
+#  are different commercial acts — a ledger row records both, so either
+#  kind of change separates old rows from new ones on its own, same
+#  mechanism as the rate-card fingerprint.
+#
+#  ⚠️ EVERY NUMBER HERE IS PROVISIONAL until the benchmark suite has
+#  produced measured per-request costs (V2 §6.4) — and nothing here is
+#  ENFORCED while credits run in shadow. Shadow mode exists precisely
+#  to find out whether these numbers survive contact with real usage.
+
+policy:
+    # Human label; the stored version is label+fingerprint, so editing
+    # a number below moves the version even if nobody touches this.
+    label: "cp-v1"
+
+    # ¥ of eligible direct AI cost per credit (V2 §1: "1 credit = ¥15
+    # of eligible direct AI cost"). Internal implementation parameter,
+    # NOT a public promise that credits are money.
+    credit_jpy: 15
+
+    # Per-request ceiling, in credits. The quote in shadow mode is this
+    # flat value until the benchmark yields per-class distributions
+    # (then quotes become measured percentiles and this stays as the
+    # hard cap). Anything above it is OUR cost — `absorbed`, never
+    # charged. 5 credits = ¥75 of eligible cost: several times a
+    # typical ask by every current estimate, yet still only half of
+    # Free's whole month — a runaway request cannot erase a plan.
+    request_max_credits: 5
+
+    # The surfaces a customer can be charged for. Everything else —
+    # search (deliberate: consumes no ask today, and V2 §3.4's "paid
+    # searches" means searches INSIDE an ask), index, eval, judge,
+    # unattributed — is measured, never billable. An UNLISTED surface
+    # is not billable by construction, so forgetting to classify a new
+    # surface fails customer-favorably.
+    billable_surfaces:
+        - ask
+        - thread_summary
+        - note_summary
+
+    # Purposes excluded from eligible cost even on a billable surface.
+    # Empty today, and that is a STATEMENT, not an omission: the known
+    # multi-turn summary waste (near-identical summary regenerated per
+    # turn) is NOT excludable per-row — the waste is the regeneration
+    # pattern, not any single call — so per V2 §3.3 the fix must land
+    # before credits go authoritative, rather than be hidden here.
+    # The key exists so that adding one is a normal, fingerprint-moving
+    # policy edit instead of a code change.
+    excluded_purposes: []
+
+# ---------------------------------------------------------------------
+#  Monthly credit entitlements per plan (V2 §1). Whole credits here;
+#  everything internal is milli-credits. `unlimited` = no entitlement
+#  accounting at all (enterprise is contract-priced).
+# ---------------------------------------------------------------------
+entitlements:
+    free: 10
+    core: 40
+    pro: 100
+    max: 200
+    enterprise: unlimited
+
+# ---------------------------------------------------------------------
+#  Internal monthly direct-AI cost ceilings, in YEN per account
+#  (V2 §1, §3.7). These are the FINANCIAL CIRCUIT BREAKER — they
+#  operate on actual yen cost regardless of what credits say, so a
+#  credit-policy bug cannot take the business with it. Declared here so
+#  they version with the rest of the commercial numbers; ENFORCEMENT
+#  (alert -> disable-premium -> route-cheapest -> pause) ships behind
+#  its own flags and reads these values.
+#
+#  Not shown to customers as plan limits. `unlimited` = no ceiling.
+# ---------------------------------------------------------------------
+monthly_ceiling_jpy:
+    free: 150
+    core: 600
+    pro: 1500
+    max: 3000
+    enterprise: unlimited

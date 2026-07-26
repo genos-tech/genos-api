@@ -22,16 +22,10 @@ import logging
 
 from django.conf import settings
 
+from origin.search_engine import credits
 from origin.search_engine.llm import spend
 
 log = logging.getLogger(__name__)
-
-# Shadow-credit unit. ILLUSTRATIVE AND PROVISIONAL — the strategy doc
-# explicitly defers the real number until per-request cost has been
-# measured, and nothing enforces or displays credits at this stage.
-# Stored per row so a later change doesn't restate history.
-CREDIT_JPY = 2.0
-CREDIT_POLICY_VERSION = "shadow-v0"
 
 _BASIS_PRICED = "priced"
 _BASIS_UNPRICED = "unpriced"
@@ -119,16 +113,8 @@ def price_units(unit_kind: str, provider: str, model: str, units: int) -> tuple[
     return usd_micro, jpy_milli, _BASIS_PRICED
 
 
-def shadow_credits_milli(jpy_milli: int) -> int:
-    """Cost -> shadow credits, in MILLI-credits.
-
-    Milli so a cheap request is not rounded up to a whole credit;
-    fractional support is a stated requirement of the credit design and
-    is a schema decision, not a display one.
-    """
-    if CREDIT_JPY <= 0:
-        return 0
-    return int(round(jpy_milli / CREDIT_JPY))
+def _credit_policy():
+    return getattr(settings, "CREDIT_POLICY", None)
 
 
 def record(rec: spend.SpendRecord) -> None:
@@ -212,6 +198,7 @@ def open_request(ctx: spend.SpendContext, *, quoted_max_jpy_milli: int = 0) -> N
         from origin.search_engine.models import AiRequestCost  # noqa: PLC0415
 
         card = _rate_card()
+        policy = _credit_policy()
         AiRequestCost.objects.update_or_create(
             request_id=ctx.request_id,
             defaults={
@@ -221,7 +208,8 @@ def open_request(ctx: spend.SpendContext, *, quoted_max_jpy_milli: int = 0) -> N
                 "plan": ctx.plan,
                 "effort": ctx.effort,
                 "quoted_max_jpy_milli": quoted_max_jpy_milli,
-                "credit_policy_version": CREDIT_POLICY_VERSION,
+                "credit_policy_version": policy.version if policy else "",
+                "plan_entitlement_version": policy.entitlement_version if policy else "",
                 "rate_card_version": card.version if card else "",
                 "started_at": timezone.now(),
             },
@@ -238,6 +226,19 @@ def close_request(ctx: spend.SpendContext, *, result: str) -> None:
     non-success outcome and is capped at the quote — the two
     customer-protection rules that have to be structural rather than
     remembered.
+
+    Two layers land here, deliberately distinct:
+
+      * `charged`/`absorbed` — the COST meter's view, against the yen
+        quote (`AI_REQUEST_MAX_JPY_MILLI`).
+      * `eligible`/`shadow_credits` — the COMMERCIAL view (V2 layers
+        3–4): what a customer could be asked to carry, derived by the
+        pure functions in `credits.py` under `settings.CREDIT_POLICY`,
+        whose two version ids are stamped alongside.
+
+    This rollup is DERIVED and re-derivable (`--rebuild` recomputes it
+    under the CURRENT policy). A posted credit charge is neither — it
+    lives in its own append-only ledger, not here.
     """
     if not _enabled():
         return
@@ -262,6 +263,18 @@ def close_request(ctx: spend.SpendContext, *, result: str) -> None:
         else:
             charged = 0  # a failed request is never charged
 
+        policy = _credit_policy()
+        if policy is not None:
+            eligible = credits.eligible_jpy_milli(
+                result=result,
+                surface=ctx.surface,
+                computed_jpy_milli=computed_jpy,
+                policy=policy,
+            )
+            shadow = credits.credits_milli(eligible, policy)
+        else:
+            eligible, shadow = 0, 0
+
         AiRequestCost.objects.update_or_create(
             request_id=ctx.request_id,
             defaults={
@@ -277,8 +290,10 @@ def close_request(ctx: spend.SpendContext, *, result: str) -> None:
                 "computed_usd_micro": int(agg["usd"] or 0),
                 "charged_jpy_milli": charged,
                 "absorbed_jpy_milli": max(computed_jpy - charged, 0),
-                "shadow_credits_milli": shadow_credits_milli(charged),
-                "credit_policy_version": CREDIT_POLICY_VERSION,
+                "eligible_jpy_milli": eligible,
+                "shadow_credits_milli": shadow,
+                "credit_policy_version": policy.version if policy else "",
+                "plan_entitlement_version": policy.entitlement_version if policy else "",
                 "call_count": int(agg["n"] or 0),
                 "has_unpriced": has_unpriced,
                 "started_at": (row.started_at if row else timezone.now()),

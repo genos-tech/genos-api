@@ -320,13 +320,19 @@ class RollupTests(_RestoresRecorder, TestCase):
     @METER_ON
     def test_shadow_credits_are_fractional(self):
         """Milli-credits, so a cheap request keeps sub-credit
-        resolution. Storing whole credits would round a 0.25-credit ask
-        up to 1 and overcharge it fourfold."""
-        # 2000 milli-yen at ¥2/credit = exactly 1 credit.
-        self.assertEqual(spend_recorder.shadow_credits_milli(2000), 1000)
-        # A quarter-credit ask stays a quarter-credit.
-        self.assertEqual(spend_recorder.shadow_credits_milli(500), 250)
-        self.assertEqual(spend_recorder.shadow_credits_milli(200), 100)
+        resolution. Storing whole credits would round a sub-credit ask
+        up to 1 and overcharge it. Conversion now comes from the
+        versioned policy (¥15/credit) via `credits.py` — the Phase 0
+        placeholder unit is gone; full coverage in test_credit_policy."""
+        from django.conf import settings as dj_settings  # noqa: PLC0415
+
+        from origin.search_engine import credits  # noqa: PLC0415
+
+        policy = dj_settings.CREDIT_POLICY
+        # ¥15 (15000 milli-yen) = exactly 1 credit under cp-v1.
+        self.assertEqual(credits.credits_milli(15_000, policy), 1000)
+        # A ¥1.50 ask stays a tenth of a credit.
+        self.assertEqual(credits.credits_milli(1_500, policy), 100)
 
     @METER_ON
     def test_quote_is_written_at_open_not_at_close(self):

@@ -18,6 +18,7 @@ from pathlib import Path
 
 import dj_database_url
 
+from apis.credit_policy import load_credit_policy
 from apis.llm_catalog import load_llm_catalog
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -1177,6 +1178,17 @@ SEARCH_ENGINE["MODEL_CATALOG"] = _llm_catalog.catalog
 # an object, and TIER_QUOTAS_JSON-style dict overrides shouldn't be able
 # to clobber it into something without those methods.
 LLM_CATALOG = _llm_catalog
+
+# The credit policy — the COMMERCIAL layer (credit unit, entitlements,
+# internal ceilings), separate from the technical rate card above
+# because the two change for different reasons on different schedules.
+# Same posture as LLM_CATALOG: eager, boot-fatal, object at top level
+# so env-dict overrides can't clobber it, path overridable for tests.
+# Shadow-only at this stage: nothing here is enforced against a
+# customer; `close_request` stamps its versions onto every rollup.
+CREDIT_POLICY = load_credit_policy(
+    os.environ.get("CREDIT_POLICY_YAML") or (BASE_DIR / "apis" / "credit_policy.yaml")
+)
 
 # Tier names must agree in both directions: a tier here with no caps in
 # the YAML would run uncapped, and a tier only in the YAML is a typo that
