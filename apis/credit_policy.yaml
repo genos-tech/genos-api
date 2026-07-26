@@ -38,16 +38,29 @@ policy:
     # a number below moves the version even if nobody touches this.
     label: "cp-v1"
 
-    # ¥ of eligible direct AI cost per credit (V2 §1: "1 credit = ¥15
-    # of eligible direct AI cost"). Internal implementation parameter,
-    # NOT a public promise that credits are money.
-    credit_jpy: 15
+    # USD of eligible direct AI cost per credit. Internal implementation
+    # parameter, NOT a public promise that credits are money — customers
+    # are shown credits and only credits.
+    #
+    # DENOMINATED IN USD because that is what providers invoice us in.
+    # It used to be ¥15, which at the pinned ¥150/$ is exactly $0.10 —
+    # so this was a pure re-labelling that moved no number and changed
+    # no balance. What it removed is the FX rate from the credit path:
+    # the old math was usd ->(x150) jpy ->(/15) credits, which meant the
+    # exchange rate was baked into every posted charge and what a credit
+    # MEANT drifted with the yen. For a product sold in more than one
+    # currency that is a defect, not untidiness.
+    #
+    # Yen has not gone away — reports still read in ¥ (or €, £) via
+    # `display_fx_per_usd` in llm_models.yaml. It is display, not
+    # arithmetic.
+    credit_usd: 0.10
 
     # Per-request ceiling, in credits. The quote in shadow mode is this
     # flat value until the benchmark yields per-class distributions
     # (then quotes become measured percentiles and this stays as the
     # hard cap). Anything above it is OUR cost — `absorbed`, never
-    # charged. 5 credits = ¥75 of eligible cost: several times a
+    # charged. 5 credits = $0.50 of eligible cost: several times a
     # typical ask by every current estimate, yet still only half of
     # Free's whole month — a runaway request cannot erase a plan.
     request_max_credits: 5
@@ -106,19 +119,26 @@ entitlements:
     enterprise: unlimited
 
 # ---------------------------------------------------------------------
-#  Internal monthly direct-AI cost ceilings, in YEN per account
+#  Internal monthly direct-AI cost ceilings, in USD per account
 #  (V2 §1, §3.7). These are the FINANCIAL CIRCUIT BREAKER — they
-#  operate on actual yen cost regardless of what credits say, so a
+#  operate on actual cost regardless of what credits say, so a
 #  credit-policy bug cannot take the business with it. Declared here so
 #  they version with the rest of the commercial numbers; ENFORCEMENT
 #  (alert -> disable-premium -> route-cheapest -> pause) ships behind
 #  its own flags and reads these values.
 #
+#  USD for the same reason credits are: this is a cost ceiling, and cost
+#  arrives in dollars. The previous ¥150/600/1500/3000 are exactly
+#  $1/4/10/20 at the pinned ¥150/$, so nothing moved — but a ceiling
+#  denominated in yen would have quietly tightened or loosened itself
+#  every time the exchange rate moved, which is not a thing a circuit
+#  breaker should do.
+#
 #  Not shown to customers as plan limits. `unlimited` = no ceiling.
 # ---------------------------------------------------------------------
-monthly_ceiling_jpy:
-    free: 150
-    core: 600
-    pro: 1500
-    max: 3000
+monthly_ceiling_usd:
+    free: 1
+    core: 4
+    pro: 10
+    max: 20
     enterprise: unlimited

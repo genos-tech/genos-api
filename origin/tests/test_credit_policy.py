@@ -41,7 +41,7 @@ METER_ON = override_settings(SEARCH_ENGINE=_se(AI_COST_METER=True))
 GOOD = """
 policy:
     label: "cp-test"
-    credit_jpy: 15
+    credit_usd: 0.10
     request_max_credits: 5
     billable_surfaces: [ask, thread_summary, note_summary]
     billable_results: [success, credits_exhausted]
@@ -52,11 +52,11 @@ entitlements:
     pro: 100
     max: 200
     enterprise: unlimited
-monthly_ceiling_jpy:
-    free: 150
-    core: 600
-    pro: 1500
-    max: 3000
+monthly_ceiling_usd:
+    free: 1
+    core: 4
+    pro: 10
+    max: 20
     enterprise: unlimited
 """
 
@@ -73,13 +73,13 @@ def _policy(**overrides) -> CreditPolicy:
     tables rather than YAML surgery."""
     base = dict(
         label="t",
-        credit_jpy=15.0,
+        credit_usd=0.10,
         request_max_credits_milli=5000,
         billable_surfaces=frozenset({"ask", "thread_summary", "note_summary"}),
         billable_results=frozenset({"success", "credits_exhausted"}),
         excluded_purposes=frozenset(),
         entitlements_milli={"free": 10_000},
-        monthly_ceiling_jpy={"free": 150.0},
+        monthly_ceiling_usd={"free": 1.0},
         fingerprint="f",
         entitlement_fingerprint="e",
     )
@@ -90,13 +90,13 @@ def _policy(**overrides) -> CreditPolicy:
 class PolicyLoaderTests(SimpleTestCase):
     def test_good_fixture_parses(self):
         p = _load(GOOD)
-        self.assertEqual(p.credit_jpy, 15.0)
+        self.assertEqual(p.credit_usd, 0.10)
         self.assertEqual(p.request_max_credits_milli, 5000)
-        self.assertEqual(p.request_max_jpy_milli(), 75_000)  # 5 credits x ¥15
+        self.assertEqual(p.request_max_usd_micro(), 500_000)  # 5 credits x $0.10
         self.assertEqual(p.entitlements_milli["pro"], 100_000)
         self.assertIsNone(p.entitlements_milli["enterprise"], "unlimited -> None")
-        self.assertEqual(p.monthly_ceiling_jpy["max"], 3000.0)
-        self.assertIsNone(p.monthly_ceiling_jpy["enterprise"])
+        self.assertEqual(p.monthly_ceiling_usd["max"], 20.0)
+        self.assertIsNone(p.monthly_ceiling_usd["enterprise"])
 
     def test_a_missing_plan_refuses_to_boot(self):
         """An absent plan would fail nowhere and behave as SOME default,
@@ -111,13 +111,13 @@ class PolicyLoaderTests(SimpleTestCase):
 
     def test_a_negative_number_refuses_to_boot(self):
         with self.assertRaises(CreditPolicyError):
-            _load(GOOD.replace("credit_jpy: 15", "credit_jpy: -15"))
+            _load(GOOD.replace("credit_usd: 0.10", "credit_usd: -0.10"))
         with self.assertRaises(CreditPolicyError):
             _load(GOOD.replace("free: 10", "free: -10"))
 
     def test_unknown_keys_refuse_to_boot(self):
         with self.assertRaises(CreditPolicyError):
-            _load(GOOD.replace("credit_jpy: 15", "credit_jpy: 15\n    credit_usd: 0.1"))
+            _load(GOOD.replace("credit_usd: 0.10", "credit_usd: 0.10\n    credit_eur: 0.1"))
         with self.assertRaises(CreditPolicyError):
             _load(GOOD + "topup_packs: {}\n")
 
@@ -144,7 +144,7 @@ class PolicyFingerprintTests(SimpleTestCase):
     def test_conversion_edits_move_the_policy_fingerprint_only(self):
         base = _load(GOOD)
         for edit in (
-            ("credit_jpy: 15", "credit_jpy: 12"),
+            ("credit_usd: 0.10", "credit_usd: 0.12"),
             ("request_max_credits: 5", "request_max_credits: 8"),
             ("excluded_purposes: []", "excluded_purposes: [summary]"),
             (
@@ -185,14 +185,14 @@ class ShippedPolicyTests(SimpleTestCase):
         self.policy = dj_settings.CREDIT_POLICY
 
     def test_the_v2_scale_is_configured(self):
-        self.assertEqual(self.policy.credit_jpy, 15.0)
+        self.assertEqual(self.policy.credit_usd, 0.10)
         self.assertEqual(
             {p: v for p, v in self.policy.entitlements_milli.items() if v is not None},
             {"free": 10_000, "core": 40_000, "pro": 100_000, "max": 200_000},
         )
         self.assertEqual(
-            {p: v for p, v in self.policy.monthly_ceiling_jpy.items() if v is not None},
-            {"free": 150.0, "core": 600.0, "pro": 1500.0, "max": 3000.0},
+            {p: v for p, v in self.policy.monthly_ceiling_usd.items() if v is not None},
+            {"free": 1.0, "core": 4.0, "pro": 10.0, "max": 20.0},
         )
 
     def test_the_billable_surfaces_are_exactly_the_user_charged_ones(self):
@@ -214,8 +214,8 @@ class EligibleCostTests(SimpleTestCase):
 
     def test_a_billable_success_is_its_computed_cost(self):
         self.assertEqual(
-            credits.eligible_jpy_milli(
-                result="success", surface="ask", computed_jpy_milli=12_345, policy=_policy()
+            credits.eligible_usd_micro(
+                result="success", surface="ask", computed_usd_micro=12_345, policy=_policy()
             ),
             12_345,
         )
@@ -223,8 +223,8 @@ class EligibleCostTests(SimpleTestCase):
     def test_a_non_billable_surface_is_zero(self):
         for surface in ("search", "index", "eval", "judge", "unattributed", "brand-new"):
             self.assertEqual(
-                credits.eligible_jpy_milli(
-                    result="success", surface=surface, computed_jpy_milli=9999, policy=_policy()
+                credits.eligible_usd_micro(
+                    result="success", surface=surface, computed_usd_micro=9999, policy=_policy()
                 ),
                 0,
                 f"{surface}: an unlisted surface must exclude itself",
@@ -239,42 +239,59 @@ class EligibleCostTests(SimpleTestCase):
             "",
         ):
             self.assertEqual(
-                credits.eligible_jpy_milli(
-                    result=result, surface="ask", computed_jpy_milli=9999, policy=_policy()
+                credits.eligible_usd_micro(
+                    result=result, surface="ask", computed_usd_micro=9999, policy=_policy()
                 ),
                 0,
                 result,
             )
 
     def test_cost_above_the_cap_is_absorbed(self):
-        p = _policy()  # cap = 5 credits x ¥15 = 75_000 milli-yen
+        p = _policy()  # cap = 5 credits x $0.10 = 500_000 micro-USD
         self.assertEqual(
-            credits.eligible_jpy_milli(
-                result="success", surface="ask", computed_jpy_milli=999_999, policy=p
+            credits.eligible_usd_micro(
+                result="success", surface="ask", computed_usd_micro=999_999, policy=p
             ),
-            75_000,
+            500_000,
         )
 
     def test_negative_computed_clamps_to_zero(self):
         self.assertEqual(
-            credits.eligible_jpy_milli(
-                result="success", surface="ask", computed_jpy_milli=-5, policy=_policy()
+            credits.eligible_usd_micro(
+                result="success", surface="ask", computed_usd_micro=-5, policy=_policy()
             ),
             0,
         )
 
 
 class CreditsConversionTests(SimpleTestCase):
-    """Layer 4 — milli in, milli out, ¥15 per credit."""
+    """Layer 4 — micro-USD in, milli-credits out, $0.10 per credit."""
 
-    def test_fifteen_yen_is_one_credit(self):
-        self.assertEqual(credits.credits_milli(15_000, _policy()), 1000)
+    def test_ten_cents_is_one_credit(self):
+        # $0.10 == 100_000 micro-USD.
+        self.assertEqual(credits.credits_milli(100_000, _policy()), 1000)
 
     def test_fractional_credits_survive(self):
-        # A ¥1.50 request is 0.1 credit, not rounded up to 1.
-        self.assertEqual(credits.credits_milli(1_500, _policy()), 100)
-        # A ¥3 request at ¥15/credit: 0.2 credits.
-        self.assertEqual(credits.credits_milli(3_000, _policy()), 200)
+        # A $0.01 request is 0.1 credit, not rounded up to 1.
+        self.assertEqual(credits.credits_milli(10_000, _policy()), 100)
+        # $0.02 at $0.10/credit: 0.2 credits.
+        self.assertEqual(credits.credits_milli(20_000, _policy()), 200)
+
+    def test_no_exchange_rate_is_involved(self):
+        """The point of denominating credits in USD.
+
+        Credits used to be usd ->(x150) jpy ->(/15) credits, so the FX
+        rate was baked into every posted charge and what a credit MEANT
+        moved with the yen. `credits_milli` now takes micro-USD and the
+        policy, and there is nowhere for a rate to enter — which is
+        checkable simply by noting the policy carries no rate at all.
+        """
+        p = _policy()
+        self.assertFalse(
+            [f for f in vars(p) if "jpy" in f or "fx" in f],
+            "a currency rate on the credit policy would put FX back in the "
+            "credit path",
+        )
 
     def test_purity_same_inputs_same_output(self):
         p = _policy()
@@ -285,9 +302,9 @@ class CreditsConversionTests(SimpleTestCase):
         """The dual-calculation contract: the same stored input under a
         DIFFERENT policy object is just another function call."""
         live = _policy()
-        candidate = _policy(credit_jpy=10.0, fingerprint="f2")
-        self.assertEqual(credits.credits_milli(30_000, live), 2000)
-        self.assertEqual(credits.credits_milli(30_000, candidate), 3000)
+        candidate = _policy(credit_usd=0.05, fingerprint="f2")
+        self.assertEqual(credits.credits_milli(200_000, live), 2000)
+        self.assertEqual(credits.credits_milli(200_000, candidate), 4000)
 
     def test_quote_is_the_flat_policy_cap_for_now(self):
         self.assertEqual(credits.quote_max_credits_milli(_policy()), 5000)
@@ -317,14 +334,14 @@ class RollupCreditFieldsTests(_RestoresRecorder, TestCase):
     def test_a_billable_success_carries_eligible_and_credits(self):
         row = self._run_request()
         policy = dj_settings.CREDIT_POLICY
-        self.assertGreater(row.computed_jpy_milli, 0)
-        expected_eligible = credits.eligible_jpy_milli(
+        self.assertGreater(row.computed_usd_micro, 0)
+        expected_eligible = credits.eligible_usd_micro(
             result="success",
             surface="ask",
-            computed_jpy_milli=row.computed_jpy_milli,
+            computed_usd_micro=row.computed_usd_micro,
             policy=policy,
         )
-        self.assertEqual(row.eligible_jpy_milli, expected_eligible)
+        self.assertEqual(row.eligible_usd_micro, expected_eligible)
         self.assertEqual(
             row.shadow_credits_milli, credits.credits_milli(expected_eligible, policy)
         )
@@ -334,14 +351,14 @@ class RollupCreditFieldsTests(_RestoresRecorder, TestCase):
     @METER_ON
     def test_a_non_billable_surface_rolls_up_with_zero_eligible(self):
         row = self._run_request(surface="search")
-        self.assertGreater(row.computed_jpy_milli, 0, "the COST is still real and recorded")
-        self.assertEqual(row.eligible_jpy_milli, 0)
+        self.assertGreater(row.computed_usd_micro, 0, "the COST is still real and recorded")
+        self.assertEqual(row.eligible_usd_micro, 0)
         self.assertEqual(row.shadow_credits_milli, 0)
 
     @METER_ON
     def test_a_failed_request_rolls_up_with_zero_eligible(self):
         row = self._run_request(result=AiRequestCost.RESULT_PROVIDER_FAILURE)
-        self.assertEqual(row.eligible_jpy_milli, 0)
+        self.assertEqual(row.eligible_usd_micro, 0)
         self.assertEqual(row.shadow_credits_milli, 0)
 
     @METER_ON
@@ -350,7 +367,7 @@ class RollupCreditFieldsTests(_RestoresRecorder, TestCase):
         # the 5-credit (¥75) cap.
         row = self._run_request(tokens=60_000_000)
         policy = dj_settings.CREDIT_POLICY
-        self.assertEqual(row.eligible_jpy_milli, policy.request_max_jpy_milli())
+        self.assertEqual(row.eligible_usd_micro, policy.request_max_usd_micro())
         self.assertEqual(
             row.shadow_credits_milli, policy.request_max_credits_milli,
             "at the cap, the charge IS the quote ceiling",

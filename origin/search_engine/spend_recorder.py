@@ -259,7 +259,12 @@ def record(rec: spend.SpendRecord) -> None:
 
         ctx = spend.current_context()
         if ctx is not None:
+            # Both running totals. USD is what the credit budget is
+            # checked against; the yen twin feeds the older
+            # `AI_REQUEST_MAX_JPY_MILLI` ceiling, which is a separate,
+            # env-driven control.
             ctx.cost_jpy_milli += jpy_milli
+            ctx.cost_usd_micro += usd_micro
 
         AiSpendEvent.objects.create(
             request_id=rec.request_id,
@@ -289,11 +294,34 @@ def record(rec: spend.SpendRecord) -> None:
         log.debug("Failed to record AI spend event", exc_info=True)
 
 
-def open_request(ctx: spend.SpendContext, *, quoted_max_jpy_milli: int = 0) -> None:
+def _usd_micro_to_jpy_milli(usd_micro: int) -> int:
+    """Derived yen, for the yen report only — never for a decision.
+
+    The pinned rate off the rate card, or 0 when there is no card. A
+    zero here loses a *display* figure and nothing else, which is the
+    whole point of USD being authoritative: the numbers that matter do
+    not pass through this function.
+    """
+    card = _rate_card()
+    if card is None:
+        return 0
+    return int(round((usd_micro / 1_000_000.0) * float(card.fx_jpy_per_usd) * 1000))
+
+
+def open_request(
+    ctx: spend.SpendContext,
+    *,
+    quoted_max_usd_micro: int = 0,
+    quoted_max_jpy_milli: int | None = None,
+) -> None:
     """Write the request's rollup row at START, with its quote.
 
     The quote has to be written now: it is what we promised not to
     exceed, and after the fact there is no way to prove what it was.
+
+    `quoted_max_jpy_milli` is derived from the USD quote when not given,
+    so the yen column stays populated for the existing reporting without
+    any caller having to think about currency.
     """
     if not _enabled():
         return
@@ -312,7 +340,12 @@ def open_request(ctx: spend.SpendContext, *, quoted_max_jpy_milli: int = 0) -> N
                 "surface": ctx.surface,
                 "plan": ctx.plan,
                 "effort": ctx.effort,
-                "quoted_max_jpy_milli": quoted_max_jpy_milli,
+                "quoted_max_usd_micro": quoted_max_usd_micro,
+                "quoted_max_jpy_milli": (
+                    quoted_max_jpy_milli
+                    if quoted_max_jpy_milli is not None
+                    else _usd_micro_to_jpy_milli(quoted_max_usd_micro)
+                ),
                 "credit_policy_version": policy.version if policy else "",
                 "plan_entitlement_version": policy.entitlement_version if policy else "",
                 "rate_card_version": card.version if card else "",
@@ -365,27 +398,35 @@ def close_request(ctx: spend.SpendContext, *, result: str) -> None:
             n=Count("id"), jpy=Sum("cost_jpy_milli"), usd=Sum("cost_usd_micro")
         )
         computed_jpy = int(agg["jpy"] or 0)
+        computed_usd = int(agg["usd"] or 0)
         has_unpriced = events.filter(cost_basis__in=("unpriced", "incomplete")).exists()
 
         row = AiRequestCost.objects.filter(request_id=ctx.request_id).first()
-        quote = int(row.quoted_max_jpy_milli) if row else 0
+        quote_usd = int(row.quoted_max_usd_micro) if row else 0
+        quote_jpy = int(row.quoted_max_jpy_milli) if row else 0
 
+        # USD is the authoritative currency here; the yen figures below
+        # are derived at the pinned rate purely so the pre-existing yen
+        # reporting keeps working. Nothing decides anything from them.
         if result in AiRequestCost.RESULTS_WORK_PERFORMED:
-            charged = min(computed_jpy, quote) if quote > 0 else computed_jpy
+            charged_usd = min(computed_usd, quote_usd) if quote_usd > 0 else computed_usd
+            charged_jpy = min(computed_jpy, quote_jpy) if quote_jpy > 0 else computed_jpy
         else:
-            charged = 0  # a failed request is never charged
+            charged_usd = charged_jpy = 0  # a failed request is never charged
 
         policy = _credit_policy()
         if policy is not None:
-            eligible = credits.eligible_jpy_milli(
+            eligible_usd = credits.eligible_usd_micro(
                 result=result,
                 surface=ctx.surface,
-                computed_jpy_milli=computed_jpy,
+                computed_usd_micro=computed_usd,
                 policy=policy,
             )
-            shadow = credits.credits_milli(eligible, policy)
+            shadow = credits.credits_milli(eligible_usd, policy)
+            # Same slice expressed in yen, for the yen report only.
+            eligible_jpy = _usd_micro_to_jpy_milli(eligible_usd)
         else:
-            eligible, shadow = 0, 0
+            eligible_usd, eligible_jpy, shadow = 0, 0, 0
 
         AiRequestCost.objects.update_or_create(
             request_id=ctx.request_id,
@@ -397,12 +438,16 @@ def close_request(ctx: spend.SpendContext, *, result: str) -> None:
                 "plan": ctx.plan,
                 "effort": ctx.effort,
                 "result": result,
-                "quoted_max_jpy_milli": quote,
+                "quoted_max_jpy_milli": quote_jpy,
+                "quoted_max_usd_micro": quote_usd,
                 "computed_jpy_milli": computed_jpy,
-                "computed_usd_micro": int(agg["usd"] or 0),
-                "charged_jpy_milli": charged,
-                "absorbed_jpy_milli": max(computed_jpy - charged, 0),
-                "eligible_jpy_milli": eligible,
+                "computed_usd_micro": computed_usd,
+                "charged_jpy_milli": charged_jpy,
+                "charged_usd_micro": charged_usd,
+                "absorbed_jpy_milli": max(computed_jpy - charged_jpy, 0),
+                "absorbed_usd_micro": max(computed_usd - charged_usd, 0),
+                "eligible_jpy_milli": eligible_jpy,
+                "eligible_usd_micro": eligible_usd,
                 "shadow_credits_milli": shadow,
                 "credit_policy_version": policy.version if policy else "",
                 "plan_entitlement_version": policy.entitlement_version if policy else "",

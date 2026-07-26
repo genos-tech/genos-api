@@ -88,13 +88,18 @@ class SpendContext:
     # Running total for this request. Read by the per-request ceiling;
     # the authoritative number is still the sum of the rows.
     cost_jpy_milli: int = 0
+    #: Same running total in micro-USD — the AUTHORITATIVE one, since
+    #: that is what providers invoice and what the credit budget is
+    #: denominated in. The yen twin above stays for the pre-existing
+    #: `AI_REQUEST_MAX_JPY_MILLI` ceiling.
+    cost_usd_micro: int = 0
     # What this request may spend before the agent loop must stop, in
-    # milli-yen; 0 disables the check. Carried on the CONTEXT rather than
+    # micro-USD; 0 disables the check. Carried on the CONTEXT rather than
     # read from the ledger per step because the loop runs on a worker
     # thread and a balance query between steps would put a DB round-trip
     # on the request path — for a number that cannot change mid-request
     # anyway, since the charge is not posted until the request ends.
-    credit_budget_jpy_milli: int = 0
+    credit_budget_usd_micro: int = 0
     events: int = 0
     # Set when a ceiling stopped this request, for the rollup's result.
     ceiling_hit: bool = False
@@ -163,7 +168,7 @@ def spend_context(
     effort: str = "",
     run_id: str | None = None,
     request_id: str | None = None,
-    credit_budget_jpy_milli: int = 0,
+    credit_budget_usd_micro: int = 0,
 ) -> Iterator[SpendContext]:
     """Bind a logical request for the duration of the block.
 
@@ -192,7 +197,7 @@ def spend_context(
         plan=plan or "",
         effort=effort or "",
         run_id=str(run_id) if run_id else None,
-        credit_budget_jpy_milli=int(credit_budget_jpy_milli or 0),
+        credit_budget_usd_micro=int(credit_budget_usd_micro or 0),
     )
     token = _context.set(ctx)
     try:
@@ -260,9 +265,9 @@ def credit_budget_exhausted() -> bool:
     it would cut users off before they had spent what they paid for.
     """
     ctx = _context.get()
-    if ctx is None or ctx.credit_budget_jpy_milli <= 0:
+    if ctx is None or ctx.credit_budget_usd_micro <= 0:
         return False
-    return ctx.cost_jpy_milli >= ctx.credit_budget_jpy_milli
+    return ctx.cost_usd_micro >= ctx.credit_budget_usd_micro
 
 
 def mark_ceiling_hit() -> None:

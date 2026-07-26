@@ -49,6 +49,8 @@ STRIPE_TEST_SETTINGS = {
     "PRICE_PRO_LEGACY": "price_pro_old_1200",
     "PRICE_MAX_LEGACY": "price_max_old_2500",
     "AUTOMATIC_TAX": False,
+    "DEFAULT_CURRENCY": "jpy",
+    "PRICES_BY_CURRENCY": {},
 }
 
 STRIPE_DISABLED_SETTINGS = {
@@ -60,6 +62,8 @@ STRIPE_DISABLED_SETTINGS = {
     "PRICE_PRO_LEGACY": "",
     "PRICE_MAX_LEGACY": "",
     "AUTOMATIC_TAX": False,
+    "DEFAULT_CURRENCY": "jpy",
+    "PRICES_BY_CURRENCY": {},
 }
 
 
@@ -1376,3 +1380,116 @@ class PlansViewTests(BillingTestBase):
             [t["tier"] for t in res.data["tiers"]],
             ["free", "core", "pro", "max", "enterprise"],
         )
+
+
+# --------------------------------------------------------------------------- #
+# Multi-currency subscription pricing                                          #
+# --------------------------------------------------------------------------- #
+
+MULTI_CURRENCY_SETTINGS = {
+    **STRIPE_TEST_SETTINGS,
+    "PRICES_BY_CURRENCY": {
+        "usd": {"core": "price_usd_core", "pro": "price_usd_pro"},
+        "eur": {"core": "price_eur_core"},
+    },
+}
+
+
+@override_settings(STRIPE=MULTI_CURRENCY_SETTINGS)
+class MultiCurrencyPricingTests(BillingTestBase):
+    """Selling in more than one currency.
+
+    Prices are DECLARED per currency, never converted: `$9` and `¥1,200`
+    are both round numbers a human chose to read well locally, and
+    neither is the other one times an exchange rate. This is the one
+    place the cost system's "USD base, convert for display" rule does
+    not apply — converting here would advertise ¥1,847/month and move it
+    with the market.
+    """
+
+    def test_the_default_currency_uses_the_plain_price_settings(self):
+        self.assertEqual(stripe_billing.default_currency(), "jpy")
+        self.assertEqual(stripe_billing.price_for_plan("core"), "price_core_789")
+
+    def test_another_currency_resolves_its_own_declared_price(self):
+        self.assertEqual(stripe_billing.price_for_plan("core", "usd"), "price_usd_core")
+        self.assertEqual(stripe_billing.price_for_plan("core", "eur"), "price_eur_core")
+
+    def test_a_plan_not_yet_priced_in_a_currency_is_not_offered(self):
+        """Rather than offered and then failing at checkout — which is
+        an upgrade button that leads nowhere."""
+        self.assertIsNone(stripe_billing.price_for_plan("max", "eur"))
+        self.assertEqual(stripe_billing.purchasable_plans("eur"), ["core"])
+        self.assertEqual(stripe_billing.purchasable_plans("usd"), ["core", "pro"])
+        self.assertEqual(stripe_billing.purchasable_plans("jpy"), ["core", "pro", "max"])
+
+    def test_supported_currencies_are_derived_from_configured_prices(self):
+        """Declared lists go stale; a currency must not appear on the
+        pricing page before its Stripe prices exist."""
+        self.assertEqual(
+            sorted(stripe_billing.supported_currencies()), ["eur", "jpy", "usd"]
+        )
+        self.assertEqual(
+            stripe_billing.supported_currencies()[0], "jpy", "default comes first"
+        )
+
+    def test_tier_for_price_resolves_every_currency(self):
+        """A euro subscriber's renewal carries the euro price id. If only
+        the default currency resolved, every renewal outside Japan would
+        log 'unmapped price' and quietly stop maintaining that customer's
+        tier."""
+        self.assertEqual(stripe_billing.tier_for_price("price_core_789"), "core")
+        self.assertEqual(stripe_billing.tier_for_price("price_usd_pro"), "pro")
+        self.assertEqual(stripe_billing.tier_for_price("price_eur_core"), "core")
+        self.assertIsNone(stripe_billing.tier_for_price("price_unknown"))
+
+    def test_grandfathered_ids_still_resolve(self):
+        """The currency axis must not have displaced the legacy one."""
+        self.assertEqual(stripe_billing.tier_for_price("price_pro_old_1200"), "pro")
+
+    def test_checkout_sells_the_price_for_the_requested_currency(self):
+        captured = {}
+
+        def _fake_create(**kwargs):
+            captured.update(kwargs)
+            return {"url": "https://checkout.example/x"}
+
+        with mock.patch.object(stripe_billing, "_stripe") as m:
+            m.return_value.checkout.Session.create.side_effect = _fake_create
+            m.return_value.Customer.create.return_value = {"id": "cus_x"}
+            stripe_billing.create_checkout_session(self.user, "pro", "usd")
+        self.assertEqual(captured["line_items"][0]["price"], "price_usd_pro")
+
+    def test_checkout_refuses_a_currency_the_plan_has_no_price_in(self):
+        """Loudly, and naming the currency — a silent fall back to the
+        default would bill a euro buyer in yen."""
+        with self.assertRaises(stripe_billing.BillingError) as ctx:
+            stripe_billing.create_checkout_session(self.user, "max", "eur")
+        self.assertIn("EUR", str(ctx.exception))
+
+
+@override_settings(STRIPE=MULTI_CURRENCY_SETTINGS)
+class PlansEndpointCurrencyTests(BillingTestBase):
+    def test_plans_default_to_the_configured_currency(self):
+        res = self.client.get("/api/v2/billing/plans/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["currency"], "jpy")
+        self.assertEqual(sorted(res.data["supported_currencies"]), ["eur", "jpy", "usd"])
+
+    def test_free_is_priced_in_the_REQUESTED_currency_not_hardcoded_yen(self):
+        """It was `{"amount": 0, "currency": "jpy"}` regardless. The
+        client formats with Intl, so a dollar visitor was shown '¥0'."""
+        res = self.client.get("/api/v2/billing/plans/?currency=usd")
+        free = next(t for t in res.data["tiers"] if t["tier"] == "free")
+        self.assertEqual(free["price"], {"amount": 0, "currency": "usd", "interval": "month"})
+
+    def test_an_unsupported_currency_falls_back_rather_than_erroring(self):
+        """A bad query string should render a pricing page, not break one."""
+        res = self.client.get("/api/v2/billing/plans/?currency=zzz")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["currency"], "jpy")
+
+    def test_only_plans_priced_in_that_currency_are_purchasable(self):
+        res = self.client.get("/api/v2/billing/plans/?currency=eur")
+        purchasable = [t["tier"] for t in res.data["tiers"] if t["purchasable"]]
+        self.assertEqual(purchasable, ["core"])

@@ -42,11 +42,34 @@ class BillingConfigView(AuthenticatedAPIView):
         return Response(
             {
                 "enabled": stripe_billing.billing_enabled(),
-                "plans": stripe_billing.purchasable_plans(),
+                "plans": stripe_billing.purchasable_plans(_requested_currency(request)),
+                "currency": _requested_currency(request),
+                "supported_currencies": stripe_billing.supported_currencies(),
                 "personal_tier": request.user.tier or "free",
                 "has_billing_account": bool(request.user.stripe_customer_id),
             }
         )
+
+
+def _requested_currency(request) -> str:
+    """The currency this request should be priced in.
+
+    Explicit `currency` wins (the pricing page passes what the visitor
+    picked); otherwise the configured default. Anything we have no
+    prices for falls back to the default rather than 404ing — a bad
+    query string should show a pricing page, not break one.
+
+    Deliberately NOT geo-inferred. Guessing from an IP shows a
+    travelling customer the wrong currency and, worse, quietly changes
+    what they are about to be billed in.
+    """
+    raw = ""
+    if request.method == "GET":
+        raw = (request.query_params.get("currency") or "").strip().lower()
+    else:
+        raw = str((request.data or {}).get("currency") or "").strip().lower()
+    supported = stripe_billing.supported_currencies()
+    return raw if raw in supported else stripe_billing.default_currency()
 
 
 class BillingCheckoutView(AuthenticatedAPIView):
@@ -64,7 +87,9 @@ class BillingCheckoutView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            url = stripe_billing.create_checkout_session(request.user, plan)
+            url = stripe_billing.create_checkout_session(
+                request.user, plan, _requested_currency(request)
+            )
         except stripe_billing.BillingError as e:
             logger.warning("billing checkout failed for %s: %s", request.user.email, e)
             return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -153,16 +178,20 @@ class BillingPlansView(AuthenticatedAPIView):
 
     def get(self, request):
         quotas = settings.SEARCH_ENGINE.get("TIER_QUOTAS") or {}
-        purchasable = stripe_billing.purchasable_plans()
+        currency = _requested_currency(request)
+        purchasable = stripe_billing.purchasable_plans(currency)
         tiers = []
         for tier in ("free", "core", "pro", "max", "enterprise"):
             cfg = quotas.get(tier)
             if cfg is None:
                 continue
             if tier == "free":
-                price = {"amount": 0, "currency": "jpy", "interval": "month"}
+                # Free is free in every currency, but the CODE still has
+                # to be right: the client formats with Intl and would
+                # render "¥0" to a dollar visitor otherwise.
+                price = {"amount": 0, "currency": currency, "interval": "month"}
             elif tier in stripe_billing.PURCHASABLE_PLANS:
-                price = stripe_billing.price_display(tier)
+                price = stripe_billing.price_display(tier, currency)
             else:
                 price = None
             tiers.append(
@@ -177,6 +206,8 @@ class BillingPlansView(AuthenticatedAPIView):
         return Response(
             {
                 "billing_enabled": stripe_billing.billing_enabled(),
+                "currency": currency,
+                "supported_currencies": stripe_billing.supported_currencies(),
                 "tiers": tiers,
             }
         )
@@ -282,7 +313,9 @@ class TeamBillingCheckoutView(AuthenticatedAPIView):
         if err:
             return err
         try:
-            url = stripe_billing.create_team_checkout_session(team, plan)
+            url = stripe_billing.create_team_checkout_session(
+                team, plan, _requested_currency(request)
+            )
         except stripe_billing.BillingError as e:
             logger.warning(
                 "team billing checkout failed for %s / %s: %s",

@@ -254,6 +254,7 @@ class Command(BaseCommand):
                         "reason": f"raised: {type(e).__name__}",
                         "total_tokens": 0,
                         "cost_jpy_milli": 0,
+                        "cost_usd_micro": 0,
                         "credits_milli": 0,
                     }
                 )
@@ -261,6 +262,7 @@ class Command(BaseCommand):
             finally:
                 reset_llm_choice(token)
             jpy = int(getattr(result, "cost_jpy_milli", 0) or 0)
+            usd = int(getattr(result, "cost_usd_micro", 0) or 0)
             tokens = int(getattr(result, "total_tokens", 0) or 0)
             # A cell counts as FAILED when the provider never really ran
             # it. Two signals, and the second is the one that matters:
@@ -288,8 +290,11 @@ class Command(BaseCommand):
                     ),
                     "total_tokens": tokens,
                     "cost_jpy_milli": jpy,
+                    "cost_usd_micro": usd,
+                    # micro-USD / (USD per credit) -> milli-credits. USD,
+                    # not yen: the credit unit carries no exchange rate.
                     "credits_milli": int(
-                        round(jpy / settings.CREDIT_POLICY.credit_jpy)
+                        round(usd / (settings.CREDIT_POLICY.credit_usd * 1_000))
                     ),
                 }
             )

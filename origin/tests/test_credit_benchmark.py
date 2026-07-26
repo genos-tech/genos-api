@@ -44,16 +44,22 @@ _CASES = [
 ]
 
 
-def _result(tokens=1000, jpy_milli=15_000, infra_error=False):
-    """A `CaseResult` stand-in.
+def _result(tokens=1000, usd_micro=100_000, infra_error=False):
+    """A `CaseResult` stand-in. $0.10 == 1 credit at the live policy.
 
     Mirrors the REAL dataclass's fields — note there is no `error`
     attribute on it, which is precisely what made the first version of
     the failure check silently dead (`getattr(result, "error", "")` was
-    always ""). Keeping this fake honest is what would have caught it.
+    always ""). Keeping this fake honest is what would have caught it,
+    and it is why `cost_usd_micro` appears here the moment it appeared
+    on `CaseResult`: a fake missing the field the code now reads would
+    make every cell look free.
     """
     return SimpleNamespace(
-        total_tokens=tokens, cost_jpy_milli=jpy_milli, infra_error=infra_error
+        total_tokens=tokens,
+        cost_jpy_milli=int(usd_micro * 150 / 1000),
+        cost_usd_micro=usd_micro,
+        infra_error=infra_error,
     )
 
 
@@ -162,10 +168,10 @@ class BaselineTests(SimpleTestCase):
     def test_a_price_change_cannot_fire_the_alarm(self):
         """Same tokens, wildly different yen — the alarm must not care."""
         with self._tmp_baseline():
-            _run(write_baseline=True, results=lambda case: _result(jpy_milli=15_000))
+            _run(write_baseline=True, results=lambda case: _result(usd_micro=100_000))
             out = _run(
                 check_baseline=True,
-                results=lambda case: _result(jpy_milli=999_000),  # 66× the yen
+                results=lambda case: _result(usd_micro=6_660_000),  # 66× the cost
             )
         self.assertIn("within the regression threshold", out)
 
@@ -203,7 +209,7 @@ class ZeroTokenCellTests(SimpleTestCase):
         out = _run(
             providers="gemini",
             efforts="medium",
-            results=lambda case: _result(tokens=0, jpy_milli=0),
+            results=lambda case: _result(tokens=0, usd_micro=0),
         )
         self.assertIn("NO USABLE RUNS", out)
         self.assertIn("not a cheap provider", out)
@@ -220,8 +226,8 @@ class ZeroTokenCellTests(SimpleTestCase):
 
             choice = get_llm_choice()
             if choice and choice.provider == "openai":
-                return _result(tokens=0, jpy_milli=0)  # every call 400'd
-            return _result(tokens=1000, jpy_milli=15_000)  # 1.00cr
+                return _result(tokens=0, usd_micro=0)  # every call 400'd
+            return _result(tokens=1000, usd_micro=100_000)  # 1.00cr
 
         out = _run(providers="gemini,openai", efforts="medium", results=by_provider)
         self.assertIn("NO USABLE RUNS", out)
@@ -238,9 +244,9 @@ class ZeroTokenCellTests(SimpleTestCase):
     def test_infra_errors_are_also_excluded(self):
         calls = iter(
             [
-                _result(tokens=1000, jpy_milli=15_000),
-                SimpleNamespace(total_tokens=5, cost_jpy_milli=1, infra_error=True),
-                _result(tokens=1000, jpy_milli=15_000),
+                _result(tokens=1000, usd_micro=100_000),
+                SimpleNamespace(total_tokens=5, cost_jpy_milli=1, cost_usd_micro=10, infra_error=True),
+                _result(tokens=1000, usd_micro=100_000),
             ]
         )
         out = _run(providers="gemini", efforts="medium", results=lambda c: next(calls))

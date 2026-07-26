@@ -28,7 +28,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db.models import Count, Sum
 from django.utils import timezone
 
-from origin.search_engine import credit_ledger, credits
+from origin.search_engine import credit_ledger, credits, money
 from origin.search_engine.models import AiCreditEntry, AiRequestCost
 
 # Allowance milestones reported per plan (V2 §8.3).
@@ -76,8 +76,35 @@ class Command(BaseCommand):
                 "posted. Read-only — the ledger is never touched."
             ),
         )
+        parser.add_argument(
+            "--currency",
+            default=money.BASE_CURRENCY,
+            help=(
+                "Currency to READ the money figures in (usd, jpy, eur, gbp — "
+                "whatever `display_fx_per_usd` in llm_models.yaml defines). "
+                "Default usd, which is what providers invoice and therefore "
+                "the only figure that reconciles exactly. Conversion is "
+                "display only: every stored number stays in micro-USD."
+            ),
+        )
+
+    def _money(self, usd_micro: int) -> str:
+        """Format a stored micro-USD figure in the requested currency."""
+        return money.format_usd_micro(usd_micro, self._currency, self._rates)
 
     def handle(self, *args, **options):
+        from django.conf import settings as dj_settings  # noqa: PLC0415
+
+        self._currency = (options.get("currency") or money.BASE_CURRENCY).lower()
+        card = getattr(getattr(dj_settings, "LLM_CATALOG", None), "rate_card", None)
+        self._rates = dict(getattr(card, "display_fx_per_usd", {}) or {})
+        if self._currency != money.BASE_CURRENCY and self._currency not in self._rates:
+            raise CommandError(
+                f"No pinned rate for {self._currency!r}. Add it to "
+                f"rate_card.display_fx_per_usd in llm_models.yaml — a report "
+                f"must never invent an exchange rate."
+            )
+
         period = options.get("period") or credit_ledger.period_for()
         try:
             year, month = (int(x) for x in period.split("-"))
@@ -266,27 +293,29 @@ class Command(BaseCommand):
         )
 
     def _divergence_section(self, requests) -> None:
-        """Credit-vs-yen divergence (V2 §8.2): how much REAL yen sits
-        behind each credited yen. 1.0 = credits track cost exactly;
+        """Credit-vs-cost divergence (V2 §8.2): how much REAL cost sits
+        behind each credited dollar. 1.0 = credits track cost exactly;
         above it, we absorb (failures, caps, non-billable surfaces)."""
         agg = requests.aggregate(
-            real=Sum("computed_jpy_milli"),
-            eligible=Sum("eligible_jpy_milli"),
+            real=Sum("computed_usd_micro"),
+            eligible=Sum("eligible_usd_micro"),
             credited=Sum("shadow_credits_milli"),
         )
         from django.conf import settings  # noqa: PLC0415
 
-        credited_jpy = int((agg["credited"] or 0) * settings.CREDIT_POLICY.credit_jpy)
+        # milli-credits x (USD per credit) -> milli-USD -> micro-USD.
+        credited_usd = int((agg["credited"] or 0) * settings.CREDIT_POLICY.credit_usd * 1_000)
         real = int(agg["real"] or 0)
         self.stdout.write("\n-- Divergence (real cost vs what credits would carry) --")
         self.stdout.write(
-            f"  actual cost ¥{real / 1000:,.2f}   eligible ¥{(agg['eligible'] or 0) / 1000:,.2f}"
-            f"   credited ≈¥{credited_jpy / 1000:,.2f}"
+            f"  actual cost {self._money(real)}"
+            f"   eligible {self._money(int(agg['eligible'] or 0))}"
+            f"   credited ≈{self._money(credited_usd)}"
         )
-        if credited_jpy:
+        if credited_usd:
             self.stdout.write(
-                f"  absorption ratio: {real / credited_jpy:,.2f}× "
-                f"(real yen per credited yen — failures, caps and internal "
+                f"  absorption ratio: {real / credited_usd:,.2f}× "
+                f"(real cost per credited unit — failures, caps and internal "
                 f"surfaces are ours)"
             )
 
@@ -307,7 +336,7 @@ class Command(BaseCommand):
         )
         rows = list(
             requests.values(
-                "result", "surface", "computed_jpy_milli", "shadow_credits_milli", "plan"
+                "result", "surface", "computed_usd_micro", "shadow_credits_milli", "plan"
             )
         )
         posted_total = 0
@@ -316,10 +345,10 @@ class Command(BaseCommand):
         by_plan: dict[str, list[int]] = defaultdict(list)
         for r in rows:
             posted_total += int(r["shadow_credits_milli"] or 0)
-            eligible = credits.eligible_jpy_milli(
+            eligible = credits.eligible_usd_micro(
                 result=r["result"],
                 surface=r["surface"],
-                computed_jpy_milli=int(r["computed_jpy_milli"] or 0),
+                computed_usd_micro=int(r["computed_usd_micro"] or 0),
                 policy=candidate,
             )
             c = credits.credits_milli(eligible, candidate)

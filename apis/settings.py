@@ -1348,9 +1348,18 @@ SEARCH_ENGINE["AI_BENCHMARK_REGRESSION_PCT"] = float(
 # 0 = off. A team over the line logs a WARNING naming the team; there
 # is deliberately no blocking lever here, because pausing N users over
 # one member's spend is a human decision, not a threshold's.
-SEARCH_ENGINE["AI_TEAM_MONTHLY_CEILING_JPY"] = float(
-    os.environ.get("AI_TEAM_MONTHLY_CEILING_JPY") or "0"
+SEARCH_ENGINE["AI_TEAM_MONTHLY_CEILING_USD"] = float(
+    os.environ.get("AI_TEAM_MONTHLY_CEILING_USD") or "0"
 )
+if os.environ.get("AI_TEAM_MONTHLY_CEILING_JPY") and not os.environ.get(
+    "AI_TEAM_MONTHLY_CEILING_USD"
+):
+    from django.core.exceptions import ImproperlyConfigured
+
+    raise ImproperlyConfigured(
+        "AI_TEAM_MONTHLY_CEILING_JPY is set but team ceilings are now "
+        "denominated in USD. Set AI_TEAM_MONTHLY_CEILING_USD instead."
+    )
 
 # Monthly AI budget in YEN, for `ai_cost_report --alert`. The command
 # pro-rates it to the reporting window and logs at ERROR when spend is
@@ -1389,7 +1398,15 @@ SEARCH_ENGINE["AI_MONTHLY_BUDGET_JPY"] = float(os.environ.get("AI_MONTHLY_BUDGET
 SEARCH_ENGINE["AI_REQUEST_MAX_JPY_MILLI"] = int(
     os.environ.get("AI_REQUEST_MAX_JPY_MILLI") or "0"
 )
-# 2. PER-USER DAILY ALERT — observation only, never blocks. Yen; 0 = off.
+#    USD-denominated twin, and the one to prefer — the cost system's base
+#    unit is USD because that is what providers invoice (see
+#    `search_engine/money.py`). The yen variable above still works and
+#    still bounds the loop; this one is what the USD quote/absorb columns
+#    are written from. Both 0 = no per-request ceiling.
+SEARCH_ENGINE["AI_REQUEST_MAX_USD_MICRO"] = int(
+    os.environ.get("AI_REQUEST_MAX_USD_MICRO") or "0"
+)
+# 2. PER-USER DAILY ALERT — observation only, never blocks. USD; 0 = off.
 #    Logs a WARNING (not ERROR — that would red the cron) naming the user
 #    when their day's ledger spend crosses this. Deliberately not
 #    enforcing: the strategy doc is explicit that blocking an early user
@@ -1398,9 +1415,23 @@ SEARCH_ENGINE["AI_REQUEST_MAX_JPY_MILLI"] = int(
 #
 #    Costs one aggregate query per ask, and ONLY when configured — 0
 #    short-circuits before touching the DB.
-SEARCH_ENGINE["AI_USER_DAILY_ALERT_JPY"] = float(
-    os.environ.get("AI_USER_DAILY_ALERT_JPY") or "0"
+#    Reads the legacy AI_USER_DAILY_ALERT_JPY only as a name to fail
+#    loudly on: an operator who still has the yen variable set would
+#    otherwise silently lose their alert when the code switched to USD.
+SEARCH_ENGINE["AI_USER_DAILY_ALERT_USD"] = float(
+    os.environ.get("AI_USER_DAILY_ALERT_USD") or "0"
 )
+if os.environ.get("AI_USER_DAILY_ALERT_JPY") and not os.environ.get(
+    "AI_USER_DAILY_ALERT_USD"
+):
+    from django.core.exceptions import ImproperlyConfigured
+
+    raise ImproperlyConfigured(
+        "AI_USER_DAILY_ALERT_JPY is set but the per-user spend alert is now "
+        "denominated in USD (the cost system's base currency). Set "
+        "AI_USER_DAILY_ALERT_USD instead — silently ignoring the old "
+        "variable would drop the alert without anyone noticing."
+    )
 # 3. KILL SWITCH — refuses new agent asks outright, for a provider
 #    incident or a runaway we have not diagnosed yet. In-flight runs
 #    finish. This is the "stop everything" lever that AGENT_DISABLED_TOOLS
@@ -1441,14 +1472,62 @@ FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "http://localhost:3000")
 # set. WEBHOOK_SECRET is required for the webhook endpoint to accept
 # events at all (unverified events are never processed).
 # `enterprise` is deliberately absent — contact-sales only.
+def _stripe_prices_by_currency() -> dict[str, dict[str, str]]:
+    """Parse STRIPE_PRICES_BY_CURRENCY. Invalid JSON fails LOUD at boot.
+
+    Same posture as TIER_QUOTAS_JSON above: silently falling back to
+    "no other currencies" would take a working pricing page down to one
+    currency with nothing in the logs to say why.
+    """
+    raw = os.environ.get("STRIPE_PRICES_BY_CURRENCY", "").strip()
+    if not raw:
+        return {}
+    from django.core.exceptions import ImproperlyConfigured
+
+    try:
+        parsed = json.loads(raw)
+    except ValueError as exc:
+        raise ImproperlyConfigured(
+            f"STRIPE_PRICES_BY_CURRENCY is not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise ImproperlyConfigured(
+            'STRIPE_PRICES_BY_CURRENCY must be {"usd": {"core": "price_..."}}'
+        )
+    out: dict[str, dict[str, str]] = {}
+    for code, plans in parsed.items():
+        if not isinstance(plans, dict):
+            raise ImproperlyConfigured(
+                f"STRIPE_PRICES_BY_CURRENCY[{code!r}] must be a plan -> price id map"
+            )
+        out[str(code).lower()] = {str(k): str(v) for k, v in plans.items() if v}
+    return out
+
+
 STRIPE = {
     "SECRET_KEY": os.environ.get("STRIPE_SECRET_KEY", ""),
     "WEBHOOK_SECRET": os.environ.get("STRIPE_WEBHOOK_SECRET", ""),
-    # CURRENT prices — what a new checkout is sold at.
-    # core JPY1,200 / pro JPY2,500 / max JPY4,900 per user/month.
+    # The currency PRICE_CORE/PRO/MAX below are denominated in — the one
+    # a buyer gets when we have nothing better to go on.
+    "DEFAULT_CURRENCY": os.environ.get("STRIPE_DEFAULT_CURRENCY", "jpy").lower(),
+    # CURRENT prices in the DEFAULT currency — what a new checkout is
+    # sold at. core JPY1,200 / pro JPY2,500 / max JPY4,900 per user/month.
     "PRICE_CORE": os.environ.get("STRIPE_PRICE_CORE", ""),
     "PRICE_PRO": os.environ.get("STRIPE_PRICE_PRO", ""),
     "PRICE_MAX": os.environ.get("STRIPE_PRICE_MAX", ""),
+    # Prices in OTHER currencies: {"usd": {"core": "price_...", ...}, ...}
+    #
+    # Explicit per currency, never converted. `$9` and `¥1,200` are both
+    # deliberate round numbers chosen to read well locally; neither is
+    # the other one times an exchange rate. Converting would advertise
+    # ¥1,847/month and move it every time the market did.
+    #
+    # This is the one place the cost system's "USD base, convert for
+    # display" rule does NOT apply — see origin/search_engine/money.py.
+    #
+    # A plan missing from a currency is simply not offered to buyers in
+    # it, rather than offered and failing at checkout.
+    "PRICES_BY_CURRENCY": _stripe_prices_by_currency(),
     # GRANDFATHERED prices — comma-separated `price_...` ids that still
     # resolve to a plan on incoming subscription events but are never
     # offered at checkout.

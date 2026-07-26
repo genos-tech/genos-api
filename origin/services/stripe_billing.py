@@ -151,14 +151,54 @@ def billing_enabled() -> bool:
     return True
 
 
-def price_for_plan(plan: str) -> str | None:
-    """The price a NEW checkout is sold at. Current prices only — never
-    a grandfathered one, so nobody can buy into a retired price."""
-    return {
-        "core": settings.STRIPE.get("PRICE_CORE") or None,
-        "pro": settings.STRIPE.get("PRICE_PRO") or None,
-        "max": settings.STRIPE.get("PRICE_MAX") or None,
-    }.get(plan)
+def default_currency() -> str:
+    """The currency a buyer gets when we have nothing better to go on."""
+    return (settings.STRIPE.get("DEFAULT_CURRENCY") or "jpy").lower()
+
+
+def supported_currencies() -> list[str]:
+    """Currencies with at least one configured price, default first.
+
+    Derived from configuration rather than declared, so a currency
+    cannot be advertised on the pricing page before its Stripe prices
+    exist — the failure that produces a checkout button leading to a
+    dead end.
+    """
+    found = {default_currency()} if any(
+        price_for_plan(p, default_currency()) for p in PURCHASABLE_PLANS
+    ) else set()
+    for code in (settings.STRIPE.get("PRICES_BY_CURRENCY") or {}):
+        if any(price_for_plan(p, code) for p in PURCHASABLE_PLANS):
+            found.add(code.lower())
+    ordered = sorted(found - {default_currency()})
+    return ([default_currency()] if default_currency() in found else []) + ordered
+
+
+def price_for_plan(plan: str, currency: str | None = None) -> str | None:
+    """The price a NEW checkout is sold at, in `currency`.
+
+    Current prices only — never a grandfathered one, so nobody can buy
+    into a retired price.
+
+    Prices are DECLARED PER CURRENCY, never converted. `$9` and `¥1,200`
+    are both deliberate round numbers chosen to read well locally;
+    neither is the other one multiplied by an exchange rate. A converted
+    subscription price gives you ¥1,847/month and moves every time the
+    market does, which is why no SaaS does it — and it is the one place
+    the "USD base + convert" rule of the cost system does NOT apply.
+
+    Returns None when that plan has no price in that currency, which is
+    what keeps `purchasable_plans` honest.
+    """
+    code = (currency or default_currency()).lower()
+    if code == default_currency():
+        return {
+            "core": settings.STRIPE.get("PRICE_CORE") or None,
+            "pro": settings.STRIPE.get("PRICE_PRO") or None,
+            "max": settings.STRIPE.get("PRICE_MAX") or None,
+        }.get(plan)
+    by_currency = (settings.STRIPE.get("PRICES_BY_CURRENCY") or {}).get(code) or {}
+    return by_currency.get(plan) or None
 
 
 def tier_for_price(price_id: str | None) -> str | None:
@@ -175,32 +215,48 @@ def tier_for_price(price_id: str | None) -> str | None:
 
     Current ids are checked first so that if an id is somehow listed as
     both, the live price wins.
+
+    Checks EVERY configured currency, not just the default. A euro
+    subscriber's renewal carries the euro price id, and if only the
+    default currency's ids resolved here, every renewal outside Japan
+    would log "unmapped price" and quietly stop maintaining that
+    customer's tier — the same failure the grandfathered ids above exist
+    to prevent, one axis over.
     """
     if not price_id:
         return None
-    for plan in PURCHASABLE_PLANS:
-        if price_for_plan(plan) == price_id:
-            return plan
+    for code in supported_currencies():
+        for plan in PURCHASABLE_PLANS:
+            if price_for_plan(plan, code) == price_id:
+                return plan
     for plan in PURCHASABLE_PLANS:
         if price_id in _legacy_price_ids(plan):
             return plan
     return None
 
 
-def purchasable_plans() -> list[str]:
-    """Plans with a configured price — what the frontend may offer."""
-    return [p for p in PURCHASABLE_PLANS if price_for_plan(p)]
+def purchasable_plans(currency: str | None = None) -> list[str]:
+    """Plans with a configured price in `currency` — what the frontend
+    may offer. A plan priced in yen but not yet in euros is simply not
+    offered to a euro buyer, rather than offered and then failing at
+    checkout."""
+    return [p for p in PURCHASABLE_PLANS if price_for_plan(p, currency)]
 
 
-def price_display(plan: str) -> dict | None:
+def price_display(plan: str, currency: str | None = None) -> dict | None:
     """`{"amount", "currency", "interval"}` for a purchasable plan,
     read from its Stripe price so the page can never advertise an
     amount Stripe won't charge. Cached for an hour, and fail-SOFT:
     billing disabled, unmapped plan, or a Stripe error all return None
     — the plans page then renders limits without a price line rather
     than failing. `amount` is in the currency's smallest unit as Stripe
-    stores it (JPY is zero-decimal: 1200 == ¥1,200)."""
-    price_id = price_for_plan(plan)
+    stores it (JPY is zero-decimal: 1200 == ¥1,200).
+
+    The `currency` field comes back from STRIPE, not from the argument:
+    the price object is the authority on what a customer will actually
+    be charged, and echoing the request would let a misconfigured price
+    id advertise the wrong currency."""
+    price_id = price_for_plan(plan, currency)
     if not price_id or not billing_enabled():
         return None
     cache_key = f"stripe_price_display:{price_id}"
@@ -291,13 +347,21 @@ def ensure_customer(user: CustomUser) -> str:
     return customer["id"]
 
 
-def create_checkout_session(user: CustomUser, plan: str) -> str:
-    """Create a subscription Checkout Session; return its redirect URL."""
+def create_checkout_session(user: CustomUser, plan: str, currency: str | None = None) -> str:
+    """Create a subscription Checkout Session; return its redirect URL.
+
+    `currency` selects WHICH declared price is sold, not a conversion —
+    the price object already carries its own currency, so Stripe charges
+    exactly the round number a human chose for that market.
+    """
     if plan not in PURCHASABLE_PLANS:
         raise BillingError(f"Unknown plan {plan!r}.")
-    price_id = price_for_plan(plan)
+    price_id = price_for_plan(plan, currency)
     if not price_id:
-        raise BillingError(f"Plan {plan!r} has no configured Stripe price.")
+        raise BillingError(
+            f"Plan {plan!r} has no configured Stripe price in "
+            f"{(currency or default_currency()).upper()}."
+        )
     stripe = _stripe()
     customer_id = ensure_customer(user)
     base = settings.FRONTEND_BASE_URL.rstrip("/")
@@ -404,9 +468,19 @@ def _portal_flow_data(stripe, customer_id: str, flow: str, plan: str | None) -> 
         # quantity is whatever Stripe carries over. This is the right
         # flow whenever the caller can't name a target plan.
         return {"type": "subscription_update", "subscription_update": {"subscription": sub["id"]}}
-    price_id = price_for_plan(plan or "")
+    # An existing subscription CANNOT change currency in Stripe, so the
+    # target price has to be in the one they already pay in. Resolving
+    # the default currency here would hand a euro subscriber a yen price
+    # id and fail the update — or worse, succeed and rebill them in yen.
+    existing_currency = (sub.get("currency") or "").lower() or None
+    price_id = price_for_plan(plan or "", existing_currency)
     if not price_id:
-        log.warning("portal flow 'update' for customer %s: plan %r has no price", customer_id, plan)
+        log.warning(
+            "portal flow 'update' for customer %s: plan %r has no price in %s",
+            customer_id,
+            plan,
+            (existing_currency or default_currency()).upper(),
+        )
         return None
     items = (sub.get("items") or {}).get("data") or []
     item = items[0] if items else {}
@@ -703,14 +777,19 @@ def ensure_team_customer(team: TeamMaster) -> str:
     return customer["id"]
 
 
-def create_team_checkout_session(team: TeamMaster, plan: str) -> str:
+def create_team_checkout_session(
+    team: TeamMaster, plan: str, currency: str | None = None
+) -> str:
     """Quantity-based Checkout Session for a team (owner-gated in the
     view). Same prices as personal plans; quantity = current seats."""
     if plan not in PURCHASABLE_PLANS:
         raise BillingError(f"Unknown plan {plan!r}.")
-    price_id = price_for_plan(plan)
+    price_id = price_for_plan(plan, currency)
     if not price_id:
-        raise BillingError(f"Plan {plan!r} has no configured Stripe price.")
+        raise BillingError(
+            f"Plan {plan!r} has no configured Stripe price in "
+            f"{(currency or default_currency()).upper()}."
+        )
     stripe = _stripe()
     customer_id = ensure_team_customer(team)
     base = settings.FRONTEND_BASE_URL.rstrip("/")
