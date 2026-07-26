@@ -1472,14 +1472,62 @@ FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "http://localhost:3000")
 # set. WEBHOOK_SECRET is required for the webhook endpoint to accept
 # events at all (unverified events are never processed).
 # `enterprise` is deliberately absent — contact-sales only.
+def _stripe_prices_by_currency() -> dict[str, dict[str, str]]:
+    """Parse STRIPE_PRICES_BY_CURRENCY. Invalid JSON fails LOUD at boot.
+
+    Same posture as TIER_QUOTAS_JSON above: silently falling back to
+    "no other currencies" would take a working pricing page down to one
+    currency with nothing in the logs to say why.
+    """
+    raw = os.environ.get("STRIPE_PRICES_BY_CURRENCY", "").strip()
+    if not raw:
+        return {}
+    from django.core.exceptions import ImproperlyConfigured
+
+    try:
+        parsed = json.loads(raw)
+    except ValueError as exc:
+        raise ImproperlyConfigured(
+            f"STRIPE_PRICES_BY_CURRENCY is not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise ImproperlyConfigured(
+            'STRIPE_PRICES_BY_CURRENCY must be {"usd": {"core": "price_..."}}'
+        )
+    out: dict[str, dict[str, str]] = {}
+    for code, plans in parsed.items():
+        if not isinstance(plans, dict):
+            raise ImproperlyConfigured(
+                f"STRIPE_PRICES_BY_CURRENCY[{code!r}] must be a plan -> price id map"
+            )
+        out[str(code).lower()] = {str(k): str(v) for k, v in plans.items() if v}
+    return out
+
+
 STRIPE = {
     "SECRET_KEY": os.environ.get("STRIPE_SECRET_KEY", ""),
     "WEBHOOK_SECRET": os.environ.get("STRIPE_WEBHOOK_SECRET", ""),
-    # CURRENT prices — what a new checkout is sold at.
-    # core JPY1,200 / pro JPY2,500 / max JPY4,900 per user/month.
+    # The currency PRICE_CORE/PRO/MAX below are denominated in — the one
+    # a buyer gets when we have nothing better to go on.
+    "DEFAULT_CURRENCY": os.environ.get("STRIPE_DEFAULT_CURRENCY", "jpy").lower(),
+    # CURRENT prices in the DEFAULT currency — what a new checkout is
+    # sold at. core JPY1,200 / pro JPY2,500 / max JPY4,900 per user/month.
     "PRICE_CORE": os.environ.get("STRIPE_PRICE_CORE", ""),
     "PRICE_PRO": os.environ.get("STRIPE_PRICE_PRO", ""),
     "PRICE_MAX": os.environ.get("STRIPE_PRICE_MAX", ""),
+    # Prices in OTHER currencies: {"usd": {"core": "price_...", ...}, ...}
+    #
+    # Explicit per currency, never converted. `$9` and `¥1,200` are both
+    # deliberate round numbers chosen to read well locally; neither is
+    # the other one times an exchange rate. Converting would advertise
+    # ¥1,847/month and move it every time the market did.
+    #
+    # This is the one place the cost system's "USD base, convert for
+    # display" rule does NOT apply — see origin/search_engine/money.py.
+    #
+    # A plan missing from a currency is simply not offered to buyers in
+    # it, rather than offered and failing at checkout.
+    "PRICES_BY_CURRENCY": _stripe_prices_by_currency(),
     # GRANDFATHERED prices — comma-separated `price_...` ids that still
     # resolve to a plan on incoming subscription events but are never
     # offered at checkout.
