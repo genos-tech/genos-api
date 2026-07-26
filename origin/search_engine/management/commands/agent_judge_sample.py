@@ -59,6 +59,7 @@ from django.utils import timezone
 from origin.management.cron_command import CronCommand
 from origin.search_engine.agent.controller import reconstruct_sources_for_run
 from origin.search_engine.agent.evals.judge import judge_answer
+from origin.search_engine.llm import spend
 from origin.search_engine.models import AgentRun, AgentRunJudgement
 
 log = logging.getLogger(__name__)
@@ -223,12 +224,20 @@ class Command(CronCommand):
                 skipped_ungrounded += 1
                 continue
 
-            scores = judge_answer(
-                query=run.query,
-                sources=sources,
-                answer=run.final_answer_text,
-                tool_results=tool_results,
-            )
+            # Cost meter — one logical request per judged run, mirroring
+            # the eval runner's per-case bind. Before this the judge's
+            # LLM calls were the cron's entire spend and all of it
+            # landed in `unattributed`. No user/team: this is our QA
+            # cost, not anyone's usage — but it is real money and the
+            # reconciliation needs it attributed. `run_id` links the
+            # judgement's cost to the run it judged.
+            with spend.spend_context(surface="judge", run_id=str(run.run_id)):
+                scores = judge_answer(
+                    query=run.query,
+                    sources=sources,
+                    answer=run.final_answer_text,
+                    tool_results=tool_results,
+                )
             err = scores.get("error") or ""
             prose = scores.get("prose_faithfulness")
             AgentRunJudgement.objects.create(
