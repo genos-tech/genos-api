@@ -10,6 +10,7 @@ questions Phase 0 exists to answer:
 
     python manage.py ai_cost_report                  # last 7 days
     python manage.py ai_cost_report --days 30 --by-user
+    python manage.py ai_cost_report --by-effort      # per-effort request anatomy
     python manage.py ai_cost_report --month          # calendar month to date
     python manage.py ai_cost_report --alert          # exit non-zero over budget
     python manage.py ai_cost_report --rebuild        # re-derive the rollups
@@ -71,6 +72,15 @@ class Command(CronCommand):
         )
         parser.add_argument("--by-user", action="store_true", help="Add a per-user breakdown.")
         parser.add_argument(
+            "--by-effort",
+            action="store_true",
+            help=(
+                "Add the per-effort request anatomy: purpose × effort with "
+                "per-request means and the token buckets (cached share, "
+                "thinking share) that size optimization levers."
+            ),
+        )
+        parser.add_argument(
             "--alert",
             action="store_true",
             help=(
@@ -130,6 +140,8 @@ class Command(CronCommand):
         total_jpy = self._totals_section(events, requests, lines)
         self._provider_section(events, lines)
         self._purpose_section(events, lines)
+        if options["by_effort"]:
+            self._effort_section(events, requests, lines)
         self._surface_section(events, lines)
         self._coverage_section(events, lines)
         if options["by_user"]:
@@ -190,20 +202,137 @@ class Command(CronCommand):
             "shows Gemini + embeddings only."
         )
 
+    @staticmethod
+    def _call_label(r: dict) -> str:
+        """One display name per row kind.
+
+        The purpose when tagged; otherwise the unit kind + provider, so
+        Tavily/embedding/Cohere rows written before purpose tagging
+        landed still get a real name instead of all folding into one
+        `(untagged)` bucket that hides three different call types.
+        """
+        if r["purpose"]:
+            return r["purpose"]
+        if r["unit_kind"]:
+            return f"({r['unit_kind']}:{r['provider'] or '?'})"
+        return "(untagged)"
+
     def _purpose_section(self, events, out: list[str]) -> None:
         """What one request is actually made of."""
         out.append("\n-- Purposes (what a request is made of) --")
-        out.append(f"  {'purpose':<14} {'calls':>7} {'JPY':>14}  share")
-        rows = list(
-            events.values("purpose").annotate(n=Count("id"), jpy=Sum("cost_jpy_milli"))
+        out.append(f"  {'purpose':<16} {'calls':>7} {'JPY':>14}  share")
+        rows = events.values("purpose", "unit_kind", "provider").annotate(
+            n=Count("id"), jpy=Sum("cost_jpy_milli")
         )
-        total = sum(int(r["jpy"] or 0) for r in rows) or 1
-        for r in sorted(rows, key=lambda x: -(x["jpy"] or 0)):
-            jpy = int(r["jpy"] or 0)
+        merged: dict[str, dict[str, int]] = {}
+        for r in rows:
+            m = merged.setdefault(self._call_label(r), {"n": 0, "jpy": 0})
+            m["n"] += int(r["n"] or 0)
+            m["jpy"] += int(r["jpy"] or 0)
+        total = sum(m["jpy"] for m in merged.values()) or 1
+        for label, m in sorted(merged.items(), key=lambda x: -x[1]["jpy"]):
             out.append(
-                f"  {(r['purpose'] or '(untagged)'):<14} {r['n']:>7} "
-                f"{_yen(jpy):>14}  {100 * jpy / total:4.1f}%"
+                f"  {label:<16} {m['n']:>7} "
+                f"{_yen(m['jpy']):>14}  {100 * m['jpy'] / total:4.1f}%"
             )
+
+    _EFFORT_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+    def _effort_section(self, events, requests, out: list[str]) -> None:
+        """The per-effort request anatomy: where each cent goes.
+
+        This is the report the cost-optimization work steers by, so its
+        columns are the levers: `in/req` + `cach%` say whether the
+        provider's prompt cache is actually absorbing the re-sent
+        prefix; `think/req` sizes what a thinking budget could reclaim;
+        `c/req` × `JPY/req` per purpose ranks which call type to attack.
+
+        Bucket semantics (normalized in the adapters): `in` = uncached +
+        cached input; `cach%` = cached share of `in`. `think` is billed
+        ON TOP of `out` on Gemini, reported as a SUBSET of `out` on
+        OpenAI, and folded invisibly into `out` on Claude — so compare
+        thinking within a provider, never across two.
+        """
+        out.append("\n-- By effort (request anatomy) --")
+
+        # Requests per effort, for the per-request means. Falls back to
+        # distinct request ids in the events when the rollup is missing
+        # (e.g. a window whose requests closed outside it).
+        n_req_by_effort = {
+            (r["effort"] or ""): int(r["n"] or 0)
+            for r in requests.values("effort").annotate(n=Count("id"))
+        }
+        fallback_req = {
+            (r["effort"] or ""): int(r["n"] or 0)
+            for r in events.values("effort").annotate(
+                n=Count("request_id", distinct=True)
+            )
+        }
+
+        rows = events.values("effort", "purpose", "unit_kind", "provider").annotate(
+            n=Count("id"),
+            jpy=Sum("cost_jpy_milli"),
+            usd=Sum("cost_usd_micro"),
+            prompt=Sum("prompt_tokens"),
+            cached=Sum("cached_tokens"),
+            outp=Sum("output_tokens"),
+            thought=Sum("thought_tokens"),
+            units=Sum("units"),
+        )
+        efforts: dict[str, dict[str, dict]] = {}
+        for r in rows:
+            eff = r["effort"] or "(none)"
+            m = efforts.setdefault(eff, {}).setdefault(
+                self._call_label(r),
+                {
+                    "n": 0, "jpy": 0, "usd": 0, "prompt": 0, "cached": 0,
+                    "outp": 0, "thought": 0, "units": 0,
+                    "unit_row": bool(r["unit_kind"]),
+                },
+            )
+            for src, dst in (
+                ("n", "n"), ("jpy", "jpy"), ("usd", "usd"), ("prompt", "prompt"),
+                ("cached", "cached"), ("outp", "outp"), ("thought", "thought"),
+                ("units", "units"),
+            ):
+                m[dst] += int(r[src] or 0)
+
+        def _k(n: float) -> str:
+            if n >= 1_000_000:
+                return f"{n / 1_000_000:.1f}M"
+            if n >= 1_000:
+                return f"{n / 1_000:.1f}k"
+            return f"{n:.0f}"
+
+        for eff in sorted(efforts, key=lambda e: (self._EFFORT_ORDER.get(e, 9), e)):
+            labels = efforts[eff]
+            eff_key = "" if eff == "(none)" else eff
+            n_req = n_req_by_effort.get(eff_key) or fallback_req.get(eff_key) or 1
+            total_jpy = sum(m["jpy"] for m in labels.values())
+            total_usd = sum(m["usd"] for m in labels.values())
+            out.append(
+                f"\n  == {eff} — {n_req} request(s), mean "
+                f"{_yen(total_jpy // n_req)}/req ({_usd(total_usd // n_req)}) =="
+            )
+            out.append(
+                f"    {'call':<16} {'calls':>6} {'c/req':>6} {'JPY/req':>9} "
+                f"{'share':>6} {'in/req':>8} {'cach%':>6} {'out/req':>8} {'think/req':>9}"
+            )
+            for label, m in sorted(labels.items(), key=lambda x: -x[1]["jpy"]):
+                base = (
+                    f"    {label:<16} {m['n']:>6} {m['n'] / n_req:>6.1f} "
+                    f"{_yen(m['jpy'] // n_req):>9} "
+                    f"{100 * m['jpy'] / (total_jpy or 1):>5.1f}%"
+                )
+                if m["unit_row"]:
+                    out.append(f"{base}  [{m['units']} unit(s)]")
+                    continue
+                total_in = m["prompt"] + m["cached"]
+                cach_pct = 100 * m["cached"] / total_in if total_in else 0.0
+                out.append(
+                    f"{base} {_k(total_in / n_req):>8} {cach_pct:>5.0f}% "
+                    f"{_k(m['outp'] / n_req):>8} {_k(m['thought'] / n_req):>9}"
+                )
 
     def _surface_section(self, events, out: list[str]) -> None:
         out.append("\n-- Surfaces --")

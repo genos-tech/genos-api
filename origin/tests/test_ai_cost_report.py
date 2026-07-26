@@ -145,6 +145,79 @@ class ReportTests(TestCase):
         _event(cost_jpy_milli=1000, cost_usd_micro=6000)
         self.assertIn("¥1.00", _report("--days", "7"))
 
+    def test_untagged_unit_rows_are_named_by_kind_not_lumped_together(self):
+        """Tavily, query embeds and Cohere all used to fold into one
+        `(untagged)` line — three different call types hiding as one.
+        Rows written before purpose tagging landed must still separate."""
+        _event(purpose="", unit_kind="search", provider="tavily", units=2,
+               cost_jpy_milli=300, cost_usd_micro=2000)
+        _event(purpose="", unit_kind="embed", provider="openai", units=4,
+               cost_jpy_milli=10, cost_usd_micro=60)
+        text = _report("--days", "7")
+        self.assertIn("(search:tavily)", text)
+        self.assertIn("(embed:openai)", text)
+        self.assertNotIn("(untagged)", text)
+
+
+class EffortAnatomyTests(TestCase):
+    """`--by-effort` — the table the cost-optimization work steers by."""
+
+    def _request(self, effort: str, request_id: str = REQ):
+        return AiRequestCost.objects.create(
+            request_id=request_id, surface="ask", user_id="u1", effort=effort,
+            result=AiRequestCost.RESULT_SUCCESS, started_at=timezone.now(),
+        )
+
+    def test_by_effort_is_opt_in(self):
+        _event(effort="low", cost_jpy_milli=100, cost_usd_micro=1000)
+        self.assertNotIn("By effort", _report("--days", "7"))
+
+    def test_anatomy_gives_per_request_means_per_purpose(self):
+        """Two low-effort requests: the loop line must average across
+        them, and the per-effort header must carry the USD mean — the
+        figure the <$0.02 target is checked against."""
+        other = "55555555-5555-5555-5555-555555555555"
+        self._request("low", REQ)
+        self._request("low", other)
+        for req in (REQ, other):
+            _event(request_id=req, effort="low", purpose="loop",
+                   cost_jpy_milli=1200, cost_usd_micro=8000)
+            _event(request_id=req, effort="low", purpose="rewrite",
+                   cost_jpy_milli=300, cost_usd_micro=2000)
+        text = _report("--days", "7", "--by-effort")
+        self.assertIn("== low — 2 request(s)", text)
+        self.assertIn("$0.0100", text, "the USD mean per request is the headline")
+        self.assertIn("loop", text)
+        self.assertIn("rewrite", text)
+        self.assertIn("¥1.20", text, "loop JPY per request, not the sum")
+
+    def test_cache_share_is_cached_over_total_input(self):
+        """`prompt_tokens` is the UNCACHED remainder on every provider,
+        so the cache share must be cached/(prompt+cached) — computing
+        cached/prompt would report 400% and nobody could trust the rest."""
+        self._request("medium")
+        _event(effort="medium", cost_jpy_milli=100, cost_usd_micro=700,
+               prompt_tokens=200, cached_tokens=800, output_tokens=50)
+        text = _report("--days", "7", "--by-effort")
+        self.assertIn("80%", text)
+
+    def test_unit_rows_show_units_in_place_of_token_buckets(self):
+        """A Tavily row has no token anatomy; printing 0-token columns
+        would read as 'free input', so it shows its unit count instead."""
+        self._request("low")
+        _event(effort="low", purpose="web_search", unit_kind="search",
+               provider="tavily", units=2, cost_jpy_milli=240, cost_usd_micro=1600)
+        text = _report("--days", "7", "--by-effort")
+        self.assertIn("[2 unit(s)]", text)
+
+    def test_efforts_sort_low_medium_high_not_alphabetically(self):
+        for eff in ("high", "low", "medium"):
+            self._request(eff, request_id=f"66666666-6666-6666-6666-66666666666{len(eff)}")
+            _event(effort=eff, cost_jpy_milli=100, cost_usd_micro=700)
+        text = _report("--days", "7", "--by-effort")
+        self.assertLess(text.index("== low"), text.index("== medium"))
+        self.assertLess(text.index("== medium"), text.index("== high"))
+
 
 class BudgetAlarmTests(TestCase):
     """The alarm. This is the only cross-provider budget check that can
