@@ -10,7 +10,7 @@ and these tests are what prove that.
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from origin.search_engine import quota
@@ -20,6 +20,25 @@ User = get_user_model()
 URL = "/api/v2/agent/models/"
 
 
+def _daily_era_se():
+    """Ambient settings with the credits era pinned OFF.
+
+    Credits-authoritative adds a `credits` block to this payload (its
+    presence is the frontend's render switch), which the exact shape
+    assertions below don't tolerate — by design: this file freezes the
+    DAILY-era contract, and the credits-era payload has its own tests.
+    The effort-level additions (`efforts[]`, `current.effort`) stay
+    UNPINNED because the contract requires them to be additive, and
+    the set-subtraction tolerances assert exactly that under either
+    flag state.
+    """
+    se = dict(settings.SEARCH_ENGINE)
+    se["AI_CREDITS_SHADOW"] = False
+    se["AI_CREDITS_AUTHORITATIVE"] = False
+    return se
+
+
+@override_settings(SEARCH_ENGINE=_daily_era_se())
 class AgentModelsEndpointTests(TestCase):
     def setUp(self):
         self.client = APIClient()
