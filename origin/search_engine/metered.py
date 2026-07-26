@@ -112,9 +112,18 @@ def open_request(spend_kwargs: dict) -> None:
 
 
 def close_request(spend_kwargs: dict, result: str) -> None:
-    """Roll this request's events up onto its row. Never raises."""
+    """End this logical request: roll the events up, then settle the
+    shadow credit charge. Never raises.
+
+    `spend_recorder.finish_request`, not the bare `close_request`:
+    the two summary surfaces are billable, so a bare close would roll
+    up their cost and post no charge — they would consume a user's ask
+    quota and appear in `ai_credit_report` as free. Settling lives on
+    `finish_request` precisely so it stays out of `--rebuild`'s replay
+    path (`RebuildGuardTests`).
+    """
     try:
-        spend_recorder.close_request(spend.SpendContext(**spend_kwargs), result=result)
+        spend_recorder.finish_request(spend.SpendContext(**spend_kwargs), result=result)
     except Exception:  # noqa: BLE001 — accounting never breaks a response
         log.debug("Failed to close spend request", exc_info=True)
 
