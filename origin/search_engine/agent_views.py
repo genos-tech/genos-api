@@ -442,8 +442,8 @@ def _alert_if_user_spend_is_high(user_id: str) -> None:
     minutes per user so a burst of asks doesn't re-run it each time.
     Fails open, like every other check here.
     """
-    threshold_yen = float(settings.SEARCH_ENGINE.get("AI_USER_DAILY_ALERT_JPY", 0) or 0)
-    if threshold_yen <= 0 or not user_id:
+    threshold_usd = float(settings.SEARCH_ENGINE.get("AI_USER_DAILY_ALERT_USD", 0) or 0)
+    if threshold_usd <= 0 or not user_id:
         return
     try:
         from django.core.cache import cache  # noqa: PLC0415
@@ -456,22 +456,22 @@ def _alert_if_user_spend_is_high(user_id: str) -> None:
             return
 
         since = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        spent_milli = int(
+        spent_usd_micro = int(
             AiSpendEvent.objects.filter(user_id=str(user_id), created_at__gte=since).aggregate(
-                s=Sum("cost_jpy_milli")
+                s=Sum("cost_usd_micro")
             )["s"]
             or 0
         )
-        if spent_milli >= threshold_yen * 1000:
+        if spent_usd_micro >= threshold_usd * 1_000_000:
             # WARNING, not ERROR: CronCommand's tripwire watches ERROR on
             # the `origin` logger, and one expensive user is not a failed
             # job.
             log.warning(
-                "User %s has used ¥%.2f of AI today, over the ¥%.2f alert "
+                "User %s has used $%.2f of AI today, over the $%.2f alert "
                 "threshold. Not blocked — see `ai_cost_report --by-user`.",
                 user_id,
-                spent_milli / 1000,
-                threshold_yen,
+                spent_usd_micro / 1_000_000,
+                threshold_usd,
             )
             cache.set(cache_key, True, 300)
     except Exception:  # noqa: BLE001 — a check that cannot run must not block
@@ -508,7 +508,7 @@ def _credit_gate(user_id: str, plan: str) -> Response | None:
     not knowable until it runs.
 
     Returns a 429 or None. Fails OPEN on any internal error: a ledger
-    hiccup must never block a paying user, and the yen ceilings
+    hiccup must never block a paying user, and the cost ceilings
     (`_enforce_monthly_ceilings`) remain the real financial backstop
     regardless of what credits say.
 
@@ -552,8 +552,8 @@ def _credit_gate(user_id: str, plan: str) -> Response | None:
         return None
 
 
-def _credit_budget_jpy_milli(user_id: str, plan: str) -> int:
-    """What this request may spend before the loop must stop, in milli-yen.
+def _credit_budget_usd_micro(user_id: str, plan: str) -> int:
+    """What this request may spend before the loop must stop, in micro-USD.
 
     The other half of `_credit_gate`: the gate lets a request with any
     positive balance through, and this is the number that then stops it
@@ -570,7 +570,7 @@ def _credit_budget_jpy_milli(user_id: str, plan: str) -> int:
         from origin.search_engine import credit_ledger, credits  # noqa: PLC0415
 
         balance = credit_ledger.balance_milli(str(user_id), plan)
-        return credits.request_budget_jpy_milli(balance, settings.CREDIT_POLICY)
+        return credits.request_budget_usd_micro(balance, settings.CREDIT_POLICY)
     except Exception:  # noqa: BLE001 — a budget we cannot compute is no budget
         log.debug("Could not compute credit budget", exc_info=True)
         return 0
@@ -684,25 +684,31 @@ def _billable_surface_gate(user_id: str, chosen: LlmChoice) -> Response | None:
     return None
 
 
-def _month_spend_milli(*, user_id: str = "", team_id: str = "") -> int:
+def _month_spend_usd_micro(*, user_id: str = "", team_id: str = "") -> int:
     """This UTC month's ledger spend for one user OR one team, in
-    milli-yen. Cached for 5 minutes — the ceiling drifts by at most a
+    micro-USD. Cached for 5 minutes — the ceiling drifts by at most a
     few asks, which is fine for a monthly number. Raises on cache/DB
-    trouble; callers fail open."""
+    trouble; callers fail open.
+
+    USD because the ceiling it feeds is a COST ceiling and cost arrives
+    in dollars. A ceiling denominated in yen would have tightened or
+    loosened itself every time the exchange rate moved, which is not a
+    thing a circuit breaker should do.
+    """
     from django.core.cache import cache  # noqa: PLC0415
     from django.db.models import Sum  # noqa: PLC0415
 
     from origin.search_engine.models import AiSpendEvent  # noqa: PLC0415
 
     key_id = f"u:{user_id}" if user_id else f"t:{team_id}"
-    cache_key = f"ai_spend_month:{key_id}:{timezone.now():%Y%m}"
+    cache_key = f"ai_spend_month_usd:{key_id}:{timezone.now():%Y%m}"
     cached = cache.get(cache_key)
     if cached is not None:
         return int(cached)
     since = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     qs = AiSpendEvent.objects.filter(created_at__gte=since)
     qs = qs.filter(user_id=str(user_id)) if user_id else qs.filter(team_id=str(team_id))
-    spent = int(qs.aggregate(s=Sum("cost_jpy_milli"))["s"] or 0)
+    spent = int(qs.aggregate(s=Sum("cost_usd_micro"))["s"] or 0)
     cache.set(cache_key, spent, 300)
     return spent
 
@@ -741,7 +747,7 @@ def _enforce_monthly_ceilings(user_id: str, plan: str, team_id, chosen: LlmChoic
          until a human has looked at `ai_cost_report --by-user`.
 
     Ceiling values come from `credit_policy.yaml`'s
-    `monthly_ceiling_jpy` — the same versioned file as the rest of the
+    `monthly_ceiling_usd` — the same versioned file as the rest of the
     commercial numbers; `unlimited` (enterprise) skips everything.
     These operate on ACTUAL yen from the ledger regardless of what
     credits say — a credit-policy bug cannot take the business with it.
@@ -757,36 +763,36 @@ def _enforce_monthly_ceilings(user_id: str, plan: str, team_id, chosen: LlmChoic
         # Per-workspace ceiling: alert-only in v1 (a team is a report
         # dimension, and blocking N users over one member's spend needs
         # a human decision). Opt-in via a single global env value.
-        team_ceiling_yen = float(
-            settings.SEARCH_ENGINE.get("AI_TEAM_MONTHLY_CEILING_JPY", 0) or 0
+        team_ceiling_usd = float(
+            settings.SEARCH_ENGINE.get("AI_TEAM_MONTHLY_CEILING_USD", 0) or 0
         )
-        if team_ceiling_yen > 0 and team_id:
-            team_spent = _month_spend_milli(team_id=str(team_id))
-            if team_spent >= team_ceiling_yen * 1000:
+        if team_ceiling_usd > 0 and team_id:
+            team_spent = _month_spend_usd_micro(team_id=str(team_id))
+            if team_spent >= team_ceiling_usd * 1_000_000:
                 log.warning(
-                    "Team %s is over the monthly AI cost ceiling: ¥%.0f of ¥%.0f. "
+                    "Team %s is over the monthly AI cost ceiling: $%.2f of $%.2f. "
                     "Alert only — see `ai_cost_report` for the member breakdown.",
                     team_id,
-                    team_spent / 1000,
-                    team_ceiling_yen,
+                    team_spent / 1_000_000,
+                    team_ceiling_usd,
                 )
 
-        ceiling_yen = policy.monthly_ceiling_jpy.get(plan or "free")
-        if ceiling_yen is None:  # unlimited (enterprise)
+        ceiling_usd = policy.monthly_ceiling_usd.get(plan or "free")
+        if ceiling_usd is None:  # unlimited (enterprise)
             return None, None, chosen
 
-        spent_milli = _month_spend_milli(user_id=str(user_id))
-        if spent_milli < ceiling_yen * 1000:
+        spent_usd_micro = _month_spend_usd_micro(user_id=str(user_id))
+        if spent_usd_micro < ceiling_usd * 1_000_000:
             return None, None, chosen
 
         log.warning(
-            "User %s (%s) is over the monthly AI cost ceiling: ¥%.0f of ¥%.0f. "
+            "User %s (%s) is over the monthly AI cost ceiling: $%.2f of $%.2f. "
             "Graded levers: route_cheapest=%s pause=%s — see "
             "`ai_cost_report --by-user` before enabling either.",
             user_id,
             plan or "free",
-            spent_milli / 1000,
-            ceiling_yen,
+            spent_usd_micro / 1_000_000,
+            ceiling_usd,
             bool(settings.SEARCH_ENGINE.get("AI_CEILING_ROUTE_CHEAPEST")),
             bool(settings.SEARCH_ENGINE.get("AI_CEILING_PAUSE")),
         )
@@ -1003,7 +1009,7 @@ class AgentAskView(AuthenticatedAPIView):
             user_id,
             team_id,
             chosen,
-            credit_budget_jpy_milli=_credit_budget_jpy_milli(user_id, plan),
+            credit_budget_usd_micro=_credit_budget_usd_micro(user_id, plan),
         )
         metered.open_request(spend_kwargs)
         _alert_if_user_spend_is_high(user_id)

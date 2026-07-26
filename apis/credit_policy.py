@@ -56,7 +56,10 @@ class CreditPolicy:
     """
 
     label: str
-    credit_jpy: float
+    #: USD of eligible direct AI cost per credit. USD because that is
+    #: what providers invoice; see `money.py` for why the credit path
+    #: carries no exchange rate at all.
+    credit_usd: float
     request_max_credits_milli: int
     billable_surfaces: frozenset[str]
     # Request outcomes that may carry a charge. Data, not a constant, so
@@ -68,7 +71,7 @@ class CreditPolicy:
     # (enterprise: no entitlement accounting at all).
     entitlements_milli: dict[str, int | None]
     # plan -> internal monthly direct-AI ceiling in yen; None = none.
-    monthly_ceiling_jpy: dict[str, float | None]
+    monthly_ceiling_usd: dict[str, float | None]
     fingerprint: str = ""
     entitlement_fingerprint: str = ""
     extra: dict = field(default_factory=dict)
@@ -82,9 +85,9 @@ class CreditPolicy:
     def entitlement_version(self) -> str:
         return f"{self.label}+{self.entitlement_fingerprint}"
 
-    def request_max_jpy_milli(self) -> int:
-        """The per-request eligible-cost cap, in milli-yen."""
-        return int(round(self.request_max_credits_milli * self.credit_jpy))
+    def request_max_usd_micro(self) -> int:
+        """The per-request eligible-cost cap, in micro-USD."""
+        return int(round(self.request_max_credits_milli * self.credit_usd * 1_000))
 
 
 def _parse_plan_map(raw: dict, key: str, *, scale: float) -> dict[str, float | None]:
@@ -129,7 +132,7 @@ def load_credit_policy(path: str | Path) -> CreditPolicy:
         _fail("`policy` must be a mapping")
     unknown = set(policy) - {
         "label",
-        "credit_jpy",
+        "credit_usd",
         "request_max_credits",
         "billable_surfaces",
         "billable_results",
@@ -142,9 +145,9 @@ def load_credit_policy(path: str | Path) -> CreditPolicy:
     if not isinstance(label, str) or not label.strip():
         _fail("policy.label must be a non-empty string")
 
-    credit_jpy = policy.get("credit_jpy")
-    if isinstance(credit_jpy, bool) or not isinstance(credit_jpy, (int, float)) or credit_jpy <= 0:
-        _fail(f"policy.credit_jpy must be a positive number, got {credit_jpy!r}")
+    credit_usd = policy.get("credit_usd")
+    if isinstance(credit_usd, bool) or not isinstance(credit_usd, (int, float)) or credit_usd <= 0:
+        _fail(f"policy.credit_usd must be a positive number, got {credit_usd!r}")
 
     max_credits = policy.get("request_max_credits")
     if isinstance(max_credits, bool) or not isinstance(max_credits, (int, float)) or max_credits <= 0:
@@ -176,15 +179,15 @@ def load_credit_policy(path: str | Path) -> CreditPolicy:
             _fail(f"policy.excluded_purposes entries must be non-empty strings, got {p!r}")
 
     entitlements = _parse_plan_map(raw, "entitlements", scale=1000.0)  # credits -> milli
-    ceilings = _parse_plan_map(raw, "monthly_ceiling_jpy", scale=1.0)
+    ceilings = _parse_plan_map(raw, "monthly_ceiling_usd", scale=1.0)
 
-    top_unknown = set(raw) - {"policy", "entitlements", "monthly_ceiling_jpy"}
+    top_unknown = set(raw) - {"policy", "entitlements", "monthly_ceiling_usd"}
     if top_unknown:
         _fail(f"unknown top-level key(s) {sorted(top_unknown)}")
 
     # --- fingerprints, derived never declared -------------------------
     policy_payload = {
-        "credit_jpy": float(credit_jpy),
+        "credit_usd": float(credit_usd),
         "request_max_credits": float(max_credits),
         "billable_surfaces": sorted(surfaces),
         "billable_results": sorted(results),
@@ -200,7 +203,7 @@ def load_credit_policy(path: str | Path) -> CreditPolicy:
 
     return CreditPolicy(
         label=label.strip(),
-        credit_jpy=float(credit_jpy),
+        credit_usd=float(credit_usd),
         request_max_credits_milli=int(round(float(max_credits) * 1000)),
         billable_surfaces=frozenset(surfaces),
         billable_results=frozenset(results),
@@ -208,7 +211,7 @@ def load_credit_policy(path: str | Path) -> CreditPolicy:
         entitlements_milli={
             p: (int(v) if v is not None else None) for p, v in entitlements.items()
         },
-        monthly_ceiling_jpy=ceilings,
+        monthly_ceiling_usd=ceilings,
         fingerprint=_fp(policy_payload),
         entitlement_fingerprint=_fp(entitlement_payload),
     )

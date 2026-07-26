@@ -141,7 +141,33 @@ version: 1
 #
 rate_card:
     label: "2026-07-25"
+
+    # USD is the BASE unit of the whole cost system — it is what every
+    # provider actually invoices. `fx_jpy_per_usd` is stamped onto each
+    # spend row so a historical yen total stays reconcilable; it is NOT
+    # in the credit path any more (credits are denominated in USD, see
+    # credit_policy.yaml), so moving it no longer changes what anyone
+    # is charged.
     fx_jpy_per_usd: 150
+
+    # Additional PINNED rates for reading reports in another currency.
+    #
+    # Deliberately NOT part of the rate-card fingerprint, and this is
+    # the important bit: the fingerprint must cover exactly what can
+    # change a STORED number. These rates convert nothing that gets
+    # stored — every row keeps micro-USD — so folding them in would
+    # split the cost ledger into two "regimes" every time somebody
+    # added a currency to read a report in, for no change in any
+    # number. `fx_jpy_per_usd` above IS fingerprinted, because it is
+    # written onto rows.
+    #
+    # Pinned rather than looked up live, for the same reason as always:
+    # a report whose historical totals drift with today's exchange rate
+    # cannot be reconciled against anything.
+    display_fx_per_usd:
+        jpy: 150
+        eur: 0.92
+        gbp: 0.79
 
 # =====================================================================
 #  Embedding models — PRICES ONLY, never a user-facing choice.

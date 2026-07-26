@@ -322,24 +322,24 @@ class RollupTests(_RestoresRecorder, TestCase):
         """Milli-credits, so a cheap request keeps sub-credit
         resolution. Storing whole credits would round a sub-credit ask
         up to 1 and overcharge it. Conversion now comes from the
-        versioned policy (¥15/credit) via `credits.py` — the Phase 0
+        versioned policy ($0.10/credit) via `credits.py` — the Phase 0
         placeholder unit is gone; full coverage in test_credit_policy."""
         from django.conf import settings as dj_settings  # noqa: PLC0415
 
         from origin.search_engine import credits  # noqa: PLC0415
 
         policy = dj_settings.CREDIT_POLICY
-        # ¥15 (15000 milli-yen) = exactly 1 credit under cp-v1.
-        self.assertEqual(credits.credits_milli(15_000, policy), 1000)
-        # A ¥1.50 ask stays a tenth of a credit.
-        self.assertEqual(credits.credits_milli(1_500, policy), 100)
+        # $0.10 (100_000 micro-USD) = exactly 1 credit under cp-v1.
+        self.assertEqual(credits.credits_milli(100_000, policy), 1000)
+        # A $0.01 ask stays a tenth of a credit.
+        self.assertEqual(credits.credits_milli(10_000, policy), 100)
 
     @METER_ON
     def test_quote_is_written_at_open_not_at_close(self):
         ctx = self._ctx()
-        spend_recorder.open_request(ctx, quoted_max_jpy_milli=555)
+        spend_recorder.open_request(ctx, quoted_max_usd_micro=555)
         row = AiRequestCost.objects.get(request_id=ctx.request_id)
-        self.assertEqual(row.quoted_max_jpy_milli, 555)
+        self.assertEqual(row.quoted_max_usd_micro, 555)
         self.assertIsNone(row.finished_at)
 
 

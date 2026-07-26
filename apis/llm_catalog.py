@@ -137,6 +137,11 @@ class RateCard:
     label: str
     fx_jpy_per_usd: float
     fingerprint: str
+    #: Pinned rates for READING reports in another currency. Never
+    #: applied to a stored number — every row stays micro-USD — which is
+    #: exactly why these are not fingerprinted: adding a currency to
+    #: read a report in must not split the cost ledger into two regimes.
+    display_fx_per_usd: dict[str, float] = field(default_factory=dict)
 
     @property
     def version(self) -> str:
@@ -350,7 +355,7 @@ def _parse_rate_card(
     rc = raw.get("rate_card")
     if not isinstance(rc, dict):
         _fail("`rate_card` must be a mapping with `label` and `fx_jpy_per_usd`")
-    unknown = set(rc) - {"label", "fx_jpy_per_usd"}
+    unknown = set(rc) - {"label", "fx_jpy_per_usd", "display_fx_per_usd"}
     if unknown:
         _fail(f"rate_card has unknown key(s) {sorted(unknown)}")
     label = rc.get("label")
@@ -359,6 +364,17 @@ def _parse_rate_card(
     fx = rc.get("fx_jpy_per_usd")
     if isinstance(fx, bool) or not isinstance(fx, (int, float)) or fx <= 0:
         _fail(f"rate_card.fx_jpy_per_usd must be a positive number, got {fx!r}")
+
+    display_fx: dict[str, float] = {}
+    raw_display = rc.get("display_fx_per_usd") or {}
+    if not isinstance(raw_display, dict):
+        _fail("rate_card.display_fx_per_usd must be a mapping of currency -> rate")
+    for code, rate in raw_display.items():
+        if not isinstance(code, str) or not code.strip():
+            _fail(f"display_fx_per_usd keys must be currency codes, got {code!r}")
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or rate <= 0:
+            _fail(f"display_fx_per_usd.{code} must be a positive number, got {rate!r}")
+        display_fx[code.strip().lower()] = float(rate)
 
     payload = {
         "fx": float(fx),
@@ -370,9 +386,17 @@ def _parse_rate_card(
             "/".join(key): rate for key, rate in sorted(unit_prices.items())
         },
     }
+    # `display_fx_per_usd` is deliberately absent from `payload`: see the
+    # field docstring. Adding a currency to read a report in must not
+    # look like a price change.
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     fingerprint = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]
-    return RateCard(label=label.strip(), fx_jpy_per_usd=float(fx), fingerprint=fingerprint)
+    return RateCard(
+        label=label.strip(),
+        fx_jpy_per_usd=float(fx),
+        fingerprint=fingerprint,
+        display_fx_per_usd=display_fx,
+    )
 
 
 def _check_price_order(provider: str, entries: list[dict[str, Any]]) -> None:

@@ -132,6 +132,10 @@ class CaseResult:
     llm_calls: int = 0
     total_tokens: int = 0
     cost_jpy_milli: int = 0
+    #: The authoritative figure — USD is what providers invoice, and
+    #: what the credit conversion reads. The yen twin is kept for
+    #: continuity of the older eval output.
+    cost_usd_micro: int = 0
     rate_card_version: str = ""
 
 
@@ -204,6 +208,7 @@ def _case_cost() -> dict[str, Any]:
         "llm_calls": 0,
         "total_tokens": 0,
         "cost_jpy_milli": 0,
+        "cost_usd_micro": 0,
         "rate_card_version": "",
     }
     ctx = spend.current_context()
@@ -218,6 +223,7 @@ def _case_cost() -> dict[str, Any]:
         agg = rows.aggregate(
             n=Count("id"),
             jpy=Sum("cost_jpy_milli"),
+            usd=Sum("cost_usd_micro"),
             prompt=Sum("prompt_tokens"),
             cached=Sum("cached_tokens"),
             output=Sum("output_tokens"),
@@ -232,6 +238,7 @@ def _case_cost() -> dict[str, Any]:
                 int(agg[k] or 0) for k in ("prompt", "cached", "output", "thought")
             ),
             "cost_jpy_milli": int(agg["jpy"] or 0),
+            "cost_usd_micro": int(agg["usd"] or 0),
             "rate_card_version": card or "",
         }
     except Exception:  # noqa: BLE001 — an eval must not fail on accounting

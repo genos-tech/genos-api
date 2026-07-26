@@ -632,8 +632,16 @@ class AiRequestCost(models.Model):
     result = models.CharField(max_length=32, blank=True, default="", db_index=True)
 
     # --- money --------------------------------------------------------
+    #
+    # USD (micro) is AUTHORITATIVE: it is what providers invoice, and it
+    # is what the credit math reads. The `*_jpy_milli` twins are kept and
+    # still written, but they are DERIVED at the pinned rate and exist
+    # for continuity of the yen reporting that predates the currency
+    # generalisation. Nothing decides anything from them. See `money.py`.
+    #
     # Quoted before any spend; the ceiling we promised not to exceed.
     quoted_max_jpy_milli = models.BigIntegerField(default=0)
+    quoted_max_usd_micro = models.BigIntegerField(default=0)
     # What it actually cost us (sum of this request's events).
     computed_jpy_milli = models.BigIntegerField(default=0)
     computed_usd_micro = models.BigIntegerField(default=0)
@@ -644,6 +652,7 @@ class AiRequestCost(models.Model):
     # names, so it can be re-derived — unlike a posted credit charge,
     # which is immutable and lives in its own ledger.
     eligible_jpy_milli = models.BigIntegerField(default=0)
+    eligible_usd_micro = models.BigIntegerField(default=0)
 
     # --- the shadow decision (V2 layer 5), written at request START --
     # What the quote/reserve/charge flow WOULD have done, recorded
@@ -663,8 +672,10 @@ class AiRequestCost(models.Model):
     # What the customer would be charged (0 on a failure; never above
     # the quote).
     charged_jpy_milli = models.BigIntegerField(default=0)
+    charged_usd_micro = models.BigIntegerField(default=0)
     # computed - charged. Our cost, deliberately taken on.
     absorbed_jpy_milli = models.BigIntegerField(default=0)
+    absorbed_usd_micro = models.BigIntegerField(default=0)
     # Shadow only. Milli-credits so a small request is not rounded up
     # to a whole credit — fractional support is a stated requirement.
     shadow_credits_milli = models.BigIntegerField(default=0)

@@ -1348,9 +1348,18 @@ SEARCH_ENGINE["AI_BENCHMARK_REGRESSION_PCT"] = float(
 # 0 = off. A team over the line logs a WARNING naming the team; there
 # is deliberately no blocking lever here, because pausing N users over
 # one member's spend is a human decision, not a threshold's.
-SEARCH_ENGINE["AI_TEAM_MONTHLY_CEILING_JPY"] = float(
-    os.environ.get("AI_TEAM_MONTHLY_CEILING_JPY") or "0"
+SEARCH_ENGINE["AI_TEAM_MONTHLY_CEILING_USD"] = float(
+    os.environ.get("AI_TEAM_MONTHLY_CEILING_USD") or "0"
 )
+if os.environ.get("AI_TEAM_MONTHLY_CEILING_JPY") and not os.environ.get(
+    "AI_TEAM_MONTHLY_CEILING_USD"
+):
+    from django.core.exceptions import ImproperlyConfigured
+
+    raise ImproperlyConfigured(
+        "AI_TEAM_MONTHLY_CEILING_JPY is set but team ceilings are now "
+        "denominated in USD. Set AI_TEAM_MONTHLY_CEILING_USD instead."
+    )
 
 # Monthly AI budget in YEN, for `ai_cost_report --alert`. The command
 # pro-rates it to the reporting window and logs at ERROR when spend is
@@ -1389,7 +1398,15 @@ SEARCH_ENGINE["AI_MONTHLY_BUDGET_JPY"] = float(os.environ.get("AI_MONTHLY_BUDGET
 SEARCH_ENGINE["AI_REQUEST_MAX_JPY_MILLI"] = int(
     os.environ.get("AI_REQUEST_MAX_JPY_MILLI") or "0"
 )
-# 2. PER-USER DAILY ALERT — observation only, never blocks. Yen; 0 = off.
+#    USD-denominated twin, and the one to prefer — the cost system's base
+#    unit is USD because that is what providers invoice (see
+#    `search_engine/money.py`). The yen variable above still works and
+#    still bounds the loop; this one is what the USD quote/absorb columns
+#    are written from. Both 0 = no per-request ceiling.
+SEARCH_ENGINE["AI_REQUEST_MAX_USD_MICRO"] = int(
+    os.environ.get("AI_REQUEST_MAX_USD_MICRO") or "0"
+)
+# 2. PER-USER DAILY ALERT — observation only, never blocks. USD; 0 = off.
 #    Logs a WARNING (not ERROR — that would red the cron) naming the user
 #    when their day's ledger spend crosses this. Deliberately not
 #    enforcing: the strategy doc is explicit that blocking an early user
@@ -1398,9 +1415,23 @@ SEARCH_ENGINE["AI_REQUEST_MAX_JPY_MILLI"] = int(
 #
 #    Costs one aggregate query per ask, and ONLY when configured — 0
 #    short-circuits before touching the DB.
-SEARCH_ENGINE["AI_USER_DAILY_ALERT_JPY"] = float(
-    os.environ.get("AI_USER_DAILY_ALERT_JPY") or "0"
+#    Reads the legacy AI_USER_DAILY_ALERT_JPY only as a name to fail
+#    loudly on: an operator who still has the yen variable set would
+#    otherwise silently lose their alert when the code switched to USD.
+SEARCH_ENGINE["AI_USER_DAILY_ALERT_USD"] = float(
+    os.environ.get("AI_USER_DAILY_ALERT_USD") or "0"
 )
+if os.environ.get("AI_USER_DAILY_ALERT_JPY") and not os.environ.get(
+    "AI_USER_DAILY_ALERT_USD"
+):
+    from django.core.exceptions import ImproperlyConfigured
+
+    raise ImproperlyConfigured(
+        "AI_USER_DAILY_ALERT_JPY is set but the per-user spend alert is now "
+        "denominated in USD (the cost system's base currency). Set "
+        "AI_USER_DAILY_ALERT_USD instead — silently ignoring the old "
+        "variable would drop the alert without anyone noticing."
+    )
 # 3. KILL SWITCH — refuses new agent asks outright, for a provider
 #    incident or a runaway we have not diagnosed yet. In-flight runs
 #    finish. This is the "stop everything" lever that AGENT_DISABLED_TOOLS

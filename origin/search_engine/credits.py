@@ -1,6 +1,6 @@
 """Credit arithmetic — V2 layers 3 and 4, as PURE functions.
 
-Layer 3 (`eligible_jpy_milli`) narrows what we measured to what a
+Layer 3 (`eligible_usd_micro`) narrows what we measured to what a
 customer may be asked to carry. Layer 4 (`credits_milli`) converts that
 to credits under a versioned policy. Both take every input as an
 argument and read NOTHING at call time — no settings, no ORM, no clock.
@@ -13,12 +13,18 @@ whichever policy object is handed in. A function that peeked at
 `settings.CREDIT_POLICY` would answer "what would this cost NOW" and
 could never answer "what did we say it cost THEN".
 
-Everything is integer milli-units in and out (milli-yen, milli-
-credits). The seam these functions sit behind decides nothing
-commercial: every rule here — which surfaces bill, which results bill,
-where the cap sits — is DATA from `credit_policy.yaml`, so a rule
-change is a fingerprint-moving config edit, never a silent code-path
-change.
+Money in is **micro-USD**, credits out are **milli-credits**, both
+integer. USD because that is what providers invoice, and because it
+takes the exchange rate out of the credit path entirely: this used to
+be usd ->(x150) jpy ->(/15) credits, which baked an FX assumption into
+every posted charge and made what a credit MEANT drift with the yen.
+Reports still read in ¥/€/£ — see `money.py` — but that is display,
+downstream of everything here.
+
+The seam these functions sit behind decides nothing commercial: every
+rule here — which surfaces bill, which results bill, where the cap sits
+— is DATA from `credit_policy.yaml`, so a rule change is a
+fingerprint-moving config edit, never a silent code-path change.
 """
 
 from __future__ import annotations
@@ -32,14 +38,14 @@ RESULT_SUCCESS = "success"
 RESULT_CREDITS_EXHAUSTED = "credits_exhausted"
 
 
-def eligible_jpy_milli(
+def eligible_usd_micro(
     *,
     result: str,
     surface: str,
-    computed_jpy_milli: int,
+    computed_usd_micro: int,
     policy: CreditPolicy,
 ) -> int:
-    """What this request's customer-billable cost is, in milli-yen.
+    """What this request's customer-billable cost is, in micro-USD.
 
     The exclusions (V2 §3.3), in the order they short-circuit:
 
@@ -54,9 +60,9 @@ def eligible_jpy_milli(
         tokens, and billing it 0 would make an empty balance the
         cheapest way to ask;
       * the per-request cap: cost above `request_max_credits` worth of
-        yen is ours (`absorbed`), not the customer's.
+        USD is ours (`absorbed`), not the customer's.
 
-    `computed_jpy_milli` is the PRICED sum. When a request also carried
+    `computed_usd_micro` is the PRICED sum. When a request also carried
     unpriced calls the true cost is higher than computed — and the
     customer is billed the lower bound. That direction is deliberate:
     a metering gap must never overcharge.
@@ -65,21 +71,22 @@ def eligible_jpy_milli(
         return 0
     if result not in policy.billable_results:
         return 0
-    eligible = max(int(computed_jpy_milli), 0)
-    return min(eligible, policy.request_max_jpy_milli())
+    eligible = max(int(computed_usd_micro), 0)
+    return min(eligible, policy.request_max_usd_micro())
 
 
-def credits_milli(eligible_jpy_milli: int, policy: CreditPolicy) -> int:
-    """Eligible milli-yen -> milli-credits under this policy.
+def credits_milli(eligible_usd_micro: int, policy: CreditPolicy) -> int:
+    """Eligible micro-USD -> milli-credits under this policy.
 
     Milli so a cheap request is not rounded up to a whole credit —
     fractional credits are a stated design requirement, and rounding
     at storage time (rather than display time) is how drift becomes
     permanent.
     """
-    if policy.credit_jpy <= 0:
+    if policy.credit_usd <= 0:
         return 0
-    return int(round(max(int(eligible_jpy_milli), 0) / policy.credit_jpy))
+    # micro-USD / (USD per credit) -> micro-credits -> milli-credits.
+    return int(round(max(int(eligible_usd_micro), 0) / (policy.credit_usd * 1_000)))
 
 
 def quote_max_credits_milli(policy: CreditPolicy) -> int:
@@ -95,8 +102,8 @@ def quote_max_credits_milli(policy: CreditPolicy) -> int:
     return policy.request_max_credits_milli
 
 
-def request_budget_jpy_milli(balance_credits_milli: int | None, policy: CreditPolicy) -> int:
-    """How much this request may spend before it must stop, in milli-yen.
+def request_budget_usd_micro(balance_credits_milli: int | None, policy: CreditPolicy) -> int:
+    """How much this request may spend before it must stop, in micro-USD.
 
     The reservation half of V2 §3.5, and the reason a user is no longer
     refused for merely having less than the quote. Gating on
@@ -108,7 +115,7 @@ def request_budget_jpy_milli(balance_credits_milli: int | None, policy: CreditPo
 
     It is THE BALANCE, and deliberately not `min(balance, per-request
     cap)`. The cap governs what a request may be CHARGED, never how far
-    it may RUN: cost above it lands in `absorbed_jpy_milli`, which is
+    it may RUN: cost above it lands in `absorbed_usd_micro`, which is
     the system saying out loud that we carry the excess. Capping the run
     too would silently truncate a long request from a user with plenty
     of credits — under a message telling them they had run out, which
@@ -125,10 +132,11 @@ def request_budget_jpy_milli(balance_credits_milli: int | None, policy: CreditPo
     passes when credits are not authoritative, so the check is inert on
     the legacy path by construction rather than by a flag read.
 
-    Yen rather than credits because the running total the loop compares
-    against (`SpendContext.cost_jpy_milli`) is yen — converting once
+    USD rather than credits because the running total the loop compares
+    against (`SpendContext.cost_usd_micro`) is USD — converting once
     here beats converting on every step.
     """
     if balance_credits_milli is None:
         return 0
-    return int(round(max(int(balance_credits_milli), 0) * policy.credit_jpy))
+    # milli-credits x (USD per credit) -> milli-USD -> micro-USD.
+    return int(round(max(int(balance_credits_milli), 0) * policy.credit_usd * 1_000))

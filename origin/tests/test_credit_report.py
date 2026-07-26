@@ -55,7 +55,7 @@ def _rollup(
     plan="free",
     surface="ask",
     result=AiRequestCost.RESULT_SUCCESS,
-    computed=15_000,
+    computed=100_000,   # micro-USD: $0.10 == 1 credit
     eligible=None,
     credits_milli=None,
     blocked=False,
@@ -64,7 +64,7 @@ def _rollup(
 ):
     eligible = computed if eligible is None else eligible
     credits_milli = (
-        int(round(eligible / dj_settings.CREDIT_POLICY.credit_jpy))
+        int(round(eligible / (dj_settings.CREDIT_POLICY.credit_usd * 1_000)))
         if credits_milli is None
         else credits_milli
     )
@@ -74,8 +74,8 @@ def _rollup(
         plan=plan,
         surface=surface,
         result=result,
-        computed_jpy_milli=computed,
-        eligible_jpy_milli=eligible,
+        computed_usd_micro=computed,
+        eligible_usd_micro=eligible,
         shadow_credits_milli=credits_milli,
         quoted_max_credits_milli=quoted,
         would_have_blocked=blocked,
@@ -137,7 +137,7 @@ class CreditReportTests(TestCase):
 
     def test_request_shape_percentiles_and_requests_per_100(self):
         for credits_milli in (1000, 2000, 3000, 4000):
-            _rollup(credits_milli=credits_milli, computed=credits_milli * 15)
+            _rollup(credits_milli=credits_milli, computed=credits_milli * 100)
         out = _report()
         self.assertIn("credits/request", out)
         self.assertIn("max=4.00cr", out)
@@ -145,11 +145,12 @@ class CreditReportTests(TestCase):
         self.assertIn("requests per 100 credits: 40", out)
 
     def test_divergence_reports_absorption(self):
-        # ¥30 real, ¥15 eligible (a failure absorbed), 1cr credited.
-        _rollup(computed=15_000, eligible=15_000, credits_milli=1000)
+        # $0.20 real, $0.10 eligible (the other request failed and is
+        # absorbed), 1cr credited -> 2x absorption.
+        _rollup(computed=100_000, eligible=100_000, credits_milli=1000)
         _rollup(
             result=AiRequestCost.RESULT_PROVIDER_FAILURE,
-            computed=15_000,
+            computed=100_000,
             eligible=0,
             credits_milli=0,
         )
@@ -157,12 +158,12 @@ class CreditReportTests(TestCase):
         self.assertIn("absorption ratio: 2.00", out)
 
     def test_compare_policy_replays_without_writing(self):
-        _rollup(computed=15_000)  # 1cr under ¥15
+        _rollup(computed=100_000)  # $0.10 == 1cr at the live policy
         posted_entries = AiCreditEntry.objects.count()
         candidate = """
 policy:
     label: "cp-candidate"
-    credit_jpy: 7.5
+    credit_usd: 0.05
     request_max_credits: 5
     billable_surfaces: [ask, thread_summary, note_summary]
     billable_results: [success, credits_exhausted]
@@ -173,11 +174,11 @@ entitlements:
     pro: 100
     max: 200
     enterprise: unlimited
-monthly_ceiling_jpy:
-    free: 150
-    core: 600
-    pro: 1500
-    max: 3000
+monthly_ceiling_usd:
+    free: 1
+    core: 4
+    pro: 10
+    max: 20
     enterprise: unlimited
 """
         with TemporaryDirectory() as d:

@@ -38,7 +38,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.search_engine import credit_ledger, credits, metered
 from origin.search_engine.agent_views import (
-    _credit_budget_jpy_milli,
+    _credit_budget_usd_micro,
     _credit_gate,
     _credits_block,
 )
@@ -183,8 +183,8 @@ class CreditBudgetTests(_CacheClearing):
             request_id=str(uuid.uuid4()), user_id=self.UID, credits_milli=7_000
         )
         cache.clear()
-        # 3 credits left, ¥15/credit -> ¥45 -> 45_000 milli-yen.
-        self.assertEqual(_credit_budget_jpy_milli(self.UID, "free"), 45_000)
+        # 3 credits left, $0.10/credit -> $0.30 -> 300_000 micro-USD.
+        self.assertEqual(_credit_budget_usd_micro(self.UID, "free"), 300_000)
 
     @AUTHORITATIVE
     def test_a_large_balance_is_not_clipped_to_the_per_request_cap(self):
@@ -198,19 +198,19 @@ class CreditBudgetTests(_CacheClearing):
         """
         credit_ledger.ensure_monthly_grant(self.UID, "max")
         cache.clear()
-        # 200 credits at ¥15 -> ¥3,000, NOT the 5-credit (¥75) cap.
-        self.assertEqual(_credit_budget_jpy_milli(self.UID, "max"), 3_000_000)
+        # 200 credits at $0.10 -> $20, NOT the 5-credit ($0.50) cap.
+        self.assertEqual(_credit_budget_usd_micro(self.UID, "max"), 20_000_000)
 
     @AUTHORITATIVE
     def test_unlimited_plan_gets_no_budget(self):
-        self.assertEqual(_credit_budget_jpy_milli(self.UID, "enterprise"), 0)
+        self.assertEqual(_credit_budget_usd_micro(self.UID, "enterprise"), 0)
 
     @SHADOW_ONLY
     def test_shadow_only_gets_no_budget(self):
         """Shadow must not stop anyone mid-run — that is the entire
         meaning of shadow."""
         credit_ledger.ensure_monthly_grant(self.UID, "free")
-        self.assertEqual(_credit_budget_jpy_milli(self.UID, "free"), 0)
+        self.assertEqual(_credit_budget_usd_micro(self.UID, "free"), 0)
 
     @AUTHORITATIVE
     def test_it_fails_open(self):
@@ -218,7 +218,7 @@ class CreditBudgetTests(_CacheClearing):
             "origin.search_engine.credit_ledger.balance_milli",
             side_effect=RuntimeError("db down"),
         ):
-            self.assertEqual(_credit_budget_jpy_milli(self.UID, "free"), 0)
+            self.assertEqual(_credit_budget_usd_micro(self.UID, "free"), 0)
 
     def test_zero_budget_makes_the_mid_run_check_inert(self):
         """0 has to mean "do not enforce" — it is what every non-credit
@@ -229,13 +229,13 @@ class CreditBudgetTests(_CacheClearing):
 
     def test_the_check_fires_only_once_spend_reaches_the_budget(self):
         with spend.spend_context(
-            surface="ask", user_id=self.UID, credit_budget_jpy_milli=45_000
+            surface="ask", user_id=self.UID, credit_budget_usd_micro=300_000
         ):
             ctx = spend.current_context()
             self.assertFalse(spend.credit_budget_exhausted())
-            ctx.cost_jpy_milli = 44_999
+            ctx.cost_usd_micro = 299_999
             self.assertFalse(spend.credit_budget_exhausted())
-            ctx.cost_jpy_milli = 45_000
+            ctx.cost_usd_micro = 300_000
             self.assertTrue(spend.credit_budget_exhausted())
 
     def test_the_budget_survives_into_a_rebound_context(self):
@@ -244,12 +244,12 @@ class CreditBudgetTests(_CacheClearing):
         those kwargs the loop would read 0 and never stop — the failure
         that makes the permissive gate unsafe."""
         kwargs = metered.spend_kwargs_for(
-            "ask", self.UID, None, None, credit_budget_jpy_milli=45_000
+            "ask", self.UID, None, None, credit_budget_usd_micro=300_000
         )
         with spend.spend_context(**kwargs):
-            self.assertEqual(spend.current_context().credit_budget_jpy_milli, 45_000)
+            self.assertEqual(spend.current_context().credit_budget_usd_micro, 300_000)
         # And the rollup path builds a SpendContext from the same dict.
-        self.assertEqual(spend.SpendContext(**kwargs).credit_budget_jpy_milli, 45_000)
+        self.assertEqual(spend.SpendContext(**kwargs).credit_budget_usd_micro, 300_000)
 
 
 class MidRunTerminationTests(_CacheClearing):
@@ -265,13 +265,13 @@ class MidRunTerminationTests(_CacheClearing):
         return dj_settings.CREDIT_POLICY
 
     def test_credits_exhausted_is_billable(self):
-        eligible = credits.eligible_jpy_milli(
+        eligible = credits.eligible_usd_micro(
             result=AiRequestCost.RESULT_CREDITS_EXHAUSTED,
             surface="ask",
-            computed_jpy_milli=30_000,
+            computed_usd_micro=300_000,
             policy=self._policy(),
         )
-        self.assertEqual(eligible, 30_000)
+        self.assertEqual(eligible, 300_000)
 
     def test_genuine_failures_stay_free(self):
         for result in (
@@ -282,10 +282,10 @@ class MidRunTerminationTests(_CacheClearing):
         ):
             with self.subTest(result=result):
                 self.assertEqual(
-                    credits.eligible_jpy_milli(
+                    credits.eligible_usd_micro(
                         result=result,
                         surface="ask",
-                        computed_jpy_milli=30_000,
+                        computed_usd_micro=300_000,
                         policy=self._policy(),
                     ),
                     0,
@@ -297,13 +297,13 @@ class MidRunTerminationTests(_CacheClearing):
         between steps, so an in-flight call always completes and a run
         can end over budget; the customer must not pay for that."""
         policy = self._policy()
-        eligible = credits.eligible_jpy_milli(
+        eligible = credits.eligible_usd_micro(
             result=AiRequestCost.RESULT_CREDITS_EXHAUSTED,
             surface="ask",
-            computed_jpy_milli=999_000,
+            computed_usd_micro=9_990_000,
             policy=policy,
         )
-        self.assertEqual(eligible, policy.request_max_jpy_milli())
+        self.assertEqual(eligible, policy.request_max_usd_micro())
 
     def test_the_result_constants_agree_across_the_django_boundary(self):
         """`credits.py` restates these as literals so it stays importable
