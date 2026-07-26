@@ -117,7 +117,37 @@ def collect(
     data["coverage"] = _coverage(events)
     data["requests"] = _recent_requests(requests)
     data["users"] = _group(events, "user_id")[:_TOP_USERS] if by_user else []
+    data["shadow"] = _shadow(requests)
     return data
+
+
+def _shadow(requests) -> dict:
+    """The shadow-credit picture for the window (V2 layer 5, read side).
+
+    Deliberately per-PLAN and per-VERDICT only — the full who-ran-out
+    analysis (milestones, exhaustion dates, dual calculation) lives in
+    `ai_credit_report`; the dashboard shows enough to see whether the
+    shadow engine is writing and roughly what it is finding.
+    """
+    billable = requests.filter(quoted_max_credits_milli__gt=0)
+    per_plan = [
+        {
+            "plan": r["plan"] or "free",
+            "requests": int(r["n"] or 0),
+            "credits_milli": int(r["credits"] or 0),
+            "would_have_blocked": int(r["blocked"] or 0),
+        }
+        for r in billable.values("plan").annotate(
+            n=Count("id"),
+            credits=Sum("shadow_credits_milli"),
+            blocked=Count("id", filter=Q(would_have_blocked=True)),
+        )
+    ]
+    return {
+        "active": bool(per_plan),
+        "per_plan": sorted(per_plan, key=lambda r: -r["credits_milli"]),
+        "blocked_total": sum(r["would_have_blocked"] for r in per_plan),
+    }
 
 
 def _totals(events, requests) -> dict:
@@ -396,9 +426,39 @@ def render_html(data: dict) -> str:
     body.append(_models_table(data["models"]))
     if data.get("users"):
         body.append(_bars("Top users", data["users"], placeholder="(no user)"))
+    if data.get("shadow", {}).get("active"):
+        body.append(_shadow_section(data["shadow"]))
     body.append(_requests_table(data["requests"]))
     body.append(_footnotes(data))
     return _page(title, body)
+
+
+def _shadow_section(shadow: dict) -> str:
+    """Shadow credits per plan. Rendered only when the engine has
+    written something — an empty table would read as 'credits are live
+    and nobody is using AI', which is two wrong claims at once."""
+    rows = "".join(
+        f"<tr><td>{_e(r['plan'])}</td><td class='num'>{r['requests']:,}</td>"
+        f"<td class='num'>{r['credits_milli'] / 1000:,.2f}</td>"
+        f"<td class='num'>{r['would_have_blocked']:,}</td></tr>"
+        for r in shadow["per_plan"]
+    )
+    blocked = shadow["blocked_total"]
+    note = (
+        f"<p class='sub'>⚠ {blocked:,} request(s) opened with a balance that could not "
+        f"cover the quoted max — what an authoritative credit system would have "
+        f"refused. Full analysis: <code>ai_credit_report</code>.</p>"
+        if blocked
+        else "<p class='sub'>No request would have been blocked in this window. "
+        "Full analysis: <code>ai_credit_report</code>.</p>"
+    )
+    return (
+        "<div class='card'><h2>Shadow credits (nothing enforced)</h2>"
+        "<div class='scroll'><table><thead><tr>"
+        "<th>Plan</th><th class='num'>Billable requests</th>"
+        "<th class='num'>Credits</th><th class='num'>Would have blocked</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table></div>{note}</div>"
+    )
 
 
 def _page(title: str, body: list[str]) -> str:
