@@ -59,6 +59,10 @@ class CreditPolicy:
     credit_jpy: float
     request_max_credits_milli: int
     billable_surfaces: frozenset[str]
+    # Request outcomes that may carry a charge. Data, not a constant, so
+    # "work performed but the request ended early" is a versioned
+    # commercial decision rather than an `if` someone can quietly widen.
+    billable_results: frozenset[str]
     excluded_purposes: frozenset[str]
     # plan -> monthly grant in milli-credits; None = unlimited
     # (enterprise: no entitlement accounting at all).
@@ -128,6 +132,7 @@ def load_credit_policy(path: str | Path) -> CreditPolicy:
         "credit_jpy",
         "request_max_credits",
         "billable_surfaces",
+        "billable_results",
         "excluded_purposes",
     }
     if unknown:
@@ -152,6 +157,17 @@ def load_credit_policy(path: str | Path) -> CreditPolicy:
         if not isinstance(s, str) or not s.strip():
             _fail(f"policy.billable_surfaces entries must be non-empty strings, got {s!r}")
 
+    results = policy.get("billable_results")
+    if not isinstance(results, list) or not results:
+        _fail(
+            "policy.billable_results must be a non-empty list. An empty list "
+            "would make every request free, which is a decision nobody would "
+            "make on purpose by deleting a line."
+        )
+    for r in results:
+        if not isinstance(r, str) or not r.strip():
+            _fail(f"policy.billable_results entries must be non-empty strings, got {r!r}")
+
     purposes = policy.get("excluded_purposes")
     if purposes is None or not isinstance(purposes, list):
         _fail("policy.excluded_purposes must be a list (empty is fine — and a statement)")
@@ -171,6 +187,7 @@ def load_credit_policy(path: str | Path) -> CreditPolicy:
         "credit_jpy": float(credit_jpy),
         "request_max_credits": float(max_credits),
         "billable_surfaces": sorted(surfaces),
+        "billable_results": sorted(results),
         "excluded_purposes": sorted(purposes),
     }
     entitlement_payload = {
@@ -186,6 +203,7 @@ def load_credit_policy(path: str | Path) -> CreditPolicy:
         credit_jpy=float(credit_jpy),
         request_max_credits_milli=int(round(float(max_credits) * 1000)),
         billable_surfaces=frozenset(surfaces),
+        billable_results=frozenset(results),
         excluded_purposes=frozenset(purposes),
         entitlements_milli={
             p: (int(v) if v is not None else None) for p, v in entitlements.items()

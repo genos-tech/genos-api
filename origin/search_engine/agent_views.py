@@ -51,6 +51,7 @@ from apis.llm_catalog import EFFORTS
 from origin.search_engine import metered, spend_recorder
 from origin.search_engine.agent.controller import (
     COST_CEILING_MESSAGE,
+    CREDITS_EXHAUSTED_MESSAGE,
     _chat_source,
     _note_source,
     reconstruct_sources_for_run,
@@ -461,13 +462,21 @@ def _credits_authoritative() -> bool:
 
 
 def _credit_gate(user_id: str, plan: str) -> Response | None:
-    """Refuse an ask when the balance cannot cover the quoted maximum.
+    """Refuse an ask only when the balance is actually spent.
 
-    The V2 §3.5 reservation rule, enforced: we cannot know a request's
-    cost before running it, so we check against the QUOTE — the most it
-    could be charged — and anything above that is absorbed. Checking
-    against a typical cost instead would let a user start a request they
-    cannot pay for, which is the one thing the quote exists to prevent.
+    ANY positive balance may start a request. The earlier rule — refuse
+    unless the balance covers the whole quoted maximum — made the last
+    `request_max_credits` of every plan unspendable: on Free (10 credits,
+    quote 5) that is half the allowance, dead, and a user who had spent 6
+    of 10 credits was told they were out. What replaces it is a real
+    reservation (V2 §3.5): the request starts, and the agent loop stops
+    itself the moment its running cost reaches what the balance can
+    cover (`spend.credit_budget_exhausted`), telling the user why.
+
+    That moves the enforcement point from "before, on a worst case" to
+    "during, on the actual number", which is the only place a limit
+    denominated in cost can be enforced honestly — a request's cost is
+    not knowable until it runs.
 
     Returns a 429 or None. Fails OPEN on any internal error: a ledger
     hiccup must never block a paying user, and the yen ceilings
@@ -481,14 +490,13 @@ def _credit_gate(user_id: str, plan: str) -> Response | None:
     if not _credits_authoritative():
         return None
     try:
-        from origin.search_engine import credit_ledger, credits  # noqa: PLC0415
+        from origin.search_engine import credit_ledger  # noqa: PLC0415
 
         policy = settings.CREDIT_POLICY
         balance = credit_ledger.balance_milli(str(user_id), plan)
         if balance is None:  # unlimited plan (enterprise)
             return None
-        quote = credits.quote_max_credits_milli(policy)
-        if balance >= quote:
+        if balance > 0:
             return None
 
         entitlement = policy.entitlements_milli.get(plan) or 0
@@ -513,6 +521,30 @@ def _credit_gate(user_id: str, plan: str) -> Response | None:
     except Exception:  # noqa: BLE001 — a check that cannot run must not block
         log.debug("Credit gate check failed", exc_info=True)
         return None
+
+
+def _credit_budget_jpy_milli(user_id: str, plan: str) -> int:
+    """What this request may spend before the loop must stop, in milli-yen.
+
+    The other half of `_credit_gate`: the gate lets a request with any
+    positive balance through, and this is the number that then stops it
+    at the right moment. 0 whenever there is nothing to enforce —
+    credits not authoritative, unlimited plan, or any error — which is
+    also the value that makes `spend.credit_budget_exhausted()` inert.
+
+    Costs no extra query in practice: `balance_milli` is the same 60s
+    cached aggregate the gate just read.
+    """
+    if not _credits_authoritative():
+        return 0
+    try:
+        from origin.search_engine import credit_ledger, credits  # noqa: PLC0415
+
+        balance = credit_ledger.balance_milli(str(user_id), plan)
+        return credits.request_budget_jpy_milli(balance, settings.CREDIT_POLICY)
+    except Exception:  # noqa: BLE001 — a budget we cannot compute is no budget
+        log.debug("Could not compute credit budget", exc_info=True)
+        return 0
 
 
 def _credits_block(user_id: str, plan: str) -> dict | None:
@@ -933,7 +965,17 @@ class AgentAskView(AuthenticatedAPIView):
         # call before it exists. Keying attribution on the run is what
         # makes the existing AgentLlmCall telemetry blind to the entire
         # eval suite.
-        spend_kwargs = metered.spend_kwargs_for("ask", user_id, team_id, chosen)
+        # The reservation: how much this ask may spend before the loop
+        # stops itself. Resolved HERE, once, and carried in the kwargs so
+        # the agent worker's own context (a different instance, another
+        # thread) is bound to the same number.
+        spend_kwargs = metered.spend_kwargs_for(
+            "ask",
+            user_id,
+            team_id,
+            chosen,
+            credit_budget_jpy_milli=_credit_budget_jpy_milli(user_id, plan),
+        )
         metered.open_request(spend_kwargs)
         _alert_if_user_spend_is_high(user_id)
 
@@ -1634,6 +1676,14 @@ def _stream_ndjson(
                 result = AiRequestCost.RESULT_USER_CANCELLATION
             elif final_status in ("done", "awaiting_approval", "rejected"):
                 result = AiRequestCost.RESULT_SUCCESS
+            elif final_error == CREDITS_EXHAUSTED_MESSAGE:
+                # NOT a failure. The provider performed the work and the
+                # user keeps the partial answer; the run ended early
+                # because their balance did, which is the credit system
+                # working. Billable — see `billable_results` in
+                # credit_policy.yaml for why scoring this as a failure
+                # would make an empty balance the cheapest way to ask.
+                result = AiRequestCost.RESULT_CREDITS_EXHAUSTED
             elif final_status == "step_cap" or final_error == COST_CEILING_MESSAGE:
                 # Reached the step cap without answering. We spent the
                 # money and the user got nothing usable, so this is not

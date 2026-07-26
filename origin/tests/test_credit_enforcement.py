@@ -13,6 +13,14 @@ What flipping `AI_CREDITS_AUTHORITATIVE` must do, and must not do:
   4. The flag requires the shadow engine. Enforcing against a ledger
      nobody writes to would show every user as permanently full.
   5. Flag OFF is byte-identical to Phase 1 behaviour.
+
+The gate is deliberately WEAK — any positive balance may start a
+request — because the strong version (refuse unless the balance covers
+the quoted maximum) made the last `request_max_credits` of every plan
+unspendable. The enforcement that replaces it happens mid-run, and
+brings its own rule: a run stopped for credits is BILLABLE, because the
+provider really performed the work. `CreditBudgetTests` and
+`MidRunTerminationTests` below cover the two halves.
 """
 
 from __future__ import annotations
@@ -28,8 +36,14 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from origin.models.common.team_models import TeamMaster, TeamMembers
-from origin.search_engine import credit_ledger
-from origin.search_engine.agent_views import _credit_gate, _credits_block
+from origin.search_engine import credit_ledger, credits, metered
+from origin.search_engine.agent_views import (
+    _credit_budget_jpy_milli,
+    _credit_gate,
+    _credits_block,
+)
+from origin.search_engine.llm import spend
+from origin.search_engine.models import AiRequestCost
 from origin.tests.test_base import BaseAPITestCase
 
 
@@ -97,15 +111,33 @@ class CreditGateTests(_CacheClearing):
         self.assertIsNone(_credit_gate(self.UID, "pro"))
 
     @AUTHORITATIVE
-    def test_a_balance_below_the_quote_is_refused(self):
-        # Quote is 5 credits; leave 3.
+    def test_a_balance_below_the_quote_still_passes(self):
+        """The whole allowance must be spendable.
+
+        Refusing anything under the 5-credit quote made the last 5
+        credits of every plan unreachable — half of Free. A user with 3
+        credits gets to ask; the loop stops them mid-run if they really
+        do run out (`request_budget_jpy_milli`).
+        """
         self._drain_to("free", 3_000)
+        self.assertIsNone(_credit_gate(self.UID, "free"))
+
+    @AUTHORITATIVE
+    def test_only_an_exhausted_balance_is_refused(self):
+        self._drain_to("free", 0)
         resp = _credit_gate(self.UID, "free")
         self.assertIsNotNone(resp)
         self.assertEqual(resp.status_code, 429)
         self.assertEqual(resp.data["category"], "ai_credits")
-        self.assertEqual(resp.data["credits_remaining"], 3.0)
+        self.assertEqual(resp.data["credits_remaining"], 0.0)
         self.assertEqual(resp.data["credits_limit"], 10.0)
+
+    @AUTHORITATIVE
+    def test_even_a_sliver_of_a_credit_gets_through(self):
+        """0.01 credits is a real balance. Rounding it away at the gate
+        would refuse a user who still has something to spend."""
+        self._drain_to("free", 10)
+        self.assertIsNone(_credit_gate(self.UID, "free"))
 
     @AUTHORITATIVE
     def test_the_refusal_speaks_credits_never_yen(self):
@@ -132,6 +164,187 @@ class CreditGateTests(_CacheClearing):
                 _credit_gate(self.UID, "free"),
                 "a check that cannot run must never block a paying user",
             )
+
+
+class CreditBudgetTests(_CacheClearing):
+    """The reservation the weak gate depends on.
+
+    Every one of these is a way the mid-run stop could silently never
+    fire, leaving a permissive gate with nothing behind it — which would
+    be strictly worse than the strict gate it replaced.
+    """
+
+    UID = "aaaaaaaa-0000-0000-0000-00000000bbbb"
+
+    @AUTHORITATIVE
+    def test_budget_is_the_balance_when_the_balance_is_the_smaller(self):
+        credit_ledger.ensure_monthly_grant(self.UID, "free")
+        credit_ledger.post_charge(
+            request_id=str(uuid.uuid4()), user_id=self.UID, credits_milli=7_000
+        )
+        cache.clear()
+        # 3 credits left, ¥15/credit -> ¥45 -> 45_000 milli-yen.
+        self.assertEqual(_credit_budget_jpy_milli(self.UID, "free"), 45_000)
+
+    @AUTHORITATIVE
+    def test_budget_is_the_per_request_cap_when_the_balance_is_larger(self):
+        """A rich balance does not license one unbounded request: past
+        the per-request cap the spend is absorbed, so continuing is pure
+        loss to us."""
+        credit_ledger.ensure_monthly_grant(self.UID, "max")
+        cache.clear()
+        # 200 credits available, but the quote is 5 -> ¥75.
+        self.assertEqual(_credit_budget_jpy_milli(self.UID, "max"), 75_000)
+
+    @AUTHORITATIVE
+    def test_unlimited_plan_gets_no_budget(self):
+        self.assertEqual(_credit_budget_jpy_milli(self.UID, "enterprise"), 0)
+
+    @SHADOW_ONLY
+    def test_shadow_only_gets_no_budget(self):
+        """Shadow must not stop anyone mid-run — that is the entire
+        meaning of shadow."""
+        credit_ledger.ensure_monthly_grant(self.UID, "free")
+        self.assertEqual(_credit_budget_jpy_milli(self.UID, "free"), 0)
+
+    @AUTHORITATIVE
+    def test_it_fails_open(self):
+        with patch(
+            "origin.search_engine.credit_ledger.balance_milli",
+            side_effect=RuntimeError("db down"),
+        ):
+            self.assertEqual(_credit_budget_jpy_milli(self.UID, "free"), 0)
+
+    def test_zero_budget_makes_the_mid_run_check_inert(self):
+        """0 has to mean "do not enforce" — it is what every non-credit
+        surface passes, and a `>=` against 0 would stop every run before
+        its first step."""
+        with spend.spend_context(surface="ask", user_id=self.UID):
+            self.assertFalse(spend.credit_budget_exhausted())
+
+    def test_the_check_fires_only_once_spend_reaches_the_budget(self):
+        with spend.spend_context(
+            surface="ask", user_id=self.UID, credit_budget_jpy_milli=45_000
+        ):
+            ctx = spend.current_context()
+            self.assertFalse(spend.credit_budget_exhausted())
+            ctx.cost_jpy_milli = 44_999
+            self.assertFalse(spend.credit_budget_exhausted())
+            ctx.cost_jpy_milli = 45_000
+            self.assertTrue(spend.credit_budget_exhausted())
+
+    def test_the_budget_survives_into_a_rebound_context(self):
+        """The agent loop runs on a worker thread that rebuilds its
+        context from `spend_kwargs`. If the budget did not travel in
+        those kwargs the loop would read 0 and never stop — the failure
+        that makes the permissive gate unsafe."""
+        kwargs = metered.spend_kwargs_for(
+            "ask", self.UID, None, None, credit_budget_jpy_milli=45_000
+        )
+        with spend.spend_context(**kwargs):
+            self.assertEqual(spend.current_context().credit_budget_jpy_milli, 45_000)
+        # And the rollup path builds a SpendContext from the same dict.
+        self.assertEqual(spend.SpendContext(**kwargs).credit_budget_jpy_milli, 45_000)
+
+
+class MidRunTerminationTests(_CacheClearing):
+    """A run the balance cut short is CHARGED.
+
+    This is the rule that keeps the permissive gate from being an
+    exploit: if a credits-exhausted run billed 0, the cheapest way to
+    use Genos would be to spend down to zero and keep asking, every
+    request stopping early and costing nothing.
+    """
+
+    def _policy(self):
+        return dj_settings.CREDIT_POLICY
+
+    def test_credits_exhausted_is_billable(self):
+        eligible = credits.eligible_jpy_milli(
+            result=AiRequestCost.RESULT_CREDITS_EXHAUSTED,
+            surface="ask",
+            computed_jpy_milli=30_000,
+            policy=self._policy(),
+        )
+        self.assertEqual(eligible, 30_000)
+
+    def test_genuine_failures_stay_free(self):
+        for result in (
+            AiRequestCost.RESULT_PROVIDER_FAILURE,
+            AiRequestCost.RESULT_APPLICATION_FAILURE,
+            AiRequestCost.RESULT_USER_CANCELLATION,
+            AiRequestCost.RESULT_SAFETY_REFUSAL,
+        ):
+            with self.subTest(result=result):
+                self.assertEqual(
+                    credits.eligible_jpy_milli(
+                        result=result,
+                        surface="ask",
+                        computed_jpy_milli=30_000,
+                        policy=self._policy(),
+                    ),
+                    0,
+                    "work the provider did not perform is never the customer's",
+                )
+
+    def test_a_stopped_run_is_still_capped_at_the_per_request_maximum(self):
+        """Overshoot past the budget is OURS. The mid-run check is
+        between steps, so an in-flight call always completes and a run
+        can end over budget; the customer must not pay for that."""
+        policy = self._policy()
+        eligible = credits.eligible_jpy_milli(
+            result=AiRequestCost.RESULT_CREDITS_EXHAUSTED,
+            surface="ask",
+            computed_jpy_milli=999_000,
+            policy=policy,
+        )
+        self.assertEqual(eligible, policy.request_max_jpy_milli())
+
+    def test_the_result_constants_agree_across_the_django_boundary(self):
+        """`credits.py` restates these as literals so it stays importable
+        without Django configured."""
+        self.assertEqual(credits.RESULT_SUCCESS, AiRequestCost.RESULT_SUCCESS)
+        self.assertEqual(
+            credits.RESULT_CREDITS_EXHAUSTED, AiRequestCost.RESULT_CREDITS_EXHAUSTED
+        )
+        self.assertEqual(
+            set(AiRequestCost.RESULTS_WORK_PERFORMED),
+            {AiRequestCost.RESULT_SUCCESS, AiRequestCost.RESULT_CREDITS_EXHAUSTED},
+        )
+
+    def test_the_stop_message_is_one_string_shared_by_loop_and_classifier(self):
+        """`agent_views` decides the run's RESULT by comparing against
+        this copy. Two copies would drift and start scoring a
+        credits-exhausted run as a provider failure — i.e. silently stop
+        charging for it, which is the exploit this class exists to
+        prevent."""
+        from origin.search_engine.agent.controller import CREDITS_EXHAUSTED_MESSAGE
+        from origin.search_engine.agent_views import (
+            CREDITS_EXHAUSTED_MESSAGE as VIEW_COPY,
+        )
+
+        self.assertIs(CREDITS_EXHAUSTED_MESSAGE, VIEW_COPY)
+
+    def test_the_stop_message_tells_the_user_what_to_do(self):
+        """Unlike the cost ceiling — our own cap, deliberately silent
+        about money — this one IS the user's limit, so it has to name it
+        and say when it comes back."""
+        from origin.search_engine.agent.controller import CREDITS_EXHAUSTED_MESSAGE
+
+        lowered = CREDITS_EXHAUSTED_MESSAGE.lower()
+        self.assertIn("credits", lowered)
+        self.assertIn("stopped", lowered)
+        self.assertNotIn("¥", CREDITS_EXHAUSTED_MESSAGE)
+        self.assertNotIn("yen", lowered)
+
+    def test_the_shipped_policy_bills_exactly_the_work_performed_results(self):
+        """Guards the live file, not a fixture: widening
+        `billable_results` to a real failure would start charging users
+        for work they never received."""
+        self.assertEqual(
+            set(self._policy().billable_results),
+            set(AiRequestCost.RESULTS_WORK_PERFORMED),
+        )
 
 
 class CreditsBlockTests(_CacheClearing):

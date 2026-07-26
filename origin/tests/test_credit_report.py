@@ -165,6 +165,7 @@ policy:
     credit_jpy: 7.5
     request_max_credits: 5
     billable_surfaces: [ask, thread_summary, note_summary]
+    billable_results: [success, credits_exhausted]
     excluded_purposes: []
 entitlements:
     free: 10

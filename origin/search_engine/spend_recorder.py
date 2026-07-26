@@ -127,9 +127,17 @@ def _shadow_decision(ctx: spend.SpendContext) -> dict:
 
     Returns the rollup fields for what an AUTHORITATIVE credit system
     would have done at this request's start: the quoted max, the
-    balance as it stood, and whether that balance covered the quote.
-    Point-in-time by necessity — the balance moves with every request,
-    so none of this is reconstructable later.
+    balance as it stood, and whether the request would have been
+    refused. Point-in-time by necessity — the balance moves with every
+    request, so none of this is reconstructable later.
+
+    `would_have_blocked` MIRRORS THE REAL GATE and has to keep doing so.
+    It used to ask "did the balance cover the quote", which was the gate
+    at the time; the gate now refuses only an exhausted balance and
+    stops over-spend mid-run instead. Left as it was, this field would
+    have counted every user below 5 credits as blocked — inflating the
+    one number in `ai_credit_report` that the allowance decision is
+    made on, in the direction that argues for raising allowances.
 
     In shadow there is nothing to actually reserve; recording
     balance-before and the quote IS the reservation, and the posted
@@ -155,7 +163,7 @@ def _shadow_decision(ctx: spend.SpendContext) -> dict:
         return {
             "quoted_max_credits_milli": quote,
             "balance_before_milli": balance,
-            "would_have_blocked": balance is not None and balance < quote,
+            "would_have_blocked": balance is not None and balance <= 0,
         }
     except Exception:  # noqa: BLE001 — shadow accounting never breaks a request
         log.debug("shadow decision failed", exc_info=True)
@@ -324,10 +332,12 @@ def close_request(ctx: spend.SpendContext, *, result: str) -> None:
     """Roll this request's events up onto its row.
 
     Derived from the EVENTS, not from the in-memory running total, so
-    the rollup and the ledger cannot disagree. `charged` is 0 for any
-    non-success outcome and is capped at the quote — the two
-    customer-protection rules that have to be structural rather than
-    remembered.
+    the rollup and the ledger cannot disagree. `charged` is 0 unless the
+    provider actually performed the work, and is capped at the quote —
+    the two customer-protection rules that have to be structural rather
+    than remembered. "Performed the work" rather than "succeeded"
+    because a run the credit balance cut short really did spend the
+    tokens (`RESULTS_WORK_PERFORMED`).
 
     Two layers land here, deliberately distinct:
 
@@ -360,7 +370,7 @@ def close_request(ctx: spend.SpendContext, *, result: str) -> None:
         row = AiRequestCost.objects.filter(request_id=ctx.request_id).first()
         quote = int(row.quoted_max_jpy_milli) if row else 0
 
-        if result == AiRequestCost.RESULT_SUCCESS:
+        if result in AiRequestCost.RESULTS_WORK_PERFORMED:
             charged = min(computed_jpy, quote) if quote > 0 else computed_jpy
         else:
             charged = 0  # a failed request is never charged

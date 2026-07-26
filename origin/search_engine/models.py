@@ -590,6 +590,20 @@ class AiRequestCost(models.Model):
     RESULT_PROVIDER_FAILURE = "provider_failure"
     RESULT_APPLICATION_FAILURE = "application_failure"
     RESULT_SAFETY_REFUSAL = "safety_refusal"
+    # The agent loop stopped itself because the user's credit balance ran
+    # out mid-run. A distinct result rather than a failure: the provider
+    # DID the work, so this is the one non-success outcome that is still
+    # billable (see `billable_results` in credit_policy.yaml). Scoring it
+    # as a failure would make an exhausted balance the cheapest way to
+    # use the product.
+    RESULT_CREDITS_EXHAUSTED = "credits_exhausted"
+
+    # Outcomes where the provider actually performed (and billed us for)
+    # the work. The cost meter's `charged`/`absorbed` split reads this,
+    # NOT `== RESULT_SUCCESS`: the question that split answers is "did we
+    # incur this against our quote", which turns on whether the work
+    # happened, not on whether the user was satisfied.
+    RESULTS_WORK_PERFORMED = (RESULT_SUCCESS, RESULT_CREDITS_EXHAUSTED)
 
     id = models.BigAutoField(primary_key=True)
     request_id = models.UUIDField(unique=True)
