@@ -322,6 +322,7 @@ def _rerank_llm(
 # --------------------------------------------------------------------------- #
 
 
+@spend_purpose("rerank")
 def _rerank_cohere(
     *,
     query: str,

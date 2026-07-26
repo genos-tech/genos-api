@@ -45,6 +45,7 @@ _MAX_LIMIT = 10
 _TAVILY_CREDITS_PER_CALL = 2
 
 
+@spend.spend_purpose("web_search")
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG001
     query = (args.get("query") or "").strip()
     if not query:

@@ -503,6 +503,12 @@ class NonLlmSourceTests(_RestoresRecorder, TestCase):
         self.assertEqual(row.provider, "tavily")
         self.assertEqual(row.units, 2, "advanced search bills Tavily 2 credits")
         self.assertEqual(row.unit_kind, "search")
+        self.assertEqual(
+            row.purpose,
+            "web_search",
+            "untagged, this row folds into the report's (untagged) bucket "
+            "with embeds and Cohere — three call types hiding as one",
+        )
         # Priced from `unit_prices`: 2 credits x $0.008 list rate.
         self.assertEqual(row.cost_basis, "priced")
         self.assertEqual(row.cost_usd_micro, 16_000)
@@ -532,6 +538,7 @@ class NonLlmSourceTests(_RestoresRecorder, TestCase):
 
         row = AiSpendEvent.objects.get()
         self.assertEqual(row.units, 0)
+        self.assertEqual(row.purpose, "web_search", "failures are tagged too")
         self.assertIn("upstream down", row.error)
         # A known rate x zero units is a TRUE zero — `priced`, so a
         # failed search does not flag its whole request `has_unpriced`.
@@ -690,6 +697,36 @@ class UnitPricingTests(_RestoresRecorder, TestCase):
         # $2.00 per 1K searches -> $0.002 per search unit.
         self.assertEqual(row.cost_usd_micro, 2_000)
         self.assertEqual(row.billable_units, 40, "raw doc count kept for reconciliation")
+
+    @METER_ON
+    def test_the_cohere_path_tags_its_rows_rerank_like_the_llm_path(self):
+        """`_rerank_llm` is decorated `@spend_purpose("rerank")`;
+        `_rerank_cohere` wasn't, so its rows fell into the report's
+        `(untagged)` bucket while the LLM path's showed as `rerank` —
+        the same call type under two names, split by provider."""
+        from origin.search_engine import reranker
+
+        fake_resp = mock.Mock(status_code=200)
+        fake_resp.json.return_value = {"results": [{"index": 0, "relevance_score": 0.9}]}
+        fake_client = mock.MagicMock()
+        fake_client.__enter__.return_value = fake_client
+        fake_client.post.return_value = fake_resp
+
+        with mock.patch.dict(
+            __import__("django.conf", fromlist=["settings"]).settings.SEARCH_ENGINE,
+            {"COHERE_API_KEY": "co-test"},
+        ), mock.patch("httpx.Client", return_value=fake_client):
+            with spend.spend_context(surface="ask", user_id="u1"):
+                reranker._rerank_cohere(
+                    query="q",
+                    entities=[{"id": "a", "title": "T"}, {"id": "b", "title": "U"}],
+                    input_k=2,
+                    output_k=1,
+                )
+
+        row = AiSpendEvent.objects.get()
+        self.assertEqual(row.unit_kind, spend.UNIT_RERANK)
+        self.assertEqual(row.purpose, "rerank")
 
     @METER_ON
     def test_an_unknown_model_is_unpriced_not_mispriced(self):

@@ -35,6 +35,7 @@ from opensearchpy.exceptions import NotFoundError
 
 from origin.search_engine.embeddings import embed_one
 from origin.search_engine.llm.choice import active_effort_profile
+from origin.search_engine.llm.spend import spend_purpose
 from origin.search_engine.opensearch_client import get_client, get_index_alias
 from origin.search_engine.quota import get_message_retention_days
 
@@ -585,7 +586,10 @@ def _multi_variant_fuse(
         vector_hits: list[dict] = []
         if use_vector:
             try:
-                qvec = embed_one(variant)
+                # Tagged so the cost report can separate query-time
+                # embeds from index-time ones (purpose="index").
+                with spend_purpose("embed_query"):
+                    qvec = embed_one(variant)
                 vector_hits = _run_vector(
                     client,
                     index,
