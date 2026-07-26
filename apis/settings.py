@@ -1275,6 +1275,21 @@ SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )
 
+# Explicit Gemini context cache for the agent's static prefix (system
+# prompt + tool declarations). Implicit caching is best-effort and the
+# 2026-07-26 anatomy run measured it missing on ~half of medium's loop
+# calls — those misses were roughly half of a medium request's cost.
+# The explicit cache guarantees the prefix bills at the cached rate on
+# every step. Fail-open by construction (any cache failure sends the
+# full prefix exactly as today), dark until the eval A/B clears it.
+# See origin/search_engine/llm/gemini_cache.py.
+SEARCH_ENGINE["GEMINI_EXPLICIT_CACHE"] = (
+    os.environ.get("GEMINI_EXPLICIT_CACHE", "false").lower() == "true"
+)
+SEARCH_ENGINE["GEMINI_EXPLICIT_CACHE_TTL_S"] = int(
+    os.environ.get("GEMINI_EXPLICIT_CACHE_TTL_S", "3600")
+)
+
 # --- Internal AI cost meter (Phase 0) ---
 # Writes the `AiSpendEvent` / `AiRequestCost` accounting ledger: one row
 # per paid provider call, plus a per-request rollup. Pure observation —
