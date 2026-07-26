@@ -265,6 +265,35 @@ def _get_or_create_session(
     return AgentSession.objects.create(**create_kwargs)
 
 
+def _persist_rolling_summary(session: AgentSession | None, ctx) -> None:
+    """Store this turn's rolling summary so the next turn can EXTEND it.
+
+    Skipping this would not break anything visibly — it would silently
+    restore the old behaviour, where every turn rebuilds the summary
+    from the whole aged-out history at a prompt that grows with the
+    conversation. That is the entire cost this feature exists to avoid,
+    so it is worth its own function rather than an inline `.save()`.
+
+    Writes only the two summary columns, and only when they changed:
+    a full `save()` here would race the session's own `last_active_at`
+    bookkeeping. Best-effort, like every other session write on this
+    path — losing it costs one redundant summary call, never an answer.
+    """
+    if session is None or not ctx.summary:
+        return
+    if (
+        session.rolling_summary_text == ctx.summary
+        and session.rolling_summary_through == ctx.summarised_through
+    ):
+        return
+    try:
+        session.rolling_summary_text = ctx.summary
+        session.rolling_summary_through = ctx.summarised_through
+        session.save(update_fields=["rolling_summary_text", "rolling_summary_through"])
+    except Exception:  # noqa: BLE001 — a lost summary costs a call, not an answer
+        log.debug("Could not persist rolling summary", exc_info=True)
+
+
 def _load_prior_turns(session: AgentSession, max_turns: int) -> list[tuple[str, str]]:
     """Return the last `max_turns` (query, answer) pairs from the session.
 
@@ -1066,9 +1095,19 @@ class AgentAskView(AuthenticatedAPIView):
             from origin.search_engine.agent.multi_turn import build_prior_context  # noqa: PLC0415
 
             with spend.spend_context(**spend_kwargs), _effort_choice_bound(chosen):
-                prior_turns, prior_summary = build_prior_context(
-                    prior_turns_all, model_override=summaries_pin
+                # Carry the stored summary in so this turn only folds in
+                # what newly aged out. Without it every turn re-summarises
+                # the whole aged-out history — the same work, at a prompt
+                # that grows with the conversation.
+                prior_ctx = build_prior_context(
+                    prior_turns_all,
+                    model_override=summaries_pin,
+                    prior_summary=session.rolling_summary_text if session else "",
+                    summarised_through=session.rolling_summary_through if session else 0,
                 )
+            prior_turns = prior_ctx.verbatim
+            prior_summary = prior_ctx.summary
+            _persist_rolling_summary(session, prior_ctx)
         except Exception:  # noqa: BLE001
             log.exception("Session load failed; continuing without memory")
             prior_turns = []
