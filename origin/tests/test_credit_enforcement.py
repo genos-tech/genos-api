@@ -187,14 +187,19 @@ class CreditBudgetTests(_CacheClearing):
         self.assertEqual(_credit_budget_jpy_milli(self.UID, "free"), 45_000)
 
     @AUTHORITATIVE
-    def test_budget_is_the_per_request_cap_when_the_balance_is_larger(self):
-        """A rich balance does not license one unbounded request: past
-        the per-request cap the spend is absorbed, so continuing is pure
-        loss to us."""
+    def test_a_large_balance_is_not_clipped_to_the_per_request_cap(self):
+        """The cap governs what a request is CHARGED, not how far it
+        runs — cost above it is `absorbed`, by design.
+
+        Clipping the budget to it would truncate a long request from a
+        Max user with 195 credits still in hand, and tell them they had
+        run out of credits. Bounding request LENGTH is
+        `AI_REQUEST_MAX_JPY_MILLI`'s job, and a separate decision.
+        """
         credit_ledger.ensure_monthly_grant(self.UID, "max")
         cache.clear()
-        # 200 credits available, but the quote is 5 -> ¥75.
-        self.assertEqual(_credit_budget_jpy_milli(self.UID, "max"), 75_000)
+        # 200 credits at ¥15 -> ¥3,000, NOT the 5-credit (¥75) cap.
+        self.assertEqual(_credit_budget_jpy_milli(self.UID, "max"), 3_000_000)
 
     @AUTHORITATIVE
     def test_unlimited_plan_gets_no_budget(self):
