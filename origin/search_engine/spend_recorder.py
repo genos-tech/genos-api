@@ -117,6 +117,103 @@ def _credit_policy():
     return getattr(settings, "CREDIT_POLICY", None)
 
 
+def _shadow_enabled() -> bool:
+    """Shadow credits require the meter — no rollup, no charge."""
+    return _enabled() and bool(settings.SEARCH_ENGINE.get("AI_CREDITS_SHADOW", False))
+
+
+def _shadow_decision(ctx: spend.SpendContext) -> dict:
+    """The V2 §3.5 quote/reserve flow, as recorded fact (layer 5).
+
+    Returns the rollup fields for what an AUTHORITATIVE credit system
+    would have done at this request's start: the quoted max, the
+    balance as it stood, and whether that balance covered the quote.
+    Point-in-time by necessity — the balance moves with every request,
+    so none of this is reconstructable later.
+
+    In shadow there is nothing to actually reserve; recording
+    balance-before and the quote IS the reservation, and the posted
+    charge at settle is its release. Only billable surfaces read a
+    balance (the read materializes the month's grant): quoting the
+    search path would add a query to a surface that can never be
+    charged.
+
+    Never raises, and the empty dict is the honest default — a shadow
+    field that silently defaulted to "would not have blocked" on an
+    error would corrupt the one number Phase 1 exists to produce.
+    """
+    if not _shadow_enabled():
+        return {}
+    try:
+        from origin.search_engine import credit_ledger, credits  # noqa: PLC0415
+
+        policy = _credit_policy()
+        if policy is None or ctx.surface not in policy.billable_surfaces:
+            return {}
+        quote = credits.quote_max_credits_milli(policy)
+        balance = credit_ledger.balance_milli(ctx.user_id, ctx.plan)
+        return {
+            "quoted_max_credits_milli": quote,
+            "balance_before_milli": balance,
+            "would_have_blocked": balance is not None and balance < quote,
+        }
+    except Exception:  # noqa: BLE001 — shadow accounting never breaks a request
+        log.debug("shadow decision failed", exc_info=True)
+        return {}
+
+
+def finish_request(ctx: spend.SpendContext, *, result: str) -> None:
+    """Close the rollup AND settle its shadow charge — the request
+    lifecycle's terminal call.
+
+    This is what entry points call when a logical request truly ends.
+    `close_request` alone is the rollup derivation (what `--rebuild`
+    replays); the ledger posting rides only on THIS function, so a
+    rebuild is structurally incapable of re-posting history.
+    """
+    close_request(ctx, result=result)
+    settle_shadow_charge(ctx)
+
+
+def settle_shadow_charge(ctx: spend.SpendContext) -> None:
+    """Post the request's final charge to the credit ledger.
+
+    Reached only through `finish_request` (the request lifecycle's
+    terminal call) — and deliberately NOT through `close_request`
+    itself. `ai_cost_report --rebuild` re-derives rollups through
+    `close_request`; if posting lived there, a rebuild under a newer
+    policy would re-post history — the exact failure the append-only
+    ledger exists to prevent, and `RebuildGuardTests` fails the moment
+    someone moves it.
+
+    Reads the closed rollup row rather than recomputing: the row IS the
+    settled statement (result, credits, both policy versions), and the
+    charge must match it exactly. The ledger's partial unique constraint
+    makes a double-settle (resumed leg re-finishing, retried close) a
+    no-op. Failed requests have shadow_credits 0 and post nothing.
+    """
+    if not _shadow_enabled():
+        return
+    try:
+        from origin.search_engine import credit_ledger  # noqa: PLC0415
+        from origin.search_engine.models import AiRequestCost  # noqa: PLC0415
+
+        row = AiRequestCost.objects.filter(request_id=ctx.request_id).first()
+        if row is None or row.shadow_credits_milli <= 0:
+            return
+        credit_ledger.post_charge(
+            request_id=str(row.request_id),
+            user_id=row.user_id,
+            team_id=row.team_id or "",
+            credits_milli=int(row.shadow_credits_milli),
+            period=credit_ledger.period_for(row.started_at),
+            credit_policy_version=row.credit_policy_version,
+            plan_entitlement_version=row.plan_entitlement_version,
+        )
+    except Exception:  # noqa: BLE001
+        log.debug("Failed to settle shadow charge", exc_info=True)
+
+
 def record(rec: spend.SpendRecord) -> None:
     """Persist one `SpendRecord`. Never raises."""
     if not _enabled():
@@ -212,6 +309,11 @@ def open_request(ctx: spend.SpendContext, *, quoted_max_jpy_milli: int = 0) -> N
                 "plan_entitlement_version": policy.entitlement_version if policy else "",
                 "rate_card_version": card.version if card else "",
                 "started_at": timezone.now(),
+                # The shadow decision is part of the OPEN, not the
+                # close: quote and balance are what stood BEFORE any
+                # spend, unprovable after the fact — the same argument
+                # as quoted_max_jpy_milli.
+                **_shadow_decision(ctx),
             },
         )
     except Exception:  # noqa: BLE001

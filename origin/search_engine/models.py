@@ -614,6 +614,22 @@ class AiRequestCost(models.Model):
     # names, so it can be re-derived — unlike a posted credit charge,
     # which is immutable and lives in its own ledger.
     eligible_jpy_milli = models.BigIntegerField(default=0)
+
+    # --- the shadow decision (V2 layer 5), written at request START --
+    # What the quote/reserve/charge flow WOULD have done, recorded
+    # while the old ask limits stay authoritative. All three are
+    # point-in-time facts that cannot be reconstructed later — the
+    # balance moves with every request, and "would this have blocked"
+    # is only answerable against the balance as it stood.
+    quoted_max_credits_milli = models.BigIntegerField(default=0)
+    # NULL = no balance accounting applied (unlimited plan, meter-only
+    # mode, or a non-billable surface).
+    balance_before_milli = models.BigIntegerField(blank=True, null=True)
+    # True when the balance could not cover the quoted maximum — the
+    # request an AUTHORITATIVE credit system would have refused (or
+    # degraded). The count of these per plan is the single number
+    # Phase 1 exists to produce.
+    would_have_blocked = models.BooleanField(default=False)
     # What the customer would be charged (0 on a failure; never above
     # the quote).
     charged_jpy_milli = models.BigIntegerField(default=0)

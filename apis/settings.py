@@ -1281,6 +1281,20 @@ SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
 # a code edit — its docstring still claims an operator can flip it.
 SEARCH_ENGINE["AI_COST_METER"] = os.environ.get("AI_COST_METER", "false").lower() == "true"
 
+# Shadow credits: quote + balance snapshot at request start, a posted
+# ledger charge at close. WRITES ONLY — nothing is enforced, no user
+# ever sees a number, and the old ask limits stay authoritative
+# (Phase 1 of the metering strategy). Requires AI_COST_METER; without
+# the meter there is no rollup to derive a charge from.
+#
+# Off by default like every other control here: flipping it on is the
+# start of shadow-mode data collection, which is a deliberate act.
+# Making credits AUTHORITATIVE is a Phase 2 decision and deliberately
+# has no flag yet — it should not be one typo away.
+SEARCH_ENGINE["AI_CREDITS_SHADOW"] = (
+    os.environ.get("AI_CREDITS_SHADOW", "false").lower() == "true"
+)
+
 # Monthly AI budget in YEN, for `ai_cost_report --alert`. The command
 # pro-rates it to the reporting window and logs at ERROR when spend is
 # over — which fails the cron run via CronCommand's tripwire.

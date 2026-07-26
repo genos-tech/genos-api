@@ -1268,7 +1268,11 @@ def _stream_ndjson(
                 result = AiRequestCost.RESULT_APPLICATION_FAILURE
             else:
                 result = AiRequestCost.RESULT_PROVIDER_FAILURE
-            spend_recorder.close_request(spend.SpendContext(**spend_kwargs), result=result)
+            # finish (close + settle the shadow charge), not bare
+            # close: the stream's end is the request lifecycle's
+            # terminal moment, and the ledger posting rides only here —
+            # never on `close_request`, which `--rebuild` replays.
+            spend_recorder.finish_request(spend.SpendContext(**spend_kwargs), result=result)
         except Exception:  # noqa: BLE001 — accounting never breaks a response
             log.debug("Failed to close spend request", exc_info=True)
 
