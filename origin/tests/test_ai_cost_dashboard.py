@@ -176,6 +176,35 @@ class CollectTests(_Fixture):
         self.assertEqual(cost_dashboard.collect(days=1)["users"], [])
         self.assertTrue(cost_dashboard.collect(days=1, by_user=True)["users"])
 
+    def test_efforts_break_a_request_down_per_effort(self):
+        """The flag-flip verification view: after flipping a cost lever
+        on Railway, the next day's page must answer '$/req at each
+        effort' and 'is the prefix cache firing' without an ssh."""
+        req = "77777777-7777-4777-8777-777777777777"
+        self._event(req, purpose="loop", jpy=1200, usd=8000, prompt=200, out=40)
+        AiSpendEvent.objects.filter(request_id=req).update(
+            effort="medium", cached_tokens=800
+        )
+        AiRequestCost.objects.filter(request_id=self.ok_request).update(effort="")
+        data = cost_dashboard.collect(days=1)
+        medium = [e for e in data["efforts"] if e["effort"] == "medium"]
+        self.assertEqual(len(medium), 1)
+        self.assertEqual(medium[0]["requests"], 1)
+        self.assertEqual(medium[0]["usd_per_req"], 8000)
+        loop_row = medium[0]["rows"][0]
+        self.assertEqual(loop_row["key"], "loop")
+        # cached/(prompt+cached), never cached/prompt (that prints 400%).
+        self.assertEqual(loop_row["cache_pct"], 80.0)
+
+    def test_efforts_sort_low_medium_high(self):
+        for i, eff in enumerate(("high", "low", "medium")):
+            req = f"88888888-8888-4888-8888-88888888888{i}"
+            self._event(req, purpose="loop", jpy=100, usd=700)
+            AiSpendEvent.objects.filter(request_id=req).update(effort=eff)
+        order = [e["effort"] for e in cost_dashboard.collect(days=1)["efforts"]]
+        self.assertLess(order.index("low"), order.index("medium"))
+        self.assertLess(order.index("medium"), order.index("high"))
+
 
 class AgreesWithTheTextReportTests(_Fixture):
     """The one guard against the two readers drifting apart.
@@ -201,6 +230,14 @@ class AgreesWithTheTextReportTests(_Fixture):
 class RenderTests(_Fixture):
     def _html(self, **kw) -> str:
         return cost_dashboard.render_html(cost_dashboard.collect(days=1, **kw))
+
+    def test_renders_the_effort_anatomy_section(self):
+        req = "99999999-9999-4999-8999-999999999999"
+        self._event(req, purpose="loop", jpy=1200, usd=8000, prompt=200)
+        AiSpendEvent.objects.filter(request_id=req).update(effort="low")
+        html = self._html()
+        self.assertIn("By effort — request anatomy", html)
+        self.assertIn("cache%", html)
 
     def test_renders_a_self_contained_page(self):
         html = self._html()

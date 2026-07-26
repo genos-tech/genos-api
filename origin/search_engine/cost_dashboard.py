@@ -113,6 +113,7 @@ def collect(
     data["providers"] = _group(events, "provider", with_usd=True)
     data["models"] = _models(events)
     data["purposes"] = _group(events, "purpose")
+    data["efforts"] = _efforts(events, requests)
     data["surfaces"] = _group(events, "surface")
     data["coverage"] = _coverage(events)
     data["requests"] = _recent_requests(requests)
@@ -276,6 +277,97 @@ def _models(events) -> list[dict]:
     return sorted(rows, key=lambda r: -r["jpy_milli"])
 
 
+_EFFORT_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+
+def _call_label(row: dict) -> str:
+    """Purpose when tagged; otherwise unit-kind + provider.
+
+    Same convention as `ai_cost_report`: Tavily / embedding / Cohere
+    rows written before purpose tagging landed must still separate
+    instead of collapsing into one `(untagged)` line.
+    """
+    if row["purpose"]:
+        return row["purpose"]
+    if row["unit_kind"]:
+        return f"({row['unit_kind']}:{row['provider'] or '?'})"
+    return "(untagged)"
+
+
+def _efforts(events, requests) -> list[dict]:
+    """Per-effort request anatomy — the cost-optimization view.
+
+    Mirrors `ai_cost_report --by-effort`, and exists here so verifying a
+    cost lever after a flag flip is opening today's page rather than an
+    ssh session. The columns ARE the levers: `$/req` is what the
+    <$0.02-per-request target is checked against, `cache%` says whether
+    the prefix cache is actually absorbing the re-sent system+tools
+    prefix, and `think/req` sizes what a thinking budget could reclaim.
+
+    Request counts come from the rollup, falling back to distinct
+    request ids in the events — a window whose requests closed outside
+    it has events but no rollup row, and dividing by zero requests
+    would print an infinite cost per request.
+    """
+    n_req = {
+        (r["effort"] or ""): int(r["n"] or 0)
+        for r in requests.values("effort").annotate(n=Count("id"))
+    }
+    fallback = {
+        (r["effort"] or ""): int(r["n"] or 0)
+        for r in events.values("effort").annotate(n=Count("request_id", distinct=True))
+    }
+
+    buckets: dict[str, dict[str, dict]] = {}
+    for r in events.values("effort", "purpose", "unit_kind", "provider").annotate(
+        n=Count("id"),
+        jpy=Sum("cost_jpy_milli"),
+        usd=Sum("cost_usd_micro"),
+        prompt=Sum("prompt_tokens"),
+        cached=Sum("cached_tokens"),
+        thought=Sum("thought_tokens"),
+    ):
+        rows = buckets.setdefault(r["effort"] or "", {})
+        row = rows.setdefault(
+            _call_label(r),
+            {"calls": 0, "jpy": 0, "usd": 0, "prompt": 0, "cached": 0, "thought": 0},
+        )
+        row["calls"] += int(r["n"] or 0)
+        row["jpy"] += int(r["jpy"] or 0)
+        row["usd"] += int(r["usd"] or 0)
+        row["prompt"] += int(r["prompt"] or 0)
+        row["cached"] += int(r["cached"] or 0)
+        row["thought"] += int(r["thought"] or 0)
+
+    out: list[dict] = []
+    for effort, rows in buckets.items():
+        n = n_req.get(effort) or fallback.get(effort) or 1
+        total_jpy = sum(v["jpy"] for v in rows.values())
+        total_usd = sum(v["usd"] for v in rows.values())
+        out.append(
+            {
+                "effort": effort or "(none)",
+                "requests": n,
+                "jpy_per_req": total_jpy // n,
+                "usd_per_req": total_usd // n,
+                "rows": [
+                    {
+                        "key": label,
+                        "calls": v["calls"],
+                        "calls_per_req": v["calls"] / n,
+                        "jpy_per_req": v["jpy"] // n,
+                        "share": _pct(v["jpy"], total_jpy),
+                        "in_per_req": (v["prompt"] + v["cached"]) / n,
+                        "cache_pct": _pct(v["cached"], v["prompt"] + v["cached"]),
+                        "think_per_req": v["thought"] / n,
+                    }
+                    for label, v in sorted(rows.items(), key=lambda kv: -kv[1]["jpy"])
+                ],
+            }
+        )
+    return sorted(out, key=lambda e: (_EFFORT_ORDER.get(e["effort"], 9), e["effort"]))
+
+
 def _coverage(events) -> dict:
     """The three ways the headline number can be wrong, each named."""
     unattributed = events.filter(surface=SURFACE_UNATTRIBUTED)
@@ -381,6 +473,8 @@ h2 { font-size: 15px; margin: 0 0 12px; letter-spacing: -0.005em; }
 .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 .kpi .value { font-size: 22px; font-weight: 600; margin-top: 4px; letter-spacing: -0.02em; }
 .kpi .note { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.card h3 { font-size: 13px; margin: 14px 0 8px; letter-spacing: -0.005em; }
+.card .note { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
 .banner {
   border-radius: 10px; padding: 14px 18px; margin-bottom: 18px; font-size: 13px;
   background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line);
@@ -422,6 +516,8 @@ def render_html(data: dict) -> str:
     body.append(_daily_chart(data["daily"]))
     body.append(_providers(data["providers"]))
     body.append(_bars("Purposes — what one request is made of", data["purposes"]))
+    if data.get("efforts"):
+        body.append(_efforts_section(data["efforts"]))
     body.append(_bars("Surfaces — where the spend comes from", data["surfaces"]))
     body.append(_models_table(data["models"]))
     if data.get("users"):
@@ -431,6 +527,51 @@ def render_html(data: dict) -> str:
     body.append(_requests_table(data["requests"]))
     body.append(_footnotes(data))
     return _page(title, body)
+
+
+def _efforts_section(efforts: list[dict]) -> str:
+    """One table per effort level: where each cent of a request goes.
+
+    `think` compares only within a provider (Gemini bills it on top of
+    output, OpenAI reports it as a subset, Claude folds it in) — the
+    footnote says so on the page rather than relying on the reader
+    knowing the adapters.
+    """
+    cards: list[str] = []
+    for e in efforts:
+        rows = "".join(
+            f"<tr><td>{_e(r['key'])}</td>"
+            f"<td class='num'>{r['calls']:,}</td>"
+            f"<td class='num'>{r['calls_per_req']:.1f}</td>"
+            f"<td class='num'>{_e(yen(r['jpy_per_req']))}</td>"
+            f"<td class='num'>{r['share']:.0f}%</td>"
+            f"<td class='num'>{r['in_per_req']:,.0f}</td>"
+            f"<td class='num'>{r['cache_pct']:.0f}%</td>"
+            f"<td class='num'>{r['think_per_req']:,.0f}</td></tr>"
+            for r in e["rows"]
+        )
+        cards.append(
+            f"<h3>{_e(e['effort'])} — {e['requests']:,} request(s), "
+            f"mean {_e(yen(e['jpy_per_req']))}/req "
+            f"(${e['usd_per_req'] / 1_000_000:,.4f})</h3>"
+            "<div class='scroll'><table><thead><tr>"
+            "<th>Call</th><th class='num'>Calls</th><th class='num'>c/req</th>"
+            "<th class='num'>JPY/req</th><th class='num'>Share</th>"
+            "<th class='num'>in tok/req</th><th class='num'>cache%</th>"
+            "<th class='num'>think/req</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table></div>"
+        )
+    note = (
+        "<p class='note'>cache% = cached share of input — whether the prefix "
+        "cache absorbs the re-sent system+tools block. think/req compares "
+        "within a provider only (billing semantics differ across them).</p>"
+    )
+    return (
+        "<div class='card'><h2>By effort — request anatomy</h2>"
+        + "".join(cards)
+        + note
+        + "</div>"
+    )
 
 
 def _shadow_section(shadow: dict) -> str:
