@@ -49,9 +49,9 @@ tier_caps:
     pro: {light: 250, middle: 25, highend: 4}
     enterprise: unlimited
 efforts:
-    low:    {rung: 0, max_steps: 6,  rewrite_variants: 1, use_reranker: true, critique_steps: 1, max_output_tokens: 4096, thinking_budget: 0}
-    medium: {rung: 1, max_steps: 10, rewrite_variants: 3, use_reranker: true, critique_steps: 2, max_output_tokens: null, thinking_budget: null}
-    high:   {rung: 2, max_steps: 10, rewrite_variants: 3, use_reranker: true, critique_steps: 2, max_output_tokens: null, thinking_budget: null}
+    low:    {rung: 0, max_steps: 6,  rewrite_variants: 1, use_reranker: true, critique_steps: 1, max_output_tokens: 4096, thinking_budget: 0, loop_rung: null}
+    medium: {rung: 1, max_steps: 10, rewrite_variants: 3, use_reranker: true, critique_steps: 2, max_output_tokens: null, thinking_budget: null, loop_rung: 0}
+    high:   {rung: 2, max_steps: 10, rewrite_variants: 3, use_reranker: true, critique_steps: 2, max_output_tokens: null, thinking_budget: null, loop_rung: null}
 subprocesses:
     rewrite: 0
     rerank: 0
@@ -238,7 +238,7 @@ class EffortRejectsTests(SimpleTestCase):
             GOOD.replace(
                 "    high:   {rung: 2, max_steps: 10, rewrite_variants: 3, "
                 "use_reranker: true, critique_steps: 2, max_output_tokens: null, "
-                "thinking_budget: null}\n",
+                "thinking_budget: null, loop_rung: null}\n",
                 "",
             ),
             "exactly",
@@ -267,13 +267,26 @@ class EffortRejectsTests(SimpleTestCase):
         mis-edit: high would think less than medium."""
         self.assertRejects(
             GOOD.replace(
-                "critique_steps: 2, max_output_tokens: null, thinking_budget: null}\n"
-                "subprocesses:",
-                "critique_steps: 2, max_output_tokens: null, thinking_budget: 16}\n"
-                "subprocesses:",
+                "critique_steps: 2, max_output_tokens: null, thinking_budget: null, "
+                "loop_rung: null}\nsubprocesses:",
+                "critique_steps: 2, max_output_tokens: null, thinking_budget: 16, "
+                "loop_rung: null}\nsubprocesses:",
             ),
             "thinking_budget",
         )
+
+    def test_rejects_a_loop_rung_above_the_efforts_own(self):
+        """A planning model pricier than the synthesis model inverts the
+        split's premise — the cap makes that mis-edit unexpressible."""
+        self.assertRejects(
+            GOOD.replace("thinking_budget: null, loop_rung: 0", "thinking_budget: null, loop_rung: 2"),
+            "loop_rung",
+        )
+
+    def test_loop_rung_zero_and_null_are_legal(self):
+        cat = _load(GOOD)
+        self.assertEqual(cat.efforts["medium"].loop_rung, 0)
+        self.assertIsNone(cat.efforts["low"].loop_rung)
 
     def test_zero_thinking_budget_is_legal(self):
         # 0 means "thinking off", not "unset" — low ships with it.

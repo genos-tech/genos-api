@@ -70,6 +70,7 @@ _EFFORT_FIELDS = (
     "critique_steps",
     "max_output_tokens",
     "thinking_budget",
+    "loop_rung",
 )
 
 # Sub-process kinds that may carry a rung pin. All three required in
@@ -105,6 +106,11 @@ class EffortProfile:
     #: ignore it (see GenerationParams). Applied only under the
     #: AGENT_THINKING_BUDGETS flag.
     thinking_budget: int | None
+    #: Rung for the loop's PLANNING steps (B3 two-tier split); null =
+    #: single-model. Synthesis always runs the effort's own `rung`.
+    #: Applied only under the AGENT_TWO_TIER_LOOP flag; the
+    #: RAG_PLANNING_MODEL env override wins over it.
+    loop_rung: int | None
 
 
 @dataclass(frozen=True)
@@ -606,6 +612,19 @@ def _parse_efforts(raw: dict) -> dict[str, EffortProfile]:
         ):
             # 0 is legal and meaningful: "thinking off".
             _fail(f"efforts.{name}.thinking_budget must be a non-negative integer or null")
+        loop_rung = p["loop_rung"]
+        if loop_rung is not None and (
+            not isinstance(loop_rung, int)
+            or isinstance(loop_rung, bool)
+            or not (0 <= loop_rung <= p["rung"])
+        ):
+            # A planning model pricier than the synthesis model would
+            # invert the split's whole premise, so the rung is capped
+            # at the effort's own.
+            _fail(
+                f"efforts.{name}.loop_rung must be null or an integer in "
+                f"[0, rung={p['rung']}]"
+            )
         profiles[name] = EffortProfile(
             name=name,
             rung=p["rung"],
@@ -615,6 +634,7 @@ def _parse_efforts(raw: dict) -> dict[str, EffortProfile]:
             critique_steps=p["critique_steps"],
             max_output_tokens=cap,
             thinking_budget=think,
+            loop_rung=loop_rung,
         )
 
     for key in ("rung", "max_steps", "rewrite_variants"):

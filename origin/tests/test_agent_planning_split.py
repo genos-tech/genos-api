@@ -201,3 +201,82 @@ class PlanningSplitTests(SimpleTestCase):
         ):
             _run_loop(client)
         self.assertEqual(client.overrides, [None])
+
+
+class TwoTierLoopTests(SimpleTestCase):
+    """AGENT_TWO_TIER_LOOP — the profile-driven form of the B3 split.
+
+    Same machinery, different steering: the effort profile's `loop_rung`
+    picks the planning model per provider instead of one global env id.
+    The shipped catalog pins medium's loop_rung to 0 (flash-lite) while
+    medium's own rung resolves to 3.6-flash — the split the anatomy run
+    priced at ~$0.006 vs ~$0.028 per loop call.
+    """
+
+    def _run_bound(self, client, *, effort, model, **flags):
+        from origin.search_engine.llm.choice import reset_llm_choice, set_llm_choice
+
+        token = set_llm_choice(LlmChoice(provider="gemini", model=model, effort=effort))
+        flags.setdefault("RAG_PLANNING_MODEL", "")
+        try:
+            with override_settings(
+                SEARCH_ENGINE=_se(
+                    AGENT_EFFORT_LEVELS=True,
+                    AGENT_TWO_TIER_LOOP=True,
+                    **flags,
+                )
+            ):
+                return _run_loop(client)
+        finally:
+            reset_llm_choice(token)
+
+    def test_medium_plans_on_the_loop_rung_and_synthesizes_on_its_own(self):
+        fast_draft = [("A mediocre draft.", None)]
+        client = _ScriptedClient([_TOOL_STEP, fast_draft, _FINAL_STEP])
+        events = self._run_bound(client, effort="medium", model="gemini-3.6-flash")
+        self.assertEqual(
+            client.overrides,
+            ["gemini-3.5-flash-lite", "gemini-3.5-flash-lite", None],
+            "planning on the rung-0 model, synthesis re-run on the user's own",
+        )
+        text = _answer_text(events)
+        self.assertIn("The final answer.", text)
+        self.assertNotIn("mediocre draft", text)
+
+    def test_low_is_single_model_because_its_loop_is_already_rung_zero(self):
+        # low: loop_rung null in the YAML — and even a rung pin equal to
+        # the synthesis model would be skipped by the same-model guard.
+        client = _ScriptedClient([_TOOL_STEP, _FINAL_STEP])
+        self._run_bound(client, effort="low", model="gemini-3.5-flash-lite")
+        self.assertEqual(client.overrides, [None, None])
+
+    def test_flag_off_is_single_model(self):
+        client = _ScriptedClient([_TOOL_STEP, _FINAL_STEP])
+        from origin.search_engine.llm.choice import reset_llm_choice, set_llm_choice
+
+        token = set_llm_choice(
+            LlmChoice(provider="gemini", model="gemini-3.6-flash", effort="medium")
+        )
+        try:
+            with override_settings(
+                SEARCH_ENGINE=_se(
+                    RAG_PLANNING_MODEL="",
+                    AGENT_EFFORT_LEVELS=True,
+                    AGENT_TWO_TIER_LOOP=False,
+                )
+            ):
+                _run_loop(client)
+        finally:
+            reset_llm_choice(token)
+        self.assertEqual(client.overrides, [None, None])
+
+    def test_env_planning_model_wins_over_the_profile(self):
+        # The operator's no-deploy escape hatch keeps precedence.
+        client = _ScriptedClient([_TOOL_STEP, _FINAL_STEP, _FINAL_STEP])
+        self._run_bound(
+            client,
+            effort="medium",
+            model="gemini-3.6-flash",
+            RAG_PLANNING_MODEL="gemini-3.1-pro-preview",
+        )
+        self.assertEqual(client.overrides[0], "gemini-3.1-pro-preview")

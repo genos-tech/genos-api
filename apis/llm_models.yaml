@@ -497,6 +497,14 @@ tier_caps:
 #    max_output_tokens  int or null — per-call output cap; null = the
 #                       provider's existing default behavior (claude/
 #                       openai env caps, gemini uncapped)
+#    loop_rung          int or null — rung for the loop's PLANNING
+#                       steps (B3 two-tier split): tool-selection steps
+#                       run the loop_rung model, the final synthesis
+#                       always runs the effort's own rung (the split's
+#                       discard-and-rerun machinery in controller.py).
+#                       null = single-model. Must be <= rung. Inert
+#                       until AGENT_TWO_TIER_LOOP is on;
+#                       RAG_PLANNING_MODEL env wins over it.
 #    thinking_budget    int or null — max thinking tokens per loop call
 #                       (0 = off, null = the model's default dynamic
 #                       thinking). Gemini-only today; other adapters
@@ -522,6 +530,8 @@ efforts:
         # flash-lite doesn't think by default; 0 pins that so a future
         # rung-0 model swap can't silently add thinking to "low".
         thinking_budget: 0
+        # Low's loop IS rung 0 — nothing cheaper to plan on.
+        loop_rung: null
     medium:
         rung: 1
         max_steps: 10
@@ -532,6 +542,10 @@ efforts:
         # null (unchanged) until the A/B eval picks a value — medium is
         # the DEFAULT experience; see the MEDIUM INVARIANT note above.
         thinking_budget: null
+        # The two-tier target: planning on flash-lite (~$0.006/call
+        # even on a cache miss vs ~$0.028 on 3.6-flash), synthesis on
+        # 3.6-flash. Loop calls are 99%+ of medium's cost.
+        loop_rung: 0
     high:
         rung: 2
         max_steps: 10
@@ -540,6 +554,9 @@ efforts:
         critique_steps: 2
         max_output_tokens: null
         thinking_budget: null
+        # High stays single-model until medium's split clears its A/B —
+        # smallest blast radius first.
+        loop_rung: null
 
 # ---------------------------------------------------------------------
 #  Sub-process model pins — rung INDICES into the user's provider list
