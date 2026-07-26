@@ -60,6 +60,24 @@ def _invalidate_balance(user_id: str, period: str) -> None:
         log.debug("credit balance cache invalidation failed", exc_info=True)
 
 
+def credits_authoritative() -> bool:
+    """Credits are the customer's limit, replacing the daily ask count.
+
+    Requires the shadow engine: without `AI_CREDITS_SHADOW` no charge is
+    ever posted, so a balance would only ever go down by the monthly
+    grant and every user would read as full forever. Enforcing on a
+    ledger nobody writes to is worse than not enforcing.
+
+    Public and single-sourced because two very different surfaces now
+    branch on it — the ask gate, and the pricing page deciding whether
+    to advertise credits or daily asks. Two copies of this predicate
+    would eventually disagree, and the visible symptom would be a plans
+    page selling a limit the server does not enforce.
+    """
+    se = settings.SEARCH_ENGINE
+    return bool(se.get("AI_CREDITS_AUTHORITATIVE")) and bool(se.get("AI_CREDITS_SHADOW"))
+
+
 def entitlement_milli(plan: str) -> int | None:
     """The plan's monthly grant in milli-credits; None = unlimited.
 

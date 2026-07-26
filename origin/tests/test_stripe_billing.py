@@ -1493,3 +1493,90 @@ class PlansEndpointCurrencyTests(BillingTestBase):
         res = self.client.get("/api/v2/billing/plans/?currency=eur")
         purchasable = [t["tier"] for t in res.data["tiers"] if t["purchasable"]]
         self.assertEqual(purchasable, ["core"])
+
+
+def _se(**overrides):
+    """SEARCH_ENGINE with overrides — this module had no such helper
+    because nothing here needed the AI flags before credits."""
+    from django.conf import settings as dj
+
+    cfg = dict(dj.SEARCH_ENGINE)
+    cfg.update(overrides)
+    return cfg
+
+
+@override_settings(STRIPE=STRIPE_TEST_SETTINGS)
+class PlansCreditAllowanceTests(BillingTestBase):
+    """`monthly_ai_credits` on the plans payload.
+
+    The plans page used to advertise "N AI asks every day". Under
+    credits those daily numbers still exist and are still counted — the
+    Free abuse breaker reads one — but they LIMIT NOBODY, so a pricing
+    page quoting them is selling a limit that is not one.
+
+    Present only when the server actually enforces credits, so its
+    presence is the client's render switch. Same payload-shape
+    convention `credits` uses on /agent/features/, and for the same
+    reason: either side can deploy first and the page still describes
+    what is really enforced.
+    """
+
+    def _limits(self, tier: str) -> dict:
+        res = self.client.get("/api/v2/billing/plans/")
+        return next(t for t in res.data["tiers"] if t["tier"] == tier)["limits"]
+
+    @override_settings(
+        SEARCH_ENGINE=_se(
+            AI_COST_METER=True, AI_CREDITS_SHADOW=True, AI_CREDITS_AUTHORITATIVE=True
+        ),
+        STRIPE=STRIPE_TEST_SETTINGS,
+    )
+    def test_allowance_is_served_when_credits_rule(self):
+        self.assertEqual(self._limits("free")["monthly_ai_credits"], 10)
+        self.assertEqual(self._limits("core")["monthly_ai_credits"], 40)
+        self.assertEqual(self._limits("pro")["monthly_ai_credits"], 100)
+        self.assertEqual(self._limits("max")["monthly_ai_credits"], 200)
+
+    @override_settings(
+        SEARCH_ENGINE=_se(
+            AI_COST_METER=True, AI_CREDITS_SHADOW=True, AI_CREDITS_AUTHORITATIVE=True
+        ),
+        STRIPE=STRIPE_TEST_SETTINGS,
+    )
+    def test_unlimited_plan_is_null_not_absent(self):
+        """null = unlimited; ABSENT = credits are not enforced at all.
+        Conflating them would advertise "unlimited AI" on every plan the
+        moment the flag went off."""
+        limits = self._limits("enterprise")
+        self.assertIn("monthly_ai_credits", limits)
+        self.assertIsNone(limits["monthly_ai_credits"])
+
+    @override_settings(
+        SEARCH_ENGINE=_se(AI_CREDITS_AUTHORITATIVE=False), STRIPE=STRIPE_TEST_SETTINGS
+    )
+    def test_absent_when_credits_are_not_the_limit(self):
+        self.assertNotIn("monthly_ai_credits", self._limits("pro"))
+
+    @override_settings(
+        SEARCH_ENGINE=_se(AI_CREDITS_SHADOW=False, AI_CREDITS_AUTHORITATIVE=True),
+        STRIPE=STRIPE_TEST_SETTINGS,
+    )
+    def test_absent_without_the_ledger(self):
+        """Authoritative WITHOUT the shadow ledger enforces nothing, so
+        the page must not advertise credits either — the predicate is
+        single-sourced in `credit_ledger.credits_authoritative` precisely
+        so this cannot drift from the ask gate."""
+        self.assertNotIn("monthly_ai_credits", self._limits("pro"))
+
+    @override_settings(
+        SEARCH_ENGINE=_se(
+            AI_COST_METER=True, AI_CREDITS_SHADOW=True, AI_CREDITS_AUTHORITATIVE=True
+        ),
+        STRIPE=STRIPE_TEST_SETTINGS,
+    )
+    def test_the_daily_keys_still_ship(self):
+        """They are still counted server-side and older clients still
+        read them; the page simply stops SELLING them."""
+        limits = self._limits("pro")
+        self.assertIsNotNone(limits["llm_ask_daily"])
+        self.assertIsNotNone(limits["web_search_daily"])

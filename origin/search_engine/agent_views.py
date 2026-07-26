@@ -479,15 +479,13 @@ def _alert_if_user_spend_is_high(user_id: str) -> None:
 
 
 def _credits_authoritative() -> bool:
-    """Credits are the customer's limit, replacing the daily ask count.
+    """See `credit_ledger.credits_authoritative` — single-sourced there
+    because the pricing page branches on the same predicate, and two
+    copies would eventually disagree about whether to advertise credits
+    or daily asks."""
+    from origin.search_engine import credit_ledger  # noqa: PLC0415
 
-    Requires the shadow engine: without `AI_CREDITS_SHADOW` no charge is
-    ever posted, so a balance would only ever go down by the monthly
-    grant and every user would read as full forever. Enforcing on a
-    ledger nobody writes to is worse than not enforcing.
-    """
-    se = settings.SEARCH_ENGINE
-    return bool(se.get("AI_CREDITS_AUTHORITATIVE")) and bool(se.get("AI_CREDITS_SHADOW"))
+    return credit_ledger.credits_authoritative()
 
 
 def _credit_gate(user_id: str, plan: str) -> Response | None:

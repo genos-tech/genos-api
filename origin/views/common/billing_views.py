@@ -18,6 +18,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from origin.models.common.team_models import TeamMaster
+from origin.search_engine import credit_ledger
 from origin.services import stripe_billing
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
@@ -180,6 +181,7 @@ class BillingPlansView(AuthenticatedAPIView):
         quotas = settings.SEARCH_ENGINE.get("TIER_QUOTAS") or {}
         currency = _requested_currency(request)
         purchasable = stripe_billing.purchasable_plans(currency)
+        credits_on = credit_ledger.credits_authoritative()
         tiers = []
         for tier in ("free", "core", "pro", "max", "enterprise"):
             cfg = quotas.get(tier)
@@ -194,13 +196,25 @@ class BillingPlansView(AuthenticatedAPIView):
                 price = stripe_billing.price_display(tier, currency)
             else:
                 price = None
+            limits = {k: cfg.get(k) for k in _PLAN_LIMIT_KEYS}
+            # The plan's monthly AI credits, present ONLY when credits
+            # are the limit the server actually enforces. Its presence is
+            # the client's render switch — the same payload-shape
+            # convention `credits` uses on /agent/features/ — so the
+            # comparison table can never advertise a limit the quota
+            # engine has stopped applying, in either direction, without
+            # a coordinated deploy.
+            if credits_on:
+                ent = credit_ledger.entitlement_milli(tier)
+                # None = unlimited (enterprise); milli -> whole credits.
+                limits["monthly_ai_credits"] = None if ent is None else ent // 1000
             tiers.append(
                 {
                     "tier": tier,
                     "price": price,
                     "purchasable": tier in purchasable,
                     "contact_sales": tier == "enterprise",
-                    "limits": {k: cfg.get(k) for k in _PLAN_LIMIT_KEYS},
+                    "limits": limits,
                 }
             )
         return Response(
