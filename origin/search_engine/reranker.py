@@ -407,12 +407,23 @@ def _rerank_cohere(
 
         # Ledger. `attempts` counts every POST, but only a 200 is a
         # billed rerank: the retries above fire exclusively on 429, and
-        # a rejected request is not charged by any provider. So units is
-        # 1-or-0, and `attempt_no` exists on the row purely so that
-        # invariant stays demonstrable from the data.
+        # a rejected request is not charged by any provider —
+        # `attempt_no` exists on the row purely so that invariant stays
+        # demonstrable from the data.
+        #
+        # `units` is Cohere's OWN billable quantity — search units, one
+        # per query with up to 100 documents — because that is what the
+        # rate card prices. ceil(docs/100) is 1 for every call today
+        # (input_k is nowhere near 100), computed rather than hardcoded
+        # so a bigger candidate pool cannot silently under-bill. The
+        # raw document count is kept in `billable_units`: Cohere splits
+        # documents over 500 tokens into chunks that each count toward
+        # the 100, so if an invoice ever disagrees, the doc count is
+        # the datum that lets us reconstruct why.
         spend.record_units(
             unit_kind=spend.UNIT_RERANK,
-            units=1 if resp.status_code == 200 else 0,
+            units=(len(documents) + 99) // 100 if resp.status_code == 200 else 0,
+            billable_units=len(documents),
             provider="cohere",
             model=str(payload.get("model") or ""),
             latency_ms=int((_time.monotonic() - started) * 1000),

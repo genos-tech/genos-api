@@ -93,10 +93,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
         # Record the failed attempt before surfacing it. Tavily does not
         # bill a failed search, so units are 0 — but the row is what
         # makes "how much spend came from failures" answerable at all.
+        # `model` still says what was ATTEMPTED: with a rate in the
+        # catalog, 0 units prices to a TRUE ¥0 (`priced`) instead of
+        # flagging the whole request `has_unpriced`.
         spend.record_units(
             unit_kind=spend.UNIT_SEARCH,
             units=0,
             provider="tavily",
+            model="advanced",
             latency_ms=int((time.monotonic() - started) * 1000),
             error=f"{type(e).__name__}: {e}"[:200],
         )

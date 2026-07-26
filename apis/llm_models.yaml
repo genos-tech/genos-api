@@ -188,6 +188,67 @@ embeddings:
       provider: openai
       price: { input: 0.02, output: 0, cached_input: 0, cache_write: 0 }
 
+# =====================================================================
+#  Per-UNIT prices — the paid services that do not bill in tokens.
+# =====================================================================
+#
+#  Web search and rerank bill per unit against their own invoices.
+#  Phase 0 recorded them `unpriced` on the grounds that no per-unit
+#  estimate belongs in a ledger whose whole value is that it contains
+#  no estimates — the right rule, wrongly applied: these rates are not
+#  estimates, they are PUBLISHED, exactly like the token prices above.
+#  Leaving them out made `computed_jpy_milli` a systematic under-count
+#  on every ask that searched or reranked, and flagged every such
+#  request `has_unpriced` — a warning that stops meaning anything when
+#  it is always on.
+#
+#  Keyed by exact (unit, provider, model) — the same exact-id-or-
+#  unpriced philosophy as `price_for()`. An operator pinning a
+#  different COHERE_RERANK_MODEL makes those rows visibly `unpriced`
+#  rather than silently priced at the wrong rate.
+#
+#  `usd_per_unit` is priced against the `units` column, which records
+#  the PROVIDER'S OWN billable quantity, not our call count:
+#
+#    * tavily: units = API credits. `search_depth="advanced"` costs 2
+#      credits per call, and the ledger has recorded 2 since Phase 0
+#      (the user's quota counter still moves by 1 — different ledgers,
+#      different questions).
+#    * cohere: units = search units. One search unit = one query with
+#      up to 100 documents; documents over 500 tokens are split into
+#      chunks that each count as a document. Our rerank sends truncated
+#      snippets (input_k << 100 of them), so this is 1 per call today;
+#      the recorder computes ceil(docs/100) so a future config change
+#      cannot silently under-bill, and the raw document count is kept
+#      in `billable_units` — same recoverability argument as Vertex's
+#      billable_character_count.
+#
+#  ⚠️ BOTH RATES ARE PROVISIONAL — list prices, not invoice-confirmed:
+#
+#    * tavily $0.008/credit is the published PAY-AS-YOU-GO rate. Plan
+#      bundles (e.g. bundled monthly credits) buy credits below list;
+#      if we are on one, the marginal rate differs from the average
+#      rate and this should be set to what the NEXT credit actually
+#      costs us.
+#    * cohere $2.00 per 1K searches is the published rerank-v3.5 rate
+#      ($0.002/search).
+#
+#  Confirm both against the first Tavily and Cohere invoices (the
+#  reconciliation step in AI_COST_METER.md section 4) and correct here
+#  if they differ — same cheap-correction path as the Vertex caveat
+#  above: rows carry `rate_card_version`, `--rebuild` re-derives.
+#
+unit_prices:
+    - unit: search
+      provider: tavily
+      model: advanced
+      usd_per_unit: 0.008
+
+    - unit: rerank
+      provider: cohere
+      model: rerank-v3.5
+      usd_per_unit: 0.002
+
 providers:
     # -----------------------------------------------------------------
     # Gemini — via Vertex AI in prod (GEMINI_USE_VERTEX=true). This is

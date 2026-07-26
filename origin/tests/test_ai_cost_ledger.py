@@ -460,11 +460,10 @@ class AdapterFinallyTests(_RestoresRecorder, TestCase):
 class NonLlmSourceTests(_RestoresRecorder, TestCase):
     """Paid calls that are not measured in tokens.
 
-    These bill per call or per document, so they carry `units` and an
-    explicit `unpriced` basis rather than an invented per-unit price.
-    Recording them keeps invoice reconciliation complete — each is a
-    separate billing line — without putting an estimate into a table
-    whose whole value is that it contains none.
+    These bill per unit and carry `units` — the PROVIDER'S billable
+    quantity (Tavily credits, Cohere search units) — priced from the
+    catalog's `unit_prices` table. Recording them keeps invoice
+    reconciliation complete: each is a separate billing line.
     """
 
     @METER_ON
@@ -498,6 +497,9 @@ class NonLlmSourceTests(_RestoresRecorder, TestCase):
         self.assertEqual(row.provider, "tavily")
         self.assertEqual(row.units, 2, "advanced search bills Tavily 2 credits")
         self.assertEqual(row.unit_kind, "search")
+        # Priced from `unit_prices`: 2 credits x $0.008 list rate.
+        self.assertEqual(row.cost_basis, "priced")
+        self.assertEqual(row.cost_usd_micro, 16_000)
 
     @METER_ON
     def test_a_failed_web_search_records_zero_units(self):
@@ -525,6 +527,10 @@ class NonLlmSourceTests(_RestoresRecorder, TestCase):
         row = AiSpendEvent.objects.get()
         self.assertEqual(row.units, 0)
         self.assertIn("upstream down", row.error)
+        # A known rate x zero units is a TRUE zero — `priced`, so a
+        # failed search does not flag its whole request `has_unpriced`.
+        self.assertEqual(row.cost_basis, "priced")
+        self.assertEqual(row.cost_usd_micro, 0)
 
     @METER_ON
     def test_embeddings_are_recorded_at_the_wire_not_the_cache(self):
@@ -636,10 +642,82 @@ class EmbeddingPricingTests(_RestoresRecorder, TestCase):
         self.assertEqual(row.cost_basis, "unpriced")
         self.assertEqual(row.units, 1)
 
+class UnitPricingTests(_RestoresRecorder, TestCase):
+    """Web search and rerank are PRICED from `unit_prices`.
+
+    Phase 0 filed them `unpriced` under the "no estimates in the
+    ledger" rule — but these rates are published list prices, not
+    estimates, and their absence made `computed_jpy_milli` a silent
+    lower bound on every ask that searched or reranked, with
+    `has_unpriced` permanently on. `units` is the PROVIDER'S billable
+    quantity (Tavily credits, Cohere search units), so pricing is a
+    straight multiply.
+    """
+
     @METER_ON
-    def test_tavily_stays_unpriced(self):
-        """Only embeddings gained a rate. Web search still has none, and
-        must not silently acquire one."""
+    def test_a_tavily_advanced_search_prices_exactly(self):
         with spend.spend_context(surface="ask"):
-            spend.record_units(unit_kind=spend.UNIT_SEARCH, units=2, provider="tavily")
+            spend.record_units(
+                unit_kind=spend.UNIT_SEARCH, units=2, provider="tavily", model="advanced"
+            )
+        from django.conf import settings as dj_settings  # noqa: PLC0415
+
+        row = AiSpendEvent.objects.get()
+        self.assertEqual(row.cost_basis, "priced")
+        # 2 credits x $0.008 = $0.016; JPY at the pinned FX.
+        self.assertEqual(row.cost_usd_micro, 16_000)
+        fx = dj_settings.LLM_CATALOG.rate_card.fx_jpy_per_usd
+        self.assertEqual(row.cost_jpy_milli, int(round(0.016 * fx * 1000)))
+
+    @METER_ON
+    def test_a_cohere_rerank_prices_per_search_unit(self):
+        with spend.spend_context(surface="ask"):
+            spend.record_units(
+                unit_kind=spend.UNIT_RERANK,
+                units=1,
+                billable_units=40,
+                provider="cohere",
+                model="rerank-v3.5",
+            )
+        row = AiSpendEvent.objects.get()
+        self.assertEqual(row.cost_basis, "priced")
+        # $2.00 per 1K searches -> $0.002 per search unit.
+        self.assertEqual(row.cost_usd_micro, 2_000)
+        self.assertEqual(row.billable_units, 40, "raw doc count kept for reconciliation")
+
+    @METER_ON
+    def test_an_unknown_model_is_unpriced_not_mispriced(self):
+        """Pinning a different COHERE_RERANK_MODEL must produce visibly
+        unpriced rows, never rows priced at another model's rate."""
+        with spend.spend_context(surface="ask"):
+            spend.record_units(
+                unit_kind=spend.UNIT_RERANK, units=1, provider="cohere", model="rerank-v99"
+            )
         self.assertEqual(AiSpendEvent.objects.get().cost_basis, "unpriced")
+
+    @METER_ON
+    def test_a_search_no_longer_poisons_its_requests_has_unpriced(self):
+        """The behavioural point of this change: `has_unpriced` used to
+        be true on ~every ask (they all search or rerank), which made
+        the flag mean nothing. A fully-priced request must now roll up
+        clean."""
+        import uuid  # noqa: PLC0415
+
+        ctx_kwargs = dict(surface="ask", user_id="u1", request_id=str(uuid.uuid4()))
+        with spend.spend_context(**ctx_kwargs) as ctx:
+            spend.record_llm_call(_usage(prompt_tokens=100, output_tokens=10))
+            spend.record_units(
+                unit_kind=spend.UNIT_SEARCH, units=2, provider="tavily", model="advanced"
+            )
+            spend_recorder.close_request(ctx, result=AiRequestCost.RESULT_SUCCESS)
+        row = AiRequestCost.objects.get()
+        self.assertFalse(row.has_unpriced)
+        self.assertEqual(row.call_count, 2)
+        # And the search's yen actually reached the rollup — the
+        # under-count this PR exists to close.
+        search_jpy = AiSpendEvent.objects.get(unit_kind="search").cost_jpy_milli
+        self.assertGreater(search_jpy, 0)
+        self.assertEqual(
+            row.computed_jpy_milli,
+            sum(e.cost_jpy_milli for e in AiSpendEvent.objects.all()),
+        )

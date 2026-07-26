@@ -498,11 +498,12 @@ def _coverage_banner(cov: dict) -> str:
                 f"{_e(r['key'])} ×{r['calls']} ({r['units']:,} units)"
                 for r in cov["unpriced"]
             )
-            + ". Web search and rerank bill per unit with no rate in the catalog, and "
-            "reconcile against their own invoices; a cost of 0 for them is a gap that "
-            "is named, not a real 0. Embeddings <strong>are</strong> priced — an "
-            "embedding model appearing here has no entry under <code>embeddings:</code> "
-            "in <code>llm_models.yaml</code>."
+            + ". Every billed line has a rate now — embeddings under "
+            "<code>embeddings:</code>, web search and rerank under "
+            "<code>unit_prices:</code> in <code>llm_models.yaml</code> — so anything "
+            "on this line means a <strong>missing entry</strong> for that exact "
+            "model or unit, not a policy. Its cost of 0 is a gap that is named, "
+            "not a real 0."
         )
     if cov["incomplete_calls"]:
         detail.append(

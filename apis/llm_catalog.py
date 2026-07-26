@@ -161,6 +161,9 @@ class LlmCatalog:
     subprocess_rungs: dict[str, int] = field(default_factory=dict)
     # model id -> ModelPrice, exact-id keyed. See `price_for`.
     prices: dict[str, ModelPrice] = field(default_factory=dict)
+    # (unit, provider, model) -> USD per unit, for the paid services
+    # that bill per unit rather than per token. See `unit_price_for`.
+    unit_prices: dict[tuple[str, str, str], float] = field(default_factory=dict)
     # The money metadata every cost row is stamped with.
     rate_card: RateCard | None = None
     # provider -> ordered (cheapest-first) model ids; derived once at
@@ -230,6 +233,16 @@ class LlmCatalog:
         """
         return self.prices.get(model)
 
+    def unit_price_for(self, unit: str, provider: str, model: str) -> float | None:
+        """USD per unit for a per-unit-billed service, or None.
+
+        Same exact-key-or-None philosophy as `price_for`, for the same
+        reason: an operator pinning a different `COHERE_RERANK_MODEL`
+        must produce visibly `unpriced` rows, never rows silently
+        priced at some other model's rate.
+        """
+        return self.unit_prices.get((unit, provider, model))
+
     def supports_temperature(self, model: str) -> bool:
         """False for models whose API rejects `temperature`.
 
@@ -282,13 +295,57 @@ def _parse_price(provider: str, entry: dict[str, Any]) -> ModelPrice:
     return ModelPrice(**values)
 
 
-def _parse_rate_card(raw: dict, prices: dict[str, ModelPrice]) -> RateCard:
+def _parse_unit_prices(raw: dict) -> dict[tuple[str, str, str], float]:
+    """Validate + build the per-unit price table. Boot-fatal, like the
+    rest of this file.
+
+    Missing entirely is fatal for the same reason `embeddings` is: an
+    absent section would not fail at request time — it would quietly
+    return every search and rerank to `unpriced`, which is precisely
+    the under-count this section exists to close.
+    """
+    entries = raw.get("unit_prices")
+    if not isinstance(entries, list) or not entries:
+        _fail("`unit_prices` must be a non-empty list of {unit, provider, model, usd_per_unit}")
+    table: dict[tuple[str, str, str], float] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            _fail("`unit_prices` entries must be mappings")
+        unknown = set(entry) - {"unit", "provider", "model", "usd_per_unit"}
+        if unknown:
+            _fail(f"unit_prices entry has unknown key(s) {sorted(unknown)}")
+        unit = entry.get("unit")
+        provider = entry.get("provider")
+        model = entry.get("model")
+        for name, value in (("unit", unit), ("provider", provider), ("model", model)):
+            if not isinstance(value, str) or not value.strip():
+                _fail(f"unit_prices: `{name}` must be a non-empty string, got {value!r}")
+        rate = entry.get("usd_per_unit")
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or rate < 0:
+            _fail(
+                f"unit_prices {unit}/{provider}/{model}: usd_per_unit must be a "
+                f"non-negative number, got {rate!r}"
+            )
+        key = (unit, provider, model)
+        if key in table:
+            _fail(f"duplicate unit_prices entry {unit}/{provider}/{model}")
+        table[key] = float(rate)
+    return table
+
+
+def _parse_rate_card(
+    raw: dict,
+    prices: dict[str, ModelPrice],
+    unit_prices: dict[tuple[str, str, str], float],
+) -> RateCard:
     """Build the rate card, fingerprinting every price + the FX rate.
 
     The fingerprint is computed rather than declared so that editing a
     price cannot leave two different price regimes sharing one
     identifier in the ledger. Sorted keys keep it stable across YAML
-    reorderings — only an actual number moving changes it.
+    reorderings — only an actual number moving changes it. Unit prices
+    join it for the same reason token prices do: a Tavily or Cohere
+    rate correction must separate old rows from new ones on its own.
     """
     rc = raw.get("rate_card")
     if not isinstance(rc, dict):
@@ -308,6 +365,9 @@ def _parse_rate_card(raw: dict, prices: dict[str, ModelPrice]) -> RateCard:
         "prices": {
             model: [p.input, p.output, p.cached_input, p.cache_write]
             for model, p in sorted(prices.items())
+        },
+        "unit_prices": {
+            "/".join(key): rate for key, rate in sorted(unit_prices.items())
         },
     }
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -454,6 +514,8 @@ def load_llm_catalog(path: str | Path) -> LlmCatalog:
             )
         prices[model] = _parse_price(provider, entry)
 
+    unit_prices = _parse_unit_prices(raw)
+
     return LlmCatalog(
         catalog=catalog,
         model_daily=model_daily,
@@ -462,7 +524,8 @@ def load_llm_catalog(path: str | Path) -> LlmCatalog:
         efforts=_parse_efforts(raw),
         subprocess_rungs=_parse_subprocesses(raw),
         prices=prices,
-        rate_card=_parse_rate_card(raw, prices),
+        unit_prices=unit_prices,
+        rate_card=_parse_rate_card(raw, prices, unit_prices),
         _provider_models={
             p: [e["model"] for e in entries] for p, entries in providers.items()
         },
