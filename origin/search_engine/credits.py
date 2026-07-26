@@ -106,12 +106,19 @@ def request_budget_jpy_milli(balance_credits_milli: int | None, policy: CreditPo
     and the agent loop stops itself when the running cost reaches this
     number.
 
-    It is the LOWER of two independent limits, and both matter:
+    It is THE BALANCE, and deliberately not `min(balance, per-request
+    cap)`. The cap governs what a request may be CHARGED, never how far
+    it may RUN: cost above it lands in `absorbed_jpy_milli`, which is
+    the system saying out loud that we carry the excess. Capping the run
+    too would silently truncate a long request from a user with plenty
+    of credits — under a message telling them they had run out, which
+    for that user is simply false. Bounding request LENGTH is what
+    `AI_REQUEST_MAX_JPY_MILLI` is for, and it is a separate decision
+    with its own copy.
 
-      * the balance — spending past it charges a customer for credits
-        they do not have;
-      * the per-request cap — spending past it is money we absorb by
-        policy, so continuing is pure loss to us.
+    So the stop this feeds fires on exactly one condition: the user has
+    genuinely spent everything they have. That keeps the message true
+    whenever it appears, which a compound limit could not promise.
 
     Returns 0 ("no budget enforcement") for an unlimited plan, where
     there is no balance to run out of. 0 is also what every caller
@@ -124,5 +131,4 @@ def request_budget_jpy_milli(balance_credits_milli: int | None, policy: CreditPo
     """
     if balance_credits_milli is None:
         return 0
-    spendable = min(max(int(balance_credits_milli), 0), policy.request_max_credits_milli)
-    return int(round(spendable * policy.credit_jpy))
+    return int(round(max(int(balance_credits_milli), 0) * policy.credit_jpy))
