@@ -1725,9 +1725,34 @@ def _resolve_planning_override() -> str | None:
         hand `ClaudeClient` a `gemini-*` id (or vice versa).
     """
     planning = (settings.SEARCH_ENGINE.get("RAG_PLANNING_MODEL") or "").strip()
+    choice = get_llm_choice() or _server_default_choice()
+    if not planning and settings.SEARCH_ENGINE.get("AGENT_TWO_TIER_LOOP"):
+        # Two-tier loop: the effort profile names a LOOP RUNG and the
+        # planning steps run that rung's model, synthesis the effort's
+        # own. The anatomy behind it: loop calls are 99%+ of request
+        # cost and most steps are tool selection, not writing — at
+        # medium a flash-lite planning call costs ~$0.006 even on a
+        # cache miss vs ~$0.028 on 3.6-flash. Same-provider by
+        # construction (the rung indexes the USER'S provider list), so
+        # the prefix guard below never fires for a profile-driven pin —
+        # it stays as the guard for the env override. The env override
+        # (RAG_PLANNING_MODEL, checked first) remains the operator's
+        # no-deploy escape hatch and WINS over the profile.
+        profile = active_effort_profile()
+        if profile is not None and profile.loop_rung is not None:
+            try:
+                planning = settings.LLM_CATALOG.model_for_rung(
+                    choice.provider, profile.loop_rung
+                )
+            except Exception:  # noqa: BLE001 — a pin failure must never kill the ask
+                log.warning(
+                    "two-tier loop_rung %r failed for provider %r; single-model run",
+                    profile.loop_rung,
+                    choice.provider,
+                )
+                planning = ""
     if not planning:
         return None
-    choice = get_llm_choice() or _server_default_choice()
     synthesis_model = (choice.model or "").strip()
     if not synthesis_model or planning == synthesis_model:
         return None

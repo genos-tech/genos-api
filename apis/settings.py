@@ -1254,6 +1254,16 @@ SEARCH_ENGINE["AGENT_THINKING_BUDGETS"] = (
     os.environ.get("AGENT_THINKING_BUDGETS", "false").lower() == "true"
 )
 
+# Two-tier agent loop: planning steps on the effort profile's
+# `loop_rung` model, synthesis on the effort's own rung, via the B3
+# discard-and-rerun split. Loop calls are 99%+ of request cost and most
+# steps are tool selection — at medium a flash-lite planning call costs
+# ~$0.006 vs ~$0.028 on 3.6-flash. Requires AGENT_EFFORT_LEVELS;
+# RAG_PLANNING_MODEL still wins as the no-deploy operator override.
+SEARCH_ENGINE["AGENT_TWO_TIER_LOOP"] = (
+    os.environ.get("AGENT_TWO_TIER_LOOP", "false").lower() == "true"
+)
+
 # Claude prompt caching (LLM_TIER_COST_OPTIMIZATION.md §8.2). Anthropic
 # does NOT cache automatically — a cache_control breakpoint must mark
 # the stable prefix. We mark the TOOL DECLARATIONS block (~13k tokens,
