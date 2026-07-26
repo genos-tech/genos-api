@@ -448,6 +448,181 @@ def _alert_if_user_spend_is_high(user_id: str) -> None:
         log.debug("Per-user spend alert check failed", exc_info=True)
 
 
+def _credits_authoritative() -> bool:
+    """Credits are the customer's limit, replacing the daily ask count.
+
+    Requires the shadow engine: without `AI_CREDITS_SHADOW` no charge is
+    ever posted, so a balance would only ever go down by the monthly
+    grant and every user would read as full forever. Enforcing on a
+    ledger nobody writes to is worse than not enforcing.
+    """
+    se = settings.SEARCH_ENGINE
+    return bool(se.get("AI_CREDITS_AUTHORITATIVE")) and bool(se.get("AI_CREDITS_SHADOW"))
+
+
+def _credit_gate(user_id: str, plan: str) -> Response | None:
+    """Refuse an ask when the balance cannot cover the quoted maximum.
+
+    The V2 §3.5 reservation rule, enforced: we cannot know a request's
+    cost before running it, so we check against the QUOTE — the most it
+    could be charged — and anything above that is absorbed. Checking
+    against a typical cost instead would let a user start a request they
+    cannot pay for, which is the one thing the quote exists to prevent.
+
+    Returns a 429 or None. Fails OPEN on any internal error: a ledger
+    hiccup must never block a paying user, and the yen ceilings
+    (`_enforce_monthly_ceilings`) remain the real financial backstop
+    regardless of what credits say.
+
+    NOTE the shadow decision (`would_have_blocked`) is still recorded by
+    `open_request` either way — flipping this flag changes what we DO
+    about that verdict, never how it is measured.
+    """
+    if not _credits_authoritative():
+        return None
+    try:
+        from origin.search_engine import credit_ledger, credits  # noqa: PLC0415
+
+        policy = settings.CREDIT_POLICY
+        balance = credit_ledger.balance_milli(str(user_id), plan)
+        if balance is None:  # unlimited plan (enterprise)
+            return None
+        quote = credits.quote_max_credits_milli(policy)
+        if balance >= quote:
+            return None
+
+        entitlement = policy.entitlements_milli.get(plan) or 0
+        return Response(
+            {
+                # Customer-facing copy in CREDITS, never yen: credits are
+                # the unit they were sold, and a yen figure is something
+                # they never agreed to and cannot act on.
+                "error": (
+                    f"You've used your {entitlement / 1000:,.0f} AI credits for this "
+                    f"month. They reset on the 1st — or upgrade your plan to keep going."
+                ),
+                "limit_reached": True,
+                "used": max(entitlement - balance, 0) // 10,  # centi-credits
+                "limit": entitlement // 10,
+                "category": "ai_credits",
+                "credits_remaining": round(balance / 1000, 2),
+                "credits_limit": round(entitlement / 1000, 2),
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+    except Exception:  # noqa: BLE001 — a check that cannot run must not block
+        log.debug("Credit gate check failed", exc_info=True)
+        return None
+
+
+def _credits_block(user_id: str, plan: str) -> dict | None:
+    """The `credits` payload for `/agent/features/`, or None.
+
+    PRESENT ONLY when credits are authoritative. Its presence IS the
+    frontend's render switch — the same payload-shape-driven convention
+    the effort picker uses (`efforts[]` appears only when
+    AGENT_EFFORT_LEVELS is on), and for the same reason: either side can
+    deploy first, and a client that shows credits while the server still
+    enforces ask counts would be lying about what limits the user.
+
+    Fractional credits are stated to 2dp: a request can cost 0.11
+    credits, and rounding the BALANCE to whole numbers would show "0
+    credits left" to someone who can still ask.
+    """
+    if not _credits_authoritative():
+        return None
+    try:
+        from origin.search_engine import credit_ledger, credits  # noqa: PLC0415
+
+        policy = settings.CREDIT_POLICY
+        entitlement = policy.entitlements_milli.get(plan)
+        balance = credit_ledger.balance_milli(str(user_id), plan)
+        if entitlement is None or balance is None:
+            # Unlimited plan — say so explicitly rather than omitting
+            # the block, which the client would read as "not on credits".
+            return {
+                "unlimited": True,
+                "balance": None,
+                "limit": None,
+                "used": None,
+                "period_end_iso": _period_end_iso(),
+                "per_request_max": round(credits.quote_max_credits_milli(policy) / 1000, 2),
+            }
+        return {
+            "unlimited": False,
+            "balance": round(balance / 1000, 2),
+            "limit": round(entitlement / 1000, 2),
+            "used": round(max(entitlement - balance, 0) / 1000, 2),
+            "period_end_iso": _period_end_iso(),
+            # What a single request can cost at most — the quote. The UI
+            # uses it to warn when the remaining balance can no longer
+            # cover one request, which is the moment asking starts
+            # failing.
+            "per_request_max": round(credits.quote_max_credits_milli(policy) / 1000, 2),
+        }
+    except Exception:  # noqa: BLE001 — never fail the settings fetch over this
+        log.debug("Could not build credits block", exc_info=True)
+        return None
+
+
+def _period_end_iso() -> str:
+    """First instant of next UTC month — when the allowance resets.
+
+    The client renders "resets in N days" from this; sending the date
+    rather than a day count keeps the two clocks from disagreeing on a
+    page left open overnight.
+    """
+    now = timezone.now()
+    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    nxt = start.replace(year=start.year + 1, month=1) if start.month == 12 else start.replace(
+        month=start.month + 1
+    )
+    return nxt.isoformat()
+
+
+def _billable_surface_gate(user_id: str, chosen: LlmChoice) -> Response | None:
+    """The customer's limit for a NON-STREAMING billable surface.
+
+    Both summary endpoints charge for a regeneration, so whatever is
+    currently charging has to be what gates them — otherwise credits
+    become authoritative for asks while summaries quietly keep enforcing
+    a daily count nobody is told about.
+
+    The ask path does not use this: it has a fallback/ceiling pipeline
+    around the same decision and needs the pieces separately.
+    """
+    plan = get_effective_tier(str(user_id))
+    credit_block = _credit_gate(user_id, plan)
+    if credit_block is not None:
+        return credit_block
+    if _credits_authoritative():
+        # Per-model caps are cost-shaping and redundant under credits —
+        # see the ask path for the full argument. Summaries have no
+        # fallback path, so the cap would be a hard refusal of something
+        # the user can pay for.
+        return None
+
+    llm_ok, llm_used, llm_limit = check_remaining(user_id, LLM_ASK_KEY)
+    if not llm_ok:
+        return Response(
+            {
+                "error": (
+                    f"You've used all {llm_limit} AI asks for today. "
+                    "Upgrade your plan to keep going."
+                ),
+                "limit_reached": True,
+                "used": llm_used,
+                "limit": llm_limit,
+                "category": "llm_ask",
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+    model_ok, model_used, model_limit = check_remaining(user_id, chosen.model)
+    if not model_ok:
+        return _model_quota_429(chosen, model_used, model_limit)
+    return None
+
+
 def _month_spend_milli(*, user_id: str = "", team_id: str = "") -> int:
     """This UTC month's ledger spend for one user OR one team, in
     milli-yen. Cached for 5 minutes — the ceiling drifts by at most a
@@ -636,51 +811,103 @@ class AgentAskView(AuthenticatedAPIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        llm_ok, llm_used, llm_limit = check_remaining(user_id, LLM_ASK_KEY)
-        if not llm_ok:
-            return Response(
-                {
-                    "error": (
-                        f"You've used all {llm_limit} AI asks for today. "
-                        "Upgrade your plan to keep going."
-                    ),
-                    "limit_reached": True,
-                    "used": llm_used,
-                    "limit": llm_limit,
-                    "category": "llm_ask",
-                },
-                status=status.HTTP_429_TOO_MANY_REQUESTS,
-            )
+        plan = get_effective_tier(str(user_id))
+
+        # --- The customer's limit. -----------------------------------
+        # Credits authoritative -> the balance is the limit and the daily
+        # ask count is not consulted at all (except the Free abuse
+        # breaker below). Flag off -> the legacy daily gate, unchanged.
+        credit_block = _credit_gate(user_id, plan)
+        if credit_block is not None:
+            return credit_block
+
+        if not _credits_authoritative():
+            llm_ok, llm_used, llm_limit = check_remaining(user_id, LLM_ASK_KEY)
+            if not llm_ok:
+                return Response(
+                    {
+                        "error": (
+                            f"You've used all {llm_limit} AI asks for today. "
+                            "Upgrade your plan to keep going."
+                        ),
+                        "limit_reached": True,
+                        "used": llm_used,
+                        "limit": llm_limit,
+                        "category": "llm_ask",
+                    },
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+        elif plan == "free":
+            # Free-only daily circuit breaker (V2 §4.3). NOT a plan
+            # limit and never shown as one — the monthly credit cap
+            # already bounds what a free account can COST us; this
+            # bounds how fast it burns, which is what makes scripted
+            # signup farms unattractive. Deliberately generous: a real
+            # free user cannot reach it in a day of honest work.
+            ok, used, limit = check_remaining(user_id, LLM_ASK_KEY)
+            if not ok:
+                log.warning(
+                    "Free daily circuit breaker fired for user %s (%s/%s asks today) "
+                    "— credits are authoritative, so this is abuse protection, not "
+                    "the plan limit.",
+                    user_id,
+                    used,
+                    limit,
+                )
+                return Response(
+                    {
+                        # Copy says nothing about credits: their credit
+                        # balance is fine, and telling them to upgrade
+                        # would be wrong advice.
+                        "error": (
+                            "You've made an unusual number of AI requests today. "
+                            "Please try again tomorrow, or contact support if you "
+                            "need a higher limit."
+                        ),
+                        "limit_reached": True,
+                        "category": "rate_limit",
+                    },
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
 
         # `fallback_note` rides the terminal `done` event (see
         # `_stream_ndjson`) so a client can later surface "answered with
         # <cheaper model> — your <chosen> quota is used up". None on the
         # common no-swap path.
         fallback_note: dict | None = None
-        model_ok, model_used, model_limit = check_remaining(user_id, chosen.model)
-        if not model_ok:
-            # Per-model cap exhausted but LLM_ASK still has room (checked
-            # above). When enabled, drop to the next-cheaper same-provider
-            # model with headroom instead of 429'ing the ask outright.
-            fallback = (
-                _resolve_quota_fallback(user_id, chosen)
-                if settings.SEARCH_ENGINE.get("MODEL_QUOTA_FALLBACK")
-                else None
-            )
-            if fallback is None:
-                return _model_quota_429(chosen, model_used, model_limit)
-            log.info(
-                "model %s daily cap reached for user %s; falling back to %s",
-                chosen.model,
-                user_id,
-                fallback.model,
-            )
-            fallback_note = {"requested_model": chosen.model, "used_model": fallback.model}
-            # Reassign BEFORE the run/quota plumbing below so the model we
-            # actually serve is the model we charge (`quota_keys` and
-            # `set_llm_choice` both read this `chosen`) — never the
-            # rejected one.
-            chosen = fallback
+        # Per-model daily caps are a COST-SHAPING device: they exist to
+        # bound worst-case spend by rationing expensive models. Credits
+        # bound that spend directly and per-request, so under credits
+        # these caps are redundant — and worse than redundant, they
+        # would refuse a request the user has the credits to pay for,
+        # which is the "asks per day" model leaking through the thing
+        # meant to replace it. Skipped entirely when credits rule.
+        if not _credits_authoritative():
+            model_ok, model_used, model_limit = check_remaining(user_id, chosen.model)
+            if not model_ok:
+                # Per-model cap exhausted but LLM_ASK still has room
+                # (checked above). When enabled, drop to the
+                # next-cheaper same-provider model with headroom instead
+                # of 429'ing the ask outright.
+                fallback = (
+                    _resolve_quota_fallback(user_id, chosen)
+                    if settings.SEARCH_ENGINE.get("MODEL_QUOTA_FALLBACK")
+                    else None
+                )
+                if fallback is None:
+                    return _model_quota_429(chosen, model_used, model_limit)
+                log.info(
+                    "model %s daily cap reached for user %s; falling back to %s",
+                    chosen.model,
+                    user_id,
+                    fallback.model,
+                )
+                fallback_note = {"requested_model": chosen.model, "used_model": fallback.model}
+                # Reassign BEFORE the run/quota plumbing below so the
+                # model we actually serve is the model we charge
+                # (`quota_keys` and `set_llm_choice` both read this
+                # `chosen`) — never the rejected one.
+                chosen = fallback
 
         # Financial circuit breaker — the monthly yen ceilings from
         # credit_policy.yaml, graded (alert → route-cheapest → pause).
@@ -689,7 +916,7 @@ class AgentAskView(AuthenticatedAPIView):
         # so a paused ask leaves no dangling rollup. Runs on actual
         # ledger yen, independent of anything credits say.
         ceiling_resp, ceiling_note, chosen = _enforce_monthly_ceilings(
-            user_id, get_effective_tier(str(user_id)), team_id, chosen
+            user_id, plan, team_id, chosen
         )
         if ceiling_resp is not None:
             return ceiling_resp
@@ -1787,25 +2014,13 @@ class NoteSummaryView(AuthenticatedAPIView):
                 }
             )
 
-        # 2. Regen needed — quota gate first.
-        llm_ok, llm_used, llm_limit = check_remaining(user_id, LLM_ASK_KEY)
-        if not llm_ok:
-            return Response(
-                {
-                    "error": (
-                        f"You've used all {llm_limit} AI asks for today. "
-                        "Upgrade your plan to keep going."
-                    ),
-                    "limit_reached": True,
-                    "used": llm_used,
-                    "limit": llm_limit,
-                    "category": "llm_ask",
-                },
-                status=status.HTTP_429_TOO_MANY_REQUESTS,
-            )
-        model_ok, model_used, model_limit = check_remaining(user_id, chosen.model)
-        if not model_ok:
-            return _model_quota_429(chosen, model_used, model_limit)
+        # 2. Regen needed — the customer's limit first. Same gate as the
+        # ask path: credits when authoritative, the legacy daily counts
+        # otherwise. This surface is billable, so it must be gated by
+        # whatever is actually charging for it.
+        limit_block = _billable_surface_gate(user_id, chosen)
+        if limit_block is not None:
+            return limit_block
 
         # 3. Generate. Metered exactly like ThreadSummaryView above —
         # regeneration only, cache hits post nothing.
@@ -1977,25 +2192,13 @@ class ThreadSummaryView(AuthenticatedAPIView):
                 }
             )
 
-        # 2. Regen needed — quota gate first.
-        llm_ok, llm_used, llm_limit = check_remaining(user_id, LLM_ASK_KEY)
-        if not llm_ok:
-            return Response(
-                {
-                    "error": (
-                        f"You've used all {llm_limit} AI asks for today. "
-                        "Upgrade your plan to keep going."
-                    ),
-                    "limit_reached": True,
-                    "used": llm_used,
-                    "limit": llm_limit,
-                    "category": "llm_ask",
-                },
-                status=status.HTTP_429_TOO_MANY_REQUESTS,
-            )
-        model_ok, model_used, model_limit = check_remaining(user_id, chosen.model)
-        if not model_ok:
-            return _model_quota_429(chosen, model_used, model_limit)
+        # 2. Regen needed — the customer's limit first. Same gate as the
+        # ask path: credits when authoritative, the legacy daily counts
+        # otherwise. This surface is billable, so it must be gated by
+        # whatever is actually charging for it.
+        limit_block = _billable_surface_gate(user_id, chosen)
+        if limit_block is not None:
+            return limit_block
 
         # 3. Generate. Set the LLM choice for the duration of the call so
         # the right provider/model fires. The metered block wraps ONLY
@@ -2135,21 +2338,29 @@ class AgentFeaturesView(AuthenticatedAPIView):
             return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
         resolved = resolve_effective_tier(user_id)
         upload_max_bytes = get_upload_max_bytes(user_id)
-        return Response(
-            {
-                "tier": resolved["tier"],
-                "tier_source": resolved["source"],
-                "tier_team": resolved["team_name"],
-                "llm_ask": _tier_limit_block(user_id, LLM_ASK_KEY),
-                "web_search": _tier_limit_block(user_id, WEB_SEARCH_KEY),
-                "task_create": _tier_month_block(user_id, TASK_CREATE_KEY),
-                "note_create": _tier_month_block(user_id, NOTE_CREATE_KEY),
-                "message_retention_days": get_message_retention_days(user_id),
-                "upload_max_mb": (
-                    upload_max_bytes // (1024 * 1024) if upload_max_bytes is not None else None
-                ),
-            }
-        )
+        payload = {
+            "tier": resolved["tier"],
+            "tier_source": resolved["source"],
+            "tier_team": resolved["team_name"],
+            # `llm_ask` and `web_search` stay in the payload even when
+            # credits rule — old clients still read them, and the
+            # counters keep incrementing (Free's breaker needs
+            # `llm_ask`). A credits-aware client ignores both.
+            "llm_ask": _tier_limit_block(user_id, LLM_ASK_KEY),
+            "web_search": _tier_limit_block(user_id, WEB_SEARCH_KEY),
+            "task_create": _tier_month_block(user_id, TASK_CREATE_KEY),
+            "note_create": _tier_month_block(user_id, NOTE_CREATE_KEY),
+            "message_retention_days": get_message_retention_days(user_id),
+            "upload_max_mb": (
+                upload_max_bytes // (1024 * 1024) if upload_max_bytes is not None else None
+            ),
+        }
+        # ADDITIVE, and present only when credits are authoritative —
+        # its presence is the client's render switch.
+        block = _credits_block(user_id, resolved["tier"])
+        if block is not None:
+            payload["credits"] = block
+        return Response(payload)
 
 
 class AgentModelsView(AuthenticatedAPIView):
@@ -2245,6 +2456,15 @@ class AgentModelsView(AuthenticatedAPIView):
                 "web_search": _tier_limit_block(user_id, WEB_SEARCH_KEY),
             },
         }
+
+        # Credits, when authoritative — same additive contract as
+        # `efforts[]` below. The picker uses it to replace the per-model
+        # "3 / 10 today" rows, which mean nothing once the daily caps
+        # stop being enforced: showing a cap that no longer applies is
+        # worse than showing none.
+        credits_block = _credits_block(user_id, tier)
+        if credits_block is not None:
+            payload["credits"] = credits_block
 
         # Effort levels: ADDITIVE payload. `efforts[]` + `current.effort`
         # appear only when the flag is on — their presence is the

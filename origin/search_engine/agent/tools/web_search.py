@@ -60,12 +60,19 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
     # Free/Pro/Max each get a different `web_search_daily` cap from
     # SEARCH_ENGINE["TIER_QUOTAS"]. Pre-flight check; increment after
     # a successful Tavily response so failed calls don't burn quota.
-    allowed, used, web_limit = check_remaining(ctx.user_id, WEB_SEARCH_KEY)
-    if not allowed:
-        raise ToolError(
-            f"You've used all {web_limit} web searches for today. "
-            "Upgrade your plan to keep going."
-        )
+    #
+    # SKIPPED when credits are authoritative. A Tavily search is priced
+    # into the request's credits since #174, so a separate daily cap
+    # would charge for it twice: once in credits, once against an
+    # allowance the user is no longer shown. The credit balance — which
+    # the search's own cost moves — is the limit.
+    if not settings.SEARCH_ENGINE.get("AI_CREDITS_AUTHORITATIVE"):
+        allowed, used, web_limit = check_remaining(ctx.user_id, WEB_SEARCH_KEY)
+        if not allowed:
+            raise ToolError(
+                f"You've used all {web_limit} web searches for today. "
+                "Upgrade your plan to keep going."
+            )
 
     api_key = (settings.SEARCH_ENGINE.get("TAVILY_API_KEY") or "").strip()
     if not api_key:
