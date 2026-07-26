@@ -498,6 +498,13 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
 
     ctx = ToolContext(team_id=team_id, user_id=user_id)
     prior_turns: list[tuple[str, str]] = []
+    # The rolling-summary state production keeps on `AgentSession`. Held
+    # here in locals for the length of the case, so the eval exercises
+    # the SAME incremental fold rather than silently taking the
+    # from-scratch path on every turn — which is precisely the cost
+    # profile the fold exists to avoid measuring wrongly.
+    rolling_text = ""
+    rolling_through = 0
     last_events: list[dict[str, Any]] = []
     last_tool_traces: list[dict[str, Any]] = []
     last_query = ""
@@ -533,15 +540,22 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
         def _capture_trace(name: str, args: dict[str, Any], result: dict[str, Any]) -> None:
             tool_traces.append({"tool_name": name, "arguments": args, "result": result})
 
-        verbatim_turns, summary = build_prior_context(prior_turns)
+        prior_ctx = build_prior_context(
+            prior_turns,
+            prior_summary=rolling_text,
+            summarised_through=rolling_through,
+        )
+        if prior_ctx.summary:
+            rolling_text = prior_ctx.summary
+            rolling_through = prior_ctx.summarised_through
         try:
             run_agent(
                 q,
                 ctx,
                 _ts_emit,
                 run_id=None,
-                prior_turns=verbatim_turns,
-                prior_summary=summary,
+                prior_turns=prior_ctx.verbatim,
+                prior_summary=prior_ctx.summary,
                 trace_hook=_capture_trace,
             )
         except Exception as e:  # noqa: BLE001

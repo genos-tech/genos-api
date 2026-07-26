@@ -77,6 +77,22 @@ class AgentSession(models.Model):
     note_type = models.IntegerField(blank=True, null=True)
     note_id = models.IntegerField(blank=True, null=True)
 
+    # ----- Rolling summary of the turns that have aged out of the
+    # verbatim window (only used when RAG_SESSION_ROLLING_SUMMARY is on).
+    #
+    # Persisted so the summary can be built INCREMENTALLY. Recomputing
+    # it from the whole history each turn — which is what happened
+    # before this existed — meant turn N paid to summarise turns
+    # 1..N-3 and turn N+1 paid again for 1..N-2: near-identical work
+    # whose prompt grew with every turn.
+    #
+    # `through` is how many of the oldest turns the text already
+    # covers, and it is what makes the fold safe: without it we could
+    # not tell which turns are already represented, and would either
+    # re-summarise everything or double-count the overlap.
+    rolling_summary_text = models.TextField(blank=True, default="")
+    rolling_summary_through = models.PositiveIntegerField(default=0)
+
     class Meta:
         indexes = [
             models.Index(fields=["team_id", "user_id", "-last_active_at"]),
