@@ -646,3 +646,114 @@ class AiRequestCost(models.Model):
 
     def __str__(self) -> str:
         return f"{self.request_id} {self.surface} {self.computed_jpy_milli}m¥"
+
+
+class AiCreditEntry(models.Model):
+    """One immutable line in the customer credit ledger — V2 layer 6.
+
+    APPEND-ONLY. `save()` refuses updates and `delete()` refuses
+    everything: once posted, an entry is history, and history is what a
+    balance is a view over. V2 §3.6 is explicit that an already-posted
+    charge must not be recalculated — when policy v2 arrives, old
+    requests stay charged under v1. Corrections are new `reversal`
+    entries referencing the original via `ref_id`, never edits, so the
+    audit trail the operational gates require comes free.
+
+    This is deliberately NOT another column on `AiRequestCost`. That
+    rollup is DERIVED — `ai_cost_report --rebuild` recomputes it from
+    events under the CURRENT policy, which is exactly the operation a
+    posted charge must never undergo. Two different mutability
+    contracts cannot share a table.
+
+    `balance = Σ credits_milli` over (user, period) — grants positive,
+    charges negative, computed at read time. A mutable counter was
+    rejected for the same reason Phase 0 rejected `ModelUsageCounter`
+    for money: its non-atomic check+increment race is only tolerable
+    when every increment is 1.
+
+    `kind` separates monthly / promotional / purchased / manual because
+    their expiry and refund rules will diverge (V2 §4); collapsing them
+    now would make that a migration later instead of a query.
+
+    Two structural gates live in the constraints, not in code:
+
+      * at most ONE `charge` per logical request ("charge one logical
+        request, not every provider call" — and a retried close cannot
+        double-bill);
+      * at most one `monthly` grant per (user, period, plan) — the
+        idempotency of lazy granting under concurrent first-reads, with
+        plan in the key so a mid-month upgrade posts its delta as a new
+        row rather than an edit.
+    """
+
+    ENTRY_GRANT = "grant"
+    ENTRY_CHARGE = "charge"
+    ENTRY_REVERSAL = "reversal"
+    ENTRY_EXPIRY = "expiry"
+
+    KIND_MONTHLY = "monthly"
+    KIND_PROMOTIONAL = "promotional"
+    KIND_PURCHASED = "purchased"
+    KIND_MANUAL = "manual"
+
+    id = models.BigAutoField(primary_key=True)
+    user_id = models.CharField(max_length=64, db_index=True)
+    team_id = models.CharField(max_length=64, blank=True, null=True, db_index=True)
+    entry_type = models.CharField(max_length=16)
+    kind = models.CharField(max_length=16, blank=True, default="")
+    # SIGNED milli-credits: grants positive, charges negative. The sign
+    # lives in the data so the balance is a bare SUM, not a case
+    # expression someone can get wrong per query.
+    credits_milli = models.BigIntegerField()
+    # The logical request a charge pays for; NULL for grants and
+    # manual entries.
+    request_id = models.UUIDField(blank=True, null=True)
+    # UTC calendar month the entry belongs to, "YYYY-MM". The period is
+    # STAMPED, never derived from created_at at query time — a charge
+    # posted milliseconds after midnight belongs to the month its
+    # request ran in, and only the writer knows that.
+    period = models.CharField(max_length=7, db_index=True)
+    # Plan whose entitlement produced a grant (grants only).
+    plan = models.CharField(max_length=32, blank=True, default="")
+    credit_policy_version = models.CharField(max_length=64, blank=True, default="")
+    plan_entitlement_version = models.CharField(max_length=64, blank=True, default="")
+    # Reversals point at the entry they reverse.
+    ref_id = models.BigIntegerField(blank=True, null=True)
+    # Manual entries carry an operator-facing why + who.
+    reason = models.CharField(max_length=200, blank=True, default="")
+    actor = models.CharField(max_length=64, blank=True, default="")
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user_id", "period"], name="se_credit_user_period_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["request_id"],
+                condition=models.Q(entry_type="charge"),
+                name="uq_credit_charge_per_request",
+            ),
+            models.UniqueConstraint(
+                fields=["user_id", "period", "plan"],
+                condition=models.Q(entry_type="grant", kind="monthly"),
+                name="uq_credit_monthly_grant",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise TypeError(
+                "AiCreditEntry is append-only. Post a `reversal` entry "
+                "referencing this one via ref_id instead of editing it."
+            )
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise TypeError(
+            "AiCreditEntry is append-only — posted history is what a balance "
+            "is a view over. Post a `reversal` entry instead."
+        )
+
+    def __str__(self) -> str:
+        return f"{self.user_id} {self.period} {self.entry_type} {self.credits_milli}mc"
