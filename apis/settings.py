@@ -1312,6 +1312,14 @@ SEARCH_ENGINE["AI_CEILING_PAUSE"] = (
     os.environ.get("AI_CEILING_PAUSE", "false").lower() == "true"
 )
 
+# The cost-benchmark regression threshold, in percent: `ai_credit_benchmark
+# --check-baseline` exits non-zero when the fixed suite's TOKEN total
+# exceeds the stored baseline by more than this. Tokens, not yen — a
+# price change must never read as an engineering regression.
+SEARCH_ENGINE["AI_BENCHMARK_REGRESSION_PCT"] = float(
+    os.environ.get("AI_BENCHMARK_REGRESSION_PCT") or "25"
+)
+
 # Per-workspace (team) monthly ceiling in YEN — alert-only, opt-in.
 # 0 = off. A team over the line logs a WARNING naming the team; there
 # is deliberately no blocking lever here, because pausing N users over
