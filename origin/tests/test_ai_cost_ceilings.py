@@ -234,3 +234,142 @@ class CeilingOutcomeClassificationTests(SimpleTestCase):
 
         self.assertIs(COST_CEILING_MESSAGE, VIEW_COPY)
         self.assertNotIn("¥", COST_CEILING_MESSAGE)
+
+
+# Real user ids are UUIDs; a non-UUID id raises ValidationError inside
+# the quota lookups (user pk is a UUIDField), which the fail-open catch
+# would silently swallow — turning a routing test into a no-op.
+_UID = "aaaaaaaa-bbbb-cccc-dddd-eeeeffff0001"
+
+
+class MonthlyCeilingTests(TestCase):
+    """The V2 §3.7 financial circuit breaker: per-account monthly YEN
+    ceilings from credit_policy.yaml, graded alert → route-cheapest →
+    pause, both levers OFF by default. Runs on actual ledger yen,
+    independent of anything credits say — a credit-policy bug cannot
+    take the business with it."""
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    def _chosen(self, model="gemini-3.6-flash"):
+        from origin.search_engine.llm.choice import LlmChoice
+
+        return LlmChoice(provider="gemini", model=model)
+
+    def _spend(self, user_id=_UID, jpy_milli=200_000, team_id=""):
+        AiSpendEvent.objects.create(
+            request_id="55555555-5555-5555-5555-555555555555",
+            user_id=user_id,
+            team_id=team_id or None,
+            surface="ask",
+            provider="gemini",
+            model="gemini-3.6-flash",
+            cost_jpy_milli=jpy_milli,
+            cost_usd_micro=1000,
+        )
+
+    def _enforce(self, plan="free", team_id="", chosen=None, **se):
+        from origin.search_engine.agent_views import _enforce_monthly_ceilings
+
+        chosen = chosen or self._chosen()
+        with override_settings(SEARCH_ENGINE=_se(**se)):
+            return _enforce_monthly_ceilings(_UID, plan, team_id, chosen)
+
+    def test_under_the_ceiling_does_nothing(self):
+        self._spend(jpy_milli=1_000)  # ¥1 of a ¥150 free ceiling
+        with mock.patch("origin.search_engine.agent_views.log") as logger:
+            resp, note, chosen = self._enforce()
+        self.assertIsNone(resp)
+        self.assertIsNone(note)
+        self.assertEqual(chosen.model, "gemini-3.6-flash")
+        logger.warning.assert_not_called()
+
+    def test_over_the_ceiling_defaults_to_alert_only(self):
+        self._spend(jpy_milli=200_000)  # ¥200 > free's ¥150
+        with self.assertLogs("origin.search_engine.agent_views", level="WARNING") as cm:
+            resp, note, chosen = self._enforce()
+        self.assertIsNone(resp, "both levers off — nothing may block")
+        self.assertIsNone(note)
+        self.assertEqual(chosen.model, "gemini-3.6-flash")
+        self.assertTrue(any("monthly AI cost ceiling" in line for line in cm.output))
+
+    def test_pause_lever_429s_with_a_money_free_message(self):
+        self._spend(jpy_milli=200_000)
+        resp, _note, _chosen = self._enforce(AI_CEILING_PAUSE=True)
+        self.assertIsNotNone(resp)
+        self.assertEqual(resp.status_code, 429)
+        self.assertEqual(resp.data["category"], "cost_ceiling")
+        self.assertNotIn("¥", resp.data["error"])
+        self.assertNotIn("yen", resp.data["error"].lower())
+
+    def test_route_cheapest_steps_down_with_a_fallback_note(self):
+        self._spend(jpy_milli=200_000)
+        resp, note, chosen = self._enforce(AI_CEILING_ROUTE_CHEAPEST=True)
+        self.assertIsNone(resp, "routing serves the ask; it must not block")
+        self.assertEqual(chosen.model, "gemini-3.5-flash-lite")
+        self.assertEqual(
+            note,
+            {"requested_model": "gemini-3.6-flash", "used_model": "gemini-3.5-flash-lite"},
+            "the same model_fallback note the quota fallback uses, so the "
+            "frontend needs nothing new",
+        )
+
+    def test_route_cheapest_on_the_cheapest_rung_serves_as_chosen(self):
+        self._spend(jpy_milli=200_000)
+        resp, note, chosen = self._enforce(
+            chosen=self._chosen("gemini-3.5-flash-lite"), AI_CEILING_ROUTE_CHEAPEST=True
+        )
+        self.assertIsNone(resp)
+        self.assertIsNone(note)
+        self.assertEqual(chosen.model, "gemini-3.5-flash-lite")
+
+    def test_pause_beats_routing_when_both_are_on(self):
+        self._spend(jpy_milli=200_000)
+        resp, _note, _chosen = self._enforce(
+            AI_CEILING_PAUSE=True, AI_CEILING_ROUTE_CHEAPEST=True
+        )
+        self.assertIsNotNone(resp, "the stronger lever wins")
+
+    def test_enterprise_is_unlimited(self):
+        self._spend(jpy_milli=10_000_000)  # ¥10,000
+        with mock.patch("origin.search_engine.agent_views.log") as logger:
+            resp, note, _chosen = self._enforce(plan="enterprise", AI_CEILING_PAUSE=True)
+        self.assertIsNone(resp)
+        self.assertIsNone(note)
+        logger.warning.assert_not_called()
+
+    def test_a_db_failure_fails_open(self):
+        with override_settings(SEARCH_ENGINE=_se(AI_CEILING_PAUSE=True)):
+            with mock.patch(
+                "origin.search_engine.agent_views._month_spend_milli",
+                side_effect=RuntimeError("db down"),
+            ):
+                from origin.search_engine.agent_views import _enforce_monthly_ceilings
+
+                resp, note, chosen = _enforce_monthly_ceilings(
+                    _UID, "free", "", self._chosen()
+                )
+        self.assertIsNone(resp, "a check that cannot run must never block")
+        self.assertEqual(chosen.model, "gemini-3.6-flash")
+
+    def test_team_ceiling_alerts_and_never_blocks(self):
+        self._spend(jpy_milli=500_000, team_id="team-9")  # ¥500
+        with self.assertLogs("origin.search_engine.agent_views", level="WARNING") as cm:
+            resp, _note, _chosen = self._enforce(
+                team_id="team-9",
+                AI_TEAM_MONTHLY_CEILING_JPY=300,
+                # user spend also over free's ceiling — but even with
+                # NO user lever on, the team line must appear.
+            )
+        self.assertIsNone(resp)
+        self.assertTrue(any("Team team-9" in line for line in cm.output))
+
+    def test_team_ceiling_zero_is_off(self):
+        self._spend(jpy_milli=1_000, team_id="team-9")
+        with mock.patch("origin.search_engine.agent_views.log") as logger:
+            self._enforce(team_id="team-9", AI_TEAM_MONTHLY_CEILING_JPY=0)
+        logger.warning.assert_not_called()

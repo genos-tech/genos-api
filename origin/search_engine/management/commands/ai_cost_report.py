@@ -356,3 +356,25 @@ class Command(CronCommand):
                 window,
                 pct,
             )
+        elif pct >= 50:
+            # The V2 §3.7 early warnings, at 50% and 80%. WARNING, not
+            # ERROR — the cron must stay green below the line, or the
+            # red run stops meaning "over budget". The graded messages
+            # exist so the first sign of a hot month is a log line and
+            # an email, not the alarm itself.
+            level = "80%" if pct >= 80 else "50%"
+            self.stdout.write(
+                self.style.WARNING(
+                    f"  ⚠ over the {level} early-warning threshold of the "
+                    f"pro-rated budget"
+                )
+            )
+            log.warning(
+                "AI spend %s is at %.0f%% of the pro-rated budget %s for %s "
+                "(early warning, over the %s line)",
+                _yen(spent),
+                pct,
+                _yen(allowed_milli),
+                window,
+                level,
+            )
