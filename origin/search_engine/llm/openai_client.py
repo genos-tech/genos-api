@@ -224,6 +224,32 @@ class OpenAIClient:
         }
         if sdk_tools:
             create_kwargs["tools"] = sdk_tools
+            # WITHOUT THIS, EVERY TOOL-CARRYING CALL IS A HARD 400:
+            #
+            #   Function tools with reasoning_effort are not supported
+            #   for <model> in /v1/chat/completions. To use function
+            #   tools, use /v1/responses or set reasoning_effort to
+            #   'none'.
+            #
+            # We never sent `reasoning_effort` — OpenAI applies a
+            # server-side default that Chat Completions refuses to
+            # combine with function tools. Since the agent always
+            # carries tools, that was every OpenAI ask on every rung,
+            # while the provider stayed selectable in Settings.
+            #
+            # Only set on the tool path: a tool-less call (the summary
+            # helpers) works today WITH the default reasoning, and
+            # silently turning that off would be a quality regression
+            # bought for nothing.
+            #
+            # This is the narrow fix, and it has a real cost: OpenAI
+            # rungs no longer reason at all, so luna/terra/sol vary by
+            # model tier alone while Claude and Gemini still scale
+            # reasoning with effort. The wider fix is porting this
+            # adapter to /v1/responses, which supports reasoning AND
+            # tools together — a much larger change that has to be
+            # judged against the eval suite, not a smoke test.
+            create_kwargs["reasoning_effort"] = "none"
 
         # Accumulates streamed tool-call fragments, keyed by the `index`
         # OpenAI assigns within this response. `arguments` arrives as a
