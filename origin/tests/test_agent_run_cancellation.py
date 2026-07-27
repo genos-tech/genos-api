@@ -14,6 +14,7 @@ quota was already charged by the time a disconnect is observable.
 
 from __future__ import annotations
 
+import json
 import threading
 from datetime import timedelta
 from io import StringIO
@@ -116,10 +117,16 @@ class StreamCancellationTests(SimpleTestCase):
             return None
 
         run = _FakeRun()
-        list(_stream_ndjson(worker_target, run=run))
+        chunks = list(_stream_ndjson(worker_target, run=run))
         self.assertEqual(run.status, "done")
         self.assertEqual(run.final_answer_text, "hello")
         self.assertIsNotNone(run.finished_at)
+        # The adapter stamps total stream wall time onto `done` (the
+        # client's "answered in Xs"), alongside run_id/session_id.
+        done = json.loads(chunks[-1])
+        self.assertEqual(done["type"], "done")
+        self.assertIsInstance(done["elapsed_ms"], int)
+        self.assertGreaterEqual(done["elapsed_ms"], 0)
 
     def test_error_event_still_closes_as_error(self):
         def worker_target(emit, cancel_event):

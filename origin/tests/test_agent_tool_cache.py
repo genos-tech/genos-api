@@ -120,6 +120,9 @@ class SessionToolCacheTests(SimpleTestCase):
         result = _result_events(events)[0]
         self.assertTrue(result.get("cached"))
         self.assertEqual(result["summary"], "ran tool_a #1")
+        # No execution → no execution time. A hit reporting the original
+        # call's duration (or 0ms) would misrepresent what happened.
+        self.assertNotIn("duration_ms", result)
 
     def test_different_args_miss(self):
         tool = _CountingTool("tool_a")
@@ -225,3 +228,8 @@ class SessionToolCacheTests(SimpleTestCase):
         self.assertEqual([r["tool_name"] for r in results], ["tool_a", "tool_b", "tool_c"])
         self.assertTrue(results[0].get("cached"))
         self.assertNotIn("cached", results[1])
+        # duration_ms mirrors the hit/miss split: absent on the cache
+        # hit (nothing executed), present on the misses that ran.
+        self.assertNotIn("duration_ms", results[0])
+        self.assertIsInstance(results[1]["duration_ms"], int)
+        self.assertIsInstance(results[2]["duration_ms"], int)

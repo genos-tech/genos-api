@@ -15,14 +15,21 @@ Q&A pairs into the model context.
 NDJSON event types emitted:
 
     {"type": "tool_call_start",            "step": N, "tool_name": "...", "arguments": {...}}
-    {"type": "tool_call_result",           "step": N, "tool_name": "...", "summary": "..."}
-    {"type": "tool_call_error",            "step": N, "tool_name": "...", "error": "..."}
+    {"type": "tool_call_result",           "step": N, "tool_name": "...", "summary": "...",
+                                           "duration_ms": N}
+    {"type": "tool_call_error",            "step": N, "tool_name": "...", "error": "...",
+                                           "duration_ms": N}
     {"type": "tool_call_pending_approval", "step": N, "tool_name": "...", "arguments": {...},
                                            "approval_token": "<uuid>"}   ← Phase 7
     {"type": "sources",                    "sources": [...]}
     {"type": "answer_delta",               "text": "..."}
-    {"type": "done",                       "session_id": "<uuid>"}       ← Phase 8
+    {"type": "done",                       "session_id": "<uuid>", "elapsed_ms": N}  ← Phase 8
     {"type": "error",                      "message": "..."}
+
+`duration_ms` (per-tool execution wall time, server-measured) and
+`elapsed_ms` (whole-stream wall time, injected below) are additive and
+omitted where no execution happened (session-cache hits, rejects) —
+clients must treat them as optional.
 
 POST instead of SSE so query payloads aren't logged in access logs.
 `StreamingHttpResponse(application/x-ndjson)` flushes each event
@@ -35,6 +42,7 @@ import dataclasses
 import json
 import logging
 import threading
+import time
 from contextlib import contextmanager, nullcontext
 from datetime import timedelta
 from typing import Any, Callable, Iterator
@@ -1658,6 +1666,12 @@ def _stream_ndjson(
     """
     import queue  # noqa: PLC0415
 
+    # Wall clock for the `elapsed_ms` injected into `done` below. Starts
+    # when Django first iterates the generator — i.e. right before the
+    # worker thread spins up — so it measures the whole answer
+    # generation, not just the tail after the last tool.
+    stream_started = time.monotonic()
+
     def line(obj: dict) -> bytes:
         return (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
 
@@ -1906,6 +1920,16 @@ def _stream_ndjson(
                 # swap + charge already happened correctly.
                 if fallback_note is not None:
                     event = {**event, "model_fallback": fallback_note}
+                # Total response time for this stream, for the client's
+                # "answered in Xs" display. Additive field on `done` (not
+                # a new event type) for the same contract reason as
+                # `model_fallback` above. On a /decide/ resume it covers
+                # the resumed segment only — the wait for the human
+                # approval is deliberately not "generation time".
+                event = {
+                    **event,
+                    "elapsed_ms": int((time.monotonic() - stream_started) * 1000),
+                }
             elif event_type == "error":
                 msg = event.get("message") or ""
                 final_error = msg
