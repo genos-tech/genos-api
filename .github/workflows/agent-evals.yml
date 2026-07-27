@@ -115,6 +115,15 @@ jobs:
       GEMINI_USE_VERTEX: "true"
       GEMINI_PROJECT: amplified-album-496413-t2
       GEMINI_LOCATION: asia-northeast1
+      # LLM calls use the global endpoint, mirroring prod (both Railway's
+      # GEMINI_LOCATION=global and the GCP service's vertex_llm_location =
+      # "global" in terraform.tfvars). gemini-3.6-flash and
+      # gemini-3.5-flash-lite are NOT served in asia-northeast1 — without
+      # this override every Gemini LLM call here 404s (NOT_FOUND) while the
+      # regional gemini-embedding-001 keeps working, so retrieval stays
+      # green and the behavior/judge suites die silently. Embeddings stay
+      # on GEMINI_LOCATION: the region their OpenSearch index was built in.
+      GEMINI_LLM_LOCATION: global
       EMBEDDING_PROVIDER: vertex
       # Cost: pin CI evals to the cheap light rung rather than inheriting
       # the server default (gemini-3.6-flash, $1.50/$7.50 per 1M).
@@ -128,8 +137,11 @@ jobs:
       # touches the report-only behavior suite + judge.
       # NB: a step-change in judge scores right after this landed is the
       # cheaper judge, not a quality regression — re-baseline the trend.
-      # If a run starts 404-ing, the model has been retired on Vertex:
-      # drop this line to fall back to the server default.
+      # If a run starts 404-ing, check REGION first (is the model served
+      # at GEMINI_LLM_LOCATION? — this exact model launched global-only,
+      # which is why that override exists above); only if the model is
+      # gone everywhere has it been retired — then drop this line to fall
+      # back to the server default.
       GEMINI_MODEL: gemini-3.5-flash-lite
       # Reranker OFF for the gate: it adds a Gemini call per query
       # (non-deterministic, slow, Vertex-quota-bound). The gate tests the

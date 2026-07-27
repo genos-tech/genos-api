@@ -99,6 +99,15 @@ jobs:
       GEMINI_USE_VERTEX: "true"
       GEMINI_PROJECT: amplified-album-496413-t2
       GEMINI_LOCATION: asia-northeast1
+      # LLM calls use the global endpoint, mirroring prod (both Railway's
+      # GEMINI_LOCATION=global and the GCP service's vertex_llm_location =
+      # "global" in terraform.tfvars). gemini-3.6-flash and
+      # gemini-3.5-flash-lite are NOT served in asia-northeast1 — without
+      # this override every Gemini LLM call here 404s (NOT_FOUND) while the
+      # regional gemini-embedding-001 keeps working, so retrieval stays
+      # green and the behavior/judge suites die silently. Embeddings stay
+      # on GEMINI_LOCATION: the region their OpenSearch index was built in.
+      GEMINI_LLM_LOCATION: global
       EMBEDDING_PROVIDER: vertex
       # Cost: pin CI evals to the cheap light rung rather than inheriting
       # the server default (gemini-3.6-flash, $1.50/$7.50 per 1M).
