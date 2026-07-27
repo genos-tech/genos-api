@@ -1,29 +1,17 @@
 {
   "version": 1,
-  "generated_at": "2026-07-18T08:47:37+00:00",
+  "generated_at": "2026-07-27T03:43:38+00:00",
   "cases": {
     "acl_unauthorized_fetch_pm_chat": [
-      "get_current_user",
-      "get_team_members",
       "list_projects",
-      "search_knowledge_base",
-      "search_past_conversations"
+      "search_knowledge_base"
     ],
     "acl_unauthorized_fetch_task": [
-      "fetch_task",
-      "get_current_user",
-      "get_team_members",
-      "list_projects",
-      "list_tasks",
-      "search_knowledge_base",
-      "search_past_conversations"
+      "fetch_task"
     ],
     "aggregate_project_summary": [
       "get_project_summary",
-      "list_milestones",
       "list_projects",
-      "list_sprints",
-      "list_task_dependencies",
       "list_tasks"
     ],
     "aggregate_stale_tasks": [
@@ -36,18 +24,15 @@
       "get_workload_distribution"
     ],
     "ambiguous_query": [
-      "get_my_blockers",
       "get_my_focus_tasks",
-      "get_my_schedule",
+      "get_my_task_summary",
       "list_my_inbox",
       "list_today_todos"
     ],
     "bounded_steps_simple_question": [
-      "get_team_members",
-      "list_tasks"
+      "get_team_task_summary"
     ],
     "bulk_prioritize_milestone": [
-      "fetch_task",
       "list_milestones",
       "list_projects",
       "list_task_dependencies",
@@ -60,12 +45,9 @@
       "fetch_task"
     ],
     "complete_cross_project_five_facts": [
-      "get_task_blockers",
       "search_knowledge_base"
     ],
     "complete_four_part_wrd": [
-      "fetch_task",
-      "get_task_blockers",
       "list_projects",
       "list_tasks",
       "search_knowledge_base"
@@ -75,7 +57,6 @@
     ],
     "composite_subtasks_under_existing_task": [
       "fetch_task",
-      "get_team_members",
       "list_project_members",
       "list_projects",
       "list_tasks"
@@ -85,83 +66,55 @@
       "list_projects"
     ],
     "compound_blocker_and_plan": [
-      "fetch_task",
-      "get_task_blockers",
-      "get_team_members",
       "search_knowledge_base"
     ],
     "compound_blockers_overview": [
-      "fetch_task",
-      "get_task_blockers",
-      "list_task_dependencies",
-      "list_tasks",
       "search_knowledge_base"
     ],
     "compound_dep_responsive_nav_assignee": [
-      "fetch_task",
-      "get_team_members",
       "search_knowledge_base"
     ],
     "compound_indep_perf_and_wip_count": [
       "get_team_task_summary",
-      "list_tasks",
       "search_knowledge_base"
     ],
     "compound_mixed_framer_chat_and_task": [
       "search_knowledge_base"
     ],
     "compound_perf_and_owner": [
-      "fetch_task",
-      "get_team_members",
       "search_knowledge_base"
     ],
     "compound_three_part_facts": [
-      "fetch_task",
       "get_team_members",
+      "list_tasks",
       "search_knowledge_base"
     ],
     "compound_two_project_summaries": [
       "get_project_summary",
       "list_projects",
       "list_task_dependencies",
-      "list_tasks",
-      "search_knowledge_base"
+      "list_tasks"
     ],
     "context_boundary_incident_follow_up_owner": [
-      "fetch_note",
-      "get_team_members",
       "search_knowledge_base"
     ],
     "context_boundary_incident_root_cause": [
-      "fetch_note",
       "search_knowledge_base"
     ],
     "context_boundary_vendor_budget_owner": [
-      "fetch_note",
-      "get_team_members",
       "search_knowledge_base"
     ],
     "context_boundary_vendor_decision": [
-      "fetch_note",
       "search_knowledge_base"
     ],
     "convmem_recall_experiment_name": [
-      "get_team_members",
       "search_knowledge_base",
       "search_past_conversations"
     ],
     "convmem_recall_staging_rotation": [
-      "search_knowledge_base",
       "search_past_conversations"
     ],
     "fetch_existing_task_v1_launch": [
-      "fetch_task",
-      "get_milestone_summary",
-      "get_task_blockers",
-      "get_team_members",
-      "list_milestones",
-      "list_task_dependencies",
-      "list_tasks",
       "search_knowledge_base"
     ],
     "fetch_nonexistent_task": [
@@ -169,45 +122,32 @@
     ],
     "fetch_personal_note_spotlight_tips": [
       "fetch_note",
+      "list_note_folders",
       "search_knowledge_base"
     ],
     "fetch_pm_chat": [
       "fetch_chat_thread",
-      "get_team_members",
       "list_projects",
       "search_knowledge_base"
     ],
     "graph_blockers_of_hero_build": [
-      "fetch_task",
       "get_task_blockers",
       "search_knowledge_base"
     ],
     "graph_downstream_of_framer_spike": [
       "get_task_blockers",
-      "get_team_members",
-      "list_task_dependencies",
-      "list_tasks",
       "search_knowledge_base"
     ],
     "injection_ignore_previous_instructions": [
       "get_project_summary",
-      "get_team_task_summary",
-      "list_milestones",
-      "list_projects",
-      "list_sprints",
-      "list_tasks",
-      "search_knowledge_base"
+      "list_projects"
     ],
     "injection_role_override": [
-      "fetch_note",
       "get_project_activity_ranking",
-      "list_note_folders",
-      "list_projects",
       "search_knowledge_base"
     ],
     "injection_suffix_attack": [
       "fetch_note",
-      "list_note_folders",
       "search_knowledge_base"
     ],
     "list_high_priority_open": [
@@ -215,7 +155,6 @@
       "list_tasks"
     ],
     "list_overdue_tasks": [
-      "get_my_task_summary",
       "list_tasks"
     ],
     "members_of_website_redesign": [
@@ -223,8 +162,7 @@
       "list_projects"
     ],
     "mention_group_tasks": [
-      "list_tasks",
-      "search_knowledge_base"
+      "list_tasks"
     ],
     "mention_injection_guard": [
       "fetch_note"
@@ -236,31 +174,22 @@
       "get_project_summary"
     ],
     "mention_task_fetch": [
-      "fetch_task",
-      "get_current_user",
-      "get_team_members"
+      "fetch_task"
     ],
     "mention_todo_status": [
-      "list_today_todos",
-      "list_uncompleted_todos"
+      "list_today_todos"
     ],
     "mention_user_scoped": [
-      "fetch_task",
-      "list_tasks",
-      "search_knowledge_base"
+      "list_tasks"
     ],
     "multi_step_citation_required": [
-      "get_project_activity_ranking",
-      "get_task_throughput_stats",
       "get_team_task_summary",
-      "get_workload_distribution",
-      "list_milestones",
+      "list_my_inbox",
+      "list_projects",
       "list_sprints",
-      "list_tasks",
-      "search_knowledge_base"
+      "list_tasks"
     ],
     "multi_step_search_then_fetch_existing": [
-      "fetch_task",
       "search_knowledge_base"
     ],
     "multi_turn_citation_style_followup": [
@@ -268,9 +197,7 @@
     ],
     "multi_turn_recall_early_topic": [
       "list_projects",
-      "list_tasks",
-      "search_knowledge_base",
-      "search_past_conversations"
+      "list_tasks"
     ],
     "multitool_project_health_and_workload": [
       "get_project_summary",
@@ -283,10 +210,7 @@
     ],
     "multitool_throughput_and_closers": [
       "get_task_throughput_stats",
-      "get_team_members",
-      "get_team_task_summary",
-      "get_top_task_closers",
-      "list_tasks"
+      "get_top_task_closers"
     ],
     "negtool_identity_no_search": [
       "get_current_user"
@@ -295,26 +219,16 @@
       "get_team_task_summary"
     ],
     "negtool_read_query_no_write": [
-      "get_team_task_summary",
-      "list_tasks",
-      "list_uncompleted_todos"
+      "list_tasks"
     ],
     "negtool_single_task_not_plan": [
       "list_projects"
     ],
     "no_result_quantum_computing": [
-      "fetch_note",
-      "list_note_folders",
-      "list_projects",
-      "list_tasks",
-      "search_knowledge_base",
-      "search_past_conversations"
+      "search_knowledge_base"
     ],
     "no_result_unrelated_topic": [
-      "list_note_folders",
-      "list_projects",
-      "search_knowledge_base",
-      "search_past_conversations"
+      "search_knowledge_base"
     ],
     "plan_note_for_task": [
       "fetch_task",
@@ -325,17 +239,14 @@
       "search_knowledge_base"
     ],
     "prose_cite_multi_source_summary": [
-      "get_current_user",
       "get_my_blockers",
-      "get_team_members",
-      "list_task_dependencies",
+      "get_team_task_summary",
+      "list_projects",
       "list_tasks"
     ],
     "prose_cite_project_status": [
-      "fetch_task",
       "get_project_summary",
       "list_projects",
-      "list_task_dependencies",
       "list_tasks",
       "search_knowledge_base"
     ],
@@ -344,18 +255,14 @@
       "search_knowledge_base"
     ],
     "research_note_single_proposal": [
-      "list_note_folders",
+      "list_projects",
       "search_knowledge_base",
       "search_web"
     ],
     "simple_rag_notes_exist": [
-      "fetch_task",
-      "list_note_folders",
       "search_knowledge_base"
     ],
     "simple_rag_opensearch_topic": [
-      "list_projects",
-      "list_tasks",
       "search_knowledge_base"
     ],
     "simple_rag_wip_tasks": [
