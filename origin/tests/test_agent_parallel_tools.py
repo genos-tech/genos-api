@@ -247,3 +247,48 @@ class ParallelToolTests(SimpleTestCase):
             _tool_events(events),
             [("tool_call_start", "tool_a"), ("tool_call_result", "tool_a")],
         )
+
+
+@override_settings(SEARCH_ENGINE_PATCHED=None)
+class ToolDurationTests(SimpleTestCase):
+    """`duration_ms` on tool_call_result / tool_call_error events.
+
+    The point of server-side timing is that the client CANNOT derive it
+    from event arrival on the parallel path (all starts are emitted
+    before any result), so each result must carry its own tool's wall
+    time — the slow call's, not the batch's, on every sibling.
+    """
+
+    def test_parallel_results_carry_per_call_durations(self):
+        def slow_a(args, ctx):
+            time.sleep(0.25)
+            return {"__summary__": "a done"}
+
+        registry = {
+            "tool_a": _fake_tool("tool_a", slow_a),
+            "tool_b": _fake_tool("tool_b", lambda a, c: {"__summary__": "b done"}),
+        }
+        client = _ScriptedClient([_batch_step("tool_a", "tool_b"), _FINAL_STEP])
+        events, _ = _run_loop(client, registry, {"RAG_PARALLEL_TOOLS": True})
+        results = {e["tool_name"]: e for e in events if e["type"] == "tool_call_result"}
+        self.assertGreaterEqual(results["tool_a"]["duration_ms"], 200)
+        # The instant sibling reports its OWN time, not the batch
+        # wall-clock it spent waiting alongside the sleeper.
+        self.assertLess(results["tool_b"]["duration_ms"], 200)
+
+    def test_serial_result_and_error_carry_durations(self):
+        def boom(args, ctx):
+            raise ToolError("access denied")
+
+        registry = {
+            "tool_a": _fake_tool("tool_a", lambda a, c: {"__summary__": "a done"}),
+            "tool_b": _fake_tool("tool_b", boom),
+        }
+        client = _ScriptedClient([_batch_step("tool_a", "tool_b"), _FINAL_STEP])
+        events, _ = _run_loop(client, registry, {"RAG_PARALLEL_TOOLS": False})
+        result = next(e for e in events if e["type"] == "tool_call_result")
+        error = next(e for e in events if e["type"] == "tool_call_error")
+        self.assertIsInstance(result["duration_ms"], int)
+        self.assertGreaterEqual(result["duration_ms"], 0)
+        self.assertIsInstance(error["duration_ms"], int)
+        self.assertGreaterEqual(error["duration_ms"], 0)

@@ -19,12 +19,17 @@ Two entry points share the same per-step loop body:
 Event types emitted (full NDJSON protocol):
 
   tool_call_start              read-only tool dispatch
-  tool_call_result             read-only tool success
-  tool_call_error              tool error (incl. user-rejected writes)
+  tool_call_result             read-only tool success (+ duration_ms
+                               when the tool actually executed — absent
+                               on session-cache hits)
+  tool_call_error              tool error (incl. user-rejected writes;
+                               + duration_ms when a tool ran)
   tool_call_pending_approval   write tool — paused, awaiting user
   sources                      citation chips (after search calls)
   answer_delta                 streaming text from the final answer
-  done                         final answer delivered
+  done                         final answer delivered (the streaming
+                               adapter adds elapsed_ms — total stream
+                               wall time — in agent_views)
   error                        fatal mid-stream
 """
 
@@ -1510,21 +1515,28 @@ def resume_agent(
             messages.append(_assistant_function_call_turn(function_call))
             messages.append(_function_response_turn(call_name, {"error": err}))
         else:
+            # Same per-tool wall clock the main loop keeps in
+            # `tool_durations` — the approved write executes here, outside
+            # that loop, so it times (and reports) its own run.
+            _tool_started = time.monotonic()
             try:
                 result = tool.run(call_args, ctx)
             except ToolError as e:
+                dur_ms = int((time.monotonic() - _tool_started) * 1000)
                 emit(
                     {
                         "type": "tool_call_error",
                         "step": step_index,
                         "tool_name": call_name,
                         "error": str(e),
+                        "duration_ms": dur_ms,
                     }
                 )
                 try:
                     pending_step.error = str(e)
                     pending_step.summary = ""
-                    pending_step.save(update_fields=["error", "summary"])
+                    pending_step.latency_ms = dur_ms
+                    pending_step.save(update_fields=["error", "summary", "latency_ms"])
                 except Exception:  # noqa: BLE001
                     log.exception(
                         "Failed to update pending step %s after ToolError", pending_step.step_id
@@ -1533,6 +1545,7 @@ def resume_agent(
                 messages.append(_function_response_turn(call_name, {"error": str(e)}))
             except Exception as e:  # noqa: BLE001
                 log.exception("Tool %s crashed on args %r", call_name, call_args)
+                dur_ms = int((time.monotonic() - _tool_started) * 1000)
                 err = f"Internal error in tool '{call_name}'."
                 emit(
                     {
@@ -1540,12 +1553,14 @@ def resume_agent(
                         "step": step_index,
                         "tool_name": call_name,
                         "error": err,
+                        "duration_ms": dur_ms,
                     }
                 )
                 try:
                     pending_step.error = err
                     pending_step.summary = ""
-                    pending_step.save(update_fields=["error", "summary"])
+                    pending_step.latency_ms = dur_ms
+                    pending_step.save(update_fields=["error", "summary", "latency_ms"])
                 except Exception:  # noqa: BLE001
                     log.exception(
                         "Failed to update pending step %s after exception", pending_step.step_id
@@ -1553,12 +1568,14 @@ def resume_agent(
                 messages.append(_assistant_function_call_turn(function_call))
                 messages.append(_function_response_turn(call_name, {"error": err}))
             else:
+                dur_ms = int((time.monotonic() - _tool_started) * 1000)
                 summary = result.pop("__summary__", "ok")
                 result_event = {
                     "type": "tool_call_result",
                     "step": step_index,
                     "tool_name": call_name,
                     "summary": summary,
+                    "duration_ms": dur_ms,
                 }
                 # Approved note writes carry a compact `note` ref so the
                 # frontend can refresh caches and (for body updates) push
@@ -1581,7 +1598,8 @@ def resume_agent(
                 try:
                     pending_step.summary = summary
                     pending_step.result_json = result
-                    pending_step.save(update_fields=["summary", "result_json"])
+                    pending_step.latency_ms = dur_ms
+                    pending_step.save(update_fields=["summary", "result_json", "latency_ms"])
                 except Exception:  # noqa: BLE001
                     log.exception(
                         "Failed to update pending step %s after approve",
@@ -2297,14 +2315,15 @@ def _drive_loop(
 
             if kind != "ok":
                 err = str(payload)
-                emit(
-                    {
-                        "type": "tool_call_error",
-                        "step": step,
-                        "tool_name": call_name,
-                        "error": err,
-                    }
-                )
+                error_event: dict[str, Any] = {
+                    "type": "tool_call_error",
+                    "step": step,
+                    "tool_name": call_name,
+                    "error": err,
+                }
+                if call_idx in tool_durations:
+                    error_event["duration_ms"] = tool_durations[call_idx]
+                emit(error_event)
                 _persist_step(
                     run_id,
                     step_index=step,
@@ -2331,6 +2350,14 @@ def _drive_loop(
                 "tool_name": call_name,
                 "summary": summary,
             }
+            if call_idx in tool_durations:
+                # Server-measured execution time, mirrored from the
+                # `latency_ms` persisted below. The client can't derive
+                # this itself: a parallel batch emits every start before
+                # any result, so arrival-time deltas would attribute the
+                # whole batch wall-clock to the first call. Absent on
+                # session-cache hits (nothing executed).
+                result_event["duration_ms"] = tool_durations[call_idx]
             if from_cache:
                 # Observability marker only — the frontend destructures
                 # step/tool_name/summary and ignores unknown fields.
