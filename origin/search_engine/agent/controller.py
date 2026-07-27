@@ -103,6 +103,20 @@ CREDITS_EXHAUSTED_MESSAGE = (
     "plan to keep going now."
 )
 
+# Appended as a final user turn when the loop exhausts its step budget
+# without ever writing a final answer (AGENT_STEP_CAP_WRAPUP). By that
+# point the transcript holds every tool result the run gathered, so the
+# directive forces one last TOOL-LESS synthesis over that material
+# instead of discarding it behind an error the user can't act on.
+STEP_CAP_WRAPUP_DIRECTIVE = (
+    "You have used the entire tool budget for this request; no further "
+    "tool calls are possible. Using ONLY the information already "
+    "gathered above, write your best final answer to the user's "
+    "question now. Cite sources with [type:id] tokens where you have "
+    "them. If the gathered information is incomplete, answer what you "
+    "can and say clearly which parts you could not verify."
+)
+
 # Marker stored in AgentStep.summary while a write tool is awaiting the
 # user's decision. The resume path uses it to locate the pending row.
 PENDING_APPROVAL_MARKER = "awaiting_approval"
@@ -1837,6 +1851,73 @@ def _collect_step(
     return text_parts, calls
 
 
+def _emit_final_answer_events(
+    final_answer: str,
+    seen_sources_by_id: dict[tuple, dict[str, Any]],
+    ctx: ToolContext,
+    emit: Callable[[dict[str, Any]], None],
+) -> None:
+    """Close out an answered turn: resolve late citations, re-emit the
+    source list, then `done`. Shared by the normal final-text path and
+    the step-cap wrap-up so the two closings can't drift. The answer
+    text itself has already been streamed as `answer_delta` events.
+    """
+    # Post-process: resolve any `[type:id]` tokens in the final
+    # answer that aren't already in the source registry. Common
+    # causes: agent cited an entity carried over from a prior
+    # turn, mentioned in a pre-injected summary, or otherwise
+    # not retrieved via a tool this turn. Lookups are ACL-gated;
+    # silent failure (raw token) is preferable to leaking titles.
+    late_sources = resolve_unresolved_citations(
+        answer=final_answer,
+        seen_keys=set(seen_sources_by_id.keys()),
+        team_id=ctx.team_id,
+        user_id=ctx.user_id,
+        build_task_source=lambda task_id, title, project_id: _task_source(
+            task_id, title, project_id
+        ),
+        build_project_source=lambda project_id, project_name: _project_source(
+            project_id, project_name
+        ),
+        build_chat_source=lambda chat_type, chat_id, thread_id: _chat_source(
+            chat_type, chat_id, thread_id
+        ),
+        build_note_source=lambda note_type, note_id, title, parent_context: _note_source(
+            note_type, note_id, title, parent_context
+        ),
+        build_todo_source=lambda item_id, title, local_date: _todo_source(
+            item_id, title, local_date
+        ),
+        build_milestone_source=lambda milestone_id, title, project_id, task_id: (
+            _milestone_source(milestone_id, title, project_id, task_id)
+        ),
+    )
+    if late_sources:
+        _apply_friendly_titles(late_sources, ctx)
+        _hydrate_task_display_ids(late_sources)
+        for src in late_sources:
+            key = (src.get("entity_type"), src.get("entity_id"))
+            if not all(key) or key in seen_sources_by_id:
+                continue
+            seen_sources_by_id[key] = src
+
+    # Phase 4.2 — re-emit the sources list re-sorted by citation
+    # density before `done`. Frontend already handles `sources`
+    # events by replacing wholesale, so the final emit overrides
+    # the in-flight tool-emission order with the more-relevant
+    # citation-first order. Gated on a flag (default True) so
+    # operators can flip it off if the chip-reshuffle UX bites.
+    if settings.SEARCH_ENGINE.get("RAG_RANK_SOURCES_BY_CITATION", True) and seen_sources_by_id:
+        ranked = _rank_sources_by_citation(final_answer, list(seen_sources_by_id.values()))
+        emit({"type": "sources", "sources": ranked})
+    elif late_sources:
+        # Rank flag off but we added sources after the last tool
+        # emit — ship the updated list so the frontend rewriter
+        # has them.
+        emit({"type": "sources", "sources": list(seen_sources_by_id.values())})
+    emit({"type": "done"})
+
+
 def _drive_loop(
     *,
     messages: list[AgentMessage],
@@ -1922,6 +2003,7 @@ def _drive_loop(
         *,
         model_override: str | None = None,
         emit_deltas: bool = True,
+        tools_override: list[ToolDeclaration] | None = None,
     ) -> tuple[list[str], list[FunctionCall]]:
         """Run one model turn AND record its per-call telemetry.
 
@@ -1931,6 +2013,10 @@ def _drive_loop(
         the loop. A raising `_collect_step` propagates to the loop's
         error handler WITHOUT recording a row — an errored call has no
         usage to attribute.
+
+        `tools_override` replaces the loop's tool declarations for this
+        one call — the step-cap wrap-up passes `[]` so the model
+        physically cannot ask for another tool. None = the loop's tools.
         """
         sink = CallUsage()
         started = time.monotonic()
@@ -1942,7 +2028,7 @@ def _drive_loop(
             parts, fcalls = _collect_step(
                 client,
                 messages=messages,
-                tools=tools,
+                tools=tools if tools_override is None else tools_override,
                 system_instruction=system_instruction,
                 emit=emit,
                 model_override=model_override,
@@ -2100,65 +2186,9 @@ def _drive_loop(
                 _persist_step(run_id, step_index=step, error="empty_response")
                 return None
 
-            final_answer = "".join(accumulated_text_parts)
-
-            # Post-process: resolve any `[type:id]` tokens in the final
-            # answer that aren't already in the source registry. Common
-            # causes: agent cited an entity carried over from a prior
-            # turn, mentioned in a pre-injected summary, or otherwise
-            # not retrieved via a tool this turn. Lookups are ACL-gated;
-            # silent failure (raw token) is preferable to leaking titles.
-            late_sources = resolve_unresolved_citations(
-                answer=final_answer,
-                seen_keys=set(seen_sources_by_id.keys()),
-                team_id=ctx.team_id,
-                user_id=ctx.user_id,
-                build_task_source=lambda task_id, title, project_id: _task_source(
-                    task_id, title, project_id
-                ),
-                build_project_source=lambda project_id, project_name: _project_source(
-                    project_id, project_name
-                ),
-                build_chat_source=lambda chat_type, chat_id, thread_id: _chat_source(
-                    chat_type, chat_id, thread_id
-                ),
-                build_note_source=lambda note_type, note_id, title, parent_context: _note_source(
-                    note_type, note_id, title, parent_context
-                ),
-                build_todo_source=lambda item_id, title, local_date: _todo_source(
-                    item_id, title, local_date
-                ),
-                build_milestone_source=lambda milestone_id, title, project_id, task_id: (
-                    _milestone_source(milestone_id, title, project_id, task_id)
-                ),
+            _emit_final_answer_events(
+                "".join(accumulated_text_parts), seen_sources_by_id, ctx, emit
             )
-            if late_sources:
-                _apply_friendly_titles(late_sources, ctx)
-                _hydrate_task_display_ids(late_sources)
-                for src in late_sources:
-                    key = (src.get("entity_type"), src.get("entity_id"))
-                    if not all(key) or key in seen_sources_by_id:
-                        continue
-                    seen_sources_by_id[key] = src
-
-            # Phase 4.2 — re-emit the sources list re-sorted by citation
-            # density before `done`. Frontend already handles `sources`
-            # events by replacing wholesale, so the final emit overrides
-            # the in-flight tool-emission order with the more-relevant
-            # citation-first order. Gated on a flag (default True) so
-            # operators can flip it off if the chip-reshuffle UX bites.
-            if (
-                settings.SEARCH_ENGINE.get("RAG_RANK_SOURCES_BY_CITATION", True)
-                and seen_sources_by_id
-            ):
-                ranked = _rank_sources_by_citation(final_answer, list(seen_sources_by_id.values()))
-                emit({"type": "sources", "sources": ranked})
-            elif late_sources:
-                # Rank flag off but we added sources after the last tool
-                # emit — ship the updated list so the frontend rewriter
-                # has them.
-                emit({"type": "sources", "sources": list(seen_sources_by_id.values())})
-            emit({"type": "done"})
             return None
 
         # ---- C3: resolve session-cache hits before any execution ----
@@ -2436,14 +2466,51 @@ def _drive_loop(
             messages.append(_assistant_function_call_turn(call))
             messages.append(_function_response_turn(call_name, result))
 
-    # Step cap.
+    # Step cap. The loop spent its whole budget on tool calls without
+    # ever writing a final answer — but everything it retrieved is
+    # already in `messages`. Erroring here would discard that work, so
+    # force ONE last tool-less synthesis call over the gathered material
+    # and ship that as the answer ("answer with what you have"). Falls
+    # back to the historical hard error when the wrap-up is disabled,
+    # pointless (client gone), fails, or returns nothing.
+    wrapup_answer = ""
+    if settings.SEARCH_ENGINE.get("AGENT_STEP_CAP_WRAPUP", True) and not (
+        cancel_event is not None and cancel_event.is_set()
+    ):
+        try:
+            messages.append(AgentMessage(role="user", text=STEP_CAP_WRAPUP_DIRECTIVE))
+            # tools_override=[]: the model physically cannot request
+            # another call, so this terminates. No model_override — the
+            # wrap-up is synthesis, and synthesis belongs to the user's
+            # model even when the loop planned on a cheaper rung (B3).
+            wrapup_parts, _wrapup_calls = _collect_and_record(
+                max_steps, "step_cap_wrapup", tools_override=[]
+            )
+            wrapup_answer = "".join(wrapup_parts).strip()
+        except Exception:  # noqa: BLE001 — degrade to the historical error
+            log.exception("Step-cap wrap-up call failed for run %s", run_id)
+    # One row records both facts: the run hit the cap AND what (if
+    # anything) the salvage answer said. answer_text="" is exactly the
+    # row this path always wrote, so cap-rate queries are unchanged.
+    _persist_step(
+        run_id,
+        step_index=max_steps,
+        error="step_cap_reached",
+        answer_text=wrapup_answer,
+    )
+    if wrapup_answer:
+        # Deltas already streamed live inside _collect_and_record; this
+        # resolves citations, re-ranks the chips, and closes with `done`
+        # — so the run ends "done" (answer delivered) rather than
+        # "step_cap", and the frontend renders a normal answered turn.
+        _emit_final_answer_events(wrapup_answer, seen_sources_by_id, ctx, emit)
+        return None
     emit(
         {
             "type": "error",
             "message": f"Agent did not reach a final answer in {max_steps} steps.",
         }
     )
-    _persist_step(run_id, step_index=max_steps, error="step_cap_reached")
     return None
 
 

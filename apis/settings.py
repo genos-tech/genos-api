@@ -574,9 +574,16 @@ SEARCH_ENGINE = {
     # max_chunks_per_entity × the per-tool entity limit.)
     # Phase 3 agent loop — hard cap on tool calls per request. The
     # roadmap recommends 5–8; we default to the conservative end.
-    # The controller stops + emits an error if the model hasn't
-    # produced a final answer by then.
+    # When the cap is hit without a final answer, the controller forces
+    # one last tool-less "answer with what you have" synthesis call
+    # (AGENT_STEP_CAP_WRAPUP below) instead of erroring.
     "AGENT_MAX_STEPS": int(os.environ.get("AGENT_MAX_STEPS", "10")),
+    # Kill switch for that step-cap wrap-up call. Default ON: a run
+    # that spent its whole budget on tools is holding real retrieved
+    # material, and "did not reach a final answer" throws it away.
+    # Setting this to false restores the historical hard error exactly.
+    "AGENT_STEP_CAP_WRAPUP": os.environ.get("AGENT_STEP_CAP_WRAPUP", "true").lower()
+    == "true",
     # Ops kill-switch for individual agent tools: comma-separated tool
     # names to hide from the model (e.g. "search_web,create_task"), so a
     # risky new tool can ship dark / be switched off per environment with

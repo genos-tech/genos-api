@@ -239,7 +239,17 @@ class LoopWiringTests(SimpleTestCase):
         try:
             with (
                 override_settings(
-                    SEARCH_ENGINE=_se(AGENT_EFFORT_LEVELS=flag, AGENT_MAX_STEPS=10)
+                    SEARCH_ENGINE=_se(
+                        AGENT_EFFORT_LEVELS=flag,
+                        AGENT_MAX_STEPS=10,
+                        # These tests count LOOP calls at the cap. The
+                        # step-cap wrap-up would add its +1 tool-less
+                        # synthesis call and swallow the error event —
+                        # it has its own suite
+                        # (test_agent_step_cap_wrapup); keep this one
+                        # about effort-profile wiring only.
+                        AGENT_STEP_CAP_WRAPUP=False,
+                    )
                 ),
                 patch(
                     "origin.search_engine.agent.controller.get_model_client",
