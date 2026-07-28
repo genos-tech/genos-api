@@ -18,9 +18,11 @@ Google's HTTP API and `get_valid_access_token` are mocked so the tests
 run offline.
 """
 
+from importlib import import_module
 from unittest.mock import MagicMock, patch
 
 import requests
+from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.test import TestCase
@@ -38,6 +40,12 @@ User = get_user_model()
 AGGREGATE_URL = "/api/v2/calendar/events/aggregate/"
 LIST_URL = "/api/v2/calendar/list/"
 CONNECTIONS_URL = "/api/v2/integrations/me/"
+
+# Imported dynamically: the module name starts with a digit, which a
+# normal `from ... import` can't express.
+set_login_identity = import_module(
+    "origin.migrations.0166_connectedaccount_multi_account"
+).set_login_identity
 
 CALENDAR_SCOPES = [
     "openid",
@@ -507,3 +515,160 @@ class CalendarListMultiAccountTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(resp.data["calendars"]), 1)
         self.assertEqual(len(resp.data["failed_accounts"]), 1)
+
+
+class LoginIdentityBackfillTests(TestCase):
+    """The 0166 data migration, exercised directly.
+
+    This is the highest-consequence code in the change and the one a
+    normal test run does NOT cover: `RunPython` fires against an empty
+    test database, so the query matches zero rows and proves nothing.
+
+    If the backfill silently no-ops on real data, every OAuth-signup
+    user ends up with `is_login_identity=False`. The disconnect guard
+    then permits deleting the row they sign in with — and because signup
+    called `set_unusable_password()`, they have no password to fall back
+    on. Locked out, unrecoverable from the UI.
+
+    Calling the migration function against the live app registry (rather
+    than a historical one) is safe here: `ConnectedAccount` has the same
+    fields at 0166 as it does now, and it's the *queryset* logic under
+    test, not the schema.
+    """
+
+    def _user(self, email: str, primary: str):
+        user = User.objects.create_user(username=email, email=email, password="pw123456")
+        user.primary_auth_provider = primary
+        user.save(update_fields=["primary_auth_provider"])
+        return user
+
+    def _account(self, user, provider: str, provider_user_id: str) -> ConnectedAccount:
+        return ConnectedAccount.objects.create(
+            user=user,
+            provider=provider,
+            provider_user_id=provider_user_id,
+            access_token_encrypted="placeholder",
+        )
+
+    def test_backfill_flags_the_signup_row_and_nothing_else(self):
+        google_user = self._user("g@example.com", "google")
+        signup_row = self._account(google_user, "google", "g-sub")
+        # Same user's GitHub connection: a pure API connection they are
+        # allowed to disconnect.
+        github_row = self._account(google_user, "github", "gh-sub")
+
+        # Email-signup user. Their Google row is NOT a login identity —
+        # `primary_auth_provider="email"` matches no ConnectedAccount.
+        email_user = self._user("e@example.com", "email")
+        email_google_row = self._account(email_user, "google", "e-sub")
+
+        set_login_identity(django_apps, None)
+
+        signup_row.refresh_from_db()
+        github_row.refresh_from_db()
+        email_google_row.refresh_from_db()
+        self.assertTrue(signup_row.is_login_identity)
+        self.assertFalse(github_row.is_login_identity)
+        self.assertFalse(email_google_row.is_login_identity)
+
+    def test_backfill_actually_writes(self):
+        """Guards the specific bug the join-avoidance rewrite was for:
+        `filter(...).update(...)` across a join raises, and an earlier
+        draft that swallowed it would have left every row False."""
+        user = self._user("g2@example.com", "google")
+        self._account(user, "google", "g2-sub")
+
+        self.assertEqual(ConnectedAccount.objects.filter(is_login_identity=True).count(), 0)
+        set_login_identity(django_apps, None)
+        self.assertEqual(ConnectedAccount.objects.filter(is_login_identity=True).count(), 1)
+
+    def test_backfill_is_idempotent(self):
+        user = self._user("g3@example.com", "google")
+        self._account(user, "google", "g3-sub")
+
+        set_login_identity(django_apps, None)
+        set_login_identity(django_apps, None)
+
+        self.assertEqual(ConnectedAccount.objects.filter(is_login_identity=True).count(), 1)
+
+    def test_backfill_leaves_at_most_one_login_identity_per_user(self):
+        """The constraint added in the same migration would reject the
+        backfill's own output if it flagged two rows for one user. Not
+        possible today (the dropped constraint guaranteed one row per
+        user per provider), but asserted so a future data shape can't
+        make the migration un-appliable."""
+        user = self._user("g4@example.com", "google")
+        self._account(user, "google", "g4-sub")
+        self._account(user, "github", "g4-gh")
+
+        set_login_identity(django_apps, None)
+
+        self.assertEqual(
+            ConnectedAccount.objects.filter(user=user, is_login_identity=True).count(), 1
+        )
+
+
+class DisconnectLockoutGuardTests(TestCase):
+    """The second, independent guard on disconnect.
+
+    `is_login_identity` is set by a data migration. If that flag were
+    ever wrong, an OAuth-signup user's only credential would look like
+    an ordinary connection and the UI would happily delete it — and
+    signup called `set_unusable_password()`, so there's no password to
+    recover with. `_is_last_signin_route` derives the same fact from
+    `primary_auth_provider` instead, so both have to fail to lock
+    somebody out.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="lockout", email="lockout@example.com", password="pw123456"
+        )
+        self.user.primary_auth_provider = "google"
+        self.user.save(update_fields=["primary_auth_provider"])
+        self.client.force_authenticate(user=self.user)
+
+    def _account(self, provider_user_id: str, **kwargs) -> ConnectedAccount:
+        return ConnectedAccount.objects.create(
+            user=self.user,
+            provider="google",
+            provider_user_id=provider_user_id,
+            access_token_encrypted="placeholder",
+            **kwargs,
+        )
+
+    def test_refuses_the_only_google_row_even_if_the_flag_is_wrong(self):
+        # Simulates a failed backfill: the signup row exists but carries
+        # is_login_identity=False.
+        account = self._account("sole-sub", is_login_identity=False)
+
+        resp = self.client.delete(f"/api/v2/integrations/account/{account.id}/")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertTrue(ConnectedAccount.objects.filter(id=account.id).exists())
+
+    def test_still_allows_removing_a_second_account_with_the_flag_wrong(self):
+        """The guard must not over-fire: once a second Google account
+        exists, removing it leaves a sign-in route intact and has to be
+        permitted."""
+        self._account("first-sub", is_login_identity=False)
+        second = self._account("second-sub", is_login_identity=False)
+
+        resp = self.client.delete(f"/api/v2/integrations/account/{second.id}/")
+
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(ConnectedAccount.objects.filter(id=second.id).exists())
+
+    def test_email_signup_user_can_disconnect_their_only_google_account(self):
+        """An email/password user's Google row is a pure API connection.
+        The guard keys on `primary_auth_provider`, so it must not touch
+        this case."""
+        self.user.primary_auth_provider = "email"
+        self.user.save(update_fields=["primary_auth_provider"])
+        account = self._account("api-only-sub")
+
+        resp = self.client.delete(f"/api/v2/integrations/account/{account.id}/")
+
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(ConnectedAccount.objects.filter(id=account.id).exists())

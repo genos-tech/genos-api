@@ -534,9 +534,29 @@ class IntegrationsDisconnectAccountView(APIView):
         return _disconnect_account(account)
 
 
+def _is_last_signin_route(account: ConnectedAccount) -> bool:
+    """True if deleting this row would leave the user unable to sign in.
+
+    Belt-and-braces alongside the `is_login_identity` flag. That flag is
+    populated by a data migration; had the backfill ever failed to match,
+    an OAuth-signup user's row would look ordinary — and therefore
+    deletable — while being the only credential they have, since signup
+    calls `set_unusable_password()`. The result is an unrecoverable
+    lockout, which is worth deriving the same fact a second, independent
+    way to prevent.
+    """
+    if account.provider != account.user.primary_auth_provider:
+        return False
+    return (
+        not ConnectedAccount.objects.filter(user=account.user, provider=account.provider)
+        .exclude(pk=account.pk)
+        .exists()
+    )
+
+
 def _disconnect_account(account: ConnectedAccount) -> Response:
     """Shared delete + login-identity guard for both disconnect routes."""
-    if account.is_login_identity:
+    if account.is_login_identity or _is_last_signin_route(account):
         return Response(
             {
                 "detail": (
