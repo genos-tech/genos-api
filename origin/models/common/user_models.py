@@ -285,12 +285,25 @@ class ConnectedAccount(models.Model):
                 name="connected_account_one_login_identity_per_user",
             ),
         ]
-        # Deterministic ordering is load-bearing, not cosmetic: several
-        # call sites resolve "the user's Google account" with `.first()`
-        # and, now that a user can have several, an unordered queryset
-        # has no defined winner in Postgres — the same task could sync
-        # to a different account run to run. Login identity first, then
-        # oldest, then id as a final tiebreak.
+        # Load-bearing, not cosmetic. DO NOT REMOVE without first fixing
+        # every bare `.first()` on this model.
+        #
+        # Several call sites resolve "the user's Google account" with an
+        # unfiltered `.filter(user=..., provider="google").first()`. Now
+        # that a user can hold several, such a queryset has no defined
+        # winner in Postgres without an ORDER BY — so the same task could
+        # sync to a different account run to run, PATCH an event id the
+        # account has never seen, take the 404 branch in
+        # `sync_task_event`, and permanently clear the task's link.
+        #
+        # Django applies this ordering to every unordered queryset on the
+        # model, which is what makes those call sites safe as written
+        # (notably `search_engine.agent.calendar`, deliberately left
+        # untouched so this change doesn't drag the agent eval suite in).
+        # `origin.services.oauth.accounts` restates the same ordering
+        # explicitly for the paths that shouldn't depend on it implicitly.
+        #
+        # Login identity first, then oldest, then id as a final tiebreak.
         ordering = ["-is_login_identity", "ts_created_at", "id"]
 
     def __str__(self) -> str:

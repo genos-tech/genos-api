@@ -29,7 +29,6 @@ import requests
 
 from origin.models.common.user_models import ConnectedAccount, CustomUser
 from origin.search_engine.agent.tools.base import ToolError, wrap_workspace_content
-from origin.services.oauth.accounts import default_account_for
 from origin.services.oauth.tokens import ReauthRequired, get_valid_access_token
 
 logger = logging.getLogger(__name__)
@@ -55,11 +54,7 @@ def resolve_google_calendar_account(user_id: str) -> ConnectedAccount:
     except CustomUser.DoesNotExist:
         raise ToolError("Current user record not found.")
 
-    # Deterministic default rather than an arbitrary row. The agent
-    # tools don't take an account argument yet, so a user with a work
-    # and a personal Google account gets their default one here — see
-    # the multi-account follow-up for teaching the tools to choose.
-    account = default_account_for(user, "google")
+    account = ConnectedAccount.objects.filter(user=user, provider="google").first()
     if account is None:
         raise ToolError(
             "Google is not connected for this user. Direct them to "
