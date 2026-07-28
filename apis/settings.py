@@ -331,10 +331,38 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
+    # NOT shortened, deliberately. A shorter access token would be the
+    # normal hardening move, but the frontend has no proactive refresh:
+    # `AuthContext` only refreshes when `accessToken` is null, and
+    # nothing nulls it on expiry (no `exp` watcher, and the axios
+    # interceptor deliberately skips 401 because it assumes AuthContext
+    # owns that path). So an expired access token silently breaks the
+    # session until the user reloads the page. At 24h almost everyone
+    # reloads first; at 30 minutes it would happen to everyone, twice an
+    # hour. Shortening this is blocked on adding proactive refresh
+    # frontend-side — see operations/AUTH_SECURITY_PLAN.md §3.1.
     "ACCESS_TOKEN_LIFETIME": timedelta(hours=24),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
+    # Bind every token to the password it was minted under. simplejwt
+    # stamps an md5 of `user.password` into the token as a
+    # `hash_password` claim (see REVOKE_TOKEN_CLAIM) and rejects any
+    # token whose claim no longer matches on every authenticated
+    # request.
+    #
+    # This is what makes a password reset actually evict an attacker.
+    # Without it, resetting your password terminates NOTHING: the only
+    # `.blacklist()` call in this codebase is in LogoutView, acting on
+    # the one refresh token in the cookie it was handed. Because
+    # ROTATE_REFRESH_TOKENS mints a fresh 7-day token on every refresh,
+    # a stolen session survived a password reset indefinitely — which
+    # is the exact scenario a password reset exists to end.
+    #
+    # Safe for OAuth users: `set_unusable_password()` is called only in
+    # the signup branch of the OAuth callback, never on later logins,
+    # so their password field is stable and so is the claim.
+    "CHECK_REVOKE_TOKEN": True,
     "ALGORITHM": "HS256",
     "SIGNING_KEY": os.environ.get("JWT_SECRET_KEY", "your_secret_key"),
     "AUTH_HEADER_TYPES": ("Bearer",),
