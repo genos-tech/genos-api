@@ -184,11 +184,15 @@ def resolve_user_choice(
 # Effort levels (AGENT_EFFORT_LEVELS)                                          #
 # --------------------------------------------------------------------------- #
 
-# The default when a user has never expressed ANY preference. Medium,
-# because the medium profile is pinned byte-identical to today's
-# default experience (the MEDIUM INVARIANT in llm_models.yaml) — so
-# defaulting here changes nothing for that cohort at the flag flip.
-DEFAULT_EFFORT = "medium"
+# The default when a user has never expressed ANY preference. Low, by
+# product decision (2026-07-28): a first-touch user gets the cheapest
+# rung and upgrades deliberately. (The original flag-flip default was
+# medium — pinned byte-identical to the legacy experience so the flip
+# changed nothing for that cohort; that migration concern has passed.)
+# Users whose legacy saved model derives a different rung, and users
+# who ever picked an effort explicitly, are unaffected — this only
+# covers "no preference at all".
+DEFAULT_EFFORT = "low"
 
 
 def resolve_user_effort(
