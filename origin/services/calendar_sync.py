@@ -25,6 +25,7 @@ from typing import Literal, Optional
 import requests
 
 from origin.models.common.user_models import ConnectedAccount
+from origin.services.oauth.accounts import default_account_for
 from origin.services.oauth.tokens import ReauthRequired, get_valid_access_token
 
 logger = logging.getLogger(__name__)
@@ -45,10 +46,21 @@ _DONE_STATUS_VALUES = frozenset({"closed", "done", "completed"})
 
 
 def get_google_connected_account(user) -> Optional[ConnectedAccount]:
-    """Look up the user's connected Google account, if any."""
+    """Look up the account task auto-sync should write to.
+
+    A user can hold several Google accounts, but `TaskMaster` only
+    stores `linked_calendar_id` / `linked_calendar_event_id` — there's
+    no column recording *which* account owns the event. So auto-sync is
+    pinned to the deterministic default account rather than an arbitrary
+    one: if the resolution drifted between runs we'd PATCH an event id
+    against an account that has never seen it, take the 404 branch in
+    `sync_task_event`, and permanently clear the task's link (that path
+    deliberately never re-creates). Pinning keeps the invariant that
+    every synced event lives on one known account.
+    """
     if user is None:
         return None
-    return ConnectedAccount.objects.filter(user=user, provider="google").first()
+    return default_account_for(user, "google")
 
 
 def _is_done(task) -> bool:

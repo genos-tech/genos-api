@@ -104,10 +104,14 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     ts_last_login_at = models.DateTimeField(null=True, auto_now=True)
     # Avoid conflicts with Django's default User model
     groups = models.ManyToManyField(
-        "auth.Group", related_name="customuser_groups", blank=True  # Unique related name
+        "auth.Group",
+        related_name="customuser_groups",
+        blank=True,  # Unique related name
     )
     user_permissions = models.ManyToManyField(
-        "auth.Permission", related_name="customuser_permissions", blank=True  # Unique related name
+        "auth.Permission",
+        related_name="customuser_permissions",
+        blank=True,  # Unique related name
     )
 
     is_demo = models.BooleanField(default=False, db_index=True)
@@ -208,23 +212,39 @@ CONNECTED_PROVIDER_CHOICES = [
 ]
 
 
+# Providers a user may connect more than one account for. Google is
+# multi-account because people routinely keep a work and a personal
+# calendar under separate Google identities and want both visible in
+# one place. Every other provider stays capped at one account per user
+# (enforced by the conditional constraint below) — nothing in the
+# GitHub integration is written to disambiguate between two accounts.
+MULTI_ACCOUNT_PROVIDERS = ("google",)
+
+
 class ConnectedAccount(models.Model):
     """A user's OAuth grant for a third-party provider.
 
     Two roles in one table:
-      1. Login identity — when `provider` matches the user's
-         `primary_auth_provider`, this row was created at signup and
-         signing in with that provider again finds the user via the
-         (provider, provider_user_id) lookup. Cannot be disconnected
-         while the account exists.
-      2. Pure API connection — when `provider` differs from the user's
-         primary, this row exists only so we can call the provider's
-         APIs on behalf of the user (Calendar events, GitHub PRs).
-         Can be freely connected and disconnected.
+      1. Login identity — the row created at signup, flagged by
+         `is_login_identity`. Signing in with that provider again finds
+         the user via the (provider, provider_user_id) lookup. Cannot be
+         disconnected while the account exists.
+      2. Pure API connection — a row that exists only so we can call the
+         provider's APIs on behalf of the user (Calendar events, GitHub
+         PRs). Can be freely connected and disconnected.
 
-    The two UniqueConstraints below enforce: (a) each provider identity
-    (e.g. each Google account) maps to at most one of our users, and
-    (b) a single user has at most one connection per provider.
+    A user may hold several rows for the same provider when that
+    provider is in `MULTI_ACCOUNT_PROVIDERS` — at most one of them is
+    the login identity. Note that "is this the login identity" is NOT
+    derivable from `provider == user.primary_auth_provider`: a user who
+    signed up with Google and then connected a second, personal Google
+    account has two google rows, only one of which they're able to sign
+    in with. Read the flag, never compare the provider string.
+
+    The UniqueConstraints below enforce: (a) each provider identity
+    (e.g. each Google account) maps to at most one of our users,
+    (b) a single user has at most one connection per single-account
+    provider, and (c) a user has at most one login identity overall.
 
     Access / refresh tokens are stored encrypted with Fernet — never
     write the plaintext token to the DB directly.
@@ -241,6 +261,10 @@ class ConnectedAccount(models.Model):
     access_token_encrypted = models.TextField()
     refresh_token_encrypted = models.TextField(blank=True, null=True)
     access_token_expires_at = models.DateTimeField(blank=True, null=True)
+    # True only for the row this user signs in with. Set by the OAuth
+    # `login` flow at signup; connect-intent rows are always False.
+    # Disconnecting this row is refused — it would lock the user out.
+    is_login_identity = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
@@ -252,12 +276,46 @@ class ConnectedAccount(models.Model):
             ),
             models.UniqueConstraint(
                 fields=["user", "provider"],
-                name="connected_account_unique_per_user_provider",
+                condition=~models.Q(provider__in=MULTI_ACCOUNT_PROVIDERS),
+                name="connected_account_unique_per_user_single_provider",
+            ),
+            models.UniqueConstraint(
+                fields=["user"],
+                condition=models.Q(is_login_identity=True),
+                name="connected_account_one_login_identity_per_user",
             ),
         ]
+        # Load-bearing, not cosmetic. DO NOT REMOVE without first fixing
+        # every bare `.first()` on this model.
+        #
+        # Several call sites resolve "the user's Google account" with an
+        # unfiltered `.filter(user=..., provider="google").first()`. Now
+        # that a user can hold several, such a queryset has no defined
+        # winner in Postgres without an ORDER BY — so the same task could
+        # sync to a different account run to run, PATCH an event id the
+        # account has never seen, take the 404 branch in
+        # `sync_task_event`, and permanently clear the task's link.
+        #
+        # Django applies this ordering to every unordered queryset on the
+        # model, which is what makes those call sites safe as written
+        # (notably `search_engine.agent.calendar`, deliberately left
+        # untouched so this change doesn't drag the agent eval suite in).
+        # `origin.services.oauth.accounts` restates the same ordering
+        # explicitly for the paths that shouldn't depend on it implicitly.
+        #
+        # Login identity first, then oldest, then id as a final tiebreak.
+        ordering = ["-is_login_identity", "ts_created_at", "id"]
 
     def __str__(self) -> str:
         return f"{self.provider}:{self.provider_email or self.provider_user_id} → {self.user_id}"
+
+    @property
+    def label(self) -> str:
+        """Human-facing name for this account. `provider_email` is how a
+        user tells their work account from their personal one, so it's
+        the label everywhere in the UI; fall back to the opaque provider
+        id only when Google didn't return an email."""
+        return self.provider_email or self.provider_user_id
 
 
 class GithubWebhookRegistration(models.Model):

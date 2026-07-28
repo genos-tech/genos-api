@@ -309,8 +309,21 @@ class TestGoogleProvider(TestCase):
             state="s", intent="connect", redirect_uri="https://app/cb"
         )
         self.assertIn("access_type=offline", url)
-        self.assertIn("prompt=consent", url)
         self.assertIn("calendar", url)
+        # `consent` guarantees a refresh_token comes back.
+        self.assertIn("consent", url)
+
+    def test_authorize_url_connect_offers_the_account_chooser(self):
+        """`select_account` is what makes connecting a *second* Google
+        account possible. With `prompt=consent` alone Google re-consents
+        whichever account the browser is already signed into and returns
+        the same `sub`, so the callback just refreshes the existing row
+        — the user clicks "Add account" and nothing appears. `prompt`
+        is a space-delimited list, urlencoded here as `+`."""
+        url = self.provider.authorize_url(
+            state="s", intent="connect", redirect_uri="https://app/cb"
+        )
+        self.assertIn("prompt=select_account+consent", url)
 
     @patch("origin.services.oauth.google.requests.post")
     def test_exchange_code_parses_token_and_scopes(self, mock_post):

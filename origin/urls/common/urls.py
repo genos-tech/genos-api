@@ -15,6 +15,7 @@ from origin.views.common.billing_views import (
 )
 from origin.views.common.calendar_views import (
     CalendarEventDetailView,
+    CalendarEventsAggregateView,
     CalendarEventsView,
     CalendarListView,
 )
@@ -41,6 +42,7 @@ from origin.views.common.notification_views import (
     PushSubscriptionView,
 )
 from origin.views.common.oauth_views import (
+    IntegrationsDisconnectAccountView,
     IntegrationsDisconnectView,
     IntegrationsListView,
     OAuthCallbackView,
@@ -99,6 +101,15 @@ urlpatterns = [
         IntegrationsListView.as_view(),
         name="integrations_list",
     ),
+    # Must precede the `<str:provider_name>` route below. It has an
+    # extra path segment so the two can't actually collide today, but
+    # keeping the more specific pattern first means a future change to
+    # either one can't silently shadow this.
+    path(
+        "api/v2/integrations/account/<uuid:account_id>/",
+        IntegrationsDisconnectAccountView.as_view(),
+        name="integrations_disconnect_account",
+    ),
     path(
         "api/v2/integrations/<str:provider_name>/",
         IntegrationsDisconnectView.as_view(),
@@ -106,6 +117,13 @@ urlpatterns = [
     ),
     # Google Calendar
     path("api/v2/calendar/list/", CalendarListView.as_view(), name="calendar_list"),
+    # Before the `<str:event_id>` detail route — "aggregate" would
+    # otherwise be captured as an event id.
+    path(
+        "api/v2/calendar/events/aggregate/",
+        CalendarEventsAggregateView.as_view(),
+        name="calendar_events_aggregate",
+    ),
     path(
         "api/v2/calendar/events/",
         CalendarEventsView.as_view(),
