@@ -73,18 +73,19 @@ class ResolveUserEffortTests(SimpleTestCase):
 
     def test_stale_legacy_model_falls_back_to_default_effort(self):
         choice = resolve_user_effort("claude", "", "claude-retired-model")
-        self.assertEqual(choice.effort, "medium")
-        self.assertEqual(choice.model, "claude-sonnet-5")
+        self.assertEqual(choice.effort, "low")
+        self.assertEqual(choice.model, "claude-haiku-4-5")
 
-    def test_no_preference_at_all_is_medium_on_the_default_provider(self):
-        """Medium == today's default experience (the medium invariant),
-        so this cohort — everyone who never opened the picker — is
-        untouched by the flip."""
+    def test_no_preference_at_all_is_low_on_the_default_provider(self):
+        """Low is the product default (2026-07-28): a first-touch user
+        starts on the cheapest rung and upgrades deliberately. Users
+        with a derivable legacy model keep their rung — see
+        test_legacy_model_derives_its_rungs_effort."""
         with override_settings(
             SEARCH_ENGINE=_se(LLM_PROVIDER="gemini", GEMINI_MODEL="gemini-3.6-flash")
         ):
             choice = resolve_user_effort("", "", "")
-        self.assertEqual(choice, LlmChoice("gemini", "gemini-3.6-flash", "medium"))
+        self.assertEqual(choice, LlmChoice("gemini", "gemini-3.5-flash-lite", "low"))
 
     def test_unknown_provider_falls_back_with_warning(self):
         with self.assertLogs("origin.search_engine.llm.choice", level="WARNING"):
@@ -94,7 +95,7 @@ class ResolveUserEffortTests(SimpleTestCase):
 
     def test_invalid_effort_string_is_treated_as_unset(self):
         choice = resolve_user_effort("claude", "maximum", "")
-        self.assertEqual(choice.effort, "medium")
+        self.assertEqual(choice.effort, "low")
 
 
 class EffortSeamsTests(SimpleTestCase):
