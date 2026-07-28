@@ -34,6 +34,8 @@ from origin.services.oauth.accounts import (
     default_account_for,
     resolve_account_for,
 )
+from origin.services.oauth.base import ProviderProfile, TokenResponse
+from origin.views.common.oauth_views import OAuthCallbackView, _can_sign_in_with
 
 User = get_user_model()
 
@@ -672,3 +674,103 @@ class DisconnectLockoutGuardTests(TestCase):
 
         self.assertEqual(resp.status_code, 204)
         self.assertFalse(ConnectedAccount.objects.filter(id=account.id).exists())
+
+
+class LoginRouteIsolationTests(TestCase):
+    """Connecting an account for its calendar must not make it a way to
+    sign in.
+
+    `_handle_login` resolves a user purely from
+    (provider, provider_user_id), so without a gate ANY connected account
+    authenticates a login. That was latent while a user could hold only
+    one Google row — it was always their signup row — and becomes real
+    the moment a second row can exist: someone adding their personal
+    Gmail to see one more calendar would be handing that Google account
+    the keys to their work Genos account.
+    """
+
+    def setUp(self):
+        self.signup_user = User.objects.create_user(
+            username="signup", email="work@example.com", password="pw123456"
+        )
+        self.signup_user.primary_auth_provider = "google"
+        self.signup_user.save(update_fields=["primary_auth_provider"])
+        self.signup_row = ConnectedAccount.objects.create(
+            user=self.signup_user,
+            provider="google",
+            provider_user_id="work-sub",
+            provider_email="work@example.com",
+            access_token_encrypted="placeholder",
+            is_login_identity=True,
+        )
+
+    def _account(self, user, provider_user_id: str, **kwargs) -> ConnectedAccount:
+        return ConnectedAccount.objects.create(
+            user=user,
+            provider="google",
+            provider_user_id=provider_user_id,
+            access_token_encrypted="placeholder",
+            **kwargs,
+        )
+
+    def test_signup_row_can_sign_in(self):
+        self.assertTrue(_can_sign_in_with(self.signup_row))
+
+    def test_calendar_only_second_account_cannot_sign_in(self):
+        """The case this gate exists for."""
+        personal = self._account(self.signup_user, "personal-sub")
+        self.assertFalse(_can_sign_in_with(personal))
+
+    def test_google_connected_by_an_email_signup_user_cannot_sign_in(self):
+        """An email/password user's Google row is a pure API connection.
+        They keep their password, so refusing it here locks nobody out."""
+        email_user = User.objects.create_user(
+            username="emailer", email="e@example.com", password="pw123456"
+        )
+        row = self._account(email_user, "e-sub")
+        self.assertFalse(_can_sign_in_with(row))
+
+    def test_sole_signup_row_still_works_if_the_flag_is_wrong(self):
+        """Fail-safe: a provider-signup user has an unusable password, so
+        a lost `is_login_identity` must not lock them out."""
+        lone_user = User.objects.create_user(
+            username="lone", email="lone@example.com", password="pw123456"
+        )
+        lone_user.primary_auth_provider = "google"
+        lone_user.save(update_fields=["primary_auth_provider"])
+        row = self._account(lone_user, "lone-sub", is_login_identity=False)
+
+        self.assertTrue(_can_sign_in_with(row))
+
+    def test_the_failsafe_does_not_let_a_second_account_in(self):
+        """The fallback keys on being the user's ONLY row for the
+        provider, so it can't be widened into the very hole the gate
+        closes."""
+        second = self._account(self.signup_user, "second-sub", is_login_identity=False)
+        self.assertFalse(_can_sign_in_with(second))
+
+    @patch("origin.views.common.oauth_views.OAuthCallbackView._issue_jwt")
+    def test_callback_refuses_login_via_a_calendar_only_account(self, mock_jwt):
+        """End to end through the callback: no session is minted and the
+        user is bounced to an explanatory failure page."""
+        personal = self._account(self.signup_user, "personal-sub")
+        view = OAuthCallbackView()
+
+        resp = view._handle_login(
+            provider_name="google",
+            profile=ProviderProfile(
+                provider_user_id=personal.provider_user_id,
+                email="personal@example.com",
+                display_name="Personal",
+            ),
+            token_response=TokenResponse(
+                access_token="tok",
+                refresh_token="ref",
+                expires_in_seconds=3600,
+                granted_scopes=CALENDAR_SCOPES,
+            ),
+            next_path="/workspace",
+        )
+
+        self.assertIn("not_a_login_account", resp.url)
+        mock_jwt.assert_not_called()

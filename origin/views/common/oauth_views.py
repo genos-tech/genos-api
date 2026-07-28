@@ -288,6 +288,19 @@ class OAuthCallbackView(APIView):
         )
 
         if existing:
+            # Connecting an account for its CALENDAR must not silently
+            # turn it into a way to sign in. This lookup is keyed only on
+            # the provider identity, so without this gate any account the
+            # user attached for API access would authenticate a login —
+            # somebody adding their personal Gmail to see one more
+            # calendar would be handing that Google account the keys to
+            # their work Genos account.
+            #
+            # Latent before multi-account (a user could only ever hold
+            # one Google row, and it was their signup row), reachable the
+            # moment a second row can exist.
+            if not _can_sign_in_with(existing):
+                return HttpResponseRedirect(_frontend_failure_url(reason="not_a_login_account"))
             user = existing.user
             self._save_tokens(existing, token_response)
         else:
@@ -532,6 +545,24 @@ class IntegrationsDisconnectAccountView(APIView):
         if account is None:
             return Response({"detail": "Not connected."}, status=status.HTTP_404_NOT_FOUND)
         return _disconnect_account(account)
+
+
+def _can_sign_in_with(account: ConnectedAccount) -> bool:
+    """Whether this row may authenticate a LOGIN.
+
+    True only for the row the user established as their sign-in route —
+    their signup row. An account attached later for API access (a second
+    Google account added to see its calendar) is not a credential and
+    must never be accepted here.
+
+    `_is_last_signin_route` is the fallback for the same reason it guards
+    deletion: if `is_login_identity` were ever wrong, a provider-signup
+    user has an unusable password and would be locked out with no way
+    back in. It only widens the gate for a user whose *only* row for that
+    provider is their signup row, so a second, calendar-only account
+    still can't slip through.
+    """
+    return account.is_login_identity or _is_last_signin_route(account)
 
 
 def _is_last_signin_route(account: ConnectedAccount) -> bool:
