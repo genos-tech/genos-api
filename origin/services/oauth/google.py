@@ -46,11 +46,20 @@ class GoogleOAuthProvider(OAuthProvider):
             "state": state,
             "include_granted_scopes": "true",
         }
-        # `access_type=offline` + `prompt=consent` are only meaningful for
-        # the `connect` flow, which needs a refresh_token to call the
+        # `access_type=offline` + `prompt` are only meaningful for the
+        # `connect` flow, which needs a refresh_token to call the
         # Calendar API on the user's behalf later. Google only returns a
-        # refresh_token on first consent unless `prompt=consent` is set,
-        # so we force a re-consent on every connect to guarantee one.
+        # refresh_token on first consent unless `consent` is forced, so
+        # we force a re-consent on every connect to guarantee one.
+        #
+        # `select_account` is what makes connecting a *second* Google
+        # account possible at all. `prompt=consent` on its own re-consents
+        # whichever account the browser is currently signed into and hands
+        # back the same `sub`, so the callback finds the existing row,
+        # refreshes it, and the user sees nothing new — they'd click "Add
+        # account" and get a no-op. `prompt` takes a space-delimited list;
+        # `select_account consent` shows the account chooser first and
+        # then consents whichever account was picked.
         #
         # The `login` flow only identifies the user (openid/email/profile);
         # we use our own JWT for ongoing access and never touch the
@@ -60,7 +69,7 @@ class GoogleOAuthProvider(OAuthProvider):
         # screen instead of having to re-approve every time.
         if intent == "connect":
             params["access_type"] = "offline"
-            params["prompt"] = "consent"
+            params["prompt"] = "select_account consent"
         return f"{AUTHORIZE_URL}?{urlencode(params)}"
 
     def exchange_code(self, *, code: str, redirect_uri: str) -> TokenResponse:

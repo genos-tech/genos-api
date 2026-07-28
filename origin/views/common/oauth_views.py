@@ -10,10 +10,15 @@ Two flows, generalized over provider:
       attach the ConnectedAccount to the current user (intent=connect),
       then 302 to the frontend bounce page.
 
-Plus two connection-management endpoints:
+Plus three connection-management endpoints:
 
-  GET    /api/v2/integrations/me/         — list current user's ConnectedAccounts
-  DELETE /api/v2/integrations/{provider}/ — disconnect (forbidden if primary)
+  GET    /api/v2/integrations/me/            — list current user's ConnectedAccounts
+  DELETE /api/v2/integrations/account/{id}/  — disconnect one specific account
+  DELETE /api/v2/integrations/{provider}/    — legacy by-provider disconnect
+
+A user may hold several accounts for a multi-account provider (Google),
+so "disconnect" has to name *which* one — hence the by-id route. Either
+route refuses to delete the row the user signs in with.
 """
 
 from __future__ import annotations
@@ -36,7 +41,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from origin.models.common.user_models import ConnectedAccount
+from origin.models.common.user_models import MULTI_ACCOUNT_PROVIDERS, ConnectedAccount
 from origin.services import crypto
 from origin.services.oauth.base import FlowIntent, OAuthProvider, ProviderProfile, TokenResponse
 from origin.services.oauth.registry import get_provider, supported_provider_names
@@ -93,6 +98,19 @@ def _sign_state(*, intent: FlowIntent, user_id: Optional[str], next_path: str) -
 
 def _verify_state(state: str) -> dict:
     return signing.loads(state, salt=STATE_SALT, max_age=STATE_TOKEN_MAX_AGE_SECONDS)
+
+
+def _provider_allows_additional_account(user, provider_name: str) -> bool:
+    """True if `user` may attach one more account for this provider.
+
+    Multi-account providers (Google) are always allowed. Everything else
+    is capped at one, matching the conditional unique constraint on
+    `ConnectedAccount` — checked here so hitting the cap redirects to a
+    readable failure page instead of raising IntegrityError mid-callback.
+    """
+    if provider_name in MULTI_ACCOUNT_PROVIDERS:
+        return True
+    return not ConnectedAccount.objects.filter(user=user, provider=provider_name).exists()
 
 
 def _client_configured(provider_name: str) -> bool:
@@ -303,6 +321,12 @@ class OAuthCallbackView(APIView):
                 provider_user_id=profile.provider_user_id,
                 provider_email=profile.email,
                 scopes=token_response.granted_scopes,
+                # This row is what the user signs in with, so it can
+                # never be disconnected. Recorded as a flag rather than
+                # inferred from `provider == primary_auth_provider`,
+                # which stops being a valid test once the user connects
+                # a second account for the same provider.
+                is_login_identity=True,
             )
             self._save_tokens(existing, token_response, save=False)
             existing.save()
@@ -329,6 +353,12 @@ class OAuthCallbackView(APIView):
         except User.DoesNotExist:
             return HttpResponseRedirect(_frontend_failure_url(reason="not_authenticated"))
 
+        # Keyed on the *provider identity*, not on (user, provider) —
+        # which is what makes connecting a second Google account work:
+        # a different Google identity simply doesn't match here and
+        # falls through to the insert branch. Re-running connect with an
+        # account the user already holds still lands on the update
+        # branch and just refreshes its tokens/scopes.
         existing = (
             ConnectedAccount.objects.select_for_update()
             .filter(provider=provider_name, provider_user_id=profile.provider_user_id)
@@ -338,6 +368,15 @@ class OAuthCallbackView(APIView):
             return HttpResponseRedirect(
                 _frontend_failure_url(reason="already_connected_to_other_user")
             )
+
+        if existing is not None and existing.user_id == user.id:
+            pass
+        elif not _provider_allows_additional_account(user, provider_name):
+            # Single-account provider (GitHub) that the user has already
+            # connected under a different identity. Without this check
+            # the insert would trip the DB constraint and surface as a
+            # 500 on the callback; this turns it into a clean redirect.
+            return HttpResponseRedirect(_frontend_failure_url(reason="provider_already_connected"))
 
         if existing is None:
             existing = ConnectedAccount(
@@ -409,17 +448,33 @@ class IntegrationsListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request: Request):
-        accounts = ConnectedAccount.objects.filter(user=request.user).order_by("provider")
+        # Ordered by (provider, then the model's own deterministic
+        # ordering) so a user's Google accounts always come back in a
+        # stable sequence — the frontend renders them as a picker and a
+        # list that reshuffles between loads is unusable.
+        accounts = ConnectedAccount.objects.filter(user=request.user).order_by(
+            "provider", "-is_login_identity", "ts_created_at", "id"
+        )
         return Response(
             {
                 "primary_auth_provider": request.user.primary_auth_provider,
                 "connections": [
                     {
+                        # `id` is what every per-account operation keys
+                        # on (calendar reads/writes, disconnect). Without
+                        # it a client holding two Google accounts has no
+                        # way to address either one.
+                        "id": str(a.id),
                         "provider": a.provider,
                         "provider_email": a.provider_email,
+                        "label": a.label,
                         "scopes": a.scopes,
                         "connected_at": a.ts_created_at,
-                        "is_primary": a.provider == request.user.primary_auth_provider,
+                        # Read from the flag, not from a provider-string
+                        # comparison: with two Google rows the old
+                        # comparison marked both as primary and made
+                        # both undeletable.
+                        "is_primary": a.is_login_identity,
                     }
                     for a in accounts
                 ],
@@ -428,8 +483,14 @@ class IntegrationsListView(APIView):
 
 
 class IntegrationsDisconnectView(APIView):
-    """Delete a ConnectedAccount. Refuses if it's the user's primary
-    login method — they'd lock themselves out."""
+    """Delete a ConnectedAccount by provider.
+
+    Legacy route, kept so older clients keep working. It refuses when
+    the user holds more than one account for the provider: this endpoint
+    can't express *which* one to drop, and deleting all of them because
+    the caller couldn't say otherwise would be a silent data-loss bug.
+    Those callers get pointed at the by-id route below.
+    """
 
     permission_classes = [permissions.IsAuthenticated]
 
@@ -439,19 +500,50 @@ class IntegrationsDisconnectView(APIView):
                 {"detail": f"Unknown provider: {provider_name}"},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        if provider_name == request.user.primary_auth_provider:
+        accounts = list(ConnectedAccount.objects.filter(user=request.user, provider=provider_name))
+        if not accounts:
+            return Response({"detail": "Not connected."}, status=status.HTTP_404_NOT_FOUND)
+        if len(accounts) > 1:
             return Response(
                 {
-                    "detail": (
-                        "Cannot disconnect the provider you signed up with. "
-                        "Delete the account instead."
-                    )
+                    "detail": "multiple_accounts_connected",
+                    "message": (
+                        "Several accounts are connected for this provider. "
+                        "Disconnect a specific one by id instead."
+                    ),
                 },
-                status=status.HTTP_400_BAD_REQUEST,
+                status=status.HTTP_409_CONFLICT,
             )
-        deleted, _ = ConnectedAccount.objects.filter(
-            user=request.user, provider=provider_name
-        ).delete()
-        if deleted == 0:
+        return _disconnect_account(accounts[0])
+
+
+class IntegrationsDisconnectAccountView(APIView):
+    """DELETE /api/v2/integrations/account/<account_id>/ — drop one
+    specific connected account. This is the route the UI uses; it's the
+    only one that can express "disconnect my personal Google, keep my
+    work Google"."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request: Request, account_id: str):
+        # Scoped to the requesting user: an account id belonging to
+        # somebody else must look identical to one that doesn't exist.
+        account = ConnectedAccount.objects.filter(user=request.user, id=account_id).first()
+        if account is None:
             return Response({"detail": "Not connected."}, status=status.HTTP_404_NOT_FOUND)
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return _disconnect_account(account)
+
+
+def _disconnect_account(account: ConnectedAccount) -> Response:
+    """Shared delete + login-identity guard for both disconnect routes."""
+    if account.is_login_identity:
+        return Response(
+            {
+                "detail": (
+                    "Cannot disconnect the account you signed up with. Delete the account instead."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    account.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
