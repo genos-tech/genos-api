@@ -819,11 +819,32 @@ def _milestone_source(
 
 
 def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[dict[str, Any]]:
-    """Build UI source dicts from a non-search read tool's result.
+    """Build UI source dicts from a non-search tool's result, marking
+    sources produced by a WRITE tool (`requires_approval`) with
+    `operated: true`.
+
+    The mark is the frontend's guarantee that every object the agent
+    created/updated surfaces as a clickable chip even when the model's
+    prose forgets to cite it (`citedChipSources` keeps operated sources
+    unconditionally; ordinary read sources it drops when uncited).
+    Marked here — the one funnel every emit path shares (the resume
+    path's write pass, `_drive_loop`, and `reconstruct_sources_for_run`)
+    — rather than per branch, so a new write tool can't forget it.
+    """
+    sources = _sources_from_tool_result(call_name, result)
+    if sources and getattr(REGISTRY.get(call_name), "requires_approval", False):
+        for s in sources:
+            s["operated"] = True
+    return sources
+
+
+def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Per-tool source-dict mapping — see `_ui_sources_from_tool_result`.
 
     Returns [] for tools whose results don't map to a clickable entity
     (e.g. analytics aggregations without per-row ids, get_current_user,
-    get_team_members — no user-detail view exists to link to).
+    get_team_members — no user-detail view exists to link to; calendar
+    events, which have no Spotlight entity type or citation grammar).
 
     Sources are deduped upstream by (entity_type, entity_id), so emitting
     the same task from both `list_tasks` and `search_knowledge_base` in
@@ -917,6 +938,32 @@ def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list
             for row in (result.get("updated") or [])[:10]
             if row.get("task_id")
         ]
+
+    if call_name in ("create_task", "update_task", "assign_task", "add_comment"):
+        # Single-task write tools → chip the operated task, so every
+        # approved write hands the user a clickable ref to what changed.
+        # assign_task / add_comment don't echo title/project_id —
+        # display-id hydration and friendly titles backfill downstream.
+        tid = result.get("task_id")
+        if not tid:
+            return []
+        return [
+            _task_source(
+                tid,
+                result.get("title"),
+                result.get("project_id"),
+                display_id=result.get("display_id"),
+            )
+        ]
+
+    if call_name in ("create_todo_item", "update_todo_item"):
+        # Todo write tools → chip the operated item (same entity_id
+        # shape as the todo chunker: `todo:<local_date>:item:<id>`).
+        iid = result.get("item_id")
+        local_date = result.get("local_date")
+        if not iid or not local_date:
+            return []
+        return [_todo_source(iid, result.get("title"), local_date)]
 
     if call_name == "list_projects":
         return [
@@ -1213,8 +1260,16 @@ def reconstruct_sources_for_run(run) -> list[dict[str, Any]]:
             new_sources = _ui_sources_from_tool_result(step.tool_name, result)
         for s in new_sources:
             eid = s.get("entity_id")
-            if eid and eid not in seen_by_id:
+            if not eid:
+                continue
+            if eid not in seen_by_id:
                 seen_by_id[eid] = s
+            elif s.get("operated"):
+                # First-wins dedup, but the operated mark must survive a
+                # read of the same entity earlier in the run (fetch_task
+                # then update_task): the frontend's always-chip guarantee
+                # rides on the flag.
+                seen_by_id[eid]["operated"] = True
     return list(seen_by_id.values())
 
 
