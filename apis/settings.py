@@ -1379,6 +1379,16 @@ SEARCH_ENGINE["AI_CEILING_PAUSE"] = (
     os.environ.get("AI_CEILING_PAUSE", "false").lower() == "true"
 )
 
+# Free-tier daily ask circuit breaker (V2 §4.3) — OPT-IN, off by
+# default (product decision 2026-07-28): with credits authoritative a
+# user with balance left must be able to spend it, so the only
+# customer-facing stop is the mid-run credits-exhausted stop. Flip this
+# only for active abuse (scripted signup farms); the monthly cost
+# ceilings above remain the financial backstop regardless.
+SEARCH_ENGINE["AI_FREE_DAILY_BREAKER"] = (
+    os.environ.get("AI_FREE_DAILY_BREAKER", "false").lower() == "true"
+)
+
 # The cost-benchmark regression threshold, in percent: `ai_credit_benchmark
 # --check-baseline` exits non-zero when the fixed suite's TOKEN total
 # exceeds the stored baseline by more than this. Tokens, not yen — a

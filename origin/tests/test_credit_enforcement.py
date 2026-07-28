@@ -8,7 +8,9 @@ What flipping `AI_CREDITS_AUTHORITATIVE` must do, and must not do:
   2. Per-model daily caps and the web-search cap stop applying. They are
      cost-shaping devices credits subsume — enforcing both would refuse
      requests the customer has already paid for.
-  3. Free keeps a daily circuit breaker as ABUSE protection, and its
+  3. Free keeps a daily circuit breaker as ABUSE protection — OPT-IN
+     via AI_FREE_DAILY_BREAKER since 2026-07-28 (off by default: a user
+     with balance left must be able to spend it). When enabled, its
      copy never mentions credits or upgrading (their balance is fine).
   4. The flag requires the shadow engine. Enforcing against a ledger
      nobody writes to would show every user as permanently full.
@@ -527,13 +529,37 @@ class AskPathEnforcementTests(_StreamingBase):
         self.assertTrue(body["limit_reached"])
 
     @AUTHORITATIVE
-    def test_the_free_breaker_still_fires_and_does_not_mention_credits(self):
-        """Abuse protection, not a plan limit — telling a user with a
-        healthy balance to 'upgrade' would be wrong advice."""
+    def test_the_free_breaker_is_off_by_default(self):
+        """Product decision 2026-07-28: no pre-flight hard stop. A free
+        user with balance left is served no matter how many asks the
+        daily counter recorded — the only customer-facing stop is the
+        mid-run credits-exhausted stop."""
         credit_ledger.ensure_monthly_grant(str(self.user.id), "free")
         self._exhaust_daily_asks()
         cache.clear()
         resp = self._ask()
+        self.assertEqual(
+            resp.status_code,
+            200,
+            "with credits left, the exhausted daily counter must not block",
+        )
+
+    def test_the_opt_in_free_breaker_fires_and_does_not_mention_credits(self):
+        """When explicitly enabled (active abuse): abuse protection, not
+        a plan limit — telling a user with a healthy balance to
+        'upgrade' would be wrong advice."""
+        credit_ledger.ensure_monthly_grant(str(self.user.id), "free")
+        self._exhaust_daily_asks()
+        cache.clear()
+        with override_settings(
+            SEARCH_ENGINE=_se(
+                AI_COST_METER=True,
+                AI_CREDITS_SHADOW=True,
+                AI_CREDITS_AUTHORITATIVE=True,
+                AI_FREE_DAILY_BREAKER=True,
+            )
+        ):
+            resp = self._ask()
         self.assertEqual(resp.status_code, 429)
         body = resp.json()
         self.assertEqual(body["category"], "rate_limit")

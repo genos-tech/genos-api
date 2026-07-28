@@ -888,8 +888,9 @@ class AgentAskView(AuthenticatedAPIView):
 
         # --- The customer's limit. -----------------------------------
         # Credits authoritative -> the balance is the limit and the daily
-        # ask count is not consulted at all (except the Free abuse
-        # breaker below). Flag off -> the legacy daily gate, unchanged.
+        # ask count is not consulted at all (except the OPT-IN Free abuse
+        # breaker below, off by default). Flag off -> the legacy daily
+        # gate, unchanged.
         credit_block = _credit_gate(user_id, plan)
         if credit_block is not None:
             return credit_block
@@ -910,13 +911,21 @@ class AgentAskView(AuthenticatedAPIView):
                     },
                     status=status.HTTP_429_TOO_MANY_REQUESTS,
                 )
-        elif plan == "free":
+        elif plan == "free" and settings.SEARCH_ENGINE.get("AI_FREE_DAILY_BREAKER"):
             # Free-only daily circuit breaker (V2 §4.3). NOT a plan
             # limit and never shown as one — the monthly credit cap
             # already bounds what a free account can COST us; this
             # bounds how fast it burns, which is what makes scripted
-            # signup farms unattractive. Deliberately generous: a real
-            # free user cannot reach it in a day of honest work.
+            # signup farms unattractive.
+            #
+            # OFF by default since 2026-07-28 (product decision): with
+            # credits authoritative, a user with balance left must be
+            # able to spend it — the ONLY customer-facing stop is the
+            # mid-run credits-exhausted stop, never a pre-flight count.
+            # Real testing sessions were hitting this in a day; abuse
+            # containment stays available as an opt-in flag (plus the
+            # monthly cost ceilings, which remain the financial
+            # backstop either way).
             ok, used, limit = check_remaining(user_id, LLM_ASK_KEY)
             if not ok:
                 log.warning(
