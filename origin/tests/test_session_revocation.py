@@ -245,6 +245,16 @@ class TestRefreshEndpointRejectsRevokedSessions(RevocationTestMixin, BaseAPITest
 
         self.assertEqual(self._refresh(str(refresh)).status_code, 401)
 
+    def test_deleted_user_gets_401_not_a_500(self):
+        """`TokenRefreshSerializer` resolves the user with a bare `.get()`
+        and no `try`, so a token for a hard-deleted user raises
+        DoesNotExist. Reaching that would 500 the one endpoint the
+        frontend polls."""
+        refresh, _ = self._tokens_for(self.user2)
+        self.user2.delete()
+
+        self.assertEqual(self._refresh(refresh).status_code, 401)
+
     def test_missing_cookie_still_403s(self):
         # Pre-existing contract; the new check must not change it.
         self.assertEqual(self.client.get(reverse("token_refresh")).status_code, 403)

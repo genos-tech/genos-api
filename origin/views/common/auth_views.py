@@ -381,7 +381,13 @@ def _refresh_token_password_is_current(refresh_value: str) -> bool:
 
     user = User.objects.filter(id=token.get(jwt_api_settings.USER_ID_CLAIM)).first()
     if user is None:
-        return True
+        # Deliberately False, not "fall through". `TokenRefreshSerializer`
+        # resolves the user with a bare `.get()` and no `try`, so a token
+        # for a hard-deleted user raises DoesNotExist and 500s the one
+        # endpoint the frontend polls. A vanished user has no valid
+        # session by definition, so 401 is both the honest answer and the
+        # one the client already knows how to handle.
+        return False
 
     # A token minted before this setting was switched on carries no claim
     # at all. `!=` treats that as a mismatch, which is what we want: those
@@ -505,7 +511,7 @@ class UserInfoView(AuthenticatedAPIView):
         return Response(serializer.data)
 
 
-def _password_login_is_available(user) -> bool:
+def _password_reset_is_allowed(user) -> bool:
     """Whether this account is allowed to have a usable password at all.
 
     Only accounts that signed up with email/password are. An account
@@ -541,7 +547,7 @@ class PasswordResetRequestView(APIView):
     live URL.
 
     Only email-signup accounts get a token. See
-    `_password_login_is_available` for why an OAuth account must not.
+    `_password_reset_is_allowed` for why an OAuth account must not.
     """
 
     permission_classes = [permissions.AllowAny]
@@ -553,7 +559,7 @@ class PasswordResetRequestView(APIView):
         email = serializer.validated_data["email"]
 
         user = User.objects.filter(email__iexact=email, is_deleted=False).first()
-        if user is not None and not _password_login_is_available(user):
+        if user is not None and not _password_reset_is_allowed(user):
             # Silently skip: still a 200, still no email, so this stays
             # enumeration-safe. The cost is that a Google user who clicks
             # "forgot password" receives nothing at all — worth a
@@ -631,7 +637,7 @@ class PasswordResetConfirmView(APIView):
         # still live and valid for their TTL, and a provider could in
         # principle change on an account. Same 400 as an unknown token so
         # this adds no signal.
-        if not _password_login_is_available(user):
+        if not _password_reset_is_allowed(user):
             logger.info(
                 "Password reset confirm refused for a %s account.",
                 user.primary_auth_provider,
