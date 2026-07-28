@@ -774,3 +774,139 @@ class LoginRouteIsolationTests(TestCase):
 
         self.assertIn("not_a_login_account", resp.url)
         mock_jwt.assert_not_called()
+
+
+class RecurrencePassthroughTests(TestCase):
+    """`recurrence` reaches Google, sanitised.
+
+    The field is forwarded verbatim into the upstream payload, so it's
+    filtered rather than trusted. The absent-vs-empty distinction is
+    load-bearing on PATCH: omitting it leaves an existing series rule
+    alone, while an explicit empty list is how a client says "stop
+    repeating".
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="rec", email="rec@example.com", password="pw123456"
+        )
+        ConnectedAccount.objects.create(
+            user=self.user,
+            provider="google",
+            provider_user_id="rec-sub",
+            provider_email="rec@example.com",
+            scopes=CALENDAR_SCOPES,
+            access_token_encrypted="placeholder",
+            is_login_identity=True,
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _body(self, mock_request):
+        return mock_request.call_args.kwargs["json"]
+
+    @patch("origin.views.common.calendar_views.get_valid_access_token", return_value="tok")
+    @patch("origin.views.common.calendar_views.requests.request")
+    def test_create_forwards_the_rrule(self, mock_request, _tok):
+        mock_request.return_value = _ok({"id": "evt-1"})
+
+        resp = self.client.post(
+            "/api/v2/calendar/events/",
+            {
+                "summary": "Standup",
+                "start": {"dateTime": "2026-08-03T09:00:00Z"},
+                "end": {"dateTime": "2026-08-03T09:15:00Z"},
+                "recurrence": ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE"],
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(self._body(mock_request)["recurrence"], ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE"])
+
+    @patch("origin.views.common.calendar_views.get_valid_access_token", return_value="tok")
+    @patch("origin.views.common.calendar_views.requests.request")
+    def test_create_without_recurrence_sends_no_such_field(self, mock_request, _tok):
+        mock_request.return_value = _ok({"id": "evt-1"})
+
+        self.client.post(
+            "/api/v2/calendar/events/",
+            {
+                "summary": "One-off",
+                "start": {"dateTime": "2026-08-03T09:00:00Z"},
+                "end": {"dateTime": "2026-08-03T09:15:00Z"},
+            },
+            format="json",
+        )
+
+        self.assertNotIn("recurrence", self._body(mock_request))
+
+    @patch("origin.views.common.calendar_views.get_valid_access_token", return_value="tok")
+    @patch("origin.views.common.calendar_views.requests.request")
+    def test_drops_lines_that_are_not_recurrence_directives(self, mock_request, _tok):
+        """The array lands in the upstream payload verbatim, so a client
+        must not be able to push arbitrary content through it."""
+        mock_request.return_value = _ok({"id": "evt-1"})
+
+        self.client.post(
+            "/api/v2/calendar/events/",
+            {
+                "summary": "Standup",
+                "start": {"dateTime": "2026-08-03T09:00:00Z"},
+                "end": {"dateTime": "2026-08-03T09:15:00Z"},
+                "recurrence": [
+                    "RRULE:FREQ=DAILY",
+                    "nonsense",
+                    {"not": "a string"},
+                    "EXDATE;VALUE=DATE:20260810",
+                    "DTSTART:20260101T000000Z",
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            self._body(mock_request)["recurrence"],
+            ["RRULE:FREQ=DAILY", "EXDATE;VALUE=DATE:20260810"],
+        )
+
+    @patch("origin.views.common.calendar_views.get_valid_access_token", return_value="tok")
+    @patch("origin.views.common.calendar_views.requests.request")
+    def test_patch_omitting_recurrence_leaves_the_series_rule_alone(self, mock_request, _tok):
+        """Editing a single occurrence must not touch the series rule —
+        sending `recurrence: []` here would silently end the repetition."""
+        mock_request.return_value = _ok({"id": "evt-1"})
+
+        self.client.patch(
+            "/api/v2/calendar/events/evt-1/",
+            {"summary": "Renamed"},
+            format="json",
+        )
+
+        self.assertNotIn("recurrence", self._body(mock_request))
+
+    @patch("origin.views.common.calendar_views.get_valid_access_token", return_value="tok")
+    @patch("origin.views.common.calendar_views.requests.request")
+    def test_patch_with_an_empty_list_ends_the_repetition(self, mock_request, _tok):
+        mock_request.return_value = _ok({"id": "evt-1"})
+
+        self.client.patch(
+            "/api/v2/calendar/events/evt-1/",
+            {"recurrence": []},
+            format="json",
+        )
+
+        self.assertEqual(self._body(mock_request)["recurrence"], [])
+
+    @patch("origin.views.common.calendar_views.get_valid_access_token", return_value="tok")
+    @patch("origin.views.common.calendar_views.requests.request")
+    def test_caps_the_number_of_lines(self, mock_request, _tok):
+        mock_request.return_value = _ok({"id": "evt-1"})
+
+        self.client.patch(
+            "/api/v2/calendar/events/evt-1/",
+            {"recurrence": [f"RDATE:2026080{i}" for i in range(9)] * 10},
+            format="json",
+        )
+
+        self.assertLessEqual(len(self._body(mock_request)["recurrence"]), 20)

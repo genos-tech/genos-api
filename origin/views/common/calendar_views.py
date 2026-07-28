@@ -66,6 +66,51 @@ def _cal(calendar_id: str) -> str:
     return quote(calendar_id, safe="")
 
 
+#: Recurrence properties Google accepts on an event. Anything else is
+#: dropped rather than forwarded — the field goes straight into the
+#: upstream payload, and a client shouldn't be able to smuggle
+#: arbitrary content through it. Notably DTSTART is NOT allowed: Google
+#: derives it from the event's own start, and accepting one would let a
+#: client desynchronise the series from the event it belongs to.
+RECURRENCE_PROPERTIES = frozenset({"RRULE", "RDATE", "EXDATE", "EXRULE"})
+#: Generous cap. Real events carry one RRULE plus the occasional EXDATE;
+#: an unbounded list would let a client push a huge upstream request.
+MAX_RECURRENCE_LINES = 20
+
+
+def _clean_recurrence(raw) -> list[str] | None:
+    """Normalise a client-supplied `recurrence` array.
+
+    Returns None when the caller didn't mention recurrence at all, which
+    on PATCH means "leave the series rule alone" — distinct from an
+    empty list, which means "this event no longer repeats".
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        return None
+    cleaned = []
+    for line in raw:
+        if not isinstance(line, str):
+            continue
+        text = line.strip()
+        if not text:
+            continue
+        # An iCalendar line is `NAME[;PARAM=...]:VALUE`, so the property
+        # name ends at whichever of ":" or ";" comes first. Matching on a
+        # literal "EXDATE:" prefix would reject `EXDATE;VALUE=DATE:...`
+        # — the parameterised form Google itself emits.
+        boundary = min(
+            (i for i in (text.find(":"), text.find(";")) if i != -1),
+            default=-1,
+        )
+        if boundary <= 0:
+            continue
+        if text[:boundary].upper() in RECURRENCE_PROPERTIES:
+            cleaned.append(text)
+    return cleaned[:MAX_RECURRENCE_LINES]
+
+
 def _has_calendar_scope(account: ConnectedAccount) -> bool:
     return CALENDAR_EVENTS_SCOPE in (account.scopes or [])
 
@@ -525,6 +570,13 @@ class CalendarEventsView(APIView):
                 {"detail": "summary, start, and end are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Recurrence: an RRULE array turns this into a repeating series.
+        # Google expands it server-side, so we store nothing extra — the
+        # instances simply start arriving from the list endpoints.
+        recurrence = _clean_recurrence(request.data.get("recurrence"))
+        if recurrence:
+            body["recurrence"] = recurrence
+
         # Attendees: when provided, copy through to Google so the
         # event shows up on each attendee's calendar. We suppress
         # email notifications (`sendUpdates=none`) because the
@@ -628,6 +680,15 @@ class CalendarEventDetailView(APIView):
             }.items()
             if v is not None
         }
+        # Recurrence on PATCH. Only meaningful against the SERIES MASTER
+        # (a single instance has no `recurrence` of its own), so callers
+        # editing one occurrence must not send it. An explicit empty list
+        # is honoured and ends the repetition, which is why absence and
+        # emptiness are kept distinct by `_clean_recurrence`.
+        recurrence = _clean_recurrence(request.data.get("recurrence"))
+        if recurrence is not None:
+            body["recurrence"] = recurrence
+
         # Attendees on PATCH: same shape as POST. When provided,
         # Google's PATCH overwrites the entire attendees list, so
         # the caller must send the full intended list (not a diff).
