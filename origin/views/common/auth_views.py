@@ -19,7 +19,9 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
+from rest_framework_simplejwt.settings import api_settings as jwt_api_settings
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.utils import get_md5_hash_password
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from origin.services.demo_seeder import (
@@ -344,12 +346,61 @@ class DemoSignInView(APIView):
         return response
 
 
+def _refresh_token_password_is_current(refresh_value: str) -> bool:
+    """Whether a refresh token was minted under the user's CURRENT password.
+
+    `SIMPLE_JWT["CHECK_REVOKE_TOKEN"]` binds every token to the password
+    it was issued under, so a password change invalidates every token
+    that predates it. But that check lives in `JWTAuthentication.get_user`,
+    which the refresh endpoint never reaches: `TokenRefreshSerializer`
+    validates only the signature and expiry.
+
+    Without this helper, a revoked session would get a cheerful **200 and
+    a fresh access token** that then 401s on every real request. That's
+    correct as security and terrible as behaviour, because nothing in the
+    frontend recovers from it: `AuthContext.forceSignOut` fires only when
+    THIS endpoint returns 401/403, and the axios interceptor deliberately
+    skips 401 on the grounds that AuthContext owns that path. Neither
+    triggers, so the user sits in a silently broken app — refresh keeps
+    succeeding, everything else keeps failing — until they happen to
+    reload.
+
+    Returning 401 here instead keeps the existing frontend contract
+    ("refresh 401 ⇒ sign out") intact, so a password change on one device
+    cleanly signs the others out rather than zombifying them.
+    """
+    if not jwt_api_settings.CHECK_REVOKE_TOKEN:
+        return True
+
+    try:
+        token = RefreshToken(refresh_value)
+    except (InvalidToken, TokenError):
+        # Malformed or expired: not our call to make. Fall through and
+        # let the serializer produce its own rejection.
+        return True
+
+    user = User.objects.filter(id=token.get(jwt_api_settings.USER_ID_CLAIM)).first()
+    if user is None:
+        return True
+
+    # A token minted before this setting was switched on carries no claim
+    # at all. `!=` treats that as a mismatch, which is what we want: those
+    # tokens are already dead at `get_user`, so the refresh endpoint must
+    # agree rather than handing back an access token that cannot work.
+    return token.get(jwt_api_settings.REVOKE_TOKEN_CLAIM) == get_md5_hash_password(
+        user.password
+    )
+
+
 class CookieTokenRefreshView(TokenRefreshView):
     def get(self, request: Request, *args, **kwargs):
         refresh = request.COOKIES.get("refresh")  # Get refresh token from cookies
 
         if not refresh or refresh == "":
             return Response({"error": "No refresh token provided"}, status=403)
+
+        if not _refresh_token_password_is_current(refresh):
+            return Response({"error": "Invalid or expired refresh token"}, status=401)
 
         # Manually create the serializer with the refresh token
         serializer = TokenRefreshSerializer(data={"refresh": refresh})
@@ -454,6 +505,33 @@ class UserInfoView(AuthenticatedAPIView):
         return Response(serializer.data)
 
 
+def _password_login_is_available(user) -> bool:
+    """Whether this account is allowed to have a usable password at all.
+
+    Only accounts that signed up with email/password are. An account
+    created through Google or GitHub has `set_unusable_password()` on it
+    and authenticates solely through the provider.
+
+    The password-reset flow used to ignore this, which meant a reset
+    could set a REAL password on an OAuth-only account and quietly create
+    a second way in — one that bypasses everything the provider was doing
+    for us (Google's own MFA, its anomaly detection, an org's ability to
+    disable the account centrally). `is_email_verified` is already True
+    on OAuth signups, so nothing downstream would have blocked that
+    login.
+
+    Anyone can trigger a reset for a known address, and the mail lands in
+    the owner's inbox rather than the attacker's, so this isn't a
+    takeover on its own — it's an attack-surface expansion that turns
+    "read the victim's email once" into "permanent password login that
+    Google can't see or revoke".
+
+    Same principle as `_can_sign_in_with` in the OAuth views: the fact
+    that an identity EXISTS never implies it may be used to sign in.
+    """
+    return user.primary_auth_provider == "email"
+
+
 class PasswordResetRequestView(APIView):
     """Accept an email, mint a one-time reset token, and email a link.
 
@@ -461,6 +539,9 @@ class PasswordResetRequestView(APIView):
     prevent user-enumeration via response or timing differences. The
     token is stored as a SHA-256 hash so a DB read can't recover the
     live URL.
+
+    Only email-signup accounts get a token. See
+    `_password_login_is_available` for why an OAuth account must not.
     """
 
     permission_classes = [permissions.AllowAny]
@@ -472,6 +553,18 @@ class PasswordResetRequestView(APIView):
         email = serializer.validated_data["email"]
 
         user = User.objects.filter(email__iexact=email, is_deleted=False).first()
+        if user is not None and not _password_login_is_available(user):
+            # Silently skip: still a 200, still no email, so this stays
+            # enumeration-safe. The cost is that a Google user who clicks
+            # "forgot password" receives nothing at all — worth a
+            # follow-up that emails them "you signed up with Google, sign
+            # in with Google" instead, which is safe because that mail
+            # only ever reaches the real owner.
+            logger.info(
+                "Password reset requested for a %s account; refused.",
+                user.primary_auth_provider,
+            )
+            user = None
         if user is not None:
             token = secrets.token_urlsafe(32)
             user.password_reset_token_hash = hashlib.sha256(token.encode()).hexdigest()
@@ -528,6 +621,21 @@ class PasswordResetConfirmView(APIView):
             is_deleted=False,
         ).first()
         if user is None:
+            return Response(
+                {"detail": "Invalid or expired token."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Defence in depth. The request view no longer mints tokens for
+        # OAuth accounts, but tokens minted BEFORE that gate existed are
+        # still live and valid for their TTL, and a provider could in
+        # principle change on an account. Same 400 as an unknown token so
+        # this adds no signal.
+        if not _password_login_is_available(user):
+            logger.info(
+                "Password reset confirm refused for a %s account.",
+                user.primary_auth_provider,
+            )
             return Response(
                 {"detail": "Invalid or expired token."},
                 status=status.HTTP_400_BAD_REQUEST,
