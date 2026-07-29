@@ -139,6 +139,26 @@ class PresenceTests(BaseAPITestCase):
         presence.mark_visible(self.user2.id)
         self.assertTrue(presence.has_visible_tab(self.user2.id))
 
+    def test_presence_is_per_device(self):
+        """A visible laptop must not mark the phone as visible.
+
+        This is the whole point of per-device presence: keyed per user,
+        one open tab silenced every other device the user owned.
+        """
+        cache.clear()
+        presence.mark_visible(self.user2.id, "laptop-abc")
+        self.assertTrue(presence.is_device_visible(self.user2.id, "laptop-abc"))
+        self.assertFalse(presence.is_device_visible(self.user2.id, "phone-xyz"))
+
+    def test_device_without_id_falls_back_to_any_tab(self):
+        """Subscriptions predating per-device presence keep the old
+        behavior rather than being pushed while the user is clearly
+        looking at the app."""
+        cache.clear()
+        self.assertFalse(presence.is_device_visible(self.user2.id, ""))
+        presence.mark_visible(self.user2.id, "laptop-abc")
+        self.assertTrue(presence.is_device_visible(self.user2.id, ""))
+
 
 class ChatUrlTests(BaseAPITestCase):
     def test_url_token_per_kind(self):
@@ -180,12 +200,13 @@ class DispatchTests(BaseAPITestCase):
             meta=(meta or {}),
         )
 
-    def _sub(self, user):
+    def _sub(self, user, device_id=""):
         return PushSubscription.objects.create(
             user=user,
             endpoint=f"https://example.com/{uuid.uuid4()}",
             p256dh="p256",
             auth="auth",
+            device_id=device_id,
         )
 
     def _run(self, activities):
@@ -213,6 +234,40 @@ class DispatchTests(BaseAPITestCase):
         self._sub(self.user2)
         presence.mark_visible(self.user2.id)
         self._run([self._activity(self.user2)]).assert_not_called()
+
+    def test_open_laptop_does_not_silence_the_phone(self):
+        """The bug this per-device split exists to fix.
+
+        Two devices, laptop foreground. The laptop must stay quiet (it
+        shows the in-app toast) while the phone still gets its push —
+        under per-user presence, BOTH were suppressed, so leaving Genos
+        open on a desktop meant the phone never notified at all.
+        """
+        laptop = self._sub(self.user2, device_id="laptop-abc")
+        phone = self._sub(self.user2, device_id="phone-xyz")
+        presence.mark_visible(self.user2.id, "laptop-abc")
+
+        send = self._run([self._activity(self.user2)])
+
+        send.assert_called_once()
+        sent_to = send.call_args.kwargs["subscription_id"]
+        self.assertEqual(sent_to, phone.id)
+        self.assertNotEqual(sent_to, laptop.id)
+
+    def test_all_devices_push_when_nothing_is_visible(self):
+        self._sub(self.user2, device_id="laptop-abc")
+        self._sub(self.user2, device_id="phone-xyz")
+        send = self._run([self._activity(self.user2)])
+        self.assertEqual(send.call_count, 2)
+
+    def test_payload_carries_badge_count(self):
+        self._sub(self.user2)
+        send = self._run([self._activity(self.user2)])
+        # Exact value depends on fixture state; what matters is that the
+        # key is present and numeric so the SW can set the icon badge
+        # instead of guessing with a local increment.
+        self.assertIn("badge_count", send.call_args.kwargs["payload"])
+        self.assertIsInstance(send.call_args.kwargs["payload"]["badge_count"], int)
 
     def test_no_subscription_no_send(self):
         self._run([self._activity(self.user2)]).assert_not_called()

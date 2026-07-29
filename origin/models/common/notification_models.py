@@ -82,6 +82,13 @@ class PushSubscription(models.Model):
     auth = models.CharField(max_length=255)
 
     user_agent = models.CharField(max_length=500, blank=True, default="")
+    # Stable per-browser id the client also sends with its presence
+    # heartbeat, so push suppression can tell "the laptop I'm staring at"
+    # from "the phone in my pocket". Blank on rows created before
+    # per-device presence existed; those fall back to the older
+    # any-visible-tab behavior until the client re-registers (which it
+    # does on every app load).
+    device_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
     is_active = models.BooleanField(default=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

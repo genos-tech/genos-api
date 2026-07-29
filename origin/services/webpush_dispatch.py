@@ -22,6 +22,7 @@ from django.db import transaction
 from origin.models.chat.unified_models import ActivityType, ChannelKind
 from origin.models.common.notification_models import PushSubscription
 from origin.services import presence
+from origin.services.unread_badge import unread_badge_total
 from origin.services.v3_activity import (
     SURFACE_CHAT_NOTE,
     SURFACE_PERSONAL_NOTE,
@@ -88,7 +89,12 @@ def _note_url(meta: dict, surface_type: int) -> str:
     note_id = meta.get("noteId")
     if surface_type == SURFACE_PERSONAL_NOTE and note_id:
         return f"/workspace/notes/my/{note_id}"
-    if surface_type == SURFACE_TASK_NOTE and note_id and meta.get("projectId") and meta.get("taskId"):
+    if (
+        surface_type == SURFACE_TASK_NOTE
+        and note_id
+        and meta.get("projectId")
+        and meta.get("taskId")
+    ):
         return (
             f"/workspace/notes/task/project/{meta['projectId']}"
             f"/task/{meta['taskId']}/note/{note_id}"
@@ -152,7 +158,12 @@ def _push_spec(act) -> dict | None:
             }
         # Channel-backed chat-message mention (and self-assign, and
         # comment @mentions on the PM mirror — all gated as mentions).
-        return {"category": "mention_chat", "title": f"{actor_name} mentioned you", "body": body, "url": chat_url}
+        return {
+            "category": "mention_chat",
+            "title": f"{actor_name} mentioned you",
+            "body": body,
+            "url": chat_url,
+        }
 
     return None
 
@@ -167,28 +178,37 @@ def _queue_push(*, recipient_id, category, title, body, url, tag, actor=None) ->
     recipient_id = str(recipient_id)
     if not should_push(recipient_id, category):
         return False
-    # Don't push to someone actively looking at the app.
-    if presence.has_visible_tab(recipient_id):
-        return False
     subs = list(
         PushSubscription.objects.filter(user_id=recipient_id, is_active=True).values(
-            "id", "endpoint", "p256dh", "auth"
+            "id", "endpoint", "p256dh", "auth", "device_id"
         )
     )
+    # Skip only the devices actually being looked at — PER DEVICE, not per
+    # user. Keyed per user, a laptop left open silenced the phone too,
+    # which made push look broken to anyone who works with the app on a
+    # second screen.
+    subs = [s for s in subs if not presence.is_device_visible(recipient_id, s["device_id"])]
     if not subs:
         return False
+    # The service worker can't compute an unread total with the app
+    # closed, which is exactly when the icon badge matters. Omitted when
+    # unavailable; the client then increments locally.
+    badge_count = unread_badge_total(recipient_id)
     payload = {
         "title": title,
         "body": body,
         "url": url,
         "tag": tag,
+        **({"badge_count": badge_count} if badge_count is not None else {}),
         # Card customizations (SW reads these). icon = sender avatar when
         # WEBPUSH_MEDIA_BASE_URL is set, else app icon.
         "icon": _avatar_url(actor),
         "requireInteraction": True,
         "actions": [{"action": "open", "title": "Open"}],
     }
-    logger.info("[webpush] queue push user=%s category=%s subs=%d", recipient_id, category, len(subs))
+    logger.info(
+        "[webpush] queue push user=%s category=%s subs=%d", recipient_id, category, len(subs)
+    )
     for sub in subs:
         _executor.submit(
             send_web_push,
@@ -283,7 +303,9 @@ def dispatch_push_for_inbox_item(item, *, title: str | None = None) -> None:
             actor=item.sender,
         )
     except Exception as exc:  # noqa: BLE001 — never break the caller
-        logger.warning("[webpush] inbox dispatch error for item %s: %s", getattr(item, "item_id", "?"), exc)
+        logger.warning(
+            "[webpush] inbox dispatch error for item %s: %s", getattr(item, "item_id", "?"), exc
+        )
 
 
 def schedule_push_for_inbox_item(item, *, title: str | None = None) -> None:
