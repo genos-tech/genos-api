@@ -150,6 +150,24 @@ class PresenceTests(BaseAPITestCase):
         self.assertTrue(presence.is_device_visible(self.user2.id, "laptop-abc"))
         self.assertFalse(presence.is_device_visible(self.user2.id, "phone-xyz"))
 
+    def test_clear_visible_reopens_push_immediately(self):
+        """The iOS dead zone: a suspended page stops notifying long before
+        the 90s TTL expires, so waiting it out means nothing notifies at
+        all. Hiding the tab must reopen push right away."""
+        cache.clear()
+        presence.mark_visible(self.user2.id, "phone-xyz")
+        self.assertTrue(presence.is_device_visible(self.user2.id, "phone-xyz"))
+        presence.clear_visible(self.user2.id, "phone-xyz")
+        self.assertFalse(presence.is_device_visible(self.user2.id, "phone-xyz"))
+
+    def test_clear_is_scoped_to_the_device(self):
+        cache.clear()
+        presence.mark_visible(self.user2.id, "phone-xyz")
+        presence.mark_visible(self.user2.id, "laptop-abc")
+        presence.clear_visible(self.user2.id, "phone-xyz")
+        self.assertFalse(presence.is_device_visible(self.user2.id, "phone-xyz"))
+        self.assertTrue(presence.is_device_visible(self.user2.id, "laptop-abc"))
+
     def test_device_without_id_falls_back_to_any_tab(self):
         """Subscriptions predating per-device presence keep the old
         behavior rather than being pushed while the user is clearly

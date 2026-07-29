@@ -91,3 +91,15 @@ class PresenceHeartbeatView(AuthenticatedAPIView):
         device_id = str(request.data.get("device_id") or "")[:64]
         presence.mark_visible(request.user.id, device_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def delete(self, request):
+        """The tab went hidden — stop suppressing push for this device.
+
+        Sent on `visibilitychange`, so push resumes the moment the user
+        looks away instead of waiting out the TTL. On iOS that gap was a
+        real dead zone: the page's JS is suspended long before the key
+        expires, so nothing notified at all in between.
+        """
+        device_id = str(request.data.get("device_id") or "")[:64]
+        presence.clear_visible(request.user.id, device_id)
+        return Response(status=status.HTTP_204_NO_CONTENT)
