@@ -154,7 +154,7 @@ class PushSubscriptionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PushSubscription
-        fields = ["endpoint", "p256dh", "auth", "user_agent"]
+        fields = ["endpoint", "p256dh", "auth", "user_agent", "device_id"]
         # `endpoint` is `unique=True` on the model, so DRF auto-attaches a
         # UniqueValidator — which would 400 every re-registration of the same
         # browser (the FE re-POSTs on each mount). The view deliberately

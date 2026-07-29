@@ -58,6 +58,9 @@ class PushSubscriptionView(AuthenticatedAPIView):
                 "p256dh": data["p256dh"],
                 "auth": data["auth"],
                 "user_agent": data.get("user_agent", ""),
+                # Ties this subscription to the device whose heartbeat
+                # decides whether to suppress its pushes.
+                "device_id": data.get("device_id", ""),
                 "is_active": True,
             },
         )
@@ -78,10 +81,13 @@ class PresenceHeartbeatView(AuthenticatedAPIView):
     """Mark the caller as having a visible tab (push-suppression presence).
 
     The frontend POSTs here on a short interval ONLY while the tab is
-    visible. The push dispatcher skips users with a fresh heartbeat so an
-    open, focused tab gets the in-app toast rather than a duplicate push.
+    visible, sending the same `device_id` it registered its push
+    subscription with. The dispatcher then suppresses push for THAT
+    device only — the open, focused tab gets the in-app toast, while the
+    user's other devices still receive the push.
     """
 
     def post(self, request):
-        presence.mark_visible(request.user.id)
+        device_id = str(request.data.get("device_id") or "")[:64]
+        presence.mark_visible(request.user.id, device_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
