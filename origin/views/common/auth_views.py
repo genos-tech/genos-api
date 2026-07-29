@@ -39,13 +39,28 @@ def _set_refresh_cookie(response, refresh_value: str) -> None:
     """Centralised helper so every place that issues a refresh cookie
     uses the exact same SameSite/Secure/HttpOnly attributes. Different
     attributes between set/delete cause the browser to keep stale
-    cookies in production."""
+    cookies in production.
+
+    `max_age` matters as much as the security attributes. Without it the
+    browser treats this as a SESSION cookie and drops it when the browser
+    (or the installed PWA) is fully closed — so the user was signed out
+    by quitting the app, even though the refresh token inside was still
+    valid for days. Pinning it to REFRESH_TOKEN_LIFETIME makes the cookie
+    last exactly as long as the credential it carries: closing the app
+    stops ending the session, while an expired or revoked token still
+    does.
+
+    Rotation keeps this from becoming a fixed 7-day clock: every refresh
+    issues a new token and re-sets this cookie, so an active user's
+    window rolls forward and only real inactivity expires it.
+    """
     response.set_cookie(
         key="refresh",
         value=refresh_value,
         httponly=True,
         secure=settings.AUTH_COOKIE_SECURE,
         samesite=settings.AUTH_COOKIE_SAMESITE,
+        max_age=int(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds()),
     )
 
 
