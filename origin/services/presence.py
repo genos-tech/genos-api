@@ -59,6 +59,24 @@ def mark_visible(user_id, device_id: str = "") -> None:
         cache.set(_device_key(user_id, device_id), "1", timeout=PRESENCE_TTL_SECONDS)
 
 
+def clear_visible(user_id, device_id: str = "") -> None:
+    """Drop this device's presence immediately (tab hidden / app closed).
+
+    Without this the TTL alone decides, which leaves a real hole on iOS:
+    a backgrounded PWA has its JavaScript suspended after ~30s, so the
+    page stops raising its own notifications — but the presence key lives
+    for 90s, so the server keeps suppressing push. Between those two the
+    user gets NOTHING. An explicit clear on `visibilitychange` closes it.
+
+    The per-user key is only cleared when no device id is supplied: with
+    one, other devices may still be visible and own that key.
+    """
+    if device_id:
+        cache.delete(_device_key(user_id, device_id))
+    else:
+        cache.delete(_key(user_id))
+
+
 def has_visible_tab(user_id) -> bool:
     """True when the user has ANY visible tab within the TTL.
 
