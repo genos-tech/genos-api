@@ -50,6 +50,13 @@ urlpatterns = [
         ProjectTaskFieldRulesView.as_view(),
         name="project_task_field_rules",
     ),
+    # Named task-filter selections ("Saved Filters" in the filter bar),
+    # shared across the project's members.
+    path(
+        "api/v2/project/saved-task-filters/",
+        ProjectSavedTaskFilterView.as_view(),
+        name="project_saved_task_filters",
+    ),
     # Per-project custom task fields (definitions only — values ride on
     # the task rows as TaskMaster.custom_field_values).
     path(
