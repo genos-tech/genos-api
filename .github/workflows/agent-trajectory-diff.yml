@@ -140,16 +140,35 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
+      # This job needs a live GCP project for BOTH Vertex and the private
+      # Artifact Registry OpenSearch image, so with the env torn down it
+      # cannot run at all — `auth@v2` fails `invalid_target` because WIF has
+      # no pool to federate against. Report-only or not, a red X on every
+      # agent PR trains people to ignore the check, so skip explicitly.
+      - name: Is a GCP-backed trajectory diff possible?
+        id: gcp
+        run: |
+          if [ "${{ vars.DEPLOY_TO_GCP }}" = "true" ] && [ -n "${{ secrets.GCP_WIF_PROVIDER }}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::GCP env unavailable — skipping the trajectory diff. Tool-choice drift is NOT being checked on this PR."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.gcp.outputs.available == 'true'
 
       - name: Authenticate to Google Cloud (keyless WIF)
+        if: steps.gcp.outputs.available == 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.GCP_DEPLOY_SA }}
       - uses: google-github-actions/setup-gcloud@v2
+        if: steps.gcp.outputs.available == 'true'
 
       - name: Start multilingual OpenSearch (prod image)
+        if: steps.gcp.outputs.available == 'true'
         run: |
           gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
           docker run -d --name opensearch -p 9200:9200 \
@@ -165,15 +184,19 @@ jobs:
           done
 
       - uses: actions/setup-python@v5
+        if: steps.gcp.outputs.available == 'true'
         with:
           python-version: "3.11"
       - run: pip install --upgrade pip pipenv
+        if: steps.gcp.outputs.available == 'true'
       - name: Install deps
+        if: steps.gcp.outputs.available == 'true'
         run: |
           pipenv sync
           pipenv run pip install -r requirements-dev.txt
 
       - name: Migrate + set up OpenSearch index + seed fixture (Vertex reindex)
+        if: steps.gcp.outputs.available == 'true'
         run: |
           pipenv run python manage.py migrate --noinput
           # MUST run before any write — see agent-evals.yml (knn_vector
@@ -182,6 +205,7 @@ jobs:
           pipenv run python manage.py agent_eval_setup --reseed
 
       - name: Capture trajectories + diff against committed baseline
+        if: steps.gcp.outputs.available == 'true'
         run: |
           set -o pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.write_baseline }}" = "true" ]; then
@@ -191,6 +215,7 @@ jobs:
           fi
 
       - name: Publish diff to the job summary
+        if: steps.gcp.outputs.available == 'true'
         if: always()
         run: |
           {
@@ -204,6 +229,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment the diff on the PR (best-effort)
+        if: steps.gcp.outputs.available == 'true'
         # Same-repo PRs only — fork tokens are read-only. Never fails the job.
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         env:
@@ -214,6 +240,7 @@ jobs:
           gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md || true
 
       - name: Upload baseline artifact (workflow_dispatch --write-baseline)
+        if: steps.gcp.outputs.available == 'true'
         if: github.event_name == 'workflow_dispatch' && inputs.write_baseline == true
         uses: actions/upload-artifact@v4
         with:
