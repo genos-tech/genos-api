@@ -25,3 +25,9 @@ class ProjectTaskTemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProjectTaskTemplate
         fields = "__all__"
+
+
+class ProjectSavedTaskFilterSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProjectSavedTaskFilter
+        fields = "__all__"

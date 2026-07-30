@@ -5,6 +5,7 @@ from collections import defaultdict
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.db.models import Exists, OuterRef, Q
+from django.db.models.functions import Lower
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
@@ -856,6 +857,220 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+# The six dimensions of the task filter bar, as the frontend's
+# `StoredTaskFilters` names them. Used to strip a saved-filter blob down
+# to keys we recognize: the client is the source of truth for what a
+# label MEANS (it rehydrates against its own predefined lists), but the
+# server still refuses to store arbitrary keys, so a future client can't
+# quietly park unrelated state in here.
+#
+# `status` is optional — see the ProjectSavedTaskFilter docstring: a
+# filter saved from the sprint board omits it because that surface hides
+# the dimension.
+SAVED_TASK_FILTER_KEYS = (
+    "status",
+    "tags",
+    "priorities",
+    "effortLevels",
+    "milestoneKeys",
+    "memberKeys",
+)
+
+
+def _clean_saved_task_filters(raw):
+    """Normalize a saved-filter blob to `{known key: list}`.
+
+    Rejects a non-dict outright. Per-key, keeps only lists of
+    strings/numbers and drops everything else, mirroring the frontend's
+    per-field shape guard in `readStoredFilters` — a half-malformed blob
+    contributes the dimensions it does have rather than failing the whole
+    save. Returns None when `raw` isn't a dict at all.
+    """
+    if not isinstance(raw, dict):
+        return None
+    cleaned = {}
+    for key in SAVED_TASK_FILTER_KEYS:
+        value = raw.get(key)
+        if not isinstance(value, list):
+            continue
+        if not all(isinstance(v, (str, int)) and not isinstance(v, bool) for v in value):
+            continue
+        cleaned[key] = value
+    return cleaned
+
+
+class ProjectSavedTaskFilterView(AuthenticatedAPIView):
+    """CRUD for project-scoped named task-filter selections.
+
+    Shared project-wide and managed by any project member (same trust
+    model as ProjectTags / ProjectTaskTemplate). Nothing here is
+    referenced by a task, so edit/delete never touch task data.
+
+    "Save over the existing name" is a PUT, not a POST: the unique
+    (project, filter_name) constraint makes a same-name POST a 400, and
+    the client resolves a name collision to a PUT instead. Renaming is
+    the same PUT with only `filter_name`.
+    """
+
+    @staticmethod
+    def _is_member(project_id, user):
+        return ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+
+    @staticmethod
+    def _serialize(row):
+        return {
+            "id": row.filter_id,
+            "filterName": row.filter_name,
+            "filters": row.filters or {},
+            "createdBy": row.created_by_id,
+            "tsUpdatedAt": row.ts_updated_at,
+        }
+
+    def post(self, request):
+        project_id = request.data.get("project_id")
+        filter_name = (request.data.get("filter_name") or "").strip()
+        filters = _clean_saved_task_filters(request.data.get("filters"))
+
+        if not project_id or not filter_name or filters is None:
+            return Response(
+                {"error": "project_id, filter_name and filters are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not self._is_member(project_id, request.user):
+            return Response(
+                {"error": "Not a member of this project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        data = {
+            "team": request.data.get("team_id"),
+            "project": project_id,
+            "filter_name": filter_name,
+            "filters": filters,
+            "created_by": request.user.id,
+        }
+        serializer = ProjectSavedTaskFilterSerializer(data=data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        # The unique (project, filter_name) constraint is DB-enforced;
+        # surface a collision as a clean 400 so the client can offer
+        # "overwrite?" instead of showing a 500.
+        try:
+            instance = serializer.save()
+        except IntegrityError:
+            return Response(
+                {"error": "A saved filter with this name already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(self._serialize(instance), status=status.HTTP_201_CREATED)
+
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        project_id = request.GET.get("project_id")
+
+        if not team_id or not project_id:
+            return Response(
+                {"error": "team_id and project_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not self._is_member(project_id, request.user):
+            return Response(
+                {"error": "Not a member of this project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Name order, not recency: this list is a menu the user scans by
+        # name, so a stable alphabetical order beats one that reshuffles
+        # every time a teammate edits a filter.
+        #
+        # Ordered on Lower(name) explicitly rather than the bare column.
+        # A plain `order_by("filter_name")` defers to the database
+        # collation, which put "alpha" before "Mango" on Postgres but
+        # would sort ASCII (every capital first) elsewhere — a menu whose
+        # order depends on the deployment's locale is a bug waiting for a
+        # confused user, so pin the case-insensitive intent here.
+        rows = ProjectSavedTaskFilter.objects.filter(team=team_id, project=project_id).order_by(
+            Lower("filter_name")
+        )
+        return Response([self._serialize(r) for r in rows], status=status.HTTP_200_OK)
+
+    def put(self, request):
+        filter_id = request.data.get("id")
+        project_id = request.data.get("project_id")
+
+        if not filter_id or not project_id:
+            return Response(
+                {"error": "id and project_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not self._is_member(project_id, request.user):
+            return Response(
+                {"error": "Not a member of this project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        row = ProjectSavedTaskFilter.objects.filter(filter_id=filter_id, project=project_id).first()
+        if not row:
+            return Response(
+                {"error": "Saved filter not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Both fields are independently optional: a rename sends only
+        # `filter_name`, an overwrite-in-place sends only `filters`.
+        if "filter_name" in request.data:
+            name = (request.data.get("filter_name") or "").strip()
+            if not name:
+                return Response(
+                    {"error": "filter_name cannot be empty."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            row.filter_name = name
+        if "filters" in request.data:
+            filters = _clean_saved_task_filters(request.data.get("filters"))
+            if filters is None:
+                return Response(
+                    {"error": "filters must be an object."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            row.filters = filters
+
+        try:
+            row.save()
+        except IntegrityError:
+            return Response(
+                {"error": "A saved filter with this name already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(self._serialize(row), status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        filter_id = request.data.get("id")
+        project_id = request.data.get("project_id")
+
+        if not filter_id or not project_id:
+            return Response(
+                {"error": "id and project_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not self._is_member(project_id, request.user):
+            return Response(
+                {"error": "Not a member of this project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        row = ProjectSavedTaskFilter.objects.filter(filter_id=filter_id, project=project_id).first()
+        if not row:
+            return Response(
+                {"error": "Saved filter not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        row.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class ProjectTemplateDefaultsView(AuthenticatedAPIView):
     """Per-project default body template, one for tasks (and subtasks) and
     one for milestones. The value is a create-form picker string (a
@@ -1108,9 +1323,7 @@ class ProjectCustomFieldsView(AuthenticatedAPIView):
             )
         project = ProjectMaster.objects.filter(project_id=project_id).first()
         if not project:
-            return None, Response(
-                {"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND
-            )
+            return None, Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
         if not can_manage(resolve_project_role(project, request.user.id)):
             return None, Response(
                 {"error": "Only the project owner or an editor can manage custom fields."},
@@ -1168,9 +1381,9 @@ class ProjectCustomFieldsView(AuthenticatedAPIView):
         if err_msg := validate_field_options(options):
             return Response({"error": err_msg}, status=status.HTTP_400_BAD_REQUEST)
 
-        next_order = (
-            ProjectCustomField.objects.filter(project=project).count()
-        )  # append at the end; reorder normalizes indices anyway
+        next_order = ProjectCustomField.objects.filter(
+            project=project
+        ).count()  # append at the end; reorder normalizes indices anyway
         try:
             # Savepoint so a duplicate-name IntegrityError doesn't
             # poison an enclosing transaction (TestCase wraps each test
@@ -1215,9 +1428,7 @@ class ProjectCustomFieldsView(AuthenticatedAPIView):
                 )
             )
             rank = {fid: idx for idx, fid in enumerate(order)}
-            fields.sort(
-                key=lambda f: (rank.get(f.field_id, len(order)), f.sort_order, f.field_id)
-            )
+            fields.sort(key=lambda f: (rank.get(f.field_id, len(order)), f.sort_order, f.field_id))
             for idx, f in enumerate(fields):
                 if f.sort_order != idx:
                     f.sort_order = idx
@@ -1228,9 +1439,7 @@ class ProjectCustomFieldsView(AuthenticatedAPIView):
 
         field_id = request.data.get("field_id")
         if not field_id:
-            return Response(
-                {"error": "field_id is required."}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": "field_id is required."}, status=status.HTTP_400_BAD_REQUEST)
         field = ProjectCustomField.objects.filter(field_id=field_id, project=project).first()
         if not field:
             return Response({"error": "Field not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -1287,9 +1496,7 @@ class ProjectCustomFieldsView(AuthenticatedAPIView):
             return err
         field_id = request.data.get("field_id")
         if not field_id:
-            return Response(
-                {"error": "field_id is required."}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": "field_id is required."}, status=status.HTTP_400_BAD_REQUEST)
         field = ProjectCustomField.objects.filter(field_id=field_id, project=project).first()
         if not field:
             return Response({"error": "Field not found."}, status=status.HTTP_404_NOT_FOUND)

@@ -343,3 +343,84 @@ class ProjectLabelAssignment(models.Model):
         ]
         # No denormalized `team` column: the team is always `label.team`,
         # and deleting a label cascades its assignments away.
+
+
+class ProjectSavedTaskFilter(models.Model):
+    """A named, project-shared task filter selection ("Saved Filters").
+
+    The filter bar above the task table / sprint board narrows on six
+    dimensions (status, tags, priority, effort, milestones, members).
+    Users routinely want several *different* combinations depending on
+    what they're checking — "my blocked work", "this sprint's review
+    queue", "unassigned P1s" — and re-picking each one by hand every time
+    is the whole problem this solves. Saving one under a name makes it a
+    one-click recall, and because rows are project-scoped rather than
+    per-user, a filter one member sets up is immediately available to
+    every other member of that project.
+
+    Shared project-wide and managed by any project member — the same
+    trust model as ProjectTags / ProjectTaskTemplate; `created_by` is a
+    display hint, never an authorization gate.
+
+    `filters` stores IDENTITY ONLY — the labels and ids the client picked
+    (`{status, tags, priorities, effortLevels, milestoneKeys,
+    memberKeys}`), matching the frontend's `StoredTaskFilters`. It must
+    never hold the client's `FilterProps` objects: those carry
+    `filterModel` predicates and palette colors, so persisting them would
+    pin a stale copy of logic that ships with the app — and pin it for
+    every member, not just the author. Labels are rehydrated against the
+    live predefined lists on read, so a filter whose definition changed
+    picks up the new one and a label that no longer exists (deleted
+    project tag, milestone since removed, member who left) is simply
+    dropped by the existing prune effects.
+
+    `status` may be absent from the blob. A filter saved from the sprint
+    board carries no status, because the board hides that dimension and
+    pins it to "All" — recording its pinned value would silently widen a
+    table view to include Closed/Deleted rows. Absent means "this filter
+    asserts nothing about status".
+
+    Applying is a pure client-side selection change: nothing here is
+    referenced by a task, so editing or deleting a saved filter never
+    touches task data (same as ProjectTaskTemplate, unlike a tag rename).
+    """
+
+    filter_id = models.BigAutoField(primary_key=True)
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="team_saved_task_filters",
+        to_field="team_id",
+    )
+    project = models.ForeignKey(
+        ProjectMaster,
+        on_delete=models.CASCADE,
+        null=True,
+        related_name="project_saved_task_filters",
+        to_field="project_id",
+    )
+    filter_name = models.CharField(max_length=60)
+    # StoredTaskFilters-shaped identity blob — see the class docstring.
+    filters = models.JSONField(default=dict)
+    created_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="created_saved_task_filters",
+        to_field="id",
+    )
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            # Name is the identity users address a filter by, so it has to
+            # be unique per project — and it's what makes "save over the
+            # existing one" well-defined: the client resolves a matching
+            # name to a PUT instead of a POST.
+            models.UniqueConstraint(
+                fields=["project", "filter_name"],
+                name="unique_project_saved_task_filter",
+            )
+        ]
