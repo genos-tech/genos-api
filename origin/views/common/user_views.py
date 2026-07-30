@@ -1,5 +1,5 @@
+import logging
 import time
-from datetime import date
 
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
@@ -14,7 +14,10 @@ from origin.services.calendar_sync import (
     get_google_connected_account,
     sync_task_event,
 )
+from origin.services.user_time import is_valid_timezone, user_today
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+
+logger = logging.getLogger(__name__)
 
 
 #############################
@@ -234,6 +237,56 @@ class AutoSyncTasksToCalendarPreferenceView(AuthenticatedAPIView):
         )
 
 
+class TimezonePreferenceView(AuthenticatedAPIView):
+    """GET / PATCH the calling user's IANA timezone.
+
+    Same shape as the boolean preference views above: scoped to
+    `request.user`, no user_id accepted, so a leaked token can't rewrite
+    someone else's zone.
+
+    Written by the client from `Intl.DateTimeFormat().resolvedOptions()
+    .timeZone` rather than typed by the user. That is why an unrecognised
+    value is stored as NULL and 200s instead of 400ing: a browser reporting
+    something this Python's tzdata doesn't know is not a client bug the user
+    can act on, and failing the boot-time sync over it would be worse than
+    falling back to server time. The response echoes what was actually
+    stored, so the client can tell the difference.
+
+    `""` / `null` is a legitimate value meaning "don't know" — see the field
+    comment on `CustomUser.timezone` for why that is distinct from "UTC".
+    """
+
+    def get(self, request):
+        return Response(
+            {"timezone": request.user.timezone or ""},
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request):
+        value = request.data.get("timezone")
+        if value is not None and not isinstance(value, str):
+            return Response(
+                {"error": "timezone must be a string."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        name = (value or "").strip()
+        if name and not is_valid_timezone(name):
+            logger.info(
+                "[timezone] rejecting unknown zone %r for user %s; storing null",
+                name[:64],
+                request.user.pk,
+            )
+            name = ""
+        stored = name or None
+        if request.user.timezone != stored:
+            request.user.timezone = stored
+            request.user.save(update_fields=["timezone"])
+        return Response(
+            {"timezone": stored or ""},
+            status=status.HTTP_200_OK,
+        )
+
+
 class LlmModelPreferenceView(AuthenticatedAPIView):
     """GET / PATCH the calling user's LLM provider + model preference.
 
@@ -359,7 +412,10 @@ class CalendarSyncBackfillView(AuthenticatedAPIView):
         # not soft-deleted. Past-due tasks are skipped to avoid
         # cluttering the user's calendar with backlog — the signal
         # will catch them next time they're edited.
-        today = date.today()
+        # The caller's own future tasks — personal scope, so "today"
+        # means the caller's today. On UTC this skipped a task due
+        # today for any user already past midnight locally.
+        today = user_today(request.user)
         tasks = TaskMaster.objects.filter(
             assignee=request.user,
             is_deleted=False,

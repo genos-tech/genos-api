@@ -14,6 +14,7 @@ from origin.serializers.chat.todo_serializers import (
     ToDoGroupSerializer,
     ToDoItemSerializer,
 )
+from origin.services.user_time import user_today
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data
 
@@ -56,7 +57,10 @@ class ToDoGroupListView(AuthenticatedAPIView):
         if res := validate_request_data({"team_id": team_id}):
             return res
 
-        today = timezone.localdate()
+        # Todo groups are keyed by the CLIENT's local date, so the range
+        # bounds have to be the caller's date too — that mismatch is what
+        # the `+1 day` slack below was working around.
+        today = user_today(request.user)
         date_from = _parse_date(
             request.GET.get("from"), today - timedelta(days=DEFAULT_LOOKBACK_DAYS)
         )
@@ -237,9 +241,9 @@ class ToDoCategoryListView(AuthenticatedAPIView):
         team_id = request.GET.get("team_id")
         if res := validate_request_data({"team_id": team_id}):
             return res
-        categories = ToDoCategory.objects.filter(
-            team_id=team_id, user_id=request.user.id
-        ).order_by("sort_order", "category_id")
+        categories = ToDoCategory.objects.filter(team_id=team_id, user_id=request.user.id).order_by(
+            "sort_order", "category_id"
+        )
         return Response(
             ToDoCategorySerializer(categories, many=True).data, status=status.HTTP_200_OK
         )
