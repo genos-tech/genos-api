@@ -11,7 +11,8 @@ See `services/user_time.py`.
 """
 
 import re
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime
+from datetime import timezone as dt_timezone
 from pathlib import Path
 from unittest.mock import patch
 
