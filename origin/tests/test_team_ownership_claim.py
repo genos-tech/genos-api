@@ -357,3 +357,39 @@ class TestClaimStatus(ClaimTestCase):
         # endpoint hands a team's claim state to any authenticated
         # stranger who guesses the id.
         self.assertEqual(self.get_status(make_user("stranger2")).status_code, 403)
+
+
+class TestLiveNotice(ClaimTestCase):
+    """The payload the sockets service relays to the owner.
+
+    This flow files over HTTP; request types 1-4 file through the
+    sockets service, which pushes the new row as it creates it. Without
+    a relay the owner's open tab shows nothing until a full reload —
+    and their silence is what authorises the takeover, so "they never
+    saw it" is not an acceptable failure mode.
+    """
+
+    def get_status(self, user):
+        return self.as_(user).get(STATUS_URL, {"team_id": str(self.team.team_id)})
+
+    def test_the_claimant_gets_a_payload_addressed_to_the_owner(self):
+        item_id = self.file_claim().json()["itemId"]
+        notice = self.get_status(self.editor).json()["claim"]["notice"]
+        self.assertEqual(notice["receiver"], str(self.owner.id))
+        self.assertEqual(notice["data"]["itemId"], item_id)
+        self.assertEqual(notice["data"]["itemType"], ITEM_TYPE_OWNERSHIP_CLAIM)
+        # The card renders from these two; empty means a blank card.
+        self.assertTrue(notice["data"]["itemBody"])
+        self.assertTrue(notice["data"]["itemOptionals"]["deadline"])
+
+    def test_nobody_else_is_handed_a_relayable_payload(self):
+        # The relay is triggered by the client, so the payload must only
+        # ever reach the person who filed the claim. Otherwise it turns
+        # into a way to push inbox content at an arbitrary user.
+        self.file_claim()
+        other = make_user("editor5")
+        TeamMembers.objects.create(
+            team_id=self.team.team_id, attendee_id=other.id, member_role=EDITOR
+        )
+        self.assertNotIn("notice", self.get_status(other).json()["claim"])
+        self.assertNotIn("notice", self.get_status(self.viewer).json()["claim"])

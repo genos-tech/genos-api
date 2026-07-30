@@ -201,20 +201,42 @@ class TeamOwnershipClaimStatusView(AuthenticatedAPIView):
 
         deadline = claim_deadline_of(item)
         is_mine = str(item.sender_id) == str(request.user.id)
+        claim = {
+            "itemId": item.item_id,
+            "deadline": deadline.isoformat() if deadline else None,
+            "status": item.request_status,
+            "isMine": is_mine,
+            "claimantId": str(item.sender_id) if item.sender_id else None,
+            # Advisory only — `finalize` re-checks all of it under a
+            # row lock. Never treat this as the authorisation.
+            "canFinalize": bool(is_mine and deadline is not None and timezone.now() >= deadline),
+        }
+        if is_mine:
+            # The card, for the sockets service to relay live to the
+            # owner. Returned ONLY to the claimant, and built here rather
+            # than accepted from the client: the relay must not become a
+            # way to push arbitrary inbox content at another user.
+            #
+            # Needed because this flow files over HTTP while request
+            # types 1-4 file through the sockets service, which pushes
+            # the new row as it creates it. Without this the owner sees
+            # nothing until a full page reload — and their silence is
+            # what authorises the takeover.
+            claim["notice"] = {
+                "receiver": str(item.receiver_id) if item.receiver_id else None,
+                "data": {
+                    "itemId": item.item_id,
+                    "itemBody": item.item_body,
+                    "itemType": item.item_type,
+                    "isRead": item.is_read,
+                    "requestStatus": item.request_status,
+                    "tsSent": item.ts_created_at.isoformat(),
+                    "itemOptionals": item.item_optionals,
+                },
+            }
         return Response(
             {
-                "claim": {
-                    "itemId": item.item_id,
-                    "deadline": deadline.isoformat() if deadline else None,
-                    "status": item.request_status,
-                    "isMine": is_mine,
-                    "claimantId": str(item.sender_id) if item.sender_id else None,
-                    # Advisory only — `finalize` re-checks all of it under a
-                    # row lock. Never treat this as the authorisation.
-                    "canFinalize": bool(
-                        is_mine and deadline is not None and timezone.now() >= deadline
-                    ),
-                },
+                "claim": claim,
                 "canRequest": False,
                 "retryAfter": None,
                 "responseDays": CLAIM_RESPONSE_DAYS,
