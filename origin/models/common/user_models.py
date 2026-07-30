@@ -67,6 +67,18 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     custom_status = models.CharField(max_length=50, blank=True, null=True)
     role = models.CharField(max_length=50, blank=True, null=True)
     base_country = models.CharField(max_length=50, blank=True, null=True)
+    # IANA timezone name ("Asia/Tokyo"), captured from the browser.
+    #
+    # NULL means UNKNOWN, and that is deliberately not the same as "chose
+    # UTC": `settings.TIME_ZONE` is the fallback for date-boundary math
+    # (see `services/user_time.py`), but a digest that has to fire "at 8am
+    # local" needs to know whether it actually knows where someone is. A
+    # `default="UTC"` would erase that distinction for every existing row
+    # at migration time and it could never be recovered.
+    #
+    # Storage stays UTC — `settings.TIME_ZONE` is unchanged. This field only
+    # affects which calendar day a moment falls in.
+    timezone = models.CharField(max_length=64, blank=True, null=True)
     last_seen = models.DateTimeField(auto_now=True)
     is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)

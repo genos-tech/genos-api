@@ -249,6 +249,11 @@ urlpatterns = [
         name="spotlight_web_search_preference",
     ),
     path(
+        "api/v2/user/preferences/timezone/",
+        TimezonePreferenceView.as_view(),
+        name="timezone_preference",
+    ),
+    path(
         "api/v2/user/preferences/llm-model/",
         LlmModelPreferenceView.as_view(),
         name="llm_model_preference",
