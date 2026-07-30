@@ -19,13 +19,13 @@ from __future__ import annotations
 from typing import Any
 
 from django.db.models import Count, Q
-from django.utils import timezone
 
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.list_tasks import _milestone_task_q
+from origin.services.user_time import today_for_user_id
 
 _MAX_LIMIT = 50
 _VALID_STATUSES = {"Open", "WIP", "Pending", "Closed", "Deleted"}
@@ -75,7 +75,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     qs = qs.order_by("status", "due_date", "-ts_updated_at")[:limit]
 
-    today = timezone.now().date()
+    today = today_for_user_id(ctx.user_id)
     milestones: list[dict[str, Any]] = []
     for m in qs:
         task_qs = TaskMaster.objects.filter(_milestone_task_q(m)).distinct()

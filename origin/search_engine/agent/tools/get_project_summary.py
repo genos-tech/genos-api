@@ -17,11 +17,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.utils import timezone
-
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.services.user_time import today_for_user_id
 
 _STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed"]
 
@@ -48,8 +47,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     ).exists()
     if not is_member:
         raise ToolError(
-            f"Not authorized to access project {project_id}. "
-            "You are not a member of that project."
+            f"Not authorized to access project {project_id}. You are not a member of that project."
         )
 
     # --- Aggregate counts. ---
@@ -64,7 +62,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     status_breakdown = {s: qs.filter(status=s).count() for s in _STATUS_LABELS}
 
-    today = timezone.now().date()
+    today = today_for_user_id(ctx.user_id)
     overdue_count = (
         qs.exclude(status__in=["Closed", "Deleted"])
         .filter(due_date__isnull=False, due_date__lt=today)

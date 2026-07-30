@@ -29,12 +29,12 @@ from __future__ import annotations
 from typing import Any
 
 from django.db.models import Q
-from django.utils import timezone
 
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.services.user_time import today_for_user_id
 
 _MAX_LIMIT = 50
 _VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed"}
@@ -163,7 +163,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         qs = qs.filter(_milestone_task_q(milestone)).distinct()
 
     if args.get("overdue_only"):
-        today = timezone.now().date()
+        today = today_for_user_id(ctx.user_id)
         qs = qs.exclude(status__in=["Closed", "Deleted"]).filter(
             due_date__isnull=False, due_date__lt=today
         )
@@ -244,7 +244,7 @@ LIST_TASKS = Tool(
                     "enum": ["Open", "WIP", "Blocked", "Pending", "Closed"],
                 },
                 "description": (
-                    "Filter by one or more statuses. Omit to include all " "non-deleted tasks."
+                    "Filter by one or more statuses. Omit to include all non-deleted tasks."
                 ),
             },
             "priority": {

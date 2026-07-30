@@ -21,7 +21,6 @@ from __future__ import annotations
 from typing import Any
 
 from django.db.models import Count, Q
-from django.utils import timezone
 
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
@@ -29,6 +28,7 @@ from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.list_tasks import _milestone_task_q
+from origin.services.user_time import today_for_user_id
 
 _STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"]
 _PRIORITY_LABELS = ["Minimal", "Low", "Normal", "High", "Critical"]
@@ -43,9 +43,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"`sprint_id` must be an integer (got {raw_id!r}).")
 
     try:
-        sprint = Sprint.objects.select_related("project").get(
-            sprint_id=sprint_id, is_deleted=False
-        )
+        sprint = Sprint.objects.select_related("project").get(sprint_id=sprint_id, is_deleted=False)
     except Sprint.DoesNotExist:
         raise ToolError(f"Sprint {sprint_id} not found.")
 
@@ -57,11 +55,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     ).exists()
     if not is_member:
         raise ToolError(
-            f"Not authorized to access sprint {sprint_id}. "
-            "You are not a member of that project."
+            f"Not authorized to access sprint {sprint_id}. You are not a member of that project."
         )
 
-    today = timezone.now().date()
+    today = today_for_user_id(ctx.user_id)
 
     base_qs = TaskMaster.objects.filter(
         team_id=ctx.team_id,
@@ -104,9 +101,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             .distinct()
             .aggregate(
                 tasks_total=Count("task_id", distinct=True),
-                tasks_closed=Count(
-                    "task_id", distinct=True, filter=Q(status__in=_CLOSED_STATUSES)
-                ),
+                tasks_closed=Count("task_id", distinct=True, filter=Q(status__in=_CLOSED_STATUSES)),
             )
         )
         milestones.append(
