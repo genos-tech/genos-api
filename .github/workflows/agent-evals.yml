@@ -173,11 +173,37 @@ jobs:
       # real agent query on the live revision. The job still finishes SUCCESS
       # when skipped, so `deploy: needs: agent-evals` is unaffected and a future
       # required-check can't deadlock (the concern in the `on:` comment).
+      # The Vertex-billed steps need a live GCP project: WIF has no pool to
+      # federate against once the env is torn down, so `auth@v2` fails with
+      # `invalid_target` BEFORE anything is spent. That is not a quality
+      # regression and must not read as one — every PR touching
+      # `origin/search_engine/**` went red at this step after the 2026-07-30
+      # teardown. Treat "no GCP" as "skip, loudly", the same shape as "no
+      # eval-relevant paths".
+      #
+      # `DEPLOY_TO_GCP` is the existing flag for "the GCP env is live"; the
+      # secret check is belt-and-braces for a repo where the var was never
+      # set. THE GATE IS INERT WHILE THIS SKIPS — retrieval regressions will
+      # not be caught on a PR until the env (or Railway-hosted evals) is back.
+      - name: Is a Vertex-backed eval possible at all?
+        id: gcp
+        run: |
+          if [ "${{ vars.DEPLOY_TO_GCP }}" = "true" ] && [ -n "${{ secrets.GCP_WIF_PROVIDER }}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::GCP env unavailable (DEPLOY_TO_GCP != true or no WIF provider) — the agent eval gate is INERT for this run."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Decide if the eval is needed (path relevance)
         id: changes
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "${{ steps.gcp.outputs.available }}" != "true" ]; then
+            echo "No GCP env — nothing to authenticate against."
+            echo "relevant=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "PR run — the on.pull_request paths filter already gated this."
             echo "relevant=true" >> "$GITHUB_OUTPUT"; exit 0
@@ -199,9 +225,16 @@ jobs:
             echo "relevant=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: No eval-relevant changes — deterministic gate auto-passes
+      - name: Eval skipped — deterministic gate auto-passes
         if: steps.changes.outputs.relevant != 'true'
-        run: echo "Skipping the Vertex eval for this merge (no eval-relevant paths). Nightly + post-deploy smoke still cover retrieval. Gate passes."
+        run: |
+          if [ "${{ steps.gcp.outputs.available }}" != "true" ]; then
+            echo "Skipped because the GCP env is unavailable, NOT because the change is safe."
+            echo "Re-run this workflow once GCP is back, or move the evals to Railway."
+          else
+            echo "Skipping the Vertex eval (no eval-relevant paths). Nightly + post-deploy smoke still cover retrieval."
+          fi
+          echo "Gate passes so \`deploy: needs: agent-evals\` stays valid."
 
       - uses: actions/checkout@v4
         if: steps.changes.outputs.relevant == 'true'
