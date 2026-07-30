@@ -34,6 +34,9 @@ class InboxItems(models.Model):
     #    2: "join project request",
     #    3: "join gm request",
     #    4: "note access request"
+    #    5: "team ownership claim" (break-glass recovery for an absent
+    #       owner — see origin/services/ownership_claim.py; `receiver` is
+    #       the CURRENT owner, `sender` the editor claiming)
     # }
     #########################################################
     item_type = models.IntegerField(blank=False)
