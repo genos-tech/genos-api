@@ -93,6 +93,15 @@ def iter_milestone_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
             search_text=search_text,
             snippet_text=make_snippet(search_text),
             project_id=project_id,
+            # Mirrors the task chunker's `task_status` overlay so a
+            # milestone row can render the same status chip a task row
+            # does. `MilestoneMaster.status` is the milestone's own
+            # status field (defaulted "Open"), not the backing task's.
+            # Already in the v2 mappings as a keyword, so no mapping
+            # change — but existing milestone docs stay bare until they
+            # are reingested (`iter_milestone_chunks` is incremental on
+            # `ts_updated_at`), and readers must treat it as optional.
+            task_status=m.status or None,
             # Backing task — lets Spotlight open the milestone via the
             # existing task deep-link. None for legacy milestones whose
             # backing task hasn't been auto-created yet.
