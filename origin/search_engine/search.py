@@ -167,6 +167,7 @@ def search(
     team_id: str,
     user_id: str,
     entity_types: Optional[list[str]] = None,
+    project_ids: Optional[list[str]] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     limit: int = DEFAULT_LIMIT,
@@ -191,6 +192,15 @@ def search(
         team_id: tenant — required.
         user_id: requesting user — used for ACL filter.
         entity_types: subset, e.g. ["chat","note"]. Default: all.
+        project_ids: hard filter — keep only chunks whose `project_id` is
+            in this list. Default (None) applies no project scoping.
+            Note this is a FILTER, not the `boost_project_ids` nudge
+            below: anything without a `project_id` is dropped outright,
+            so DMs/GMs, personal notes and todos disappear. That's the
+            intended reading of "only content in these projects" (the
+            Spotlight project filter); callers that want project
+            relevance without excluding everything else want
+            `boost_project_ids` instead.
         date_from/date_to: ISO 8601 strings (compared against `updated_at`).
         limit: max number of entity-level results to return (after
             relevance filtering).
@@ -309,6 +319,7 @@ def search(
         mode=mode,
         person_id=person_id,
         chat_retention_cutoff=chat_retention_cutoff,
+        project_ids=project_ids,
     )
 
     # --- Phase 10: query rewriting (optional) ---
@@ -814,6 +825,7 @@ def _build_filter(
     mode: Optional[SearchMode] = None,
     person_id: Optional[str] = None,
     chat_retention_cutoff: Optional[str] = None,
+    project_ids: Optional[list[str]] = None,
 ) -> list[dict]:
     filt: list[dict] = [
         {"term": {"team_id": team_id}},
@@ -853,6 +865,16 @@ def _build_filter(
         if mode != "typeahead":
             excluded.append("spotlight_answer")
         filt.append({"bool": {"must_not": [{"term": {"entity_type": et}} for et in excluded]}})
+    if project_ids:
+        # Project scoping (Spotlight's project filter). A plain `terms`
+        # clause, so chunks with NO `project_id` are excluded — DMs/GMs,
+        # personal notes and todos aren't "content in a project" and the
+        # user picked specific projects. Composes with `entity_types`:
+        # Tasks + project P narrows to that project's tasks.
+        #
+        # Deliberately a filter and not a boost — see the `project_ids`
+        # note in `search()`'s docstring for why both exist.
+        filt.append({"terms": {"project_id": [str(p) for p in project_ids]}})
     if date_from or date_to:
         rng: dict = {}
         if date_from:
@@ -1172,6 +1194,11 @@ def _source_fields(*, for_agent: bool = False) -> list[str]:
         "author_id",
         "task_assignee_id",
         "note_owner_id",
+        # Task overlay projected for the UI shape's status chip (see
+        # `_group_by_entity`). Written by task_chunker on every task
+        # chunk incl. comments, and by milestone_chunker; absent on all
+        # other chunk families, which `to_dict()` drops.
+        "task_status",
     ]
     if for_agent:
         # The full chunk text — used as LLM grounding context. Excluded
@@ -1287,6 +1314,15 @@ def _group_by_entity(
                 # the chat/thread, no specific message focus".
                 "message_id": _extract_chat_message_id(c["chunk_id"], src.get("chunk_type")),
             }
+            if not for_agent:
+                # UI-shape only: powers the Spotlight status chip on
+                # task / milestone rows. Deliberately withheld from the
+                # agent shape — those entries are serialized into LLM
+                # grounding context, so adding a field there would
+                # change agent behaviour (and the eval numbers) for a
+                # purely presentational need. None on non-task rows and
+                # on docs indexed before the field was written.
+                entry["task_status"] = src.get("task_status")
             if for_agent:
                 entry["chunks"] = [_chunk_for_agent(c)]
             by_entity[key] = entry

@@ -9,6 +9,7 @@ Request body (JSON):
       "query":         "payment retry failure",          # required
       "team_id":       "<team uuid>",                     # required
       "entity_types":  ["chat","task","note"],            # optional, default all
+      "project_ids":   ["12","31"],                       # optional, default no scoping
       "date_from":     "2026-01-01T00:00:00Z",            # optional
       "date_to":       "2026-05-15T00:00:00Z",            # optional
       "limit":         20,                                # optional, default 20
@@ -59,6 +60,21 @@ class SearchView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Project scoping — a hard filter on `project_id`, so a request
+        # naming projects gets ONLY those projects' content (Spotlight's
+        # project filter). Cast to str because project ids are integers
+        # in the app but keywords in the index; an int here would match
+        # nothing. Note this is search-only: `/agent/ask/` has no
+        # equivalent and must stay unscoped.
+        project_ids = data.get("project_ids") or None
+        if project_ids is not None and not isinstance(project_ids, list):
+            return Response(
+                {"error": "project_ids must be a list of strings."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if project_ids is not None:
+            project_ids = [str(p) for p in project_ids]
+
         try:
             limit = int(data.get("limit", 20))
         except (TypeError, ValueError):
@@ -105,6 +121,7 @@ class SearchView(AuthenticatedAPIView):
                 team_id=str(team_id),
                 user_id=user_id,
                 entity_types=entity_types,
+                project_ids=project_ids,
                 date_from=data.get("date_from"),
                 date_to=data.get("date_to"),
                 limit=limit,

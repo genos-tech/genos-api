@@ -590,6 +590,20 @@ class TestMilestoneChunker(BaseAPITestCase):
         self.assertEqual(c.task_id, str(backing.task_id))
         self.assertEqual(c.project_id, str(self.project.project_id))
         self.assertIn(str(self.user.id), c.acl_user_ids)  # project member
+        # Status overlay mirrors the task chunker so a milestone row can
+        # render the same Spotlight status chip. The MILESTONE's own
+        # status (default "Open"), not the backing task's ("open" here).
+        self.assertEqual(c.task_status, "Open")
+
+    def test_milestone_status_overlay_tracks_the_milestone_status(self):
+        m = self._ms(title="Shipped MS", status="Closed")
+        c = list(iter_milestone_chunks())[0].chunks[0]
+        self.assertEqual(c.task_status, "Closed")
+        # Blank status must drop out rather than index an empty keyword.
+        MilestoneMaster.objects.filter(milestone_id=m.milestone_id).update(status="")
+        c = list(iter_milestone_chunks())[0].chunks[0]
+        self.assertIsNone(c.task_status)
+        self.assertNotIn("task_status", c.to_dict())
 
     def test_milestone_acl_includes_assignee_and_reporter(self):
         m = self._ms(title="Assigned MS", reporter=self.user2)
