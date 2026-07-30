@@ -8,7 +8,6 @@ with a deadline rather than an inactivity check.
 """
 
 import logging
-from datetime import datetime
 
 from django.db import transaction
 from django.utils import timezone
@@ -23,6 +22,8 @@ from origin.services.ownership_claim import (
     ITEM_TYPE_OWNERSHIP_CLAIM,
     claim_body,
     claim_deadline,
+    claim_deadline_of,
+    claim_optionals,
     cooldown_until,
     is_eligible_claimant,
     pending_claim_for_team,
@@ -105,12 +106,21 @@ class TeamOwnershipClaimRequestView(AuthenticatedAPIView):
             )
 
         deadline = claim_deadline()
+        claimant_name = request.user.username or request.user.email or "A team editor"
         item = InboxItems.objects.create(
             team=team,
             sender=request.user,
             receiver_id=team.owner_id,
             item_type=ITEM_TYPE_OWNERSHIP_CLAIM,
+            # Prose in `item_body`, machine-readable fields in
+            # `item_optionals` — the split every other request type uses.
+            # The owner's inbox renders the body; anything else is a blank
+            # card, and a blank card here means being timed out by a
+            # notice you were never shown.
             item_body=claim_body(
+                claimant_name=claimant_name, team_name=team.team_name, deadline=deadline
+            ),
+            item_optionals=claim_optionals(
                 team_name=team.team_name, owner_id=team.owner_id, deadline=deadline
             ),
             request_status="pending",
@@ -134,6 +144,82 @@ class TeamOwnershipClaimRequestView(AuthenticatedAPIView):
                 "responseDays": CLAIM_RESPONSE_DAYS,
             },
             status=status.HTTP_201_CREATED,
+        )
+
+
+class TeamOwnershipClaimStatusView(AuthenticatedAPIView):
+    """GET ?team_id= — the open claim on this team, from the caller's side.
+
+    WHY THIS EXISTS. The claim rides on `InboxItems`, and the inbox GET is
+    filtered to `receiver` — which is the OWNER. The claimant is the
+    `sender`, so their own claim never appears in their inbox and they
+    would have nothing to finalize from. This is the claimant's only view
+    of it.
+
+    Visible to any member: an ownership claim is not a private matter, and
+    the team is told about it on finalize anyway.
+    """
+
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        if not team_id:
+            return Response({"error": "team_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        team = _team_or_none(team_id)
+        if team is None:
+            return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+        # Membership must be checked EXPLICITLY. `resolve_team_role`
+        # returns `viewer` for someone with no member row at all, so a
+        # `role is not None` test would hand this team's claim state to
+        # any authenticated stranger who guessed the id. The other three
+        # endpoints only escape that by being editor-only.
+        is_member = (
+            str(team.owner_id) == str(request.user.id)
+            or TeamMembers.objects.filter(
+                team_id=team_id, attendee_id=request.user.id, is_deleted=False
+            ).exists()
+        )
+        if not is_member:
+            return Response(
+                {"error": "You are not a member of this team."}, status=status.HTTP_403_FORBIDDEN
+            )
+        role = resolve_team_role(team, request.user.id)
+
+        item = pending_claim_for_team(team_id)
+        if item is None:
+            blocked_until = cooldown_until(team_id, request.user.id)
+            return Response(
+                {
+                    "claim": None,
+                    # What the caller may do next, so the client doesn't
+                    # re-derive eligibility rules that live here.
+                    "canRequest": is_eligible_claimant(role) and blocked_until is None,
+                    "retryAfter": blocked_until.isoformat() if blocked_until else None,
+                    "responseDays": CLAIM_RESPONSE_DAYS,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        deadline = claim_deadline_of(item)
+        is_mine = str(item.sender_id) == str(request.user.id)
+        return Response(
+            {
+                "claim": {
+                    "itemId": item.item_id,
+                    "deadline": deadline.isoformat() if deadline else None,
+                    "status": item.request_status,
+                    "isMine": is_mine,
+                    "claimantId": str(item.sender_id) if item.sender_id else None,
+                    # Advisory only — `finalize` re-checks all of it under a
+                    # row lock. Never treat this as the authorisation.
+                    "canFinalize": bool(
+                        is_mine and deadline is not None and timezone.now() >= deadline
+                    ),
+                },
+                "canRequest": False,
+                "retryAfter": None,
+                "responseDays": CLAIM_RESPONSE_DAYS,
+            },
+            status=status.HTTP_200_OK,
         )
 
 
@@ -243,13 +329,12 @@ class TeamOwnershipClaimFinalizeView(AuthenticatedAPIView):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
-            deadline_raw = (item.item_body or {}).get("deadline")
-            deadline = datetime.fromisoformat(deadline_raw) if deadline_raw else None
+            deadline = claim_deadline_of(item)
             if deadline is None or timezone.now() < deadline:
                 return Response(
                     {
                         "error": "The owner still has time to respond.",
-                        "deadline": deadline_raw,
+                        "deadline": deadline.isoformat() if deadline else None,
                     },
                     status=status.HTTP_409_CONFLICT,
                 )
@@ -262,7 +347,7 @@ class TeamOwnershipClaimFinalizeView(AuthenticatedAPIView):
             # normally while this claim sits pending. Finalizing on the
             # recorded owner would then take the team from the new owner,
             # who never had a claim filed against them.
-            owner_at_request = (item.item_body or {}).get("ownerIdAtRequest")
+            owner_at_request = (item.item_optionals or {}).get("owner_id_at_request")
             if owner_at_request and str(team.owner_id) != str(owner_at_request):
                 item.request_status = "rejected"
                 item.save(update_fields=["request_status", "ts_updated_at"])

@@ -33,6 +33,7 @@ User = get_user_model()
 REQUEST_URL = "/api/v2/team/ownership-claim/request/"
 RESPOND_URL = "/api/v2/team/ownership-claim/respond/"
 FINALIZE_URL = "/api/v2/team/ownership-claim/finalize/"
+STATUS_URL = "/api/v2/team/ownership-claim/"
 
 
 def make_user(name):
@@ -68,11 +69,11 @@ class ClaimTestCase(TestCase):
     def expire(self, item_id):
         """Move a claim's deadline into the past."""
         item = InboxItems.objects.get(item_id=item_id)
-        item.item_body = {
-            **(item.item_body or {}),
+        item.item_optionals = {
+            **(item.item_optionals or {}),
             "deadline": (timezone.now() - timedelta(days=1)).isoformat(),
         }
-        item.save(update_fields=["item_body"])
+        item.save(update_fields=["item_optionals"])
 
     def owner_of_team(self):
         return str(TeamMaster.objects.get(team_id=self.team.team_id).owner_id)
@@ -88,6 +89,36 @@ class TestFilingAClaim(ClaimTestCase):
         # Addressed TO the owner — that's what makes their silence evidence.
         self.assertEqual(str(item.receiver_id), str(self.owner.id))
         self.assertEqual(item.request_status, "pending")
+
+    def test_the_owner_is_shown_something(self):
+        """The claim must render in the owner's inbox.
+
+        THIS IS A SAFETY TEST, not a formatting one. Finalizing is
+        justified by the owner's silence, so the notice they stayed
+        silent about has to be legible. The inbox renders `item_body`
+        through BlockNote and gates on `itemBody[0]?.content?.length`
+        (`InboxBubble.tsx`) — a structured dict there is an EMPTY CARD
+        with a timestamp, and the owner is then timed out by a notice
+        that showed them nothing.
+        """
+        item = InboxItems.objects.get(item_id=self.file_claim().json()["itemId"])
+        self.assertIsInstance(item.item_body, list)
+        self.assertTrue(item.item_body[0].get("content"))
+        text = " ".join(
+            span.get("text", "") for block in item.item_body for span in block.get("content", [])
+        )
+        self.assertIn("editor", text)  # who is asking
+        self.assertIn("Acme", text)  # for what
+        # ...and what happens if they do nothing, which is the whole point.
+        self.assertIn(str(CLAIM_RESPONSE_DAYS), text)
+
+    def test_the_machine_readable_half_rides_in_optionals(self):
+        # Same split as every other request type: prose in `item_body`,
+        # ids and dates in `item_optionals`.
+        item = InboxItems.objects.get(item_id=self.file_claim().json()["itemId"])
+        self.assertEqual(item.item_optionals["kind"], "team_ownership_claim")
+        self.assertEqual(item.item_optionals["owner_id_at_request"], str(self.owner.id))
+        self.assertTrue(item.item_optionals["deadline"])
 
     def test_a_viewer_cannot_file(self):
         # The escalation this feature must not become: a read-only member
@@ -244,6 +275,15 @@ class TestFinalizing(ClaimTestCase):
         resp = self.as_(self.editor).post(FINALIZE_URL, {"item_id": item_id}, format="json")
         self.assertEqual(resp.status_code, 404)
 
+    def test_a_claim_with_no_recorded_deadline_can_never_be_finalized(self):
+        # Fail closed. A row that predates `claim_optionals`, or one made
+        # by hand, must not become finalizable by having no deadline.
+        item_id = self.file_claim().json()["itemId"]
+        InboxItems.objects.filter(item_id=item_id).update(item_optionals={})
+        resp = self.as_(self.editor).post(FINALIZE_URL, {"item_id": item_id}, format="json")
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(self.owner_of_team(), str(self.owner.id))
+
     def test_everyone_is_told_when_a_claim_is_finalized(self):
         # A silent ownership change is what would make this a liability
         # rather than a safety net.
@@ -254,3 +294,66 @@ class TestFinalizing(ClaimTestCase):
         notified = {str(c.kwargs["recipient_id"]) for c in push.call_args_list}
         self.assertIn(str(self.owner.id), notified)
         self.assertIn(str(self.viewer.id), notified)
+
+
+class TestClaimStatus(ClaimTestCase):
+    """The claimant's only view of their own claim.
+
+    The claim is an `InboxItems` row and the inbox GET filters on
+    `receiver` — the OWNER. The claimant is the `sender`, so without this
+    endpoint they can file a claim and then never see it again, and have
+    nothing to finalize from.
+    """
+
+    def get_status(self, user):
+        return self.as_(user).get(STATUS_URL, {"team_id": str(self.team.team_id)})
+
+    def test_the_claimant_can_see_their_own_pending_claim(self):
+        item_id = self.file_claim().json()["itemId"]
+        body = self.get_status(self.editor).json()
+        self.assertEqual(body["claim"]["itemId"], item_id)
+        self.assertTrue(body["claim"]["isMine"])
+        self.assertTrue(body["claim"]["deadline"])
+
+    def test_finalize_is_not_offered_before_the_deadline(self):
+        self.file_claim()
+        self.assertFalse(self.get_status(self.editor).json()["claim"]["canFinalize"])
+
+    def test_finalize_is_offered_after_the_deadline(self):
+        self.expire(self.file_claim().json()["itemId"])
+        self.assertTrue(self.get_status(self.editor).json()["claim"]["canFinalize"])
+
+    def test_another_editor_is_not_offered_someone_elses_finalize(self):
+        self.expire(self.file_claim().json()["itemId"])
+        other = make_user("editor4")
+        TeamMembers.objects.create(
+            team_id=self.team.team_id, attendee_id=other.id, member_role=EDITOR
+        )
+        claim = self.get_status(other).json()["claim"]
+        self.assertFalse(claim["isMine"])
+        self.assertFalse(claim["canFinalize"])
+
+    def test_an_editor_with_no_open_claim_is_told_they_may_request(self):
+        body = self.get_status(self.editor).json()
+        self.assertIsNone(body["claim"])
+        self.assertTrue(body["canRequest"])
+        self.assertEqual(body["responseDays"], CLAIM_RESPONSE_DAYS)
+
+    def test_a_viewer_is_not_told_they_may_request(self):
+        self.assertFalse(self.get_status(self.viewer).json()["canRequest"])
+
+    def test_a_rejected_claimant_sees_their_cooldown(self):
+        item_id = self.file_claim().json()["itemId"]
+        self.as_(self.owner).post(
+            RESPOND_URL, {"item_id": item_id, "decision": "reject"}, format="json"
+        )
+        body = self.get_status(self.editor).json()
+        self.assertFalse(body["canRequest"])
+        self.assertIsNotNone(body["retryAfter"])
+
+    def test_a_non_member_cannot_read_the_status(self):
+        # `resolve_team_role` answers `viewer` for someone with NO member
+        # row, so membership has to be checked explicitly here or this
+        # endpoint hands a team's claim state to any authenticated
+        # stranger who guesses the id.
+        self.assertEqual(self.get_status(make_user("stranger2")).status_code, 403)

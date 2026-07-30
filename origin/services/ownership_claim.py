@@ -39,7 +39,7 @@ second manager.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from django.utils import timezone
 
@@ -55,11 +55,11 @@ ITEM_TYPE_OWNERSHIP_CLAIM = 5
 # THIS IS THE KNOB. It has to be comfortably longer than a normal absence,
 # because the cost of getting it wrong is asymmetric: too short takes a
 # team from someone who was on holiday, too long only means a genuinely
-# stranded team waits a bit more. Three weeks clears the usual holiday and
-# is still far quicker than a support round-trip. There is no email channel
+# stranded team waits a bit more. A month clears extended leave and is
+# still far quicker than a support round-trip. There is no email channel
 # yet (see PRODUCT_READINESS_PLAN §3.1), so the owner's only warning is
 # in-app + web push — another reason not to shorten this.
-CLAIM_RESPONSE_DAYS = 21
+CLAIM_RESPONSE_DAYS = 30
 
 # After a rejection, how long before the SAME user may file again. Without
 # this an editor can re-file the moment it's declined, which is a nuisance
@@ -120,16 +120,77 @@ def cooldown_until(team_id, claimant_id):
     return until if until > timezone.now() else None
 
 
-def claim_body(*, team_name: str, owner_id, deadline) -> dict:
-    """`item_body` for the inbox row.
+def _paragraph(content):
+    return {
+        "type": "paragraph",
+        "props": {"textColor": "default", "textAlignment": "left", "backgroundColor": "default"},
+        "content": content,
+        "children": [],
+    }
 
-    Denormalised on purpose: the inbox list renders from this without
-    joining, and the recorded owner id is what `finalize` re-checks against
-    so an intervening voluntary transfer invalidates the claim.
+
+def claim_body(*, claimant_name: str, team_name: str, deadline) -> list:
+    """`item_body` for the inbox row — BlockNote blocks, like item types 1-4.
+
+    This MUST be prose in block form, not a structured dict. The inbox
+    renders `item_body` through the BlockNote preview and reads structured
+    fields from `item_optionals`; a dict here renders as an EMPTY CARD,
+    which for this item type is a safety bug — the owner's silence is what
+    lets the claim be finalized, so they have to actually be shown what
+    they are being silent about.
+
+    Hence the second sentence: the consequence of ignoring this is the
+    whole point of the notice.
+    """
+    return [
+        _paragraph(
+            [
+                {"text": claimant_name, "type": "text", "styles": {"bold": True}},
+                {"text": " is requesting ownership of the team ", "type": "text", "styles": {}},
+                {"text": team_name, "type": "text", "styles": {"bold": True, "textColor": "pink"}},
+                {"text": ".", "type": "text", "styles": {}},
+            ]
+        ),
+        _paragraph(
+            [
+                {
+                    "text": (
+                        f"If you do not respond within {CLAIM_RESPONSE_DAYS} days, they will "
+                        f"be able to take ownership without your approval. Reject this "
+                        f"request to keep ownership."
+                    ),
+                    "type": "text",
+                    "styles": {},
+                }
+            ]
+        ),
+    ]
+
+
+def claim_optionals(*, team_name: str, owner_id, deadline) -> dict:
+    """`item_optionals` for the inbox row — the machine-readable half.
+
+    Denormalised on purpose, same as the note-access item's note ids: the
+    client renders the deadline without a second call, and the recorded
+    owner id is what `finalize` re-checks against so an intervening
+    voluntary transfer invalidates the claim.
     """
     return {
         "kind": "team_ownership_claim",
-        "teamName": team_name,
-        "ownerIdAtRequest": str(owner_id),
+        "team_name": team_name,
+        "owner_id_at_request": str(owner_id),
         "deadline": deadline.isoformat(),
     }
+
+
+def claim_deadline_of(item):
+    """The deadline recorded on a claim row, or None if it has none.
+
+    None fails closed at every call site (`finalize` refuses), which is the
+    right behaviour for a row that predates `claim_optionals` or was
+    hand-made.
+    """
+    raw = (item.item_optionals or {}).get("deadline")
+    if not raw:
+        return None
+    return datetime.fromisoformat(raw)
