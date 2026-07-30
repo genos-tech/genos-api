@@ -17,7 +17,7 @@ from django.core.cache import cache
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
-from origin.models.common.team_models import TeamMembers
+from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 
@@ -28,6 +28,35 @@ from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 # keeping the legacy chat models alive. v3 channel membership lives in
 # `ChannelMember`; if a cached v3 surface needs invalidation later, add a
 # `ChannelMember` receiver here.
+
+
+@receiver(post_save, sender=TeamMaster)
+def _invalidate_team_master(sender, instance, **kwargs):
+    """A team write invalidates `my_teams` for every one of its members.
+
+    The `TeamMembers` receiver below covers roster changes, but OWNERSHIP
+    does not live on a member row — it lives in `TeamMaster.owner`. So a
+    transfer fired no invalidation at all and the team profile modal,
+    which reloads `getMyTeams` every time it opens, kept showing the
+    PREVIOUS owner for the rest of the 60s TTL. That reads as a transfer
+    that silently failed, on the one screen where you go to check.
+
+    It covers renames and avatar changes for the same reason: the cached
+    payload embeds `teamName` and the image path too.
+
+    Cheap enough to do unconditionally — team rows are written on rename,
+    avatar change and transfer, not in any hot path.
+    """
+    team_id = getattr(instance, "team_id", None)
+    if team_id is None:
+        return
+    attendee_ids = TeamMembers.objects.filter(team_id=team_id).values_list("attendee_id", flat=True)
+    keys = [f"team:my_teams:{uid}" for uid in attendee_ids if uid]
+    # The owner's own row can be missing from TeamMembers in old data.
+    if getattr(instance, "owner_id", None):
+        keys.append(f"team:my_teams:{instance.owner_id}")
+    if keys:
+        cache.delete_many(keys)
 
 
 @receiver(post_save, sender=TeamMembers)

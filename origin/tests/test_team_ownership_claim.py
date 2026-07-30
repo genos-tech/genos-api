@@ -15,6 +15,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -393,3 +394,49 @@ class TestLiveNotice(ClaimTestCase):
         )
         self.assertNotIn("notice", self.get_status(other).json()["claim"])
         self.assertNotIn("notice", self.get_status(self.viewer).json()["claim"])
+
+
+class TestOwnershipCacheInvalidation(ClaimTestCase):
+    """A transfer must not leave the team profile showing the old owner.
+
+    `getMyTeams` caches per user for 60s and the team profile modal
+    reloads it every time it opens. Ownership lives in `TeamMaster.owner`,
+    NOT on a member row, so the roster receiver never saw it — a transfer
+    fired no invalidation at all and the modal kept naming the previous
+    owner for the rest of the TTL, on the one screen you would go to to
+    check whether it worked.
+    """
+
+    def keys(self):
+        return [f"team:my_teams:{u.id}" for u in (self.owner, self.editor, self.viewer)]
+
+    def warm(self):
+        for key in self.keys():
+            cache.set(key, ["stale"], timeout=60)
+
+    def test_approving_clears_every_members_cached_teams(self):
+        item_id = self.file_claim().json()["itemId"]
+        self.warm()
+        self.as_(self.owner).post(
+            RESPOND_URL, {"item_id": item_id, "decision": "approve"}, format="json"
+        )
+        for key in self.keys():
+            self.assertIsNone(cache.get(key), f"{key} still cached after transfer")
+
+    def test_finalizing_clears_every_members_cached_teams(self):
+        item_id = self.file_claim().json()["itemId"]
+        self.expire(item_id)
+        self.warm()
+        self.as_(self.editor).post(FINALIZE_URL, {"item_id": item_id}, format="json")
+        for key in self.keys():
+            self.assertIsNone(cache.get(key), f"{key} still cached after transfer")
+
+    def test_an_ordinary_owner_initiated_transfer_clears_it_too(self):
+        # The same staleness applied to the pre-existing transfer path;
+        # fixing it at the model covers all three.
+        self.warm()
+        team = TeamMaster.objects.get(team_id=self.team.team_id)
+        team.owner_id = self.editor.id
+        team.save(update_fields=["owner"])
+        for key in self.keys():
+            self.assertIsNone(cache.get(key), f"{key} still cached after transfer")
