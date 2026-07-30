@@ -48,6 +48,11 @@ from origin.views.common.oauth_views import (
     OAuthCallbackView,
     OAuthInitiateView,
 )
+from origin.views.common.ownership_claim_views import (
+    TeamOwnershipClaimFinalizeView,
+    TeamOwnershipClaimRequestView,
+    TeamOwnershipClaimRespondView,
+)
 from origin.views.common.runtime_config_views import RuntimeConfigView
 from origin.views.common.team_emoji_views import TeamEmojiView
 from origin.views.common.team_views import *
@@ -247,6 +252,23 @@ urlpatterns = [
         "api/v2/user/preferences/spotlight-web-search/",
         SpotlightWebSearchPreferenceView.as_view(),
         name="spotlight_web_search_preference",
+    ),
+    # Break-glass team-ownership recovery. See
+    # `origin/services/ownership_claim.py` for the policy.
+    path(
+        "api/v2/team/ownership-claim/request/",
+        TeamOwnershipClaimRequestView.as_view(),
+        name="team_ownership_claim_request",
+    ),
+    path(
+        "api/v2/team/ownership-claim/respond/",
+        TeamOwnershipClaimRespondView.as_view(),
+        name="team_ownership_claim_respond",
+    ),
+    path(
+        "api/v2/team/ownership-claim/finalize/",
+        TeamOwnershipClaimFinalizeView.as_view(),
+        name="team_ownership_claim_finalize",
     ),
     path(
         "api/v2/user/preferences/timezone/",
