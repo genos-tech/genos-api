@@ -43,7 +43,7 @@ class InboxItems(models.Model):
     item_optionals = models.JSONField(blank=True, null=True)
     is_read = models.BooleanField(default=False)
     #########################################################
-    # request_status: only relevant for request items (item_type 1-4)
+    # request_status: only relevant for request items (item_type 1-5)
     #   "pending"  = waiting for action
     #   "approved" = approved by owner
     #   "rejected" = rejected by owner

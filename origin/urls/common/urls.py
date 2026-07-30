@@ -52,6 +52,7 @@ from origin.views.common.ownership_claim_views import (
     TeamOwnershipClaimFinalizeView,
     TeamOwnershipClaimRequestView,
     TeamOwnershipClaimRespondView,
+    TeamOwnershipClaimStatusView,
 )
 from origin.views.common.runtime_config_views import RuntimeConfigView
 from origin.views.common.team_emoji_views import TeamEmojiView
@@ -259,6 +260,11 @@ urlpatterns = [
         "api/v2/team/ownership-claim/request/",
         TeamOwnershipClaimRequestView.as_view(),
         name="team_ownership_claim_request",
+    ),
+    path(
+        "api/v2/team/ownership-claim/",
+        TeamOwnershipClaimStatusView.as_view(),
+        name="team_ownership_claim_status",
     ),
     path(
         "api/v2/team/ownership-claim/respond/",
