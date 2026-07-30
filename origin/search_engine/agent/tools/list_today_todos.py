@@ -12,14 +12,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.utils import timezone
-
 from origin.models.chat.todo_models import ToDoGroup
 from origin.search_engine.agent.tools.base import Tool, ToolContext
+from origin.services.user_time import today_for_user_id
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    today = timezone.localdate()
+    today = today_for_user_id(ctx.user_id)
     group = (
         ToDoGroup.objects.filter(user_id=ctx.user_id, local_date=today)
         .prefetch_related("items", "items__category")

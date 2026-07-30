@@ -23,11 +23,11 @@ from datetime import timedelta
 from typing import Any
 
 from django.db.models import Count, Q
-from django.utils import timezone
 
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext
+from origin.services.user_time import today_for_user_id
 
 _STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed"]
 _PRIORITY_LABELS = ["Minimal", "Low", "Normal", "High", "Critical"]
@@ -46,7 +46,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
     member_project_ids = {pid for pid, _ in member_projects}
     project_name_by_id: dict[int, str | None] = {pid: name for pid, name in member_projects}
 
-    today = timezone.now().date()
+    today = today_for_user_id(ctx.user_id)
     week_ahead = today + timedelta(days=7)
 
     # Exclude `status='Deleted'` (the enum value, not the `is_deleted`

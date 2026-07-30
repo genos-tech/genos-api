@@ -15,10 +15,17 @@ WHEN NOT TO USE IT — the distinction is whose day it is:
 
   * **Personal scope** — "my tasks due today", "my todo groups", a digest
     addressed to one person. The viewer's day. Use this module.
-  * **Shared scope** — a sprint's day count, a team velocity bucket. Two
-    users in different zones must not get different bytes for the same team
-    resource, and if the response is cached under a user-agnostic key the
-    second reader gets the first reader's day. Leave those on server time.
+  * **Shared scope** — a sprint's day count, a team velocity bucket, served
+    from a REST endpoint. Two users in different zones must not get
+    different bytes for the same team resource, and if the response is
+    cached under a user-agnostic key the second reader gets the first
+    reader's day. Leave those on server time.
+  * **Agent tools are personal scope even when the DATA is team-wide.** A
+    tool result is composed into one person's answer to one question and is
+    never cached across users, so "today" there is always the asking user's
+    today — `get_team_task_summary` included. The shared-scope caution above
+    is about serialized shared RESOURCES, not about whose data is being
+    summarised.
   * **Quota / billing windows** (`search_engine/quota.py`) — MUST stay on a
     fixed zone. A per-user daily window is resettable by changing your
     timezone, i.e. free quota on demand.
@@ -68,6 +75,30 @@ def user_zone(user) -> ZoneInfo:
     system paths), so callers don't need their own guard.
     """
     return resolve_zone(getattr(user, "timezone", None))
+
+
+def zone_for_user_id(user_id) -> ZoneInfo:
+    """Like `user_zone`, but from a user id rather than a loaded row.
+
+    For callers that only hold an id — the agent tools receive
+    `ToolContext.user_id`, never a `CustomUser`. One narrow indexed lookup
+    of a single column, which is nothing next to the LLM round-trip that
+    invoked the tool, and deliberately NOT cached per process: a user who
+    fixes their timezone should see it apply to their next question.
+    """
+    if not user_id:
+        return resolve_zone(None)
+    # Imported here, not at module scope: `origin.services` is imported by
+    # model modules, and a top-level model import would be circular.
+    from origin.models.common.user_models import CustomUser
+
+    name = CustomUser.objects.filter(pk=user_id).values_list("timezone", flat=True).first()
+    return resolve_zone(name)
+
+
+def today_for_user_id(user_id) -> date:
+    """The calendar date it currently is for the user with this id."""
+    return timezone.now().astimezone(zone_for_user_id(user_id)).date()
 
 
 def user_now(user) -> datetime:

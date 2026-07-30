@@ -9,10 +9,9 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
-from django.utils import timezone
-
 from origin.models.chat.todo_models import ToDoItem
 from origin.search_engine.agent.tools.base import Tool, ToolContext
+from origin.services.user_time import today_for_user_id
 
 _MAX_ITEMS = 50
 _DEFAULT_DAYS = 14
@@ -25,7 +24,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         days = _DEFAULT_DAYS
     days = max(1, min(days, 365))
 
-    today = timezone.localdate()
+    today = today_for_user_id(ctx.user_id)
     from_date = today - timedelta(days=days)
 
     qs = (
@@ -78,7 +77,7 @@ LIST_UNCOMPLETED_TODOS = Tool(
             "date_range_days": {
                 "type": "INTEGER",
                 "description": (
-                    "How many days back to scan, inclusive of today. " "Default 14, max 365."
+                    "How many days back to scan, inclusive of today. Default 14, max 365."
                 ),
             },
         },

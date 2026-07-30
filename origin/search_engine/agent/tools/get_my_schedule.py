@@ -11,7 +11,7 @@ having to fan out to `list_tasks` + `list_calendar_events` separately.
 
 Date window:
   * If both `from` and `to` are omitted, defaults to today 00:00 →
-    today+7d 23:59 in the server's timezone.
+    today+7d 23:59 in the asking user's timezone.
   * If only one is given, the other is bounded to ±7 days from the
     given side so the window is always finite.
 
@@ -36,6 +36,7 @@ from origin.search_engine.agent.calendar import (
     shape_event,
 )
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.services.user_time import zone_for_user_id
 
 _DEFAULT_WINDOW_DAYS = 7
 _MAX_TASKS = 50
@@ -65,10 +66,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from_dt = _parse_iso(raw_from, "from")
     to_dt = _parse_iso(raw_to, "to")
 
+    # The default window starts at the ASKING USER's midnight, not the
+    # server's. `make_aware` would attach the server zone, so "today 00:00"
+    # for a Tokyo user landed nine hours late — asking "what's on today" in
+    # the morning returned a window that had not started yet.
+    zone = zone_for_user_id(ctx.user_id)
     now = timezone.now()
-    today = now.date()
+    today = now.astimezone(zone).date()
     if from_dt is None and to_dt is None:
-        from_dt = timezone.make_aware(datetime.combine(today, time.min))
+        from_dt = datetime.combine(today, time.min, tzinfo=zone)
         to_dt = from_dt + timedelta(days=_DEFAULT_WINDOW_DAYS)
     elif from_dt is None:
         from_dt = to_dt - timedelta(days=_DEFAULT_WINDOW_DAYS)
@@ -154,9 +160,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 calendar_message = str(exc)
         else:
             data = resp.json() or {}
-            calendar_events = [
-                shape_event(e) for e in data.get("items", []) if isinstance(e, dict)
-            ]
+            calendar_events = [shape_event(e) for e in data.get("items", []) if isinstance(e, dict)]
 
     summary_bits = [
         f"{len(tasks_due)} task(s) due",
@@ -198,7 +202,7 @@ GET_MY_SCHEDULE = Tool(
                 "description": (
                     "Window start as ISO 8601 datetime, e.g. "
                     "'2026-05-27T00:00:00Z'. Omit to default to today "
-                    "00:00 in the server's timezone."
+                    "00:00 in the asking user's timezone."
                 ),
             },
             "to": {

@@ -12,10 +12,10 @@ from datetime import datetime
 from typing import Any
 
 from django.db import transaction
-from django.utils import timezone
 
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.services.user_time import today_for_user_id
 
 
 def _wrap_notes(text: str) -> list[dict[str, Any]] | None:
@@ -55,7 +55,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if not title:
         raise ToolError("`title` is required.")
 
-    target_date = _parse_date(args.get("target_date"), timezone.localdate())
+    target_date = _parse_date(args.get("target_date"), today_for_user_id(ctx.user_id))
     notes_text = (args.get("notes_text") or "").strip()
     category_name = (args.get("category") or "").strip()
 
