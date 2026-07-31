@@ -1089,6 +1089,17 @@ SEARCH_ENGINE = {
         # forgetting one of four tiers silently uncapped a premium model.
         # Deriving it per class from the catalog makes that unexpressible.
         # Everything else here — the per-tier totals — stays hand-set.
+        #
+        # UX-pillar capability keys (agent_tool_level, max_effort,
+        # auto_effort, agent_memory, agent_history_retention_days,
+        # integrations, digest_cadence) are DARK-SHIPPED PERMISSIVE:
+        # every tier currently carries the most capable value, so the
+        # enforcement PRs merge with zero user impact. A single
+        # merge-last PR sets the real per-tier ladder — rationale and
+        # target table: genos-docs operations/UX_TIER_MODEL_PLAN.md.
+        # A MISSING capability key also resolves permissive (see
+        # quota.py) so a TIER_QUOTAS_JSON override that predates a key
+        # can't silently downgrade anyone.
         "free": {
             "llm_ask_daily": 20,
             "web_search_daily": 10,
@@ -1097,6 +1108,13 @@ SEARCH_ENGINE = {
             "note_create_monthly": 50,
             "message_retention_days": 180,
             "upload_max_mb": 5,
+            "agent_tool_level": "organize",
+            "max_effort": "high",
+            "auto_effort": True,
+            "agent_memory": "team",
+            "agent_history_retention_days": None,
+            "integrations": ["web", "google_calendar", "github"],
+            "digest_cadence": None,
         },
         # Paid-tier LLM caps are set by a value-based X/Y/Z tiering model,
         # not a profit gate — genos-docs/operations/LLM_TIER_COST_OPTIMIZATION.md
@@ -1154,6 +1172,13 @@ SEARCH_ENGINE = {
             "note_create_monthly": 300,
             "message_retention_days": None,  # unlimited on paid tiers
             "upload_max_mb": 25,
+            "agent_tool_level": "organize",
+            "max_effort": "high",
+            "auto_effort": True,
+            "agent_memory": "team",
+            "agent_history_retention_days": None,
+            "integrations": ["web", "google_calendar", "github"],
+            "digest_cadence": None,
         },
         "pro": {
             "llm_ask_daily": 250,
@@ -1163,6 +1188,13 @@ SEARCH_ENGINE = {
             "note_create_monthly": 1000,
             "message_retention_days": None,  # unlimited on paid tiers
             "upload_max_mb": 50,
+            "agent_tool_level": "organize",
+            "max_effort": "high",
+            "auto_effort": True,
+            "agent_memory": "team",
+            "agent_history_retention_days": None,
+            "integrations": ["web", "google_calendar", "github"],
+            "digest_cadence": None,
         },
         # max = 2x pro on the headline totals for ~1.96x the price, and
         # 2.5x on the premium caps — the deliberate value > price gap is
@@ -1176,6 +1208,13 @@ SEARCH_ENGINE = {
             "note_create_monthly": None,
             "message_retention_days": None,  # unlimited on paid tiers
             "upload_max_mb": 100,
+            "agent_tool_level": "organize",
+            "max_effort": "high",
+            "auto_effort": True,
+            "agent_memory": "team",
+            "agent_history_retention_days": None,
+            "integrations": ["web", "google_calendar", "github"],
+            "digest_cadence": None,
         },
         # Contact-sales tier: everything unlimited except an absolute
         # per-file ceiling. Set manually via `feature_access set-tier`
@@ -1188,6 +1227,13 @@ SEARCH_ENGINE = {
             "note_create_monthly": None,
             "message_retention_days": None,
             "upload_max_mb": 200,
+            "agent_tool_level": "organize",
+            "max_effort": "high",
+            "auto_effort": True,
+            "agent_memory": "team",
+            "agent_history_retention_days": None,
+            "integrations": ["web", "google_calendar", "github"],
+            "digest_cadence": None,
         },
     },
 }
