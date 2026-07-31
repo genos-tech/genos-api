@@ -91,6 +91,58 @@ class NoteFolderTagTests(BaseAPITestCase):
         self.assertEqual(res.status_code, 200)
         self.assertFalse(NoteFolderTag.objects.filter(tag_id=tag.tag_id).exists())
 
+    def test_rename_and_recolor(self):
+        tag = self._tag("eng")
+        res = self.client.put(
+            TAG_URL,
+            {
+                "team_id": self.team.team_id,
+                "tag_id": tag.tag_id,
+                "name": "engineering",
+                "color": "#f97316",
+                "text_color": "white",
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["name"], "engineering")
+        self.assertEqual(res.data["color"], "#f97316")
+        self.assertEqual(res.data["textColor"], "white")
+
+    def test_rename_onto_an_existing_name_is_refused(self):
+        """(team, name) is unique — without this guard the rename would
+        500 on the constraint instead of saying what went wrong."""
+        self._tag("eng")
+        other = self._tag("design")
+        res = self.client.put(
+            TAG_URL,
+            {"team_id": self.team.team_id, "tag_id": other.tag_id, "name": "eng"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 409)
+
+    def test_rename_without_color_keeps_the_color(self):
+        tag = NoteFolderTag.objects.create(
+            team=self.team, name="eng", color="#111111", created_by=self.user
+        )
+        self.client.put(
+            TAG_URL,
+            {"team_id": self.team.team_id, "tag_id": tag.tag_id, "name": "engineering"},
+            format="json",
+        )
+        tag.refresh_from_db()
+        self.assertEqual(tag.color, "#111111")
+
+    def test_unrelated_member_cannot_edit(self):
+        tag = self._tag(user=self.user)
+        self.authenticate(self.user2)
+        res = self.client.put(
+            TAG_URL,
+            {"team_id": self.team.team_id, "tag_id": tag.tag_id, "name": "nope"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 403)
+
     def test_unrelated_member_cannot_delete(self):
         tag = self._tag(user=self.user)
 

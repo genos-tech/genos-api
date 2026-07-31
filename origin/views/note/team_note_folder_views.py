@@ -121,13 +121,14 @@ def _serialize_folders(folder_ids, roles, folders):
 
     tags_by_folder = {}
     for row in NoteFolderTagLink.objects.filter(folder_id__in=folder_ids).values(
-        "folder_id", "tag__tag_id", "tag__name", "tag__color"
+        "folder_id", "tag__tag_id", "tag__name", "tag__color", "tag__text_color"
     ):
         tags_by_folder.setdefault(row["folder_id"], []).append(
             {
                 "tagId": row["tag__tag_id"],
                 "name": row["tag__name"],
                 "color": row["tag__color"],
+                "textColor": row["tag__text_color"],
             }
         )
 
