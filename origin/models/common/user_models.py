@@ -79,6 +79,16 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     # Storage stays UTC — `settings.TIME_ZONE` is unchanged. This field only
     # affects which calendar day a moment falls in.
     timezone = models.CharField(max_length=64, blank=True, null=True)
+    # Proactive digest (UX tier model §8). Whether it FIRES at all comes
+    # from the tier (`digest_cadence`: pro=weekly, max=daily) — cadence
+    # is deliberately not user config; the tier is the felt difference.
+    # `digest_enabled` is the opt-OUT (default on: the digest is the
+    # top tiers' marquee "comes to you" feature, and opt-in would mean
+    # most payers never see what they pay for). `digest_last_sent_at`
+    # is the idempotency stamp — the hourly cron re-running inside a
+    # window must not double-send.
+    digest_enabled = models.BooleanField(default=True)
+    digest_last_sent_at = models.DateTimeField(blank=True, null=True)
     last_seen = models.DateTimeField(auto_now=True)
     is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)

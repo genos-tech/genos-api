@@ -37,6 +37,9 @@ class InboxItems(models.Model):
     #    5: "team ownership claim" (break-glass recovery for an absent
     #       owner — see origin/services/ownership_claim.py; `receiver` is
     #       the CURRENT owner, `sender` the editor claiming)
+    #    6: "Genos digest" (proactive tier digest, UX tier model §8 —
+    #       system-authored: `sender` is NULL, `item_body` carries
+    #       {title, text}; not a request, `request_status` is "")
     # }
     #########################################################
     item_type = models.IntegerField(blank=False)
