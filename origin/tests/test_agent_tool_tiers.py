@@ -101,6 +101,21 @@ class LevelSetTests(SimpleTestCase):
             self.assertEqual(tier_disabled_tools("u1"), set())
 
 
+class TierSystemExtraTests(SimpleTestCase):
+    def test_read_level_gets_the_draft_and_offer_branch(self):
+        with mock.patch.object(tool_tiers, "get_agent_tool_level", return_value="read"):
+            extra = tool_tiers.tier_system_extra("u1")
+        self.assertIn("READ-ONLY", extra)
+        self.assertIn("ready-to-paste", extra)
+        # The upgrade mention must stay a one-liner, not a sales pitch.
+        self.assertIn("at most once per conversation", extra)
+
+    def test_other_levels_add_nothing(self):
+        for level in ("act", "organize"):
+            with mock.patch.object(tool_tiers, "get_agent_tool_level", return_value=level):
+                self.assertIsNone(tool_tiers.tier_system_extra("u1"), level)
+
+
 class ResumeVetoTests(TestCase):
     """An approval token must not outlive the grant (plan trap #1)."""
 

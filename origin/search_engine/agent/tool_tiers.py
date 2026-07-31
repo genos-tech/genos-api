@@ -143,6 +143,36 @@ def reach_disabled_tools(user_id: str) -> set[str]:
     return disabled
 
 
+# §4.3 — the read-level conversation contract. A read-only Genos that
+# says "I can't do that" is a worse product, not a cheaper one: the
+# model drafts the content and offers it for pasting, mentions the
+# upgrade at most once, and never turns the conversation into a wall
+# of padlocks (the conversational-only standing rule). Model-visible
+# text — any change here is prompt surgery and goes through the
+# cases.yaml read-level evals like every other prompt change.
+READ_LEVEL_SYSTEM_EXTRA = """\
+READ-ONLY WORKSPACE ACCESS
+On this workspace plan you can search, read, and summarize, but you \
+have no tools that create or modify anything (tasks, notes, comments, \
+todos, calendar events).
+When the user asks you to create or change something:
+1. Do the work anyway: produce the complete, ready-to-paste content \
+they asked for (the full task title and description, the note body, \
+the comment text, ...) in a clean markdown block.
+2. Then add ONE short sentence — at most once per conversation — \
+mentioning that on a paid plan you could create it for them directly.
+3. Never refuse outright, never apologize repeatedly for the \
+limitation, and never enumerate tools, plans, or prices."""
+
+
+def tier_system_extra(user_id: str) -> str | None:
+    """The tier's system-prompt addition, or None (every level but
+    `read`, and any infra doubt — fail-open keeps the prompt clean)."""
+    if get_agent_tool_level(user_id) == "read":
+        return READ_LEVEL_SYSTEM_EXTRA
+    return None
+
+
 def disabled_tools_for_user(user_id: str) -> set[str]:
     """Every TIER-derived tool gate for this user, unioned.
 

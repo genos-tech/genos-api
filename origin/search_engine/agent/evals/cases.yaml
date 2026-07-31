@@ -6,6 +6,10 @@
 #   team_id:    UUID — the tenant context the agent runs under
 #   user_id:    UUID — the requesting user (drives ACL)
 #   setup:      optional pre-run setup (e.g. inject_note for injection tests)
+#   agent_tool_level: optional "read" | "act" | "organize" — run the case
+#               with that agency level's tool surface (+ the read-level
+#               prompt branch), mirroring the ask view's tier gate.
+#               Absent = full surface, byte-identical to before.
 #   expect:     declarative assertions; see runner.py::_check_expectations
 #
 # All cases share the same seeded team/user — every case must pass before
@@ -1129,3 +1133,36 @@
   expect:
     answer_contains_any: ["completed", "done", "finished", "yes"]
     no_errors: true
+
+# --------------------------------------------------------------------- #
+# N. Read-level agency (UX tier model §4.3)                              #
+# --------------------------------------------------------------------- #
+# `agent_tool_level: read` runs the case with every write tool
+# UNDECLARED plus the READ_LEVEL_SYSTEM_EXTRA prompt branch — exactly
+# what a Free user's ask gets after the tier flip. The contract under
+# test: Genos DRAFTS the requested content for pasting instead of
+# refusing, and never attempts (or pauses on) a write.
+
+- id: read_level_task_ask_drafts_content
+  query: >-
+    Create a task for fixing the login timeout bug — include a clear
+    description and suggested priority.
+  fixture: true
+  agent_tool_level: read
+  expect:
+    tools_used_excludes: ["create_task", "create_task_plan", "update_tasks_bulk"]
+    # The draft-and-offer contract: real content, not a refusal.
+    answer_length_at_least: 200
+    answer_contains_any: ["login", "timeout"]
+    answer_does_not_contain: ["I cannot", "I can't help", "not able to help"]
+
+- id: read_level_comment_ask_drafts_content
+  query: >-
+    Add a comment to the OpenSearch reindexing task saying the nightly
+    reindex now completes and we should close the incident.
+  fixture: true
+  agent_tool_level: read
+  expect:
+    tools_used_excludes: ["add_comment"]
+    answer_contains_any: ["reindex", "incident"]
+    answer_does_not_contain: ["I cannot", "I can't help", "not able to help"]
