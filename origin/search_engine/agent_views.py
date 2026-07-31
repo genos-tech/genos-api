@@ -118,7 +118,14 @@ from origin.search_engine.quota import (
     WEB_SEARCH_KEY,
     check_remaining,
     check_remaining_monthly,
+    get_agent_history_retention_days,
+    get_agent_memory,
+    get_agent_tool_level,
+    get_auto_effort,
+    get_digest_cadence,
     get_effective_tier,
+    get_integrations,
+    get_max_effort,
     get_message_retention_days,
     get_quota,
     get_upload_max_bytes,
@@ -2454,7 +2461,18 @@ class AgentFeaturesView(AuthenticatedAPIView):
             "task_create": {"used": int, "limit": int | null, "period": "month"},
             "note_create": {"used": int, "limit": int | null, "period": "month"},
             "message_retention_days": int | null,   # null = unlimited history
-            "upload_max_mb":          int | null    # null = no tier file cap
+            "upload_max_mb":          int | null,   # null = no tier file cap
+
+            # UX-pillar capability dimensions (additive; permissive
+            # for every tier until the tier-model flip — see
+            # genos-docs operations/UX_TIER_MODEL_PLAN.md):
+            "agent_tool_level": "read" | "act" | "organize",
+            "max_effort":       "low" | "medium" | "high",
+            "auto_effort":      bool,
+            "agent_memory":     "none" | "own" | "team",
+            "agent_history_retention_days": int | null,  # null = unlimited
+            "integrations":     ["web", "google_calendar", "github"],
+            "digest_cadence":   null | "weekly" | "daily"
         }
     """
 
@@ -2480,6 +2498,13 @@ class AgentFeaturesView(AuthenticatedAPIView):
             "upload_max_mb": (
                 upload_max_bytes // (1024 * 1024) if upload_max_bytes is not None else None
             ),
+            "agent_tool_level": get_agent_tool_level(user_id),
+            "max_effort": get_max_effort(user_id),
+            "auto_effort": get_auto_effort(user_id),
+            "agent_memory": get_agent_memory(user_id),
+            "agent_history_retention_days": get_agent_history_retention_days(user_id),
+            "integrations": get_integrations(user_id),
+            "digest_cadence": get_digest_cadence(user_id),
         }
         # ADDITIVE, and present only when credits are authoritative —
         # its presence is the client's render switch.

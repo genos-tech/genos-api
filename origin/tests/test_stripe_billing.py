@@ -1346,6 +1346,29 @@ class PlansViewTests(BillingTestBase):
             )
         self.assertNotIn("model_daily", tiers["pro"]["limits"])
 
+    def test_plans_payload_includes_capability_keys(self):
+        # The UX-pillar keys ride the same tier-config-only pipeline as
+        # the classic six — safe on this public view precisely because
+        # they are per-TIER values, never per-user.
+        from django.conf import settings as dj_settings  # noqa: PLC0415
+
+        with self._price_mock():
+            res = self.client.get(PLANS_URL)
+        self.assertEqual(res.status_code, 200)
+        quotas = dj_settings.SEARCH_ENGINE["TIER_QUOTAS"]
+        for t in res.data["tiers"]:
+            limits, cfg = t["limits"], quotas[t["tier"]]
+            self.assertEqual(limits["agent_tool_level"], cfg["agent_tool_level"])
+            self.assertEqual(limits["max_effort"], cfg["max_effort"])
+            self.assertEqual(limits["auto_effort"], cfg["auto_effort"])
+            self.assertEqual(limits["agent_memory"], cfg["agent_memory"])
+            self.assertEqual(
+                limits["agent_history_retention_days"],
+                cfg["agent_history_retention_days"],
+            )
+            self.assertEqual(limits["integrations"], cfg["integrations"])
+            self.assertEqual(limits["digest_cadence"], cfg["digest_cadence"])
+
     def test_plans_flags_and_prices(self):
         with self._price_mock():
             res = self.client.get(PLANS_URL)

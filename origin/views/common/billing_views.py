@@ -148,6 +148,10 @@ class BillingPortalView(AuthenticatedAPIView):
 # The dimensions the plans page compares. Deliberately excludes
 # `model_daily` — per-model caps churn with the model catalog; the page
 # carries a static "per-model caps apply" footnote instead.
+#
+# The UX-pillar capability keys below the classic six are TIER CONFIG,
+# not user data — this view is public (AllowAny), and that is the line
+# that keeps it safe. Never add a per-user value here.
 _PLAN_LIMIT_KEYS = (
     "llm_ask_daily",
     "web_search_daily",
@@ -155,6 +159,13 @@ _PLAN_LIMIT_KEYS = (
     "note_create_monthly",
     "message_retention_days",
     "upload_max_mb",
+    "agent_tool_level",
+    "max_effort",
+    "auto_effort",
+    "agent_memory",
+    "agent_history_retention_days",
+    "integrations",
+    "digest_cadence",
 )
 
 

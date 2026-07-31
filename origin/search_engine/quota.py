@@ -283,3 +283,119 @@ def get_upload_max_bytes(user_id: str) -> int | None:
     except Exception:  # noqa: BLE001
         log.exception("get_upload_max_bytes failed for user=%s", user_id)
         return None
+
+
+# --- UX-pillar capability dimensions ---------------------------------
+#
+# The tier model's experience ladder (genos-docs
+# operations/UX_TIER_MODEL_PLAN.md): what the agent may do, how deeply
+# it thinks, what it remembers, what it can see, and whether it comes
+# to you. Two contracts every accessor below honours:
+#
+#   * Fail-open: an infra error, a MISSING key (e.g. a
+#     TIER_QUOTAS_JSON override written before the key existed), or an
+#     unrecognized value all resolve to the PERMISSIVE default — a
+#     Redis hiccup or a stale ops override must never silently
+#     downgrade someone. (`digest_cadence` is the one deliberate
+#     exception: on any doubt we do NOT send an unsolicited digest.)
+#   * Normalization: enforcement sites only ever see values from the
+#     declared vocabulary; anything else is logged and replaced.
+
+_AGENT_TOOL_LEVELS = ("read", "act", "organize")
+_EFFORT_LEVELS = ("low", "medium", "high")
+_AGENT_MEMORY_LEVELS = ("none", "own", "team")
+_ALL_INTEGRATIONS = ("web", "google_calendar", "github")
+_DIGEST_CADENCES = ("weekly", "daily")
+
+
+def _capability(user_id: str, key: str, default):
+    """`_user_cfg` lookup under the fail-open contract above."""
+    try:
+        v = _user_cfg(user_id).get(key)
+        return default if v is None else v
+    except Exception:  # noqa: BLE001
+        log.exception("capability lookup failed for user=%s key=%s", user_id, key)
+        return default
+
+
+def _enum_capability(user_id: str, key: str, allowed: tuple, default: str) -> str:
+    v = _capability(user_id, key, default)
+    if v not in allowed:
+        log.warning("TIER_QUOTAS %s=%r not in %s; using %r", key, v, allowed, default)
+        return default
+    return v
+
+
+def get_agent_tool_level(user_id: str) -> str:
+    """Agency ladder: 'read' (answers) | 'act' (single writes) |
+    'organize' (composite writes). Permissive default: 'organize'."""
+    return _enum_capability(user_id, "agent_tool_level", _AGENT_TOOL_LEVELS, "organize")
+
+
+def get_max_effort(user_id: str) -> str:
+    """Ceiling on the effort ladder: 'low' | 'medium' | 'high'.
+
+    Enforcement CLAMPS a saved preference down to this — it never
+    rejects the request (the preference outlives the subscription).
+    Permissive default: 'high'.
+    """
+    return _enum_capability(user_id, "max_effort", _EFFORT_LEVELS, "high")
+
+
+def get_auto_effort(user_id: str) -> bool:
+    """Whether the tier may use the 'auto' (adaptive) effort router."""
+    return bool(_capability(user_id, "auto_effort", True))
+
+
+def get_agent_memory(user_id: str) -> str:
+    """Memory lanes the agent may recall from: 'none' | 'own' (the
+    user's past conversations) | 'team' (+ collected team answers).
+    Permissive default: 'team'."""
+    return _enum_capability(user_id, "agent_memory", _AGENT_MEMORY_LEVELS, "team")
+
+
+def get_agent_history_retention_days(user_id: str) -> int | None:
+    """Agent session history window (days), or None = unlimited.
+
+    Windows are session-anchored (`last_active_at`) and HIDE, never
+    delete — an upgrade restores full history. Fail-open: None.
+    """
+    try:
+        v = _user_cfg(user_id).get("agent_history_retention_days")
+        return int(v) if v is not None else None
+    except Exception:  # noqa: BLE001
+        log.exception("get_agent_history_retention_days failed for user=%s", user_id)
+        return None
+
+
+def get_integrations(user_id: str) -> list[str]:
+    """Integration allowlist ('web' | 'google_calendar' | 'github').
+
+    An explicit [] is a real restriction (Free); only a MISSING key or
+    an error resolves to the full permissive list. Unknown names are
+    kept — enforcement maps known names to tools, so they are inert.
+    """
+    v = _capability(user_id, "integrations", list(_ALL_INTEGRATIONS))
+    if not isinstance(v, (list, tuple)):
+        log.warning("TIER_QUOTAS integrations=%r is not a list; using all", v)
+        return list(_ALL_INTEGRATIONS)
+    return [str(x) for x in v]
+
+
+def get_digest_cadence(user_id: str) -> str | None:
+    """None (no digest) | 'weekly' | 'daily'.
+
+    Deliberately fails CLOSED (None): a digest is unsolicited outbound,
+    so on any infra doubt we stay silent rather than risk noise.
+    """
+    try:
+        v = _user_cfg(user_id).get("digest_cadence")
+    except Exception:  # noqa: BLE001
+        log.exception("get_digest_cadence failed for user=%s", user_id)
+        return None
+    if v is None:
+        return None
+    if v not in _DIGEST_CADENCES:
+        log.warning("TIER_QUOTAS digest_cadence=%r not in %s; off", v, _DIGEST_CADENCES)
+        return None
+    return v

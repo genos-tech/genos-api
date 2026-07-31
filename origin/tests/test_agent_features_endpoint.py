@@ -55,6 +55,22 @@ class AgentFeaturesPayloadTests(FeaturesTestBase):
         self.assertEqual(data["message_retention_days"], 90)
         self.assertEqual(data["upload_max_mb"], 10)
 
+    def test_capability_keys_present_and_permissive_when_unset(self):
+        # TEST_QUOTAS predates the UX-pillar keys, so this pins BOTH
+        # that the payload always carries them AND that a config table
+        # without them resolves permissive (the TIER_QUOTAS_JSON
+        # override contract) — except digest_cadence, which stays off.
+        res = self.client.get(URL)
+        self.assertEqual(res.status_code, 200)
+        data = res.data
+        self.assertEqual(data["agent_tool_level"], "organize")
+        self.assertEqual(data["max_effort"], "high")
+        self.assertTrue(data["auto_effort"])
+        self.assertEqual(data["agent_memory"], "team")
+        self.assertIsNone(data["agent_history_retention_days"])
+        self.assertEqual(data["integrations"], ["web", "google_calendar", "github"])
+        self.assertIsNone(data["digest_cadence"])
+
     def test_team_plan_reflected_with_source_and_name(self):
         self.team.plan = "max"
         self.team.save(update_fields=["plan"])
