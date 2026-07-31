@@ -215,8 +215,9 @@ jobs:
           fi
 
       - name: Publish diff to the job summary
-        if: steps.gcp.outputs.available == 'true'
-        if: always()
+        # `always()` so the summary is still published when the eval step
+        # above failed — but only when the eval actually ran.
+        if: always() && steps.gcp.outputs.available == 'true'
         run: |
           {
             echo "### agent-trajectory-diff — ${GITHUB_SHA::7}"
@@ -229,9 +230,11 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment the diff on the PR (best-effort)
-        if: steps.gcp.outputs.available == 'true'
         # Same-repo PRs only — fork tokens are read-only. Never fails the job.
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        if: >-
+          steps.gcp.outputs.available == 'true'
+          && github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -240,8 +243,10 @@ jobs:
           gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md || true
 
       - name: Upload baseline artifact (workflow_dispatch --write-baseline)
-        if: steps.gcp.outputs.available == 'true'
-        if: github.event_name == 'workflow_dispatch' && inputs.write_baseline == true
+        if: >-
+          steps.gcp.outputs.available == 'true'
+          && github.event_name == 'workflow_dispatch'
+          && inputs.write_baseline == true
         uses: actions/upload-artifact@v4
         with:
           name: trajectory-baseline
