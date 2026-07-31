@@ -67,6 +67,11 @@ env:
 jobs:
   bakeoff:
     name: A/B bake-off (report-only)
+    # Needs Vertex via WIF; had no availability guard, so since the
+    # 2026-07-30 GCP teardown a manual dispatch died on `auth@v2` with a
+    # cryptic `invalid_target`. Skipping reads as "not configured", which
+    # is the truth. Restore: genos-docs ENVIRONMENTS.md §CI.
+    if: vars.RUN_AGENT_EVALS == 'true' || vars.DEPLOY_TO_GCP == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:

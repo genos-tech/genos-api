@@ -141,14 +141,16 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       # This job needs a live GCP project for BOTH Vertex and the private
-      # Artifact Registry OpenSearch image, so with the env torn down it
-      # cannot run at all — `auth@v2` fails `invalid_target` because WIF has
-      # no pool to federate against. Report-only or not, a red X on every
-      # agent PR trains people to ignore the check, so skip explicitly.
+      # Artifact Registry OpenSearch image. With the WIF identity gone
+      # `auth@v2` fails `invalid_target` (no pool to federate against).
+      # Report-only or not, a red X on every agent PR trains people to
+      # ignore the check, so skip explicitly. Gated on RUN_AGENT_EVALS —
+      # NOT on DEPLOY_TO_GCP alone, which is about app hosting.
       - name: Is a GCP-backed trajectory diff possible?
         id: gcp
         run: |
-          if [ "${{ vars.DEPLOY_TO_GCP }}" = "true" ] && [ -n "${{ secrets.GCP_WIF_PROVIDER }}" ]; then
+          if { [ "${{ vars.RUN_AGENT_EVALS }}" = "true" ] || [ "${{ vars.DEPLOY_TO_GCP }}" = "true" ]; } \
+             && [ -n "${{ secrets.GCP_WIF_PROVIDER }}" ]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::GCP env unavailable — skipping the trajectory diff. Tool-choice drift is NOT being checked on this PR."
