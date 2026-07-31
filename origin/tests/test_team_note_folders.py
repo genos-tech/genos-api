@@ -482,3 +482,69 @@ class TeamNoteFolderMemberTests(BaseAPITestCase):
         self.authenticate(self.user2)
         listing = self.client.get(f"{TEAM_FOLDER_URL}?{urlencode(self._params(self.user2))}")
         self.assertEqual(listing.data, [])
+
+
+class TeamNoteSearchAclTests(BaseAPITestCase):
+    """Team notes must be reachable by the AGENT and by search, not just
+    over HTTP. Both read a materialized `acl_user_ids` set rather than
+    calling `get_effective_role`, so folder-derived access is a separate
+    code path that can regress independently."""
+
+    def setUp(self):
+        super().setUp()
+        self.folder = PersonalNoteFolder.objects.create(
+            team=self.team,
+            owner=self.user,
+            name="Handbook",
+            scope=PersonalNoteFolder.SCOPE_TEAM,
+            visibility="public",
+        )
+        NoteFolderPermission.objects.create(
+            team=self.team, folder=self.folder, user=self.user, role_id=ROLE_OWNER
+        )
+        self.note = PersonalNoteMaster.objects.create(
+            team=self.team,
+            owner=self.user,
+            title="Onboarding",
+            body=[],
+            folder_id=self.folder.folder_id,
+        )
+
+    def test_public_folder_note_carries_the_team_sentinel(self):
+        from origin.search_engine.agent.acl import personal_note_acl_user_ids
+
+        acl = personal_note_acl_user_ids(owner_id=self.user.id, note_id=self.note.note_id)
+        # The sentinel is what lets a public folder's chunks be found by
+        # the whole team without indexing one entry per member.
+        self.assertIn(f"team:{self.team.team_id}", acl)
+
+    def test_private_folder_grantee_is_in_the_acl(self):
+        from origin.search_engine.agent.acl import personal_note_acl_user_ids
+
+        self.folder.visibility = "private"
+        self.folder.save()
+        NoteFolderPermission.objects.create(
+            team=self.team, folder=self.folder, user=self.user2, role_id=ROLE_VIEWER
+        )
+        acl = personal_note_acl_user_ids(owner_id=self.user.id, note_id=self.note.note_id)
+        self.assertIn(str(self.user2.id), acl)
+        self.assertNotIn(f"team:{self.team.team_id}", acl)
+
+    def test_unfiled_personal_note_gains_nothing(self):
+        from origin.search_engine.agent.acl import personal_note_acl_user_ids
+
+        loose = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="Diary", body=[]
+        )
+        acl = personal_note_acl_user_ids(owner_id=self.user.id, note_id=loose.note_id)
+        self.assertEqual(acl, {str(self.user.id)})
+
+    def test_chunker_emits_the_folder_acl(self):
+        """The chunker builds `acl_user_ids` inline rather than calling
+        the helper, so it needs its own assertion."""
+        from origin.search_engine.chunkers.note_chunker import iter_personal_note_chunks
+
+        entities = {e.entity_id: e for e in iter_personal_note_chunks()}
+        entity = entities.get(f"note:personal:{self.note.note_id}")
+        self.assertIsNotNone(entity)
+        self.assertIn(f"team:{self.team.team_id}", entity.chunks[0].acl_user_ids)
