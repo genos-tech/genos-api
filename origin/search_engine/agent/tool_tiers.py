@@ -19,7 +19,7 @@ already flow through (`controller._build_tool_declarations`).
 
 from __future__ import annotations
 
-from origin.search_engine.quota import get_agent_tool_level
+from origin.search_engine.quota import get_agent_memory, get_agent_tool_level
 
 from .tools import REGISTRY
 
@@ -74,10 +74,32 @@ def disabled_tools_for_level(level: str) -> set[str]:
 
 
 def tier_disabled_tools(user_id: str) -> set[str]:
-    """The calling user's tier gate for the disabled-tools union.
+    """The agency-ladder gate for the disabled-tools union.
 
     Inherits `get_agent_tool_level`'s fail-open contract: any infra
     doubt resolves to `organize`, i.e. an empty set — a Redis hiccup
     must never shrink someone's agent mid-conversation.
     """
     return disabled_tools_for_level(get_agent_tool_level(user_id))
+
+
+def memory_disabled_tools(user_id: str) -> set[str]:
+    """The memory-ladder gate (UX tier model §6): at `agent_memory ==
+    "none"` the recall tool is simply not declared — the model never
+    mentions a capability it doesn't have. `own`/`team` (and fail-open)
+    leave it declared; the lane itself stays reachable because
+    `search_past_conversations` opts in via `entity_types`, which the
+    tier's `exclude_lanes` never blankets (see search.py §6.2)."""
+    if get_agent_memory(user_id) == "none":
+        return {"search_past_conversations"}
+    return set()
+
+
+def disabled_tools_for_user(user_id: str) -> set[str]:
+    """Every TIER-derived tool gate for this user, unioned.
+
+    The single call sites in `agent_views` (fresh ask + the /decide/
+    resume leg) use this so a new pillar's gate lands in ONE place —
+    the two legs can never disagree on the surface again.
+    """
+    return tier_disabled_tools(user_id) | memory_disabled_tools(user_id)

@@ -37,7 +37,7 @@ from origin.search_engine.embeddings import embed_one
 from origin.search_engine.llm.choice import active_effort_profile
 from origin.search_engine.llm.spend import spend_purpose
 from origin.search_engine.opensearch_client import get_client, get_index_alias
-from origin.search_engine.quota import get_message_retention_days
+from origin.search_engine.quota import get_agent_memory, get_message_retention_days
 
 log = logging.getLogger(__name__)
 
@@ -184,6 +184,7 @@ def search(
     boost_entity_ids: Optional[list[str]] = None,
     boost_project_ids: Optional[list[str]] = None,
     person_id: Optional[str] = None,
+    exclude_lanes: Optional[frozenset[str]] = None,
 ) -> dict:
     """Run a hybrid search and return entity-grouped results.
 
@@ -265,6 +266,15 @@ def search(
             from the agent tool's LLM-visible `person_id` arg; the ACL
             filter still applies on top, so a bogus id just matches
             nothing.
+        exclude_lanes: entity types excluded UNCONDITIONALLY — unlike
+            the default exclusions, an explicit `entity_types` request
+            cannot tunnel under this. Set per ENTRY POINT only (the
+            /search/ view from the tier's memory level via
+            `memory_exclude_lanes`; `search_knowledge_base` pins both
+            memory lanes as its grounding guard) and NEVER blanket-
+            applied here or in any shared helper — a lane-opting caller
+            like `search_past_conversations` would otherwise return
+            empty forever with nothing in the logs.
     """
     if not query or not query.strip():
         return {"query": query, "results": []}
@@ -320,6 +330,7 @@ def search(
         person_id=person_id,
         chat_retention_cutoff=chat_retention_cutoff,
         project_ids=project_ids,
+        exclude_lanes=exclude_lanes,
     )
 
     # --- Phase 10: query rewriting (optional) ---
@@ -811,6 +822,33 @@ def _apply_representation_floor(survivors: list[dict], pre_threshold: list[dict]
     return out
 
 
+# Memory-lane exclusions per `agent_memory` level (UX tier model §6):
+#   none — Genos remembers only the live conversation: no recall lane,
+#          no collected team answers.
+#   own  — + the user's own past conversations (the lane
+#          `search_past_conversations` opts into).
+#   team — + collected team answers (Spotlight typeahead's
+#          "Previous answer" cards).
+# Unknown levels are impossible here — `get_agent_memory` normalizes —
+# but `.get(..., frozenset())` keeps even that failure permissive.
+_MEMORY_LANE_EXCLUSIONS: dict[str, frozenset[str]] = {
+    "none": frozenset({"conversation", "spotlight_answer"}),
+    "own": frozenset({"spotlight_answer"}),
+    "team": frozenset(),
+}
+
+
+def memory_exclude_lanes(user_id: str) -> frozenset[str]:
+    """The /search/ entry point's tier-driven `exclude_lanes` value.
+
+    ONLY for user-facing search — the agent's `search_knowledge_base`
+    pins both lanes regardless of tier (grounding never recalls), and
+    `search_past_conversations` must never pass this (its lane gate is
+    the tool being undeclared at `agent_memory == "none"`).
+    """
+    return _MEMORY_LANE_EXCLUSIONS.get(get_agent_memory(user_id), frozenset())
+
+
 # --------------------------------------------------------------------------- #
 # Internal helpers                                                            #
 # --------------------------------------------------------------------------- #
@@ -826,6 +864,7 @@ def _build_filter(
     person_id: Optional[str] = None,
     chat_retention_cutoff: Optional[str] = None,
     project_ids: Optional[list[str]] = None,
+    exclude_lanes: Optional[frozenset[str]] = None,
 ) -> list[dict]:
     filt: list[dict] = [
         {"term": {"team_id": team_id}},
@@ -869,6 +908,23 @@ def _build_filter(
         if mode != "typeahead":
             excluded.append("spotlight_answer")
         filt.append({"bool": {"must_not": [{"term": {"entity_type": et}} for et in excluded]}})
+    if exclude_lanes:
+        # UNCONDITIONAL lane exclusion (UX tier model §6). The default
+        # exclusions above live in the `else` branch, which an explicit
+        # `entity_types` request bypasses — that bypass is exactly how
+        # `search_past_conversations` opts into its lane, so it must
+        # stay. This clause is the one a caller cannot tunnel under:
+        # tier memory gates and the agent grounding guard compose here
+        # regardless of what `entity_types` asks for.
+        filt.append(
+            {
+                "bool": {
+                    "must_not": [
+                        {"term": {"entity_type": et}} for et in sorted(exclude_lanes)
+                    ]
+                }
+            }
+        )
     if project_ids:
         # Project scoping (Spotlight's project filter). A plain `terms`
         # clause, so chunks with NO `project_id` are excluded — DMs/GMs,
