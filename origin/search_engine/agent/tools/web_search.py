@@ -28,11 +28,13 @@ from typing import Any
 
 from django.conf import settings
 
+from origin.search_engine import credit_ledger
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.llm import spend
 from origin.search_engine.quota import (
     WEB_SEARCH_KEY,
     check_remaining,
+    get_integrations,
     increment_usage,
 )
 
@@ -57,6 +59,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
         limit = 5
     limit = max(1, min(limit, _MAX_LIMIT))
 
+    # Defence in depth for the Reach gate (UX tier model §7): tiers
+    # without `web` never have this tool DECLARED (tool_tiers), so the
+    # model can't normally reach here. This covers any path that
+    # bypasses the declaration union. Fail-open accessor: infra doubt
+    # never blocks a search.
+    if "web" not in get_integrations(ctx.user_id):
+        raise ToolError("Web search is not available on this plan.")
+
     # --- Per-tier daily quota. ---
     # Free/Pro/Max each get a different `web_search_daily` cap from
     # SEARCH_ENGINE["TIER_QUOTAS"]. Pre-flight check; increment after
@@ -67,7 +77,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
     # would charge for it twice: once in credits, once against an
     # allowance the user is no longer shown. The credit balance — which
     # the search's own cost moves — is the limit.
-    if not settings.SEARCH_ENGINE.get("AI_CREDITS_AUTHORITATIVE"):
+    #
+    # `credits_authoritative()` (AUTHORITATIVE **and** SHADOW), not the
+    # raw setting: every other credits branch goes through it, and the
+    # raw read meant the half-configured state dropped this cap while
+    # the ask gate still enforced daily asks.
+    if not credit_ledger.credits_authoritative():
         allowed, used, web_limit = check_remaining(ctx.user_id, WEB_SEARCH_KEY)
         if not allowed:
             raise ToolError(
