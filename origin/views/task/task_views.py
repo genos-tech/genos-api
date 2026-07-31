@@ -35,6 +35,7 @@ from origin.views.utils.incremental import (
     check_since,
 )
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
+from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 from origin.views.utils.upload_limits import check_upload_size
@@ -1813,6 +1814,9 @@ class TaskCommentsView(AuthenticatedAPIView):
             # handler can broadcast `activity.created` (mirrors the
             # message-send proxy contract).
             activities_wire = []
+            # Init here, not inside the try below — the mirror block is
+            # best-effort and may be skipped entirely.
+            comment_mentioned_ids: list = []
             if mirror is not None and mirror.sender is not None:
                 # Best-effort, mirroring the dual-write philosophy above: a
                 # failure building comment activities must NOT 500 the
@@ -1832,9 +1836,10 @@ class TaskCommentsView(AuthenticatedAPIView):
                     group_ids = mention_extractor.extract_mention_group_ids(comment_body)
                     if group_ids:
                         mentioned_ids |= resolve_group_members(group_ids)
+                    comment_mentioned_ids = list(mentioned_ids)  # noqa: F841 (read below)
                     acts = v3_activity.create_mention_activities(
                         message=mirror,
-                        mentioned_user_ids=list(mentioned_ids),
+                        mentioned_user_ids=comment_mentioned_ids,
                         actor=sender,
                         skip_actor=False,
                     )
@@ -1895,8 +1900,26 @@ class TaskCommentsView(AuthenticatedAPIView):
                 except Exception as exc:  # never break the saved comment
                     logger.warning("task-comment activity fan-out failed: %s", exc)
                     activities_wire = []
+            # A task comment IS delivered to a non-project-member, and
+            # the task is even readable — but `TaskMetaView` filters by
+            # ProjectMembers, so it never appears in their lists and is
+            # reachable only from that one notification. Report it so the
+            # commenter can add them properly.
+            comment_project_id = (
+                TaskMaster.objects.filter(task_id=request.data["task_id"])
+                .values_list("project_id", flat=True)
+                .first()
+            )
             return Response(
-                {**serializer.data, "_v3_activities": activities_wire},
+                {
+                    **serializer.data,
+                    "_v3_activities": activities_wire,
+                    "nonMemberMentions": non_member_mentions(
+                        comment_mentioned_ids,
+                        project_id=comment_project_id,
+                        exclude_user_ids=[request.user.id],
+                    ),
+                },
                 status=status.HTTP_201_CREATED,
             )
 

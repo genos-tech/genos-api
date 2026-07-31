@@ -62,6 +62,7 @@ from origin.views.utils.incremental import (
     check_since,
 )
 from origin.views.utils.mention_handler import resolve_group_members
+from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.upload_limits import check_upload_size
 
 
@@ -169,16 +170,31 @@ def _valid_mention_user_ids(channel, body):
     # entirely (a group @-mention notified nobody). The channel-membership
     # intersection below then drops any group member who isn't in the
     # channel, so a group mention only pings members who can see the chat.
+    return _split_mentions_by_membership(channel, body)[0]
+
+
+def _split_mentions_by_membership(channel, body):
+    """`(members, non_members)` for the users mentioned in `body`.
+
+    The non-member half is why this is split out: a chat mention of
+    someone outside the channel is dropped here and NEVER reaches a
+    client, so the sender's chip renders as if it worked while the
+    recipient is never told. Surfacing the dropped ids is the only way
+    that case is observable at all.
+    """
     mentioned = extract_mentioned_user_ids(body)
     group_ids = extract_mention_group_ids(body)
     if group_ids:
         mentioned = mentioned | resolve_group_members(group_ids)
     if not mentioned:
-        return set()
-    valid = ChannelMember.objects.filter(
-        channel=channel, user_id__in=mentioned, is_deleted=False
-    ).values_list("user_id", flat=True)
-    return {str(uid) for uid in valid}
+        return set(), set()
+    valid = {
+        str(uid)
+        for uid in ChannelMember.objects.filter(
+            channel=channel, user_id__in=mentioned, is_deleted=False
+        ).values_list("user_id", flat=True)
+    }
+    return valid, {str(u) for u in mentioned} - valid
 
 
 def _allocate_seq_and_create_message_with_activities(
@@ -590,6 +606,14 @@ class MessagesDeltaView(AuthenticatedAPIView):
         # the REST endpoint directly (e.g. tests) get the key too —
         # ignoring it is fine since it's purely additive.
         response_data["_v3_activities"] = ActivitySerializer(activities, many=True).data
+        # Mentions of people outside the channel are dropped above and
+        # never reach anyone — report them so the sender can offer to
+        # add the person instead of the mention silently going nowhere.
+        response_data["nonMemberMentions"] = non_member_mentions(
+            _split_mentions_by_membership(channel, msg_body)[1],
+            channel_id=channel.id,
+            exclude_user_ids=[request.user.id],
+        )
         return Response(response_data, status=status.HTTP_201_CREATED)
 
 

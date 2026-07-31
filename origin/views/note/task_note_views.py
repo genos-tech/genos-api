@@ -11,6 +11,7 @@ from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
+from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.note_role import (
     ROLE_OWNER,
     ROLE_VIEWER,
@@ -473,6 +474,13 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                     "newly_mentioned_user_ids": newly_mentioned_user_ids,
                     "all_mentioned_user_ids": all_mentioned_user_ids,
                     "removed_user_ids": removed_user_ids,
+                    # A task note is readable by PROJECT members, so a
+                    # mention outside the project 403s on open.
+                    "nonMemberMentions": non_member_mentions(
+                        newly_mentioned_user_ids,
+                        project_id=note.project_id,
+                        exclude_user_ids=[request_user_id],
+                    ),
                 },
                 status=status.HTTP_200_OK,
             )
