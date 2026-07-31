@@ -28,7 +28,7 @@ This reports; it never grants. Adding someone stays an explicit action.
 
 from origin.models.chat.unified_models import Channel, ChannelMember
 from origin.models.common.user_models import CustomUser
-from origin.models.note.personal_note_models import PersonalNoteFolder
+from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 
 # Wire values for `scopeKind`, so the client can word the prompt ("Add
@@ -63,6 +63,35 @@ def _members_of_channel(channel_id) -> set[str]:
     }
 
 
+def _is_team_folder(folder_id) -> bool:
+    return PersonalNoteFolder.objects.filter(
+        folder_id=folder_id, scope=PersonalNoteFolder.SCOPE_TEAM
+    ).exists()
+
+
+def _grantees_of_personal_note(note_id) -> set[str]:
+    """Who a personal note has actually been SHARED with — its owner
+    plus explicit grants. Personal notes have no implicit access path,
+    so this is the whole list."""
+    from origin.models.note.common_note_models import NotePermissionMaster  # noqa: PLC0415
+
+    out = {
+        str(uid)
+        for uid in NotePermissionMaster.objects.filter(
+            note_type=1, note_id=note_id
+        ).values_list("user_id", flat=True)
+        if uid is not None
+    }
+    owner_id = (
+        PersonalNoteMaster.objects.filter(note_id=note_id)
+        .values_list("owner_id", flat=True)
+        .first()
+    )
+    if owner_id is not None:
+        out.add(str(owner_id))
+    return out
+
+
 def _readers_of_team_folder(folder_id, user_ids) -> set[str]:
     """Of `user_ids`, those who can reach the folder. Resolved per user
     because a team folder's access is a chain walk, not a member list."""
@@ -79,6 +108,7 @@ def non_member_mentions(
     project_id=None,
     channel_id=None,
     folder_id=None,
+    personal_note_id=None,
     exclude_user_ids=None,
 ):
     """Mentioned users who can't reach the surface, with the scope they'd
@@ -122,23 +152,32 @@ def non_member_mentions(
         scope_name = (
             Channel.objects.filter(id=channel_id).values_list("title", flat=True).first()
         )
-    elif folder_id is not None:
-        # Only TEAM folders carry an ACL; a personal folder grants
-        # nothing to anyone, so there is no membership to be missing
-        # from — the note's own share dialog is the right surface there.
+    elif folder_id is not None and _is_team_folder(folder_id):
         folder = (
-            PersonalNoteFolder.objects.filter(
-                folder_id=folder_id, scope=PersonalNoteFolder.SCOPE_TEAM
-            )
+            PersonalNoteFolder.objects.filter(folder_id=folder_id)
             .values("folder_id", "name")
             .first()
         )
-        if folder is None:
-            return None
         scope_kind = SCOPE_TEAM_FOLDER
         reachable = _readers_of_team_folder(folder_id, ids)
         scope_id = str(folder["folder_id"])
         scope_name = folder["name"]
+    elif personal_note_id is not None:
+        # A personal note (unfiled, or in a personal folder). There's no
+        # membership here — access is per-note grants — so "reachable"
+        # is whoever the note has actually been shared with, and the
+        # remedy is sharing rather than adding to anything.
+        scope_kind = SCOPE_PERSONAL_NOTE
+        reachable = _grantees_of_personal_note(personal_note_id)
+        note = (
+            PersonalNoteMaster.objects.filter(note_id=personal_note_id)
+            .values("note_id", "title")
+            .first()
+        )
+        if note is None:
+            return None
+        scope_id = str(note["note_id"])
+        scope_name = note["title"]
     else:
         return None
 
@@ -161,3 +200,21 @@ def non_member_mentions(
         "scopeName": scope_name or "",
         "users": users,
     }
+
+
+def reachable_mentions(mentioned_user_ids, *, folder_id=None, personal_note_id=None):
+    """Of `mentioned_user_ids`, those who can actually open the note.
+
+    The inverse of `non_member_mentions`, and the notify list: a mention
+    should only page someone who can follow it. A team-folder note
+    resolves through the folder chain; a personal one through its owner
+    plus explicit grants.
+    """
+    ids = {str(u) for u in (mentioned_user_ids or []) if u}
+    if not ids:
+        return set()
+    if folder_id is not None and _is_team_folder(folder_id):
+        return _readers_of_team_folder(folder_id, ids)
+    if personal_note_id is not None:
+        return ids & _grantees_of_personal_note(personal_note_id)
+    return set()
