@@ -199,6 +199,7 @@ def resolve_user_effort(
     preferred_provider: str | None,
     preferred_effort: str | None,
     preferred_model: str | None,
+    max_effort: str = "high",
 ) -> LlmChoice:
     """Effort-aware successor to `resolve_user_choice`.
 
@@ -211,8 +212,16 @@ def resolve_user_effort(
       effort — the explicit field when valid; else DERIVED from the
         legacy saved model's rung (`effort_for_model`) so existing
         users keep the model they chose without any data migration;
-        else DEFAULT_EFFORT.
+        else DEFAULT_EFFORT. Then CLAMPED to `max_effort`.
       model — `model_for_effort(provider, effort)`, i.e. the rung.
+
+    `max_effort` is the tier ceiling (UX tier model §5). It CLAMPS,
+    never rejects: a saved `preferred_llm_effort` outlives a downgrade
+    (the preference is a CustomUser column; the subscription is Stripe
+    state), so the user keeps working at their ceiling instead of
+    hitting a wall — the same posture as the stale-model fallback. An
+    unknown ceiling is treated as "high" (permissive), mirroring
+    `quota.get_max_effort`.
 
     The legacy fields are never written by this path — they are the
     rollback substrate (flag off → `resolve_user_choice` reads them
@@ -235,6 +244,12 @@ def resolve_user_effort(
             provider, (preferred_model or "").strip()
         )
         effort = derived or DEFAULT_EFFORT
+
+    ceiling = (max_effort or "").lower().strip()
+    if ceiling not in EFFORTS:
+        ceiling = "high"
+    if EFFORTS.index(effort) > EFFORTS.index(ceiling):
+        effort = ceiling
 
     return LlmChoice(
         provider=provider,
