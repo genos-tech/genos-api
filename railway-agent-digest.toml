@@ -1,0 +1,36 @@
+# Railway config for the `agent-digest` cron service (UX tier model §8 —
+# the proactive digest, genos-docs operations/UX_TIER_MODEL_PLAN.md).
+#
+# Same Docker image as `backend-django`, run as a cron: the container
+# starts each tick, runs to completion, exits.
+#
+# What this does:
+#   EVERY HOUR, `manage.py agent_digest` selects digest-enabled users
+#   whose tier grants a digest (pro=weekly / max=daily via
+#   TIER_QUOTAS.digest_cadence) and whose LOCAL clock is at 08:00
+#   (CustomUser.timezone), generates a read-only agent digest for each,
+#   and delivers it as an Inbox item + web push. Idempotent via
+#   `digest_last_sent_at`, so the hourly tick never double-sends; cost
+#   is bounded by --limit and by the run being surface="digest"
+#   (metered for US, non-billable to the user by construction).
+#
+# ENV (per-service on Railway — NOT inherited): the full backend-django
+# LLM set (Vertex/Gemini + provider keys), DATABASE_URL, OPENSEARCH_*
+# (the read tools search the index), the AI_COST_METER /
+# AI_CREDITS_SHADOW flags in lockstep with backend-django (or the
+# ledger disagrees with itself), AND the WEBPUSH_VAPID_PUBLIC_KEY /
+# _PRIVATE_KEY / _ADMIN_EMAIL triple — webpush_sender silently no-ops
+# without it, which would run green and deliver nothing.
+#
+# The hourly schedule is the LOCAL-TIME design, not an oversight: one
+# fixed UTC slot would land at random local hours across timezones.
+# The command itself is the selector; most ticks send to nobody.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+cronSchedule = "0 * * * *"
+startCommand = "sh /app/railway-agent-digest-entrypoint.sh --at-hour 8"
+restartPolicyType = "NEVER"

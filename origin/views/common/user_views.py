@@ -172,6 +172,34 @@ class AutoCloseOnPrMergePreferenceView(AuthenticatedAPIView):
         )
 
 
+class DigestPreferenceView(AuthenticatedAPIView):
+    """GET / PATCH the calling user's proactive-digest opt-out
+    (UX tier model §8). Operates on `request.user`; no user_id is
+    accepted, so a leaked token can't toggle someone else's setting.
+
+    Note this is the OPT-OUT only — whether a digest fires at all, and
+    how often, comes from the tier (`digest_cadence`), deliberately not
+    from user config.
+    """
+
+    def get(self, request):
+        return Response(
+            {"digest_enabled": bool(request.user.digest_enabled)},
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request):
+        value = request.data.get("digest_enabled")
+        if not isinstance(value, bool):
+            return Response(
+                {"error": "digest_enabled must be a boolean."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        request.user.digest_enabled = value
+        request.user.save(update_fields=["digest_enabled"])
+        return Response({"digest_enabled": value}, status=status.HTTP_200_OK)
+
+
 class SpotlightWebSearchPreferenceView(AuthenticatedAPIView):
     """GET / PATCH the calling user's "Spotlight web search" preference.
     Operates on `request.user`; no user_id is accepted, so a leaked token
