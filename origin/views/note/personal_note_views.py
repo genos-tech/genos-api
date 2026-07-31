@@ -9,6 +9,7 @@ from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
+from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.note_role import (
     ROLE_EDITOR,
     ROLE_OWNER,
@@ -313,6 +314,15 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
                     "newly_mentioned_user_ids": newly_mentioned_user_ids,
                     "all_mentioned_user_ids": all_mentioned_user_ids,
                     "removed_user_ids": removed_user_ids,
+                    # Team-folder notes carry an ACL, so a mention can
+                    # land on someone who'll 403 on open. Unfiled and
+                    # personal-folder notes resolve to [] — sharing
+                    # those is the per-note dialog's job, not membership.
+                    "nonMemberMentions": non_member_mentions(
+                        newly_mentioned_user_ids,
+                        folder_id=note.folder_id,
+                        exclude_user_ids=[request_user_id],
+                    ),
                 },
                 status=status.HTTP_200_OK,
             )
