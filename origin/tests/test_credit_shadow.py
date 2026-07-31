@@ -100,7 +100,7 @@ class ShadowDecisionAtOpenTests(_ShadowBase):
         """
         credit_ledger.ensure_monthly_grant("u1", "free")
         credit_ledger.post_charge(
-            request_id=str(uuid.uuid4()), user_id="u1", credits_milli=7_000
+            request_id=str(uuid.uuid4()), user_id="u1", credits_milli=2_000
         )
         ctx = self._ctx(plan="free")
         spend_recorder.open_request(ctx)
@@ -112,7 +112,7 @@ class ShadowDecisionAtOpenTests(_ShadowBase):
     def test_an_exhausted_balance_flags_would_have_blocked(self):
         credit_ledger.ensure_monthly_grant("u1", "free")
         credit_ledger.post_charge(
-            request_id=str(uuid.uuid4()), user_id="u1", credits_milli=10_000
+            request_id=str(uuid.uuid4()), user_id="u1", credits_milli=5_000
         )
         ctx = self._ctx(plan="free")
         spend_recorder.open_request(ctx)

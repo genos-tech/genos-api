@@ -1092,28 +1092,32 @@ SEARCH_ENGINE = {
         #
         # UX-pillar capability keys (agent_tool_level, max_effort,
         # auto_effort, agent_memory, agent_history_retention_days,
-        # integrations, digest_cadence) are DARK-SHIPPED PERMISSIVE:
-        # every tier currently carries the most capable value, so the
-        # enforcement PRs merge with zero user impact. A single
-        # merge-last PR sets the real per-tier ladder — rationale and
-        # target table: genos-docs operations/UX_TIER_MODEL_PLAN.md.
-        # A MISSING capability key also resolves permissive (see
-        # quota.py) so a TIER_QUOTAS_JSON override that predates a key
-        # can't silently downgrade anyone.
+        # integrations, digest_cadence) carry the LIVE experience
+        # ladder — tiers sell capability, volume caps are the fair-use
+        # footer. Rationale and target table: genos-docs
+        # operations/UX_TIER_MODEL_PLAN.md. A MISSING capability key
+        # resolves permissive (see quota.py) so a TIER_QUOTAS_JSON
+        # override that predates a key can't silently downgrade anyone
+        # — which also means a rollback of ONE pillar is "restore that
+        # key to its permissive value", not a revert.
+        #
+        # Free reads as: Genos ANSWERS (drafts writes for pasting),
+        # thinks at the default depth, remembers only the live
+        # conversation, sees only the workspace.
         "free": {
             "llm_ask_daily": 20,
             "web_search_daily": 10,
             "model_daily": {},  # filled from llm_models.yaml (see below)
-            "task_create_monthly": 100,
+            "task_create_monthly": 50,
             "note_create_monthly": 50,
             "message_retention_days": 180,
             "upload_max_mb": 5,
-            "agent_tool_level": "organize",
-            "max_effort": "high",
-            "auto_effort": True,
-            "agent_memory": "team",
-            "agent_history_retention_days": None,
-            "integrations": ["web", "google_calendar", "github"],
+            "agent_tool_level": "read",
+            "max_effort": "low",  # = DEFAULT_EFFORT since api #204, so no felt change
+            "auto_effort": False,
+            "agent_memory": "none",
+            "agent_history_retention_days": 30,
+            "integrations": [],
             "digest_cadence": None,
         },
         # Paid-tier LLM caps are set by a value-based X/Y/Z tiering model,
@@ -1164,37 +1168,43 @@ SEARCH_ENGINE = {
         # core = the entry paid plan (JPY1,200 — the price pro used to
         # be). Limits are close to the old pro tier, trimmed at the mid
         # class so there is real headroom to sell pro into.
+        # Core reads as: Genos ACTS (single writes, with approval),
+        # thinks thoroughly, remembers your history, sees web +
+        # Calendar.
         "core": {
             "llm_ask_daily": 100,
             "web_search_daily": 25,
             "model_daily": {},  # filled from llm_models.yaml (see below)
-            "task_create_monthly": 500,
-            "note_create_monthly": 300,
-            "message_retention_days": None,  # unlimited on paid tiers
+            "task_create_monthly": 200,
+            "note_create_monthly": 200,
+            "message_retention_days": 365,
             "upload_max_mb": 25,
-            "agent_tool_level": "organize",
-            "max_effort": "high",
-            "auto_effort": True,
-            "agent_memory": "team",
-            "agent_history_retention_days": None,
-            "integrations": ["web", "google_calendar", "github"],
+            "agent_tool_level": "act",
+            "max_effort": "medium",
+            "auto_effort": False,
+            "agent_memory": "own",
+            "agent_history_retention_days": 180,
+            "integrations": ["web", "google_calendar"],
             "digest_cadence": None,
         },
+        # Pro reads as: Genos ORGANIZES (composite writes — a milestone
+        # + task tree in one approval), deep reasoning + adaptive
+        # effort, team memory, + GitHub, weekly digest.
         "pro": {
             "llm_ask_daily": 250,
             "web_search_daily": 60,
             "model_daily": {},  # filled from llm_models.yaml (see below)
-            "task_create_monthly": 1500,
-            "note_create_monthly": 1000,
-            "message_retention_days": None,  # unlimited on paid tiers
+            "task_create_monthly": 500,
+            "note_create_monthly": 500,
+            "message_retention_days": None,  # unlimited from pro up
             "upload_max_mb": 50,
             "agent_tool_level": "organize",
             "max_effort": "high",
             "auto_effort": True,
             "agent_memory": "team",
-            "agent_history_retention_days": None,
+            "agent_history_retention_days": 365,
             "integrations": ["web", "google_calendar", "github"],
-            "digest_cadence": None,
+            "digest_cadence": "weekly",
         },
         # max = 2x pro on the headline totals for ~1.96x the price, and
         # 2.5x on the premium caps — the deliberate value > price gap is
@@ -1206,7 +1216,7 @@ SEARCH_ENGINE = {
             "model_daily": {},  # filled from llm_models.yaml (see below)
             "task_create_monthly": None,
             "note_create_monthly": None,
-            "message_retention_days": None,  # unlimited on paid tiers
+            "message_retention_days": None,  # unlimited from pro up
             "upload_max_mb": 100,
             "agent_tool_level": "organize",
             "max_effort": "high",
@@ -1214,7 +1224,7 @@ SEARCH_ENGINE = {
             "agent_memory": "team",
             "agent_history_retention_days": None,
             "integrations": ["web", "google_calendar", "github"],
-            "digest_cadence": None,
+            "digest_cadence": "daily",
         },
         # Contact-sales tier: everything unlimited except an absolute
         # per-file ceiling. Set manually via `feature_access set-tier`
@@ -1233,7 +1243,7 @@ SEARCH_ENGINE = {
             "agent_memory": "team",
             "agent_history_retention_days": None,
             "integrations": ["web", "google_calendar", "github"],
-            "digest_cadence": None,
+            "digest_cadence": "daily",
         },
     },
 }

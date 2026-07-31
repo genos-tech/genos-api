@@ -188,7 +188,7 @@ class ShippedPolicyTests(SimpleTestCase):
         self.assertEqual(self.policy.credit_usd, 0.10)
         self.assertEqual(
             {p: v for p, v in self.policy.entitlements_milli.items() if v is not None},
-            {"free": 10_000, "core": 40_000, "pro": 100_000, "max": 200_000},
+            {"free": 5_000, "core": 30_000, "pro": 70_000, "max": 150_000},
         )
         self.assertEqual(
             {p: v for p, v in self.policy.monthly_ceiling_usd.items() if v is not None},

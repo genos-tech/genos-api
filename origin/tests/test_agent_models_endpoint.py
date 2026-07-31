@@ -106,9 +106,14 @@ class AgentModelsEndpointTests(TestCase):
 
     def test_current_reflects_a_saved_preference(self):
         entry = settings.SEARCH_ENGINE["MODEL_CATALOG"][-1]
+        # A tier whose max_effort allows the top rung — on Free the
+        # clamp would resolve a saved highend model down a rung when
+        # effort levels are ambient-on (the clamp tests own that path).
+        self.user.tier = "max"
         self.user.preferred_llm_provider = entry["provider"]
         self.user.preferred_llm_model = entry["model"]
-        self.user.save(update_fields=["preferred_llm_provider", "preferred_llm_model"])
+        self.user.save(update_fields=["tier", "preferred_llm_provider", "preferred_llm_model"])
+        quota.invalidate_effective_tier([self.user.id])
         data = self.client.get(URL).json()
         self.assertEqual(data["current"]["provider"], entry["provider"])
         self.assertEqual(data["current"]["model"], entry["model"])

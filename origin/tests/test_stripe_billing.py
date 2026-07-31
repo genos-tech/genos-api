@@ -1555,10 +1555,10 @@ class PlansCreditAllowanceTests(BillingTestBase):
         STRIPE=STRIPE_TEST_SETTINGS,
     )
     def test_allowance_is_served_when_credits_rule(self):
-        self.assertEqual(self._limits("free")["monthly_ai_credits"], 10)
-        self.assertEqual(self._limits("core")["monthly_ai_credits"], 40)
-        self.assertEqual(self._limits("pro")["monthly_ai_credits"], 100)
-        self.assertEqual(self._limits("max")["monthly_ai_credits"], 200)
+        self.assertEqual(self._limits("free")["monthly_ai_credits"], 5)
+        self.assertEqual(self._limits("core")["monthly_ai_credits"], 30)
+        self.assertEqual(self._limits("pro")["monthly_ai_credits"], 70)
+        self.assertEqual(self._limits("max")["monthly_ai_credits"], 150)
 
     @override_settings(
         SEARCH_ENGINE=_se(

@@ -222,7 +222,7 @@ class CreateTaskPlanCapTests(CreationCapTestBase):
 
 class ShippedDefaultsTests(CreationCapTestBase):
     """The SHIPPED config carries live free-tier caps:
-    100 tasks / 50 notes per month.
+    50 tasks / 50 notes per month.
 
 
     Five modules assert the shipped tier table:
@@ -233,7 +233,7 @@ class ShippedDefaultsTests(CreationCapTestBase):
 
     def test_task_create_capped_at_shipped_default(self):
         limit = settings.SEARCH_ENGINE["TIER_QUOTAS"]["free"]["task_create_monthly"]
-        self.assertEqual(limit, 100)
+        self.assertEqual(limit, 50)
         self.seed_usage(quota.TASK_CREATE_KEY, limit)
         res = self.client.post("/api/v2/task/", self.task_payload(), format="json")
         self.assert_limit_429(res, "task_create")

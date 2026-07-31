@@ -111,11 +111,19 @@ policy:
 #  everything internal is milli-credits. `unlimited` = no entitlement
 #  accounting at all (enterprise is contract-priced).
 # ---------------------------------------------------------------------
+# Cut 2026-07-31 with the UX tier model flip (10/40/100/200 ->
+# 5/30/70/150): credits are the invisible fair-use backstop now, not
+# the product. The edit moves `plan_entitlement_version` — intended;
+# rows written under the old grants stay distinguishable. Rollout is
+# NOT uniformly "next month": ensure_monthly_grant's delta<=0 guard
+# means an already-materialized period keeps the old higher grant,
+# while a first balance read of the period gets the new number — no
+# clawback, no negative balances.
 entitlements:
-    free: 10
-    core: 40
-    pro: 100
-    max: 200
+    free: 5
+    core: 30
+    pro: 70
+    max: 150
     enterprise: unlimited
 
 # ---------------------------------------------------------------------

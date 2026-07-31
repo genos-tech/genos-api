@@ -376,17 +376,36 @@ class ModelsEndpointEffortTests(TestCase):
                 },
             )
             self.assertEqual(row["daily_limit"], model_daily.get(row["model"]))
-            # Permissive/dark default: nothing locked until the tier flip.
-            self.assertFalse(row["locked"])
+            # Post-flip shipped config: this class's user is FREE, whose
+            # ceiling is "low" — the rungs above it come back locked.
+            self.assertEqual(row["locked"], row["effort"] != "low")
 
     def test_saved_effort_is_reflected_in_current(self):
+        # A tier whose ceiling allows "high" — Free's would CLAMP it
+        # (that path is pinned in test_saved_high_is_clamped_for_free).
+        self.user.tier = "pro"
+        self.user.preferred_llm_provider = "openai"
+        self.user.preferred_llm_effort = "high"
+        self.user.save(update_fields=["tier", "preferred_llm_provider", "preferred_llm_effort"])
+        from origin.search_engine import quota as _quota  # noqa: PLC0415
+
+        _quota.invalidate_effective_tier([self.user.id])
+        self.addCleanup(_quota.invalidate_effective_tier, [self.user.id])
+        with override_settings(SEARCH_ENGINE=_se(AGENT_EFFORT_LEVELS=True)):
+            data = self.client.get(self.URL).json()
+        self.assertEqual(data["current"]["effort"], "high")
+        self.assertEqual(data["current"]["model"], "gpt-5.6-sol")
+
+    def test_saved_high_is_clamped_for_free(self):
+        # The flipped ladder: Free's ceiling is "low", and the clamp is
+        # a CLAMP — the request succeeds at the ceiling, never a 403.
         self.user.preferred_llm_provider = "openai"
         self.user.preferred_llm_effort = "high"
         self.user.save(update_fields=["preferred_llm_provider", "preferred_llm_effort"])
         with override_settings(SEARCH_ENGINE=_se(AGENT_EFFORT_LEVELS=True)):
             data = self.client.get(self.URL).json()
-        self.assertEqual(data["current"]["effort"], "high")
-        self.assertEqual(data["current"]["model"], "gpt-5.6-sol")
+        self.assertEqual(data["current"]["effort"], "low")
+        self.assertEqual(data["current"]["model"], "gpt-5.6-luna")
 
 
 class SubprocessPinWiringTests(SimpleTestCase):

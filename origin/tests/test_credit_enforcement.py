@@ -132,7 +132,7 @@ class CreditGateTests(_CacheClearing):
         self.assertEqual(resp.status_code, 429)
         self.assertEqual(resp.data["category"], "ai_credits")
         self.assertEqual(resp.data["credits_remaining"], 0.0)
-        self.assertEqual(resp.data["credits_limit"], 10.0)
+        self.assertEqual(resp.data["credits_limit"], 5.0)
 
     @AUTHORITATIVE
     def test_even_a_sliver_of_a_credit_gets_through(self):
@@ -182,7 +182,7 @@ class CreditBudgetTests(_CacheClearing):
     def test_budget_is_the_balance_when_the_balance_is_the_smaller(self):
         credit_ledger.ensure_monthly_grant(self.UID, "free")
         credit_ledger.post_charge(
-            request_id=str(uuid.uuid4()), user_id=self.UID, credits_milli=7_000
+            request_id=str(uuid.uuid4()), user_id=self.UID, credits_milli=2_000
         )
         cache.clear()
         # 3 credits left, $0.10/credit -> $0.30 -> 300_000 micro-USD.
@@ -194,14 +194,14 @@ class CreditBudgetTests(_CacheClearing):
         runs — cost above it is `absorbed`, by design.
 
         Clipping the budget to it would truncate a long request from a
-        Max user with 195 credits still in hand, and tell them they had
+        Max user with 145 credits still in hand, and tell them they had
         run out of credits. Bounding request LENGTH is
         `AI_REQUEST_MAX_JPY_MILLI`'s job, and a separate decision.
         """
         credit_ledger.ensure_monthly_grant(self.UID, "max")
         cache.clear()
-        # 200 credits at $0.10 -> $20, NOT the 5-credit ($0.50) cap.
-        self.assertEqual(_credit_budget_usd_micro(self.UID, "max"), 20_000_000)
+        # 150 credits at $0.10 -> $15, NOT the 5-credit ($0.50) cap.
+        self.assertEqual(_credit_budget_usd_micro(self.UID, "max"), 15_000_000)
 
     @AUTHORITATIVE
     def test_unlimited_plan_gets_no_budget(self):
@@ -372,8 +372,8 @@ class CreditsBlockTests(_CacheClearing):
     def test_present_with_balance_limit_used_and_reset(self):
         credit_ledger.ensure_monthly_grant(self.UID, "pro")
         block = _credits_block(self.UID, "pro")
-        self.assertEqual(block["limit"], 100.0)
-        self.assertEqual(block["balance"], 100.0)
+        self.assertEqual(block["limit"], 70.0)
+        self.assertEqual(block["balance"], 70.0)
         self.assertEqual(block["used"], 0.0)
         self.assertFalse(block["unlimited"])
         self.assertEqual(block["per_request_max"], 5.0)
@@ -389,7 +389,7 @@ class CreditsBlockTests(_CacheClearing):
         )
         cache.clear()
         block = _credits_block(self.UID, "free")
-        self.assertEqual(block["balance"], 8.75)
+        self.assertEqual(block["balance"], 3.75)
         self.assertEqual(block["used"], 1.25)
 
     @AUTHORITATIVE
@@ -421,7 +421,7 @@ class FeaturesEndpointTests(BaseAPITestCase):
         resp = self._get()
         self.assertEqual(resp.status_code, 200)
         self.assertIn("credits", resp.data)
-        self.assertEqual(resp.data["credits"]["limit"], 10.0)  # free
+        self.assertEqual(resp.data["credits"]["limit"], 5.0)  # free
         # Old clients keep working, and Free's breaker still needs the
         # ask counter — so the legacy keys stay.
         self.assertIn("llm_ask", resp.data)
@@ -598,6 +598,10 @@ class WebSearchCapTests(TestCase):
         with (
             patch.object(web_search, "check_remaining") as check,
             patch.object(web_search, "increment_usage"),
+            # "u1" is not a real user -> effective tier free, whose
+            # integrations now EXCLUDE web (the reach gate) — pin the
+            # gate open so this class keeps testing the CAP predicate.
+            patch.object(web_search, "get_integrations", return_value=["web"]),
             patch.dict(dj_settings.SEARCH_ENGINE, {"TAVILY_API_KEY": ""}, clear=False),
         ):
             check.return_value = (False, 10, 10)  # cap exhausted
