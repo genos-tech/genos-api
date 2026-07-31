@@ -37,7 +37,11 @@ from origin.search_engine.embeddings import embed_one
 from origin.search_engine.llm.choice import active_effort_profile
 from origin.search_engine.llm.spend import spend_purpose
 from origin.search_engine.opensearch_client import get_client, get_index_alias
-from origin.search_engine.quota import get_agent_memory, get_message_retention_days
+from origin.search_engine.quota import (
+    get_agent_history_retention_days,
+    get_agent_memory,
+    get_message_retention_days,
+)
 
 log = logging.getLogger(__name__)
 
@@ -320,6 +324,21 @@ def search(
             datetime.now(timezone.utc) - timedelta(days=retention_days)
         ).isoformat()
 
+    # Agent-history retention (UX tier model §6.3): the `conversation`
+    # lane is cut to the same window the session views enforce, or the
+    # agent would still RECALL asks the user can no longer SEE. Cut on
+    # the chunk's own `updated_at` (its run's finish time) — chunks
+    # carry no session anchor, and hiding a stale run inside a
+    # still-active session errs in the safe direction (recall hides
+    # slightly more than the session view shows). Hide, never delete:
+    # an upgrade widens the window and the chunks are still there.
+    agent_history_days = get_agent_history_retention_days(user_id)
+    conversation_retention_cutoff = None
+    if agent_history_days is not None:
+        conversation_retention_cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=agent_history_days)
+        ).isoformat()
+
     base_filter = _build_filter(
         team_id,
         user_id,
@@ -329,6 +348,7 @@ def search(
         mode=mode,
         person_id=person_id,
         chat_retention_cutoff=chat_retention_cutoff,
+        conversation_retention_cutoff=conversation_retention_cutoff,
         project_ids=project_ids,
         exclude_lanes=exclude_lanes,
     )
@@ -863,6 +883,7 @@ def _build_filter(
     mode: Optional[SearchMode] = None,
     person_id: Optional[str] = None,
     chat_retention_cutoff: Optional[str] = None,
+    conversation_retention_cutoff: Optional[str] = None,
     project_ids: Optional[list[str]] = None,
     exclude_lanes: Optional[frozenset[str]] = None,
 ) -> list[dict]:
@@ -962,6 +983,21 @@ def _build_filter(
                             }
                         },
                         {"range": {"created_at": {"gte": chat_retention_cutoff}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        )
+    if conversation_retention_cutoff:
+        # Agent-history retention (§6.3): "NOT a conversation chunk OR
+        # recent enough" — same shape as the chat clause above; the
+        # anchor rationale lives at the `search()` call site.
+        filt.append(
+            {
+                "bool": {
+                    "should": [
+                        {"bool": {"must_not": [{"term": {"entity_type": "conversation"}}]}},
+                        {"range": {"updated_at": {"gte": conversation_retention_cutoff}}},
                     ],
                     "minimum_should_match": 1,
                 }
