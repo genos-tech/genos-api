@@ -9,7 +9,11 @@ from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
-from origin.views.utils.mention_membership import non_member_mentions, reachable_mentions
+from origin.views.utils.mention_membership import (
+    is_team_folder,
+    non_member_mentions,
+    reachable_mentions,
+)
 from origin.views.utils.note_role import (
     ROLE_EDITOR,
     ROLE_OWNER,
@@ -290,24 +294,29 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
             removed_user_ids = list(prev_set - full_mentioned)
             all_mentioned_user_ids = list(full_mentioned)
 
-            # Don't notify someone about a note they can't open.
+            # Suppress mention notifications for PERSONAL notes only.
             #
-            # Personal notes have no implicit access, so an @mention in
-            # an unshared note pinged the recipient about something that
-            # 403s — and mentions are cheap to type, so this was noise
-            # with no recourse. Only notify people the note actually
-            # reaches; the rest come back as `nonMemberMentions` below so
-            # the author is offered the share instead.
+            # A personal note has no implicit access, so an @mention in an
+            # unshared one pinged the recipient about something that 403s
+            # — noise with no recourse. Those are filtered to the people
+            # the note actually reaches, and the rest come back as
+            # `nonMemberMentions` so the author is offered the share.
             #
-            # Team-folder notes keep notifying normally: their reach is
-            # the folder's, which `reachable_mentions` resolves.
-            reachable = reachable_mentions(
-                full_mentioned,
-                folder_id=note.folder_id,
-                personal_note_id=note.note_id,
-            )
-            newly_mentioned_user_ids = [u for u in newly_mentioned_user_ids if u in reachable]
-            all_mentioned_user_ids = [u for u in all_mentioned_user_ids if u in reachable]
+            # TEAM notes must keep notifying EVERYONE mentioned, including
+            # people not yet in the folder. A team note is a shared
+            # surface: being mentioned into one is how you find out it
+            # exists, and the author gets the "add them" prompt to close
+            # the access gap. Filtering them by folder reach — which an
+            # earlier version of this did — meant a mention into a private
+            # folder reached nobody and the recipient never learned of it.
+            if not is_team_folder(note.folder_id):
+                reachable = reachable_mentions(
+                    full_mentioned, personal_note_id=note.note_id
+                )
+                newly_mentioned_user_ids = [
+                    u for u in newly_mentioned_user_ids if u in reachable
+                ]
+                all_mentioned_user_ids = [u for u in all_mentioned_user_ids if u in reachable]
 
         serializer = PersonalNoteMasterSerializer(note, data=update_data, partial=True)
         if serializer.is_valid():

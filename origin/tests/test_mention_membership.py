@@ -177,3 +177,66 @@ class PersonalNoteMentionTests(BaseAPITestCase):
         self.assertIsNone(
             non_member_mentions([self.user2.id], personal_note_id=self.note.note_id)
         )
+
+
+class TeamNoteMentionNotifyTests(BaseAPITestCase):
+    """A mention in a TEAM note must notify everyone mentioned, INCLUDING
+    people not yet in the folder.
+
+    Being mentioned into a team note is how you find out it exists; the
+    author gets the "add them" prompt to close the access gap. An earlier
+    version filtered these by folder reach, so a mention into a private
+    folder reached nobody and the recipient never learned of it — that is
+    what this guards.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from origin.models.note.personal_note_models import PersonalNoteMaster
+
+        self.folder = PersonalNoteFolder.objects.create(
+            team=self.team,
+            owner=self.user,
+            name="Secret",
+            scope=PersonalNoteFolder.SCOPE_TEAM,
+            visibility="private",
+        )
+        NoteFolderPermission.objects.create(
+            team=self.team, folder=self.folder, user=self.user, role_id=ROLE_OWNER
+        )
+        self.note = PersonalNoteMaster.objects.create(
+            team=self.team,
+            owner=self.user,
+            title="Plan",
+            body=[],
+            folder_id=self.folder.folder_id,
+        )
+
+    def test_team_note_is_not_subject_to_the_personal_suppression(self):
+        from origin.views.utils.mention_membership import is_team_folder
+
+        # The view branches on exactly this, so pin it: a team folder
+        # must never take the personal-note filtering path.
+        self.assertTrue(is_team_folder(self.folder.folder_id))
+
+    def test_private_team_folder_still_reports_the_non_member_for_adding(self):
+        out = non_member_mentions(
+            [self.user2.id],
+            folder_id=self.folder.folder_id,
+            exclude_user_ids=[self.user.id],
+        )
+        self.assertEqual(out["scopeKind"], SCOPE_TEAM_FOLDER)
+        self.assertEqual([u["userId"] for u in out["users"]], [str(self.user2.id)])
+
+    def test_personal_note_still_is_suppressed(self):
+        """The other side of the branch — the behaviour that WAS wanted."""
+        from origin.models.note.personal_note_models import PersonalNoteMaster
+        from origin.views.utils.mention_membership import is_team_folder, reachable_mentions
+
+        loose = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="Diary", body=[]
+        )
+        self.assertFalse(is_team_folder(loose.folder_id))
+        self.assertEqual(
+            reachable_mentions([self.user2.id], personal_note_id=loose.note_id), set()
+        )
