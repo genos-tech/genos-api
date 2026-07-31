@@ -6,6 +6,14 @@ shared, never surfaced in tabs/search/recents. See
 `PersonalNoteFolder` in `origin/models/note/personal_note_models.py`.
 
 Contract notes:
+  - `PersonalNoteFolder` is SHARED with Team Notes, told apart by
+    `scope`. EVERY query in this module therefore pins
+    `scope="personal"` — without it, team folders would surface inside
+    users' My Notes, and this module's destructive delete would reach
+    content it must never touch. Team folders are served by
+    `team_note_folder_views.py`, which has its own handlers rather than
+    reusing these; in particular its delete REFUSES to destroy other
+    people's notes, where the delete here is unconditionally recursive.
   - This module uses KEY-PRESENCE semantics for optional structural
     fields ("parent_folder_id" / "folder_id" present-but-null means
     "move to root"), unlike the legacy note PUTs whose None-strip makes
@@ -25,9 +33,13 @@ from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.note_acl_resync import collect_note_subtree_ids, purge_notes_from_index
+from origin.views.utils.note_folder_role import get_folder_role
+from origin.views.utils.note_role import ROLE_EDITOR, ROLE_VIEWER
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 NOTE_TYPE = 1  # Personal Notes
+SCOPE = PersonalNoteFolder.SCOPE_PERSONAL
 
 
 def _folder_dict(folder: PersonalNoteFolder) -> dict:
@@ -42,8 +54,18 @@ def _folder_dict(folder: PersonalNoteFolder) -> dict:
 
 
 def _get_owned_folder(folder_id, team_id, owner_id):
-    """Fetch a folder scoped to (team, owner). Raises DoesNotExist."""
-    return PersonalNoteFolder.objects.get(folder_id=folder_id, team=team_id, owner=owner_id)
+    """Fetch a PERSONAL folder scoped to (team, owner). Raises DoesNotExist."""
+    return PersonalNoteFolder.objects.get(
+        folder_id=folder_id, team=team_id, owner=owner_id, scope=SCOPE
+    )
+
+
+def _is_team_folder(folder_id, team_id) -> bool:
+    if folder_id is None:
+        return False
+    return PersonalNoteFolder.objects.filter(
+        folder_id=folder_id, team=team_id, scope=PersonalNoteFolder.SCOPE_TEAM
+    ).exists()
 
 
 def _creates_cycle(owner_id, team_id, folder_id, target_parent_id) -> bool:
@@ -62,7 +84,9 @@ def _creates_cycle(owner_id, team_id, folder_id, target_parent_id) -> bool:
             return True
         visited.add(current)
         current = (
-            PersonalNoteFolder.objects.filter(folder_id=current, team=team_id, owner=owner_id)
+            PersonalNoteFolder.objects.filter(
+                folder_id=current, team=team_id, owner=owner_id, scope=SCOPE
+            )
             .values_list("parent_folder_id", flat=True)
             .first()
         )
@@ -82,7 +106,7 @@ class PersonalNoteFolderView(AuthenticatedAPIView):
             return res
 
         folders = PersonalNoteFolder.objects.filter(
-            team=data["team_id"], owner=data["user_id"]
+            team=data["team_id"], owner=data["user_id"], scope=SCOPE
         ).order_by("name")
 
         return Response([_folder_dict(f) for f in folders], status=status.HTTP_200_OK)
@@ -124,6 +148,7 @@ class PersonalNoteFolderView(AuthenticatedAPIView):
             owner_id=data["user_id"],
             parent_folder_id=parent_folder_id,
             name=name,
+            scope=SCOPE,
         )
 
         return Response(_folder_dict(folder), status=status.HTTP_201_CREATED)
@@ -217,6 +242,7 @@ class PersonalNoteFolderView(AuthenticatedAPIView):
                         PersonalNoteFolder.objects.filter(
                             team=data["team_id"],
                             owner=data["user_id"],
+                            scope=SCOPE,
                             parent_folder_id__in=frontier,
                         )
                         .exclude(folder_id__in=folder_ids)
@@ -316,20 +342,50 @@ class PersonalNoteMoveView(AuthenticatedAPIView):
         except PersonalNoteMaster.DoesNotExist:
             return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if str(note.owner_id) != str(request_user_id):
-            return Response(
-                {"error": "Only the note owner can move it."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        is_owner = str(note.owner_id) == str(request_user_id)
+        source_team_role = (
+            get_folder_role(request_user_id, note.folder_id, data["team_id"])
+            if _is_team_folder(note.folder_id, data["team_id"])
+            else None
+        )
+        target_is_team = _is_team_folder(target_folder_id, data["team_id"])
 
-        if target_folder_id is not None:
-            try:
-                _get_owned_folder(target_folder_id, data["team_id"], data["user_id"])
-            except PersonalNoteFolder.DoesNotExist:
+        # Moving INTO the team space: any editor of the destination may
+        # file a note there, and an editor of the source team folder may
+        # rearrange it — the sidebar being rearranged is the team's, not
+        # a colleague's private one, so the owner-only rule that guards
+        # personal folders doesn't apply.
+        #
+        # Moving OUT of the team space (to a personal folder or to root)
+        # is owner-only even for a team-folder editor: it would pull
+        # shared content into one person's private sidebar.
+        if target_is_team:
+            if not is_owner and (source_team_role is None or source_team_role > ROLE_EDITOR):
                 return Response(
-                    {"error": "Target folder not found."},
-                    status=status.HTTP_400_BAD_REQUEST,
+                    {"error": "You do not have permission to move this note."},
+                    status=status.HTTP_403_FORBIDDEN,
                 )
+            if (
+                get_folder_role(request_user_id, target_folder_id, data["team_id"]) or ROLE_VIEWER
+            ) > ROLE_EDITOR:
+                return Response(
+                    {"error": "You do not have permission to add notes to that folder."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+        else:
+            if not is_owner:
+                return Response(
+                    {"error": "Only the note owner can move it."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if target_folder_id is not None:
+                try:
+                    _get_owned_folder(target_folder_id, data["team_id"], data["user_id"])
+                except PersonalNoteFolder.DoesNotExist:
+                    return Response(
+                        {"error": "Target folder not found."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
 
         # Queryset .update() on purpose: skips auto_now so the move
         # neither reshuffles the -tsUpdated sidebar ordering nor routes
@@ -339,6 +395,14 @@ class PersonalNoteMoveView(AuthenticatedAPIView):
             folder_id=target_folder_id,
             parent_note_id=None,
         )
+
+        # Crossing the team boundary CHANGES the note's ACL, which the
+        # `.update()` above deliberately hides from the reindexer. Moving
+        # out of the team space narrows access, so purge now rather than
+        # leave the note findable by the team for another reindex cycle.
+        # Moving in only broadens — the widened window handles it.
+        if source_team_role is not None and not target_is_team:
+            purge_notes_from_index(collect_note_subtree_ids(note.note_id, data["team_id"]))
 
         return Response(
             {

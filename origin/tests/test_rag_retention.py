@@ -56,7 +56,9 @@ class BuildFilterRetentionShapeTests(SimpleTestCase):
     def test_acl_and_tenant_clauses_still_first(self):
         filt = _build_filter("team-1", "user-1", None, None, None, chat_retention_cutoff=CUTOFF)
         self.assertEqual(filt[0], {"term": {"team_id": "team-1"}})
-        self.assertEqual(filt[1], {"term": {"acl_user_ids": "user-1"}})
+        # See test_search_project_filter — the ACL clause is a `terms`
+        # that also admits the whole-team sentinel.
+        self.assertEqual(filt[1], {"terms": {"acl_user_ids": ["user-1", "team:team-1"]}})
 
     def test_composes_with_entity_types_and_dates(self):
         filt = _build_filter(

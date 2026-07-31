@@ -7,18 +7,36 @@ from origin.models.common.user_models import CustomUser
 
 
 class PersonalNoteFolder(models.Model):
-    """User-created folder for organizing personal notes in the sidebar.
+    """User-created folder for organizing notes in the sidebar.
 
-    Folders are a pure organization layer, personal-only (no
-    NotePermissionMaster rows, never shared, never surfaced in
-    tabs/search/recents). `parent_folder_id` nests folders arbitrarily
-    deep; `PersonalNoteMaster.folder_id` attaches a ROOT-level note (its
+    `parent_folder_id` nests folders arbitrarily deep;
+    `PersonalNoteMaster.folder_id` attaches a ROOT-level note (its
     `parent_note_id` child subtree rides along implicitly). Both are
     plain BigIntegerFields per the repo's tree convention
-    (`parent_note_id` / `parent_task_id`) — folder deletion is a
-    DESTRUCTIVE recursive delete of the whole subtree (folders + filed
-    notes + their child notes), implemented in the view.
+    (`parent_note_id` / `parent_task_id`).
+
+    ONE table serves TWO sidebar spaces, told apart by `scope`:
+
+    * ``scope="personal"`` — "My Notes". A pure organization layer:
+      owner-scoped on every handler, no permission rows, never shared.
+      Deletion is a DESTRUCTIVE recursive delete of the whole subtree
+      (see `personal_note_folder_views.py`).
+    * ``scope="team"`` — "Team Notes", the shared general space. The
+      folder is the ACL CARRIER: access flows from `visibility` plus
+      `NoteFolderPermission` rows down to every note filed inside, and
+      `owner` means *creator*, not sole reader. Served by
+      `team_note_folder_views.py`, which refuses to delete a subtree
+      holding anyone else's content.
+
+    `scope` is therefore load-bearing, not cosmetic: EVERY query on this
+    table must filter it, or team folders leak into My Notes.
     """
+
+    SCOPE_PERSONAL = "personal"
+    SCOPE_TEAM = "team"
+
+    VISIBILITY_PUBLIC = "public"
+    VISIBILITY_PRIVATE = "private"
 
     team = models.ForeignKey(
         TeamMaster,
@@ -35,6 +53,18 @@ class PersonalNoteFolder(models.Model):
     folder_id = models.BigAutoField(primary_key=True, unique=True)
     parent_folder_id = models.BigIntegerField(blank=True, null=True, db_index=True)
     name = models.CharField(max_length=255)
+    # Which sidebar space this folder belongs to — see the class
+    # docstring. Indexed because every list query filters on it.
+    scope = models.CharField(max_length=16, default=SCOPE_PERSONAL, db_index=True)
+    # Team folders only. "public" = every team member gets Editor;
+    # "private" = only NoteFolderPermission grantees.
+    #
+    # NULL means INHERIT: resolution walks up to the nearest ancestor
+    # that has an opinion. That is what makes a subfolder "accessible to
+    # everyone who can reach the parent" the zero-config default — an
+    # inheriting subfolder simply has no access definition of its own.
+    # Always NULL for personal folders.
+    visibility = models.CharField(max_length=16, blank=True, null=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 

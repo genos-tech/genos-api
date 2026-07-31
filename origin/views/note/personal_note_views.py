@@ -3,12 +3,14 @@ from django.db.models import F, IntegerField, Value
 from rest_framework import status
 from rest_framework.response import Response
 
+from origin.models.note.personal_note_models import PersonalNoteFolder
 from origin.search_engine.purge import purge_note
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 from origin.views.utils.note_role import (
+    ROLE_EDITOR,
     ROLE_OWNER,
     delete_note_permissions,
     get_effective_role,
@@ -38,8 +40,15 @@ class AllPersonalNotesView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
+        # See AllPersonalNoteMetaView — notes in a TEAM folder belong to
+        # the Team Notes space, not to My Notes.
+        team_folder_ids = PersonalNoteFolder.objects.filter(
+            team=data["team_id"], scope=PersonalNoteFolder.SCOPE_TEAM
+        ).values_list("folder_id", flat=True)
+
         personal_notes = (
             PersonalNoteMaster.objects.filter(team=data["team_id"], owner=data["user_id"])
+            .exclude(folder_id__in=team_folder_ids)
             .annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 roleId=Value(ROLE_OWNER, output_field=IntegerField()),
@@ -83,8 +92,16 @@ class AllPersonalNoteMetaView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
+        # Notes the caller filed in a TEAM folder belong to the Team
+        # Notes space and are served by `/note/team/meta/`. Excluding
+        # them here keeps one note out of two sidebar sections.
+        team_folder_ids = PersonalNoteFolder.objects.filter(
+            team=data["team_id"], scope=PersonalNoteFolder.SCOPE_TEAM
+        ).values_list("folder_id", flat=True)
+
         personal_notes = (
             PersonalNoteMaster.objects.filter(team=data["team_id"], owner=data["user_id"])
+            .exclude(folder_id__in=team_folder_ids)
             .annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 noteId=F("note_id"),
@@ -134,13 +151,33 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
         data["parent_note_id"] = request.data.get("parent_note_id")
 
         # Optional folder placement — "New note here" on a sidebar
-        # folder. Validate ownership so a note can't be filed into
-        # someone else's folder.
+        # folder. A PERSONAL folder must be the caller's own, so a note
+        # can't be filed into someone else's sidebar. A TEAM folder is
+        # shared by design, so the gate there is the folder's role
+        # (editor+) rather than ownership — that is what lets anyone
+        # write in a public Team Notes folder.
         folder_id = request.data.get("folder_id")
         if folder_id is not None:
-            from origin.models.note.personal_note_models import PersonalNoteFolder
+            from origin.views.utils.note_folder_role import get_folder_role  # noqa: PLC0415
 
-            if not PersonalNoteFolder.objects.filter(
+            folder_scope = (
+                PersonalNoteFolder.objects.filter(folder_id=folder_id, team=data["team"])
+                .values_list("scope", flat=True)
+                .first()
+            )
+            if folder_scope is None:
+                return Response(
+                    {"error": "Target folder not found."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if folder_scope == PersonalNoteFolder.SCOPE_TEAM:
+                role = get_folder_role(request_user_id, folder_id, data["team"])
+                if role is None or role > ROLE_EDITOR:
+                    return Response(
+                        {"error": "You do not have permission to add notes to that folder."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+            elif not PersonalNoteFolder.objects.filter(
                 folder_id=folder_id, team=data["team"], owner=data["owner"]
             ).exists():
                 return Response(

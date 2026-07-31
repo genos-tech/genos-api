@@ -12,7 +12,10 @@ ACL is the union of:
   * the note owner,
   * the parent context's members (chat members for ChatNote, project
     members for TaskNote, just the owner for PersonalNote),
-  * any explicit `NotePermissionMaster` grants on this note.
+  * any explicit `NotePermissionMaster` grants on this note,
+  * for a PersonalNote filed in a TEAM folder (Team Notes), whoever
+    that folder chain grants — including a `team:<team_id>` sentinel
+    when the folder resolves public.
 """
 
 from __future__ import annotations
@@ -21,12 +24,14 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Iterator, Optional
 
+from django.db.models import Q
+
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
-from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMembers
-from origin.search_engine.agent.acl import chat_acl_user_ids
+from origin.search_engine.agent.acl import chat_acl_user_ids, team_folder_acl_user_ids
 from origin.search_engine.chunkers.base import (
     CHAT_TYPE_LABEL,
     NOTE_TYPE_CHAT,
@@ -198,12 +203,22 @@ def iter_task_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
 def iter_personal_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
     qs = PersonalNoteMaster.objects.select_related("team", "owner")
     if since is not None:
-        qs = qs.filter(ts_updated_at__gte=since)
+        # Two-clause window (same shape as `todo_chunker`): a note whose
+        # own body changed, OR one sitting in a TEAM folder whose ACL
+        # changed. Folder membership now DETERMINES visibility, so a
+        # grant that never touches the note must still re-index it —
+        # otherwise the note stays invisible to someone who was just
+        # given access.
+        touched_folder_ids = PersonalNoteFolder.objects.filter(
+            scope=PersonalNoteFolder.SCOPE_TEAM, ts_updated_at__gte=since
+        ).values_list("folder_id", flat=True)
+        qs = qs.filter(Q(ts_updated_at__gte=since) | Q(folder_id__in=touched_folder_ids))
     notes = list(qs)
     if not notes:
         return
 
     grants_by_note = _load_grants(NOTE_TYPE_PERSONAL, [n.note_id for n in notes])
+    folder_acl_cache: dict[int, set[str]] = {}
 
     for note in notes:
         if not note.team_id:
@@ -213,6 +228,12 @@ def iter_personal_note_chunks(since: Optional[datetime] = None) -> Iterator[Enti
         if note.owner_id:
             acl.add(str(note.owner_id))
         acl.update(grants_by_note.get(note.note_id, []))
+        if note.folder_id is not None:
+            # Cached per folder: a folder's chain resolves identically
+            # for every note filed in it.
+            if note.folder_id not in folder_acl_cache:
+                folder_acl_cache[note.folder_id] = team_folder_acl_user_ids(note.folder_id)
+            acl.update(folder_acl_cache[note.folder_id])
 
         related = []
         if note.parent_note_id:

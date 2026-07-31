@@ -829,7 +829,11 @@ def _build_filter(
 ) -> list[dict]:
     filt: list[dict] = [
         {"term": {"team_id": team_id}},
-        {"term": {"acl_user_ids": user_id}},
+        # `acl_user_ids` holds user ids plus, for content readable by the
+        # whole team (a public Team Notes folder), a `team:<team_id>`
+        # SENTINEL. Matching the sentinel here is what keeps a public
+        # folder's chunks from having to carry one entry per member.
+        {"terms": {"acl_user_ids": [user_id, f"team:{team_id}"]}},
     ]
     if person_id:
         # Person-scoped search (mentions v2): only chunks authored by,

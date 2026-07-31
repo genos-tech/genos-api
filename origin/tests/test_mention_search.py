@@ -108,7 +108,7 @@ class BuildFilterPersonTests(SimpleTestCase):
         )
         # ACL + tenant guards are untouched.
         self.assertIn({"term": {"team_id": "team-1"}}, filt)
-        self.assertIn({"term": {"acl_user_ids": "user-1"}}, filt)
+        self.assertIn({"terms": {"acl_user_ids": ["user-1", "team:team-1"]}}, filt)
 
     def test_no_person_clause_without_person_id(self):
         filt = _build_filter("team-1", "user-1", None, None, None)
