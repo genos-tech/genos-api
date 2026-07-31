@@ -2,6 +2,10 @@ from django.urls import path
 
 from origin.views.note.chat_note_views import *
 from origin.views.note.favorite_note_views import *
+from origin.views.note.note_folder_tag_views import (
+    NoteFolderTagLinkView,
+    NoteFolderTagView,
+)
 from origin.views.note.note_role_views import (
     NoteRoleCheckView,
     NoteRoleListView,
@@ -74,6 +78,17 @@ urlpatterns = [
         "api/v2/note/team/meta/",
         TeamNoteMetaView.as_view(),
         name="team_note_meta",
+    ),
+    # Team-scoped folder tag vocabulary + per-folder links.
+    path(
+        "api/v2/note/team/tag/",
+        NoteFolderTagView.as_view(),
+        name="note_folder_tag",
+    ),
+    path(
+        "api/v2/note/team/folder/tag/",
+        NoteFolderTagLinkView.as_view(),
+        name="note_folder_tag_link",
     ),
     path("api/v2/note/task/", TaskNoteMasterView.as_view(), name="task_note"),
     path(

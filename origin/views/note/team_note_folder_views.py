@@ -42,6 +42,7 @@ from origin.models.note.personal_note_models import PersonalNoteFolder, Personal
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.services.group_expansion import expand_groups
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.note.note_folder_tag_views import sync_folder_tags
 from origin.views.utils.note_acl_resync import (
     collect_folder_subtree_ids,
     collect_note_ids_in_folders,
@@ -279,6 +280,7 @@ class TeamNoteFolderView(AuthenticatedAPIView):
                 groups=request.data.get("groups") or [],
                 role_id=request.data.get("role_id") or ROLE_EDITOR,
             )
+            sync_folder_tags(folder, data["team_id"], request.data.get("tag_ids"))
 
         folders = load_team_folder_index(data["team_id"])
         return Response(
@@ -382,6 +384,11 @@ class TeamNoteFolderView(AuthenticatedAPIView):
             folder.parent_folder_id = target_parent_id
 
         folder.save()
+
+        # Key presence, like the structural fields: omitting `tag_ids`
+        # leaves tags alone, sending `[]` clears them.
+        if "tag_ids" in request.data:
+            sync_folder_tags(folder, data["team_id"], request.data.get("tag_ids") or [])
 
         if narrowed:
             resync_folder_subtree(folder.folder_id, data["team_id"])
