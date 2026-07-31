@@ -39,6 +39,10 @@ def get_effective_role(user_id, note_type, note_id, team_id=None):
        - chat notes: chat members get Viewer (chat notes default to
          read-only; the chat owner promotes individual users to Editor
          via NotePermissionMaster)
+       - personal notes: none, UNLESS the note is filed in a TEAM
+         folder, in which case the folder carries the ACL (Team Notes —
+         see `note_folder_role.py`). A personal note in a personal
+         folder, or in no folder, still has no implicit access.
     3) Otherwise None (no access).
 
     Lower role_id is stronger (1=owner > 2=editor > 3=viewer). If both
@@ -74,7 +78,26 @@ def get_effective_role(user_id, note_type, note_id, team_id=None):
             return ROLE_VIEWER
         return None
 
-    # Personal notes have no implicit access.
+    # Personal notes: implicit access only via a TEAM folder.
+    #
+    # `team_id` is deliberately NOT trusted here — it is optional on this
+    # function and several callers omit it (require_write_role, and
+    # NoteRoleCheckView, the Hocuspocus collab gate). The folder row
+    # names its own team, so resolution stays correct either way.
+    if note_type == NOTE_TYPE_PERSONAL:
+        folder_id = (
+            PersonalNoteMaster.objects.filter(note_id=note_id)
+            .values_list("folder_id", flat=True)
+            .first()
+        )
+        if folder_id is None:
+            return None
+        # Local import: note_folder_role imports the ROLE_* constants
+        # from this module.
+        from origin.views.utils.note_folder_role import get_folder_role  # noqa: PLC0415
+
+        return get_folder_role(user_id, folder_id)
+
     return None
 
 

@@ -72,7 +72,10 @@ class BuildFilterProjectScopeTests(SimpleTestCase):
     def test_acl_and_tenant_clauses_still_first(self):
         filt = _build_filter("team-1", "user-1", None, None, None, project_ids=["12"])
         self.assertEqual(filt[0], {"term": {"team_id": "team-1"}})
-        self.assertEqual(filt[1], {"term": {"acl_user_ids": "user-1"}})
+        # The ACL clause also admits the `team:<team_id>` sentinel, which
+        # is how content readable by the whole team (a public Team Notes
+        # folder) is matched without indexing every member's id.
+        self.assertEqual(filt[1], {"terms": {"acl_user_ids": ["user-1", "team:team-1"]}})
 
 
 class TaskStatusProjectionTests(SimpleTestCase):

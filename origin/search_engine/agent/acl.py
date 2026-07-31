@@ -19,9 +19,13 @@ from django.core.exceptions import ValidationError
 
 from origin.models.chat.unified_models import Channel, ChannelMember
 from origin.models.note.common_note_models import NotePermissionMaster
-from origin.models.note.personal_note_models import PersonalNoteFolder
+from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees
+
+# Distinguishes "caller didn't say" (look it up) from an explicit
+# `folder_id=None` meaning the note is genuinely unfiled.
+_UNSET = object()
 from origin.search_engine.chunkers.base import (
     CHAT_TYPE_PM,
     NOTE_TYPE_CHAT,
@@ -31,7 +35,7 @@ from origin.search_engine.chunkers.base import (
 
 
 def owns_personal_folder(*, folder_id, team_id: str, user_id: str) -> bool:
-    """True if `folder_id` is a personal-note folder owned by this user in
+    """True if `folder_id` is a PERSONAL-note folder owned by this user in
     this team.
 
     Personal-note folders are a pure per-owner organization layer — they
@@ -40,10 +44,19 @@ def owns_personal_folder(*, folder_id, team_id: str, user_id: str) -> bool:
     `update_note` before filing or moving a note into a folder so the
     agent can't drop a note into a folder that isn't the user's, even if
     the model supplies an arbitrary id.
+
+    TEAM folders are deliberately excluded by the `scope` filter: their
+    ACL is the folder chain, not ownership, so this function cannot
+    answer for them. Agent writes into the Team Notes space are out of
+    scope — a user's own team folder would otherwise slip through here
+    on the ownership check alone.
     """
     try:
         return PersonalNoteFolder.objects.filter(
-            folder_id=folder_id, team=team_id, owner=user_id
+            folder_id=folder_id,
+            team=team_id,
+            owner=user_id,
+            scope=PersonalNoteFolder.SCOPE_PERSONAL,
         ).exists()
     except (ValueError, ValidationError):
         return False
@@ -171,10 +184,59 @@ def task_note_acl_user_ids(*, owner_id, project_id: int | None, note_id: int) ->
     return out
 
 
-def personal_note_acl_user_ids(*, owner_id, note_id: int) -> set[str]:
-    """Personal-note ACL: owner + explicit grants only."""
+def personal_note_acl_user_ids(*, owner_id, note_id: int, folder_id=_UNSET) -> set[str]:
+    """Personal-note ACL: owner + explicit grants, plus folder-derived
+    access when the note lives in a TEAM folder (Team Notes).
+
+    A public team folder contributes a single ``team:<team_id>``
+    SENTINEL rather than one entry per member — a large team would
+    otherwise put hundreds of ids on every chunk. The query side matches
+    `[user_id, "team:<team_id>"]`; see `_build_filter` in
+    `origin/search_engine/search.py`.
+
+    `folder_id` defaults to LOOKING ITSELF UP rather than to None. This
+    function has callers across the agent, citation and summary paths;
+    defaulting to "no folder" would have silently denied team notes to
+    people who can legitimately read them, and the failure would only
+    show up as a note mysteriously missing from an agent answer. Bulk
+    callers (the chunker) pass it explicitly to skip the query; pass
+    `folder_id=None` to state that the note is genuinely unfiled.
+    """
     out: set[str] = set()
     if owner_id:
         out.add(str(owner_id))
     out |= note_grants_user_ids(NOTE_TYPE_PERSONAL, note_id)
+
+    if folder_id is _UNSET:
+        folder_id = (
+            PersonalNoteMaster.objects.filter(note_id=note_id)
+            .values_list("folder_id", flat=True)
+            .first()
+        )
+    if folder_id is not None:
+        out |= team_folder_acl_user_ids(folder_id)
     return out
+
+
+def team_folder_acl_user_ids(folder_id) -> set[str]:
+    """Principals that reach a note through its team folder chain.
+
+    Empty for a personal folder — a personal folder grants nothing, so
+    this is safe to call for any filed note without checking scope first.
+    """
+    from origin.models.note.personal_note_models import PersonalNoteFolder  # noqa: PLC0415
+    from origin.views.utils.note_folder_role import (  # noqa: PLC0415
+        folder_ancestor_grant_user_ids,
+        load_team_folder_index,
+    )
+
+    team_id = (
+        PersonalNoteFolder.objects.filter(
+            folder_id=folder_id, scope=PersonalNoteFolder.SCOPE_TEAM
+        )
+        .values_list("team_id", flat=True)
+        .first()
+    )
+    if team_id is None:
+        return set()
+    return folder_ancestor_grant_user_ids(folder_id, load_team_folder_index(team_id))
