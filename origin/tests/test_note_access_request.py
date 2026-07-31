@@ -162,3 +162,106 @@ class NoteAccessRequestTests(BaseAPITestCase):
             ).role_id,
             2,
         )
+
+
+class TeamNoteAccessRequestTests(NoteAccessRequestTests):
+    """The same request/approve flow, but with the note in a TEAM folder.
+
+    Approval must land as a FOLDER Viewer grant, not a per-note row —
+    the folder is the ACL carrier, and every Team Notes surface (the
+    members dialog, the sidebar, the header bucket) resolves access from
+    `NoteFolderPermission`. The old per-note grant let the requester open
+    the note while remaining invisible to all of them.
+
+    Subclasses the personal-note suite so every request-side test also
+    runs against the team-folder shape; the overrides below assert the
+    approval-side differences.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from origin.models.note.common_note_models import NoteFolderPermission
+        from origin.models.note.personal_note_models import PersonalNoteFolder
+
+        self.folder = PersonalNoteFolder.objects.create(
+            team=self.team,
+            owner=self.user,
+            name="Secret plans",
+            scope=PersonalNoteFolder.SCOPE_TEAM,
+            visibility="private",
+        )
+        NoteFolderPermission.objects.create(
+            team=self.team, folder=self.folder, user=self.user, role_id=ROLE_OWNER
+        )
+        PersonalNoteMaster.objects.filter(note_id=self.note.note_id).update(
+            folder_id=self.folder.folder_id
+        )
+        self.note.refresh_from_db()
+
+    def test_owner_approval_grants_viewer_and_settles_request(self):
+        from origin.models.note.common_note_models import NoteFolderPermission
+
+        item = self._file_and_get_item()
+        self.authenticate(self.user)
+        resp = self.client.post(GRANT_URL, {"item_id": item.item_id}, format="json")
+        self.assertEqual(resp.status_code, 201)
+
+        # The grant is a FOLDER role…
+        grant = NoteFolderPermission.objects.get(folder=self.folder, user=self.user2)
+        self.assertEqual(grant.role_id, ROLE_VIEWER)
+        # …not a per-note row (which would be invisible to the Team
+        # Notes UI and resurface the note under Shared Notes).
+        self.assertFalse(
+            NotePermissionMaster.objects.filter(
+                note_type=1, note_id=self.note.note_id, user=self.user2
+            ).exists()
+        )
+        # And it makes the note actually reachable through the folder.
+        self.assertEqual(
+            get_effective_role(self.user2.id, 1, self.note.note_id, str(self.team.team_id)),
+            ROLE_VIEWER,
+        )
+        item.refresh_from_db()
+        self.assertEqual(item.request_status, "approved")
+
+    def test_approved_user_appears_in_the_folder_roster(self):
+        from urllib.parse import urlencode
+
+        item = self._file_and_get_item()
+        self.authenticate(self.user)
+        self.client.post(GRANT_URL, {"item_id": item.item_id}, format="json")
+
+        query = urlencode({"team_id": self.team.team_id, "folder_id": self.folder.folder_id})
+        roster = self.client.get(f"/api/v2/note/team/folder/member/?{query}")
+        self.assertEqual(roster.status_code, 200)
+        self.assertIn(str(self.user2.id), [str(r["userId"]) for r in roster.data])
+
+    def test_approved_user_sees_the_note_in_team_meta(self):
+        from urllib.parse import urlencode
+
+        item = self._file_and_get_item()
+        self.authenticate(self.user)
+        self.client.post(GRANT_URL, {"item_id": item.item_id}, format="json")
+
+        self.authenticate(self.user2)
+        query = urlencode({"team_id": self.team.team_id, "user_id": str(self.user2.id)})
+        meta = self.client.get(f"/api/v2/note/team/meta/?{query}")
+        self.assertEqual(meta.status_code, 200)
+        self.assertIn(self.note.note_id, [n["noteId"] for n in meta.data])
+
+    def test_approval_never_downgrades_an_existing_role(self):
+        from origin.models.note.common_note_models import NoteFolderPermission
+        from origin.views.utils.note_role import ROLE_EDITOR
+
+        # File first — the request endpoint refuses once the user has a
+        # role, so the promotion has to land BETWEEN request and
+        # approval, which is also the race this test is about.
+        item = self._file_and_get_item()
+        NoteFolderPermission.objects.create(
+            team=self.team, folder=self.folder, user=self.user2, role_id=ROLE_EDITOR
+        )
+        self.authenticate(self.user)
+        resp = self.client.post(GRANT_URL, {"item_id": item.item_id}, format="json")
+        self.assertEqual(resp.status_code, 201)
+        grant = NoteFolderPermission.objects.get(folder=self.folder, user=self.user2)
+        self.assertEqual(grant.role_id, ROLE_EDITOR)

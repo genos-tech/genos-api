@@ -657,14 +657,43 @@ class GrantNoteAccessFromInboxView(AuthenticatedAPIView):
             # don't leak whether the note exists.
             return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        from origin.models.note.common_note_models import NotePermissionMaster
+        from origin.models.note.common_note_models import (
+            NoteFolderPermission,
+            NotePermissionMaster,
+        )
+        from origin.views.utils.mention_membership import is_team_folder
         from origin.views.utils.note_role import ROLE_VIEWER, get_explicit_role
 
         note_title = optionals.get("note_title") or note.title or "Untitled note"
+        # For a note in a TEAM folder, the folder is the ACL carrier —
+        # approval must land there, as a folder Viewer role. A per-note
+        # NotePermissionMaster row (the old behavior) produced an access
+        # shape the entire Team Notes UI is blind to: the requester could
+        # open the note, but the folder's members dialog didn't list
+        # them, the Team Notes sidebar showed them nothing (both read
+        # folder grants), and the note opened under the My/Shared bucket.
+        team_folder_id = (
+            note.folder_id
+            if note_type == 1 and is_team_folder(getattr(note, "folder_id", None))
+            else None
+        )
         with transaction.atomic():
+            if team_folder_id is not None:
+                # get_or_create, not update_or_create: never downgrade a
+                # role the folder already grants (e.g. promoted to
+                # Editor between request and approval).
+                NoteFolderPermission.objects.get_or_create(
+                    folder_id=team_folder_id,
+                    user_id=sender_id,
+                    defaults={
+                        "team_id": note.team_id,
+                        "role_id": ROLE_VIEWER,
+                        "granted_by_id": request.user.id,
+                    },
+                )
             # Never downgrade an existing explicit role (e.g. the owner
             # granted Editor between request and approval).
-            if get_explicit_role(sender_id, note_type, note_id) is None:
+            elif get_explicit_role(sender_id, note_type, note_id) is None:
                 NotePermissionMaster.objects.create(
                     team_id=note.team_id,
                     user_id=sender_id,
