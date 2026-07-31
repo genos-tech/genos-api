@@ -98,6 +98,45 @@ class ResolveUserEffortTests(SimpleTestCase):
         self.assertEqual(choice.effort, "low")
 
 
+class MaxEffortClampTests(SimpleTestCase):
+    """The tier ceiling (UX tier model §5). The contract: CLAMP, never
+    reject — a saved preference outlives a downgrade, so the user keeps
+    working at their ceiling instead of hitting a wall."""
+
+    def test_saved_high_clamps_to_a_low_ceiling(self):
+        choice = resolve_user_effort("claude", "high", "", max_effort="low")
+        self.assertEqual(choice, LlmChoice("claude", "claude-haiku-4-5", "low"))
+
+    def test_medium_ceiling_clamps_high_only(self):
+        clamped = resolve_user_effort("claude", "high", "", max_effort="medium")
+        self.assertEqual(clamped.effort, "medium")
+        untouched = resolve_user_effort("claude", "low", "", max_effort="medium")
+        self.assertEqual(untouched.effort, "low")
+
+    def test_high_ceiling_is_a_no_op(self):
+        for effort in ("low", "medium", "high"):
+            choice = resolve_user_effort("claude", effort, "", max_effort="high")
+            self.assertEqual(choice.effort, effort)
+
+    def test_effort_derived_from_a_legacy_model_is_clamped_too(self):
+        # The read-time migration path must not tunnel under the gate.
+        choice = resolve_user_effort("claude", "", "claude-opus-5", max_effort="low")
+        self.assertEqual(choice.effort, "low")
+        self.assertEqual(choice.model, "claude-haiku-4-5")
+
+    def test_garbage_ceiling_is_permissive(self):
+        # Mirrors quota.get_max_effort: an unknown ceiling never
+        # downgrades anyone.
+        choice = resolve_user_effort("claude", "high", "", max_effort="ultra")
+        self.assertEqual(choice.effort, "high")
+
+    def test_omitted_ceiling_changes_nothing(self):
+        self.assertEqual(
+            resolve_user_effort("claude", "high", ""),
+            resolve_user_effort("claude", "high", "", max_effort="high"),
+        )
+
+
 class EffortSeamsTests(SimpleTestCase):
     """`active_effort_profile` and `subprocess_model_override` — the
     None conventions that keep flag-off byte-identical."""
@@ -326,9 +365,19 @@ class ModelsEndpointEffortTests(TestCase):
         for row in data["efforts"]:
             self.assertEqual(
                 set(row),
-                {"provider", "effort", "model", "model_label", "daily_limit", "used_today"},
+                {
+                    "provider",
+                    "effort",
+                    "model",
+                    "model_label",
+                    "daily_limit",
+                    "used_today",
+                    "locked",
+                },
             )
             self.assertEqual(row["daily_limit"], model_daily.get(row["model"]))
+            # Permissive/dark default: nothing locked until the tier flip.
+            self.assertFalse(row["locked"])
 
     def test_saved_effort_is_reflected_in_current(self):
         self.user.preferred_llm_provider = "openai"

@@ -62,7 +62,9 @@ class AgentModelsEndpointTests(TestCase):
         resp = self.client.get(URL)
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
-        self.assertEqual(set(data) - {"efforts"}, {"tier", "current", "models", "limits"})
+        self.assertEqual(
+            set(data) - {"efforts", "max_effort"}, {"tier", "current", "models", "limits"}
+        )
         self.assertIn(data["tier"], ("free", "core", "pro", "max", "enterprise"))
         self.assertEqual(set(data["current"]) - {"effort"}, {"provider", "model"})
         self.assertEqual(set(data["limits"]), {"llm_ask", "web_search"})
@@ -122,3 +124,55 @@ class AgentModelsEndpointTests(TestCase):
         self.assertEqual(data["current"]["provider"], "claude")
         catalog_pairs = {(r["provider"], r["model"]) for r in data["models"]}
         self.assertIn(("claude", data["current"]["model"]), catalog_pairs)
+
+
+def _efforts_se(max_effort=None):
+    """Effort levels ON (daily era), optionally with a free-tier
+    `max_effort` ceiling in TIER_QUOTAS."""
+    se = _daily_era_se()
+    se["AGENT_EFFORT_LEVELS"] = True
+    quotas = {t: dict(cfg) for t, cfg in se["TIER_QUOTAS"].items()}
+    if max_effort is not None:
+        quotas["free"]["max_effort"] = max_effort
+    else:
+        quotas["free"].pop("max_effort", None)
+    se["TIER_QUOTAS"] = quotas
+    return se
+
+
+class EffortCeilingPayloadTests(TestCase):
+    """The picker must never offer what the server would clamp
+    (UX tier model §5): rungs above the tier ceiling are declared but
+    `locked`, so the frontend renders an upgrade hint, not an option."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="ceiling-user",
+            email="ceiling@test.com",
+            password="testpass123",
+            is_email_verified=True,
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def tearDown(self):
+        quota.invalidate_effective_tier([self.user.id])
+
+    @override_settings(SEARCH_ENGINE=_efforts_se(max_effort="low"))
+    def test_rungs_above_the_ceiling_are_locked(self):
+        data = self.client.get(URL).json()
+        self.assertEqual(data["max_effort"], "low")
+        for row in data["efforts"]:
+            self.assertEqual(
+                row["locked"],
+                row["effort"] != "low",
+                f"{row['provider']}/{row['effort']}",
+            )
+
+    @override_settings(SEARCH_ENGINE=_efforts_se())
+    def test_missing_ceiling_locks_nothing(self):
+        # The permissive/dark contract: a config table without the key
+        # (or a pre-key TIER_QUOTAS_JSON override) offers every rung.
+        data = self.client.get(URL).json()
+        self.assertEqual(data["max_effort"], "high")
+        self.assertFalse(any(row["locked"] for row in data["efforts"]))
