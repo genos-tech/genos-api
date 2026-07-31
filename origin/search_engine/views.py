@@ -24,7 +24,7 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from origin.search_engine.metered import metered_request
-from origin.search_engine.search import search
+from origin.search_engine.search import memory_exclude_lanes, search
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 
@@ -126,6 +126,11 @@ class SearchView(AuthenticatedAPIView):
                 date_to=data.get("date_to"),
                 limit=limit,
                 use_vector=use_vector,
+                # Tier memory gate (UX tier model §6): unconditional, so
+                # a client-supplied entity_types can't opt into a lane
+                # the tier doesn't have. Permissive (empty) for every
+                # tier until the flip.
+                exclude_lanes=memory_exclude_lanes(user_id),
                 **extra_kwargs,
             )
         return Response(result, status=status.HTTP_200_OK)

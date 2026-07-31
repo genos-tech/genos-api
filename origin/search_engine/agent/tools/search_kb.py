@@ -68,6 +68,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         boost_person_ids=boost["boost_person_ids"],
         boost_entity_ids=boost["boost_entity_ids"],
         boost_project_ids=boost["boost_project_ids"],
+        # Grounding guard, tier-independent: neither memory lane may
+        # ever feed a NEW answer through this tool. The default
+        # exclusions only cover the no-entity_types path; this one also
+        # covers a model-supplied `entity_types=["conversation"]` /
+        # ["spotlight_answer"], which used to tunnel under them. Recall
+        # is `search_past_conversations`' job (and the answer→grounding
+        # loop guard is a standing rule — see chunkers/spotlight docs).
+        exclude_lanes=frozenset({"conversation", "spotlight_answer"}),
     )
 
     # Trim the per-entity payload to what the LLM actually needs:
