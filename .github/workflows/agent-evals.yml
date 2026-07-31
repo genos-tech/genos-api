@@ -15,9 +15,20 @@
 # roles/aiplatform.user, so CI calls the SAME Vertex (embeddings + Gemini) as
 # prod — no API keys stored.
 #
-# Required GitHub secrets (from `terraform output` in genos-platform/infra/gcp):
+# Required GitHub secrets (from `terraform output` in genos-platform/infra/gcp,
+# or from the identity-only restore in genos-docs ENVIRONMENTS.md §CI):
 #   GCP_WIF_PROVIDER  = wif_provider
 #   GCP_DEPLOY_SA     = deploy_service_account
+#
+# Required repo VARIABLE:
+#   RUN_AGENT_EVALS = "true"  -> run the GCP-backed evals.
+#
+# ⚠️ `RUN_AGENT_EVALS` is deliberately SEPARATE from `DEPLOY_TO_GCP`.
+# They used to be the same switch, which meant that turning off GCP
+# *hosting* (2026-07-30, the app moved to Railway-only) silently turned
+# off the quality gate for a month — evals only need Vertex, which is a
+# project-level API, and never needed the app to run on GCP. `DEPLOY_TO_GCP`
+# still implies evals: a Cloud Run deploy must never ship ungated.
 
 name: agent-evals
 
@@ -90,17 +101,18 @@ jobs:
     name: agent-evals (quality gate)
     # On PRs the `on: pull_request: paths:` filter above already limits this to
     # agent-quality changes — a cheap early warning. On push to main the job runs
-    # only when it gates a deploy (DEPLOY_TO_GCP == 'true'); with the flag off
-    # (Railway-only) the `deploy` job below is skipped, so a merge run would gate
-    # nothing — skip the whole job (skipped-via-`if` reports SUCCESS, no
-    # required-check deadlock). When it DOES run on a merge, the Vertex-billed
+    # when evals are enabled at all (RUN_AGENT_EVALS) or when it gates a deploy
+    # (DEPLOY_TO_GCP) — with both off nothing would be gated, so skip the whole
+    # job (skipped-via-`if` reports SUCCESS, no required-check deadlock). When it DOES run on a merge, the Vertex-billed
     # steps are further skipped unless the merge touched the eval's dependency
     # surface (the `changes` step below). Coverage for a step-skipped eval: the
     # PR already ran the gate, agent-evals-nightly.yml trends the full numbers
     # daily, and the deploy's post-deploy smoke runs a real agent query on the
     # live revision. GCP is the parallel env (Railway is live), so the residual
     # risk of an unlisted path moving retrieval numbers is bounded.
-    if: github.event_name == 'pull_request' || vars.DEPLOY_TO_GCP == 'true'
+    if: >-
+      github.event_name == 'pull_request' || vars.RUN_AGENT_EVALS == 'true'
+      || vars.DEPLOY_TO_GCP == 'true'
     runs-on: ubuntu-latest
     env:
       PIPENV_VENV_IN_PROJECT: "1"
@@ -181,17 +193,21 @@ jobs:
       # teardown. Treat "no GCP" as "skip, loudly", the same shape as "no
       # eval-relevant paths".
       #
-      # `DEPLOY_TO_GCP` is the existing flag for "the GCP env is live"; the
-      # secret check is belt-and-braces for a repo where the var was never
-      # set. THE GATE IS INERT WHILE THIS SKIPS — retrieval regressions will
-      # not be caught on a PR until the env (or Railway-hosted evals) is back.
+      # `RUN_AGENT_EVALS` is "CI may use Vertex"; `DEPLOY_TO_GCP` implies it
+      # (a deploy must never ship ungated). The secret check is
+      # belt-and-braces for a repo where neither var was ever set.
+      # THE GATE IS INERT WHILE THIS SKIPS — retrieval regressions will not
+      # be caught on a PR until the identity is restored (the procedure is
+      # in genos-docs operations/ENVIRONMENTS.md §CI; it re-creates NO app
+      # infrastructure and costs nothing).
       - name: Is a Vertex-backed eval possible at all?
         id: gcp
         run: |
-          if [ "${{ vars.DEPLOY_TO_GCP }}" = "true" ] && [ -n "${{ secrets.GCP_WIF_PROVIDER }}" ]; then
+          if { [ "${{ vars.RUN_AGENT_EVALS }}" = "true" ] || [ "${{ vars.DEPLOY_TO_GCP }}" = "true" ]; } \
+             && [ -n "${{ secrets.GCP_WIF_PROVIDER }}" ]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::GCP env unavailable (DEPLOY_TO_GCP != true or no WIF provider) — the agent eval gate is INERT for this run."
+            echo "::warning::Vertex-backed evals unavailable (set RUN_AGENT_EVALS=true and the GCP_WIF_PROVIDER secret) — the agent eval gate is INERT for this run."
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
 

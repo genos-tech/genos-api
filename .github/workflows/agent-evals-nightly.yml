@@ -58,6 +58,13 @@ env:
 jobs:
   nightly-trend:
     name: behavior + judge trend (report-only)
+    # Needs Vertex via WIF. Unlike agent-evals.yml this job had NO
+    # availability guard, so from the 2026-07-30 GCP teardown until this
+    # change it failed RED every night on `auth@v2` — a scheduled red X
+    # nobody can act on is worse than a skip. Same predicate as the gate:
+    # RUN_AGENT_EVALS (CI may use Vertex), or DEPLOY_TO_GCP (deploys imply
+    # evals). Restore procedure: genos-docs ENVIRONMENTS.md §CI.
+    if: vars.RUN_AGENT_EVALS == 'true' || vars.DEPLOY_TO_GCP == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
