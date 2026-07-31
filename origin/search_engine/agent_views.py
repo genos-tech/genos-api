@@ -415,6 +415,10 @@ def _resolve_choice_for(user) -> LlmChoice:
             user.preferred_llm_provider,
             user.preferred_llm_effort,
             user.preferred_llm_model,
+            # Tier ceiling (UX tier model §5) — clamps, never rejects.
+            # Permissive ("high") for every tier until the flip, and
+            # fail-open, so this argument is inert today.
+            max_effort=get_max_effort(str(user.id)),
         )
     return resolve_user_choice(user.preferred_llm_provider, user.preferred_llm_model)
 
@@ -2647,6 +2651,13 @@ class AgentModelsView(AuthenticatedAPIView):
         # quota stays keyed on model ids, this is a re-labeling.
         if settings.SEARCH_ENGINE.get("AGENT_EFFORT_LEVELS"):
             payload["current"]["effort"] = resolved.effort
+            # Tier ceiling (UX tier model §5): rungs above it are
+            # DECLARED but marked locked, so the picker can render them
+            # as an upgrade hint instead of offering what the server
+            # would clamp. (A padlock is acceptable here — it's a
+            # settings control, not the conversation.)
+            ceiling = get_max_effort(user_id)
+            ceiling_idx = EFFORTS.index(ceiling) if ceiling in EFFORTS else len(EFFORTS) - 1
             efforts_payload = []
             for entry_provider in settings.LLM_CATALOG.provider_order():
                 for effort_name in EFFORTS:
@@ -2662,9 +2673,11 @@ class AgentModelsView(AuthenticatedAPIView):
                             "model_label": mapped_entry.get("label", mapped),
                             "daily_limit": get_quota(user_id, mapped),
                             "used_today": get_used_today(user_id, mapped),
+                            "locked": EFFORTS.index(effort_name) > ceiling_idx,
                         }
                     )
             payload["efforts"] = efforts_payload
+            payload["max_effort"] = ceiling
 
         return Response(payload)
 

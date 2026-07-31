@@ -451,7 +451,11 @@ providers:
 
 tier_caps:
     free: { light: 20, middle: 10, highend: 0 }
-    core: { light: 100, middle: 12, highend: 2 }
+    # core.highend went 2 -> 0 with the UX tier model (§5: premium
+    # depth starts at pro). Belt-and-braces with the max_effort clamp —
+    # this row only bites on a credits-off rollback, where model_daily
+    # is the enforced limit again.
+    core: { light: 100, middle: 12, highend: 0 }
     pro: { light: 250, middle: 25, highend: 4 }
     max: { light: 500, middle: 50, highend: 10 }
     # Contact-sales tier: no per-model caps at all.
