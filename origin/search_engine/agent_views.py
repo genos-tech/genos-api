@@ -2726,9 +2726,19 @@ class AgentSessionsListView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        sessions_qs = AgentSession.objects.filter(team_id=str(team_id), user_id=user_id).order_by(
-            "-last_active_at"
-        )[:_HISTORY_LIST_LIMIT]
+        sessions_qs = AgentSession.objects.filter(team_id=str(team_id), user_id=user_id)
+        # Tier history window (UX tier model §6.3). SESSION-anchored:
+        # a session inside the window may hold runs older than the
+        # cutoff; they stay visible. HIDE, never delete — no rows are
+        # removed, so an upgrade restores full history (the Slack
+        # model, SUBSCRIPTION_TIERS.md §5). Permissive (None) for
+        # every tier until the flip.
+        history_days = get_agent_history_retention_days(user_id)
+        if history_days is not None:
+            sessions_qs = sessions_qs.filter(
+                last_active_at__gte=timezone.now() - timedelta(days=history_days)
+            )
+        sessions_qs = sessions_qs.order_by("-last_active_at")[:_HISTORY_LIST_LIMIT]
         sessions = list(sessions_qs)
         if not sessions:
             return Response({"sessions": []})
@@ -2820,6 +2830,19 @@ class AgentSessionDetailView(AuthenticatedAPIView):
         except (AgentSession.DoesNotExist, ValueError):
             # ValueError covers malformed UUIDs. Both surface as 404 so
             # we don't reveal "this id exists but you can't see it".
+            return Response(
+                {"error": "Session not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Tier history window (§6.3) — the same 404 as not-found, for
+        # the same reason: an out-of-window session should not read as
+        # "exists but locked". Hidden, not deleted; an upgrade brings
+        # it straight back.
+        history_days = get_agent_history_retention_days(user_id)
+        if history_days is not None and session.last_active_at < timezone.now() - timedelta(
+            days=history_days
+        ):
             return Response(
                 {"error": "Session not found."},
                 status=status.HTTP_404_NOT_FOUND,
