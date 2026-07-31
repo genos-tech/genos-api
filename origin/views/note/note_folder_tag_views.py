@@ -34,8 +34,19 @@ def tag_dict(tag: NoteFolderTag) -> dict:
         "tagId": tag.tag_id,
         "name": tag.name,
         "color": tag.color,
+        "textColor": tag.text_color,
         "createdBy": tag.created_by_id,
     }
+
+
+def _can_edit_vocabulary(tag: NoteFolderTag, team_id, user_id) -> bool:
+    """Renaming or recolouring changes the tag for EVERY folder using it,
+    so it takes the same gate as delete: the tag's creator, with the team
+    owner as the backstop for a departed one. Attaching a tag stays a
+    per-folder edit and is gated by folder role instead."""
+    if str(tag.created_by_id) == str(user_id):
+        return True
+    return TeamMaster.objects.filter(team_id=team_id, owner=user_id).exists()
 
 
 def sync_folder_tags(folder, team_id, tag_ids):
@@ -119,10 +130,61 @@ class NoteFolderTagView(AuthenticatedAPIView):
             name=name,
             defaults={
                 "color": request.data.get("color"),
+                "text_color": request.data.get("text_color"),
                 "created_by_id": request_user_id,
             },
         )
         return Response(tag_dict(tag), status=status.HTTP_201_CREATED)
+
+    def put(self, request):
+        """Rename and/or recolour a tag — team-wide."""
+        request_user_id = request.user.id
+        data = {
+            "team_id": request.data.get("team_id"),
+            "tag_id": request.data.get("tag_id"),
+        }
+        if res := validate_request_data(data):
+            return res
+
+        try:
+            tag = NoteFolderTag.objects.get(tag_id=data["tag_id"], team=data["team_id"])
+        except NoteFolderTag.DoesNotExist:
+            return Response({"error": "Tag not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if not _can_edit_vocabulary(tag, data["team_id"], request_user_id):
+            return Response(
+                {"error": "Only the tag's creator or the team owner can edit it."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if "name" in request.data and request.data.get("name") is not None:
+            name = str(request.data["name"]).strip()
+            if name == "" or len(name) > MAX_TAG_NAME:
+                return Response(
+                    {"error": f"Tag name must be 1-{MAX_TAG_NAME} characters."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            # (team, name) is unique — renaming onto an existing tag would
+            # 500 on the constraint, so refuse with something actionable.
+            if (
+                NoteFolderTag.objects.filter(team=data["team_id"], name=name)
+                .exclude(tag_id=tag.tag_id)
+                .exists()
+            ):
+                return Response(
+                    {"error": "A tag with that name already exists."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            tag.name = name
+
+        # Key presence, so a rename doesn't silently clear the colour.
+        if "color" in request.data:
+            tag.color = request.data.get("color")
+        if "text_color" in request.data:
+            tag.text_color = request.data.get("text_color")
+
+        tag.save()
+        return Response(tag_dict(tag), status=status.HTTP_200_OK)
 
     def delete(self, request):
         """Remove a tag from the vocabulary and from every folder."""
@@ -139,13 +201,8 @@ class NoteFolderTagView(AuthenticatedAPIView):
         except NoteFolderTag.DoesNotExist:
             return Response({"error": "Tag not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Deleting detaches the tag everywhere, so it isn't a per-folder
-        # edit — restrict it to the person who introduced it, or the team
-        # owner as the backstop for a departed creator.
-        is_team_owner = TeamMaster.objects.filter(
-            team_id=data["team_id"], owner=request_user_id
-        ).exists()
-        if str(tag.created_by_id) != str(request_user_id) and not is_team_owner:
+        # Deleting detaches the tag everywhere — same gate as rename.
+        if not _can_edit_vocabulary(tag, data["team_id"], request_user_id):
             return Response(
                 {"error": "Only the tag's creator or the team owner can delete it."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -196,11 +253,16 @@ class NoteFolderTagLinkView(AuthenticatedAPIView):
         sync_folder_tags(folder, data["team_id"], request.data.get("tag_ids") or [])
 
         links = NoteFolderTagLink.objects.filter(folder=folder).values(
-            "tag__tag_id", "tag__name", "tag__color"
+            "tag__tag_id", "tag__name", "tag__color", "tag__text_color"
         )
         return Response(
             [
-                {"tagId": r["tag__tag_id"], "name": r["tag__name"], "color": r["tag__color"]}
+                {
+                    "tagId": r["tag__tag_id"],
+                    "name": r["tag__name"],
+                    "color": r["tag__color"],
+                    "textColor": r["tag__text_color"],
+                }
                 for r in links
             ],
             status=status.HTTP_200_OK,

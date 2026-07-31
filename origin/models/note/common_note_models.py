@@ -121,8 +121,13 @@ class NoteFolderTag(models.Model):
     )
     tag_id = models.BigAutoField(primary_key=True, unique=True)
     name = models.CharField(max_length=40)
-    # Optional swatch (e.g. "#f97316"); null renders the neutral chip.
+    # Chip background (e.g. "#f97316"); null renders the neutral chip.
     color = models.CharField(max_length=16, blank=True, null=True)
+    # Chip foreground. Stored alongside `color` rather than derived,
+    # matching `ProjectLabelMaster` — the palette pairs each swatch with
+    # a hand-picked readable text colour, and computing contrast at
+    # render time would second-guess that choice.
+    text_color = models.CharField(max_length=16, blank=True, null=True)
     created_by = models.ForeignKey(
         CustomUser,
         on_delete=models.SET_NULL,
