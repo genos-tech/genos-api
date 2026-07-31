@@ -348,11 +348,15 @@ class LlmModelPreferenceView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         # Effort IS strictly validated (unlike model): it's a closed
-        # 3-value vocabulary we own, not a churning catalog — an
-        # unknown value here is a client bug, not a stale preference.
-        if effort and effort not in EFFORTS:
+        # vocabulary we own, not a churning catalog — an unknown value
+        # here is a client bug, not a stale preference. "auto" (§5.3
+        # adaptive effort) is always ACCEPTED at write time even while
+        # AGENT_AUTO_EFFORT is off: with the flag off it resolves like
+        # an unset preference, so a saved "auto" is never a brick — the
+        # same lenience the model field gets for catalog churn.
+        if effort and effort not in EFFORTS and effort != "auto":
             return Response(
-                {"error": "effort must be 'low', 'medium', 'high', or empty."},
+                {"error": "effort must be 'low', 'medium', 'high', 'auto', or empty."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         request.user.preferred_llm_provider = provider

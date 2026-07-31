@@ -63,7 +63,8 @@ class AgentModelsEndpointTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(
-            set(data) - {"efforts", "max_effort"}, {"tier", "current", "models", "limits"}
+            set(data) - {"efforts", "max_effort", "auto_effort_available"},
+            {"tier", "current", "models", "limits"},
         )
         self.assertIn(data["tier"], ("free", "core", "pro", "max", "enterprise"))
         self.assertEqual(set(data["current"]) - {"effort"}, {"provider", "model"})

@@ -42,11 +42,20 @@ class LlmChoice:
     AGENT_EFFORT_LEVELS path). Empty everywhere else — every legacy
     constructor site stays valid, and readers treat "" as "effort
     machinery inactive for this request".
+
+    `auto` marks a PROVISIONAL choice for a user whose saved effort is
+    "auto" (AGENT_AUTO_EFFORT, UX tier model §5.3): `effort`/`model`
+    hold the medium fallback so every pre-router consumer (quota
+    pre-flight, summary pins, spend quotes) has a real value, and the
+    ask worker replaces the choice with the routed one before the
+    loop. Default False keeps every existing constructor site and
+    equality check byte-identical.
     """
 
     provider: str  # 'gemini' | 'claude' | 'openai'
     model: str  # e.g. 'gemini-2.5-pro' / 'claude-sonnet-4-6' / 'gpt-5.6-terra'
     effort: str = ""  # '' | 'low' | 'medium' | 'high'
+    auto: bool = False  # provisional — the ask worker routes and replaces
 
 
 _current_choice: ContextVar[LlmChoice | None] = ContextVar("llm_choice", default=None)
@@ -193,6 +202,13 @@ def resolve_user_choice(
 # who ever picked an effort explicitly, are unaffected — this only
 # covers "no preference at all".
 DEFAULT_EFFORT = "low"
+
+# The saved-preference value that means "Genos picks the effort per
+# question" (UX tier model §5.3). Deliberately NOT in EFFORTS: with
+# AGENT_AUTO_EFFORT off, `resolve_user_effort` treats a saved "auto"
+# exactly like an unset preference (the not-in-EFFORTS branch), which
+# is the whole rollback story — no migration, no special casing.
+AUTO_EFFORT = "auto"
 
 
 def resolve_user_effort(
