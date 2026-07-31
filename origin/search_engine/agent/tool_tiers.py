@@ -19,7 +19,11 @@ already flow through (`controller._build_tool_declarations`).
 
 from __future__ import annotations
 
-from origin.search_engine.quota import get_agent_memory, get_agent_tool_level
+from origin.search_engine.quota import (
+    get_agent_memory,
+    get_agent_tool_level,
+    get_integrations,
+)
 
 from .tools import REGISTRY
 
@@ -95,6 +99,50 @@ def memory_disabled_tools(user_id: str) -> set[str]:
     return set()
 
 
+# Integration → the tools it lights up (UX tier model §7 Reach). The
+# tier's `integrations` allowlist disables the COMPLEMENT — remove the
+# tool, never let it error: a tool that always raises burns an agent
+# step and confuses the model into retrying. The three calendar WRITES
+# also sit in SINGLE_WRITE_TOOLS; the two gates union, which is the
+# intended composition (Free has no calendar at all; Core has calendar
+# AND `act`, so it can create events).
+INTEGRATION_TOOLS: dict[str, frozenset[str]] = {
+    "web": frozenset({"search_web"}),
+    "google_calendar": frozenset(
+        {
+            "list_calendars",
+            "list_calendar_events",
+            "create_calendar_event",
+            "update_calendar_event",
+            "delete_calendar_event",
+        }
+    ),
+    "github": frozenset(
+        {
+            "fetch_pr",
+            "list_pr_comments",
+            "list_pr_commits",
+            "list_pr_files",
+            "list_pr_reviews",
+        }
+    ),
+}
+
+
+def reach_disabled_tools(user_id: str) -> set[str]:
+    """The reach gate: tools of every integration the tier lacks.
+
+    `get_integrations` fails open to the full list (and unknown names
+    in the allowlist are inert), so infra doubt disables nothing.
+    """
+    allowed = set(get_integrations(user_id))
+    disabled: set[str] = set()
+    for name, tools in INTEGRATION_TOOLS.items():
+        if name not in allowed:
+            disabled |= tools
+    return disabled
+
+
 def disabled_tools_for_user(user_id: str) -> set[str]:
     """Every TIER-derived tool gate for this user, unioned.
 
@@ -102,4 +150,8 @@ def disabled_tools_for_user(user_id: str) -> set[str]:
     resume leg) use this so a new pillar's gate lands in ONE place —
     the two legs can never disagree on the surface again.
     """
-    return tier_disabled_tools(user_id) | memory_disabled_tools(user_id)
+    return (
+        tier_disabled_tools(user_id)
+        | memory_disabled_tools(user_id)
+        | reach_disabled_tools(user_id)
+    )
