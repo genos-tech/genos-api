@@ -13,6 +13,7 @@ from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.utils.mention_membership import (
     SCOPE_CHANNEL,
+    SCOPE_PERSONAL_NOTE,
     SCOPE_PROJECT,
     SCOPE_TEAM_FOLDER,
     non_member_mentions,
@@ -124,3 +125,55 @@ class MentionMembershipTests(BaseAPITestCase):
 
     def test_no_scope_reports_nothing(self):
         self.assertIsNone(non_member_mentions([self.user2.id]))
+
+
+class PersonalNoteMentionTests(BaseAPITestCase):
+    """An @mention in an UNSHARED personal note must not page anyone —
+    they'd get a notification for something that 403s, with no recourse.
+    Once the note is shared, the recipient is notified normally."""
+
+    def setUp(self):
+        super().setUp()
+        from origin.models.note.personal_note_models import PersonalNoteMaster
+
+        self.note = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="Diary", body=[]
+        )
+
+    def test_unshared_note_reaches_nobody_but_the_owner(self):
+        from origin.views.utils.mention_membership import reachable_mentions
+
+        reach = reachable_mentions(
+            [self.user.id, self.user2.id], personal_note_id=self.note.note_id
+        )
+        self.assertEqual(reach, {str(self.user.id)})
+
+    def test_unshared_note_reports_the_mention_for_sharing(self):
+        out = non_member_mentions(
+            [self.user2.id],
+            personal_note_id=self.note.note_id,
+            exclude_user_ids=[self.user.id],
+        )
+        self.assertEqual(out["scopeKind"], SCOPE_PERSONAL_NOTE)
+        self.assertEqual(out["scopeName"], "Diary")
+        self.assertEqual([u["userId"] for u in out["users"]], [str(self.user2.id)])
+
+    def test_shared_note_reaches_the_grantee_and_reports_nothing(self):
+        from origin.models.note.common_note_models import NotePermissionMaster
+        from origin.views.utils.mention_membership import reachable_mentions
+        from origin.views.utils.note_role import ROLE_EDITOR
+
+        NotePermissionMaster.objects.create(
+            team=self.team,
+            user=self.user2,
+            note_id=self.note.note_id,
+            note_type=1,
+            role_id=ROLE_EDITOR,
+        )
+        self.assertIn(
+            str(self.user2.id),
+            reachable_mentions([self.user2.id], personal_note_id=self.note.note_id),
+        )
+        self.assertIsNone(
+            non_member_mentions([self.user2.id], personal_note_id=self.note.note_id)
+        )
