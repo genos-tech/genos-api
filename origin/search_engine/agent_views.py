@@ -93,6 +93,7 @@ from origin.search_engine.agent.thread_summary import (
     peek_cached_summary,
     regenerate_summary,
 )
+from origin.search_engine.agent.tool_tiers import tier_disabled_tools
 from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.llm import spend
 from origin.search_engine.llm.choice import (
@@ -1167,8 +1168,12 @@ class AgentAskView(AuthenticatedAPIView):
         # Per-request tool gates. Web search is gated by the user's
         # PERSISTED preference (see `_persisted_disabled_tools`), which is
         # authoritative — the old frontend-sent `allow_web_search` flag was
-        # fragile and is now ignored.
-        disabled_tools: set[str] = _persisted_disabled_tools(request.user)
+        # fragile and is now ignored. Unioned with the tier's agency
+        # ladder (tool_tiers) — permissive for every tier until the
+        # UX-tier-model flip, and fail-open, so this line is inert today.
+        disabled_tools: set[str] = _persisted_disabled_tools(request.user) | tier_disabled_tools(
+            user_id
+        )
 
         # Thread Q&A branch: when the frontend passes a `thread_context`,
         # the agent is *primed* with that thread's summary but still has
@@ -1527,11 +1532,27 @@ class AgentDecideView(AuthenticatedAPIView):
         else:
             metered.open_request(spend_kwargs)
 
+        # The resumed leg must carry the same per-user + tier tool gates
+        # as a fresh ask — without this, every post-approval step
+        # redeclared the FULL registry (minus only the ops kill-switch),
+        # silently dropping e.g. the web-search toggle, and an approval
+        # issued before a downgrade could execute after it.
+        resumed_disabled = _persisted_disabled_tools(request.user) | tier_disabled_tools(
+            request_user_id
+        )
+
         def worker(emit, cancel_event):
             token = set_llm_choice(resumed_choice)
             try:
                 with spend.spend_context(**spend_kwargs):
-                    return resume_agent(run, decision, ctx, emit, cancel_event=cancel_event)
+                    return resume_agent(
+                        run,
+                        decision,
+                        ctx,
+                        emit,
+                        disabled_tools=resumed_disabled,
+                        cancel_event=cancel_event,
+                    )
             finally:
                 reset_llm_choice(token)
 
