@@ -151,27 +151,27 @@ class ExactlyOnceTests(_ClearsBalanceCache):
             credit_ledger.ensure_monthly_grant("u1", "pro")
         grants = AiCreditEntry.objects.filter(entry_type="grant", kind="monthly")
         self.assertEqual(grants.count(), 1)
-        self.assertEqual(grants.get().credits_milli, 100_000)  # pro = 100 credits
+        self.assertEqual(grants.get().credits_milli, 70_000)  # pro = 70 credits
 
 
 class EntitlementGrantTests(_ClearsBalanceCache):
     def test_an_upgrade_posts_a_delta_grant_not_an_edit(self):
-        credit_ledger.ensure_monthly_grant("u1", "core")  # 40
-        credit_ledger.ensure_monthly_grant("u1", "pro")  # -> +60 delta
+        credit_ledger.ensure_monthly_grant("u1", "core")  # 30
+        credit_ledger.ensure_monthly_grant("u1", "pro")  # -> +40 delta
         grants = list(
             AiCreditEntry.objects.filter(entry_type="grant").order_by("created_at")
         )
-        self.assertEqual([g.credits_milli for g in grants], [40_000, 60_000])
+        self.assertEqual([g.credits_milli for g in grants], [30_000, 40_000])
         self.assertEqual([g.plan for g in grants], ["core", "pro"])
-        self.assertEqual(credit_ledger.balance_milli("u1", "pro"), 100_000)
+        self.assertEqual(credit_ledger.balance_milli("u1", "pro"), 70_000)
 
     def test_a_downgrade_grants_nothing_and_takes_nothing(self):
-        credit_ledger.ensure_monthly_grant("u1", "max")  # 200
+        credit_ledger.ensure_monthly_grant("u1", "max")  # 150
         credit_ledger.ensure_monthly_grant("u1", "free")
         self.assertEqual(
             AiCreditEntry.objects.filter(entry_type="grant").count(), 1
         )
-        self.assertEqual(credit_ledger.balance_milli("u1", "free"), 200_000)
+        self.assertEqual(credit_ledger.balance_milli("u1", "free"), 150_000)
 
     def test_enterprise_is_unlimited_no_accounting(self):
         credit_ledger.ensure_monthly_grant("u1", "enterprise")
@@ -190,14 +190,14 @@ class EntitlementGrantTests(_ClearsBalanceCache):
 
 class BalanceTests(_ClearsBalanceCache):
     def test_balance_is_grants_minus_charges(self):
-        credit_ledger.ensure_monthly_grant("u1", "core")  # 40_000
+        credit_ledger.ensure_monthly_grant("u1", "core")  # 30_000
         credit_ledger.post_charge(
             request_id=str(uuid.uuid4()), user_id="u1", credits_milli=1_500
         )
         credit_ledger.post_charge(
             request_id=str(uuid.uuid4()), user_id="u1", credits_milli=2_500
         )
-        self.assertEqual(credit_ledger.balance_milli("u1", "core"), 36_000)
+        self.assertEqual(credit_ledger.balance_milli("u1", "core"), 26_000)
 
     def test_periods_do_not_mix(self):
         _grant(period="2026-06", milli=99_000)
@@ -213,7 +213,7 @@ class BalanceTests(_ClearsBalanceCache):
     def test_the_first_read_materializes_the_grant(self):
         self.assertEqual(AiCreditEntry.objects.count(), 0)
         balance = credit_ledger.balance_milli("u9", "max")
-        self.assertEqual(balance, 200_000)
+        self.assertEqual(balance, 150_000)
         self.assertEqual(
             AiCreditEntry.objects.filter(user_id="u9", entry_type="grant").count(), 1
         )

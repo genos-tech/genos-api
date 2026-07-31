@@ -91,7 +91,7 @@ class MatrixTests(SimpleTestCase):
         self.assertIn("tokens/case", out)
         # ¥15/case at ¥15/credit = 1cr mean; pro 100cr ≈ 100 requests.
         self.assertIn("pro", out)
-        self.assertIn("100 request(s)/month", out)
+        self.assertIn("70 request(s)/month", out)
         self.assertIn("every cell is a live provider run", out)
 
     @METER_ON
@@ -237,8 +237,8 @@ class ZeroTokenCellTests(SimpleTestCase):
             "the mean must be over the working provider alone — averaging the "
             "dead rung's zeros in would halve it",
         )
-        # pro = 100cr at 1.00cr/request = 100 requests, not 200.
-        self.assertIn("100 request(s)/month", out)
+        # pro = 70cr at 1.00cr/request = 70 requests, not 140.
+        self.assertIn("70 request(s)/month", out)
 
     @METER_ON
     def test_infra_errors_are_also_excluded(self):

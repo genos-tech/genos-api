@@ -459,6 +459,15 @@ class AskViewMentionTests(BaseAPITestCase):
 
     def setUp(self):
         super().setUp()
+        # These tests pin system_extra=None on a plain ask. On FREE the
+        # read-level agency branch now appends its own extra, which is
+        # not this class's subject — run as pro (and pin the tier cache).
+        from origin.search_engine import quota as _quota  # noqa: PLC0415
+
+        self.user.tier = "pro"
+        self.user.save(update_fields=["tier"])
+        _quota.invalidate_effective_tier([self.user.id])
+        self.addCleanup(_quota.invalidate_effective_tier, [self.user.id])
         self.task = TaskMaster.objects.create(
             team=self.team, title="Fix login flow", assignee=self.user, reporter=self.user
         )

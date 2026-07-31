@@ -97,9 +97,23 @@ class AgentFeaturesShippedDefaultsTests(FeaturesTestBase):
     def test_shipped_free_limits_populated(self):
         res = self.client.get(URL)
         data = res.data
-        self.assertEqual(data["task_create"]["limit"], 100)
+        self.assertEqual(data["task_create"]["limit"], 50)
         self.assertEqual(data["note_create"]["limit"], 50)
         self.assertEqual(data["message_retention_days"], 180)
         self.assertEqual(data["upload_max_mb"], 5)
         # Daily AI quotas keep their existing live values.
         self.assertIsNotNone(data["llm_ask"]["limit"])
+
+    def test_shipped_free_capability_ladder(self):
+        # The flipped experience ladder (UX_TIER_MODEL_PLAN.md §3.1):
+        # Free's Genos answers, at the default depth, remembering only
+        # the live conversation, seeing only the workspace.
+        res = self.client.get(URL)
+        data = res.data
+        self.assertEqual(data["agent_tool_level"], "read")
+        self.assertEqual(data["max_effort"], "low")
+        self.assertFalse(data["auto_effort"])
+        self.assertEqual(data["agent_memory"], "none")
+        self.assertEqual(data["agent_history_retention_days"], 30)
+        self.assertEqual(data["integrations"], [])
+        self.assertIsNone(data["digest_cadence"])

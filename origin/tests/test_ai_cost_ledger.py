@@ -514,6 +514,11 @@ class NonLlmSourceTests(_RestoresRecorder, TestCase):
         with mock.patch.object(
             web_search, "check_remaining", return_value=(True, 0, 10)
         ), mock.patch.object(
+            # "u1" is not a real user -> effective tier free, whose
+            # integrations exclude web — pin the reach gate open; this
+            # test is about the LEDGER row.
+            web_search, "get_integrations", return_value=["web"]
+        ), mock.patch.object(
             web_search, "increment_usage", side_effect=lambda uid, key: charged.append(key)
         ), mock.patch.dict(
             __import__("django.conf", fromlist=["settings"]).settings.SEARCH_ENGINE,
@@ -552,6 +557,8 @@ class NonLlmSourceTests(_RestoresRecorder, TestCase):
 
         with mock.patch.object(
             web_search, "check_remaining", return_value=(True, 0, 10)
+        ), mock.patch.object(
+            web_search, "get_integrations", return_value=["web"]
         ), mock.patch.object(web_search, "increment_usage"), mock.patch.dict(
             __import__("django.conf", fromlist=["settings"]).settings.SEARCH_ENGINE,
             {"TAVILY_API_KEY": "tvly-test"},

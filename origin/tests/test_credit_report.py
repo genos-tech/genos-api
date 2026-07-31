@@ -113,13 +113,13 @@ class CreditReportTests(TestCase):
         self.assertIn("what WOULD have happened", out)
 
     def test_per_plan_milestones_blocked_and_exhaustion_day(self):
-        # User A (free, 10cr): 6cr on day 2 + 5cr on day 3 -> crosses
-        # 50/80/100, exhausted on day 3.
+        # User A (free, 5cr): 6cr on day 2 + 5cr on day 3 -> crosses
+        # 50/80/100 on day 2, where the allowance dies.
         credit_ledger.ensure_monthly_grant(_UID_A, "free")
         _charge(_UID_A, 6_000, day=2)
         _charge(_UID_A, 5_000, day=3)
         _rollup(user=_UID_A, plan="free")
-        # User B (pro, 100cr): 30cr -> under every milestone.
+        # User B (pro, 70cr): 30cr -> under every milestone.
         credit_ledger.ensure_monthly_grant(_UID_B, "pro")
         _charge(_UID_B, 30_000, day=5)
         _rollup(user=_UID_B, plan="pro")
@@ -133,7 +133,7 @@ class CreditReportTests(TestCase):
         self.assertRegex(free_line, r"free\s+1\s+11\.00cr\s+1\s+1\s+1\s+1")
         pro_line = next(line for line in out.splitlines() if line.strip().startswith("pro"))
         self.assertRegex(pro_line, r"pro\s+1\s+30\.00cr\s+0\s+0\s+0\s+0")
-        self.assertIn("day 3", out, "the exhaustion line names the day the allowance died")
+        self.assertIn("day 2", out, "the exhaustion line names the day the allowance died")
 
     def test_request_shape_percentiles_and_requests_per_100(self):
         for credits_milli in (1000, 2000, 3000, 4000):

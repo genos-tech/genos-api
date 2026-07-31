@@ -289,6 +289,16 @@ class DefaultConfigShapeTests(TestCase):
         "note_create_monthly",
         "message_retention_days",
         "upload_max_mb",
+        # UX-pillar capability keys. The accessors resolve a MISSING
+        # key permissively, so forgetting one on a tier would silently
+        # hand that tier the full experience — require them all.
+        "agent_tool_level",
+        "max_effort",
+        "auto_effort",
+        "agent_memory",
+        "agent_history_retention_days",
+        "integrations",
+        "digest_cadence",
     }
 
     def test_all_tiers_have_all_dimensions(self):
@@ -337,17 +347,20 @@ class DefaultConfigShapeTests(TestCase):
         self.assertIsNone(tq["enterprise"]["llm_ask_daily"], "enterprise is unlimited")
 
     def test_shipped_limits_match_documented_targets(self):
-        # The enable PR flipped the four dimensions live. These are the
-        # documented values (SUBSCRIPTION_TIERS.md §1) — changing them
-        # is a product decision that should update the doc too.
+        # The UX tier model flip (2026-07-31): volume caps are the
+        # fair-use footer now (UX_TIER_MODEL_PLAN.md §9) — tasks and
+        # notes cap SEPARATELY at the same figure, deliberate. These
+        # are the documented values (SUBSCRIPTION_TIERS.md §1) —
+        # changing them is a product decision that should update the
+        # doc too.
         tq = settings.SEARCH_ENGINE["TIER_QUOTAS"]
         expected = {
-            "free": (100, 50, 180, 5),
-            "core": (500, 300, None, 25),
-            "pro": (1500, 1000, None, 50),
-            # Max is uncapped on task/note creation: at 200 AI credits a
-            # month the AI limit binds long before a create count could,
-            # so a second cap only ever surprises someone.
+            "free": (50, 50, 180, 5),
+            "core": (200, 200, 365, 25),
+            "pro": (500, 500, None, 50),
+            # Max is uncapped on task/note creation: the AI credit
+            # allowance binds long before a create count could, so a
+            # second cap only ever surprises someone.
             "max": (None, None, None, 100),
             "enterprise": (None, None, None, 200),
         }
@@ -357,3 +370,56 @@ class DefaultConfigShapeTests(TestCase):
             self.assertEqual(cfg["note_create_monthly"], note, f"{tier} note cap")
             self.assertEqual(cfg["message_retention_days"], retention, f"{tier} retention")
             self.assertEqual(cfg["upload_max_mb"], upload, f"{tier} upload cap")
+
+    def test_shipped_capability_ladder_matches_documented_targets(self):
+        # The experience ladder itself (UX_TIER_MODEL_PLAN.md §3.1).
+        tq = settings.SEARCH_ENGINE["TIER_QUOTAS"]
+        expected = {
+            # (agency, max_effort, auto, memory, history_days, integrations, digest)
+            "free": ("read", "low", False, "none", 30, [], None),
+            "core": (
+                "act",
+                "medium",
+                False,
+                "own",
+                180,
+                ["web", "google_calendar"],
+                None,
+            ),
+            "pro": (
+                "organize",
+                "high",
+                True,
+                "team",
+                365,
+                ["web", "google_calendar", "github"],
+                "weekly",
+            ),
+            "max": (
+                "organize",
+                "high",
+                True,
+                "team",
+                None,
+                ["web", "google_calendar", "github"],
+                "daily",
+            ),
+            "enterprise": (
+                "organize",
+                "high",
+                True,
+                "team",
+                None,
+                ["web", "google_calendar", "github"],
+                "daily",
+            ),
+        }
+        for tier, (agency, effort, auto, memory, days, integ, digest) in expected.items():
+            cfg = tq[tier]
+            self.assertEqual(cfg["agent_tool_level"], agency, tier)
+            self.assertEqual(cfg["max_effort"], effort, tier)
+            self.assertEqual(cfg["auto_effort"], auto, tier)
+            self.assertEqual(cfg["agent_memory"], memory, tier)
+            self.assertEqual(cfg["agent_history_retention_days"], days, tier)
+            self.assertEqual(cfg["integrations"], integ, tier)
+            self.assertEqual(cfg["digest_cadence"], digest, tier)
