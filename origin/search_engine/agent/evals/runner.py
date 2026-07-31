@@ -340,6 +340,27 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
             mention_seeds = build_mention_seed_sources(resolved)
             ctx = dataclasses.replace(ctx, resolved_mentions=tuple(m.as_json() for m in resolved))
 
+        # UX tier model §4 — per-case agency level. Mirrors exactly what
+        # the ask view does at that level: hide the level's tools from
+        # the declarations and (for `read`) append the draft-and-offer
+        # prompt branch. Absent -> full surface, byte-identical to
+        # before this key existed.
+        level_disabled: set[str] | None = None
+        level = case.get("agent_tool_level")
+        if level:
+            from origin.search_engine.agent.tool_tiers import (  # noqa: PLC0415
+                READ_LEVEL_SYSTEM_EXTRA,
+                disabled_tools_for_level,
+            )
+
+            level_disabled = disabled_tools_for_level(level)
+            if level == "read":
+                mention_extra = (
+                    f"{mention_extra}\n\n{READ_LEVEL_SYSTEM_EXTRA}"
+                    if mention_extra
+                    else READ_LEVEL_SYSTEM_EXTRA
+                )
+
         def _attempt() -> tuple[list[dict[str, Any]], list[dict[str, Any]], float | None]:
             """One full agent run with event / trace / TTFT capture.
 
@@ -373,6 +394,7 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
                 trace_hook=_capture_trace,
                 system_extra=mention_extra,
                 seed_sources=mention_seeds,
+                disabled_tools=level_disabled,
             )
             return attempt_events, attempt_traces, ttft
 

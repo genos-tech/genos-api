@@ -93,7 +93,7 @@ from origin.search_engine.agent.thread_summary import (
     peek_cached_summary,
     regenerate_summary,
 )
-from origin.search_engine.agent.tool_tiers import disabled_tools_for_user
+from origin.search_engine.agent.tool_tiers import disabled_tools_for_user, tier_system_extra
 from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.llm import spend
 from origin.search_engine.llm.choice import (
@@ -1368,6 +1368,15 @@ class AgentAskView(AuthenticatedAPIView):
             ctx = dataclasses.replace(
                 ctx, resolved_mentions=tuple(m.as_json() for m in resolved_mentions)
             )
+
+        # §4.3 — read-level conversation contract. At agency level
+        # `read` the write tools are UNDECLARED (see `disabled_tools`
+        # above); this branch teaches the model to draft-and-offer
+        # instead of refusing. None for every tier until the
+        # UX-tier-model flip, so this is inert today.
+        tier_extra = tier_system_extra(user_id)
+        if tier_extra:
+            system_extra = f"{system_extra}\n\n{tier_extra}" if system_extra else tier_extra
 
         # `chosen` is captured in the worker closure so the contextvar
         # is set inside the controller's threading.Thread — a bare
