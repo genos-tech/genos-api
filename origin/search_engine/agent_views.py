@@ -96,6 +96,7 @@ from origin.search_engine.agent.thread_summary import (
 from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.llm import spend
 from origin.search_engine.llm.choice import (
+    AUTO_EFFORT,
     LlmChoice,
     cheaper_models_same_provider,
     reset_llm_choice,
@@ -104,6 +105,7 @@ from origin.search_engine.llm.choice import (
     set_llm_choice,
     subprocess_model_override,
 )
+from origin.search_engine.llm.effort_router import route_effort
 from origin.search_engine.models import (
     AgentRun,
     AgentRunFeedback,
@@ -408,17 +410,37 @@ def _resolve_choice_for(user) -> LlmChoice:
     `resolve_user_effort`, which derives a missing effort from the
     legacy model's rung so nobody's provider or model changes at the
     flip.
+
+    A saved "auto" effort (AGENT_AUTO_EFFORT + the tier's
+    `auto_effort`) resolves to a PROVISIONAL medium choice marked
+    `auto=True`; the ask worker routes the real effort per question
+    (see `effort_router`). Medium is deliberately both the provisional
+    and the router's fail-open value, so every pre-router consumer —
+    the per-model quota pre-flight, the summary pins, the spend quote,
+    and the post-stream counter increment — sees the same balanced
+    rung the ask degrades to if routing fails. That skew (a routed-high
+    ask pre-flights and counts against the medium model) is accepted
+    and only reachable behind the default-off flag.
     """
     if settings.SEARCH_ENGINE.get("AGENT_EFFORT_LEVELS"):
-        return resolve_user_effort(
+        preferred_effort = (user.preferred_llm_effort or "").strip().lower()
+        wants_auto = (
+            preferred_effort == AUTO_EFFORT
+            and settings.SEARCH_ENGINE.get("AGENT_AUTO_EFFORT")
+            and get_auto_effort(str(user.id))
+        )
+        choice = resolve_user_effort(
             user.preferred_llm_provider,
-            user.preferred_llm_effort,
+            "medium" if wants_auto else user.preferred_llm_effort,
             user.preferred_llm_model,
             # Tier ceiling (UX tier model §5) — clamps, never rejects.
             # Permissive ("high") for every tier until the flip, and
             # fail-open, so this argument is inert today.
             max_effort=get_max_effort(str(user.id)),
         )
+        if wants_auto:
+            choice = dataclasses.replace(choice, auto=True)
+        return choice
     return resolve_user_choice(user.preferred_llm_provider, user.preferred_llm_model)
 
 
@@ -1376,6 +1398,23 @@ class AgentAskView(AuthenticatedAPIView):
             try:
                 with spend.spend_context(**spend_kwargs):
                     spend.bind_run_id(str(run.run_id) if run else None)
+                    if chosen.auto:
+                        # §5.3 — route the real effort per question, then
+                        # re-resolve under the same tier ceiling. Runs
+                        # INSIDE the spend context (the router is a real
+                        # rung-0 call and must roll up under this ask) and
+                        # under the provisional binding (so the router's
+                        # client is the user's provider adapter). Fails
+                        # open to medium — exactly the provisional choice.
+                        routed = route_effort(query, chosen.provider)
+                        effective = resolve_user_effort(
+                            chosen.provider,
+                            routed,
+                            "",
+                            max_effort=get_max_effort(user_id),
+                        )
+                        reset_llm_choice(token)
+                        token = set_llm_choice(effective)
                     return run_agent(
                         query,
                         ctx,
@@ -2657,6 +2696,12 @@ class AgentModelsView(AuthenticatedAPIView):
                     )
             payload["efforts"] = efforts_payload
             payload["max_effort"] = ceiling
+            # §5.3 — whether the picker may offer "auto". Both gates:
+            # the ops flag AND the tier's auto_effort. Additive; absent
+            # on older clients' assumptions, false hides the option.
+            payload["auto_effort_available"] = bool(
+                settings.SEARCH_ENGINE.get("AGENT_AUTO_EFFORT")
+            ) and get_auto_effort(user_id)
 
         return Response(payload)
 

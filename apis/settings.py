@@ -1324,6 +1324,18 @@ SEARCH_ENGINE["AGENT_EFFORT_LEVELS"] = (
     os.environ.get("AGENT_EFFORT_LEVELS", "false").lower() == "true"
 )
 
+# Adaptive effort (UX tier model §5.3): a saved "auto" effort routes
+# each ask through a rung-0 classification call (low|medium|high),
+# then clamps to the tier's max_effort. Removes a config chore rather
+# than adding a control — the premium experience is Genos choosing per
+# question. Dark-shipped OFF; with the flag off a saved "auto" resolves
+# like an unset preference (DEFAULT_EFFORT), so rollback is safe.
+# Router cost must be measured before flipping (AGENT_COST_OPTIMIZATION
+# has the method); it fails open to "medium" on any error or garbage.
+SEARCH_ENGINE["AGENT_AUTO_EFFORT"] = (
+    os.environ.get("AGENT_AUTO_EFFORT", "false").lower() == "true"
+)
+
 # Per-effort thinking budgets (llm_models.yaml `efforts.*.thinking_budget`)
 # applied to the agent loop's Gemini calls. Separate from
 # AGENT_EFFORT_LEVELS so it can flip — and roll back — without touching
