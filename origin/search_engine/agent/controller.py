@@ -1489,6 +1489,7 @@ def resume_agent(
     ctx: ToolContext,
     emit: Callable[[dict[str, Any]], None],
     *,
+    disabled_tools: set[str] | None = None,
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any] | None:
     """Resume a paused agent run after the user has approved or rejected.
@@ -1498,6 +1499,13 @@ def resume_agent(
     (reject) for that one tool, then continues the loop. Returns
     `None` on completion or another pause descriptor if the resumed
     run hits a second write tool.
+
+    `disabled_tools` is the same per-user + tier union a fresh ask
+    computes; the view MUST pass it so the continued loop declares the
+    same surface the original run did. It also vetoes the pending call
+    itself: an approval issued before a downgrade (or before an ops
+    kill-switch flipped) must not execute a tool the user no longer
+    has.
     """
     if decision not in (DECISION_APPROVE, DECISION_REJECT):
         emit(
@@ -1561,10 +1569,18 @@ def resume_agent(
         messages.append(_assistant_function_call_turn(function_call))
         messages.append(_function_response_turn(call_name, {"error": "user_rejected"}))
     else:
-        # APPROVE — actually run the tool now.
+        # APPROVE — actually run the tool now. A pending call whose
+        # tool has since been disabled (tier downgrade, toggled-off
+        # preference, ops kill-switch) is vetoed exactly like an
+        # unknown tool: the approval token must not outlive the grant.
         tool = REGISTRY.get(call_name)
-        if tool is None:
-            err = f"Unknown tool: {call_name}"
+        vetoed = (disabled_tools or set()) | _operator_disabled_tools()
+        if tool is None or call_name in vetoed:
+            err = (
+                f"Unknown tool: {call_name}"
+                if tool is None
+                else f"Tool '{call_name}' is no longer available on this account."
+            )
             emit(
                 {
                     "type": "tool_call_error",
@@ -1707,6 +1723,7 @@ def resume_agent(
         run_id=run.run_id,
         starting_step=step_index + 1,
         seen_sources_by_id=resumed_sources,
+        disabled_tools=disabled_tools,
         session_id=str(run.session_id) if run.session_id else None,
         cancel_event=cancel_event,
     )
