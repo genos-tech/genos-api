@@ -63,7 +63,7 @@ def _members_of_channel(channel_id) -> set[str]:
     }
 
 
-def _is_team_folder(folder_id) -> bool:
+def is_team_folder(folder_id) -> bool:
     return PersonalNoteFolder.objects.filter(
         folder_id=folder_id, scope=PersonalNoteFolder.SCOPE_TEAM
     ).exists()
@@ -152,7 +152,7 @@ def non_member_mentions(
         scope_name = (
             Channel.objects.filter(id=channel_id).values_list("title", flat=True).first()
         )
-    elif folder_id is not None and _is_team_folder(folder_id):
+    elif folder_id is not None and is_team_folder(folder_id):
         folder = (
             PersonalNoteFolder.objects.filter(folder_id=folder_id)
             .values("folder_id", "name")
@@ -213,7 +213,7 @@ def reachable_mentions(mentioned_user_ids, *, folder_id=None, personal_note_id=N
     ids = {str(u) for u in (mentioned_user_ids or []) if u}
     if not ids:
         return set()
-    if folder_id is not None and _is_team_folder(folder_id):
+    if folder_id is not None and is_team_folder(folder_id):
         return _readers_of_team_folder(folder_id, ids)
     if personal_note_id is not None:
         return ids & _grantees_of_personal_note(personal_note_id)
