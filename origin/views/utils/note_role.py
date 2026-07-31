@@ -36,9 +36,10 @@ def get_effective_role(user_id, note_type, note_id, team_id=None):
        - task notes: project members get **Editor** (task notes are a
          shared, collaboratively-edited surface within the project; the
          expectation is anyone with project access can edit them)
-       - chat notes: chat members get Viewer (chat notes default to
-         read-only; the chat owner promotes individual users to Editor
-         via NotePermissionMaster)
+       - chat notes: chat members get **Editor**, for the same reason
+         task notes do — a note hanging off a shared conversation is a
+         shared surface, and granting only Viewer made every chat note
+         read-only for everyone but its creator
        - personal notes: none, UNLESS the note is filed in a TEAM
          folder, in which case the folder carries the ACL (Team Notes —
          see `note_folder_role.py`). A personal note in a personal
@@ -70,12 +71,21 @@ def get_effective_role(user_id, note_type, note_id, team_id=None):
         except ChatNoteMaster.DoesNotExist:
             return None
         # Chat notes are keyed on the v3 `Channel` UUID; an active
-        # `ChannelMember` row grants implicit Viewer (PM members included
-        # via pm_channel_signals).
+        # `ChannelMember` row grants implicit **Editor** (PM members
+        # included via pm_channel_signals).
+        #
+        # This used to grant Viewer, on the theory that the chat owner
+        # would promote individual editors. In practice that made every
+        # chat note read-only for everyone except whoever happened to
+        # create it — a note started from a DM couldn't be edited by the
+        # other participant, which is the opposite of what a note
+        # attached to a shared conversation is for. Task notes have
+        # always granted project members Editor for the same reason;
+        # this brings chat notes in line.
         if ChannelMember.objects.filter(
             channel_id=note.channel_id, user=user_id, is_deleted=False
         ).exists():
-            return ROLE_VIEWER
+            return ROLE_EDITOR
         return None
 
     # Personal notes: implicit access only via a TEAM folder.
