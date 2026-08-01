@@ -12,6 +12,7 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import (
     validate_request_data,
 )
+from origin.views.utils.scope_guards import is_project_member
 
 SPRINT_STATUS_UPCOMING = "upcoming"
 SPRINT_STATUS_ACTIVE = "active"
@@ -20,6 +21,13 @@ SPRINT_STATUS_ARCHIVED = "archived"
 
 DEFAULT_SPRINT_DURATION_DAYS = 14
 DEFAULT_SPRINT_UPCOMING_HORIZON = 6
+
+
+def _deny_not_found(kind: str):
+    """404 rather than 403 — milestone/sprint/project ids are sequential
+    integers, so a 403 would turn this endpoint into an existence oracle
+    for the whole install. Mirrors the `channel_views` convention."""
+    return Response({"error": f"{kind} not found."}, status=status.HTTP_404_NOT_FOUND)
 
 
 def _ensure_default_config(project: ProjectMaster) -> SprintConfig:
@@ -247,6 +255,8 @@ class SprintConfigView(AuthenticatedAPIView):
             project = ProjectMaster.objects.get(project_id=project_id, is_deleted=False)
         except ProjectMaster.DoesNotExist:
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not is_project_member(project.project_id, request.user.id):
+            return _deny_not_found("Project")
 
         # Bootstrap a default config on first read so the config dialog
         # always lands on sane prefilled values (2-week cadence,
@@ -286,6 +296,8 @@ class SprintConfigView(AuthenticatedAPIView):
             project = ProjectMaster.objects.get(project_id=data["project_id"], is_deleted=False)
         except ProjectMaster.DoesNotExist:
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not is_project_member(project.project_id, request.user.id):
+            return _deny_not_found("Project")
 
         auto_roll = request.data.get("auto_roll", True)
         upcoming_horizon = request.data.get("upcoming_horizon", 6)
@@ -330,6 +342,8 @@ class ProjectSprintsView(AuthenticatedAPIView):
             project = ProjectMaster.objects.get(project_id=project_id, is_deleted=False)
         except ProjectMaster.DoesNotExist:
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not is_project_member(project.project_id, request.user.id):
+            return _deny_not_found("Project")
 
         # Bootstrap a default 2-week cadence so a brand-new project
         # doesn't return an empty sprint list and trap the user into
@@ -386,6 +400,8 @@ class SprintView(AuthenticatedAPIView):
             project = ProjectMaster.objects.get(project_id=data["project_id"], is_deleted=False)
         except ProjectMaster.DoesNotExist:
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not is_project_member(project.project_id, request.user.id):
+            return _deny_not_found("Project")
 
         # Reject overlap with existing non-deleted sprints.
         overlapping = Sprint.objects.filter(project=project, is_deleted=False).filter(
@@ -426,6 +442,8 @@ class SprintView(AuthenticatedAPIView):
             sprint = Sprint.objects.get(sprint_id=sprint_id, is_deleted=False)
         except Sprint.DoesNotExist:
             return Response({"error": "Sprint not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not is_project_member(sprint.project_id, request.user.id):
+            return _deny_not_found("Sprint")
 
         new_name = request.data.get("name")
         new_start = _parse_iso_date(request.data.get("start_date"))
@@ -474,6 +492,8 @@ class SprintView(AuthenticatedAPIView):
             sprint = Sprint.objects.get(sprint_id=sprint_id)
         except Sprint.DoesNotExist:
             return Response({"error": "Sprint not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not is_project_member(sprint.project_id, request.user.id):
+            return _deny_not_found("Sprint")
         sprint.is_deleted = True
         sprint.save(update_fields=["is_deleted", "ts_updated_at"])
         # Detach milestones from a deleted sprint so they fall back into
