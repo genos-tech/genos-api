@@ -1617,6 +1617,15 @@ EMAIL_NOTIFICATIONS_ENABLED = (
     os.environ.get("EMAIL_NOTIFICATIONS_ENABLED", "false").lower() == "true"
 )
 
+# Coalescer tuning (email_notify_tick). AWAY = a user is emailed only
+# when their oldest pending outbox row is at least this old (email is for
+# the person who LEFT — anyone active gets the in-app feed and push).
+# COOLDOWN = minimum minutes between two notification emails to the same
+# user. Tune in staging before prod; the cron's --away-minutes /
+# --cooldown-minutes args override per-run.
+EMAIL_NOTIFY_AWAY_MINUTES = int(os.environ.get("EMAIL_NOTIFY_AWAY_MINUTES", "10"))
+EMAIL_NOTIFY_COOLDOWN_MINUTES = int(os.environ.get("EMAIL_NOTIFY_COOLDOWN_MINUTES", "30"))
+
 # Public origin used to build absolute URLs in outgoing emails (e.g.
 # password-reset links). Default matches the dockerised dev frontend
 # (see docker/docker-compose.yml, react service on :3000). Override in

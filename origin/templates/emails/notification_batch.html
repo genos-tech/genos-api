@@ -1,0 +1,14 @@
+{% extends "emails/base.html" %}
+{% block content %}
+    <h1 style="font-size:16px; margin:0 0 16px; color:#1c1c1e;">While you were away</h1>
+    {% for group in groups %}
+        <div style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.4px; color:#8e8e93; margin:16px 0 8px;">{{ group.label }}</div>
+        {% for item in group.items %}
+            <div style="padding:10px 12px; border:1px solid #f0f0f2; border-radius:8px; margin-bottom:8px;">
+                <div style="font-size:14px; font-weight:600; color:#1c1c1e;">{{ item.title }}</div>
+                {% if item.body %}<div style="font-size:13px; color:#3a3a3c; margin-top:4px; line-height:1.5;">{{ item.body }}</div>{% endif %}
+                <div style="margin-top:6px;"><a href="{{ item.url }}" style="font-size:13px; color:#7c3aed; text-decoration:none;">Open →</a></div>
+            </div>
+        {% endfor %}
+    {% endfor %}
+{% endblock %}
