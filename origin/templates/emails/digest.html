@@ -1,0 +1,16 @@
+{% extends "emails/base.html" %}
+{% block content %}
+    <h1 style="font-size:16px; margin:0 0 6px; color:#1c1c1e;">Your Genos digest</h1>
+    <p style="font-size:13px; color:#8e8e93; margin:0 0 16px;">{{ total }} unread update{{ total|pluralize }} waiting for you.</p>
+    {% for item in entries %}
+        <div style="padding:10px 12px; border:1px solid #f0f0f2; border-radius:8px; margin-bottom:8px;">
+            <div style="font-size:14px; font-weight:600; color:#1c1c1e;">{{ item.title }}</div>
+            <div style="margin-top:6px;"><a href="{{ item.url }}" style="font-size:13px; color:#7c3aed; text-decoration:none;">Open →</a></div>
+        </div>
+    {% endfor %}
+    {% if more %}
+        <p style="font-size:13px; color:#8e8e93; margin:8px 0 0;">…and {{ more }} more in the app.</p>
+    {% endif %}
+{% endblock %}
+{% block footer_note %}You're receiving this daily digest because it's enabled for your Genos account.{% endblock %}
+{% block unsubscribe_label %}Stop the digest{% endblock %}

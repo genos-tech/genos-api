@@ -1,0 +1,9 @@
+{% extends "emails/base.txt" %}
+{% block content %}Your Genos digest — {{ total }} unread update{{ total|pluralize }}:
+
+{% for item in entries %}- {{ item.title }}
+  {{ item.url }}
+{% endfor %}{% if more %}
+…and {{ more }} more in the app.{% endif %}{% endblock %}
+{% block footer_note %}You're receiving this daily digest because it's enabled for your Genos account.{% endblock %}
+{% block unsubscribe_label %}Stop the digest{% endblock %}

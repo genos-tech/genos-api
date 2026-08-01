@@ -1,0 +1,31 @@
+# Railway config for the `email-digest` cron service (email notification
+# channel, PR A6 — see genos-docs operations/RAILWAY_DEPLOY.md).
+#
+# Same Docker image as `backend-django`, run as a cron. NOT the agent
+# digest (`agent-digest`, tier-gated, LLM): this one is the plain
+# unread-summary EMAIL, all tiers, two DB queries per user, no model
+# calls.
+#
+# What this does:
+#   EVERY HOUR, `manage.py email_digest` selects email_digest_enabled
+#   users whose LOCAL clock is at 08:00 (CustomUser.timezone), builds an
+#   unread summary (Activity + InboxItems since the last digest, minus
+#   anything a coalesced notification email already delivered), and
+#   sends ONE email. Idempotent via `email_digest_last_sent_at` (its own
+#   stamp — never the agent digest's). Empty digest = stamp, no send.
+#
+# ENV (per-service on Railway — NOT inherited): DATABASE_URL,
+# EMAIL_BACKEND=anymail.backends.resend.EmailBackend, RESEND_API_KEY,
+# DEFAULT_FROM_EMAIL, FRONTEND_BASE_URL, API_PUBLIC_BASE_URL, the SAME
+# SECRET_KEY as backend-django (signed unsubscribe links), and
+# EMAIL_NOTIFICATIONS_ENABLED=true. No Redis needed (no presence check —
+# a digest goes out regardless of open tabs) and no LLM/Vertex vars.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+cronSchedule = "0 * * * *"
+startCommand = "sh /app/railway-email-digest-entrypoint.sh --at-hour 8"
+restartPolicyType = "NEVER"
