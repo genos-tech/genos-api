@@ -47,14 +47,36 @@ def parse_token(token: str) -> tuple[str, str] | None:
     return (str(user_id), scope)
 
 
+def public_base_url() -> str:
+    """`API_PUBLIC_BASE_URL` normalized to a scheme-ful origin, or "".
+
+    A bare host (`api.example.com`) is the trap this exists for: it
+    produces a SCHEMELESS link, which every mail client resolves against
+    the message itself instead of the web — Apple Mail turns it into
+    `x-webdoc://<message-uuid>/api.example.com/...` and offers to find
+    an app to open it, Gmail's one-click POST never leaves. Nothing
+    errors; the link is simply dead in every already-sent email.
+
+    So a missing scheme degrades to WORKING rather than broken: assume
+    https. `manage.py check` still warns (`origin.W003`) so the config
+    gets fixed rather than silently carried.
+    """
+    base = (getattr(settings, "API_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+    if not base:
+        return ""
+    if "://" not in base:
+        return f"https://{base}"
+    return base
+
+
 def unsubscribe_url(user_id, scope: str = SCOPE_ALL) -> str | None:
     """Absolute unsubscribe URL, or None when API_PUBLIC_BASE_URL is
     unset (emails then simply omit the footer link/headers rather than
     emitting a broken relative URL)."""
-    base = getattr(settings, "API_PUBLIC_BASE_URL", "") or ""
+    base = public_base_url()
     if not base:
         return None
-    return f"{base.rstrip('/')}/api/v2/email/unsubscribe/{make_token(user_id, scope)}/"
+    return f"{base}/api/v2/email/unsubscribe/{make_token(user_id, scope)}/"
 
 
 def unsubscribe_headers(user_id) -> dict:

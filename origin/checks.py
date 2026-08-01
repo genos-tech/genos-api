@@ -14,7 +14,13 @@ from django.core.checks import Warning, register
 
 
 def _normalized(name: str) -> str:
-    return (getattr(settings, name, "") or "").rstrip("/")
+    return (getattr(settings, name, "") or "").strip().rstrip("/")
+
+
+def _host(value: str) -> str:
+    """Host portion, scheme and trailing slash removed — so
+    `api.example.com` and `https://api.example.com` compare equal."""
+    return value.split("://", 1)[-1].rstrip("/")
 
 
 @register()
@@ -50,7 +56,28 @@ def email_public_url_check(app_configs, **kwargs):
                 id="origin.W001",
             )
         )
-    elif api == frontend:
+        return issues
+
+    if "://" not in api:
+        issues.append(
+            Warning(
+                f"API_PUBLIC_BASE_URL has no scheme ({api!r}); unsubscribe "
+                "links would be relative.",
+                hint=(
+                    "A bare host makes mail clients resolve the link against "
+                    "the message instead of the web (Apple Mail shows "
+                    "'no application set to open x-webdoc://…', and one-click "
+                    "unsubscribe never leaves). https:// is assumed at send "
+                    "time so links still work — set it explicitly, e.g. "
+                    "https://api.example.com."
+                ),
+                id="origin.W003",
+            )
+        )
+
+    # Compared scheme-insensitively so a bare frontend host trips this
+    # too, not just W003 above.
+    if _host(api) and _host(api) == _host(frontend):
         issues.append(
             Warning(
                 "API_PUBLIC_BASE_URL equals FRONTEND_BASE_URL "
