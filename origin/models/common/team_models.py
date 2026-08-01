@@ -87,6 +87,12 @@ class TeamMembers(models.Model):
     # The default backfills every existing member as `viewer`, which is
     # the intended migration behaviour.
     member_role = models.CharField(max_length=16, default="viewer")
+    # When the Genos Guide notes were seeded into this member's My Notes
+    # for this team (services/guide_notes.py). A durable stamp, NOT a
+    # folder-existence check: personal-folder deletion is a hard
+    # recursive delete, so without this a user who deleted their guide
+    # would get it re-seeded on every team switch. NULL = never seeded.
+    guide_seeded_at = models.DateTimeField(null=True, blank=True)
     ts_joined_at = models.DateTimeField(auto_now_add=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

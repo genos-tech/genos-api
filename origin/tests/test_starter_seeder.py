@@ -55,7 +55,19 @@ class StarterWorkspaceTests(BaseAPITestCase):
 
         self.assertEqual(ProjectTags.objects.filter(project=project).count(), 3)
         self.assertEqual(TaskDependency.objects.filter(team=team).count(), 1)
-        self.assertEqual(PersonalNoteMaster.objects.filter(team=team, owner=self.user).count(), 1)
+        from origin.services.guide_notes import GUIDE_FOLDER_NAME, GUIDE_NOTES
+
+        self.assertEqual(
+            PersonalNoteMaster.objects.filter(team=team, owner=self.user).count(),
+            len(GUIDE_NOTES),
+        )
+        from origin.models.note.personal_note_models import PersonalNoteFolder
+
+        self.assertTrue(
+            PersonalNoteFolder.objects.filter(
+                team=team, owner=self.user, name=GUIDE_FOLDER_NAME
+            ).exists()
+        )
         self.assertEqual(
             ToDoItem.objects.filter(group__team=team, group__user=self.user).count(), 2
         )

@@ -34,8 +34,6 @@ from django.db import transaction
 
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.models.common.team_models import TeamMembers
-from origin.models.note.common_note_models import NotePermissionMaster
-from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
 from origin.models.task.task_models import TaskDependency
 from origin.services.demo_seeder import (
@@ -46,6 +44,7 @@ from origin.services.demo_seeder import (
     _text_body,
     kick_off_demo_reindex,
 )
+from origin.services.guide_notes import seed_guide_notes
 from origin.services.user_time import user_today
 
 log = logging.getLogger(__name__)
@@ -202,27 +201,6 @@ STARTER_BLUEPRINT = {
     ],
 }
 
-NOTE_WELCOME = _body(
-    (
-        "👋 Welcome to Genos",
-        [
-            "This note lives in My Notes — private to you. Notes support "
-            "real-time co-editing when you share them, version history, and "
-            "markdown import/export.",
-            "The Getting started project in Tasks walks you through the rest.",
-        ],
-    ),
-    (
-        "⚡ Three things worth knowing",
-        [
-            "Cmd-K opens Spotlight anywhere — ask questions in plain language.",
-            "Every project has its own chat channel; threads keep side discussions tidy.",
-            "@-mention someone and they're notified — in the app, by push, "
-            "and by email when they're away.",
-        ],
-    ),
-)
-
 
 def create_starter_workspace(user, team) -> None:
     """Seed the starter content into an EXISTING team for a REAL user.
@@ -295,17 +273,11 @@ def create_starter_workspace(user, team) -> None:
             created_by=user,
         )
 
-        folder = PersonalNoteFolder.objects.create(team=team, owner=user, name="Getting started")
-        note = PersonalNoteMaster.objects.create(
-            team=team,
-            owner=user,
-            title="Welcome to Genos",
-            body=NOTE_WELCOME,
-            folder_id=folder.folder_id,
-        )
-        NotePermissionMaster.objects.create(
-            team=team, user=user, note_id=note.note_id, note_type=1, role_id=1
-        )
+        # The full user manual — the "Genos Guide" my-notes folder, the
+        # same seed every member gets on joining a team (guide_notes.py).
+        # Seeding here means the creator has it before their first
+        # /team/join/ round-trip; the folder guard makes that a no-op.
+        seed_guide_notes(user, team)
 
         today = user_today(user)
         cat = ToDoCategory.objects.create(

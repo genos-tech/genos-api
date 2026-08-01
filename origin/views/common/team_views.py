@@ -67,9 +67,7 @@ class TeamMasterView(AuthenticatedAPIView):
                 try:
                     create_starter_workspace(request.user, team)
                 except Exception:  # noqa: BLE001 — team creation must survive
-                    logger.exception(
-                        "starter workspace seeding failed for team=%s", team.team_id
-                    )
+                    logger.exception("starter workspace seeding failed for team=%s", team.team_id)
 
             data = {
                 "teamDetails": {
@@ -267,6 +265,35 @@ class CheckTeamExistsView(AuthenticatedAPIView):
 
 
 class TeamMembersView(AuthenticatedAPIView):
+    @staticmethod
+    def _seed_guide_notes_best_effort(request, team_id) -> None:
+        """Give the joining user their Genos Guide notes (per user, per
+        team — see services/guide_notes.py for why my-notes and why this
+        hook). Runs on BOTH the new-membership and already-a-member
+        paths: the client calls /team/join/ on every team switch, which
+        is exactly how existing users pick the guide up. The folder
+        check inside makes repeats a cheap no-op. Best-effort — a guide
+        problem must never fail a join."""
+        try:
+            # Only self-joins: this endpoint can be called with an
+            # attendee that isn't the caller, and notes are personal.
+            if str(request.data.get("attendee_id")) != str(request.user.id):
+                return
+            if getattr(request.user, "is_demo", False):
+                return  # the demo has its own richer seed
+            from origin.models.common.team_models import TeamMaster
+            from origin.services.demo_seeder import kick_off_demo_reindex
+            from origin.services.guide_notes import seed_guide_notes
+
+            team = TeamMaster.objects.filter(team_id=team_id).first()
+            if team is None:
+                return
+            if seed_guide_notes(request.user, team):
+                # Fresh notes are only useful once searchable.
+                kick_off_demo_reindex()
+        except Exception:  # noqa: BLE001 — joining matters more than the guide
+            logger.exception("guide-note seeding failed for team=%s", team_id)
+
     def post(self, request):
         data = {"team": request.data["team_id"], "attendee": request.data["attendee_id"]}
 
@@ -281,11 +308,13 @@ class TeamMembersView(AuthenticatedAPIView):
             if existing.is_deleted:
                 existing.is_deleted = False
                 existing.save(update_fields=["is_deleted", "ts_updated_at"])
+            self._seed_guide_notes_best_effort(request, data["team"])
             return Response(data, status=status.HTTP_201_CREATED)
 
         serializer = TeamMembersSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
+            self._seed_guide_notes_best_effort(request, data["team"])
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
