@@ -1605,6 +1605,11 @@ DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "Genos <noreply@exampl
 
 ANYMAIL = {
     "RESEND_API_KEY": os.environ.get("RESEND_API_KEY", ""),
+    # Verifies the Resend tracking webhook (bounce/complaint →
+    # suppression list). Svix signing secret from the webhook's settings
+    # page at resend.com/webhooks; empty = webhook posts are rejected,
+    # which is the safe default.
+    "RESEND_SIGNING_SECRET": os.environ.get("ANYMAIL_RESEND_SIGNING_SECRET", ""),
 }
 
 # Dark-ship flag for the NOTIFICATION email channel (the outbox enqueue in

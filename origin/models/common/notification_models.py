@@ -107,6 +107,31 @@ class PushSubscription(models.Model):
         return f"PushSubscription(user={self.user_id}, endpoint={self.endpoint[:32]}…)"
 
 
+class EmailSuppression(models.Model):
+    """An address the NOTIFICATION email channel must not send to.
+
+    Written by the Anymail tracking webhook (Resend bounce/complaint
+    events — `origin/signals/email_suppression_signals.py`) or manually
+    by ops. Deliberately NOT consulted by the transactional mails
+    (password reset, verification, invite): those are individually
+    requested and must keep working; this list protects the shared
+    domain reputation from bulk sends to dead or unwilling addresses.
+    """
+
+    REASON_BOUNCE = "bounce"
+    REASON_COMPLAINT = "complaint"
+    REASON_MANUAL = "manual"
+
+    # Stored lowercased (`email_suppression.suppress` normalizes);
+    # unique so re-reports upsert instead of piling up.
+    address = models.EmailField(unique=True)
+    reason = models.CharField(max_length=16)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"EmailSuppression({self.address}, {self.reason})"
+
+
 class EmailNotificationEvent(models.Model):
     """Outbox row for the email notification channel.
 
