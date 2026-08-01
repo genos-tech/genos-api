@@ -20,13 +20,17 @@ from origin.models.common.inbox_models import InboxItems
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.serializers.common.team_serializers import TeamMasterSerializer, TeamMembersSerializer
 from origin.services.email import send_templated_email
 from origin.services.member_roles import (
     ASSIGNABLE_ROLES,
+    GUEST,
     OWNER,
+    VIEWER,
     can_manage,
     is_assignable,
+    resolve_project_role,
     resolve_team_role,
 )
 from origin.services.team_membership import InviteAcceptError, accept_invite
@@ -36,7 +40,11 @@ from origin.views.utils.incremental import (
     capture_server_time,
     check_since,
 )
-from origin.views.utils.scope_guards import is_team_member, require_team_member_or_response
+from origin.views.utils.scope_guards import (
+    is_project_member,
+    is_team_member,
+    require_team_member_or_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -494,15 +502,25 @@ class JoinTeamFromInboxView(AuthenticatedAPIView):
 # Team invite views
 #############################
 class InviteTeamMembersView(AuthenticatedAPIView):
-    """Owner-only: email-invite one or more people to a team.
+    """Email-invite one or more people to a team, or to one project as a
+    guest.
 
     Returns a per-email result so the modal can show what happened to
     each address. A send failure for one address doesn't abort the batch.
+
+    Pass `project_id` to invite GUESTS instead of members: acceptance
+    then writes a `ProjectMembers` row scoped to that project and no
+    team membership at all. External collaborators have no inbox and no
+    workspace to browse, so an emailed token is the only entry point
+    that works for them — which is why this reuses the existing invite
+    machinery rather than adding a request/approve flow.
     """
 
     def post(self, request):
         team_id = request.data.get("team_id")
         emails = request.data.get("emails") or []
+        project_id = request.data.get("project_id")
+        as_guest = project_id is not None
         if not team_id or not isinstance(emails, list):
             return Response(
                 {"error": "team_id and a list of emails are required."},
@@ -514,10 +532,31 @@ class InviteTeamMembersView(AuthenticatedAPIView):
         except TeamMaster.DoesNotExist:
             return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        project = None
+        if as_guest:
+            project = ProjectMaster.objects.filter(
+                project_id=project_id, team=team, is_deleted=False
+            ).first()
+            # 404 for "not yours" as well as "not there" — the project id
+            # is a sequential integer.
+            if project is None or not is_project_member(project_id, request.user.id):
+                return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+            # Bringing an outsider in is management, so it needs a
+            # manager — of the project, or of the team above it. A guest
+            # can never satisfy either (GUEST is not in MANAGER_ROLES),
+            # so guests cannot invite further guests.
+            may_invite = can_manage(resolve_project_role(project, request.user.id)) or can_manage(
+                resolve_team_role(team, request.user.id)
+            )
+            if not may_invite:
+                return Response(
+                    {"error": "Only a project owner or editor can invite guests."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
         # Owner OR editor — mirrors TeamMasterView.put. This gate used to
         # be owner-only, which made a single person the bottleneck for
         # every new hire; the editor role exists precisely to lift it.
-        if not can_manage(resolve_team_role(team, request.user.id)):
+        elif not can_manage(resolve_team_role(team, request.user.id)):
             return Response(
                 {"error": "Only the team owner or an editor can invite members."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -542,26 +581,43 @@ class InviteTeamMembersView(AuthenticatedAPIView):
                 results.append({"email": email, "status": "invalid_email"})
                 continue
 
-            # Already an active member of this team? Skip, send nothing.
+            # Already there? Skip, send nothing. "There" means the
+            # project for a guest invite and the team for a member one —
+            # a full team member is deliberately NOT reported as
+            # already_member for a guest invite, because adding them to
+            # the project is a legitimate thing to want.
             member_user = CustomUser.objects.filter(email__iexact=email, is_deleted=False).first()
-            if (
-                member_user
-                and TeamMembers.objects.filter(
+            if member_user and as_guest:
+                already = ProjectMembers.objects.filter(
+                    project=project, attendee_id=member_user.id
+                ).exists()
+            elif member_user:
+                already = TeamMembers.objects.filter(
                     team_id=team_id, attendee_id=member_user.id, is_deleted=False
                 ).exists()
-            ):
+            else:
+                already = False
+            if already:
                 results.append({"email": email, "status": "already_member"})
                 continue
 
             # Re-invite: refresh token + expiry on an existing pending
-            # invite rather than inserting a duplicate row.
+            # invite rather than inserting a duplicate row. Scoped by
+            # project too, so a pending team invite and a pending guest
+            # invite to the same address are separate rows rather than
+            # one silently overwriting the other's role.
             invite = TeamInvite.objects.filter(
-                team=team, invited_email=email, status="pending"
+                team=team,
+                invited_email=email,
+                status="pending",
+                project=project,
             ).first()
             resent = invite is not None
             raw_token = secrets.token_urlsafe(32)
             if invite is None:
                 invite = TeamInvite(team=team, invited_email=email)
+            invite.member_role = GUEST if as_guest else VIEWER
+            invite.project = project
             invite.invited_by = request.user
             invite.token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
             invite.expires_at = timezone.now() + timedelta(
@@ -571,14 +627,19 @@ class InviteTeamMembersView(AuthenticatedAPIView):
             invite.save()
 
             invite_url = f"{settings.FRONTEND_BASE_URL}/accept-invite?token={raw_token}"
+            # A guest is being invited to a PROJECT, so name the project.
+            # Saying "join <team>" to an external contractor would both
+            # misdescribe what they get and disclose more about the
+            # workspace than they are being given access to.
+            scope_name = project.project_name if as_guest else team.team_name
             try:
                 send_templated_email(
                     to=email,
-                    subject=f"You're invited to join {team.team_name} on Genos",
+                    subject=f"You're invited to join {scope_name} on Genos",
                     template_base="team_invitation",
                     context={
                         "inviter_name": inviter_name,
-                        "team_name": team.team_name,
+                        "team_name": scope_name,
                         "invite_url": invite_url,
                         "expiry_days": expiry_days,
                     },
@@ -617,15 +678,29 @@ class InvitePreviewView(APIView):
         if invite.team is None or invite.team.is_deleted:
             return Response(invalid, status=status.HTTP_200_OK)
 
+        is_guest_invite = invite.member_role == GUEST
+        # A guest invite whose project has since been deleted grants
+        # nothing (`accept_invite` refuses it), so don't offer it.
+        if is_guest_invite and (invite.project is None or invite.project.is_deleted):
+            return Response(invalid, status=status.HTTP_200_OK)
+
         account_exists = CustomUser.objects.filter(
             email__iexact=invite.invited_email, is_deleted=False
         ).exists()
+        # `team_name` is what the visitor is told they're joining, so for
+        # a guest it names the PROJECT. This endpoint is unauthenticated
+        # — anyone holding the token reads it — and a guest's token must
+        # not disclose the name of the wider workspace they are being
+        # kept out of.
         return Response(
             {
                 "valid": True,
                 "status": "account_exists" if account_exists else "no_account",
-                "team_name": invite.team.team_name,
+                "team_name": (
+                    invite.project.project_name if is_guest_invite else invite.team.team_name
+                ),
                 "invited_email": invite.invited_email,
+                "is_guest": is_guest_invite,
             },
             status=status.HTTP_200_OK,
         )
@@ -642,12 +717,22 @@ class InviteAcceptView(AuthenticatedAPIView):
         invite = TeamInvite.objects.filter(token_hash=token_hash).first()
         if invite is None:
             return Response({"detail": "invalid"}, status=status.HTTP_400_BAD_REQUEST)
+        # Read before consuming: `accept_invite` flips the row, and the
+        # guest branch needs the project to tell the client where to land
+        # (a guest has no team surface to land on).
+        was_guest = invite.member_role == GUEST
+        project_id = invite.project_id
         try:
             team = accept_invite(invite, request.user)
         except InviteAcceptError as exc:
             return Response({"detail": exc.code}, status=status.HTTP_400_BAD_REQUEST)
         return Response(
-            {"team_id": str(team.team_id), "team_name": team.team_name},
+            {
+                "team_id": str(team.team_id),
+                "team_name": team.team_name,
+                "is_guest": was_guest,
+                "project_id": project_id if was_guest else None,
+            },
             status=status.HTTP_200_OK,
         )
 

@@ -40,13 +40,42 @@ def add_team_member(team_id, attendee_id) -> None:
     TeamMembers.objects.create(team_id=team_id, attendee_id=attendee_id)
 
 
+def add_project_guest(team_id, project_id, attendee_id) -> None:
+    """Un-delete-or-create the `ProjectMembers` row for a guest.
+
+    Deliberately does NOT touch `TeamMembers`. That absence is the guest
+    model — see `services/member_roles` — and writing a team row here
+    would silently hand the guest the whole workspace.
+
+    `ProjectMembers` has no `is_deleted` column (removal is a hard
+    delete), so `update_or_create` is enough; the role is refreshed on a
+    re-invite in case someone was previously a full member of the
+    project and is being re-scoped down to a guest.
+    """
+    from origin.models.project.prj_models import ProjectMembers
+    from origin.services.member_roles import GUEST
+
+    ProjectMembers.objects.update_or_create(
+        project_id=project_id,
+        attendee_id=attendee_id,
+        defaults={"team_id": team_id, "member_role": GUEST},
+    )
+
+
 def accept_invite(invite, user):
     """Validate and consume `invite` on behalf of `user`.
 
     Raises `InviteAcceptError(code)` on any failure; returns the joined
     team on success. Membership add + invite status flip happen in one
     transaction so a crash can't leave a half-consumed invite.
+
+    A GUEST invite takes the same validation path and writes a different
+    row: `ProjectMembers` only, no `TeamMembers`. Everything before the
+    branch — single-use, expiry, email lock — is shared on purpose, so a
+    guest link is exactly as hard to forward or replay as a team link.
     """
+    from origin.services.member_roles import GUEST
+
     if invite.status != "pending":
         # Already accepted or revoked — don't leak which.
         raise InviteAcceptError("invalid")
@@ -59,8 +88,20 @@ def accept_invite(invite, user):
     if team is None or team.is_deleted:
         raise InviteAcceptError("team_unavailable")
 
+    is_guest_invite = invite.member_role == GUEST
+    if is_guest_invite:
+        # The project FK is SET_NULL, so a deleted project leaves the
+        # invite pointing at nothing. Refuse rather than fall through to
+        # the team-join branch, which would grant far more than intended.
+        project = invite.project
+        if project is None or project.is_deleted:
+            raise InviteAcceptError("project_unavailable")
+
     with transaction.atomic():
-        add_team_member(team.team_id, user.id)
+        if is_guest_invite:
+            add_project_guest(team.team_id, invite.project_id, user.id)
+        else:
+            add_team_member(team.team_id, user.id)
         invite.status = "accepted"
         invite.accepted_by = user
         invite.ts_accepted_at = timezone.now()
