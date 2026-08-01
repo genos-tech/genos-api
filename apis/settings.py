@@ -1607,6 +1607,16 @@ ANYMAIL = {
     "RESEND_API_KEY": os.environ.get("RESEND_API_KEY", ""),
 }
 
+# Dark-ship flag for the NOTIFICATION email channel (the outbox enqueue in
+# `email_enqueue.py` plus the `email_notify_tick` / `email_digest` crons).
+# The transactional mails (verification, password reset, team invite, ops
+# report) are NOT gated by this — they must always work. Flip to true in
+# prod only once bounce/complaint suppression is live: the notification
+# channel shares the transactional mails' Resend domain reputation.
+EMAIL_NOTIFICATIONS_ENABLED = (
+    os.environ.get("EMAIL_NOTIFICATIONS_ENABLED", "false").lower() == "true"
+)
+
 # Public origin used to build absolute URLs in outgoing emails (e.g.
 # password-reset links). Default matches the dockerised dev frontend
 # (see docker/docker-compose.yml, react service on :3000). Override in
