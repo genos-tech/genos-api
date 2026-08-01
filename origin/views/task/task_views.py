@@ -1602,14 +1602,31 @@ class GetProjectTasksView(AuthenticatedAPIView):
 
 
 class GetMyAssignedTasksView(AuthenticatedAPIView):
+    """Tasks assigned to the CALLER in one team.
+
+    `user_id` came from the query string and went straight into
+    `assignee=`, so any authenticated user could read another member's
+    assigned tasks. "My" is now enforced rather than assumed.
+
+    No frontend code calls this route, so there is no client relying on
+    passing somebody else's id; the dashboard's Member's Tasks tab reads
+    the team-wide list and filters client-side.
+    """
+
     def get(self, request):
         team_id = request.GET.get("team_id")
-        user_id = request.GET.get("user_id")
+        user_id = str(request.user.id)
 
-        if not user_id or not team_id:
+        if not team_id:
             return Response(
-                {"error": "user_id and team_id are required."},
+                {"error": "team_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+        claimed = request.GET.get("user_id")
+        if claimed and str(claimed) != user_id:
+            return Response(
+                {"error": "Only the data owner can request."},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         task_with_tags = (

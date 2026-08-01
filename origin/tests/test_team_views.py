@@ -156,10 +156,13 @@ class TestGetMyTeams(BaseAPITestCase):
         self.assertEqual(team_data["teamName"], "Test Team")
         self.assertIn("teamMembers", team_data)
 
-    def test_get_my_teams_missing_user_id(self):
+    def test_get_my_teams_without_user_id_uses_the_token(self):
+        """`user_id` is no longer required: identity comes from the JWT.
+        It used to be read from the query string and used verbatim."""
         self.authenticate()
         response = self.client.get("/api/v2/team/getMyTeams/")
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual({str(t["teamId"]) for t in response.data}, {str(self.team.team_id)})
 
     def test_get_my_teams_unauthenticated(self):
         response = self.client.get(
@@ -192,12 +195,19 @@ class TestGetTeamMembers(BaseAPITestCase):
         self.assertIn("test@example.com", emails)
         self.assertIn("other@example.com", emails)
 
-    def test_get_team_members_missing_params(self):
+    def test_get_team_members_without_user_id_is_fine(self):
+        """`user_id` was required but never used as a gate; membership of
+        `team_id` is what is checked now."""
         self.authenticate()
         response = self.client.get(
             "/api/v2/team/getTeamMembers/",
             {"team_id": str(self.team.team_id)},
         )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_get_team_members_requires_team_id(self):
+        self.authenticate()
+        response = self.client.get("/api/v2/team/getTeamMembers/")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_get_team_members_unauthenticated(self):

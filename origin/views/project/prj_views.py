@@ -26,7 +26,11 @@ from origin.services.member_roles import (
 from origin.services.project_code import derive_project_code
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data
-from origin.views.utils.scope_guards import is_project_member, is_team_member
+from origin.views.utils.scope_guards import (
+    is_project_member,
+    is_team_member,
+    require_project_member_or_response,
+)
 
 _PROJECT_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
 
@@ -561,22 +565,34 @@ class JoinProjectFromInboxView(AuthenticatedAPIView):
 
 
 class ProjectMembersView(AuthenticatedAPIView):
-    def get(self, request):
-        user_id = request.GET.get("user_id")
-        project_id = request.GET.get("project_id")
+    """The roster of one project.
 
-        if not user_id or not project_id:
-            return Response(
-                {"error": "user_id is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+    The previous guard could not do its job, three ways over:
 
         _project_id = ProjectMembers.objects.filter(Q(attendee=user_id)).values("project")
         if len(_project_id) > 0 and _project_id[0]["project"] != project_id:
+
+    it inspected only `[0]` — the caller's FIRST membership row, in
+    whatever order the DB returned — so anyone in two or more projects
+    passed whenever the ordering was kind; it compared an `int` PK
+    against the `str` from the query string, which is unequal for
+    essentially every caller; and `len == 0` short-circuited it
+    entirely, so a user in NO projects could read any project's roster.
+    It also keyed on a client-supplied `user_id` rather than the token.
+
+    Replaced with the membership check it was reaching for.
+    """
+
+    def get(self, request):
+        project_id = request.GET.get("project_id")
+
+        if not project_id:
             return Response(
-                {"error": f"You're not in the project `{project_id}`"},
+                {"error": "project_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if res := require_project_member_or_response(request.user, project_id):
+            return res
 
         attendees = (
             ProjectMembers.objects.filter(project=project_id)
