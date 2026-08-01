@@ -288,6 +288,16 @@ urlpatterns = [
         name="timezone_preference",
     ),
     path(
+        "api/v2/user/account/export/",
+        AccountExportView.as_view(),
+        name="account_export",
+    ),
+    path(
+        "api/v2/user/account/",
+        AccountDeletionView.as_view(),
+        name="account_deletion",
+    ),
+    path(
         "api/v2/user/preferences/language/",
         LanguagePreferenceView.as_view(),
         name="language_preference",

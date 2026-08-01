@@ -1,6 +1,7 @@
 import logging
 import time
 
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
@@ -562,3 +563,98 @@ class CalendarSyncBackfillView(AuthenticatedAPIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class AccountDeletionView(AuthenticatedAPIView):
+    """DELETE the calling user's own account (GDPR/CCPA erasure).
+
+    GET reports whether deletion is currently possible, so the UI can
+    explain the ownership blocker BEFORE the user commits rather than
+    after. DELETE performs it.
+
+    Two guards, both deliberate:
+
+      * `confirm` must be the literal string "DELETE" — this endpoint is
+        irreversible and must not be reachable by a mis-fired request.
+      * users who have a password must re-supply it. OAuth-only accounts
+        have no usable password (`set_unusable_password` at signup), so
+        requiring one would lock them out of erasure entirely; their
+        session itself is the proof of identity.
+
+    Scoped to `request.user` and takes no user id, so a leaked token can
+    never delete somebody else.
+    """
+
+    def get(self, request):
+        from origin.services.account_deletion import blocking_owned_teams
+
+        blocking = blocking_owned_teams(request.user)
+        return Response(
+            {
+                "can_delete": not blocking,
+                "requires_password": request.user.has_usable_password(),
+                "blocking_teams": [
+                    {"teamId": str(t.team_id), "teamName": t.team_name} for t in blocking
+                ],
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def delete(self, request):
+        from origin.services.account_deletion import (
+            OwnershipTransferRequired,
+            delete_account,
+        )
+
+        if request.data.get("confirm") != "DELETE":
+            return Response(
+                {"error": 'confirm must be the string "DELETE".'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if request.user.has_usable_password():
+            password = request.data.get("password") or ""
+            if not request.user.check_password(password):
+                logger.warning("[account] deletion refused, bad password user=%s", request.user.pk)
+                return Response(
+                    {"error": "Password is incorrect."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        try:
+            summary = delete_account(request.user)
+        except OwnershipTransferRequired as exc:
+            return Response(
+                {
+                    "error": "Transfer ownership of your teams before deleting your account.",
+                    "blocking_teams": [
+                        {"teamId": str(t.team_id), "teamName": t.team_name} for t in exc.teams
+                    ],
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response(summary, status=status.HTTP_200_OK)
+
+
+class AccountExportView(AuthenticatedAPIView):
+    """GET the calling user's own data as a JSON download (GDPR Art. 15/20).
+
+    Scoped to `request.user` — no user id is accepted, so this can never
+    be pointed at somebody else. See `services/account_export.py` for
+    what is included and the deliberate exclusion of team-owned content
+    authored by other people.
+    """
+
+    def get(self, request):
+        from django.http import JsonResponse
+
+        from origin.services.account_export import build_export
+
+        document = build_export(request.user)
+        response = JsonResponse(document, json_dumps_params={"indent": 2, "ensure_ascii": False})
+        stamp = timezone.now().strftime("%Y%m%d")
+        response["Content-Disposition"] = f'attachment; filename="genos-export-{stamp}.json"'
+        logger.info(
+            "[account] export generated user=%s counts=%s", request.user.pk, document["counts"]
+        )
+        return response
