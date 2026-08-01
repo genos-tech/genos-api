@@ -45,6 +45,38 @@ _TODO_RE = re.compile(r"^todo:(\d{4}-\d{2}-\d{2}):item:(\d+)$")
 # link target / bare bracket is a candidate for resolution at all.
 ENTITY_TOKEN_RE = re.compile(r"^(?:chat|task|note|project|todo|milestone):[^\s()\[\]]+$")
 
+# A markdown link whose target might be a citation token:  [label](target)
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+
+
+def rewrite_citation_md(text: str, *, team_id: str) -> str:
+    """Rewrite citation-token markdown links in a plain-markdown string.
+
+    The chat surface resolves `[label](task:12)` tokens client-side
+    against the run's sources; a digest stored in `InboxItems.item_body`
+    has no sources map, so the tokens must become real app hrefs at save
+    time — the same rule note bodies follow. Per link:
+
+      - resolvable token  → `[label](/workspace/...)` (same routes as
+        `resolve_note_entity_link`; ACL is enforced again on open)
+      - unresolvable token → `label` (plain prose — never a dead link)
+      - anything else (http links, plain text) → untouched
+    """
+    if not text:
+        return text
+
+    def _sub(match: re.Match) -> str:
+        label, target = match.group(1), match.group(2)
+        if not ENTITY_TOKEN_RE.match(target):
+            return match.group(0)
+        resolved = resolve_note_entity_link(target, team_id=team_id)
+        if resolved is None:
+            return label
+        href, _fallback = resolved
+        return f"[{label}]({href})"
+
+    return _MD_LINK_RE.sub(_sub, text)
+
 
 def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | None:
     """Token → (href, label), or None to degrade to prose.
@@ -74,10 +106,7 @@ def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | N
     if m:
         from origin.models.project.prj_models import ProjectMaster  # noqa: PLC0415
 
-        project = (
-            ProjectMaster.objects.filter(project_id=int(m.group(1)), is_deleted=False)
-            .first()
-        )
+        project = ProjectMaster.objects.filter(project_id=int(m.group(1)), is_deleted=False).first()
         if project is None or str(project.team_id or "") != team_id:
             return None
         return (
@@ -89,10 +118,9 @@ def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | N
     if m:
         from origin.models.task.milestone_models import MilestoneMaster  # noqa: PLC0415
 
-        milestone = (
-            MilestoneMaster.objects.filter(milestone_id=int(m.group(1)), is_deleted=False)
-            .first()
-        )
+        milestone = MilestoneMaster.objects.filter(
+            milestone_id=int(m.group(1)), is_deleted=False
+        ).first()
         if milestone is None or str(milestone.team_id or "") != team_id or not milestone.project_id:
             return None
         return (
@@ -108,20 +136,14 @@ def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | N
                 PersonalNoteMaster,
             )
 
-            note = (
-                PersonalNoteMaster.objects.filter(note_id=note_id)
-                .first()
-            )
+            note = PersonalNoteMaster.objects.filter(note_id=note_id).first()
             if note is None or str(note.team_id or "") != team_id:
                 return None
             return (f"/workspace/notes/my/{note.note_id}", note.title or f"note {note.note_id}")
 
         from origin.models.note.task_note_models import TaskNoteMaster  # noqa: PLC0415
 
-        note = (
-            TaskNoteMaster.objects.filter(note_id=note_id)
-            .first()
-        )
+        note = TaskNoteMaster.objects.filter(note_id=note_id).first()
         # The task-note route needs all three ids; notes attached only at
         # project level (task_id null) have no deep link → degrade.
         if (
@@ -149,11 +171,7 @@ def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | N
     if m:
         from origin.models.chat.todo_models import ToDoItem  # noqa: PLC0415
 
-        item = (
-            ToDoItem.objects.filter(item_id=int(m.group(2)))
-            .select_related("group")
-            .first()
-        )
+        item = ToDoItem.objects.filter(item_id=int(m.group(2))).select_related("group").first()
         if item is None or item.group is None or str(item.group.team_id or "") != team_id:
             return None
         # Use the group's real date, not the token's — a model-mangled

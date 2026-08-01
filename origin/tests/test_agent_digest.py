@@ -179,3 +179,80 @@ class DigestPreferenceEndpointTests(BaseAPITestCase):
     def test_non_boolean_is_rejected(self):
         resp = self.client.patch(self.URL, {"digest_enabled": "yes"}, format="json")
         self.assertEqual(resp.status_code, 400)
+
+
+class DigestCitationRewriteTests(BaseAPITestCase):
+    """The stored digest body must carry REAL /workspace hrefs, not the
+    agent's citation tokens — the Inbox has no sources map to resolve
+    them, so `[KDS-7](task:15)` in `item_body.text` renders as a dead
+    link (or raw markdown) in the bubble."""
+
+    def setUp(self):
+        super().setUp()
+        from origin.models.project.prj_models import ProjectMaster
+        from origin.models.task.task_models import TaskMaster
+
+        self.team.plan = "max"
+        self.team.save(update_fields=["plan"])
+        self.user.timezone = "Asia/Tokyo"
+        self.user.save(update_fields=["timezone"])
+        self.project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Website Redesign",
+            code="WRD",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        self.task = TaskMaster.objects.create(
+            team=self.team, project=self.project, title="Fix login", status="Open"
+        )
+
+    def test_rewriter_resolves_degrades_and_keeps_http(self):
+        from origin.search_engine.agent.tools.entity_links import rewrite_citation_md
+
+        text = (
+            f"- [WRD-1](task:{self.task.task_id}) is overdue.\n"
+            "- [gone](task:999999) was deleted.\n"
+            "- See [MDN](https://developer.mozilla.org)."
+        )
+        out = rewrite_citation_md(text, team_id=str(self.team.team_id))
+        self.assertIn(
+            f"[WRD-1](/workspace/tasks/project/{self.project.project_id}/task/{self.task.task_id})",
+            out,
+        )
+        # Unresolvable token degrades to prose — never a dead link.
+        self.assertIn("- gone was deleted.", out)
+        self.assertNotIn("task:999999", out)
+        # Real URLs pass through untouched.
+        self.assertIn("[MDN](https://developer.mozilla.org)", out)
+
+    def test_foreign_team_token_degrades(self):
+        from origin.models.common.team_models import TeamMaster
+        from origin.search_engine.agent.tools.entity_links import rewrite_citation_md
+
+        other_team = TeamMaster.objects.create(
+            team_name="Other", team_email="other-team@example.com", owner=self.user2
+        )
+        out = rewrite_citation_md(
+            f"[peek](task:{self.task.task_id})", team_id=str(other_team.team_id)
+        )
+        self.assertEqual(out, "peek")
+
+    def test_tick_stores_rewritten_body(self):
+        out = StringIO()
+        with (
+            mock.patch.object(digest_mod.timezone, "now", return_value=_MONDAY_8AM_JST),
+            mock.patch.object(
+                digest_mod,
+                "run_agent",
+                side_effect=_fake_run_agent(f"- [WRD-1](task:{self.task.task_id}) slipped."),
+            ),
+            mock.patch.object(digest_mod, "dispatch_push_for_inbox_item"),
+        ):
+            call_command("agent_digest", at_hour=8, stdout=out)
+        item = InboxItems.objects.get(item_type=digest_mod.ITEM_TYPE_DIGEST)
+        self.assertIn(
+            f"/workspace/tasks/project/{self.project.project_id}/task/{self.task.task_id}",
+            item.item_body["text"],
+        )
+        self.assertNotIn(f"(task:{self.task.task_id})", item.item_body["text"])
