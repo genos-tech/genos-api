@@ -89,6 +89,36 @@ def is_project_member(project_id, user_id) -> bool:
     return ProjectMembers.objects.filter(project=project_id, attendee=user_id).exists()
 
 
+def can_access_task(task_id, user_id) -> bool:
+    """May `user_id` see (and therefore edit) this task?
+
+    Project members, plus the assignee and the reporter. Deliberately the
+    same rule as `search_engine/agent/acl.task_acl_user_ids`, which is
+    what decides whether the task appears in search: an assignee with no
+    `ProjectMembers` row can already find the task, so a narrower rule
+    here would let someone open a task from search and then be refused.
+
+    Note this is the READ audience and the WRITE audience at once. Task
+    editing has always been open to anyone who can see the task; adding
+    a role tier on top is a product decision, not a security fix, and
+    isn't made here.
+    """
+    if task_id is None or user_id is None:
+        return False
+    from origin.models.task.task_models import TaskMaster
+
+    row = (
+        TaskMaster.objects.filter(task_id=task_id)
+        .values("project_id", "assignee_id", "reporter_id")
+        .first()
+    )
+    if row is None:
+        return False
+    if str(user_id) in {str(row["assignee_id"]), str(row["reporter_id"])}:
+        return True
+    return is_project_member(row["project_id"], user_id)
+
+
 def member_project_ids(user_id, team_id=None) -> list:
     """Project ids `user_id` may see, optionally narrowed to one team.
 

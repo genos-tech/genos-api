@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from origin.models.project.prj_models import *
 from origin.models.task.task_models import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.scope_guards import is_project_member
 
 from .common_color import status_color
 
@@ -53,6 +54,13 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
             )
             scope_filter = Q(project__in=project_ids)
         else:
+            # The `-1` branch above derives the scope from membership,
+            # which made this endpoint LOOK scoped. Naming a project
+            # explicitly skipped that entirely and searched it — so the
+            # one safe path was the default, and the parameterised path
+            # was not.
+            if not is_project_member(project_id, request_user_id):
+                return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
             scope_filter = Q(project=project_id)
 
         tasks = (

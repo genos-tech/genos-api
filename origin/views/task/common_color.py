@@ -23,6 +23,7 @@ def status_color(status_label):
     fallback for unknown / empty values."""
     return STATUS_COLOR_MAP.get((status_label or "").lower(), DEFAULT_STATUS_COLOR)
 
+
 PRIORITY_COLOR_MAP = {
     "minimal": {"chipColor": "#9CA3AF", "textColor": "white"},
     "low": {"chipColor": "#34D399", "textColor": "white"},

@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.scope_guards import can_access_task
 
 # Mirrors `milestone_views.CLOSED_STATUSES` — kept duplicated here on
 # purpose so the burndown view doesn't import from the milestone view
@@ -165,6 +166,13 @@ class TaskActivityListView(AuthenticatedAPIView):
                 {"error": "task_id must be an integer."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # The audit log is the task's full edit history — old and new
+        # values of every field, with the actor on each row. It was
+        # reachable with nothing but a walkable integer `task_id` and a
+        # `team_id` the caller made up.
+        if not can_access_task(task_id, request.user.id):
+            return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
 
         try:
             limit = int(request.GET.get("limit") or DEFAULT_LIMIT)
