@@ -19,6 +19,7 @@ from origin.views.common.calendar_views import (
     CalendarEventsView,
     CalendarListView,
 )
+from origin.views.common.email_unsubscribe_views import email_unsubscribe
 from origin.views.common.gif_views import GifSearchView
 from origin.views.common.github_views import (
     GithubAccessibleReposView,
@@ -290,6 +291,14 @@ urlpatterns = [
         "api/v2/user/preferences/language/",
         LanguagePreferenceView.as_view(),
         name="language_preference",
+    ),
+    # Anonymous unsubscribe (signed token in the path; GET confirms,
+    # POST applies — see email_unsubscribe_views for why GET must never
+    # mutate).
+    path(
+        "api/v2/email/unsubscribe/<str:token>/",
+        email_unsubscribe,
+        name="email_unsubscribe",
     ),
     path(
         "api/v2/user/preferences/llm-model/",

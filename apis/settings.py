@@ -1623,6 +1623,15 @@ EMAIL_NOTIFICATIONS_ENABLED = (
 # deployed environments to the actual frontend host.
 FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "http://localhost:3000")
 
+# The API's OWN public origin — for links that must hit Django directly
+# (the anonymous unsubscribe endpoints), distinct from FRONTEND_BASE_URL.
+# Empty (the default) means unsubscribe links/headers are OMITTED from
+# outgoing email rather than emitted broken; set it in any deployed env.
+# ⚠️ Unsubscribe tokens are signed with SECRET_KEY — every service that
+# sends notification email (backend-django + the email crons) must share
+# the same SECRET_KEY or footer links minted by one 400 at the other.
+API_PUBLIC_BASE_URL = os.environ.get("API_PUBLIC_BASE_URL", "")
+
 # --- Stripe billing (self-serve subscription tiers) ---
 # Entirely optional: with SECRET_KEY unset the billing endpoints report
 # {enabled: false} and the frontend keeps its "coming soon" placeholder —
