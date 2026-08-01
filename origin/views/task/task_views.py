@@ -38,6 +38,7 @@ from origin.views.utils.mention_handler import extractMentionedUsers, resolve_gr
 from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.utils.scope_guards import can_access_task
 from origin.views.utils.upload_limits import check_upload_size
 
 from .common_color import EFFORT_LEVEL_COLOR_MAP, PRIORITY_COLOR_MAP, status_color
@@ -442,6 +443,14 @@ class TaskMasterView(AuthenticatedAPIView):
                 {"error": "Task not found to delete."}, status=status.HTTP_404_NOT_FOUND
             )
 
+        # `task_id` is a sequential integer straight off the request body
+        # and, until this check, the ONLY thing that resolved the target.
+        # Any authenticated user could walk the id space and rewrite any
+        # task in any project of any team. 404 rather than 403 so the id
+        # space isn't a task-existence oracle.
+        if not can_access_task(task_id, request.user.id):
+            return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
+
         update_data = request.data.copy()
 
         # Capture the milestone change intent BEFORE the None-strip
@@ -727,6 +736,14 @@ class TaskMasterView(AuthenticatedAPIView):
 
         if res := validate_request_data(data):
             return res
+
+        # THIS DELETE IS A HARD DELETE (`task.delete()` below), so an
+        # unauthorized call is unrecoverable data loss, not just a
+        # disclosure. The only scoping was `team=data["team"]` — a value
+        # the caller supplies — so naming the right team alongside a
+        # walkable integer task id destroyed another tenant's task.
+        if not can_access_task(data["task_id"], request.user.id):
+            return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
 
         try:
             task = TaskMaster.objects.get(

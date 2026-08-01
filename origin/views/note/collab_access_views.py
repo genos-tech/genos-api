@@ -35,7 +35,7 @@ from origin.views.utils.note_role import (
     get_effective_role,
     note_exists,
 )
-from origin.views.utils.scope_guards import is_project_member
+from origin.views.utils.scope_guards import can_access_task
 
 logger = logging.getLogger(__name__)
 
@@ -116,23 +116,14 @@ class CollabAccessCheckView(AuthenticatedAPIView):
 
     @staticmethod
     def _check_task_body(user_id, task_id):
-        """A task body is readable by the same people as the task itself:
-        project members, plus the assignee and reporter — mirroring
-        `search_engine/agent/acl.task_acl_user_ids`, which is what decides
-        whether the task shows up in search."""
-        task = (
-            TaskMaster.objects.filter(task_id=task_id, is_deleted=False)
-            .values("project_id", "assignee_id", "reporter_id")
-            .first()
-        )
-        if task is None:
+        """A task body is readable by the same people as the task itself
+        — `can_access_task`, which is also what the task REST endpoints
+        gate on, so the editor and the API can never disagree about who
+        may open a given task."""
+        if not TaskMaster.objects.filter(task_id=task_id, is_deleted=False).exists():
             return Response({"error": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        allowed = is_project_member(task["project_id"], user_id) or str(user_id) in {
-            str(task["assignee_id"]),
-            str(task["reporter_id"]),
-        }
-        if not allowed:
+        if not can_access_task(task_id, user_id):
             return Response(
                 {"error": "You do not have access to this document."},
                 status=status.HTTP_403_FORBIDDEN,
