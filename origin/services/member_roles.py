@@ -10,6 +10,42 @@ Three roles, one vocabulary:
           day-to-day admin.
   viewer  Read-only. The default, and what every pre-existing non-owner
           member becomes.
+  guest   An EXTERNAL collaborator — a client, contractor or partner —
+          scoped to individual projects. Read/write inside the projects
+          they were invited to, and invisible to everything else.
+
+## A guest is defined by the row it does NOT have
+
+The other three roles live in a `TeamMembers` row. A guest deliberately
+has **no `TeamMembers` row at all** — only `ProjectMembers` rows. That is
+the whole security model, and it is worth stating plainly because the
+obvious alternative (a fourth `member_role` value on `TeamMembers`) is a
+trap.
+
+Every team-wide gate in this codebase keys on `TeamMembers`, so a guest
+without that row is denied by DEFAULT rather than by a check somebody has
+to remember to write:
+
+    is_team_member          public Team Notes folders (grant EDITOR to
+                            any team member) ................. denied
+    _verify_team_member     team roster, GM list, team emoji .. denied
+    get_effective_tier      inherits the team's paid plan .... not inherited
+    v3 socket team room     team-wide presence stream ........ not joined
+    get_team_members tool   the agent's roster tool .......... empty
+
+A `member_role="guest"` on `TeamMembers` would have inherited all five as
+GRANTS, and closing them would have meant auditing every team-scoped
+endpoint in the product — turning a role into an open-ended security
+project. Fail-closed by construction beats fail-closed by vigilance.
+
+What a guest gets for free, because these already resolve through
+`ProjectMembers`: the project's PM channel (the `post_save` signal in
+`pm_channel_signals` mirrors the membership into `ChannelMember`), task
+notes, and the agent's task/note ACL.
+
+**`resolve_project_role` still returns VIEWER for a non-member**, so a
+guest gate must always be an EXISTENCE check first and a role check
+second. See `views/utils/scope_guards.py`.
 
 ## Do not confuse this with `CustomUser.role`
 
@@ -41,14 +77,24 @@ from __future__ import annotations
 OWNER = "owner"
 EDITOR = "editor"
 VIEWER = "viewer"
+GUEST = "guest"
 
-# Roles a member can be *assigned*. `owner` is deliberately absent:
-# minting an owner is an ownership transfer, which is owner-only and
-# goes through its own endpoint.
+# Roles a member can be *assigned* on a TEAM. `owner` is deliberately
+# absent: minting an owner is an ownership transfer, which is owner-only
+# and goes through its own endpoint. `guest` is absent for a different
+# reason — a guest is not a team member at all (see the module
+# docstring), so there is no team row on which to set it.
 ASSIGNABLE_ROLES = (EDITOR, VIEWER)
 
+# Roles a manager may assign on a PROJECT. A guest reaches the product
+# through project membership, so this is the one place the value is
+# writable.
+ASSIGNABLE_PROJECT_ROLES = (EDITOR, VIEWER, GUEST)
+
 # Roles allowed to manage — invite/add members, rename, change the
-# avatar, and set other members' roles.
+# avatar, and set other members' roles. `guest` must never appear here:
+# an external collaborator who could invite people would defeat the
+# point of scoping them.
 MANAGER_ROLES = (OWNER, EDITOR)
 
 
@@ -58,8 +104,18 @@ def can_manage(role: str | None) -> bool:
 
 
 def is_assignable(role: str | None) -> bool:
-    """Is this a role a manager may assign to another member?"""
+    """Is this a role a manager may assign to another TEAM member?"""
     return role in ASSIGNABLE_ROLES
+
+
+def is_assignable_project_role(role: str | None) -> bool:
+    """Is this a role a manager may assign on a project?"""
+    return role in ASSIGNABLE_PROJECT_ROLES
+
+
+def is_guest_role(role: str | None) -> bool:
+    """Is this stored `member_role` the external-collaborator role?"""
+    return role == GUEST
 
 
 def resolve_team_role(team, user_id, member_row_role: str | None = None) -> str:
