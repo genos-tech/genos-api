@@ -1,0 +1,32 @@
+# Railway config for the `email-notify` cron service (email notification
+# channel, PR A4 — see genos-docs operations/RAILWAY_DEPLOY.md).
+#
+# Same Docker image as `backend-django`, run as a cron: the container
+# starts each tick, runs `manage.py email_notify_tick`, exits.
+#
+# What this does:
+#   EVERY 5 MINUTES, drain the EmailNotificationEvent outbox: at most ONE
+#   batched email per user per pass, and only when the user has been away
+#   long enough (oldest pending row age >= EMAIL_NOTIFY_AWAY_MINUTES),
+#   has no visible tab, the source items are still unread, and no email
+#   went out within the cooldown. Atomic status-claim makes overlapping
+#   passes safe; failed sends retry next tick.
+#
+# ENV (per-service on Railway — NOT inherited): DATABASE_URL, the REDIS
+# cache vars (⚠️ LOAD-BEARING: presence lives in Redis — without it every
+# user looks "away" and gets emailed while actively using the app),
+# EMAIL_BACKEND=anymail.backends.resend.EmailBackend, RESEND_API_KEY,
+# DEFAULT_FROM_EMAIL, FRONTEND_BASE_URL, API_PUBLIC_BASE_URL, and the
+# SAME SECRET_KEY as backend-django (unsubscribe links are signed with
+# it — a drifted key means every footer link 400s), plus
+# EMAIL_NOTIFICATIONS_ENABLED=true. No LLM/Vertex vars — this cron never
+# calls a model.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+cronSchedule = "*/5 * * * *"
+startCommand = "sh /app/railway-email-notify-entrypoint.sh"
+restartPolicyType = "NEVER"

@@ -1,0 +1,6 @@
+{% block content %}{% endblock %}
+
+--
+{% block footer_note %}You're receiving this because notifications are enabled for your Genos account.{% endblock %}
+{% block open_label %}Open Genos{% endblock %}: {{ app_url }}
+{% if unsubscribe_url %}{% block unsubscribe_label %}Unsubscribe{% endblock %}: {{ unsubscribe_url }}{% endif %}

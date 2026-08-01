@@ -1,0 +1,7 @@
+{% extends "emails/base.txt" %}
+{% block content %}While you were away:
+{% for group in groups %}
+[{{ group.label }}]
+{% for item in group.items %}- {{ item.title }}{% if item.body %} — {{ item.body }}{% endif %}
+  {{ item.url }}
+{% endfor %}{% endfor %}{% endblock %}
