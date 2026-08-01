@@ -54,7 +54,23 @@ class TeamMasterView(AuthenticatedAPIView):
 
         serializer = TeamMasterSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            team = serializer.save()
+
+            # Opt-in starter workspace (readiness plan §3.3). Explicit
+            # read — the serializer path must never see extra flags (it
+            # is fields="__all__" over a model that carries is_demo).
+            # Best-effort by design: a seeding failure must not lose the
+            # team the user just created.
+            if request.data.get("with_starter") is True:
+                from origin.services.starter_seeder import create_starter_workspace
+
+                try:
+                    create_starter_workspace(request.user, team)
+                except Exception:  # noqa: BLE001 — team creation must survive
+                    logger.exception(
+                        "starter workspace seeding failed for team=%s", team.team_id
+                    )
+
             data = {
                 "teamDetails": {
                     "teamId": serializer.data["team_id"],
