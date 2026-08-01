@@ -17,6 +17,8 @@ because it lives under `search_engine/` and that path triggers billed
 agent-evals: one change, one eval run.
 """
 
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 
 from origin.models.common.team_models import TeamMaster, TeamMembers
@@ -133,11 +135,20 @@ class TestTeamIdIsVerifiedAtTheEntryPoints(GuestAgentBase):
 
     def test_a_guest_is_admitted_to_their_own_team(self):
         """A guest belongs to the team through a project, so they must
-        pass the entry gate and be narrowed inside it — not refused."""
+        pass the entry gate and be narrowed inside it — not refused.
+
+        `search` is stubbed because this test is about the GATE. The two
+        tests above return 404 before reaching it, but this one passes
+        the gate by design and would otherwise run a real query against
+        OpenSearch — which exists in the docker dev stack and not in CI.
+        """
         self.authenticate(self.guest)
-        res = self.client.post(
-            "/api/v2/search/",
-            {"query": "anything", "team_id": str(self.team.team_id)},
-            format="json",
-        )
-        self.assertNotEqual(res.status_code, 404)
+        with patch("origin.search_engine.views.search", return_value={"results": []}) as stub:
+            res = self.client.post(
+                "/api/v2/search/",
+                {"query": "anything", "team_id": str(self.team.team_id)},
+                format="json",
+            )
+        self.assertEqual(res.status_code, 200)
+        # The point of the assertion: the request got PAST the gate.
+        stub.assert_called_once()
