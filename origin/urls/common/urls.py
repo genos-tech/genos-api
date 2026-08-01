@@ -287,6 +287,11 @@ urlpatterns = [
         name="timezone_preference",
     ),
     path(
+        "api/v2/user/preferences/language/",
+        LanguagePreferenceView.as_view(),
+        name="language_preference",
+    ),
+    path(
         "api/v2/user/preferences/llm-model/",
         LlmModelPreferenceView.as_view(),
         name="llm_model_preference",

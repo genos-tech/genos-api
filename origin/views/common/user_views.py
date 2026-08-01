@@ -315,6 +315,57 @@ class TimezonePreferenceView(AuthenticatedAPIView):
         )
 
 
+# The locales the product ships (mirrors `src/i18n/locales/` in the
+# frontend). Anything else stores NULL, same posture as an unknown
+# timezone below-vs-above: the value is machine-reported, not user-typed.
+_KNOWN_LANGUAGES = {"en", "ja", "zh", "ar", "hi", "fr", "es"}
+
+
+class LanguagePreferenceView(AuthenticatedAPIView):
+    """GET / PATCH the calling user's UI language ("en", "ja", ...).
+
+    Written by the client from its active i18n locale at boot — the exact
+    counterpart of `TimezonePreferenceView` above, with the same
+    store-null-don't-400 posture for unrecognised values. NULL means
+    UNKNOWN; server-side consumers (the notification email templates)
+    fall back to English.
+    """
+
+    def get(self, request):
+        return Response(
+            {"language": request.user.language or ""},
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request):
+        value = request.data.get("language")
+        if value is not None and not isinstance(value, str):
+            return Response(
+                {"error": "language must be a string."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        name = (value or "").strip().lower()
+        if name and name not in _KNOWN_LANGUAGES:
+            # Accept a regioned tag ("en-US") by its primary subtag before
+            # giving up on it.
+            name = name.split("-")[0]
+        if name and name not in _KNOWN_LANGUAGES:
+            logger.info(
+                "[language] rejecting unknown locale %r for user %s; storing null",
+                name[:32],
+                request.user.pk,
+            )
+            name = ""
+        stored = name or None
+        if request.user.language != stored:
+            request.user.language = stored
+            request.user.save(update_fields=["language"])
+        return Response(
+            {"language": stored or ""},
+            status=status.HTTP_200_OK,
+        )
+
+
 class LlmModelPreferenceView(AuthenticatedAPIView):
     """GET / PATCH the calling user's LLM provider + model preference.
 

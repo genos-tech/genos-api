@@ -79,6 +79,15 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     # Storage stays UTC — `settings.TIME_ZONE` is unchanged. This field only
     # affects which calendar day a moment falls in.
     timezone = models.CharField(max_length=64, blank=True, null=True)
+    # UI language ("en", "ja"), captured from the app's active locale the
+    # same way `timezone` is captured from the browser: reported by the
+    # client at boot, never typed by the user, unknown values stored as
+    # NULL rather than rejected. NULL means UNKNOWN — server-side
+    # consumers (currently the notification email templates) fall back to
+    # English. Deliberately a primary subtag, not a full BCP-47 tag: the
+    # frontend locale set is the vocabulary ("en", "ja", "zh", "ar",
+    # "hi", "fr", "es").
+    language = models.CharField(max_length=16, blank=True, null=True)
     # Proactive digest (UX tier model §8). Whether it FIRES at all comes
     # from the tier (`digest_cadence`: pro=weekly, max=daily) — cadence
     # is deliberately not user config; the tier is the felt difference.
