@@ -12,7 +12,7 @@ from rest_framework import status
 
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup
 from origin.models.common.notification_models import NotificationPreference
-from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMaster
@@ -41,9 +41,7 @@ class DeletionGuardTests(BaseAPITestCase):
 
     def test_wrong_password_is_refused(self):
         self.authenticate()
-        resp = self.client.delete(
-            URL, {"confirm": "DELETE", "password": "nope"}, format="json"
-        )
+        resp = self.client.delete(URL, {"confirm": "DELETE", "password": "nope"}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
         self.user.refresh_from_db()
         self.assertTrue(self.user.is_active)
@@ -137,9 +135,7 @@ class ErasureTests(BaseAPITestCase):
     def test_memberships_end_but_the_row_survives(self):
         delete_account(self.user2)
         # Soft — so no ghost membership row and no orphaned FKs.
-        self.assertFalse(
-            TeamMembers.objects.filter(attendee=self.user2, is_deleted=False).exists()
-        )
+        self.assertFalse(TeamMembers.objects.filter(attendee=self.user2, is_deleted=False).exists())
         self.assertTrue(TeamMembers.objects.filter(attendee=self.user2).exists())
         self.assertTrue(CustomUser.objects.filter(id=self.user2.id).exists())
 
