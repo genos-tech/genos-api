@@ -36,7 +36,7 @@ from origin.views.utils.incremental import (
     capture_server_time,
     check_since,
 )
-from origin.views.utils.scope_guards import is_team_member
+from origin.views.utils.scope_guards import is_team_member, require_team_member_or_response
 
 logger = logging.getLogger(__name__)
 
@@ -653,17 +653,33 @@ class InviteAcceptView(AuthenticatedAPIView):
 
 
 class GetMyTeamsView(AuthenticatedAPIView):
-    def get(self, request):
-        user_id = request.GET.get("user_id")
+    """Every team the CALLER belongs to, each with its full member roster.
 
-        if not user_id:
+    `user_id` used to be read from the query string and used verbatim, so
+    any authenticated user could pass someone else's id and receive that
+    person's teams — plus the username, email, avatar and status of every
+    member of each. The parameter is still accepted (the client and the
+    sockets heartbeat both send it) but it is now only checked for
+    agreement with the token; the query itself keys on `request.user`.
+    """
+
+    def get(self, request):
+        user_id = str(request.user.id)
+
+        # A client that names a different user is either confused or
+        # probing; say so rather than silently serving the right data.
+        claimed = request.GET.get("user_id")
+        if claimed and str(claimed) != user_id:
             return Response(
-                {"error": "user_id is required."},
-                status=status.HTTP_400_BAD_REQUEST,
+                {"error": "Only the data owner can request."},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         # Heartbeat hot path — cache for 60s. Invalidated by
         # cache_invalidation.py signals on TeamMembers / CustomUser writes.
+        # Keyed on the AUTHENTICATED id: keying on the parameter would let
+        # one user's roster payload be served to another from cache even
+        # after the query below was fixed.
         cache_key = f"team:my_teams:{user_id}"
         cached = cache.get(cache_key)
         if cached is not None:
@@ -773,16 +789,27 @@ class GetAllTeamsView(AuthenticatedAPIView):
 
 
 class GetTeamMembersView(AuthenticatedAPIView):
+    """The roster of one team: every member's name, EMAIL, avatar, job
+    title, permission role, country and status.
+
+    `request.user` was never consulted. The `user_id` parameter was
+    required but only checked for presence, so naming any team id
+    returned its entire roster to any authenticated user. It is still
+    accepted for client compatibility and still unused — the gate is
+    membership of `team_id`, which is the question that was missing.
+    """
+
     def get(self, request):
         team_id = request.GET.get("team_id")
         team_name = request.GET.get("team_name")
-        user_id = request.GET.get("user_id")
 
-        if not user_id or not team_id:
+        if not team_id:
             return Response(
-                {"error": "team_id and user_id are required."},
+                {"error": "team_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if res := require_team_member_or_response(request.user, team_id):
+            return res
 
         # Snapshot server time BEFORE the query. See utils/incremental.py.
         server_time = capture_server_time()
@@ -866,6 +893,15 @@ class GetTeamMembersView(AuthenticatedAPIView):
 
 
 class GetTeamMemberInfoView(AuthenticatedAPIView):
+    """One member's profile within a team.
+
+    Unlike `GetMyTeamsView`, `user_id` here is the member being looked
+    UP, not the caller — a teammate asking about a teammate is the
+    intended use. What was missing is any check that the caller belongs
+    to the team at all, so this returned a named member's email to
+    anyone who knew the two ids.
+    """
+
     def get(self, request):
         team_id = request.GET.get("team_id")
         user_id = request.GET.get("user_id")
@@ -875,6 +911,8 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
                 {"error": "team_id and user_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if res := require_team_member_or_response(request.user, team_id):
+            return res
 
         # Per-message hot path — cache for 60s. Invalidated by signals when
         # CustomUser or TeamMembers rows change.

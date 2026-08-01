@@ -108,12 +108,24 @@ class InboxItemView(AuthenticatedAPIView):
 
     def get(self, request):
         team_id = request.GET.get("team_id")
-        user_id = request.GET.get("user_id")
+        # The receiver is the CALLER, always. This used to be read from
+        # the query string and used verbatim as `receiver=`, so naming
+        # someone else's id returned their inbox: join/approve requests,
+        # note-access requests and the `itemOptionals` payloads that go
+        # with them. Still accepted as a parameter because the client
+        # sends it, but only to be checked for agreement.
+        user_id = str(request.user.id)
 
-        if not team_id or not user_id:
+        if not team_id:
             return Response(
-                {"error": "team_id and user_id are required."},
+                {"error": "team_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+        claimed = request.GET.get("user_id")
+        if claimed and str(claimed) != user_id:
+            return Response(
+                {"error": "Only the data owner can request."},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         # Snapshot server time BEFORE the query. See utils/incremental.py.
@@ -431,6 +443,7 @@ class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
 #############################
 # Note access request views
 #############################
+
 
 # Note-type ints match origin.views.utils.note_role (1=personal, 2=task,
 # 3=chat). Kept as a local map so the request/grant pair below can

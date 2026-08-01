@@ -177,12 +177,19 @@ class TestInboxList(BaseAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data["data"]["items"]), 0)
 
-    def test_list_inbox_missing_params(self):
+    def test_list_inbox_without_user_id_uses_the_token(self):
+        """The receiver is the caller. `user_id` used to come from the
+        query string and go straight into `receiver=`."""
         self.authenticate()
         response = self.client.get(
             "/api/v2/inbox/",
             {"team_id": str(self.team.team_id)},
         )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_list_inbox_requires_team_id(self):
+        self.authenticate()
+        response = self.client.get("/api/v2/inbox/")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_list_inbox_unauthenticated(self):
