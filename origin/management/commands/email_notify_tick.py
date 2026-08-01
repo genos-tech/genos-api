@@ -51,9 +51,11 @@ _STALE_SENDING = timedelta(minutes=15)
 
 
 def _suppressed(user) -> bool:
-    """Bounce/complaint suppression — wired by PR A5 (EmailSuppression +
-    the Anymail tracking webhook). Until then, nobody is suppressed."""
-    return False
+    """Bounce/complaint suppression (EmailSuppression rows, written by
+    the Anymail tracking webhook)."""
+    from origin.services.email_suppression import is_suppressed
+
+    return is_suppressed(user.email)
 
 
 class Command(CronCommand):

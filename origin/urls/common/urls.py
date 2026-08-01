@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import include, path
 
 from origin.views.common.auth_views import *
 from origin.views.common.billing_views import (
@@ -300,6 +300,11 @@ urlpatterns = [
         email_unsubscribe,
         name="email_unsubscribe",
     ),
+    # Anymail ESP webhooks (Resend tracking → bounce/complaint
+    # suppression). The Resend tracking endpoint is
+    # `api/v2/email/anymail/resend/tracking/`, verified with the Svix
+    # signing secret (ANYMAIL_RESEND_SIGNING_SECRET).
+    path("api/v2/email/anymail/", include("anymail.urls")),
     path(
         "api/v2/user/preferences/llm-model/",
         LlmModelPreferenceView.as_view(),
