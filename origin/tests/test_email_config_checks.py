@@ -38,6 +38,26 @@ class EmailPublicUrlCheckTests(SimpleTestCase):
 
     @override_settings(
         EMAIL_NOTIFICATIONS_ENABLED=True,
+        API_PUBLIC_BASE_URL="api.genos.test",
+        FRONTEND_BASE_URL=FRONTEND,
+    )
+    def test_missing_scheme_is_flagged(self):
+        # The real incident: a bare host makes mail clients resolve the
+        # link against the message (Apple Mail: x-webdoc://...).
+        self.assertEqual(_ids(), ["origin.W003"])
+
+    @override_settings(
+        EMAIL_NOTIFICATIONS_ENABLED=True,
+        API_PUBLIC_BASE_URL="genos.test",
+        FRONTEND_BASE_URL=FRONTEND,
+    )
+    def test_bare_frontend_host_trips_both(self):
+        # Scheme-insensitive comparison, or this would look like a mere
+        # missing-scheme problem and hide the wrong-host one.
+        self.assertEqual(_ids(), ["origin.W003", "origin.W002"])
+
+    @override_settings(
+        EMAIL_NOTIFICATIONS_ENABLED=True,
         API_PUBLIC_BASE_URL=FRONTEND + "/",
         FRONTEND_BASE_URL=FRONTEND,
     )

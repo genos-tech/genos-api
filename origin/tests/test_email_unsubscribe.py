@@ -144,3 +144,36 @@ class UnsubscribePostTests(BaseAPITestCase):
         resp = self.client.post(_url("garbage"))
         self.assertEqual(resp.status_code, 400)
         self.assertFalse(NotificationPreference.objects.filter(user=self.user).exists())
+
+
+class PublicBaseUrlNormalizationTests(BaseAPITestCase):
+    """A bare host must still produce a CLICKABLE link.
+
+    Production shipped `API_PUBLIC_BASE_URL=api.genosai.dev` (no
+    scheme). Every unsubscribe link in every sent email was therefore
+    relative, and mail clients resolved it against the message itself —
+    Apple Mail rendered `x-webdoc://<message-uuid>/api.genosai.dev/...`
+    and offered to go find an application to open it. Nothing errored.
+    """
+
+    @override_settings(API_PUBLIC_BASE_URL="api.genos.test")
+    def test_bare_host_gets_https(self):
+        url = unsubscribe_url(self.user.id)
+        self.assertTrue(url.startswith("https://api.genos.test/api/v2/email/unsubscribe/"), url)
+
+    @override_settings(API_PUBLIC_BASE_URL="http://localhost:8000")
+    def test_explicit_scheme_is_preserved(self):
+        # Dev/proxy setups mean http:// must not be rewritten.
+        url = unsubscribe_url(self.user.id)
+        self.assertTrue(url.startswith("http://localhost:8000/"), url)
+
+    @override_settings(API_PUBLIC_BASE_URL="https://api.genos.test/")
+    def test_trailing_slash_does_not_double(self):
+        self.assertNotIn("//api/v2/", unsubscribe_url(self.user.id))
+
+    @override_settings(API_PUBLIC_BASE_URL="api.genos.test")
+    def test_headers_are_absolute_too(self):
+        # The List-Unsubscribe header is what Gmail's one-click POSTs;
+        # a relative URI there is silently unusable.
+        headers = unsubscribe_headers(self.user.id)
+        self.assertTrue(headers["List-Unsubscribe"].startswith("<https://"), headers)
