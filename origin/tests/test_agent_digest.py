@@ -256,3 +256,142 @@ class DigestCitationRewriteTests(BaseAPITestCase):
             item.item_body["text"],
         )
         self.assertNotIn(f"(task:{self.task.task_id})", item.item_body["text"])
+
+
+class BareCitationTokenTests(BaseAPITestCase):
+    """The agent emits BOTH `[label](task:12)` and bare `[task:12]`; a
+    digest must link the same way a note body does for either form."""
+
+    def setUp(self):
+        super().setUp()
+        from origin.models.project.prj_models import ProjectMaster
+        from origin.models.task.task_models import TaskMaster
+
+        self.project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Website Redesign",
+            code="WRD",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        # display_id is a derived property ("<project.code>-<number>"),
+        # not a column — set the number it reads from.
+        self.task = TaskMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            title="Fix login",
+            status="Open",
+            project_task_number=4,
+        )
+
+    def test_bare_token_becomes_a_labelled_link(self):
+        from origin.search_engine.agent.tools.entity_links import rewrite_citation_md
+
+        out = rewrite_citation_md(
+            f"Start with [task:{self.task.task_id}] today.",
+            team_id=str(self.team.team_id),
+        )
+        # Label comes from the entity itself (display_id), like the note path.
+        self.assertIn(
+            f"[WRD-4](/workspace/tasks/project/{self.project.project_id}/task/{self.task.task_id})",
+            out,
+        )
+
+    def test_bare_project_token_resolves(self):
+        from origin.search_engine.agent.tools.entity_links import rewrite_citation_md
+
+        out = rewrite_citation_md(
+            f"[project:{self.project.project_id}] is stale.",
+            team_id=str(self.team.team_id),
+        )
+        self.assertIn(
+            f"[Website Redesign](/workspace/tasks/project/{self.project.project_id})", out
+        )
+
+    def test_unresolvable_bare_token_is_left_literal(self):
+        from origin.search_engine.agent.tools.entity_links import rewrite_citation_md
+
+        out = rewrite_citation_md("See [task:999999].", team_id=str(self.team.team_id))
+        self.assertEqual(out, "See [task:999999].")
+
+    def test_rewriting_is_idempotent(self):
+        from origin.search_engine.agent.tools.entity_links import rewrite_citation_md
+
+        once = rewrite_citation_md(
+            f"[WRD-4](task:{self.task.task_id}) and [task:{self.task.task_id}].",
+            team_id=str(self.team.team_id),
+        )
+        twice = rewrite_citation_md(once, team_id=str(self.team.team_id))
+        self.assertEqual(once, twice)
+        # And the already-rewritten label is not re-consumed as a token.
+        self.assertNotIn("task:", once)
+
+
+class BackfillDigestLinksTests(BaseAPITestCase):
+    """The one-shot repair for digests stored before the link fix."""
+
+    def setUp(self):
+        super().setUp()
+        from origin.models.project.prj_models import ProjectMaster
+        from origin.models.task.task_models import TaskMaster
+
+        self.project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Website Redesign",
+            code="WRD",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        self.task = TaskMaster.objects.create(
+            team=self.team, project=self.project, title="Fix login", status="Open"
+        )
+        self.item = InboxItems.objects.create(
+            team=self.team,
+            sender=None,
+            receiver=self.user,
+            item_type=digest_mod.ITEM_TYPE_DIGEST,
+            item_body={
+                "title": "Your Genos digest",
+                "text": f"- [KDS-1](task:{self.task.task_id}) is overdue.",
+            },
+            item_optionals={"cadence": "daily"},
+            request_status="",
+        )
+        self.href = f"/workspace/tasks/project/{self.project.project_id}/task/{self.task.task_id}"
+
+    def _run(self, **opts):
+        out = StringIO()
+        call_command("backfill_digest_links", stdout=out, **opts)
+        return out.getvalue()
+
+    def test_backfill_rewrites_stored_tokens(self):
+        report = self._run()
+        self.assertIn("changed=1", report)
+        self.item.refresh_from_db()
+        self.assertIn(f"[KDS-1]({self.href})", self.item.item_body["text"])
+        self.assertNotIn("task:", self.item.item_body["text"])
+        # Sibling keys survive the rewrite.
+        self.assertEqual(self.item.item_body["title"], "Your Genos digest")
+
+    def test_dry_run_writes_nothing(self):
+        report = self._run(dry_run=True)
+        self.assertIn("changed=1", report)
+        self.item.refresh_from_db()
+        self.assertIn(f"(task:{self.task.task_id})", self.item.item_body["text"])
+
+    def test_second_run_is_a_noop(self):
+        self._run()
+        report = self._run()
+        self.assertIn("changed=0", report)
+
+    def test_non_digest_items_are_untouched(self):
+        other = InboxItems.objects.create(
+            team=self.team,
+            sender=self.user2,
+            receiver=self.user,
+            item_type=1,
+            item_body=[{"type": "paragraph", "content": []}],
+        )
+        self._run()
+        other.refresh_from_db()
+        self.assertEqual(other.item_body, [{"type": "paragraph", "content": []}])

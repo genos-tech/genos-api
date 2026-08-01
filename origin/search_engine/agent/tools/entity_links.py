@@ -48,24 +48,39 @@ ENTITY_TOKEN_RE = re.compile(r"^(?:chat|task|note|project|todo|milestone):[^\s()
 # A markdown link whose target might be a citation token:  [label](target)
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 
+# A BARE citation token in prose — `[task:12]` — that is not the label of
+# a markdown link (no following paren). Same shape as `blocknote_md`'s
+# `_BARE_TOKEN_RE`; the two must agree, because the agent emits both
+# forms and a note body and a digest should link identically.
+_BARE_TOKEN_RE = re.compile(r"\[((?:chat|task|note|project|todo|milestone):[^\]\s]+)\](?!\()")
+
 
 def rewrite_citation_md(text: str, *, team_id: str) -> str:
-    """Rewrite citation-token markdown links in a plain-markdown string.
+    """Rewrite citation tokens in a plain-markdown string into real links.
 
     The chat surface resolves `[label](task:12)` tokens client-side
     against the run's sources; a digest stored in `InboxItems.item_body`
     has no sources map, so the tokens must become real app hrefs at save
-    time — the same rule note bodies follow. Per link:
+    time — the same rule note bodies follow. And the frontend *cannot*
+    do this itself: a task link needs the project id, which only a DB
+    lookup knows.
 
-      - resolvable token  → `[label](/workspace/...)` (same routes as
-        `resolve_note_entity_link`; ACL is enforced again on open)
-      - unresolvable token → `label` (plain prose — never a dead link)
+    Both token forms the agent emits are handled, mirroring
+    `blocknote_md`:
+
+      - `[label](task:12)` resolvable  → `[label](/workspace/...)` (ACL
+        is enforced again when the link is opened)
+      - `[label](task:12)` unresolvable → `label` (prose — never a dead
+        link)
+      - bare `[task:12]` resolvable    → `[<display id>](/workspace/...)`
+        using the entity's own label
+      - bare `[task:12]` unresolvable  → left literal, like the note path
       - anything else (http links, plain text) → untouched
     """
     if not text:
         return text
 
-    def _sub(match: re.Match) -> str:
+    def _sub_link(match: re.Match) -> str:
         label, target = match.group(1), match.group(2)
         if not ENTITY_TOKEN_RE.match(target):
             return match.group(0)
@@ -75,7 +90,17 @@ def rewrite_citation_md(text: str, *, team_id: str) -> str:
         href, _fallback = resolved
         return f"[{label}]({href})"
 
-    return _MD_LINK_RE.sub(_sub, text)
+    def _sub_bare(match: re.Match) -> str:
+        token = match.group(1)
+        resolved = resolve_note_entity_link(token, team_id=team_id)
+        if resolved is None:
+            return match.group(0)
+        href, label = resolved
+        return f"[{label}]({href})"
+
+    # Links first: the bare pattern's `(?!\()` lookahead then skips the
+    # labels of links this pass has already rewritten.
+    return _BARE_TOKEN_RE.sub(_sub_bare, _MD_LINK_RE.sub(_sub_link, text))
 
 
 def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | None:
