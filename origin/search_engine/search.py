@@ -27,10 +27,13 @@ from __future__ import annotations
 import logging
 import math
 import re
+import time
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import Any, Literal, Optional
 
 from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
 from opensearchpy.exceptions import NotFoundError
 
 from origin.search_engine.embeddings import embed_one
@@ -874,6 +877,49 @@ def memory_exclude_lanes(user_id: str) -> frozenset[str]:
 # --------------------------------------------------------------------------- #
 
 
+# Seconds a guest/member verdict may be reused inside `_build_filter`.
+_GUEST_CACHE_TTL = 30
+
+
+@lru_cache(maxsize=512)
+def _is_guest_cached(team_id: str, user_id: str, bucket: int) -> bool:
+    from origin.views.utils.scope_guards import is_guest
+
+    return is_guest(team_id, user_id)
+
+
+def _is_guest_in_team(team_id, user_id) -> bool:
+    """Is this searcher an external collaborator in this team?
+
+    Two indexed `exists()` queries, memoised for a few seconds because
+    `_build_filter` runs on every lane of every search and the answer
+    changes only when someone's membership does. The `bucket` argument
+    is what expires the cache: it is the current time floored to
+    `_GUEST_CACHE_TTL`, so a stale "not a guest" can persist for at most
+    that long — and erring that way is safe, because a *former* guest
+    who became a member simply misses the sentinel until it rolls over.
+    Fail-closed on a lookup error for the same reason.
+    """
+    if not team_id or not user_id:
+        return False
+    try:
+        bucket = int(time.time() // _GUEST_CACHE_TTL)
+        return _is_guest_cached(str(team_id), str(user_id), bucket)
+    except (DjangoValidationError, ValueError, TypeError):
+        # A malformed id can't name a real guest, and it can't name a
+        # real team either — the `{"term": {"team_id": ...}}` clause
+        # alongside this one already matches nothing — so the sentinel
+        # is harmless here. Treating it as "guest" instead would make
+        # every filter-shape caller depend on DB-valid UUIDs.
+        return False
+    except Exception:  # noqa: BLE001 — a search must not 500 on this
+        # A genuine lookup failure IS worth failing closed on: dropping
+        # the sentinel only loses public-Team-Notes hits, whereas
+        # keeping it on a wrong verdict would show a guest the team wiki.
+        log.warning("guest lookup failed for team=%s user=%s", team_id, user_id)
+        return True
+
+
 def _build_filter(
     team_id: str,
     user_id: str,
@@ -887,13 +933,24 @@ def _build_filter(
     project_ids: Optional[list[str]] = None,
     exclude_lanes: Optional[frozenset[str]] = None,
 ) -> list[dict]:
+    # `acl_user_ids` holds user ids plus, for content readable by the
+    # whole team (a public Team Notes folder), a `team:<team_id>`
+    # SENTINEL. Matching the sentinel here is what keeps a public
+    # folder's chunks from having to carry one entry per member.
+    #
+    # A GUEST must not match it. The sentinel means "any member of this
+    # team", and an external collaborator is deliberately not one — a
+    # public Team Notes folder grants EDITOR to every team member, so
+    # matching here would hand a guest the whole team wiki through
+    # search. Their own reachable content still matches on `user_id`,
+    # which is how project chat, tasks and task notes reach them.
+    acl_terms = [user_id]
+    if not _is_guest_in_team(team_id, user_id):
+        acl_terms.append(f"team:{team_id}")
+
     filt: list[dict] = [
         {"term": {"team_id": team_id}},
-        # `acl_user_ids` holds user ids plus, for content readable by the
-        # whole team (a public Team Notes folder), a `team:<team_id>`
-        # SENTINEL. Matching the sentinel here is what keeps a public
-        # folder's chunks from having to carry one entry per member.
-        {"terms": {"acl_user_ids": [user_id, f"team:{team_id}"]}},
+        {"terms": {"acl_user_ids": acl_terms}},
     ]
     if person_id:
         # Person-scoped search (mentions v2): only chunks authored by,
@@ -938,13 +995,7 @@ def _build_filter(
         # tier memory gates and the agent grounding guard compose here
         # regardless of what `entity_types` asks for.
         filt.append(
-            {
-                "bool": {
-                    "must_not": [
-                        {"term": {"entity_type": et}} for et in sorted(exclude_lanes)
-                    ]
-                }
-            }
+            {"bool": {"must_not": [{"term": {"entity_type": et}} for et in sorted(exclude_lanes)]}}
         )
     if project_ids:
         # Project scoping (Spotlight's project filter). A plain `terms`

@@ -138,6 +138,7 @@ from origin.search_engine.quota import (
 )
 from origin.services.webpush_dispatch import schedule_push_to_user
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.scope_guards import is_guest, is_team_member
 
 log = logging.getLogger(__name__)
 
@@ -675,8 +676,10 @@ def _period_end_iso() -> str:
     """
     now = timezone.now()
     start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    nxt = start.replace(year=start.year + 1, month=1) if start.month == 12 else start.replace(
-        month=start.month + 1
+    nxt = (
+        start.replace(year=start.year + 1, month=1)
+        if start.month == 12
+        else start.replace(month=start.month + 1)
     )
     return nxt.isoformat()
 
@@ -803,9 +806,7 @@ def _enforce_monthly_ceilings(user_id: str, plan: str, team_id, chosen: LlmChoic
         # Per-workspace ceiling: alert-only in v1 (a team is a report
         # dimension, and blocking N users over one member's spend needs
         # a human decision). Opt-in via a single global env value.
-        team_ceiling_usd = float(
-            settings.SEARCH_ENGINE.get("AI_TEAM_MONTHLY_CEILING_USD", 0) or 0
-        )
+        team_ceiling_usd = float(settings.SEARCH_ENGINE.get("AI_TEAM_MONTHLY_CEILING_USD", 0) or 0)
         if team_ceiling_usd > 0 and team_id:
             team_spent = _month_spend_usd_micro(team_id=str(team_id))
             if team_spent >= team_ceiling_usd * 1_000_000:
@@ -886,6 +887,14 @@ class AgentAskView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Every tool docstring describes `ctx.team_id` as "server-trusted".
+        # It reaches us in the request body, so until this check that was
+        # an aspiration rather than a fact — and the agent surface reads
+        # far more than the REST one, through tools whose own ACL notes
+        # assume the team is already established.
+        if not is_team_member(team_id, user_id) and not is_guest(team_id, user_id):
+            return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+
         ctx = ToolContext(team_id=str(team_id), user_id=user_id)
 
         # --- Tier-based daily quotas. ---
@@ -910,8 +919,7 @@ class AgentAskView(AuthenticatedAPIView):
             return Response(
                 {
                     "error": (
-                        "AI assistance is temporarily unavailable. "
-                        "Please try again shortly."
+                        "AI assistance is temporarily unavailable. Please try again shortly."
                     ),
                     "category": "service_unavailable",
                 },
@@ -1198,9 +1206,9 @@ class AgentAskView(AuthenticatedAPIView):
         # gate (tool_tiers.disabled_tools_for_user: agency ladder +
         # memory) — permissive for every tier until the UX-tier-model
         # flip, and fail-open, so this line is inert today.
-        disabled_tools: set[str] = _persisted_disabled_tools(request.user) | disabled_tools_for_user(
-            user_id
-        )
+        disabled_tools: set[str] = _persisted_disabled_tools(
+            request.user
+        ) | disabled_tools_for_user(user_id)
 
         # Thread Q&A branch: when the frontend passes a `thread_context`,
         # the agent is *primed* with that thread's summary but still has
@@ -1885,7 +1893,9 @@ def _stream_ndjson(
                 run.pending_approval_token = pause_descriptor["approval_token"]
                 if answer_parts:
                     if append_to_existing_answer:
-                        run.final_answer_text = (run.final_answer_text or "") + "".join(answer_parts)
+                        run.final_answer_text = (run.final_answer_text or "") + "".join(
+                            answer_parts
+                        )
                     else:
                         run.final_answer_text = "".join(answer_parts)
                 run.save(
@@ -1962,8 +1972,6 @@ def _stream_ndjson(
         except Exception:  # noqa: BLE001
             log.exception("Failed to close AgentRun %s", run.run_id)
 
-
-
     # CANCELLATION. A client disconnect raises `GeneratorExit` AT the
     # `yield` below — and `GeneratorExit` is a BaseException, so the old
     # `except Exception` around the close block never saw it. The run row
@@ -2036,6 +2044,7 @@ def _stream_ndjson(
     finally:
         _close_run(cancelled)
         _close_spend(cancelled)
+
 
 # --------------------------------------------------------------------------- #
 # /thread-summary/ — generate or fetch a cached chat-thread summary           #
@@ -2710,9 +2719,7 @@ class AgentModelsView(AuthenticatedAPIView):
             efforts_payload = []
             for entry_provider in settings.LLM_CATALOG.provider_order():
                 for effort_name in EFFORTS:
-                    mapped = settings.LLM_CATALOG.model_for_effort(
-                        entry_provider, effort_name
-                    )
+                    mapped = settings.LLM_CATALOG.model_for_effort(entry_provider, effort_name)
                     mapped_entry = settings.LLM_CATALOG.by_model.get(mapped) or {}
                     efforts_payload.append(
                         {
