@@ -26,6 +26,7 @@ from rest_framework.response import Response
 from origin.search_engine.metered import metered_request
 from origin.search_engine.search import memory_exclude_lanes, search
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.scope_guards import is_guest, is_team_member
 
 
 class SearchView(AuthenticatedAPIView):
@@ -52,6 +53,15 @@ class SearchView(AuthenticatedAPIView):
                 {"error": "Could not determine user_id from the auth token."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # `team_id` arrives in the request body and was never checked
+        # against the caller. The ACL filter downstream then builds its
+        # `team:<team_id>` sentinel FROM that same untrusted string, so
+        # naming a foreign team matched that team's public Team Notes
+        # chunks. Guests pass here (they belong to the team through a
+        # project) and are narrowed by the sentinel rule in `_build_filter`.
+        if not is_team_member(team_id, user_id) and not is_guest(team_id, user_id):
+            return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 
         entity_types = data.get("entity_types") or None
         if entity_types is not None and not isinstance(entity_types, list):
