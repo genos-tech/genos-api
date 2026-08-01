@@ -89,6 +89,37 @@ def is_project_member(project_id, user_id) -> bool:
     return ProjectMembers.objects.filter(project=project_id, attendee=user_id).exists()
 
 
+def is_guest(team_id, user_id) -> bool:
+    """Is `user_id` an EXTERNAL collaborator in this team?
+
+    True when they hold at least one `ProjectMembers` row in the team but
+    no `TeamMembers` row. That absence *is* the guest model — see the
+    `services/member_roles` docstring — so this function is a
+    description of the data, not a separate flag that could drift out of
+    sync with it.
+
+    Note the deliberate asymmetry: `is_team_member` returning False is
+    what denies a guest everything team-wide, and it does so without
+    knowing guests exist. This predicate is only for the places that
+    need to treat a guest *differently* from a stranger — showing them
+    the team shell so the client can boot, for instance — never for
+    granting access.
+    """
+    if team_id is None or user_id is None:
+        return False
+    if is_team_member(team_id, user_id):
+        return False
+    return ProjectMembers.objects.filter(team=team_id, attendee=user_id).exists()
+
+
+def guest_project_ids(team_id, user_id) -> list:
+    """The projects a guest may see in this team — nothing else exists
+    for them. Same shape as `member_project_ids`, narrowed to one team."""
+    if not is_guest(team_id, user_id):
+        return []
+    return member_project_ids(user_id, team_id=team_id)
+
+
 def can_access_task(task_id, user_id) -> bool:
     """May `user_id` see (and therefore edit) this task?
 
