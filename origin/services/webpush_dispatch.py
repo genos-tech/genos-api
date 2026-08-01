@@ -257,18 +257,31 @@ def dispatch_push_for_activities(activities) -> None:
 
 
 def schedule_push_for_activities(activities) -> None:
-    """Defer a web-push fan-out for `activities` until the current DB
-    transaction commits (so a rollback never pushes). Safe to call from
-    any activity-creating view; no-op on an empty / falsy list.
+    """Defer the notification fan-out for `activities` — Web Push AND the
+    email-outbox enqueue — until the current DB transaction commits (so a
+    rollback never notifies). Safe to call from any activity-creating
+    view; no-op on an empty / falsy list.
 
     This is the single wiring point every activity producer should use —
     the gaps this fixes came from paths that created Activity rows but
     never reached dispatch.
+
+    The email enqueue lives HERE, not inside the dispatcher: the
+    dispatcher early-returns when VAPID is unconfigured, and email must
+    not depend on push's transport being set up. (Lazy import — see
+    `email_enqueue`'s module docstring for the cycle.)
     """
     acts = [a for a in (activities or []) if a is not None]
     if not acts:
         return
-    transaction.on_commit(lambda: dispatch_push_for_activities(acts))
+
+    def _run():
+        dispatch_push_for_activities(acts)
+        from origin.services.email_enqueue import enqueue_email_for_activities
+
+        enqueue_email_for_activities(acts)
+
+    transaction.on_commit(_run)
 
 
 # item_type -> push title builder. Inbox items are their own surface (not
@@ -309,22 +322,35 @@ def dispatch_push_for_inbox_item(item, *, title: str | None = None) -> None:
 
 
 def schedule_push_for_inbox_item(item, *, title: str | None = None) -> None:
-    """Defer an inbox web-push until the current transaction commits."""
+    """Defer the inbox notification fan-out (push + email enqueue) until
+    the current transaction commits."""
     if item is None:
         return
-    transaction.on_commit(lambda: dispatch_push_for_inbox_item(item, title=title))
+
+    def _run():
+        dispatch_push_for_inbox_item(item, title=title)
+        from origin.services.email_enqueue import enqueue_email_for_inbox_item
+
+        enqueue_email_for_inbox_item(item, title=title)
+
+    transaction.on_commit(_run)
 
 
 def schedule_push_to_user(*, recipient_id, category, title, url, actor=None, tag=None) -> None:
-    """Defer a one-off web push to a single user not backed by an Activity
-    or InboxItems row (e.g. the GM-join approval notice to the requester).
-    Fires after commit; never raises."""
+    """Defer a one-off notification (push + email enqueue) to a single
+    user not backed by an Activity or InboxItems row (e.g. the GM-join
+    approval notice to the requester). Fires after commit; never raises."""
     if not recipient_id:
         return
     rid = str(recipient_id)
     resolved_tag = tag or f"{category}:{rid}"
 
     def _run():
+        # Email first, BEFORE the VAPID guard — the guard belongs to the
+        # push transport only.
+        from origin.services.email_enqueue import enqueue_email_to_user
+
+        enqueue_email_to_user(recipient_id=rid, category=category, title=title, url=url)
         if not vapid_configured():
             return
         try:
@@ -383,8 +409,16 @@ def dispatch_push_for_message(message, recipient_ids) -> None:
 
 
 def schedule_push_for_message(message, recipient_ids) -> None:
-    """Defer a plain-message fan-out push until the transaction commits."""
+    """Defer the plain-message fan-out (push + email enqueue) until the
+    transaction commits."""
     ids = [str(r) for r in (recipient_ids or [])]
     if message is None or not ids:
         return
-    transaction.on_commit(lambda: dispatch_push_for_message(message, ids))
+
+    def _run():
+        dispatch_push_for_message(message, ids)
+        from origin.services.email_enqueue import enqueue_email_for_message
+
+        enqueue_email_for_message(message, ids)
+
+    transaction.on_commit(_run)
