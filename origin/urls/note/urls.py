@@ -1,6 +1,7 @@
 from django.urls import path
 
 from origin.views.note.chat_note_views import *
+from origin.views.note.collab_access_views import CollabAccessCheckView
 from origin.views.note.favorite_note_views import *
 from origin.views.note.note_folder_tag_views import (
     NoteFolderTagLinkView,
@@ -165,6 +166,14 @@ urlpatterns = [
         "api/v2/note/role/check/",
         NoteRoleCheckView.as_view(),
         name="note_role_check",
+    ),
+    # Collab (Hocuspocus) document-open gate. Supersedes the note-only
+    # probe above for genos-collab: it covers every document prefix,
+    # including `task-body:`, and denies the ones it doesn't know.
+    path(
+        "api/v2/collab/access/check/",
+        CollabAccessCheckView.as_view(),
+        name="collab_access_check",
     ),
     # Version / history endpoints
     path(
