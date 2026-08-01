@@ -24,6 +24,7 @@ from origin.services.thread_link import find_thread_link_conflict
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import resolve_group_members
 from origin.views.utils.request_validators import validate_request_data
+from origin.views.utils.scope_guards import is_project_member
 
 CLOSED_STATUSES = {"Closed", "Deleted"}
 
@@ -33,6 +34,13 @@ CLOSED_STATUSES = {"Closed", "Deleted"}
 _parse_iso_date = parse_iso_date
 _ensure_backing_task = ensure_backing_task
 _sync_backing_task = sync_backing_task
+
+
+def _deny_not_found(kind: str):
+    """404 rather than 403 — milestone/sprint/project ids are sequential
+    integers, so a 403 would turn this endpoint into an existence oracle
+    for the whole install. Mirrors the `channel_views` convention."""
+    return Response({"error": f"{kind} not found."}, status=status.HTTP_404_NOT_FOUND)
 
 
 def _format_due_date(value):
@@ -170,6 +178,8 @@ class ProjectMilestonesView(AuthenticatedAPIView):
             project = ProjectMaster.objects.get(project_id=project_id, is_deleted=False)
         except ProjectMaster.DoesNotExist:
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not is_project_member(project.project_id, request.user.id):
+            return _deny_not_found("Project")
 
         statuses_param = request.GET.get("statuses")
         sprint_id_param = request.GET.get("sprint_id")
@@ -223,6 +233,8 @@ class MilestoneView(AuthenticatedAPIView):
             )
         except MilestoneMaster.DoesNotExist:
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not is_project_member(m.project_id, request.user.id):
+            return _deny_not_found("Milestone")
         # Lazy-create the backing task for legacy milestones so the
         # client always gets a non-null `taskId` to drive comments /
         # notes / attachments tabs against.
@@ -244,6 +256,8 @@ class MilestoneView(AuthenticatedAPIView):
             project = ProjectMaster.objects.get(project_id=data["project_id"], is_deleted=False)
         except ProjectMaster.DoesNotExist:
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not is_project_member(project.project_id, request.user.id):
+            return _deny_not_found("Project")
 
         sprint_id = request.data.get("sprint_id")
         sprint = None
@@ -331,6 +345,8 @@ class MilestoneView(AuthenticatedAPIView):
             milestone = MilestoneMaster.objects.get(milestone_id=milestone_id, is_deleted=False)
         except MilestoneMaster.DoesNotExist:
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not is_project_member(milestone.project_id, request.user.id):
+            return _deny_not_found("Milestone")
 
         # Validate custom field values BEFORE the transaction below —
         # rejecting them mid-transaction (after milestone.save()) would
@@ -483,6 +499,8 @@ class MilestoneView(AuthenticatedAPIView):
             milestone = MilestoneMaster.objects.get(milestone_id=milestone_id)
         except MilestoneMaster.DoesNotExist:
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not is_project_member(milestone.project_id, request.user.id):
+            return _deny_not_found("Milestone")
         milestone.is_deleted = True
         milestone.save(update_fields=["is_deleted", "ts_updated_at"])
         # Soft-delete the backing task too so the milestone disappears
@@ -527,6 +545,8 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
             milestone = MilestoneMaster.objects.get(milestone_id=milestone_id, is_deleted=False)
         except MilestoneMaster.DoesNotExist:
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not is_project_member(milestone.project_id, request.user.id):
+            return _deny_not_found("Milestone")
 
         try:
             user = CustomUser.objects.get(id=user_id)
@@ -559,6 +579,8 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
             milestone = MilestoneMaster.objects.get(milestone_id=milestone_id, is_deleted=False)
         except MilestoneMaster.DoesNotExist:
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not is_project_member(milestone.project_id, request.user.id):
+            return _deny_not_found("Milestone")
         MilestoneAssignees.objects.filter(milestone=milestone, user_id=user_id).delete()
         # Backing task assignee may need to fall back to the reporter
         # when the removed user was the previously synced assignee.
