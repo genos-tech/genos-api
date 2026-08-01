@@ -53,6 +53,7 @@ from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.controller import run_agent
 from origin.search_engine.agent.tools import REGISTRY
 from origin.search_engine.agent.tools.base import ToolContext
+from origin.search_engine.agent.tools.entity_links import rewrite_citation_md
 from origin.search_engine.metered import metered_request
 from origin.services.user_time import resolve_zone
 from origin.services.webpush_dispatch import dispatch_push_for_inbox_item
@@ -198,6 +199,13 @@ class Command(BaseCommand):
                 user.save(update_fields=["digest_last_sent_at"])
                 skipped += 1
                 continue
+
+            # The agent cites entities with bare tokens ([KDS-7](task:15)).
+            # The chat surface resolves those against the run's sources;
+            # an Inbox item has no sources map, so resolve to real
+            # /workspace hrefs at save time (unresolvable → plain prose,
+            # never a dead link).
+            text = rewrite_citation_md(text, team_id=team_id)
 
             item = InboxItems.objects.create(
                 team_id=team_id,
