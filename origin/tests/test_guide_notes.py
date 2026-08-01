@@ -28,9 +28,21 @@ def _mock_reindex():
 class GuideNotesOnJoinTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()
-        # A second team the fixture user is NOT yet a member of.
+        # A second team the fixture user is NOT a member of, owned by
+        # someone else — used for the "caller adds a third party" case.
         self.other_team = TeamMaster.objects.create(
             team_name="Other", team_email="other@example.com", owner=self.user2
+        )
+        # A team the fixture user OWNS but has no membership row for.
+        # This is the shape of a freshly created team (TeamMasterView.post
+        # writes no TeamMembers row), and since `/team/join/` was closed
+        # to unsolicited self-joins it is the only way a self-join still
+        # CREATES a membership — which is what the seeding hook keys on.
+        # A genuine invitee reaches the same code path one step later:
+        # they accept the invite, the client switches them into the team,
+        # and that switch hits the already-a-member branch below.
+        self.fresh_team = TeamMaster.objects.create(
+            team_name="Freshly Created", team_email="fresh@example.com", owner=self.user
         )
 
     def _join(self, user, team, attendee=None):
@@ -52,20 +64,20 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
         )
 
     def test_new_membership_seeds_the_guide(self):
-        resp = self._join(self.user, self.other_team)
+        resp = self._join(self.user, self.fresh_team)
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
-        notes = self._guide_notes(self.user, self.other_team)
+        notes = self._guide_notes(self.user, self.fresh_team)
         self.assertEqual(notes.count(), len(GUIDE_NOTES))
         # Owner-role rows exist (the note APIs 403 without them).
         self.assertEqual(
             NotePermissionMaster.objects.filter(
-                team=self.other_team,
+                team=self.fresh_team,
                 user=self.user,
                 note_id__in=notes.values_list("note_id", flat=True),
             ).count(),
             len(GUIDE_NOTES),
         )
-        member = TeamMembers.objects.get(team=self.other_team, attendee=self.user)
+        member = TeamMembers.objects.get(team=self.fresh_team, attendee=self.user)
         self.assertIsNotNone(member.guide_seeded_at)
 
     def test_existing_member_picks_the_guide_up_on_next_switch(self):
@@ -117,17 +129,17 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
     def test_demo_users_are_excluded(self):
         self.user.is_demo = True
         self.user.save(update_fields=["is_demo"])
-        resp = self._join(self.user, self.other_team)
+        resp = self._join(self.user, self.fresh_team)
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(self._guide_notes(self.user, self.other_team).count(), 0)
+        self.assertEqual(self._guide_notes(self.user, self.fresh_team).count(), 0)
 
     def test_guide_failure_never_breaks_a_join(self):
         with mock.patch(
             "origin.services.guide_notes.seed_guide_notes",
             side_effect=RuntimeError("boom"),
         ):
-            resp = self._join(self.user, self.other_team)
+            resp = self._join(self.user, self.fresh_team)
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         self.assertTrue(
-            TeamMembers.objects.filter(team=self.other_team, attendee=self.user).exists()
+            TeamMembers.objects.filter(team=self.fresh_team, attendee=self.user).exists()
         )

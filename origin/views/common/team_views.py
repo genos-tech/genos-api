@@ -36,6 +36,7 @@ from origin.views.utils.incremental import (
     capture_server_time,
     check_since,
 )
+from origin.views.utils.scope_guards import is_team_member
 
 logger = logging.getLogger(__name__)
 
@@ -294,8 +295,89 @@ class TeamMembersView(AuthenticatedAPIView):
         except Exception:  # noqa: BLE001 — joining matters more than the guide
             logger.exception("guide-note seeding failed for team=%s", team_id)
 
+    @staticmethod
+    def _authorize(request, team_id, attendee_id):
+        """Return an error `Response`, or `None` when the join is allowed.
+
+        This endpoint used to perform NO authorization at all: it read
+        `team_id` and `attendee_id` straight from the body and wrote the
+        membership row, so any authenticated user could add anyone —
+        including themselves — to any team whose id they knew. Team ids
+        are UUIDs, but ids leak through invites, inbox payloads and
+        shared links, and adding *yourself* only needs an id you already
+        hold.
+
+        Closing it is delicate because four legitimate callers share this
+        one route, and one of them is not a self-join:
+
+        1. **Fresh team creation.** `TeamMasterView.post` does NOT write
+           a membership row, so the creator has none — the client calls
+           here immediately afterwards. Allowed via the owner FK.
+        2. **Team switch / re-join.** The client calls this on every team
+           switch (that is also the Genos Guide seeding hook below), and
+           after `LeaveTeamView` soft-deletes a row. Allowed because a
+           row already exists, in either state.
+        3. **The project system user.** Project creation signs up an
+           `is_system_user` account and joins it to the team. That is a
+           join of somebody *else*, performed by whoever created the
+           project — who need not be an owner or editor.
+        4. **Deliberately adding a person.** Owner/editor only, matching
+           the gate on `InviteTeamMembersView`.
+
+        Anything else — notably a stranger self-joining a team they were
+        never invited to — is refused. Genuine first-time joins have
+        their own vetted routes: `/team/invite/accept/` (token) and
+        `/team/join/fromInbox/` (approved request).
+        """
+        actor_id = str(request.user.id)
+        is_self = str(attendee_id) == actor_id
+
+        if is_self:
+            # (1) and (2): the owner FK covers a team whose creator has
+            # no row yet; an existing row (soft-deleted or not) covers
+            # switch and re-join.
+            if TeamMaster.objects.filter(team_id=team_id, owner=request.user).exists():
+                return None
+            if TeamMembers.objects.filter(team_id=team_id, attendee_id=attendee_id).exists():
+                return None
+            return Response(
+                {"error": "Join this team through an invitation."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Adding someone else always requires the actor to be in the team.
+        if not is_team_member(team_id, request.user.id):
+            return Response(
+                {"error": "Team not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # (3) System users aren't people: they are created by the project
+        # flow and never sign in, so any team member may attach one.
+        if CustomUser.objects.filter(id=attendee_id, is_system_user=True).exists():
+            return None
+
+        # (4) Everyone else is a person, so this is member management.
+        team = TeamMaster.objects.filter(team_id=team_id).first()
+        if not can_manage(resolve_team_role(team, request.user.id)):
+            return Response(
+                {"error": "Only the team owner or an editor can add members."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return None
+
     def post(self, request):
-        data = {"team": request.data["team_id"], "attendee": request.data["attendee_id"]}
+        team_id = request.data.get("team_id")
+        attendee_id = request.data.get("attendee_id")
+        if not team_id or not attendee_id:
+            return Response(
+                {"error": "team_id and attendee_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if res := self._authorize(request, team_id, attendee_id):
+            return res
+
+        data = {"team": team_id, "attendee": attendee_id}
 
         # Re-join path: a previously soft-deleted membership row is
         # un-deleted in place. Without this, the UniqueConstraint on

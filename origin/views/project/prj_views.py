@@ -26,6 +26,7 @@ from origin.services.member_roles import (
 from origin.services.project_code import derive_project_code
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data
+from origin.views.utils.scope_guards import is_project_member, is_team_member
 
 _PROJECT_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
 
@@ -403,11 +404,60 @@ class ProjectsView(AuthenticatedAPIView):
 
 
 class JoinProjectView(AuthenticatedAPIView):
+    """Add a member to a project.
+
+    Like `TeamMembersView.post`, this performed NO authorization: any
+    authenticated user could add anyone to any project by id, and project
+    PKs are sequential integers so they need no guessing. `LeaveProjectView`
+    directly below has always self-checked, which made the asymmetry
+    plain once someone looked.
+
+    Who may add is deliberately ANY project member, not just owner/editor
+    — that is the documented project policy (see
+    `tests/test_project_member_roles.py`), and narrowing it here would
+    remove a capability every project member has today. The new
+    requirements are only that the actor is inside the project, and that
+    the person being added is already in the team, so a project cannot be
+    used to pull in a total outsider.
+
+    Adding a member has a side effect worth remembering: the
+    `_sync_pm_channel_member` signal mirrors the row into the project's
+    PM channel, so this grants chat access too.
+    """
+
     def post(self, request):
+        team_id = request.data.get("team_id")
+        project_id = request.data.get("project_id")
+        attendee_id = request.data.get("attendee_id")
+        if not team_id or not project_id or not attendee_id:
+            return Response(
+                {"error": "team_id, project_id, and attendee_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # The project must really live in the named team; otherwise the
+        # team_id below is just a claim the caller made up.
+        project = ProjectMaster.objects.filter(
+            project_id=project_id, team=team_id, is_deleted=False
+        ).first()
+        # 404 for "not yours" as well as "not there" — a 403 would
+        # confirm the id names a real project (channel_views convention).
+        if project is None or not is_project_member(project_id, request.user.id):
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # System users are attached by the project-creation flow and
+        # never hold a team membership row of their own at this point.
+        is_system = CustomUser.objects.filter(id=attendee_id, is_system_user=True).exists()
+        if not is_system and not is_team_member(team_id, attendee_id):
+            return Response(
+                {"error": "Only members of this team can be added to the project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         data = {
-            "team": request.data["team_id"],
-            "project": request.data["project_id"],
-            "attendee": request.data["attendee_id"],
+            "team": team_id,
+            "project": project_id,
+            "attendee": attendee_id,
         }
         serializer = ProjectMembersSerializer(data=data)
         if serializer.is_valid():
