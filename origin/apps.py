@@ -6,6 +6,10 @@ class OriginConfig(AppConfig):
     name = "origin"
 
     def ready(self):
+        # Same import-for-side-effect rule as the signals below: the
+        # @register() decorators attach the deploy-time config checks.
+        from origin import checks  # noqa: F401
+
         # Importing the module is enough — the @receiver decorators in
         # task_signals.py / cache_invalidation.py register the handlers as a
         # side effect.
