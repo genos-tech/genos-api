@@ -302,6 +302,15 @@ class OAuthCallbackView(APIView):
             if not _can_sign_in_with(existing):
                 return HttpResponseRedirect(_frontend_failure_url(reason="not_a_login_account"))
             user = existing.user
+            # Deactivated accounts must not sign in. The password path
+            # gets this free (`authenticate()` → `user_can_authenticate`),
+            # but OAuth mints via `RefreshToken.for_user` and never calls
+            # `authenticate()`, so without this check a deactivated or
+            # DELETED user completes the whole flow and receives tokens —
+            # tokens SimpleJWT then rejects on first use, i.e. a signed-in
+            # session that 401s on everything. Refuse at the door instead.
+            if not user.is_active:
+                return HttpResponseRedirect(_frontend_failure_url(reason="account_inactive"))
             self._save_tokens(existing, token_response)
         else:
             # First time this provider identity has signed in. If our
