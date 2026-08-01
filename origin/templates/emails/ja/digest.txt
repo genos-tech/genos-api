@@ -1,0 +1,10 @@
+{% extends "emails/base.txt" %}
+{% block content %}Genosダイジェスト — 未読{{ total }}件:
+
+{% for item in entries %}- {{ item.title }}
+  {{ item.url }}
+{% endfor %}{% if more %}
+ほか{{ more }}件はアプリでご確認ください。{% endif %}{% endblock %}
+{% block footer_note %}このメールは、Genosアカウントのデイリーダイジェストが有効になっているため送信されています。{% endblock %}
+{% block open_label %}Genosを開く{% endblock %}
+{% block unsubscribe_label %}ダイジェストを停止{% endblock %}

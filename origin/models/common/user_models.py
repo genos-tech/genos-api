@@ -98,6 +98,13 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     # window must not double-send.
     digest_enabled = models.BooleanField(default=True)
     digest_last_sent_at = models.DateTimeField(blank=True, null=True)
+    # EMAIL digest (the plain all-tiers unread summary, `email_digest`
+    # cron) — deliberately its OWN opt-out + idempotency stamp, never
+    # shared with the agent digest above: sharing the stamp would let one
+    # channel's send suppress the other, and one opt-out kill both. The
+    # opt-out is also flipped by the "digest"-scope unsubscribe link.
+    email_digest_enabled = models.BooleanField(default=True)
+    email_digest_last_sent_at = models.DateTimeField(blank=True, null=True)
     last_seen = models.DateTimeField(auto_now=True)
     is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)

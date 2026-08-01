@@ -184,20 +184,36 @@ class DigestPreferenceView(AuthenticatedAPIView):
 
     def get(self, request):
         return Response(
-            {"digest_enabled": bool(request.user.digest_enabled)},
+            {
+                "digest_enabled": bool(request.user.digest_enabled),
+                # The EMAIL digest (all-tiers unread summary) — a separate
+                # opt-out from the tier-gated agent digest above.
+                "email_digest_enabled": bool(request.user.email_digest_enabled),
+            },
             status=status.HTTP_200_OK,
         )
 
     def patch(self, request):
-        value = request.data.get("digest_enabled")
-        if not isinstance(value, bool):
+        updates = {}
+        for key in ("digest_enabled", "email_digest_enabled"):
+            if key not in request.data:
+                continue
+            value = request.data.get(key)
+            if not isinstance(value, bool):
+                return Response(
+                    {"error": f"{key} must be a boolean."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            updates[key] = value
+        if not updates:
             return Response(
-                {"error": "digest_enabled must be a boolean."},
+                {"error": "digest_enabled or email_digest_enabled is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        request.user.digest_enabled = value
-        request.user.save(update_fields=["digest_enabled"])
-        return Response({"digest_enabled": value}, status=status.HTTP_200_OK)
+        for key, value in updates.items():
+            setattr(request.user, key, value)
+        request.user.save(update_fields=list(updates))
+        return Response(updates, status=status.HTTP_200_OK)
 
 
 class SpotlightWebSearchPreferenceView(AuthenticatedAPIView):

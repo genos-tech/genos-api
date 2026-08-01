@@ -20,7 +20,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from origin.services.email_gating import _EMAIL_DEFAULTS
-from origin.services.email_unsubscribe import SCOPE_ALL, parse_token
+from origin.services.email_unsubscribe import SCOPE_ALL, SCOPE_DIGEST, parse_token
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 # locale plumbing needed for an anonymous reader.
 _SCOPE_LABELS = {
     SCOPE_ALL: ("すべての通知メール", "all notification emails"),
+    SCOPE_DIGEST: ("デイリーダイジェストメール", "the daily digest email"),
     "mention_chat": ("メンション通知メール", "mention notification emails"),
     "mention_thread": ("メンション通知メール", "mention notification emails"),
     "mention_task": ("メンション通知メール", "mention notification emails"),
@@ -43,8 +44,7 @@ _SCOPE_LABELS = {
 
 
 def _valid_scope(scope: str) -> bool:
-    # "digest" joins this set in PR A6 alongside the field it flips.
-    return scope == SCOPE_ALL or scope in _EMAIL_DEFAULTS
+    return scope == SCOPE_ALL or scope == SCOPE_DIGEST or scope in _EMAIL_DEFAULTS
 
 
 def _resolve(token: str):
@@ -73,6 +73,12 @@ def _apply(user, scope: str) -> None:
     this key (or vice versa). Read-modify-write of the one key only."""
     from origin.models.common.notification_models import NotificationPreference
 
+    if scope == SCOPE_DIGEST:
+        # The digest opt-out lives on the user row, not the prefs row.
+        if user.email_digest_enabled:
+            user.email_digest_enabled = False
+            user.save(update_fields=["email_digest_enabled"])
+        return
     prefs, _ = NotificationPreference.objects.get_or_create(user=user)
     if scope == SCOPE_ALL:
         if prefs.email_enabled:
