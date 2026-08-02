@@ -37,9 +37,12 @@ import logging
 from django.db import transaction
 
 from origin.models.common.webhook_models import (
+    EVENT_MESSAGE_CREATED,
+    EVENT_TASK_COMMENT_CREATED,
     EVENT_TASK_COMPLETED,
     EVENT_TASK_CREATED,
     EVENT_TASK_UPDATED,
+    SUBSCRIBABLE_CHANNEL_KINDS,
     WebhookDelivery,
     WebhookEndpoint,
 )
@@ -89,8 +92,60 @@ def task_payload(task) -> dict:
     }
 
 
-def enqueue_event(team_id, event: str, payload: dict) -> None:
+def comment_payload(comment, task) -> dict:
+    """A task comment. Carries the text — a comment is content the
+    subscriber is expected to act on, and unlike chat it is scoped to a
+    project the endpoint already receives task events for."""
+    return {
+        "id": comment.comment_id,
+        "task_id": task.task_id,
+        "task_display_id": task.display_id,
+        "project_id": task.project_id,
+        "team_id": str(task.team_id) if task.team_id else None,
+        "author_id": str(comment.sender_id) if comment.sender_id else None,
+        "body": comment.comment_body,
+        # `ts_sent_at`, not `ts_created_at`. Both this model and `Message`
+        # name it that way, and a defensive `getattr(..., None)` here
+        # silently published `"created_at": null` on every delivery
+        # rather than failing. Attribute access, so the next rename is a
+        # test failure instead of a quiet hole in the payload.
+        "created_at": _iso(comment.ts_sent_at),
+    }
+
+
+def message_payload(message, channel) -> dict:
+    """A chat message.
+
+    Carries `body_text` — the plain-text projection the client already
+    derives for previews — rather than the BlockNote `body` array. The
+    array is an editor format whose inline node types change (custom
+    emoji and GIFs each added one), so publishing it would make an
+    internal schema into a public contract.
+
+    Only ever built for channels an endpoint explicitly named, and never
+    for a DM: see `CHAT_EVENTS_REQUIRE_CHANNELS`.
+    """
+    return {
+        "id": message.seq,
+        "channel_id": str(channel.id),
+        "channel_kind": channel.kind,
+        "channel_title": channel.title or "",
+        "team_id": str(channel.team_id) if channel.team_id else None,
+        "author_id": str(message.sender_id) if message.sender_id else None,
+        "body_text": message.body_text or "",
+        "thread_root_id": message.thread_root_id,
+        "is_thread_reply": bool(message.is_thread_reply),
+        "created_at": _iso(message.ts_sent_at),
+    }
+
+
+def enqueue_event(team_id, event: str, payload: dict, scope: dict | None = None) -> None:
     """Queue `event` for every active endpoint in `team_id` that wants it.
+
+    `scope` is `{"project_id": …}` / `{"channel_id": …}` describing the
+    object the event is about, matched against each endpoint's filters by
+    `WebhookEndpoint.subscribes_to`. Resolved by the caller because the
+    caller has the object; this function only ever sees ids.
 
     Best-effort: any failure is logged at WARNING and swallowed. WARNING
     rather than ERROR because this runs inside a request, and because
@@ -100,7 +155,7 @@ def enqueue_event(team_id, event: str, payload: dict) -> None:
         endpoints = [
             e
             for e in WebhookEndpoint.objects.filter(team_id=team_id, is_active=True)
-            if event in (e.events or [])
+            if e.subscribes_to(event, scope)
         ]
         if not endpoints:
             return
@@ -164,8 +219,8 @@ def _flush_one(registry: dict, task_pk) -> None:
     entry = registry.pop(task_pk, None)
     if entry is None:
         return
-    team_id, event, payload = entry
-    enqueue_event(team_id, event, payload)
+    team_id, event, payload, scope = entry
+    enqueue_event(team_id, event, payload, scope)
 
 
 def schedule_task_event(task, *, created: bool, status_changed_to=None) -> None:
@@ -207,4 +262,57 @@ def schedule_task_event(task, *, created: bool, status_changed_to=None) -> None:
         task_pk = task.pk
         transaction.on_commit(lambda: _flush_one(registry, task_pk))
 
-    registry[task.pk] = (team_id, event, task_payload(task))
+    # Scope refreshed alongside the payload: a task moved between
+    # projects mid-transaction must be filtered by where it ended up.
+    registry[task.pk] = (team_id, event, task_payload(task), {"project_id": task.project_id})
+
+
+def schedule_comment_event(comment, task) -> None:
+    """Queue `task.comment_created` after commit.
+
+    Not collapsed per transaction the way task saves are: a comment is
+    created once, by one deliberate user action, so the multi-save
+    problem `_pending_for_transaction` exists for does not arise here.
+    Filtered on the comment's TASK's project, which is the scope an
+    integrator subscribing to a project means.
+    """
+    if task is None or not task.team_id:
+        return
+    try:
+        payload = comment_payload(comment, task)
+    except Exception:  # noqa: BLE001 — never break the comment write
+        log.warning("webhook comment payload failed for task=%s", task.pk, exc_info=True)
+        return
+    team_id = task.team_id
+    project_id = task.project_id
+    transaction.on_commit(
+        lambda: enqueue_event(
+            team_id, EVENT_TASK_COMMENT_CREATED, payload, {"project_id": project_id}
+        )
+    )
+
+
+def schedule_message_event(message, channel) -> None:
+    """Queue `message.created` after commit.
+
+    Returns early for DM channels before a payload is ever built, so a
+    private one-to-one's text is not assembled into a dict that then has
+    to be discarded by a filter further down. `subscribes_to` would also
+    refuse it — an endpoint cannot hold a DM id — but the two checks
+    guard different mistakes: this one keeps DM content out of the code
+    path, that one keeps it out of the outbox.
+    """
+    if channel is None or channel.kind not in SUBSCRIBABLE_CHANNEL_KINDS:
+        return
+    if not channel.team_id:
+        return
+    try:
+        payload = message_payload(message, channel)
+    except Exception:  # noqa: BLE001 — never break the message write
+        log.warning("webhook message payload failed for channel=%s", channel.id, exc_info=True)
+        return
+    team_id = channel.team_id
+    channel_id = str(channel.id)
+    transaction.on_commit(
+        lambda: enqueue_event(team_id, EVENT_MESSAGE_CREATED, payload, {"channel_id": channel_id})
+    )

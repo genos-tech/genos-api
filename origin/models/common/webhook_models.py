@@ -50,13 +50,53 @@ from origin.services import crypto
 EVENT_TASK_CREATED = "task.created"
 EVENT_TASK_UPDATED = "task.updated"
 EVENT_TASK_COMPLETED = "task.completed"
+EVENT_TASK_COMMENT_CREATED = "task.comment_created"
+EVENT_MESSAGE_CREATED = "message.created"
 
 EVENT_CHOICES = [
     (EVENT_TASK_CREATED, EVENT_TASK_CREATED),
     (EVENT_TASK_UPDATED, EVENT_TASK_UPDATED),
     (EVENT_TASK_COMPLETED, EVENT_TASK_COMPLETED),
+    (EVENT_TASK_COMMENT_CREATED, EVENT_TASK_COMMENT_CREATED),
+    (EVENT_MESSAGE_CREATED, EVENT_MESSAGE_CREATED),
 ]
 ALL_EVENTS = [e for e, _ in EVENT_CHOICES]
+
+# Events scoped by project. An endpoint with a non-empty `project_ids`
+# receives these only for the projects it named.
+PROJECT_SCOPED_EVENTS = frozenset(
+    {
+        EVENT_TASK_CREATED,
+        EVENT_TASK_UPDATED,
+        EVENT_TASK_COMPLETED,
+        EVENT_TASK_COMMENT_CREATED,
+    }
+)
+
+# Events scoped by channel — and, unlike the project ones, an empty
+# `channel_ids` does NOT mean "all". See `CHAT_EVENTS_REQUIRE_CHANNELS`.
+CHANNEL_SCOPED_EVENTS = frozenset({EVENT_MESSAGE_CREATED})
+
+# Subscribing to chat requires naming the channels explicitly.
+#
+# For project events, "no filter" sensibly means "the whole team" — the
+# subscriber is already trusted with the team's task metadata, and that
+# is the shape every integrator expects. Chat is different in kind: the
+# payload carries what people actually wrote, and a webhook is configured
+# by ONE admin on behalf of everyone who talks in those channels. An
+# empty list there would mean "every conversation in the team, including
+# ones created after you subscribed", which nobody can meaningfully
+# consent to.
+#
+# DM channels cannot be named at all — see `SUBSCRIBABLE_CHANNEL_KINDS`.
+# A private one-to-one is the one place where a team admin's
+# configuration choice is clearly not theirs to make.
+CHAT_EVENTS_REQUIRE_CHANNELS = True
+
+# ChannelKind values a webhook may subscribe to: GM(2), PM(3), MDM(4).
+# DM is 1 and is deliberately absent. Imported lazily at validation time
+# to keep this module free of a chat-app import.
+SUBSCRIBABLE_CHANNEL_KINDS = frozenset({2, 3, 4})
 
 # After this many consecutive failures the endpoint is disabled. Five
 # attempts each with backoff is already most of a day; past that the URL
@@ -84,6 +124,15 @@ class WebhookEndpoint(models.Model):
     # Subscribed event names. A JSON list rather than an M2M: the set is
     # small, always read whole, and never queried across rows.
     events = models.JSONField(default=list)
+    # Scope filters, same JSON-list reasoning as `events`.
+    #
+    # `project_ids` empty means EVERY project in the team; `channel_ids`
+    # empty means NO channel. That asymmetry is deliberate and is the
+    # whole privacy design — see `CHAT_EVENTS_REQUIRE_CHANNELS`. Reading
+    # them as one uniform "empty = unfiltered" is the mistake this
+    # comment exists to prevent.
+    project_ids = models.JSONField(default=list)
+    channel_ids = models.JSONField(default=list)
     is_active = models.BooleanField(default=True)
     consecutive_failures = models.PositiveIntegerField(default=0)
     disabled_at = models.DateTimeField(null=True, blank=True)
@@ -107,8 +156,44 @@ class WebhookEndpoint(models.Model):
     def set_secret(self, raw: str) -> None:
         self.secret_encrypted = crypto.encrypt(raw)
 
-    def subscribes_to(self, event: str) -> bool:
-        return self.is_active and event in (self.events or [])
+    def subscribes_to(self, event: str, scope: dict | None = None) -> bool:
+        """Does this endpoint want `event` for the object `scope` names?
+
+        `scope` is `{"project_id": …, "channel_id": …}`, resolved by the
+        emit site rather than assembled here — the enqueue call has the
+        object in hand, this method has only ids. One dict rather than
+        widening the signature per event type, so adding an event never
+        changes this method's shape.
+
+        A `None`/absent scope key means the event is not filterable on
+        that axis and passes. That matters for `task.*` on a task whose
+        project FK is null: `ProjectMaster` deletion is `SET_NULL`, so an
+        orphaned task is a real state, and dropping its events silently
+        would repeat the bug `test_get_team_tasks_handles_null_fks`
+        already caught once.
+        """
+        if not self.is_active or event not in (self.events or []):
+            return False
+        scope = scope or {}
+
+        if event in CHANNEL_SCOPED_EVENTS:
+            # Empty = nothing, not everything. An endpoint that somehow
+            # subscribed to a chat event without naming channels receives
+            # no chat, which is the safe direction to fail.
+            channel_id = scope.get("channel_id")
+            if channel_id is None:
+                return False
+            return str(channel_id) in {str(c) for c in (self.channel_ids or [])}
+
+        if event in PROJECT_SCOPED_EVENTS and self.project_ids:
+            project_id = scope.get("project_id")
+            if project_id is None:
+                # An orphaned task in a filtered subscription: the filter
+                # names projects and this object is in none of them.
+                return False
+            return str(project_id) in {str(p) for p in self.project_ids}
+
+        return True
 
 
 class WebhookDelivery(models.Model):

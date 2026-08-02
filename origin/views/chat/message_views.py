@@ -50,6 +50,7 @@ from origin.serializers.chat.unified_serializers import (
     MessageAttachmentSerializer,
     MessageSerializer,
 )
+from origin.services import webhook_enqueue
 from origin.services.mention_extractor import (
     extract_mention_group_ids,
     extract_mentioned_user_ids,
@@ -392,6 +393,23 @@ def _allocate_seq_and_create_message(
             metadata=metadata or {},
             correlation_id=correlation_id,
         )
+
+        # Outbound webhook for `message.created`.
+        #
+        # This is the ONLY emit point for chat, and it is the endpoint
+        # genos-sockets proxies every send through
+        # (`socketio_events_v3/message_handlers.py` →
+        # `POST api/v3/channels/{id}/messages/`), so one user action is
+        # one event. Deliberately NOT hooked on `Message.objects.create`
+        # generally: `unified_writer` also writes Message rows to mirror
+        # a task comment into its PM thread, and an integrator should get
+        # `task.comment_created` for that, not a second `message.created`
+        # betraying an internal mirroring detail. `demo_seeder` writes
+        # Message rows too, and nobody wants a webhook storm on seed.
+        #
+        # DM channels never reach the outbox — `schedule_message_event`
+        # refuses them before a payload is built.
+        webhook_enqueue.schedule_message_event(msg, channel)
 
         # Bump `reply_count` on the parent if this is a thread reply.
         # Denormalized to avoid an aggregate query when the chat list

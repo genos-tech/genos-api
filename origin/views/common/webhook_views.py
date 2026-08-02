@@ -17,6 +17,8 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.webhook_models import (
     ALL_EVENTS,
+    CHANNEL_SCOPED_EVENTS,
+    SUBSCRIBABLE_CHANNEL_KINDS,
     WebhookEndpoint,
     generate_secret,
 )
@@ -32,11 +34,148 @@ def _serialize(e: WebhookEndpoint) -> dict:
         "url": e.url,
         "description": e.description,
         "events": e.events,
+        "project_ids": e.project_ids,
+        "channel_ids": e.channel_ids,
         "is_active": e.is_active,
         "consecutive_failures": e.consecutive_failures,
         "disabled_at": e.disabled_at,
         "created_at": e.ts_created_at,
     }
+
+
+def _validate_scope(team, events, request_data):
+    """`(project_ids, channel_ids, None)` or `(None, None, Response)`.
+
+    Two different rules, because the two axes mean different things:
+
+    **Projects** are an optional narrowing. Empty is legitimate and means
+    the whole team, which is what the endpoint already did before scoping
+    existed. Ids are checked for team membership so one team cannot
+    subscribe to another's project — the same walkable-integer shape the
+    ACL audit closed everywhere else.
+
+    **Channels are mandatory for chat events, and DMs are never allowed.**
+    A chat payload carries what people wrote, and this endpoint is
+    configured by one admin on behalf of everyone who talks there. So
+    there is no "all channels" and no way to name a private one-to-one.
+    Enforced here rather than trusted from the client because the UI is
+    not the only caller.
+    """
+    from origin.models.chat.unified_models import Channel  # noqa: PLC0415
+    from origin.models.project.prj_models import ProjectMaster  # noqa: PLC0415
+
+    project_ids = request_data.get("project_ids") or []
+    channel_ids = request_data.get("channel_ids") or []
+    if not isinstance(project_ids, list) or not isinstance(channel_ids, list):
+        return (
+            None,
+            None,
+            Response(
+                {"error": "project_ids and channel_ids must be lists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            ),
+        )
+
+    # Parse FIRST, then compare parsed-to-parsed. Comparing raw input
+    # against ids read back from the database mixes types: a JSON client
+    # sending `["12"]` — which is ordinary — had its own project reported
+    # as unknown, because `"12" not in {12}`. And a value that is not a
+    # scalar at all (`[{"id": 1}]`) raised `unhashable type` out of the
+    # membership test — a 500 on request input.
+    parsed_projects = []
+    for raw in project_ids:
+        try:
+            parsed_projects.append(int(raw))
+        except (TypeError, ValueError):
+            return (
+                None,
+                None,
+                Response(
+                    {"error": "project_ids must be a list of project ids."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            )
+
+    if parsed_projects:
+        valid = set(
+            ProjectMaster.objects.filter(team=team, project_id__in=parsed_projects).values_list(
+                "project_id", flat=True
+            )
+        )
+        missing = [p for p in parsed_projects if p not in valid]
+        if missing:
+            return (
+                None,
+                None,
+                Response(
+                    {"error": f"Unknown projects for this team: {missing}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            )
+
+    wants_chat = any(e in CHANNEL_SCOPED_EVENTS for e in events)
+    if wants_chat and not channel_ids:
+        return (
+            None,
+            None,
+            Response(
+                {
+                    "error": (
+                        "Chat events require an explicit channel_ids list. "
+                        "There is no subscribe-to-all-chat: the payload carries "
+                        "message text, so every channel has to be named."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            ),
+        )
+    if channel_ids and not wants_chat:
+        return (
+            None,
+            None,
+            Response(
+                {"error": "channel_ids only applies to chat events."},
+                status=status.HTTP_400_BAD_REQUEST,
+            ),
+        )
+
+    if channel_ids:
+        rows = list(
+            Channel.objects.filter(team=team, id__in=[str(c) for c in channel_ids]).values_list(
+                "id", "kind"
+            )
+        )
+        found = {str(cid) for cid, _ in rows}
+        missing = [c for c in channel_ids if str(c) not in found]
+        if missing:
+            # Same 404-flavoured vagueness as everywhere else: a channel
+            # in another team is reported exactly like one that does not
+            # exist, so this cannot enumerate channel ids.
+            return (
+                None,
+                None,
+                Response(
+                    {"error": f"Unknown channels for this team: {missing}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            )
+        forbidden = [str(cid) for cid, kind in rows if kind not in SUBSCRIBABLE_CHANNEL_KINDS]
+        if forbidden:
+            return (
+                None,
+                None,
+                Response(
+                    {
+                        "error": (
+                            f"Direct messages cannot be subscribed to: {forbidden}. "
+                            "Only group, project and multi-DM channels are eligible."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            )
+
+    return parsed_projects, [str(c) for c in channel_ids], None
 
 
 def _require_manager(request, team_id):
@@ -91,12 +230,18 @@ class WebhookListCreateView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        project_ids, channel_ids, scope_err = _validate_scope(team, events, request.data)
+        if scope_err:
+            return scope_err
+
         raw_secret = generate_secret()
         endpoint = WebhookEndpoint(
             team=team,
             url=url,
             description=(request.data.get("description") or "")[:200],
             events=events,
+            project_ids=project_ids,
+            channel_ids=channel_ids,
             created_by=request.user,
         )
         endpoint.set_secret(raw_secret)

@@ -215,6 +215,12 @@ class ChannelListView(AuthenticatedAPIView):
 
     Each row carries a denormalized `latestMessage` and `unreadCount` so
     the chat-list sidebar renders in a single round-trip.
+
+    Optional `?team_id=` narrows to one team. The chat sidebar wants
+    every team at once and so passes nothing; callers that are choosing
+    channels *within* a team — the webhook scope picker — need the
+    narrowing, because the serialized row carries no team of its own and
+    a user in two teams would otherwise be offered both.
     """
 
     def get(self, request):
@@ -223,6 +229,12 @@ class ChannelListView(AuthenticatedAPIView):
         # is resolved below by a single DISTINCT ON query, so we skip the
         # per-channel `_latest_seq` correlated subquery entirely.
         qs = _annotate_unread(_user_channels_qs(user), user)
+        team_id = request.GET.get("team_id")
+        if team_id:
+            # Narrowing only — `_user_channels_qs` has already restricted
+            # this to the caller's own memberships, so naming a team you
+            # are not in yields nothing rather than anything new.
+            qs = qs.filter(team_id=team_id)
 
         channels = list(qs)
         if not channels:
