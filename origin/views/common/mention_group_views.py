@@ -8,7 +8,50 @@ from origin.models.common.mention_group_models import (
     MentionGroupMaster,
     MentionGroupMembers,
 )
+from origin.models.common.team_models import TeamMembers
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.scope_guards import is_guest, is_team_member
+
+
+def _require_team(request, team_id):
+    """`None` when the caller belongs to `team_id`, else a 404 `Response`.
+
+    404 rather than 403 for the usual reason (`scope_guards`): it must
+    not confirm that an id names a real team.
+
+    Guests are refused deliberately. A mention group is a team-wide
+    directory construct — its whole purpose is to name a set of
+    colleagues — and handing an external collaborator the org chart is
+    exactly the enumeration the guest model exists to prevent.
+    """
+    if not team_id:
+        return Response({"error": "team_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+    if not is_team_member(team_id, request.user.id) or is_guest(team_id, request.user.id):
+        return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+    return None
+
+
+def _require_group(request, group_id):
+    """`(group, None)` when allowed, `(None, Response)` otherwise.
+
+    Group ids are sequential integers, so resolving one and acting on it
+    without checking the caller's team let anyone walk the id space —
+    reading a team's org chart, renaming its groups, or deleting them.
+    """
+    if not group_id:
+        return None, Response(
+            {"error": "group_id is required."}, status=status.HTTP_400_BAD_REQUEST
+        )
+    group = MentionGroupMaster.objects.filter(group_id=group_id, is_deleted=False).first()
+    if (
+        group is None
+        or not is_team_member(group.team_id, request.user.id)
+        or is_guest(group.team_id, request.user.id)
+    ):
+        return None, Response(
+            {"error": "Mention group not found."}, status=status.HTTP_404_NOT_FOUND
+        )
+    return group, None
 
 
 def _serialize_group(group: MentionGroupMaster, member_user_ids: list) -> dict:
@@ -43,6 +86,8 @@ class MentionGroupView(AuthenticatedAPIView):
                 {"error": "team_id and group_name are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if res := _require_team(request, team_id):
+            return res
 
         if MentionGroupMaster.objects.filter(
             team_id=team_id, group_name=group_name, is_deleted=False
@@ -62,11 +107,8 @@ class MentionGroupView(AuthenticatedAPIView):
 
     def get(self, request):
         team_id = request.GET.get("team_id")
-        if not team_id:
-            return Response(
-                {"error": "team_id is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if res := _require_team(request, team_id):
+            return res
 
         groups = list(
             MentionGroupMaster.objects.filter(team_id=team_id, is_deleted=False).order_by(
@@ -90,19 +132,9 @@ class MentionGroupView(AuthenticatedAPIView):
 
     def put(self, request):
         group_id = request.data.get("group_id")
-        if not group_id:
-            return Response(
-                {"error": "group_id is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            group = MentionGroupMaster.objects.get(group_id=group_id, is_deleted=False)
-        except MentionGroupMaster.DoesNotExist:
-            return Response(
-                {"error": "Mention group not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        group, err = _require_group(request, group_id)
+        if err:
+            return err
 
         # Partial update — only touch fields the caller supplied.
         if "group_name" in request.data:
@@ -143,13 +175,9 @@ class MentionGroupView(AuthenticatedAPIView):
                 {"error": "group_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        try:
-            group = MentionGroupMaster.objects.get(group_id=group_id)
-        except MentionGroupMaster.DoesNotExist:
-            return Response(
-                {"error": "Mention group not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        group, err = _require_group(request, group_id)
+        if err:
+            return err
         # Soft-delete keeps existing message bodies stable; the resolve
         # endpoint returns an empty member set so live fan-out skips them.
         group.is_deleted = True
@@ -172,13 +200,9 @@ class MentionGroupMembersView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            group = MentionGroupMaster.objects.get(group_id=group_id, is_deleted=False)
-        except MentionGroupMaster.DoesNotExist:
-            return Response(
-                {"error": "Mention group not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        group, err = _require_group(request, group_id)
+        if err:
+            return err
 
         existing = set(
             MentionGroupMembers.objects.filter(group_id=group_id).values_list("user_id", flat=True)
@@ -215,11 +239,14 @@ class MentionGroupMembersView(AuthenticatedAPIView):
     def delete(self, request):
         group_id = request.GET.get("group_id") or request.data.get("group_id")
         user_id = request.GET.get("user_id") or request.data.get("user_id")
-        if not group_id or not user_id:
+        if not user_id:
             return Response(
                 {"error": "group_id and user_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        _, err = _require_group(request, group_id)
+        if err:
+            return err
         MentionGroupMembers.objects.filter(group_id=group_id, user_id=user_id).delete()
         remaining = [
             str(uid)
@@ -234,11 +261,9 @@ class MentionGroupMembersView(AuthenticatedAPIView):
 
     def get(self, request):
         group_id = request.GET.get("group_id")
-        if not group_id:
-            return Response(
-                {"error": "group_id is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        _, err = _require_group(request, group_id)
+        if err:
+            return err
         member_ids = [
             str(uid)
             for uid in MentionGroupMembers.objects.filter(group_id=group_id).values_list(
@@ -272,11 +297,20 @@ class MentionGroupResolveView(AuthenticatedAPIView):
         if not group_ids:
             return Response({"resolved": {}}, status=status.HTTP_200_OK)
 
-        # Only return memberships for non-deleted groups.
+        # Only return memberships for non-deleted groups the CALLER can
+        # see. This endpoint takes a list of ids and returns member sets
+        # wholesale, so without the team filter it is the fastest way to
+        # enumerate several teams' org charts in one request — and the
+        # sockets service calls it with the user's own JWT, so scoping
+        # here covers that path too.
         live_groups = set(
-            MentionGroupMaster.objects.filter(
-                group_id__in=group_ids, is_deleted=False
-            ).values_list("group_id", flat=True)
+            MentionGroupMaster.objects.filter(group_id__in=group_ids, is_deleted=False)
+            .filter(
+                team_id__in=TeamMembers.objects.filter(
+                    attendee=request.user, is_deleted=False
+                ).values_list("team_id", flat=True)
+            )
+            .values_list("group_id", flat=True)
         )
         rows = MentionGroupMembers.objects.filter(group_id__in=live_groups).values_list(
             "group_id", "user_id"
