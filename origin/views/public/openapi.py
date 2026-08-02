@@ -435,7 +435,9 @@ OPENAPI = {
                 "description": (
                     "Speaks [MCP](https://modelcontextprotocol.io) over Streamable "
                     "HTTP, so an AI coding agent can read and work your Genos tasks "
-                    "directly. Point a client at this URL with your API key:\n\n"
+                    "directly. **Requires the Pro plan or above** — the rest of "
+                    "this API is available on every plan. Point a client at this "
+                    "URL with your API key:\n\n"
                     "```\nclaude mcp add --transport http genos \\\n"
                     "  https://api.genosai.dev/api/public/v1/mcp \\\n"
                     '  --header "Authorization: ApiKey gnos_..."\n```\n\n'
@@ -467,7 +469,7 @@ OPENAPI = {
                     "202": {"description": "A JSON-RPC notification was accepted."},
                     "400": _error("Malformed request, or no team named."),
                     "401": _error("Missing or invalid key."),
-                    "403": _error("Disallowed Origin."),
+                    "403": _error("Plan does not include MCP, or a disallowed Origin."),
                     "404": _error("Unknown JSON-RPC method, or team not found."),
                 },
             }

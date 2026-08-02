@@ -215,8 +215,8 @@ class McpView(PublicApiView):
         if not get_mcp_enabled(user_id):
             raise JsonRpcError(
                 protocol.INVALID_REQUEST,
-                "MCP is available on the Pro plan and above. Your workspace's "
-                "current plan doesn't include it — upgrade in Genos under "
+                "MCP is available on the Pro plan and above. Your current plan "
+                "doesn't include it — upgrade in Genos under "
                 "Settings → Plan & Usage, and this connection will start "
                 "working without any change here. The REST API at "
                 "/api/public/v1/ is available on every plan.",
