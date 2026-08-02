@@ -161,11 +161,11 @@ class TierSafetyTests(PackTestBase):
 
 
 class DelayedPaymentTests(PackTestBase):
+    """Checkout is card-only, so none of these SHOULD occur — they are
+    the defense in depth for the day the method list is widened, when
+    the failure would otherwise be paying and silently never receiving."""
+
     def test_an_unpaid_completed_session_grants_nothing_yet(self):
-        """Konbini and bank transfer complete the session and pay later.
-        JPY is the default currency, so this is an ordinary path, not an
-        edge case — granting here hands out credits for money that may
-        never arrive."""
         summary = stripe_billing.handle_event(self.event(self.session(paid=False)))
         self.assertIn("deferred", summary)
         self.assertEqual(self.purchased_milli(), 0)
@@ -240,6 +240,13 @@ class CheckoutEndpointTests(PackTestBase):
 
         params = create.call_args.kwargs
         self.assertEqual(params["mode"], "payment", "a pack must never recur")
+        self.assertEqual(
+            params["payment_method_types"],
+            ["card"],
+            "card only, by decision — konbini/bank transfer settle days "
+            "later, and a delayed method here means paying and receiving "
+            "nothing until an async event arrives",
+        )
         self.assertNotIn("plan", params["metadata"], "a `plan` key would grant a subscription tier")
         self.assertEqual(params["metadata"]["genos_credit_pack"], "pack_50")
 

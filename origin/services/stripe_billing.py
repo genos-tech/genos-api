@@ -490,6 +490,15 @@ def create_credit_pack_checkout_session(
         # product, and the difference is the whole point: it must never
         # create a recurring charge.
         "mode": "payment",
+        # CARD ONLY, by decision (owner, 2026-08-03) — never the
+        # account's default payment-method list. Konbini and bank
+        # transfer complete a session with `payment_status: "unpaid"`
+        # and settle days later; for a digital good delivered instantly
+        # that gap is all downside, so those methods are simply not
+        # offered. The deferred-payment machinery further down
+        # (`payment_status` guard, the async_payment_succeeded branch)
+        # is therefore defense in depth, not a mainline path.
+        "payment_method_types": ["card"],
         "customer": customer_id,
         "line_items": [{"price": price_id, "quantity": 1}],
         "client_reference_id": str(user.id),
@@ -540,11 +549,11 @@ def _grant_credit_pack(session: dict) -> tuple[bool, str]:
         return False, "ignored: unknown user"
     _bind_customer(user, session.get("customer"))
 
-    # Only a PAID session grants. A `mode=payment` session can COMPLETE
-    # with `payment_status: "unpaid"` — that is the normal shape for
-    # konbini and bank transfer, both ordinary in the default (JPY)
-    # market. Granting then would hand out credits for money that may
-    # never arrive; the later `async_payment_succeeded` grants instead.
+    # Only a PAID session grants. Checkout is card-only so this should
+    # never fire, but it is the guard that makes that a fact rather than
+    # a hope: if an unpaid session ever completes, credits are withheld
+    # until the money actually arrives rather than handed out for a
+    # payment that may never settle.
     if session.get("payment_status") not in ("paid", "no_payment_required"):
         log.info("credit pack session %s completed but unpaid; deferring", session.get("id"))
         return False, "pack deferred: awaiting payment"
@@ -816,12 +825,12 @@ def handle_event(event) -> str:
     # paid plan for the price of a top-up. Branching on mode makes that
     # unexpressible rather than merely avoided.
     #
-    # `async_payment_succeeded` matters more here than it looks: JPY is
-    # the default currency and konbini / bank transfer are ordinary
-    # Japanese payment methods. Those COMPLETE a session with
-    # `payment_status: "unpaid"` and settle minutes-to-days later. Both
-    # events route here and both key on the same session id, so the
-    # ledger's uniqueness makes a double-fire a no-op.
+    # Pack checkout is card-only, so a session should never complete
+    # unpaid — but `async_payment_succeeded` is still routed, as defense
+    # in depth: if the method list is ever widened (deliberately, or by
+    # a future Stripe default), delayed settlement grants correctly
+    # instead of silently never granting. Both events key on the same
+    # session id, so the ledger's uniqueness makes a double-fire a no-op.
     if etype in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
         if (obj.get("mode") or "") == "payment":
             return _grant_credit_pack(obj)[1]
