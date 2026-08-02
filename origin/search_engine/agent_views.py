@@ -186,6 +186,20 @@ _ROLLING_SUMMARY_LOAD_CAP = 20
 # --------------------------------------------------------------------------- #
 
 
+def _within_history_retention(session: AgentSession, user_id: str) -> bool:
+    """True when `session` is still visible in the user's agent history.
+
+    Mirrors the `last_active_at` window the history list/detail views
+    apply (see `AgentSessionsListView` / `AgentSessionDetailView`), so an
+    explicit resume can reach exactly the sessions the user can see and
+    nothing older. `None` retention (unlimited tiers) → always visible.
+    """
+    days = get_agent_history_retention_days(user_id)
+    if days is None:
+        return True
+    return session.last_active_at >= timezone.now() - timedelta(days=days)
+
+
 def _get_or_create_session(
     session_id_str: str | None,
     team_id: str,
@@ -194,6 +208,7 @@ def _get_or_create_session(
     thread_context: dict | None = None,
     note_context: dict | None = None,
     force_new: bool = False,
+    allow_expired: bool = False,
 ) -> AgentSession:
     """Return an existing live session or create a fresh one.
 
@@ -203,7 +218,14 @@ def _get_or_create_session(
          conversation via the "Clear" button).
       2. If `session_id_str` points to a valid session that still
          belongs to this user/team and hasn't expired, touch its
-         `last_active_at` and return it.
+         `last_active_at` and return it. With `allow_expired=True`
+         (the client sent `resume: true` because the user is
+         continuing a conversation whose transcript is on screen —
+         e.g. resumed from history on the Genos page), an expired
+         plain session is also accepted, as long as it is still
+         inside the user's history-retention window: resume-ability
+         exactly matches what the history views will show, and a
+         hidden-by-retention session stays un-resumable.
       3. If `thread_context` is set, try to find an existing
          per-thread session for this user. Thread sessions are NOT
          TTL-bounded — a user might come back days later and expect
@@ -230,7 +252,15 @@ def _get_or_create_session(
                 # same rationale as the per-thread / per-note lookups
                 # below.
                 entity_scoped = session.chat_type is not None or session.note_type is not None
-                if entity_scoped or session.last_active_at >= cutoff:
+                # Retention lookup only when the cheap checks fail —
+                # `resume: true` rides on every continuing ask, so the
+                # common case (session still live) must not pay a tier
+                # lookup per turn.
+                if (
+                    entity_scoped
+                    or session.last_active_at >= cutoff
+                    or (allow_expired and _within_history_retention(session, user_id))
+                ):
                     AgentSession.objects.filter(session_id=session.session_id).update(
                         last_active_at=timezone.now()
                     )
@@ -1082,6 +1112,12 @@ class AgentAskView(AuthenticatedAPIView):
         prior_summary: str | None = None
         session_id_str = (data.get("session_id") or "").strip() or None
         force_new_conversation = bool(data.get("new_conversation"))
+        # `resume: true` = the client is continuing a conversation whose
+        # transcript the user can SEE (live page/overlay, or restored from
+        # history). It lets an expired plain session be reused instead of
+        # silently minting a fresh one — bounded by history retention in
+        # `_get_or_create_session`.
+        resume_requested = bool(data.get("resume"))
         max_prior_turns = int(settings.SEARCH_ENGINE.get("SESSION_MAX_PRIOR_TURNS", 3))
         rolling_summary = bool(settings.SEARCH_ENGINE.get("RAG_SESSION_ROLLING_SUMMARY", False))
         load_cap = _ROLLING_SUMMARY_LOAD_CAP if rolling_summary else max_prior_turns
@@ -1153,6 +1189,7 @@ class AgentAskView(AuthenticatedAPIView):
                 thread_context=thread_ctx_parsed,
                 note_context=note_ctx_parsed,
                 force_new=force_new_conversation,
+                allow_expired=resume_requested,
             )
             prior_turns_all = _load_prior_turns(session, load_cap)
             from origin.search_engine.agent.multi_turn import build_prior_context  # noqa: PLC0415
