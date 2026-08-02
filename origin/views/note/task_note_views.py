@@ -26,6 +26,7 @@ from origin.views.utils.note_version import (
 )
 from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.utils.scope_guards import can_access_task
 from origin.views.utils.upload_limits import check_upload_size
 
 NOTE_TYPE = 2  # Task Notes
@@ -284,6 +285,11 @@ class TaskNoteMasterView(AuthenticatedAPIView):
 
         if res := validate_request_data(data):
             return res
+        # Every scope value here came from the query string. Task notes
+        # are readable by whoever can read the task, so reuse that rule
+        # rather than inventing a second one.
+        if not can_access_task(data["task_id"], request.user.id):
+            return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
 
         task_notes = (
             TaskNoteMaster.objects.filter(
