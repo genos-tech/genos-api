@@ -41,7 +41,13 @@ from django.utils import timezone
 log = logging.getLogger(__name__)
 
 _BALANCE_CACHE_SECONDS = 60
-_BALANCE_CACHE_PREFIX = "ai_credit_balance:"
+# v2: the cached value changed from an int to a (monthly, purchased)
+# pair. Reusing the prefix would let a warm cache from the previous
+# release feed an int into a tuple unpack — which raises inside the broad
+# `except` below and returns None, and None means UNLIMITED. Every user
+# with a warm key would run uncapped until their entry aged out. A new
+# prefix costs one cold read instead.
+_BALANCE_CACHE_PREFIX = "ai_credit_balance2:"
 
 
 def period_for(dt: datetime | None = None) -> str:
@@ -232,31 +238,20 @@ def balance_breakdown(user_id: str, plan: str, *, period: str | None = None) -> 
 
         rows = AiCreditEntry.objects.filter(user_id=str(user_id))
 
-        # One pass per quantity, each covered by the (user_id, period)
-        # index. Charges are stored NEGATIVE, so negate to get a spend.
-        monthly_granted = _sum(
-            rows.filter(
-                entry_type=AiCreditEntry.ENTRY_GRANT, kind=AiCreditEntry.KIND_MONTHLY, period=period
-            )
-        )
-        # Everything that is not a monthly grant or a purchased grant —
-        # promotional and manual grants, reversals — still belongs to
-        # the period it was posted in, and to the monthly side of the
-        # ledger. Folding them in here keeps `total` a true SUM of the
-        # user's rows for the current period, which is what it was
-        # before this function learned about buckets.
-        other_period_credits = _sum(
-            rows.filter(period=period)
-            .exclude(entry_type=AiCreditEntry.ENTRY_CHARGE)
-            .exclude(entry_type=AiCreditEntry.ENTRY_GRANT, kind=AiCreditEntry.KIND_MONTHLY)
-            .exclude(entry_type=AiCreditEntry.ENTRY_GRANT, kind=AiCreditEntry.KIND_PURCHASED)
-        )
-        monthly_allowance = monthly_granted + other_period_credits
-        charges_this_period = -_sum(
-            rows.filter(entry_type=AiCreditEntry.ENTRY_CHARGE, period=period)
-        )
-        monthly_remaining = max(0, monthly_allowance - charges_this_period)
-
+        # The split is on KIND, and everything not purchased is one
+        # pool. That is not a shortcut — it is the only partition that
+        # stays correct as row types are added. Charges carry `kind=""`,
+        # and so do their reversals; monthly, promotional and manual
+        # grants each belong to the month they were posted in.
+        # Enumerating the members instead silently drops whatever is not
+        # on the list: an operator's apology grant would land in neither
+        # bucket and, worse, read as overspend that drains the user's
+        # pack.
+        #
+        # It also puts a REVERSAL of a purchased grant on the purchased
+        # side, where it belongs — `reverse_entry` copies the original's
+        # kind, so refunding a pack posts `reversal`/`purchased`.
+        monthly_remaining = max(0, _pool_delta_milli(rows, period))
         purchased_remaining = _purchased_remaining_milli(rows)
 
         cache.set(cache_key, (monthly_remaining, purchased_remaining), _BALANCE_CACHE_SECONDS)
@@ -270,38 +265,58 @@ def _sum(qs) -> int:
     return int(qs.aggregate(s=Sum("credits_milli"))["s"] or 0)
 
 
-def _purchased_remaining_milli(rows) -> int:
-    """Purchased grants, less what each period overspent its allowance by.
+def _pool_delta_milli(rows, period: str) -> int:
+    """What is left of one period's allowance: its grants minus its charges.
 
-    Walks every period the user has rows in, which is bounded by their
-    account age in months and covered by the `(user_id, period)` index.
-    Returns 0 — never negative — because a purchased bucket that has been
-    fully drained is empty, not owed.
+    Signed on purpose — a negative result is that period's **overspend**,
+    the amount that had to come from somewhere other than the month's
+    allowance.
     """
     from origin.search_engine.models import AiCreditEntry  # noqa: PLC0415
 
-    purchased_granted = _sum(
-        rows.filter(entry_type=AiCreditEntry.ENTRY_GRANT, kind=AiCreditEntry.KIND_PURCHASED)
-    )
-    if purchased_granted <= 0:
+    return _sum(rows.filter(period=period).exclude(kind=AiCreditEntry.KIND_PURCHASED))
+
+
+def _purchased_remaining_milli(rows) -> int:
+    """Purchased credits, less the overspend they have had to cover.
+
+    **Only overspend from the first purchase onward counts**, and that
+    bound is load-bearing rather than tidy. Credits have been running in
+    SHADOW mode — `AI_CREDITS_AUTHORITATIVE` defaults to false, so
+    nothing gates and a free account routinely charges many times its
+    5-credit allowance. Counting all history would consume a customer's
+    first pack to zero the moment they bought it: they pay, and receive
+    nothing. Overspend that happened before they owned any purchased
+    credits was never covered by them and must not be charged to them
+    retroactively.
+
+    `period` is a zero-padded "YYYY-MM", so a lexicographic `>=` is a
+    chronological one.
+
+    Returns 0 rather than a negative: a drained bucket is empty, not owed.
+    """
+    from origin.search_engine.models import AiCreditEntry  # noqa: PLC0415
+
+    purchased = rows.filter(kind=AiCreditEntry.KIND_PURCHASED)
+    purchased_sum = _sum(purchased)
+    if purchased_sum <= 0:
+        # The overwhelmingly common path — nobody has bought anything.
+        # Returning here keeps the grouped query below off the ask hot
+        # path for every user who never will.
         return 0
 
-    per_period: dict[str, dict[str, int]] = {}
+    first_period = purchased.order_by("period").values_list("period", flat=True).first()
+    if not first_period:
+        return 0
+
     grouped = (
-        rows.exclude(entry_type=AiCreditEntry.ENTRY_GRANT, kind=AiCreditEntry.KIND_PURCHASED)
-        .values("period", "entry_type")
+        rows.filter(period__gte=first_period)
+        .exclude(kind=AiCreditEntry.KIND_PURCHASED)
+        .values("period")
         .annotate(s=Sum("credits_milli"))
     )
-    for row in grouped:
-        bucket = per_period.setdefault(row["period"], {"allowance": 0, "charges": 0})
-        amount = int(row["s"] or 0)
-        if row["entry_type"] == AiCreditEntry.ENTRY_CHARGE:
-            bucket["charges"] += -amount
-        else:
-            bucket["allowance"] += amount
-
-    overspend = sum(max(0, b["charges"] - b["allowance"]) for b in per_period.values())
-    return max(0, purchased_granted - overspend)
+    overspend = sum(max(0, -int(row["s"] or 0)) for row in grouped)
+    return max(0, purchased_sum - overspend)
 
 
 def balance_milli(user_id: str, plan: str, *, period: str | None = None) -> int | None:

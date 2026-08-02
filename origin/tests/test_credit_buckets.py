@@ -179,6 +179,70 @@ class ExpiryTests(BucketTestCase):
         self.assertEqual(b.purchased_milli, 70_000, "last month's 30 overspill stayed spent")
 
 
+class HistoryPredatingThePurchaseTests(BucketTestCase):
+    """The bug that would have taken money and given nothing.
+
+    Credits have been running in SHADOW mode, where nothing gates — so
+    accounts routinely charge many times their allowance and the ledger
+    is full of "overspend" that was never anybody's debt. Counting it
+    against a pack bought later consumes that pack the instant it lands.
+    """
+
+    def test_overspend_from_before_the_first_purchase_is_not_charged_to_it(self):
+        last = _last_period()
+        self.grant_monthly(5_000, plan="free", period=last)
+        self.charge(60_000, period=last)  # 55 over, months of shadow usage
+
+        self.grant_purchased(10_000)  # buys a 10-pack today
+
+        b = self.read()
+        self.assertEqual(
+            b.purchased_milli,
+            10_000,
+            "they paid for 10 credits and must receive 10 — the overspend "
+            "predates the pack and was never covered by it",
+        )
+
+    def test_overspend_after_the_purchase_still_drains_it(self):
+        # The bound must not become an amnesty: spending past the
+        # allowance while holding a pack is exactly what the pack is for.
+        self.grant_monthly()
+        self.grant_purchased(10_000)
+        self.charge(75_000)
+        self.assertEqual(self.read().purchased_milli, 5_000)
+
+
+class ReversalTests(BucketTestCase):
+    def test_reversing_a_purchase_reduces_the_purchased_bucket(self):
+        """`reverse_entry` copies the original's kind, so refunding a
+        pack posts `reversal`/`purchased`. Partitioning on entry_type
+        instead of kind put that row on the MONTHLY side, where it ate
+        the allowance the user had not spent."""
+        self.grant_monthly()
+        grant = self.grant_purchased(40_000)
+        credit_ledger.reverse_entry(grant.id, reason="refunded", actor="op")
+
+        b = self.read()
+        self.assertEqual(b.purchased_milli, 0, "the refund came off the pack")
+        self.assertEqual(b.monthly_milli, PRO_MILLI, "and left the allowance alone")
+
+
+class CacheShapeTests(BucketTestCase):
+    def test_a_stale_int_from_the_previous_release_is_not_read_as_unlimited(self):
+        """The cached value used to be an int and is now a pair. Reading
+        the old shape raises inside the fail-open `except`, which returns
+        None — and None means UNLIMITED. That would leave credits
+        unenforced for everyone with a warm key after a deploy, which is
+        why the cache prefix changed rather than the parsing."""
+        self.grant_monthly()
+        stale_key = f"ai_credit_balance:{USER}:{credit_ledger.period_for()}"
+        cache.set(stale_key, 999_999, 60)
+
+        b = credit_ledger.balance_breakdown(USER, "pro")
+        self.assertIsNotNone(b, "a stale entry must not read as unlimited")
+        self.assertEqual(b.monthly_milli, PRO_MILLI, "and must not be believed")
+
+
 class AllowanceCompositionTests(BucketTestCase):
     def test_an_upgrade_delta_is_one_allowance_not_two(self):
         """A mid-month upgrade posts a DELTA grant (`ensure_monthly_grant`),
