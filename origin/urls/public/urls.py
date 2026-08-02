@@ -16,11 +16,13 @@ in kind from breaking the others.
     POST   /api/public/v1/tasks/
     GET    /api/public/v1/tasks/<int:task_id>/
     PATCH  /api/public/v1/tasks/<int:task_id>/
+    POST   /api/public/v1/mcp            (MCP — JSON-RPC, no trailing slash)
     GET    /api/public/v1/openapi.json   (unauthenticated — the spec)
 """
 
 from django.urls import path
 
+from origin.views.public.mcp.views import McpView
 from origin.views.public.openapi import OpenApiSchemaView
 from origin.views.public.v1_views import (
     MeView,
@@ -45,4 +47,9 @@ urlpatterns = [
         TaskDetailView.as_view(),
         name="public_v1_task_detail",
     ),
+    # No trailing slash: this URL is pasted verbatim into MCP client
+    # config, and `openapi.json` above set the precedent that a path
+    # people copy by hand doesn't get one. `APPEND_SLASH` can't rescue a
+    # POST anyway — the redirect would drop the body.
+    path("api/public/v1/mcp", McpView.as_view(), name="public_v1_mcp"),
 ]
