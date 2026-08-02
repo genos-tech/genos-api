@@ -123,7 +123,14 @@ class TestGetTaskAttachmentModes(TestCase):
         # request on the most frequently called task endpoint. Budget:
         # 1 auth-user fetch + 1 joined task row + 1 attachment prefetch +
         # 1 collaborators prefetch (one query regardless of how many
-        # collaborators the task has — still O(1), never N+1).
-        with self.assertNumQueries(4):
+        # collaborators the task has — still O(1), never N+1)
+        # + 1 for the `can_access_task` membership check.
+        #
+        # That fifth query is the price of the endpoint no longer serving
+        # any task in the install to anyone who counts to its id, and it
+        # is a fixed cost, not an N+1. Here it short-circuits on the
+        # reporter match; a caller who is neither assignee nor reporter
+        # pays one or two more for the project-membership lookup.
+        with self.assertNumQueries(5):
             resp = self._get_task("&attachments=meta")
         self.assertEqual(resp.status_code, 200)
