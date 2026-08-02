@@ -19,6 +19,7 @@ from rest_framework.response import Response
 from origin.models.common.api_key_models import SCOPE_READ
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.metered import metered_request
+from origin.search_engine.quota import get_mcp_enabled
 from origin.views.public.mcp import protocol, tools
 from origin.views.public.mcp.protocol import JsonRpcError
 from origin.views.public.permissions import HasApiKey, PublicApiThrottle
@@ -200,6 +201,26 @@ class McpView(PublicApiView):
                 protocol.INVALID_PARAMS,
                 "Team not found.",
                 http_status=404,
+            )
+
+        # MCP is a Pro-and-up capability. Checked HERE because this is
+        # the one place both `tools/list` and `tools/call` pass through,
+        # so neither can be reached without it — a gate on the two call
+        # sites is a gate someone forgets when a third arrives.
+        #
+        # `initialize`, `ping` and `server/discover` deliberately stay
+        # open: they carry no workspace data, and answering them lets the
+        # client complete its handshake and SHOW this message instead of
+        # reporting a bare connection failure.
+        if not get_mcp_enabled(user_id):
+            raise JsonRpcError(
+                protocol.INVALID_REQUEST,
+                "MCP is available on the Pro plan and above. Your current plan "
+                "doesn't include it — upgrade in Genos under "
+                "Settings → Plan & Usage, and this connection will start "
+                "working without any change here. The REST API at "
+                "/api/public/v1/ is available on every plan.",
+                http_status=403,
             )
 
         scope = getattr(request.auth, "scope", SCOPE_READ)
