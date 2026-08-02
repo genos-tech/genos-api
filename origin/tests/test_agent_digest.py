@@ -313,6 +313,24 @@ class DigestEditorialContentTests(BaseAPITestCase):
             item = InboxItems.objects.get(item_type=digest_mod.ITEM_TYPE_DIGEST)
             self.assertEqual(item.item_body["title"], "Stuck on review", raw)
 
+    def test_a_headline_is_forced_to_plain_text(self):
+        # Both consumers render the headline LITERALLY — a bare
+        # <Typography> in the bubble and the web-push title — and unlike
+        # the body it never passes through rewrite_citation_md. "no
+        # markdown, no links" in the brief is an instruction, not a
+        # guarantee, so the markdown has to be taken out here.
+        self._tick(
+            at_hour=8,
+            run_agent=_fake_run_agent(
+                "TITLE: **[KDS-439](task:15)** is stuck and [task:99] slipped\n\nBody."
+            ),
+        )
+        item = InboxItems.objects.get(item_type=digest_mod.ITEM_TYPE_DIGEST)
+        title = item.item_body["title"]
+        self.assertEqual(title, "KDS-439 is stuck and slipped")
+        for junk in ("[", "]", "(", ")", "*", "task:"):
+            self.assertNotIn(junk, title)
+
     def test_an_overlong_headline_is_truncated(self):
         self._tick(at_hour=8, run_agent=_fake_run_agent(f"TITLE: {'x' * 200}\n\nBody."))
         item = InboxItems.objects.get(item_type=digest_mod.ITEM_TYPE_DIGEST)

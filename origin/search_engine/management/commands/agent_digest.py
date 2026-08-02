@@ -144,6 +144,18 @@ DEFAULT_TITLE = "Your Genos digest"
 _TITLE_RE = re.compile(r"^\s*(?:#{1,6}\s*)?\**\s*TITLE\s*[:：]\s*(?P<title>.+?)\s*\**\s*$", re.I)
 _TITLE_MAX = 90
 
+# The headline is PLAIN TEXT, and it has to be made so rather than asked
+# for. Both consumers render it literally — the Inbox bubble prints it
+# in a bare <Typography>, and it is the web-push title — and unlike the
+# body it never passes through `rewrite_citation_md`, so there is no
+# downstream net. "no markdown, no links" in the brief is an
+# instruction, and the entire point of this change is to let the writer
+# take more liberties with how it writes; a headline reading
+# `[KDS-439](task:15) is stuck` is exactly the raw-token bug the digest
+# body already had reported against it.
+_MD_LINK_RE = re.compile(r"\[([^\]\n]*)\]\([^)\n]*\)")  # [label](target) -> label
+_BARE_TOKEN_RE = re.compile(r"\[(?:chat|task|note|project|todo|milestone):[^\]\n]*\]", re.I)
+
 
 def _digest_disabled_tools() -> set[str]:
     writes = {t.name for t in REGISTRY.values() if t.requires_approval}
@@ -175,10 +187,18 @@ def _split_title(text: str) -> tuple[str, str]:
     match = _TITLE_RE.match(lines[0])
     if match is None:
         return "", text
-    title = match.group("title").strip().strip("*_`\"'")
+    return _plain_headline(match.group("title")), "\n".join(lines[1:]).strip()
+
+
+def _plain_headline(raw: str) -> str:
+    """Force a headline down to plain text, then cap its length."""
+    title = _MD_LINK_RE.sub(r"\1", raw)  # keep the label, drop the target
+    title = _BARE_TOKEN_RE.sub("", title)  # bare citation tokens have no label
+    title = re.sub(r"[*_`#]+", "", title)
+    title = re.sub(r"\s+", " ", title).strip().strip("\"'").strip()
     if len(title) > _TITLE_MAX:
         title = title[: _TITLE_MAX - 1].rstrip() + "…"
-    return title, "\n".join(lines[1:]).strip()
+    return title
 
 
 def _recent_editions(user_id: str, now) -> list[str]:
