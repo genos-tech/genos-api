@@ -453,3 +453,52 @@ class ManagementEndpointInputTests(BaseAPITestCase):
             self._assert_no_500(
                 self.client.delete(f"/api/v2/webhooks/{value}/"), f"DELETE {value!r}"
             )
+
+
+class SpecConstraintsMatchBehaviourTests(ContractTestBase):
+    """A documented constraint must describe what the server does.
+
+    `maximum` in OpenAPI means "reject above this". A generated client
+    enforces it locally — so documenting `maximum: 100` on a parameter
+    the server CLAMPS makes that client refuse to send a request the
+    server would have answered. The spec is the thing people generate
+    from, so a constraint that is merely tidy is a bug in it.
+    """
+
+    def _param(self, name):
+        for p in OPENAPI["paths"]["/api/public/v1/tasks/"]["get"]["parameters"]:
+            if p["name"] == name:
+                return p
+        raise AssertionError(f"{name} is not documented")
+
+    def test_limit_is_clamped_so_it_declares_no_maximum(self):
+        self.assertNotIn(
+            "maximum",
+            self._param("limit")["schema"],
+            "limit is clamped server-side; a `maximum` would make generated "
+            "clients refuse a request the server would answer",
+        )
+        res = self.client.get(f"/api/public/v1/tasks/?{self.team_q}&limit=99999")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["limit"], 100)
+
+    def test_limit_below_one_is_clamped_not_rejected(self):
+        res = self.client.get(f"/api/public/v1/tasks/?{self.team_q}&limit=-5")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["limit"], 1)
+
+    def test_offset_declares_the_maximum_it_actually_enforces(self):
+        schema = self._param("offset")["schema"]
+        self.assertIn("maximum", schema)
+        over = schema["maximum"] + 1
+        res = self.client.get(f"/api/public/v1/tasks/?{self.team_q}&offset={over}")
+        self.assertEqual(
+            res.status_code,
+            400,
+            "the spec declares a maximum, so the server must reject above it",
+        )
+
+    def test_the_documented_offset_maximum_is_honoured_at_the_boundary(self):
+        schema = self._param("offset")["schema"]
+        res = self.client.get(f"/api/public/v1/tasks/?{self.team_q}&offset={schema['maximum']}")
+        self.assertEqual(res.status_code, 200)

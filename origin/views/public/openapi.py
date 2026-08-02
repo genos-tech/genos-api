@@ -262,13 +262,36 @@ OPENAPI = {
                     {
                         "name": "limit",
                         "in": "query",
-                        "schema": {"type": "integer", "default": 50, "maximum": 100},
-                        "description": "Capped server-side; a larger value is clamped, not rejected.",
+                        # NO `maximum`. In OpenAPI that means "reject
+                        # above this", and the server CLAMPS instead — a
+                        # generated client would refuse to send limit=200
+                        # locally for a request the server would have
+                        # happily answered with 100. The constraint has to
+                        # describe what the server does, not what it
+                        # would be tidy for it to do.
+                        "schema": {"type": "integer", "default": 50, "minimum": 1},
+                        "description": (
+                            "Default 50. Values above 100 are clamped to 100 and values "
+                            "below 1 are clamped to 1 — never rejected."
+                        ),
                     },
                     {
                         "name": "offset",
                         "in": "query",
-                        "schema": {"type": "integer", "default": 0},
+                        # `maximum` IS right here: the server returns 400
+                        # above this, so a client refusing early agrees
+                        # with it.
+                        "schema": {
+                            "type": "integer",
+                            "default": 0,
+                            "minimum": 0,
+                            "maximum": 1000000,
+                        },
+                        "description": (
+                            "Default 0. Above 1,000,000 the request is refused with 400 "
+                            "rather than answered with an empty page — at that size it is "
+                            "almost always a paging-loop bug."
+                        ),
                     },
                 ],
                 "responses": {
