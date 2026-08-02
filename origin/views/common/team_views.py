@@ -41,6 +41,7 @@ from origin.views.utils.incremental import (
     check_since,
 )
 from origin.views.utils.scope_guards import (
+    guest_visible_user_ids,
     is_project_member,
     is_team_member,
     require_team_member_or_response,
@@ -788,6 +789,34 @@ class GetMyTeamsView(AuthenticatedAPIView):
             )
         )
 
+        # A guest has no TeamMembers row anywhere — that absence is the
+        # model — so the query above returns nothing and the client has
+        # no team to boot into. Add the SHELL of each team they hold a
+        # project in. They get the team's id and name because the UI
+        # needs somewhere to render the project; they do not get its
+        # roster (see the member filter below).
+        guest_team_ids = set()
+        for row in (
+            ProjectMembers.objects.filter(attendee=user_id, team__is_deleted=False)
+            .exclude(
+                team_id__in=TeamMembers.objects.filter(
+                    attendee=user_id, is_deleted=False
+                ).values_list("team_id", flat=True)
+            )
+            .values_list(
+                "team__team_id",
+                "team__team_name",
+                "team__team_email",
+                "team__owner",
+                "team__profile_image_file_name",
+                "team__ts_created_at",
+            )
+            .distinct()
+        ):
+            if row[0] not in guest_team_ids:
+                guest_team_ids.add(row[0])
+                raw_my_teams.append(row)
+
         team_ids = [row[0] for row in raw_my_teams]
         member_rows = (
             TeamMembers.objects.filter(team_id__in=team_ids, attendee__is_system_user=False)
@@ -834,6 +863,16 @@ class GetMyTeamsView(AuthenticatedAPIView):
         members_by_team = defaultdict(list)
         for member in member_rows:
             members_by_team[member["teamId"]].append(member)
+
+        # In a team where the caller is a GUEST, the roster shrinks to
+        # the people they actually share a project with. Applied after
+        # grouping so a user who is a full member of team A and a guest
+        # in team B gets the whole roster for A and the narrow one for B.
+        for gid in guest_team_ids:
+            visible = guest_visible_user_ids(gid, user_id)
+            members_by_team[gid] = [
+                m for m in members_by_team.get(gid, []) if str(m["userId"]) in visible
+            ]
 
         my_teams = [
             {
@@ -893,14 +932,22 @@ class GetTeamMembersView(AuthenticatedAPIView):
                 {"error": "team_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if res := require_team_member_or_response(request.user, team_id):
-            return res
+        # A guest is not a team member and never will be, so the plain
+        # guard would 404 them out of their own project's people picker.
+        # They get the roster narrowed to the projects they're in.
+        guest_visible = None
+        if not is_team_member(team_id, request.user.id):
+            guest_visible = guest_visible_user_ids(team_id, request.user.id)
+            if not guest_visible:
+                return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 
         # Snapshot server time BEFORE the query. See utils/incremental.py.
         server_time = capture_server_time()
         since, force_full = check_since(request)
 
         qs = TeamMembers.objects.filter(Q(team_id=team_id, attendee__is_system_user=False))
+        if guest_visible is not None:
+            qs = qs.filter(attendee_id__in=guest_visible)
         if since is None:
             # Full load: hide soft-deleted memberships and users.
             qs = qs.filter(is_deleted=False, attendee__is_deleted=False)

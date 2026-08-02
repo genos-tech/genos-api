@@ -120,6 +120,41 @@ def guest_project_ids(team_id, user_id) -> list:
     return member_project_ids(user_id, team_id=team_id)
 
 
+def guest_visible_user_ids(team_id, user_id) -> set:
+    """Everyone a guest may see in this team: the members of the projects
+    they were invited to, plus themselves.
+
+    This is the answer to "who exists?" for an external collaborator. It
+    is deliberately a *positive* list rather than a filter over the team
+    roster, because the roster is the thing being withheld — a guest who
+    can enumerate the team is the exact failure §4.1 of the readiness
+    plan warns about.
+
+    Returns an empty set for anyone who is not a guest, so a caller that
+    forgets to branch fails closed rather than open.
+    """
+    project_ids = guest_project_ids(team_id, user_id)
+    if not project_ids:
+        return set()
+    visible = {
+        str(uid)
+        for uid in ProjectMembers.objects.filter(project_id__in=project_ids).values_list(
+            "attendee_id", flat=True
+        )
+        if uid
+    }
+    # Project owners need not hold a ProjectMembers row.
+    visible |= {
+        str(uid)
+        for uid in ProjectMaster.objects.filter(project_id__in=project_ids).values_list(
+            "owner_id", flat=True
+        )
+        if uid
+    }
+    visible.add(str(user_id))
+    return visible
+
+
 def can_access_task(task_id, user_id) -> bool:
     """May `user_id` see (and therefore edit) this task?
 

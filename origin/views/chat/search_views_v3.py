@@ -23,6 +23,7 @@ from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMembe
 from origin.models.common.team_models import TeamMembers
 from origin.views.chat.channel_views import _verify_team_member
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.scope_guards import guest_visible_user_ids
 
 
 class SearchTeamMembersAndGroupsView(AuthenticatedAPIView):
@@ -35,9 +36,17 @@ class SearchTeamMembersAndGroupsView(AuthenticatedAPIView):
                 {"error": "team_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        # 404 (not 403) if the requester isn't a member of this team —
-        # don't leak team existence. Raises Http404 on miss.
-        _verify_team_member(request.user, team_id)
+        # A guest holds no TeamMembers row, so `_verify_team_member`
+        # would 404 them out of the @-mention picker inside their own
+        # project. They pass, with the people list narrowed to the
+        # projects they belong to — this endpoint is the mention source,
+        # so an unnarrowed list here would hand a guest the whole team
+        # directory by autocomplete.
+        guest_visible = guest_visible_user_ids(team_id, request.user.id)
+        if not guest_visible:
+            # 404 (not 403) if the requester isn't a member of this team —
+            # don't leak team existence. Raises Http404 on miss.
+            _verify_team_member(request.user, team_id)
 
         results = []
 
@@ -49,6 +58,8 @@ class SearchTeamMembersAndGroupsView(AuthenticatedAPIView):
             attendee__is_system_user=False,
             is_deleted=False,
         ).select_related("attendee")
+        if guest_visible:
+            members = members.filter(attendee_id__in=guest_visible)
         for tm in members:
             u = tm.attendee
             results.append(
@@ -71,11 +82,22 @@ class SearchTeamMembersAndGroupsView(AuthenticatedAPIView):
         # Groups: the team's GM channels, with the requester's join state
         # so the FE can show the join-request modal for private GMs the
         # user isn't in yet.
-        gm_channels = list(
-            Channel.objects.filter(
-                team_id=team_id,
-                kind=ChannelKind.GM,
-                is_deleted=False,
+        #
+        # Guests get NONE of this. The list is deliberately team-wide and
+        # includes private channels (that is what makes the join-request
+        # modal possible), so it is the single richest disclosure on this
+        # endpoint — and group messaging is a team facility an external
+        # collaborator has no business enumerating. Their project's PM
+        # channel reaches them through the normal channel list instead.
+        gm_channels = (
+            []
+            if guest_visible
+            else list(
+                Channel.objects.filter(
+                    team_id=team_id,
+                    kind=ChannelKind.GM,
+                    is_deleted=False,
+                )
             )
         )
         joined_channel_ids = set(
