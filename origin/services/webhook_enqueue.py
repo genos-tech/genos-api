@@ -132,22 +132,40 @@ def _pending_for_transaction() -> dict:
     Collapsing per transaction is the fix, and the transaction is the
     right boundary because it is exactly what "one user action" means
     here. The registry hangs off the DB connection so it is scoped
-    correctly under concurrency and test isolation, and is cleared when
-    it flushes.
+    correctly under concurrency and test isolation.
+
+    **The rollback case is why this is not just a dict.** Django discards
+    `on_commit` callbacks when a transaction rolls back, so the doomed
+    task is never sent by its OWN callback — but a stale entry left on
+    the connection would be picked up by the NEXT transaction's flush,
+    announcing a task that never existed. An empty `run_on_commit` means
+    the previous batch either ran (and cleared itself) or was discarded;
+    either way anything still here is stale.
     """
     conn = transaction.get_connection()
     registry = getattr(conn, "_genos_webhook_pending", None)
     if registry is None:
         registry = {}
         conn._genos_webhook_pending = registry
+    elif registry and not conn.run_on_commit:
+        registry.clear()
     return registry
 
 
-def _flush(registry: dict) -> None:
-    pending = dict(registry)
-    registry.clear()
-    for team_id, event, payload in pending.values():
-        enqueue_event(team_id, event, payload)
+def _flush_one(registry: dict, task_pk) -> None:
+    """Send exactly the entry this callback owns.
+
+    Per task rather than draining the whole registry: a callback must
+    never be able to deliver an entry belonging to a transaction that
+    rolled back, and "flush everything pending" is precisely how that
+    happens under nested atomics, where an inner rollback leaves outer
+    callbacks queued.
+    """
+    entry = registry.pop(task_pk, None)
+    if entry is None:
+        return
+    team_id, event, payload = entry
+    enqueue_event(team_id, event, payload)
 
 
 def schedule_task_event(task, *, created: bool, status_changed_to=None) -> None:
@@ -183,8 +201,10 @@ def schedule_task_event(task, *, created: bool, status_changed_to=None) -> None:
         if _EVENT_PRECEDENCE.get(keep, 0) >= _EVENT_PRECEDENCE.get(event, 0):
             event = keep
     else:
-        # Only the FIRST event for this transaction registers a flush,
-        # so the callback runs once no matter how many saves follow.
-        transaction.on_commit(lambda: _flush(registry))
+        # Only the FIRST event for this TASK registers a callback, so it
+        # runs once no matter how many saves follow — and it owns only
+        # this task, so a rolled-back sibling can never ride along.
+        task_pk = task.pk
+        transaction.on_commit(lambda: _flush_one(registry, task_pk))
 
     registry[task.pk] = (team_id, event, task_payload(task))

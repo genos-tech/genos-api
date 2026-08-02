@@ -175,3 +175,43 @@ class TestEnqueueIsBestEffort(WebhookEmitBase):
                 team=self.team, project=self.project, title="Uncommitted", status="Open"
             )
             self.assertEqual(WebhookDelivery.objects.count(), 0)
+
+
+class TestRollbackDoesNotLeak(WebhookEmitBase):
+    """A task whose transaction rolled back must never be delivered.
+
+    `on_commit` callbacks are discarded by Django on rollback, so the
+    delivery for the doomed task is not sent by its own callback. The
+    risk is the shared per-transaction registry: if a stale entry
+    survives on the connection, the NEXT transaction's flush would pick
+    it up and announce a task that never existed.
+    """
+
+    def test_a_rolled_back_task_is_never_announced(self):
+        from django.db import transaction as db_transaction
+
+        self._endpoint([EVENT_TASK_CREATED, EVENT_TASK_UPDATED])
+
+        with self.assertRaises(RuntimeError):
+            with db_transaction.atomic():
+                TaskMaster.objects.create(
+                    team=self.team,
+                    project=self.project,
+                    title="Doomed",
+                    status="Open",
+                    reporter=self.user,
+                )
+                raise RuntimeError("rollback")
+
+        # A later, unrelated write in a fresh transaction.
+        with self.captureOnCommitCallbacks(execute=True):
+            TaskMaster.objects.create(
+                team=self.team,
+                project=self.project,
+                title="Survivor",
+                status="Open",
+                reporter=self.user,
+            )
+
+        titles = {d.payload.get("title") for d in WebhookDelivery.objects.all()}
+        self.assertEqual(titles, {"Survivor"})
