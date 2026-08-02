@@ -22,6 +22,7 @@ from django.db import transaction
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.services.task_comment_fanout import fan_out_task_comment
 
 _PARA_PROPS = {
     "textColor": "default",
@@ -101,6 +102,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             )
     except Exception as e:  # noqa: BLE001
         raise ToolError(f"Failed to add comment: {e}")
+
+    # Same post-write fan-out the REST endpoint runs: mirror into the v3
+    # PM thread, raise mention + participant activities, push to anyone
+    # away. Without it the row existed but told nobody — the comment was
+    # missing from the thread entirely, and the assignee found out only
+    # by opening the task. Best-effort inside; the comment is already
+    # committed and must not be undone by an observer failing.
+    fan_out_task_comment(comment)
 
     return {
         "task_id": task_id,

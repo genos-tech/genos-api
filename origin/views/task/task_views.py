@@ -16,8 +16,9 @@ from origin.models.project.prj_models import *
 from origin.models.task.task_models import *
 from origin.search_engine.purge import purge_task, purge_task_comment
 from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
+from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.serializers.task.task_serializers import *
-from origin.services import unified_writer, webhook_enqueue
+from origin.services import unified_writer
 from origin.services.custom_fields import sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.task_cache import (
@@ -27,6 +28,7 @@ from origin.services.task_cache import (
     set_cached_project_tasks,
 )
 from origin.services.task_collaborators import sync_task_collaborators
+from origin.services.task_comment_fanout import fan_out_task_comment
 from origin.services.thread_link import find_thread_link_conflict
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
@@ -1877,138 +1879,22 @@ class TaskCommentsView(AuthenticatedAPIView):
         serializer = TaskCommentsSerializer(data=data)
         if serializer.is_valid():
             comment_obj = serializer.save()
-            # Outbound webhook. Before the mirror below, so a mirror
-            # failure cannot cost the integrator the event — and reading
-            # the task fresh rather than trusting `request.data`, since
-            # the payload names the project the subscription filters on.
-            try:
-                webhook_comment_task = (
-                    TaskMaster.objects.filter(task_id=request.data["task_id"])
-                    .only("task_id", "team_id", "project_id", "project_task_number")
-                    .select_related("project")
-                    .first()
-                )
-                if webhook_comment_task is not None:
-                    webhook_enqueue.schedule_comment_event(comment_obj, webhook_comment_task)
-            except Exception:  # noqa: BLE001 — an observer must not break the write
-                logger.warning("webhook comment enqueue failed", exc_info=True)
-            # Track B dual-write: mirror the comment as a v3 thread-reply
-            # Message under the PM task header. Lets PM task threads
-            # render comments via the unified message path instead of a
-            # parallel comments-only endpoint. Best-effort — failure
-            # here doesn't roll back the legacy save (the drift cron
-            # catches any divergence).
-            # `bypass_flag=True`: task comments live in the legacy
-            # `TaskComments` table; the v3 PM task thread renders them
-            # ONLY through this mirror. With the legacy chat tables
-            # dropped, v3 is the sole chat backend, so the mirror must run
-            # unconditionally — not gated on the (now-vestigial)
-            # `UNIFIED_MESSAGING_DUAL_WRITE` flag, which would otherwise
-            # leave live comments invisible in the PM thread and produce
-            # no comment-mention activity.
-            mirror = unified_writer.write_task_comment_as_thread_reply(
-                task_id=int(request.data["task_id"]),
-                comment_id=data["comment_id"],
-                sender_id=request.data["sender_id"],
-                body=request.data["comment_body"],
-                bypass_flag=True,
+            # Webhook, v3 thread mirror, mention + participant activities
+            # and web push all live in `task_comment_fanout`, shared with
+            # the agent's `add_comment` tool so both produce the same
+            # notifications. Every stage in there is best-effort — a
+            # saved comment is never undone by an observer failing.
+            #
+            # Activities are returned under `_v3_activities` so the Flask
+            # task_comment handler can broadcast `activity.created`
+            # (mirrors the message-send proxy contract).
+            fanout = fan_out_task_comment(comment_obj)
+            activities_wire = (
+                ActivitySerializer(fanout.activities, many=True).data
+                if fanout.activities
+                else []
             )
-            # Create v3 mention activities on the mirrored comment Message
-            # (the legacy `chat/activity/` persist these used to hit was
-            # deleted). Channel-scoped — the mirror lives in the PM
-            # channel — so they ride the normal activity feed + WS path.
-            # `skip_actor=False`: tagging yourself in a comment still
-            # pings (consistent with task-body / note mentions).
-            # Returned under `_v3_activities` so the Flask task_comment
-            # handler can broadcast `activity.created` (mirrors the
-            # message-send proxy contract).
-            activities_wire = []
-            # Init here, not inside the try below — the mirror block is
-            # best-effort and may be skipped entirely.
-            comment_mentioned_ids: list = []
-            if mirror is not None and mirror.sender is not None:
-                # Best-effort, mirroring the dual-write philosophy above: a
-                # failure building comment activities must NOT 500 the
-                # already-saved comment. On error we just skip the live
-                # broadcast — the activity feed reconciles on next load.
-                try:
-                    # TaskComments / TaskMaster come from the module-level
-                    # `import *` (line ~10) — do NOT re-import them locally or
-                    # they become function-locals and the earlier
-                    # `TaskComments.objects...` use above raises UnboundLocalError.
-                    from origin.serializers.chat.unified_serializers import ActivitySerializer
-                    from origin.services import mention_extractor, v3_activity
-
-                    sender = mirror.sender
-                    comment_body = request.data["comment_body"] or []
-                    mentioned_ids = set(mention_extractor.extract_mentioned_user_ids(comment_body))
-                    group_ids = mention_extractor.extract_mention_group_ids(comment_body)
-                    if group_ids:
-                        mentioned_ids |= resolve_group_members(group_ids)
-                    comment_mentioned_ids = list(mentioned_ids)  # noqa: F841 (read below)
-                    acts = v3_activity.create_mention_activities(
-                        message=mirror,
-                        mentioned_user_ids=comment_mentioned_ids,
-                        actor=sender,
-                        skip_actor=False,
-                    )
-
-                    # Plain-comment fan-out: a comment with no @mention
-                    # otherwise pings nobody. Notify the task's assignee +
-                    # everyone who has previously commented (thread
-                    # participants), minus the commenter (skipped inside the
-                    # helper) and anyone already @-mentioned above (they get
-                    # the more-specific MENTION activity).
-                    task_id_int = int(request.data["task_id"])
-                    mentioned_set = {str(u) for u in (mentioned_ids or []) if u}
-                    participant_ids = set()
-                    assignee_id = (
-                        TaskMaster.objects.filter(task_id=task_id_int)
-                        .values_list("assignee_id", flat=True)
-                        .first()
-                    )
-                    if assignee_id is not None:
-                        participant_ids.add(str(assignee_id))
-                    # Collaborators are notified on task activity exactly
-                    # like the assignee — add them to the participant set.
-                    for collab_id in (
-                        TaskMaster.objects.filter(task_id=task_id_int)
-                        .values_list("collaborators__id", flat=True)
-                        .distinct()
-                    ):
-                        if collab_id is not None:
-                            participant_ids.add(str(collab_id))
-                    for cid in (
-                        TaskComments.objects.filter(task=task_id_int, is_deleted=False)
-                        .values_list("sender_id", flat=True)
-                        .distinct()
-                    ):
-                        if cid is not None:
-                            participant_ids.add(str(cid))
-                    # Excluding @-mentioned users AFTER adding collaborators
-                    # so a mentioned collaborator gets the MENTION activity
-                    # (more specific), never a duplicate THREAD_REPLY.
-                    participant_ids -= mentioned_set
-                    comment_acts = v3_activity.create_comment_participant_activities(
-                        message=mirror,
-                        recipient_ids=participant_ids,
-                        actor=sender,
-                    )
-
-                    # Web Push for away recipients: @mention rows route to
-                    # the mention category, the plain participant fan-out
-                    # (THREAD_REPLY on the mirror, which carries
-                    # metadata.taskCommentId) to the task_comments category.
-                    from origin.services.webpush_dispatch import schedule_push_for_activities
-
-                    schedule_push_for_activities(list(acts) + list(comment_acts))
-
-                    activities_wire = ActivitySerializer(
-                        list(acts) + list(comment_acts), many=True
-                    ).data
-                except Exception as exc:  # never break the saved comment
-                    logger.warning("task-comment activity fan-out failed: %s", exc)
-                    activities_wire = []
+            comment_mentioned_ids = fanout.mentioned_user_ids
             # A task comment IS delivered to a non-project-member, and
             # the task is even readable — but `TaskMetaView` filters by
             # ProjectMembers, so it never appears in their lists and is
