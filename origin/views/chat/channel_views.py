@@ -216,11 +216,15 @@ class ChannelListView(AuthenticatedAPIView):
     Each row carries a denormalized `latestMessage` and `unreadCount` so
     the chat-list sidebar renders in a single round-trip.
 
-    Optional `?team_id=` narrows to one team. The chat sidebar wants
-    every team at once and so passes nothing; callers that are choosing
-    channels *within* a team — the webhook scope picker — need the
-    narrowing, because the serialized row carries no team of its own and
-    a user in two teams would otherwise be offered both.
+    `?team_id=` narrows to one team, and the chat sidebar now sends it.
+
+    It used to pass nothing, on the reasoning that the sidebar "wants
+    every team at once". That was wrong as a product decision: a channel
+    belongs to exactly one team (`Channel.team` is non-null, DMs
+    included), so switching teams left the previous team's chats on
+    screen. Only the webhook scope picker relied on the narrowing before;
+    now both callers do, and unnarrowed is the compatibility path rather
+    than the intended one.
     """
 
     def get(self, request):
@@ -231,6 +235,16 @@ class ChannelListView(AuthenticatedAPIView):
         qs = _annotate_unread(_user_channels_qs(user), user)
         team_id = request.GET.get("team_id")
         if team_id:
+            # Parse before filtering. `Channel.team` points at a UUID
+            # column, so `filter(team_id="abc")` raises ValidationError
+            # out of the ORM — a 500 on request input, and reachable by
+            # anyone now that the sidebar sends this parameter on every
+            # load. An unparseable id names no team, which is the same
+            # answer as a team you are not in.
+            try:
+                team_id = str(uuid.UUID(str(team_id)))
+            except (ValueError, AttributeError, TypeError):
+                return Response({"channels": []})
             # Narrowing only — `_user_channels_qs` has already restricted
             # this to the caller's own memberships, so naming a team you
             # are not in yields nothing rather than anything new.
