@@ -45,7 +45,7 @@ from origin.search_engine.agent_views import (
     _credits_block,
 )
 from origin.search_engine.llm import spend
-from origin.search_engine.models import AiRequestCost
+from origin.search_engine.models import AiCreditEntry, AiRequestCost
 from origin.tests.test_base import BaseAPITestCase
 
 
@@ -56,20 +56,14 @@ def _se(**overrides):
 
 
 AUTHORITATIVE = override_settings(
-    SEARCH_ENGINE=_se(
-        AI_COST_METER=True, AI_CREDITS_SHADOW=True, AI_CREDITS_AUTHORITATIVE=True
-    )
+    SEARCH_ENGINE=_se(AI_COST_METER=True, AI_CREDITS_SHADOW=True, AI_CREDITS_AUTHORITATIVE=True)
 )
 SHADOW_ONLY = override_settings(
-    SEARCH_ENGINE=_se(
-        AI_COST_METER=True, AI_CREDITS_SHADOW=True, AI_CREDITS_AUTHORITATIVE=False
-    )
+    SEARCH_ENGINE=_se(AI_COST_METER=True, AI_CREDITS_SHADOW=True, AI_CREDITS_AUTHORITATIVE=False)
 )
 # The dangerous configuration: authoritative WITHOUT the ledger.
 NO_LEDGER = override_settings(
-    SEARCH_ENGINE=_se(
-        AI_COST_METER=True, AI_CREDITS_SHADOW=False, AI_CREDITS_AUTHORITATIVE=True
-    )
+    SEARCH_ENGINE=_se(AI_COST_METER=True, AI_CREDITS_SHADOW=False, AI_CREDITS_AUTHORITATIVE=True)
 )
 
 
@@ -230,9 +224,7 @@ class CreditBudgetTests(_CacheClearing):
             self.assertFalse(spend.credit_budget_exhausted())
 
     def test_the_check_fires_only_once_spend_reaches_the_budget(self):
-        with spend.spend_context(
-            surface="ask", user_id=self.UID, credit_budget_usd_micro=300_000
-        ):
+        with spend.spend_context(surface="ask", user_id=self.UID, credit_budget_usd_micro=300_000):
             ctx = spend.current_context()
             self.assertFalse(spend.credit_budget_exhausted())
             ctx.cost_usd_micro = 299_999
@@ -311,9 +303,7 @@ class MidRunTerminationTests(_CacheClearing):
         """`credits.py` restates these as literals so it stays importable
         without Django configured."""
         self.assertEqual(credits.RESULT_SUCCESS, AiRequestCost.RESULT_SUCCESS)
-        self.assertEqual(
-            credits.RESULT_CREDITS_EXHAUSTED, AiRequestCost.RESULT_CREDITS_EXHAUSTED
-        )
+        self.assertEqual(credits.RESULT_CREDITS_EXHAUSTED, AiRequestCost.RESULT_CREDITS_EXHAUSTED)
         self.assertEqual(
             set(AiRequestCost.RESULTS_WORK_PERFORMED),
             {AiRequestCost.RESULT_SUCCESS, AiRequestCost.RESULT_CREDITS_EXHAUSTED},
@@ -393,6 +383,54 @@ class CreditsBlockTests(_CacheClearing):
         self.assertEqual(block["used"], 1.25)
 
     @AUTHORITATIVE
+    def test_purchased_credits_ride_alongside_rather_than_inside_the_balance(self):
+        """A pack must not be folded into `used`/`limit`. The plan still
+        advertises 70; the extra 100 is a separate possession, and the
+        client shows them under different reset copy because only one of
+        them resets."""
+        credit_ledger.ensure_monthly_grant(self.UID, "pro")
+        AiCreditEntry.objects.create(
+            user_id=self.UID,
+            entry_type=AiCreditEntry.ENTRY_GRANT,
+            kind=AiCreditEntry.KIND_PURCHASED,
+            credits_milli=100_000,
+            period=credit_ledger.period_for(),
+            plan="pro",
+            actor="stripe",
+        )
+        cache.clear()
+        block = _credits_block(self.UID, "pro")
+        self.assertEqual(block["limit"], 70.0, "the PLAN's allowance is unchanged")
+        self.assertEqual(block["purchased_balance"], 100.0)
+        self.assertEqual(block["balance"], 170.0, "spendable is both buckets")
+        self.assertEqual(
+            block["used"],
+            0.0,
+            "used counts the monthly allowance only — deriving it from the "
+            "total went NEGATIVE the moment a pack was bought",
+        )
+
+    @AUTHORITATIVE
+    def test_used_tracks_the_allowance_while_a_pack_is_held(self):
+        credit_ledger.ensure_monthly_grant(self.UID, "pro")
+        AiCreditEntry.objects.create(
+            user_id=self.UID,
+            entry_type=AiCreditEntry.ENTRY_GRANT,
+            kind=AiCreditEntry.KIND_PURCHASED,
+            credits_milli=100_000,
+            period=credit_ledger.period_for(),
+            plan="pro",
+            actor="stripe",
+        )
+        credit_ledger.post_charge(
+            request_id=str(uuid.uuid4()), user_id=self.UID, credits_milli=20_000
+        )
+        cache.clear()
+        block = _credits_block(self.UID, "pro")
+        self.assertEqual(block["used"], 20.0)
+        self.assertEqual(block["purchased_balance"], 100.0, "the pack is untouched")
+
+    @AUTHORITATIVE
     def test_unlimited_plan_says_so_rather_than_omitting_the_block(self):
         block = _credits_block(self.UID, "enterprise")
         self.assertTrue(block["unlimited"])
@@ -458,9 +496,7 @@ class _StreamingBase(TransactionTestCase):
 
         with (
             patch("origin.search_engine.agent_views.run_agent", side_effect=fake_run_agent),
-            patch(
-                "origin.search_engine.ingestion.ingest_conversation_run", return_value=False
-            ),
+            patch("origin.search_engine.ingestion.ingest_conversation_run", return_value=False),
         ):
             resp = self.client.post(
                 "/api/v2/agent/ask/",

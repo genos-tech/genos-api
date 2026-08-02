@@ -29,6 +29,7 @@ revisit at Phase 2.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 
 from django.conf import settings
@@ -54,10 +55,20 @@ def _policy():
 
 
 def _invalidate_balance(user_id: str, period: str) -> None:
-    try:
-        cache.delete(f"{_BALANCE_CACHE_PREFIX}{user_id}:{period}")
-    except Exception:  # noqa: BLE001
-        log.debug("credit balance cache invalidation failed", exc_info=True)
+    """Drop the cached balance for `period` — and for the current month.
+
+    Both, because purchased credits do not expire: a charge is stamped
+    with the *request's* period, not now, so a request from last month
+    settling today changes how much of the purchased bucket is left, and
+    therefore what THIS month's balance reads. Dropping only the charged
+    period would leave that stale for the cache's lifetime.
+    """
+    periods = {period, period_for()}
+    for p in periods:
+        try:
+            cache.delete(f"{_BALANCE_CACHE_PREFIX}{user_id}:{p}")
+        except Exception:  # noqa: BLE001
+            log.debug("credit balance cache invalidation failed", exc_info=True)
 
 
 def credits_authoritative() -> bool:
@@ -158,12 +169,51 @@ def ensure_monthly_grant(user_id: str, plan: str, *, period: str | None = None) 
         log.debug("ensure_monthly_grant failed", exc_info=True)
 
 
-def balance_milli(user_id: str, plan: str, *, period: str | None = None) -> int | None:
-    """The user's available milli-credits this period; None = unlimited.
+@dataclass(frozen=True)
+class Breakdown:
+    """What a user has, split by where it came from.
 
-    Grants are materialized lazily on first read, then the balance is
-    one cached SUM. Fail-open: any error reads as unlimited, because a
-    ledger hiccup must never block (or in shadow, mislabel) a request.
+    `total` is the only number enforcement uses; the two parts exist so
+    the UI can say "40 this month + 100 you bought" rather than one
+    figure that looks wrong next to a plan's advertised allowance.
+    """
+
+    monthly_milli: int
+    purchased_milli: int
+
+    @property
+    def total_milli(self) -> int:
+        return self.monthly_milli + self.purchased_milli
+
+
+def balance_breakdown(user_id: str, plan: str, *, period: str | None = None) -> Breakdown | None:
+    """The monthly and purchased buckets, separately. None = unlimited.
+
+    **The spend order is derived, not recorded.** A charge row cannot say
+    which bucket it drew from — `uq_credit_charge_per_request` allows one
+    charge per request and `post_charge` takes no `kind` — so attributing
+    a debit that spans both buckets is unrepresentable. It does not need
+    to be: given the rule "monthly first", the split is a function of
+    what is already stored.
+
+        monthly_remaining(P) = max(0, monthly_granted(P) - charges(P))
+        purchased_spent(P)   = max(0, charges(P) - monthly_granted(P))
+
+    Charges in a period eat that period's allowance first and only then
+    bite the purchased bucket, which is exactly the required order — and
+    it falls out of the arithmetic rather than out of a field somebody
+    has to remember to set.
+
+    Expiry comes free from the same shape. The monthly part is read from
+    the current period alone, so last month's unused allowance is simply
+    not counted. The purchased part sums grants across ALL periods and
+    subtracts what each period overspent, so it survives the rollover
+    that expires the monthly one. That is why a purchased grant can keep
+    carrying its purchase month in `period` — the column stays the
+    expiry model for monthly credits and means nothing for these.
+
+    Fail-open: any error reads as unlimited, because a ledger hiccup must
+    never block (or in shadow, mislabel) a request.
     """
     if not user_id:
         return None
@@ -174,23 +224,95 @@ def balance_milli(user_id: str, plan: str, *, period: str | None = None) -> int 
         cache_key = f"{_BALANCE_CACHE_PREFIX}{user_id}:{period}"
         cached = cache.get(cache_key)
         if cached is not None:
-            return int(cached)
+            return Breakdown(int(cached[0]), int(cached[1]))
 
         ensure_monthly_grant(user_id, plan, period=period)
 
         from origin.search_engine.models import AiCreditEntry  # noqa: PLC0415
 
-        total = int(
-            AiCreditEntry.objects.filter(user_id=str(user_id), period=period).aggregate(
-                s=Sum("credits_milli")
-            )["s"]
-            or 0
+        rows = AiCreditEntry.objects.filter(user_id=str(user_id))
+
+        # One pass per quantity, each covered by the (user_id, period)
+        # index. Charges are stored NEGATIVE, so negate to get a spend.
+        monthly_granted = _sum(
+            rows.filter(
+                entry_type=AiCreditEntry.ENTRY_GRANT, kind=AiCreditEntry.KIND_MONTHLY, period=period
+            )
         )
-        cache.set(cache_key, total, _BALANCE_CACHE_SECONDS)
-        return total
+        # Everything that is not a monthly grant or a purchased grant —
+        # promotional and manual grants, reversals — still belongs to
+        # the period it was posted in, and to the monthly side of the
+        # ledger. Folding them in here keeps `total` a true SUM of the
+        # user's rows for the current period, which is what it was
+        # before this function learned about buckets.
+        other_period_credits = _sum(
+            rows.filter(period=period)
+            .exclude(entry_type=AiCreditEntry.ENTRY_CHARGE)
+            .exclude(entry_type=AiCreditEntry.ENTRY_GRANT, kind=AiCreditEntry.KIND_MONTHLY)
+            .exclude(entry_type=AiCreditEntry.ENTRY_GRANT, kind=AiCreditEntry.KIND_PURCHASED)
+        )
+        monthly_allowance = monthly_granted + other_period_credits
+        charges_this_period = -_sum(
+            rows.filter(entry_type=AiCreditEntry.ENTRY_CHARGE, period=period)
+        )
+        monthly_remaining = max(0, monthly_allowance - charges_this_period)
+
+        purchased_remaining = _purchased_remaining_milli(rows)
+
+        cache.set(cache_key, (monthly_remaining, purchased_remaining), _BALANCE_CACHE_SECONDS)
+        return Breakdown(monthly_remaining, purchased_remaining)
     except Exception:  # noqa: BLE001
-        log.debug("balance_milli failed", exc_info=True)
+        log.debug("balance_breakdown failed", exc_info=True)
         return None
+
+
+def _sum(qs) -> int:
+    return int(qs.aggregate(s=Sum("credits_milli"))["s"] or 0)
+
+
+def _purchased_remaining_milli(rows) -> int:
+    """Purchased grants, less what each period overspent its allowance by.
+
+    Walks every period the user has rows in, which is bounded by their
+    account age in months and covered by the `(user_id, period)` index.
+    Returns 0 — never negative — because a purchased bucket that has been
+    fully drained is empty, not owed.
+    """
+    from origin.search_engine.models import AiCreditEntry  # noqa: PLC0415
+
+    purchased_granted = _sum(
+        rows.filter(entry_type=AiCreditEntry.ENTRY_GRANT, kind=AiCreditEntry.KIND_PURCHASED)
+    )
+    if purchased_granted <= 0:
+        return 0
+
+    per_period: dict[str, dict[str, int]] = {}
+    grouped = (
+        rows.exclude(entry_type=AiCreditEntry.ENTRY_GRANT, kind=AiCreditEntry.KIND_PURCHASED)
+        .values("period", "entry_type")
+        .annotate(s=Sum("credits_milli"))
+    )
+    for row in grouped:
+        bucket = per_period.setdefault(row["period"], {"allowance": 0, "charges": 0})
+        amount = int(row["s"] or 0)
+        if row["entry_type"] == AiCreditEntry.ENTRY_CHARGE:
+            bucket["charges"] += -amount
+        else:
+            bucket["allowance"] += amount
+
+    overspend = sum(max(0, b["charges"] - b["allowance"]) for b in per_period.values())
+    return max(0, purchased_granted - overspend)
+
+
+def balance_milli(user_id: str, plan: str, *, period: str | None = None) -> int | None:
+    """Everything the user can spend right now; None = unlimited.
+
+    The single scalar every enforcement site already reads. It is now the
+    sum of two buckets (see `balance_breakdown`), which changes nothing
+    for a caller that only asks "is there anything left".
+    """
+    breakdown = balance_breakdown(user_id, plan, period=period)
+    return None if breakdown is None else breakdown.total_milli
 
 
 def post_charge(
