@@ -37,8 +37,35 @@ from rest_framework.views import APIView
 
 API_VERSION = "1.0.0"
 
+# `required` names EVERY key the endpoint always returns, and
+# `additionalProperties: false` forbids any it does not. Both matter:
+# without `required`, a response missing every field still validates;
+# without `additionalProperties`, a new model column leaking into
+# `_serialize_task` ships silently. A schema with neither cannot fail a
+# contract test, which is the same as not having one.
+#
+# `nullable` is NOT the opposite of `required` here. `display_id` is
+# always present and sometimes null — that is `required` plus
+# `nullable`, and conflating the two is how optional-looking fields
+# quietly disappear.
 _TASK = {
     "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "id",
+        "display_id",
+        "title",
+        "status",
+        "priority",
+        "project_id",
+        "team_id",
+        "assignee_id",
+        "reporter_id",
+        "due_date",
+        "start_date",
+        "created_at",
+        "updated_at",
+    ],
     "properties": {
         "id": {"type": "integer", "example": 4821},
         "display_id": {
@@ -51,6 +78,7 @@ _TASK = {
         "status": {"type": "string", "example": "Open"},
         "priority": {"type": "string", "nullable": True, "example": "High"},
         "project_id": {"type": "integer", "nullable": True},
+        "team_id": {"type": "string", "format": "uuid", "nullable": True},
         "assignee_id": {"type": "string", "format": "uuid", "nullable": True},
         "reporter_id": {"type": "string", "format": "uuid", "nullable": True},
         "due_date": {"type": "string", "format": "date", "nullable": True},
@@ -62,6 +90,8 @@ _TASK = {
 
 _PROJECT = {
     "type": "object",
+    "additionalProperties": False,
+    "required": ["id", "name", "code", "team_id", "is_private", "created_at"],
     "properties": {
         "id": {"type": "integer"},
         "name": {"type": "string"},
@@ -232,13 +262,36 @@ OPENAPI = {
                     {
                         "name": "limit",
                         "in": "query",
-                        "schema": {"type": "integer", "default": 50, "maximum": 100},
-                        "description": "Capped server-side; a larger value is clamped, not rejected.",
+                        # NO `maximum`. In OpenAPI that means "reject
+                        # above this", and the server CLAMPS instead — a
+                        # generated client would refuse to send limit=200
+                        # locally for a request the server would have
+                        # happily answered with 100. The constraint has to
+                        # describe what the server does, not what it
+                        # would be tidy for it to do.
+                        "schema": {"type": "integer", "default": 50, "minimum": 1},
+                        "description": (
+                            "Default 50. Values above 100 are clamped to 100 and values "
+                            "below 1 are clamped to 1 — never rejected."
+                        ),
                     },
                     {
                         "name": "offset",
                         "in": "query",
-                        "schema": {"type": "integer", "default": 0},
+                        # `maximum` IS right here: the server returns 400
+                        # above this, so a client refusing early agrees
+                        # with it.
+                        "schema": {
+                            "type": "integer",
+                            "default": 0,
+                            "minimum": 0,
+                            "maximum": 1000000,
+                        },
+                        "description": (
+                            "Default 0. Above 1,000,000 the request is refused with 400 "
+                            "rather than answered with an empty page — at that size it is "
+                            "almost always a paging-loop bug."
+                        ),
                     },
                 ],
                 "responses": {

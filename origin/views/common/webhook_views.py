@@ -10,6 +10,8 @@ management, not membership — and a leaked API key must not be able to
 add an exfiltration target.
 """
 
+import uuid
+
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
@@ -179,7 +181,17 @@ def _validate_scope(team, events, request_data):
 
 
 def _require_manager(request, team_id):
-    """`(team, None)` when allowed, `(None, Response)` otherwise."""
+    """`(team, None)` when allowed, `(None, Response)` otherwise.
+
+    `team_id` is parsed first: it is a UUIDField, and an unparseable
+    value raised `ValidationError` out of the ORM rather than answering
+    "no such team". Same 404 as a team that does not exist — a malformed
+    id names nothing.
+    """
+    try:
+        team_id = str(uuid.UUID(str(team_id)))
+    except (ValueError, AttributeError, TypeError):
+        return None, Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
     team = TeamMaster.objects.filter(team_id=team_id, is_deleted=False).first()
     if team is None or not is_team_member(team_id, request.user.id):
         return None, Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)

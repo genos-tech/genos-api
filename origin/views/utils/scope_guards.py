@@ -46,6 +46,7 @@ delete — so project queries must not filter on one. `TeamMembers` does.
 
 from __future__ import annotations
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.http import Http404
 from rest_framework import status
 from rest_framework.permissions import BasePermission
@@ -60,6 +61,27 @@ _PROJECT_MISSING = "Project not found."
 
 
 # ── predicates ─────────────────────────────────────────────────────────
+#
+# Every predicate here takes ids that came from a request, so a malformed
+# one is ordinary input, not an exceptional condition. `team_id` is a
+# UUIDField and `project_id` an integer, and handing either a bad value
+# raises out of the ORM's `to_python` — `ValidationError` for the UUID,
+# `ValueError` for the integer, neither of them caught by callers. That
+# made `?team_id=abc` a 500 on every endpoint the ACL series routed
+# through here, which is most of them.
+#
+# `_no_such` swallows exactly those two and answers False, which is also
+# the honest answer: a malformed id names nothing, so nobody is a member
+# of it. Doing this once here is worth more than doing it at each of the
+# hundred-odd call sites, and it cannot drift.
+
+
+def _no_such(query):
+    """Run a membership `.exists()`, treating an unparseable id as False."""
+    try:
+        return query()
+    except (DjangoValidationError, ValueError, TypeError):
+        return False
 
 
 def is_team_member(team_id, user_id) -> bool:
@@ -71,9 +93,13 @@ def is_team_member(team_id, user_id) -> bool:
     """
     if team_id is None or user_id is None:
         return False
-    if TeamMaster.objects.filter(team_id=team_id, owner=user_id).exists():
+    if _no_such(lambda: TeamMaster.objects.filter(team_id=team_id, owner=user_id).exists()):
         return True
-    return TeamMembers.objects.filter(team=team_id, attendee=user_id, is_deleted=False).exists()
+    return _no_such(
+        lambda: TeamMembers.objects.filter(
+            team=team_id, attendee=user_id, is_deleted=False
+        ).exists()
+    )
 
 
 def is_project_member(project_id, user_id) -> bool:
@@ -84,9 +110,13 @@ def is_project_member(project_id, user_id) -> bool:
     """
     if project_id is None or user_id is None:
         return False
-    if ProjectMaster.objects.filter(project_id=project_id, owner=user_id).exists():
+    if _no_such(
+        lambda: ProjectMaster.objects.filter(project_id=project_id, owner=user_id).exists()
+    ):
         return True
-    return ProjectMembers.objects.filter(project=project_id, attendee=user_id).exists()
+    return _no_such(
+        lambda: ProjectMembers.objects.filter(project=project_id, attendee=user_id).exists()
+    )
 
 
 def is_guest(team_id, user_id) -> bool:
@@ -109,7 +139,7 @@ def is_guest(team_id, user_id) -> bool:
         return False
     if is_team_member(team_id, user_id):
         return False
-    return ProjectMembers.objects.filter(team=team_id, attendee=user_id).exists()
+    return _no_such(lambda: ProjectMembers.objects.filter(team=team_id, attendee=user_id).exists())
 
 
 def is_team_participant(team_id, user_id) -> bool:
@@ -197,11 +227,14 @@ def can_access_task(task_id, user_id) -> bool:
         return False
     from origin.models.task.task_models import TaskMaster
 
-    row = (
-        TaskMaster.objects.filter(task_id=task_id)
-        .values("project_id", "assignee_id", "reporter_id")
-        .first()
-    )
+    try:
+        row = (
+            TaskMaster.objects.filter(task_id=task_id)
+            .values("project_id", "assignee_id", "reporter_id")
+            .first()
+        )
+    except (DjangoValidationError, ValueError, TypeError):
+        return False
     if row is None:
         return False
     if str(user_id) in {str(row["assignee_id"]), str(row["reporter_id"])}:

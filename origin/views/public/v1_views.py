@@ -30,6 +30,8 @@ forever.
 
 from __future__ import annotations
 
+import uuid
+
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
@@ -46,6 +48,7 @@ from origin.views.utils.scope_guards import (
     member_project_ids,
 )
 
+MAX_OFFSET = 1_000_000
 MAX_PAGE = 100
 
 
@@ -68,6 +71,15 @@ class PublicApiView(APIView):
             request.data.get("team_id") if hasattr(request.data, "get") else None
         )
         if not team_id:
+            return None
+        # Parsed before it reaches a query. `team_id` is a UUIDField, so
+        # a malformed value raises `ValidationError` (not `ValueError`)
+        # out of `to_python` deep inside the ORM — a 500 that anyone
+        # could trigger with `?team_id=abc`. Treated as "no such team",
+        # which is what a caller who sent nonsense should hear.
+        try:
+            team_id = str(uuid.UUID(str(team_id)))
+        except (ValueError, AttributeError, TypeError):
             return None
         if not is_team_member(team_id, request.user.id):
             return None
@@ -103,6 +115,7 @@ def _serialize_task(t: TaskMaster) -> dict:
         "status": t.status,
         "priority": t.priority,
         "project_id": t.project_id,
+        "team_id": str(t.team_id) if t.team_id else None,
         "assignee_id": str(t.assignee_id) if t.assignee_id else None,
         "reporter_id": str(t.reporter_id) if t.reporter_id else None,
         "due_date": t.due_date,
@@ -174,11 +187,26 @@ class TaskListCreateView(PublicApiView):
             allowed = [project_id]
 
         try:
-            limit = min(int(request.query_params.get("limit", 50)), MAX_PAGE)
-            offset = max(int(request.query_params.get("offset", 0)), 0)
+            # CLAMPED AT BOTH ENDS. `offset` was already floored at 0;
+            # `limit` was only ceilinged, so `?limit=-1` produced a
+            # negative queryset slice and `ValueError: Negative indexing
+            # is not supported` — a 500 on a public endpoint from one
+            # query parameter.
+            limit = max(1, min(int(request.query_params.get("limit", 50)), MAX_PAGE))
+            offset = max(0, int(request.query_params.get("offset", 0)))
         except (TypeError, ValueError):
             return Response(
                 {"error": "limit and offset must be integers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # An offset larger than Postgres' bigint is a `DataError` from
+        # the driver — another 500 from one query parameter. Bounded
+        # rather than clamped: a 40-digit offset is a bug in the caller's
+        # paging loop, and silently answering "no results" would hide it
+        # from them for as long as it takes to notice the empty page.
+        if offset > MAX_OFFSET:
+            return Response(
+                {"error": f"offset must not exceed {MAX_OFFSET}."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -202,11 +230,29 @@ class TaskListCreateView(PublicApiView):
         if team is None:
             return _team_required()
 
-        title = (request.data.get("title") or "").strip()
+        # Types come from JSON, so they are the caller's choice.
+        # `(x or "").strip()` assumed a string and raised `AttributeError:
+        # 'int' object has no attribute 'strip'` on `{"title": 123}`;
+        # `project_id` went to a query unparsed, which is the same shape
+        # that made a malformed UUID a 500 elsewhere in this session.
+        raw_title = request.data.get("title")
+        if raw_title is not None and not isinstance(raw_title, str):
+            return Response(
+                {"error": "title must be a string."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        title = (raw_title or "").strip()
         raw_project = request.data.get("project_id")
         if not title or raw_project is None:
             return Response(
                 {"error": "title and project_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            raw_project = int(raw_project)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "project_id must be an integer."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if not is_project_member(raw_project, request.user.id):
@@ -253,6 +299,15 @@ class TaskDetailView(PublicApiView):
             if field in request.data:
                 value = request.data.get(field)
                 if field == "title":
+                    # `(value or "").strip()` assumed a string: `{"title":
+                    # 123}` raised `AttributeError: 'int' object has no
+                    # attribute 'strip'`. Request bodies are JSON, so the
+                    # type is the caller's choice, not ours to assume.
+                    if value is not None and not isinstance(value, str):
+                        return Response(
+                            {"error": "title must be a string."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
                     value = (value or "").strip()
                     if not value:
                         return Response(

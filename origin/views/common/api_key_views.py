@@ -9,6 +9,8 @@ must not be able to mint further keys or revoke the ones that would let
 you notice. Key management is a session-only surface.
 """
 
+import uuid
+
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
@@ -56,7 +58,14 @@ class ApiKeyListCreateView(AuthenticatedAPIView):
         return Response({"api_keys": [_serialize(k) for k in keys]}, status=status.HTTP_200_OK)
 
     def post(self, request):
-        name = (request.data.get("name") or "").strip()
+        # Type-check before `.strip()`: `{"name": 123}` raised
+        # `AttributeError: 'int' object has no attribute 'strip'` — a 500
+        # from a settings form, and the request body is JSON so the type
+        # is the caller's to choose.
+        raw_name = request.data.get("name")
+        if raw_name is not None and not isinstance(raw_name, str):
+            return Response({"error": "name must be a string."}, status=status.HTTP_400_BAD_REQUEST)
+        name = (raw_name or "").strip()
         if not name:
             return Response({"error": "name is required."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -70,6 +79,13 @@ class ApiKeyListCreateView(AuthenticatedAPIView):
         team = None
         team_id = request.data.get("team_id")
         if team_id:
+            # Parsed before the query: `team_id` is a UUIDField, so a
+            # malformed value raised out of the ORM instead of answering
+            # "no such team". Same 404 either way.
+            try:
+                team_id = str(uuid.UUID(str(team_id)))
+            except (ValueError, AttributeError, TypeError):
+                return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
             team = TeamMaster.objects.filter(team_id=team_id, is_deleted=False).first()
             if team is None or not is_team_member(team_id, request.user.id):
                 return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
