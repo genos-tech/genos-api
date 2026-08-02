@@ -417,6 +417,129 @@ def post_manual(
     return entry.id
 
 
+def _pre_purchase_debt_milli(user_id: str, period: str) -> int:
+    """Overshoot the buyer is carrying that a new pack must not inherit.
+
+    Someone who overspends this month's allowance and THEN buys a pack
+    would otherwise see the pack land already partly eaten — the
+    overspend sits in the same period, so `_purchased_remaining_milli`
+    counts it from the moment `first_period` becomes this month. Buying
+    100 has to give 100.
+
+    The amount forgiven is bounded by how far a single request may
+    overshoot, and that overshoot is already forgiven at month end when
+    the period rolls — this only brings the forgiveness forward.
+
+    `- purchased_before` is what stops it becoming a gift to a repeat
+    buyer: someone who legitimately spent an earlier pack has debt equal
+    to that spending, and it must not be handed back to them when they
+    buy again.
+    """
+    from origin.search_engine.models import AiCreditEntry  # noqa: PLC0415
+
+    rows = AiCreditEntry.objects.filter(user_id=str(user_id))
+    purchased_before = _sum(rows.filter(kind=AiCreditEntry.KIND_PURCHASED))
+    first_period = (
+        rows.filter(kind=AiCreditEntry.KIND_PURCHASED)
+        .order_by("period")
+        .values_list("period", flat=True)
+        .first()
+        or period  # the FIRST purchase: only this month's overshoot counts
+    )
+    grouped = (
+        rows.filter(period__gte=first_period)
+        .exclude(kind=AiCreditEntry.KIND_PURCHASED)
+        .values("period")
+        .annotate(s=Sum("credits_milli"))
+    )
+    spent_before = sum(max(0, -int(row["s"] or 0)) for row in grouped)
+    return max(0, spent_before - purchased_before)
+
+
+def post_purchase(
+    *,
+    user_id: str,
+    credits_milli: int,
+    external_ref: str,
+    team_id: str = "",
+    reason: str = "",
+    actor: str = "stripe",
+) -> bool:
+    """Grant purchased credits, at most once per `external_ref`.
+
+    Returns True when a row was posted, False when this purchase had
+    already been granted. Never raises — the caller is a webhook, and a
+    500 back to Stripe buys a redelivery of an event we have already
+    handled.
+
+    **Exactly-once comes from the database**, via
+    `uq_credit_grant_per_external_ref`, for the same reason a charge's
+    does: the webhook layer's existing idempotency is convergence (set
+    the tier — an assignment), and that reasoning does not survive an
+    additive grant. Stripe delivers at least once; without the
+    constraint a redelivery would grant the pack twice.
+
+    `credits_milli` must come from the server's own policy, keyed by
+    pack id — never from a quantity carried on the event, which is
+    attacker-adjacent input.
+    """
+    if not user_id or not external_ref or int(credits_milli) <= 0:
+        return False
+    from origin.search_engine.models import AiCreditEntry  # noqa: PLC0415
+
+    policy = _policy()
+    period = period_for()
+
+    # Debt the buyer already carries, computed BEFORE the grant exists so
+    # it cannot see it. See `_pre_purchase_debt_milli` for why this is
+    # required rather than generous.
+    debt = _pre_purchase_debt_milli(str(user_id), period)
+
+    try:
+        with transaction.atomic():
+            AiCreditEntry.objects.create(
+                user_id=str(user_id),
+                team_id=str(team_id or ""),
+                entry_type=AiCreditEntry.ENTRY_GRANT,
+                kind=AiCreditEntry.KIND_PURCHASED,
+                credits_milli=int(credits_milli),
+                # The purchase month. It is recorded because every row
+                # carries one, NOT because it expires — `balance_breakdown`
+                # sums purchased grants across all periods.
+                period=period,
+                external_ref=str(external_ref)[:128],
+                reason=(reason or "credit pack")[:200],
+                actor=(actor or "stripe")[:64],
+                credit_policy_version=policy.version if policy else "",
+                plan_entitlement_version=policy.entitlement_version if policy else "",
+            )
+            # The grant and its absorption row are ONE transaction,
+            # grant first: a redelivery rolls back both, so the
+            # absorption cannot be posted twice for one purchase.
+            if debt > 0:
+                AiCreditEntry.objects.create(
+                    user_id=str(user_id),
+                    entry_type=AiCreditEntry.ENTRY_GRANT,
+                    kind=AiCreditEntry.KIND_MANUAL,
+                    credits_milli=debt,
+                    period=period,
+                    reason=f"absorbed overshoot before {external_ref}"[:200],
+                    actor="system",
+                    credit_policy_version=policy.version if policy else "",
+                    plan_entitlement_version=policy.entitlement_version if policy else "",
+                )
+    except IntegrityError:
+        # Already granted. The expected outcome of a redelivery, not an
+        # error — the constraint IS the idempotency mechanism.
+        log.info("credit pack %s already granted; ignoring redelivery", external_ref)
+        return False
+    except Exception:  # noqa: BLE001 — a webhook must not 500 on our bookkeeping
+        log.exception("post_purchase failed for %s", external_ref)
+        return False
+    _invalidate_balance(str(user_id), period)
+    return True
+
+
 def reverse_entry(entry_id: int, *, reason: str, actor: str) -> int:
     """Reverse a posted entry by posting its negation. Returns new id.
 

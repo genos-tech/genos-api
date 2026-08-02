@@ -1663,6 +1663,39 @@ API_PUBLIC_BASE_URL = os.environ.get("API_PUBLIC_BASE_URL", "")
 # set. WEBHOOK_SECRET is required for the webhook endpoint to accept
 # events at all (unverified events are never processed).
 # `enterprise` is deliberately absent — contact-sales only.
+def _stripe_credit_pack_prices() -> dict[str, dict[str, str]]:
+    """Parse STRIPE_CREDIT_PACK_PRICES. Invalid JSON fails LOUD at boot.
+
+    `{"usd": {"pack_100": "price_...", ...}, "jpy": {...}}` — the same
+    shape as the subscription map and for the same reason, but a
+    SEPARATE variable, which is the point rather than an accident.
+    `tier_for_price` reverse-maps every configured subscription price to
+    a plan; a pack price sitting in that map would resolve to a tier and
+    a one-off purchase would silently grant a subscription.
+    """
+    raw = os.environ.get("STRIPE_CREDIT_PACK_PRICES", "").strip()
+    if not raw:
+        return {}
+    from django.core.exceptions import ImproperlyConfigured
+
+    try:
+        parsed = json.loads(raw)
+    except ValueError as exc:
+        raise ImproperlyConfigured(f"STRIPE_CREDIT_PACK_PRICES is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ImproperlyConfigured(
+            'STRIPE_CREDIT_PACK_PRICES must be {"usd": {"pack_100": "price_..."}}'
+        )
+    out: dict[str, dict[str, str]] = {}
+    for code, packs in parsed.items():
+        if not isinstance(packs, dict):
+            raise ImproperlyConfigured(
+                f"STRIPE_CREDIT_PACK_PRICES[{code!r}] must be a pack -> price id map"
+            )
+        out[str(code).lower()] = {str(k): str(v) for k, v in packs.items() if v}
+    return out
+
+
 def _stripe_prices_by_currency() -> dict[str, dict[str, str]]:
     """Parse STRIPE_PRICES_BY_CURRENCY. Invalid JSON fails LOUD at boot.
 
@@ -1717,6 +1750,22 @@ STRIPE = {
     # A plan missing from a currency is simply not offered to buyers in
     # it, rather than offered and failing at checkout.
     "PRICES_BY_CURRENCY": _stripe_prices_by_currency(),
+    # One-off AI credit packs, per currency:
+    #   {"usd": {"pack_100": "price_...", "pack_50": ..., "pack_10": ...}}
+    #
+    # How many credits a pack grants is NOT here — that is a commercial
+    # number and lives in `credit_policy.yaml`, versioned with the rest
+    # of them. This map only answers "what does Stripe charge for it".
+    #
+    # A separate key from PRICES_BY_CURRENCY on purpose: `tier_for_price`
+    # scans that map to decide which plan a paid price id represents, so
+    # a pack price landing in it would make a credit purchase grant a
+    # subscription tier. Keeping the two apart makes that unexpressible
+    # rather than merely avoided.
+    #
+    # A pack missing from a currency is not offered to buyers in it, the
+    # same rule the plans follow.
+    "CREDIT_PACK_PRICES": _stripe_credit_pack_prices(),
     # GRANDFATHERED prices — comma-separated `price_...` ids that still
     # resolve to a plan on incoming subscription events but are never
     # offered at checkout.

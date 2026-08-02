@@ -41,6 +41,32 @@ class CreditPolicyError(RuntimeError):
 _PLANS = ("free", "core", "pro", "max", "enterprise")
 
 
+def _parse_credit_packs(raw: dict) -> dict[str, int]:
+    """`credit_packs:` -> {pack id: milli-credits}. Optional and boot-fatal.
+
+    Absent means we simply sell no packs — which is the correct reading
+    for an older config, and lets the feature ship dark. Anything
+    PRESENT but malformed fails the boot, like every other number in
+    this file: a pack that silently grants zero would take money and
+    give nothing.
+    """
+    packs = raw.get("credit_packs")
+    if packs is None:
+        return {}
+    if not isinstance(packs, dict) or not packs:
+        _fail("credit_packs must be a non-empty mapping of pack id -> credits")
+    out: dict[str, int] = {}
+    for pack_id, credits_ in packs.items():
+        if not isinstance(pack_id, str) or not pack_id.strip():
+            _fail(f"credit_packs keys must be non-empty strings, got {pack_id!r}")
+        if isinstance(credits_, bool) or not isinstance(credits_, (int, float)):
+            _fail(f"credit_packs[{pack_id}] must be a number, got {credits_!r}")
+        if credits_ <= 0:
+            _fail(f"credit_packs[{pack_id}] must be positive, got {credits_!r}")
+        out[pack_id] = int(round(float(credits_) * 1000))
+    return out
+
+
 def _fail(msg: str) -> None:
     raise CreditPolicyError(f"credit_policy.yaml: {msg}")
 
@@ -74,6 +100,18 @@ class CreditPolicy:
     monthly_ceiling_usd: dict[str, float | None]
     fingerprint: str = ""
     entitlement_fingerprint: str = ""
+    #: pack id -> milli-credits granted. One-off Stripe purchases; the
+    #: PRICE lives in env (per currency), the amount lives here so a
+    #: webhook grants what the server says a pack is worth rather than a
+    #: quantity that arrived with the request.
+    #:
+    #: Deliberately outside BOTH fingerprints — a pack changes neither
+    #: what a request costs nor what a plan includes, so adding or
+    #: repricing one must not separate old ledger rows from new ones.
+    #:
+    #: Defaults to empty: selling no packs is a valid configuration, and
+    #: is what an older policy file means.
+    credit_packs_milli: dict[str, int] = field(default_factory=dict)
     extra: dict = field(default_factory=dict)
 
     @property
@@ -150,7 +188,11 @@ def load_credit_policy(path: str | Path) -> CreditPolicy:
         _fail(f"policy.credit_usd must be a positive number, got {credit_usd!r}")
 
     max_credits = policy.get("request_max_credits")
-    if isinstance(max_credits, bool) or not isinstance(max_credits, (int, float)) or max_credits <= 0:
+    if (
+        isinstance(max_credits, bool)
+        or not isinstance(max_credits, (int, float))
+        or max_credits <= 0
+    ):
         _fail(f"policy.request_max_credits must be a positive number, got {max_credits!r}")
 
     surfaces = policy.get("billable_surfaces")
@@ -181,7 +223,14 @@ def load_credit_policy(path: str | Path) -> CreditPolicy:
     entitlements = _parse_plan_map(raw, "entitlements", scale=1000.0)  # credits -> milli
     ceilings = _parse_plan_map(raw, "monthly_ceiling_usd", scale=1.0)
 
-    top_unknown = set(raw) - {"policy", "entitlements", "monthly_ceiling_usd"}
+    packs = _parse_credit_packs(raw)
+
+    top_unknown = set(raw) - {
+        "policy",
+        "entitlements",
+        "monthly_ceiling_usd",
+        "credit_packs",
+    }
     if top_unknown:
         _fail(f"unknown top-level key(s) {sorted(top_unknown)}")
 
@@ -193,9 +242,7 @@ def load_credit_policy(path: str | Path) -> CreditPolicy:
         "billable_results": sorted(results),
         "excluded_purposes": sorted(purposes),
     }
-    entitlement_payload = {
-        plan: entitlements[plan] for plan in sorted(entitlements)
-    }
+    entitlement_payload = {plan: entitlements[plan] for plan in sorted(entitlements)}
 
     def _fp(payload) -> str:
         blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -211,6 +258,7 @@ def load_credit_policy(path: str | Path) -> CreditPolicy:
         entitlements_milli={
             p: (int(v) if v is not None else None) for p, v in entitlements.items()
         },
+        credit_packs_milli=packs,
         monthly_ceiling_usd=ceilings,
         fingerprint=_fp(policy_payload),
         entitlement_fingerprint=_fp(entitlement_payload),

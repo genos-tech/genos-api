@@ -127,6 +127,31 @@ entitlements:
     enterprise: unlimited
 
 # ---------------------------------------------------------------------
+#  Credit packs — one-off purchases, sold through Stripe.
+#
+#  What a pack GRANTS lives here; what it COSTS lives in the Stripe
+#  price ids, in env. That split is deliberate and matches how
+#  subscriptions already work: a price is a market decision made per
+#  currency (¥4,500 and $30 are both round numbers, neither converted
+#  from the other), while the credits behind it are one number
+#  everywhere. Putting the amount here also means a webhook grants what
+#  the SERVER says the pack is worth, never a quantity that arrived
+#  with the request.
+#
+#  Deliberately OUTSIDE both fingerprints. A pack changes neither what a
+#  request costs (`policy:`) nor what a plan includes (`entitlements:`),
+#  so adding or repricing one must not separate old ledger rows from new
+#  ones — a charge posted before and after a pack launch was computed
+#  under identical rules.
+#
+#  Purchased credits do not expire; see `credit_ledger.balance_breakdown`.
+# ---------------------------------------------------------------------
+credit_packs:
+    pack_100: 100
+    pack_50: 50
+    pack_10: 10
+
+# ---------------------------------------------------------------------
 #  Internal monthly direct-AI cost ceilings, in USD per account
 #  (V2 §1, §3.7). These are the FINANCIAL CIRCUIT BREAKER — they
 #  operate on actual cost regardless of what credits say, so a
