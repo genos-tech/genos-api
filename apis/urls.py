@@ -26,6 +26,7 @@ from origin.urls.chat import v3_urls as chat_v3_urls
 from origin.urls.common import urls as common_urls
 from origin.urls.note import urls as note_urls
 from origin.urls.project import urls as prj_urls
+from origin.urls.public import urls as public_urls
 from origin.urls.task import urls as task_urls
 from origin.views.common.media_views import serve_media
 
@@ -40,6 +41,8 @@ urlpatterns.extend(prj_urls.urlpatterns)
 urlpatterns.extend(task_urls.urlpatterns)
 urlpatterns.extend(note_urls.urlpatterns)
 urlpatterns.extend(search_engine_urls.urlpatterns)
+# Public API — its own prefix, its own contract. See the module docstring.
+urlpatterns.extend(public_urls.urlpatterns)
 
 
 # Serve user-uploaded media in *both* dev and prod.
