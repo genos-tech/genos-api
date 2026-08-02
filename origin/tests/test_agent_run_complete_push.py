@@ -74,16 +74,17 @@ class RunCompleteUrlTests(BaseAPITestCase):
         )
         self.assertEqual(agent_views._run_complete_url(session), "/workspace/notes/my/42")
 
-    def test_plain_spotlight_run_falls_back_to_the_app_root(self):
-        # The overlay is a Cmd-K layer, not a route — there is nothing
-        # more specific to link to. It restores its own turns on reopen.
-        self.assertEqual(agent_views._run_complete_url(None), "/workspace/chat")
+    def test_plain_genos_run_deep_links_to_the_genos_page(self):
+        # A plain (non-entity-scoped) run now has a real surface: the
+        # Genos page, which restores its turns from localStorage on
+        # landing.
+        self.assertEqual(agent_views._run_complete_url(None), "/workspace/genos")
 
     def test_unknown_chat_type_falls_back_rather_than_building_a_broken_link(self):
         session = SimpleNamespace(
             chat_type=99, chat_id="x", thread_id=None, note_type=None, note_id=None
         )
-        self.assertEqual(agent_views._run_complete_url(session), "/workspace/chat")
+        self.assertEqual(agent_views._run_complete_url(session), "/workspace/genos")
 
 
 class PushRunCompleteTests(BaseAPITestCase):

@@ -1652,13 +1652,12 @@ def _run_complete_url(session) -> str:
 
     A thread- or note-scoped session links back to the surface the ask was
     made from; the Ask modal there restores its conversation from the
-    server on open. A plain Spotlight run has no addressable surface (the
-    overlay is a Cmd-K layer, not a route), so it falls back to the app
-    root — the overlay restores its own turns from localStorage once the
-    user reopens it.
+    server on open. A plain Genos/Spotlight run deep-links to the Genos
+    page (/workspace/genos) — the full-page surface over the same
+    conversation, which restores its turns from localStorage on landing.
     """
     if session is None:
-        return "/workspace/chat"
+        return "/workspace/genos"
     token = _CHAT_KIND_TOKEN.get(session.chat_type or 0)
     if token and session.chat_id:
         base = f"/workspace/chat/{token}/{session.chat_id}"
@@ -1668,7 +1667,7 @@ def _run_complete_url(session) -> str:
         return f"{base}/thread/{session.thread_id}" if session.thread_id else base
     if session.note_type == 1 and session.note_id:
         return f"/workspace/notes/my/{session.note_id}"
-    return "/workspace/chat"
+    return "/workspace/genos"
 
 
 def _push_run_complete(run, *, failed: bool) -> None:
