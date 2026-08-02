@@ -30,6 +30,7 @@ from origin.views.utils.scope_guards import (
     is_project_member,
     is_team_member,
     require_project_member_or_response,
+    require_team_member_or_response,
 )
 
 _PROJECT_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
@@ -146,6 +147,11 @@ class ProjectMasterView(AuthenticatedAPIView):
         return Response(ProjectMasterSerializer(project).data, status=status.HTTP_200_OK)
 
     def post(self, request):
+        # `team` arrives in the request body and was never checked, so a
+        # project could be planted in another tenant — where it then
+        # shows up in their project list and carries a PM channel.
+        if res := require_team_member_or_response(request.user, request.data.get("team")):
+            return res
         # Auto-derive a unique-per-team `code` if the caller didn't
         # supply one. The code is the prefix in human-readable task
         # display IDs (e.g. "GEN-42"). Users can edit it later from
@@ -177,6 +183,10 @@ class ProjectMasterView(AuthenticatedAPIView):
         }
 
         if res := validate_request_data(data):
+            return res
+        # Returns the project's full member roster, emails included, and
+        # was resolved by a sequential integer alone.
+        if res := require_project_member_or_response(request.user, data["project_id"]):
             return res
 
         project_data = ProjectMaster.objects.filter(Q(project_id=data["project_id"])).values()
@@ -340,13 +350,32 @@ class CheckProjectExistsView(AuthenticatedAPIView):
 class ProjectsView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
-        attendee_id = request.GET.get("attendee_id")
-
-        if not team_id or not attendee_id:
+        # `attendee_id` came from the query string and drove both the
+        # `isJoined` annotation and the CACHE KEY, so naming someone else
+        # returned their view of the team — and poisoned a shared key
+        # with it. Identity comes from the token now; the parameter is
+        # still accepted (the client sends it) but only checked.
+        attendee_id = str(request.user.id)
+        claimed = request.GET.get("attendee_id")
+        if claimed and str(claimed) != attendee_id:
             return Response(
-                {"error": "team_id and attendee_id are required."},
+                {"error": "Only the data owner can request."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not team_id:
+            return Response(
+                {"error": "team_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Deliberately NOT narrowed to the caller's own projects: the
+        # list is how someone finds a project to ask to join
+        # (`ModalJoinProject`), and `isJoined` is the annotation that
+        # makes that flow work. Team membership is the right gate — it
+        # keeps other tenants out without removing the product
+        # behaviour.
+        if res := require_team_member_or_response(request.user, team_id):
+            return res
 
         cache_key = f"project:list:{team_id}:{attendee_id}"
         cached = cache.get(cache_key)
@@ -527,9 +556,19 @@ class JoinProjectFromInboxView(AuthenticatedAPIView):
         team_id = request.data["team_id"]
         inbox_item_id = int(request.data["item_id"])
 
-        inbox_item = InboxItems.objects.filter(item_id=inbox_item_id).values_list(
-            "sender", "item_optionals"
-        )[0]
+        # Approving a join request is a membership mutation, and the item
+        # was previously fetched by id alone — so anyone could approve
+        # anyone's request into any project by counting. The item is
+        # addressed TO its approver, so scoping the lookup to
+        # `receiver=request.user` is both the authorization check and the
+        # fetch; a 404 leaks nothing about which item ids exist.
+        inbox_item = (
+            InboxItems.objects.filter(item_id=inbox_item_id, receiver=request.user)
+            .values_list("sender", "item_optionals")
+            .first()
+        )
+        if inbox_item is None:
+            return Response({"error": "Inbox item not found."}, status=status.HTTP_404_NOT_FOUND)
 
         attendee_id = inbox_item[0]
         project_id = inbox_item[1]["project_id"]
@@ -606,7 +645,17 @@ class ProjectMembersView(AuthenticatedAPIView):
 
 
 class ProjectTagsView(AuthenticatedAPIView):
+    """Task-tag vocabulary for one project.
+
+    All three write verbs resolved the project from a sequential integer
+    with no membership check, so anyone could add, rename or delete tags
+    in any project — a small blast radius on its own, but tags drive task
+    filtering, so deleting them reshapes somebody else's board.
+    """
+
     def post(self, request):
+        if res := require_project_member_or_response(request.user, request.data.get("project_id")):
+            return res
         tag_count = ProjectTags.objects.filter(project=request.data["project_id"]).count()
 
         data = {
@@ -664,6 +713,8 @@ class ProjectTagsView(AuthenticatedAPIView):
                 {"error": "project_id and old_tag_name are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if res := require_project_member_or_response(request.user, project_id):
+            return res
 
         tag = ProjectTags.objects.filter(project=project_id, tag_name=old_tag_name).first()
 
@@ -745,6 +796,8 @@ class ProjectTagsView(AuthenticatedAPIView):
                 {"error": "project_id and tag_name are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if res := require_project_member_or_response(request.user, project_id):
+            return res
 
         tag = ProjectTags.objects.filter(project=project_id, tag_name=tag_name).first()
 

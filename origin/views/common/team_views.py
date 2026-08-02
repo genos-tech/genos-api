@@ -472,9 +472,19 @@ class JoinTeamFromInboxView(AuthenticatedAPIView):
         team_name = request.data["team_name"]
         inbox_item_id = int(request.data["item_id"])
 
-        attendee_id = str(
-            InboxItems.objects.filter(item_id=inbox_item_id).values_list("sender")[0][0]
+        # The item is addressed TO its approver, so scoping the lookup
+        # to `receiver=request.user` is both the authorization check and
+        # the fetch. Previously the item was found by id alone, so anyone
+        # could approve anyone's join request into any team by counting —
+        # the same shape as the `/team/join/` hole, one step removed.
+        row = (
+            InboxItems.objects.filter(item_id=inbox_item_id, receiver=request.user)
+            .values_list("sender", flat=True)
+            .first()
         )
+        if row is None:
+            return Response({"error": "Inbox item not found."}, status=status.HTTP_404_NOT_FOUND)
+        attendee_id = str(row)
 
         # Re-join path: a previously soft-deleted membership row gets
         # un-deleted in place. Without this, the unique constraint on
