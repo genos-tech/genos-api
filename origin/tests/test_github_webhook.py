@@ -19,8 +19,9 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from origin.models.common.team_models import TeamMaster
+from origin.models.common.user_models import GithubWebhookRegistration
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
-from origin.models.task.task_activity_models import TaskActivity
+from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
 
 User = get_user_model()
@@ -81,6 +82,14 @@ class TestGithubWebhook(TestCase):
             code="HK",
         )
         ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user)
+        # Every hook Genos creates writes this row in the same breath
+        # (`github_webhooks.register_repo_webhook`), so a delivering repo
+        # always has one in production — all five live registrations do.
+        # It is what tells an unauthenticated webhook which tenant it may
+        # write into; without it the payload matched tasks install-wide.
+        GithubWebhookRegistration.objects.create(
+            owner="owner", repo="repo", hook_id=1, registered_by=self.user
+        )
 
     def _create_task(
         self,
@@ -363,9 +372,7 @@ class TestGithubWebhook(TestCase):
         task = self._create_task(project_task_number=42)
         url = "https://github.com/owner/repo/pull/7"
         response = self._post_webhook(
-            _pr_payload(
-                action="opened", merged=False, head_ref="feature/HK-42-thing", html_url=url
-            )
+            _pr_payload(action="opened", merged=False, head_ref="feature/HK-42-thing", html_url=url)
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["linked"], 1)
@@ -546,3 +553,180 @@ class TestGithubWebhookSecretUnset(TestCase):
             HTTP_X_GITHUB_EVENT="pull_request",
         )
         self.assertEqual(response.status_code, 401)
+
+
+@override_settings(GITHUB_WEBHOOK_SECRET=WEBHOOK_SECRET)
+class TestGithubWebhookTenantScope(TestCase):
+    """A webhook may only write into the tenant that registered its repo.
+
+    Every task-resolution helper here used to scan `TaskMaster` across the
+    whole install. Branch names carry a project's display id (`code` +
+    number) and project codes are short, guessable strings, so a branch
+    named after ANOTHER customer's task closed or annotated that
+    customer's task.
+
+    The trigger is not a Genos account. One shared
+    `GITHUB_WEBHOOK_SECRET` signs every registered repo's payloads, so
+    push access to any connected repo produced a valid signature — the
+    attacker never authenticates to Genos at all.
+
+    `victim` is a second tenant sharing the project code `HK` with the
+    repo's own tenant. Sharing a code is the whole point: it is what
+    makes one branch name match in two tenants.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.attacker = User.objects.create_user(
+            username="gwtattacker", email="gwtattacker@test.com", password="pw"
+        )
+        self.attacker_team = TeamMaster.objects.create(
+            team_name="Attacker", team_email="gwtattacker@team.com", owner=self.attacker
+        )
+        GithubWebhookRegistration.objects.create(
+            owner="owner", repo="repo", hook_id=1, registered_by=self.attacker
+        )
+
+        # A different customer entirely, with the same project code.
+        self.victim = User.objects.create_user(
+            username="gwtvictim",
+            email="gwtvictim@test.com",
+            password="pw",
+            auto_close_on_pr_merge=True,
+        )
+        self.victim_team = TeamMaster.objects.create(
+            team_name="Victim", team_email="gwtvictim@team.com", owner=self.victim
+        )
+        self.victim_project = ProjectMaster.objects.create(
+            team=self.victim_team,
+            project_name="Victim Project",
+            owner=self.victim,
+            project_system_user=self.victim,
+            code="HK",
+        )
+        ProjectMembers.objects.create(
+            team=self.victim_team, project=self.victim_project, attendee=self.victim
+        )
+        self.victim_task = TaskMaster.objects.create(
+            team=self.victim_team,
+            project=self.victim_project,
+            assignee=self.victim,
+            reporter=self.victim,
+            title="Another customer's task",
+            status="Open",
+            project_task_number=42,
+        )
+
+    def _post(self, payload, event="pull_request"):
+        body = json.dumps(payload).encode("utf-8")
+        return self.client.post(
+            "/api/v2/github/webhook/",
+            data=body,
+            content_type="application/json",
+            HTTP_X_HUB_SIGNATURE_256=_sign(body),
+            HTTP_X_GITHUB_EVENT=event,
+        )
+
+    def test_a_merged_pr_cannot_close_another_tenants_task(self):
+        res = self._post(_pr_payload(action="closed", merged=True, head_ref="feature/HK-42-fix"))
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["updated"], 0)
+        self.victim_task.refresh_from_db()
+        self.assertEqual(self.victim_task.status, "Open")
+
+    def test_a_pr_open_cannot_write_activity_into_another_tenant(self):
+        """The row carries an attacker-controlled `pr_title` into the
+        victim's audit feed, rendered as if it were their own history."""
+        res = self._post(_pr_payload(action="opened", merged=False, head_ref="feature/HK-42-fix"))
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["linked"], 0)
+        # Narrowed to PR_LINKED: creating the task already wrote a
+        # TASK_CREATED row, so asserting "no activity at all" passes
+        # vacuously against nothing and fails against the real fixture.
+        self.assertFalse(
+            TaskActivity.objects.filter(
+                task=self.victim_task, action_type=TaskActivityActionType.PR_LINKED
+            ).exists()
+        )
+
+    def test_an_unregistered_repo_writes_nothing(self):
+        """Fail closed. A payload for a repo Genos never registered has
+        no tenant to attribute to, so it gets none."""
+        res = self._post(
+            _pr_payload(
+                action="closed",
+                merged=True,
+                html_url="https://github.com/stranger/elsewhere/pull/1",
+                head_ref="feature/HK-42-fix",
+            )
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["updated"], 0)
+        self.victim_task.refresh_from_db()
+        self.assertEqual(self.victim_task.status, "Open")
+
+    def test_the_registering_tenants_own_task_still_closes(self):
+        """The scope must not be so tight that the feature stops working
+        for the customer who connected the repo."""
+        project = ProjectMaster.objects.create(
+            team=self.attacker_team,
+            project_name="Own Project",
+            owner=self.attacker,
+            project_system_user=self.attacker,
+            code="OWN",
+        )
+        ProjectMembers.objects.create(
+            team=self.attacker_team, project=project, attendee=self.attacker
+        )
+        self.attacker.auto_close_on_pr_merge = True
+        self.attacker.save(update_fields=["auto_close_on_pr_merge"])
+        mine = TaskMaster.objects.create(
+            team=self.attacker_team,
+            project=project,
+            assignee=self.attacker,
+            reporter=self.attacker,
+            title="Mine",
+            status="Open",
+            project_task_number=7,
+        )
+        res = self._post(_pr_payload(action="closed", merged=True, head_ref="feature/OWN-7-fix"))
+        self.assertEqual(res.data["updated"], 1)
+        mine.refresh_from_db()
+        self.assertNotEqual(mine.status, "Open")
+
+    def test_repo_casing_does_not_silently_drop_the_scope(self):
+        """GitHub owner/repo names are case-insensitive. An exact-match
+        lookup would return "no tenant" and quietly disable auto-close
+        rather than fail loudly."""
+        project = ProjectMaster.objects.create(
+            team=self.attacker_team,
+            project_name="Cased",
+            owner=self.attacker,
+            project_system_user=self.attacker,
+            code="CAS",
+        )
+        ProjectMembers.objects.create(
+            team=self.attacker_team, project=project, attendee=self.attacker
+        )
+        self.attacker.auto_close_on_pr_merge = True
+        self.attacker.save(update_fields=["auto_close_on_pr_merge"])
+        task = TaskMaster.objects.create(
+            team=self.attacker_team,
+            project=project,
+            assignee=self.attacker,
+            reporter=self.attacker,
+            title="Cased",
+            status="Open",
+            project_task_number=3,
+        )
+        res = self._post(
+            _pr_payload(
+                action="closed",
+                merged=True,
+                html_url="https://github.com/OWNER/REPO/pull/9",
+                head_ref="feature/CAS-3-fix",
+            )
+        )
+        self.assertEqual(res.data["updated"], 1)
+        task.refresh_from_db()
+        self.assertNotEqual(task.status, "Open")
