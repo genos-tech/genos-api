@@ -91,7 +91,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # --- Apply the change. ---
     task.assignee_id = new_assignee_id
     try:
-        task.save(update_fields=["assignee_id"])
+        # "ts_updated_at" is required alongside the changed column —
+        # auto_now only fires for fields named in update_fields, and the
+        # incremental reindexer keys off it. See update_task.
+        task.save(update_fields=["assignee_id", "ts_updated_at"])
     except Exception as e:  # noqa: BLE001
         raise ToolError(f"Failed to assign task: {e}")
 

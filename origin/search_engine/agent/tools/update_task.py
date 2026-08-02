@@ -169,7 +169,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         }
 
     try:
-        task.save(update_fields=update_fields)
+        # `ts_updated_at` is auto_now, but Django only runs pre_save() on
+        # the fields named in update_fields — omit it and the timestamp
+        # silently stays put. It's the incremental reindexer's watermark
+        # (task_chunker filters ts_updated_at__gte) and list_tasks' sort
+        # key, so a status change that doesn't move it never reaches
+        # search. The REST path lists it explicitly for the same reason.
+        task.save(update_fields=[*update_fields, "ts_updated_at"])
     except Exception as e:  # noqa: BLE001
         raise ToolError(f"Failed to update task: {e}")
 
