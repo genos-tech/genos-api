@@ -9,9 +9,9 @@ must not be able to mint further keys or revoke the ones that would let
 you notice. Key management is a session-only surface.
 """
 
-from django.utils import timezone
 import uuid
 
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
