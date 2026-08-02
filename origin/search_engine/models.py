@@ -784,6 +784,16 @@ class AiCreditEntry(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["user_id", "period"], name="se_credit_user_period_idx"),
+            # The purchased bucket asks two questions no index covered:
+            # "has this user bought anything" and "when first". Both are
+            # on the ask hot path — `balance_breakdown` runs on every
+            # cold balance read — so without this they degrade to a scan
+            # of the user's whole ledger history, for the ~all of them
+            # who have never bought a thing.
+            #
+            # Three columns, not two: equality on (user_id, kind) plus
+            # period ordering also serves the MIN(period) lookup.
+            models.Index(fields=["user_id", "kind", "period"], name="se_credit_user_kind_idx"),
         ]
         constraints = [
             models.UniqueConstraint(

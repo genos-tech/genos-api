@@ -605,12 +605,24 @@ def _credit_gate(user_id: str, plan: str) -> Response | None:
                 # Customer-facing copy in CREDITS, never yen: credits are
                 # the unit they were sold, and a yen figure is something
                 # they never agreed to and cannot act on.
+                #
+                # This can only fire when BOTH buckets are empty, so the
+                # message names the two ways out. It deliberately does not
+                # say "they reset on the 1st" alone: someone who has
+                # bought credits knows perfectly well that some of theirs
+                # do not reset, and being told otherwise reads as the
+                # meter being broken rather than as advice.
                 "error": (
                     f"You've used your {entitlement / 1000:,.0f} AI credits for this "
-                    f"month. They reset on the 1st — or upgrade your plan to keep going."
+                    f"month, and any credits you'd bought. The monthly ones reset on "
+                    f"the 1st — or buy more credits, or upgrade your plan, to keep going."
                 ),
                 "limit_reached": True,
-                "used": max(entitlement - balance, 0) // 10,  # centi-credits
+                # Of the MONTHLY allowance. `balance` is 0 here by
+                # definition, so this is the whole entitlement — spelled
+                # out rather than left as arithmetic that only happens to
+                # be right at zero.
+                "used": entitlement // 10,  # centi-credits
                 "limit": entitlement // 10,
                 "category": "ai_credits",
                 "credits_remaining": round(balance / 1000, 2),
@@ -668,8 +680,9 @@ def _credits_block(user_id: str, plan: str) -> dict | None:
 
         policy = settings.CREDIT_POLICY
         entitlement = policy.entitlements_milli.get(plan)
-        balance = credit_ledger.balance_milli(str(user_id), plan)
-        if entitlement is None or balance is None:
+        breakdown = credit_ledger.balance_breakdown(str(user_id), plan)
+        balance = None if breakdown is None else breakdown.total_milli
+        if entitlement is None or breakdown is None:
             # Unlimited plan — say so explicitly rather than omitting
             # the block, which the client would read as "not on credits".
             return {
@@ -677,6 +690,7 @@ def _credits_block(user_id: str, plan: str) -> dict | None:
                 "balance": None,
                 "limit": None,
                 "used": None,
+                "purchased_balance": None,
                 "period_end_iso": _period_end_iso(),
                 "per_request_max": round(credits.quote_max_credits_milli(policy) / 1000, 2),
             }
@@ -684,7 +698,17 @@ def _credits_block(user_id: str, plan: str) -> dict | None:
             "unlimited": False,
             "balance": round(balance / 1000, 2),
             "limit": round(entitlement / 1000, 2),
-            "used": round(max(entitlement - balance, 0) / 1000, 2),
+            # `used` is what was spent of THIS MONTH'S allowance, so it
+            # is derived from the monthly bucket alone. Deriving it from
+            # the total (`entitlement - balance`) went negative the
+            # moment someone bought a pack — a bigger balance than the
+            # plan advertises is now normal, and it read as "used: 0"
+            # while the meter beside it filled.
+            "used": round(max(entitlement - breakdown.monthly_milli, 0) / 1000, 2),
+            # Bought separately and never expiring. Sent alongside rather
+            # than folded in, because the client shows the two under
+            # different reset copy: one resets on the 1st, one does not.
+            "purchased_balance": round(breakdown.purchased_milli / 1000, 2),
             "period_end_iso": _period_end_iso(),
             # What a single request can cost at most — the quote. The UI
             # uses it to warn when the remaining balance can no longer
