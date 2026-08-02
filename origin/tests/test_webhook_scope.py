@@ -337,3 +337,55 @@ class CommentEmissionTests(BaseAPITestCase):
         with self.captureOnCommitCallbacks(execute=True):
             self._comment()
         self.assertEqual(WebhookDelivery.objects.filter(event=EVENT_MESSAGE_CREATED).count(), 0)
+
+
+class ChannelListTeamFilterTests(BaseAPITestCase):
+    """`GET /api/v3/channels/?team_id=` — enabling the scope picker.
+
+    The serialized channel row carries no team of its own, and the chat
+    sidebar deliberately wants every team at once. But a picker choosing
+    channels *within* one team cannot tell them apart, so a user in two
+    teams would be offered — and could name — a channel the webhook's
+    team does not contain.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.mine = Channel.objects.create(team=self.team, kind=ChannelKind.GM, title="Ours")
+        ChannelMember.objects.create(channel=self.mine, user=self.user, role="owner")
+
+        self.second_team = TeamMaster.objects.create(
+            team_name="Second", team_email="second@team.com", owner=self.user
+        )
+        TeamMembers.objects.create(team=self.second_team, attendee=self.user)
+        self.theirs = Channel.objects.create(
+            team=self.second_team, kind=ChannelKind.GM, title="Other team"
+        )
+        ChannelMember.objects.create(channel=self.theirs, user=self.user, role="owner")
+        self.authenticate(self.user)
+
+    def test_without_a_team_id_every_team_is_returned(self):
+        """The chat sidebar depends on this — the filter must stay
+        opt-in, not become the default."""
+        res = self.client.get("/api/v3/channels/")
+        titles = {c["title"] for c in res.data["channels"]}
+        self.assertIn("Ours", titles)
+        self.assertIn("Other team", titles)
+
+    def test_a_team_id_narrows_to_that_team(self):
+        res = self.client.get("/api/v3/channels/", {"team_id": str(self.team.team_id)})
+        titles = {c["title"] for c in res.data["channels"]}
+        self.assertEqual(titles, {"Ours"})
+
+    def test_naming_a_team_you_are_not_in_returns_nothing(self):
+        """Narrowing only. The queryset is already restricted to the
+        caller's memberships, so this can never widen access."""
+        outsider = User.objects.create_user(
+            username="cltfout", email="cltfout@example.com", password="pw"
+        )
+        foreign_team = TeamMaster.objects.create(
+            team_name="Foreign", team_email="cltfout@team.com", owner=outsider
+        )
+        Channel.objects.create(team=foreign_team, kind=ChannelKind.GM, title="Not yours")
+        res = self.client.get("/api/v3/channels/", {"team_id": str(foreign_team.team_id)})
+        self.assertEqual(res.data["channels"], [])
