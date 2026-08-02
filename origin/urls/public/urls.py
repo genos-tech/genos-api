@@ -16,10 +16,12 @@ in kind from breaking the others.
     POST   /api/public/v1/tasks/
     GET    /api/public/v1/tasks/<int:task_id>/
     PATCH  /api/public/v1/tasks/<int:task_id>/
+    GET    /api/public/v1/openapi.json   (unauthenticated — the spec)
 """
 
 from django.urls import path
 
+from origin.views.public.openapi import OpenApiSchemaView
 from origin.views.public.v1_views import (
     MeView,
     ProjectListView,
@@ -28,6 +30,13 @@ from origin.views.public.v1_views import (
 )
 
 urlpatterns = [
+    # First so the spec is reachable even if a route below is
+    # misconfigured — a broken API with readable docs is debuggable.
+    path(
+        "api/public/v1/openapi.json",
+        OpenApiSchemaView.as_view(),
+        name="public_v1_openapi",
+    ),
     path("api/public/v1/me/", MeView.as_view(), name="public_v1_me"),
     path("api/public/v1/projects/", ProjectListView.as_view(), name="public_v1_projects"),
     path("api/public/v1/tasks/", TaskListCreateView.as_view(), name="public_v1_tasks"),
