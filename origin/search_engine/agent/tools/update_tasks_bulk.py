@@ -184,7 +184,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 if not update_fields:
                     noops.append(task.task_id)
                     continue
-                task.save(update_fields=update_fields)
+                # "ts_updated_at" is required alongside the changed
+                # columns — auto_now only fires for fields named in
+                # update_fields, and the incremental reindexer keys off
+                # it. See update_task.
+                task.save(update_fields=[*update_fields, "ts_updated_at"])
                 updated.append(
                     {
                         "task_id": task.task_id,
