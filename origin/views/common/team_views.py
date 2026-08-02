@@ -254,20 +254,33 @@ class CheckTeamExistsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Check if a Team exists in any order
+        # Deliberately answerable for a team you are NOT in: this backs
+        # the join-by-id flow (`joinTeamFrom.tsx`), where the whole point
+        # is looking up a team before you belong to it. Requiring
+        # membership here would break joining a team entirely.
+        #
+        # So the fix is narrowing the payload, not refusing it. A
+        # non-member gets what the join card renders and nothing else;
+        # `teamOwnerId` names a specific person and is read by no caller
+        # in that state, so it is withheld. Members — the boot-time
+        # `initCurrentTeam` path, which feeds `setCurrentTeam` — still
+        # get the full object, unchanged.
         team_info = TeamMaster.objects.filter(Q(team_id=team_id)).values()
         if len(team_info) == 1:
-            print("team_info[0]:", team_info[0])
-            res = {
-                "exist": True,
-                "teamDetails": {
-                    "teamId": team_info[0]["team_id"],
-                    "teamName": team_info[0]["team_name"],
-                    "teamEmail": team_info[0]["team_email"],
-                    "teamOwnerId": team_info[0]["owner_id"],
-                    "teamImgPath": team_info[0]["profile_image_file_name"],
-                },
+            row = team_info[0]
+            details = {
+                "teamId": row["team_id"],
+                "teamName": row["team_name"],
+                # Shown on the join card so someone can confirm they have
+                # the right team before asking to join. A product
+                # decision, made explicitly: it is the team's contact
+                # address, not a member's.
+                "teamEmail": row["team_email"],
+                "teamImgPath": row["profile_image_file_name"],
             }
+            if is_team_member(team_id, request.user.id):
+                details["teamOwnerId"] = row["owner_id"]
+            res = {"exist": True, "teamDetails": details}
         else:
             res = {"exist": False, "teamDetails": {}}
 

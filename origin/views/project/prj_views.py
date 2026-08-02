@@ -685,6 +685,13 @@ class ProjectTagsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # The sibling `post` on this very class already guards this way.
+        # The read did not, so any authenticated user could enumerate the
+        # tag vocabulary of any project by id — which is a fair sketch of
+        # what a team is working on, and a walkable integer id.
+        if res := require_project_member_or_response(request.user, project_id):
+            return res
+
         tags = (
             ProjectTags.objects.filter(team=team_id, project=project_id)
             .order_by("ts_updated_at")
@@ -1767,8 +1774,10 @@ def _invalidate_label_project_list(team_id):
 class ProjectLabelsView(AuthenticatedAPIView):
     """Team-scoped catalog of labels used to organize PROJECTS.
 
-    GET is open to any authenticated team member (the chips render for
+    GET is open to any member OF THAT TEAM (the chips render for
     everyone); every mutation is owner-gated via `_require_project_owner`.
+    The docstring used to say "any authenticated team member" and the
+    handler enforced only the first half of that.
 
     Note this is a different axis from `ProjectTagsView` — that one
     manages tags applied to TASKS within a single project. See the
@@ -1782,6 +1791,9 @@ class ProjectLabelsView(AuthenticatedAPIView):
                 {"error": "team_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        if res := require_team_member_or_response(request.user, team_id):
+            return res
 
         labels = ProjectLabel.objects.filter(team=team_id).order_by("name")
         # Assigned-project counts so the manage UI can warn about the
