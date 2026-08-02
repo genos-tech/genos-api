@@ -60,6 +60,7 @@ from origin.views.common.runtime_config_views import RuntimeConfigView
 from origin.views.common.team_emoji_views import TeamEmojiView
 from origin.views.common.team_views import *
 from origin.views.common.user_views import *
+from origin.views.common.webhook_views import WebhookDetailView, WebhookListCreateView
 from origin.views.utils.extract_page_title_view import get_page_title
 
 user_list = UserViewSet.as_view({"post": "create"})
@@ -330,6 +331,12 @@ urlpatterns = [
     # Public-API credentials (readiness plan §4.4). JWT-only by design:
     # a leaked key must not be able to mint more keys or revoke the ones
     # that would let you notice.
+    path("api/v2/webhooks/", WebhookListCreateView.as_view(), name="webhooks"),
+    path(
+        "api/v2/webhooks/<uuid:webhook_id>/",
+        WebhookDetailView.as_view(),
+        name="webhook_detail",
+    ),
     path("api/v2/api-keys/", ApiKeyListCreateView.as_view(), name="api_keys"),
     path("api/v2/api-keys/<uuid:key_id>/", ApiKeyDetailView.as_view(), name="api_key_detail"),
     path("api/v2/team/create/", TeamMasterView.as_view(), name="join_team"),

@@ -1,0 +1,35 @@
+# Railway config for the `webhook-deliver` cron service (public API +
+# outbound webhooks, readiness plan §4.4).
+#
+# Same Docker image as `backend-django`, run as a cron: the container
+# starts each tick, runs `manage.py webhook_deliver_tick`, exits.
+#
+# What this does:
+#   EVERY MINUTE, drain the WebhookDelivery outbox. Claims due rows
+#   atomically (`filter(status=PENDING).update(status=SENDING)`), POSTs
+#   each to its customer endpoint with an HMAC signature, and either
+#   marks it sent or schedules an exponentially backed-off retry.
+#   Overlapping passes are safe; a crash leaves SENDING rows for the
+#   stale sweep. An endpoint that fails repeatedly is disabled so a dead
+#   URL stops consuming cron budget.
+#
+# Every minute rather than every five: a webhook that lands a minute
+# after the event is useful, one that lands five minutes after is a
+# batch job. Retries carry their own backoff, so the tick rate does not
+# hammer a failing endpoint.
+#
+# ENV (per-service on Railway — NOT inherited): DATABASE_URL, and
+# OAUTH_TOKEN_ENCRYPTION_KEY, which is ⚠️ LOAD-BEARING: webhook signing
+# secrets are Fernet-encrypted with it, so a missing or drifted key
+# means every delivery fails to sign. No LLM/Vertex vars — this cron
+# never calls a model. No Redis: unlike email-notify it does not consult
+# presence.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+cronSchedule = "* * * * *"
+startCommand = "sh /app/railway-webhook-deliver-entrypoint.sh"
+restartPolicyType = "NEVER"
