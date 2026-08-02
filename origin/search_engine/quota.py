@@ -382,6 +382,28 @@ def get_integrations(user_id: str) -> list[str]:
     return [str(x) for x in v]
 
 
+def get_mcp_enabled(user_id: str) -> bool:
+    """May this user connect an outside AI agent over MCP? (Pro and up.)
+
+    Permissive default `True`, deliberately, and it is worth saying why
+    since this one gates a PAID feature: the fail-open contract exists
+    because a Redis hiccup or a `TIER_QUOTAS_JSON` override written
+    before this key existed must never silently downgrade someone. The
+    asymmetry decides it — a Pro user whose coding agent dies mid-task
+    files a support ticket and loses work in progress; a Free user who
+    briefly reaches MCP during an incident costs us a few tool calls.
+
+    Not the `digest_cadence` exception: that one fails CLOSED because
+    the doubtful action is *sending an unsolicited email*, which cannot
+    be taken back. Answering a tool call can.
+    """
+    v = _capability(user_id, "mcp_enabled", True)
+    if not isinstance(v, bool):
+        log.warning("TIER_QUOTAS mcp_enabled=%r is not a bool; allowing", v)
+        return True
+    return v
+
+
 def get_digest_cadence(user_id: str) -> str | None:
     """None (no digest) | 'weekly' | 'daily'.
 

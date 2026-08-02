@@ -35,6 +35,7 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskComments, TaskMaster
+from origin.search_engine import quota
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.public.mcp import protocol, tools
 
@@ -46,9 +47,28 @@ MODERN = "2026-07-28"
 _META_VERSION = "io.modelcontextprotocol/protocolVersion"
 
 
+def _mcp_enabled_everywhere():
+    """`TIER_QUOTAS` with the MCP capability granted to every tier.
+
+    A fresh test user resolves to `free`, which does NOT include MCP —
+    so without this every test below would assert the tier gate instead
+    of the thing it is named after. Entitlement has its own file
+    (`test_mcp_tier_gate.py`); this one is about the protocol, the auth
+    and the tools.
+    """
+    quotas = {
+        t: {**cfg, "mcp_enabled": True} for t, cfg in settings.SEARCH_ENGINE["TIER_QUOTAS"].items()
+    }
+    return {**settings.SEARCH_ENGINE, "TIER_QUOTAS": quotas}
+
+
+@override_settings(SEARCH_ENGINE=_mcp_enabled_everywhere())
 class McpBase(BaseAPITestCase):
     def setUp(self):
         super().setUp()
+        # The effective tier is cached per user for 60s, so the override
+        # above only takes effect once the previous verdict is dropped.
+        quota.invalidate_effective_tier([str(self.user.id), str(self.user2.id)])
         self.project = ProjectMaster.objects.create(
             team=self.team,
             project_name="Website Redesign",

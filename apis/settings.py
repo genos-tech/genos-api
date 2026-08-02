@@ -1109,7 +1109,7 @@ SEARCH_ENGINE = {
         #
         # UX-pillar capability keys (agent_tool_level, max_effort,
         # auto_effort, agent_memory, agent_history_retention_days,
-        # integrations, digest_cadence) carry the LIVE experience
+        # integrations, digest_cadence, mcp_enabled) carry the LIVE experience
         # ladder — tiers sell capability, volume caps are the fair-use
         # footer. Rationale and target table: genos-docs
         # operations/UX_TIER_MODEL_PLAN.md. A MISSING capability key
@@ -1136,6 +1136,7 @@ SEARCH_ENGINE = {
             "agent_history_retention_days": 30,
             "integrations": [],
             "digest_cadence": None,
+            "mcp_enabled": False,
         },
         # Paid-tier LLM caps are set by a value-based X/Y/Z tiering model,
         # not a profit gate — genos-docs/operations/LLM_TIER_COST_OPTIMIZATION.md
@@ -1203,6 +1204,7 @@ SEARCH_ENGINE = {
             "agent_history_retention_days": 180,
             "integrations": ["web", "google_calendar"],
             "digest_cadence": None,
+            "mcp_enabled": False,
         },
         # Pro reads as: Genos ORGANIZES (composite writes — a milestone
         # + task tree in one approval), deep reasoning + adaptive
@@ -1222,6 +1224,7 @@ SEARCH_ENGINE = {
             "agent_history_retention_days": 365,
             "integrations": ["web", "google_calendar", "github"],
             "digest_cadence": "weekly",
+            "mcp_enabled": True,
         },
         # max = 2x pro on the headline totals for ~1.96x the price, and
         # 2.5x on the premium caps — the deliberate value > price gap is
@@ -1242,6 +1245,7 @@ SEARCH_ENGINE = {
             "agent_history_retention_days": None,
             "integrations": ["web", "google_calendar", "github"],
             "digest_cadence": "daily",
+            "mcp_enabled": True,
         },
         # Contact-sales tier: everything unlimited except an absolute
         # per-file ceiling. Set manually via `feature_access set-tier`
@@ -1261,6 +1265,7 @@ SEARCH_ENGINE = {
             "agent_history_retention_days": None,
             "integrations": ["web", "google_calendar", "github"],
             "digest_cadence": "daily",
+            "mcp_enabled": True,
         },
     },
 }

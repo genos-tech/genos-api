@@ -166,6 +166,7 @@ _PLAN_LIMIT_KEYS = (
     "agent_history_retention_days",
     "integrations",
     "digest_cadence",
+    "mcp_enabled",
 )
 
 
@@ -270,9 +271,11 @@ class BillingRefreshView(AuthenticatedAPIView):
     def post(self, request):
         try:
             summary = stripe_billing.reconcile_from_stripe(request.user)
-            for team in TeamMaster.objects.filter(
-                owner=request.user, is_deleted=False
-            ).exclude(stripe_customer_id__isnull=True).exclude(stripe_customer_id=""):
+            for team in (
+                TeamMaster.objects.filter(owner=request.user, is_deleted=False)
+                .exclude(stripe_customer_id__isnull=True)
+                .exclude(stripe_customer_id="")
+            ):
                 stripe_billing.reconcile_team_from_stripe(team)
         except stripe_billing.BillingError as e:
             logger.warning("billing refresh failed for %s: %s", request.user.email, e)
@@ -288,12 +291,8 @@ def _owned_team_or_error(request, team_id):
     someone else's billing is not a thing to confirm or deny.
     """
     if not team_id:
-        return None, Response(
-            {"error": "team_id is required."}, status=status.HTTP_400_BAD_REQUEST
-        )
-    team = TeamMaster.objects.filter(
-        team_id=team_id, owner=request.user, is_deleted=False
-    ).first()
+        return None, Response({"error": "team_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+    team = TeamMaster.objects.filter(team_id=team_id, owner=request.user, is_deleted=False).first()
     if team is None:
         return None, Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
     return team, None
