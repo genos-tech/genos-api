@@ -212,6 +212,50 @@ class HistoryPredatingThePurchaseTests(BucketTestCase):
         self.assertEqual(self.read().purchased_milli, 5_000)
 
 
+class MidPeriodDowngradeTests(BucketTestCase):
+    """A plan can drop mid-period and the allowance does not follow it.
+
+    `ensure_monthly_grant` claws nothing back on a downgrade, deliberately
+    — so someone granted max's 150 who lands on free still holds 150 for
+    the rest of the month. Everything reading the balance has to cope
+    with `monthly > the plan's entitlement`, which was the shape behind
+    the meter rendering "150 of 5 AI credits left".
+    """
+
+    def test_the_allowance_is_what_was_granted_not_what_the_plan_says(self):
+        self.grant_monthly(150_000, plan="max")
+        b = self.read(plan="free")
+        self.assertEqual(b.monthly_milli, 150_000, "the credits are really held")
+        self.assertEqual(
+            b.monthly_allowance_milli,
+            150_000,
+            "and the period's allowance is what it granted, not free's 5",
+        )
+
+    def test_spending_reduces_the_remainder_not_the_allowance(self):
+        self.grant_monthly(150_000, plan="max")
+        self.charge(30_000)
+        b = self.read(plan="free")
+        self.assertEqual(b.monthly_milli, 120_000)
+        self.assertEqual(b.monthly_allowance_milli, 150_000, "the denominator holds still")
+
+    def test_a_manual_grant_counts_toward_the_allowance(self):
+        # Otherwise an apology credit would make the meter read
+        # "75 of 70", which is the same class of nonsense.
+        self.grant_monthly()
+        credit_ledger.post_manual(user_id=USER, credits_milli=5_000, reason="apology", actor="op")
+        b = self.read()
+        self.assertEqual(b.monthly_allowance_milli, 75_000)
+
+    def test_a_pack_never_inflates_the_allowance(self):
+        self.grant_monthly()
+        self.grant_purchased(100_000)
+        b = self.read()
+        self.assertEqual(
+            b.monthly_allowance_milli, PRO_MILLI, "bought credits are not an allowance"
+        )
+
+
 class ReversalTests(BucketTestCase):
     def test_reversing_a_purchase_reduces_the_purchased_bucket(self):
         """`reverse_entry` copies the original's kind, so refunding a

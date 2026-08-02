@@ -694,17 +694,26 @@ def _credits_block(user_id: str, plan: str) -> dict | None:
                 "period_end_iso": _period_end_iso(),
                 "per_request_max": round(credits.quote_max_credits_milli(policy) / 1000, 2),
             }
+        # The denominator is what THIS PERIOD granted, not what the
+        # current plan advertises. They differ after a mid-period plan
+        # change: `ensure_monthly_grant` claws nothing back on a
+        # downgrade, so someone who was on max keeps max's allowance
+        # until it rolls — and dividing 150 held credits by free's 5
+        # rendered "150 of 5 AI credits left". `max()` because the
+        # entitlement is still the right floor when nothing has been
+        # granted yet this period.
+        allowance = max(entitlement, breakdown.monthly_allowance_milli)
         return {
             "unlimited": False,
             "balance": round(balance / 1000, 2),
-            "limit": round(entitlement / 1000, 2),
+            "limit": round(allowance / 1000, 2),
             # `used` is what was spent of THIS MONTH'S allowance, so it
             # is derived from the monthly bucket alone. Deriving it from
             # the total (`entitlement - balance`) went negative the
             # moment someone bought a pack — a bigger balance than the
             # plan advertises is now normal, and it read as "used: 0"
             # while the meter beside it filled.
-            "used": round(max(entitlement - breakdown.monthly_milli, 0) / 1000, 2),
+            "used": round(max(allowance - breakdown.monthly_milli, 0) / 1000, 2),
             # Bought separately and never expiring. Sent alongside rather
             # than folded in, because the client shows the two under
             # different reset copy: one resets on the 1st, one does not.
