@@ -18,6 +18,8 @@ no longer inherited.
 
 from __future__ import annotations
 
+import re
+
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.test import override_settings
@@ -31,6 +33,7 @@ from origin.models.common.api_key_models import (
 )
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.public.mcp import protocol, tools
@@ -295,6 +298,26 @@ class TestAuthorization(McpBase):
         self.task.refresh_from_db()
         self.assertEqual(self.task.status, "WIP")
 
+    def test_a_write_is_attributed_to_the_key_owner(self):
+        """`TaskActivity.actor` comes from a thread-local holding the
+        request, resolved lazily because DRF authenticates *after*
+        middleware runs. That indirection is why this is worth pinning:
+        an API-key request is `AnonymousUser` at middleware time, and if
+        the actor were captured then instead of read later, every task a
+        connected agent touched would appear in the activity feed with
+        no author. It is also the reason tools run inline rather than on
+        a worker thread — a different thread has a different local."""
+        self._key(scope=SCOPE_WRITE)
+        self._call("update_task", {"task_id": self.task.task_id, "status": "WIP"})
+
+        activity = TaskActivity.objects.filter(task=self.task).order_by("-activity_id").first()
+        self.assertIsNotNone(activity, "the write raised no activity row at all")
+        self.assertEqual(
+            str(activity.actor_id),
+            str(self.user.id),
+            "an MCP write landed in the activity feed without its author",
+        )
+
     def test_a_personal_token_must_name_a_team(self):
         self._key()
         res = self._rpc("tools/list", url=self._url(team=False))
@@ -392,17 +415,30 @@ class TestToolCalls(McpBase):
         payload or be described as conditional."""
         self._key()
         payload = self._result(self._call("get_task", {"task_id": "WRD-7"}))["structuredContent"]
-        blurb = (
-            tools.BY_NAME["get_task"].description + protocol.initialize_result({})["instructions"]
+        prose = (
+            tools.BY_NAME["get_task"].description
+            + " "
+            + protocol.initialize_result({})["instructions"]
         )
-        for field_name in ("content_markdown", "content_text"):
-            if field_name in blurb and field_name not in payload:
-                self.assertIn(
-                    "when it is present",
-                    blurb,
-                    f"`{field_name}` is promised but not returned, and not "
-                    f"described as conditional.",
-                )
+        # Hedging is checked per SENTENCE, not across the whole blurb:
+        # one hedged mention elsewhere must not license an unhedged
+        # promise here, which is exactly how this assertion would rot
+        # into one that cannot fail.
+        hedges = ("when it is present", "when present", "if present", "fall back")
+        broken = []
+        for sentence in re.split(r"(?<=[.!?])\s+", prose):
+            for field_name in re.findall(r"`(\w+)`", sentence):
+                if not field_name.startswith("content_"):
+                    continue
+                if field_name in payload:
+                    continue
+                if not any(h in sentence for h in hedges):
+                    broken.append((field_name, sentence.strip()))
+        self.assertFalse(
+            broken,
+            "prose promises a field the payload does not carry, without saying "
+            f"it is conditional: {broken}",
+        )
 
     def test_workspace_content_fences_are_stripped(self):
         """They are a guard for Genos's own system prompt. To another
