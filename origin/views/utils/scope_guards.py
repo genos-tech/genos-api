@@ -185,6 +185,29 @@ def can_access_task(task_id, user_id) -> bool:
     return is_project_member(row["project_id"], user_id)
 
 
+def team_ids_for_user(user_id) -> list:
+    """Every team `user_id` owns or actively belongs to.
+
+    The team-level counterpart of `member_project_ids`. Used where a
+    request arrives with no team context at all and one has to be
+    derived from a user — the GitHub webhook being the case that forced
+    it, since it is authenticated by a repo signature rather than by a
+    session.
+    """
+    if user_id is None:
+        return []
+    return list(
+        {
+            *TeamMembers.objects.filter(attendee=user_id, is_deleted=False).values_list(
+                "team_id", flat=True
+            ),
+            *TeamMaster.objects.filter(owner=user_id, is_deleted=False).values_list(
+                "team_id", flat=True
+            ),
+        }
+    )
+
+
 def member_project_ids(user_id, team_id=None) -> list:
     """Project ids `user_id` may see, optionally narrowed to one team.
 

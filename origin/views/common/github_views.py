@@ -33,7 +33,7 @@ from origin.models.task.task_activity_models import TaskActivity, TaskActivityAc
 from origin.models.task.task_models import TaskMaster
 from origin.services.github_webhooks import parse_pr_url, parse_pr_url_full
 from origin.services.oauth.tokens import get_valid_access_token
-from origin.views.utils.scope_guards import can_access_task
+from origin.views.utils.scope_guards import can_access_task, team_ids_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +267,51 @@ def _verify_signature(raw_body: bytes, signature_header: str | None) -> bool:
     return hmac.compare_digest(expected, received)
 
 
-def _close_tasks_for_merged_pr(head_ref: str, pr_url: str = "") -> int:
+def _repo_team_ids(owner: str, repo: str) -> list:
+    """Team ids a webhook for `owner/repo` is allowed to write into.
+
+    The webhook is authenticated by a repo signature, not a session, so
+    it arrives with no team context — and every task-resolution helper
+    below used to answer that by scanning `TaskMaster` across the whole
+    install. Branch names carry a project's display id (`code` +
+    number), and project codes are short, human, guessable strings, so
+    a branch named after ANOTHER tenant's task closed or annotated that
+    tenant's task. One shared `GITHUB_WEBHOOK_SECRET` signs every
+    registered repo's payloads, so any repo connected by any customer
+    produced a valid signature.
+
+    `GithubWebhookRegistration` records who registered the hook, not
+    where its tasks live — there is no `team` FK — so the best scope the
+    current model supports is the registering user's teams. That is a
+    real narrowing: reaching another tenant now requires the registrar
+    to already be a member there, where they can act anyway. **A `team`
+    FK on the registration is the durable fix** and is the reason this
+    function is one lookup rather than a join.
+
+    Empty list = write nothing. An unregistered repo authorizes nothing,
+    and neither does a registration whose user has been deleted
+    (`registered_by` is `SET_NULL`) — fail closed, and say so in the log
+    rather than silently reverting to install-wide.
+    """
+    # `__iexact` because GitHub owner/repo names are case-insensitive and
+    # the payload's casing need not match what was stored —
+    # `github_webhooks.register_repo_webhook` already looks its own rows
+    # up this way. An exact match would silently yield "no scope", i.e.
+    # quietly disable auto-close for a repo whose URL casing drifted.
+    registered_by = (
+        GithubWebhookRegistration.objects.filter(owner__iexact=owner, repo__iexact=repo)
+        .values_list("registered_by_id", flat=True)
+        .first()
+    )
+    if not registered_by:
+        logger.warning(
+            "GitHub webhook: no usable registration for %s/%s — no tasks in scope", owner, repo
+        )
+        return []
+    return team_ids_for_user(registered_by)
+
+
+def _close_tasks_for_merged_pr(head_ref: str, team_ids: list, pr_url: str = "") -> int:
     """Auto-close tasks referenced by a merged PR's head branch name.
 
     Resolution path: walk every task that has a project-scoped display
@@ -291,15 +335,20 @@ def _close_tasks_for_merged_pr(head_ref: str, pr_url: str = "") -> int:
     automatic for users who follow the convention, no-op for users who
     don't.
     """
-    if not head_ref:
+    if not head_ref or not team_ids:
         return 0
     # Pre-filter to tasks that *could* have a display ID matched.
     # `select_related("project", "assignee")` keeps the per-row lookup
     # cheap; for a workspace with thousands of tasks this iterates in
     # SQL once, then the regex pass runs in memory.
+    #
+    # `team_id__in` is the tenant boundary — see `_repo_team_ids`. It is
+    # first in the filter because without it this loop closes tasks in
+    # any customer's install that happens to share a project code.
     candidates = (
         TaskMaster.objects.select_related("project", "assignee")
         .filter(
+            team_id__in=team_ids,
             is_deleted=False,
             project__code__isnull=False,
             project_task_number__isnull=False,
@@ -391,15 +440,19 @@ def _fetch_pr_head_ref(owner: str, repo: str, number: int) -> str | None:
 
 
 def _record_pr_comment_activity(
-    head_ref: str, pr_url: str, comment: dict, comment_kind: str
+    head_ref: str, pr_url: str, comment: dict, comment_kind: str, team_ids: list
 ) -> int:
     """For each task whose `display_id` matches `head_ref`, create a
     `TaskActivity` row recording this PR comment. Idempotent by
     `(action_type, metadata.comment_id, task)` so webhook retries don't
     duplicate. Returns the count of rows actually created."""
-    if not head_ref or not comment.get("id"):
+    if not head_ref or not comment.get("id") or not team_ids:
         return 0
+    # `team_id__in` is the tenant boundary — see `_repo_team_ids`. The
+    # comment body is attacker-controlled and lands in the task's audit
+    # feed, so an unscoped match wrote into someone else's tenant.
     candidates = TaskMaster.objects.select_related("project", "team").filter(
+        team_id__in=team_ids,
         is_deleted=False,
         project__code__isnull=False,
         project_task_number__isnull=False,
@@ -448,7 +501,7 @@ def _record_pr_comment_activity(
     return created
 
 
-def _record_pr_link_activity(head_ref: str, pr_url: str, number, title: str) -> int:
+def _record_pr_link_activity(head_ref: str, pr_url: str, number, title: str, team_ids: list) -> int:
     """For each task whose `display_id` is contained in `head_ref`, create
     a `PR_LINKED` activity row recording that this PR (opened on a branch
     carrying the task's display id) is linked to the task. PRs whose head
@@ -459,9 +512,14 @@ def _record_pr_link_activity(head_ref: str, pr_url: str, number, title: str) -> 
     reopen events don't duplicate. `pr_url` (not the per-repo PR number) is
     the dedup key because the number collides across repos. Returns the
     count of rows actually created."""
-    if not head_ref or not pr_url:
+    if not head_ref or not pr_url or not team_ids:
         return 0
+    # `team_id__in` is the tenant boundary — see `_repo_team_ids`. The
+    # row this writes carries an attacker-controlled `pr_title` into the
+    # task's audit feed, so an unscoped match was stored content in
+    # someone else's tenant.
     candidates = TaskMaster.objects.select_related("project", "team").filter(
+        team_id__in=team_ids,
         is_deleted=False,
         project__code__isnull=False,
         project_task_number__isnull=False,
@@ -554,15 +612,22 @@ class GithubWebhookView(APIView):
             # mutate state we cache (state, draft, merged_at, head sha).
             # Comment events skip this — they don't touch cached fields.
             ref = parse_pr_url_full(html_url)
+            # Which tenant this repo may write into. Derived from the PR
+            # url rather than trusted from the payload's `repository`
+            # block for no deep reason — this is the value already parsed
+            # here — but note both are attacker-supplied and the scope is
+            # only as good as the registration lookup they feed.
+            team_ids = []
             if ref is not None:
                 owner_inv, repo_inv, number_inv = ref
                 _invalidate_pr_caches(owner_inv, repo_inv, number_inv, head_ref or None)
+                team_ids = _repo_team_ids(owner_inv, repo_inv)
 
             # MVP: only the merge transition fires. Other action types
             # (opened, ready_for_review, closed-unmerged, etc.) are
             # acknowledged but not acted on.
             if action == "closed" and merged and head_ref:
-                updated = _close_tasks_for_merged_pr(head_ref, html_url)
+                updated = _close_tasks_for_merged_pr(head_ref, team_ids, html_url)
                 logger.info(
                     "GitHub webhook: PR merged %s (head=%s) → updated %d task(s)",
                     html_url,
@@ -577,7 +642,7 @@ class GithubWebhookView(APIView):
             if action in ("opened", "reopened") and head_ref:
                 pr_number = pr.get("number")
                 pr_title = pr.get("title") or ""
-                linked = _record_pr_link_activity(head_ref, html_url, pr_number, pr_title)
+                linked = _record_pr_link_activity(head_ref, html_url, pr_number, pr_title, team_ids)
                 logger.info(
                     "GitHub webhook: PR %s %s (head=%s) → linked %d task(s)",
                     action,
@@ -649,7 +714,13 @@ class GithubWebhookView(APIView):
             )
             return Response({"detail": "noop"}, status=status.HTTP_200_OK)
 
-        recorded = _record_pr_comment_activity(head_ref, pr_url, comment, comment_kind)
+        # The `review` branch above never parses the PR url, so resolve
+        # the tenant from it here rather than in each branch — both
+        # arrive with a `pr_url` and nothing else identifying the repo.
+        comment_ref = parse_pr_url(pr_url)
+        team_ids = _repo_team_ids(*comment_ref) if comment_ref else []
+
+        recorded = _record_pr_comment_activity(head_ref, pr_url, comment, comment_kind, team_ids)
         logger.info(
             "GitHub webhook: %s comment %s (head=%s) → recorded %d activity row(s)",
             comment_kind,
