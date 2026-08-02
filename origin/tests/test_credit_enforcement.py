@@ -383,6 +383,29 @@ class CreditsBlockTests(_CacheClearing):
         self.assertEqual(block["used"], 1.25)
 
     @AUTHORITATIVE
+    def test_a_mid_period_downgrade_does_not_render_as_more_than_the_limit(self):
+        """The bug this shipped with: granted 150 on max, downgraded to
+        free, and the meter read "150 of 5 AI credits left" — dividing
+        what they hold by what their NEW plan grants."""
+        AiCreditEntry.objects.create(
+            user_id=self.UID,
+            entry_type=AiCreditEntry.ENTRY_GRANT,
+            kind=AiCreditEntry.KIND_MONTHLY,
+            credits_milli=150_000,
+            period=credit_ledger.period_for(),
+            plan="max",
+            actor="system",
+        )
+        cache.clear()
+        block = _credits_block(self.UID, "free")
+        self.assertEqual(block["balance"], 150.0)
+        self.assertEqual(block["limit"], 150.0, "the denominator is what the period granted")
+        self.assertEqual(block["used"], 0.0)
+        self.assertLessEqual(
+            block["balance"], block["limit"], "a meter can never read X of fewer-than-X"
+        )
+
+    @AUTHORITATIVE
     def test_purchased_credits_ride_alongside_rather_than_inside_the_balance(self):
         """A pack must not be folded into `used`/`limit`. The plan still
         advertises 70; the extra 100 is a separate possession, and the

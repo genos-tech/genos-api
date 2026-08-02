@@ -186,6 +186,13 @@ class Breakdown:
 
     monthly_milli: int
     purchased_milli: int
+    #: What this period ACTUALLY granted, before spending — which is not
+    #: the current plan's entitlement once a plan changes mid-period.
+    #: `ensure_monthly_grant` claws nothing back on a downgrade, so
+    #: someone who was on max this month keeps max's allowance until it
+    #: rolls. The meter's denominator has to be this, or it divides what
+    #: they hold by what their new plan grants and reads "150 of 5".
+    monthly_allowance_milli: int = 0
 
     @property
     def total_milli(self) -> int:
@@ -230,7 +237,7 @@ def balance_breakdown(user_id: str, plan: str, *, period: str | None = None) -> 
         cache_key = f"{_BALANCE_CACHE_PREFIX}{user_id}:{period}"
         cached = cache.get(cache_key)
         if cached is not None:
-            return Breakdown(int(cached[0]), int(cached[1]))
+            return Breakdown(int(cached[0]), int(cached[1]), int(cached[2]))
 
         ensure_monthly_grant(user_id, plan, period=period)
 
@@ -251,11 +258,16 @@ def balance_breakdown(user_id: str, plan: str, *, period: str | None = None) -> 
         # It also puts a REVERSAL of a purchased grant on the purchased
         # side, where it belongs — `reverse_entry` copies the original's
         # kind, so refunding a pack posts `reversal`/`purchased`.
+        monthly_allowance = _pool_credits_milli(rows, period)
         monthly_remaining = max(0, _pool_delta_milli(rows, period))
         purchased_remaining = _purchased_remaining_milli(rows)
 
-        cache.set(cache_key, (monthly_remaining, purchased_remaining), _BALANCE_CACHE_SECONDS)
-        return Breakdown(monthly_remaining, purchased_remaining)
+        cache.set(
+            cache_key,
+            (monthly_remaining, purchased_remaining, monthly_allowance),
+            _BALANCE_CACHE_SECONDS,
+        )
+        return Breakdown(monthly_remaining, purchased_remaining, monthly_allowance)
     except Exception:  # noqa: BLE001
         log.debug("balance_breakdown failed", exc_info=True)
         return None
@@ -275,6 +287,22 @@ def _pool_delta_milli(rows, period: str) -> int:
     from origin.search_engine.models import AiCreditEntry  # noqa: PLC0415
 
     return _sum(rows.filter(period=period).exclude(kind=AiCreditEntry.KIND_PURCHASED))
+
+
+def _pool_credits_milli(rows, period: str) -> int:
+    """What the period granted on the monthly side, before any spending.
+
+    Grants only — the allowance a meter should divide by. Charges are
+    excluded rather than netted, which is the whole difference between
+    this and `_pool_delta_milli`.
+    """
+    from origin.search_engine.models import AiCreditEntry  # noqa: PLC0415
+
+    return _sum(
+        rows.filter(period=period)
+        .exclude(kind=AiCreditEntry.KIND_PURCHASED)
+        .exclude(entry_type=AiCreditEntry.ENTRY_CHARGE)
+    )
 
 
 def _purchased_remaining_milli(rows) -> int:
