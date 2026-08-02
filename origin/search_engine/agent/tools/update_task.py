@@ -23,6 +23,7 @@ from typing import Any
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 
 _VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"}
 # Canonical enums live in `frontend/.../taskMeta.ts`. Keep in sync —
@@ -49,13 +50,27 @@ def _paragraph(text: str) -> dict[str, Any]:
 
 
 def _wrap_blocknote(text: str) -> list[dict[str, Any]]:
-    """Same shape `create_task` produces — id / props / styles /
-    children on every block, plus the trailing blank sentinel a
-    user-typed body always carries."""
+    """Parse the written body as markdown into BlockNote blocks.
+
+    Previously this split on newlines and emitted one flat paragraph per
+    line, so a status update written with a heading and a checklist
+    round-tripped into the editor as literal `##` and `- [ ]` characters
+    in prose. `markdown_to_blocks` is the same parser `create_note` uses,
+    so a body written here renders exactly like one written there.
+
+    The two touches it doesn't apply are kept, because this tool's output
+    has to be indistinguishable from a user-typed body: a stable `id` on
+    every block, and the trailing blank paragraph the editor always
+    carries as its final line.
+    """
     if not text:
         return []
-    lines = text.split("\n")
-    return [_paragraph(line) for line in lines] + [_paragraph("")]
+    blocks = markdown_to_blocks(text)
+    if not blocks:
+        return []
+    for block in blocks:
+        block.setdefault("id", str(uuid.uuid4()))
+    return blocks + [_paragraph("")]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:

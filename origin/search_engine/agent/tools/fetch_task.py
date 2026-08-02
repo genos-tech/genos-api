@@ -22,6 +22,7 @@ from origin.search_engine.agent.tools.base import (
     ToolError,
     wrap_workspace_content,
 )
+from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
 from origin.search_engine.text_extraction import extract_text
 
 _COMMENTS_CAP = 20
@@ -59,6 +60,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"Not authorized to read task {task_id}.")
 
     content_text = extract_text(task.content)
+    # `content_markdown` keeps the body's structure — headings, list
+    # markers, checkbox state, code fences. A task description is a spec,
+    # and a reader acting on it needs to tell "- [x] done" from
+    # "- [ ] todo", which the flattened form cannot express. Returned
+    # ALONGSIDE `content_text` rather than replacing it: existing callers
+    # (and the evals pinned to them) keep the string they were built on.
+    content_markdown = blocks_to_markdown(task.content)
 
     # Most-recent N comments. The chunker indexes all comments, but the
     # LLM rarely needs full history — last 20 is plenty for grounding.
@@ -91,6 +99,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "assignee_id": str(task.assignee_id) if task.assignee_id else None,
         "reporter_id": str(task.reporter_id) if task.reporter_id else None,
         "content_text": wrap_workspace_content(content_text),
+        "content_markdown": wrap_workspace_content(content_markdown),
         "comments": comments,
         "__summary__": (
             f"Loaded task {task.display_id}" + (f" + {len(comments)} comments" if comments else "")
