@@ -162,6 +162,231 @@ class DigestTickTests(BaseAPITestCase):
         )
 
 
+class DigestEditorialContentTests(BaseAPITestCase):
+    """The content contract (`_build_prompt` / `_split_title`).
+
+    The failure this guards against is not a crash — it's two mornings
+    in a row that say the same thing in the same order. So: the writer
+    must SEE its last editions, it must be able to headline an edition,
+    and a conversational body must survive the sentinel check that was
+    written for terse bullets.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.team.plan = "max"
+        self.team.save(update_fields=["plan"])
+        self.user.timezone = "Asia/Tokyo"
+        self.user.save(update_fields=["timezone"])
+
+    def _tick(self, now=_MONDAY_8AM_JST, run_agent=None, **opts):
+        out = StringIO()
+        with (
+            mock.patch.object(digest_mod.timezone, "now", return_value=now),
+            mock.patch.object(
+                digest_mod, "run_agent", side_effect=run_agent or _fake_run_agent()
+            ) as ra,
+            mock.patch.object(digest_mod, "dispatch_push_for_inbox_item") as push,
+        ):
+            call_command("agent_digest", stdout=out, **opts)
+        return ra, push, out.getvalue()
+
+    def _prompt(self, ra):
+        return ra.call_args.args[0]
+
+    # --- the writer's memory -------------------------------------------------
+
+    def test_first_edition_says_so_and_carries_no_history(self):
+        ra, _, _ = self._tick(at_hour=8)
+        prompt = self._prompt(ra)
+        self.assertIn("first edition", prompt)
+        self.assertNotIn("What you already told them", prompt)
+
+    def test_previous_editions_reach_the_prompt(self):
+        # Yesterday's digest, stored the way the tick stores one.
+        InboxItems.objects.create(
+            team=self.team,
+            sender=None,
+            receiver=self.user,
+            item_type=digest_mod.ITEM_TYPE_DIGEST,
+            item_body={"title": "Two things slipped", "text": "- The API milestone slipped."},
+            item_optionals={"cadence": "daily"},
+            request_status="",
+        )
+        ra, _, _ = self._tick(at_hour=8)
+        prompt = self._prompt(ra)
+        self.assertIn("What you already told them", prompt)
+        self.assertIn("The API milestone slipped.", prompt)
+        # ...and the instruction that makes the history useful rather
+        # than a template to copy.
+        self.assertIn("Do NOT restate", prompt)
+
+    def test_only_the_last_two_editions_are_recalled(self):
+        for n in range(4):
+            InboxItems.objects.create(
+                team=self.team,
+                sender=None,
+                receiver=self.user,
+                item_type=digest_mod.ITEM_TYPE_DIGEST,
+                item_body={"title": "t", "text": f"edition-{n}"},
+                item_optionals={"cadence": "daily"},
+                request_status="",
+            )
+        ra, _, _ = self._tick(at_hour=8)
+        prompt = self._prompt(ra)
+        self.assertIn("edition-3", prompt)
+        self.assertIn("edition-2", prompt)
+        self.assertNotIn("edition-1", prompt)
+        self.assertNotIn("edition-0", prompt)
+
+    def test_another_users_digests_are_not_recalled(self):
+        InboxItems.objects.create(
+            team=self.team,
+            sender=None,
+            receiver=self.user2,
+            item_type=digest_mod.ITEM_TYPE_DIGEST,
+            item_body={"title": "t", "text": "someone-elses-edition"},
+            item_optionals={"cadence": "daily"},
+            request_status="",
+        )
+        ra, _, _ = self._tick(at_hour=8, user_id=str(self.user.id))
+        self.assertNotIn("someone-elses-edition", self._prompt(ra))
+
+    def test_the_house_bullet_rules_are_overridden_for_this_surface(self):
+        # agent/prompts.py mandates "prefer 3-5 bullets over a paragraph"
+        # and bans opening lines — the format the screenshots showed. A
+        # briefing has to countermand that at the SYSTEM level or the
+        # per-run voice instructions just lose.
+        ra, _, _ = self._tick(at_hour=8)
+        extra = ra.call_args.kwargs["system_extra"]
+        self.assertIn("SURFACE OVERRIDE", extra)
+        self.assertIn("does NOT apply", extra)
+
+    def test_prompt_carries_the_local_day_and_cadence(self):
+        ra, _, _ = self._tick(at_hour=8)
+        prompt = self._prompt(ra)
+        # Monday 2026-08-03 in Asia/Tokyo — the USER's day, not UTC's.
+        self.assertIn("Monday, August 3", prompt)
+        self.assertIn("daily briefing", prompt)
+
+    def test_prompt_asks_for_the_users_language(self):
+        self.user.language = "ja"
+        self.user.save(update_fields=["language"])
+        ra, _, _ = self._tick(at_hour=8)
+        self.assertIn("Write in Japanese", self._prompt(ra))
+
+    def test_unknown_language_falls_back_to_english(self):
+        self.user.language = "kl"
+        self.user.save(update_fields=["language"])
+        ra, _, _ = self._tick(at_hour=8)
+        self.assertIn("Write in English", self._prompt(ra))
+
+    # --- the headline --------------------------------------------------------
+
+    def test_title_line_becomes_the_item_title_and_the_push_title(self):
+        _, push, _ = self._tick(
+            at_hour=8,
+            run_agent=_fake_run_agent("TITLE: Three things are stuck\n\nMorning. Two slipped."),
+        )
+        item = InboxItems.objects.get(item_type=digest_mod.ITEM_TYPE_DIGEST)
+        self.assertEqual(item.item_body["title"], "Three things are stuck")
+        # ...and it is GONE from the body, or the bubble prints it twice.
+        self.assertNotIn("TITLE:", item.item_body["text"])
+        self.assertTrue(item.item_body["text"].startswith("Morning."))
+        self.assertEqual(push.call_args.kwargs["title"], "Three things are stuck")
+
+    def test_output_without_a_title_keeps_the_default_and_its_first_line(self):
+        # The regression that matters: a run that ignores the convention
+        # loses its headline, never its opening sentence.
+        _, push, _ = self._tick(at_hour=8, run_agent=_fake_run_agent("Morning. Two slipped."))
+        item = InboxItems.objects.get(item_type=digest_mod.ITEM_TYPE_DIGEST)
+        self.assertEqual(item.item_body["title"], digest_mod.DEFAULT_TITLE)
+        self.assertEqual(item.item_body["text"], "Morning. Two slipped.")
+        self.assertEqual(push.call_args.kwargs["title"], digest_mod.DEFAULT_TITLE)
+
+    def test_a_bolded_or_headed_title_line_is_still_parsed(self):
+        for raw in ("**TITLE: Stuck on review**", "## TITLE: Stuck on review"):
+            InboxItems.objects.all().delete()
+            self.user.digest_last_sent_at = None
+            self.user.save(update_fields=["digest_last_sent_at"])
+            self._tick(at_hour=8, run_agent=_fake_run_agent(f"{raw}\n\nBody."))
+            item = InboxItems.objects.get(item_type=digest_mod.ITEM_TYPE_DIGEST)
+            self.assertEqual(item.item_body["title"], "Stuck on review", raw)
+
+    def test_a_headline_is_forced_to_plain_text(self):
+        # Both consumers render the headline LITERALLY — a bare
+        # <Typography> in the bubble and the web-push title — and unlike
+        # the body it never passes through rewrite_citation_md. "no
+        # markdown, no links" in the brief is an instruction, not a
+        # guarantee, so the markdown has to be taken out here.
+        self._tick(
+            at_hour=8,
+            run_agent=_fake_run_agent(
+                "TITLE: **[KDS-439](task:15)** is stuck and [task:99] slipped\n\nBody."
+            ),
+        )
+        item = InboxItems.objects.get(item_type=digest_mod.ITEM_TYPE_DIGEST)
+        title = item.item_body["title"]
+        self.assertEqual(title, "KDS-439 is stuck and slipped")
+        for junk in ("[", "]", "(", ")", "*", "task:"):
+            self.assertNotIn(junk, title)
+
+    def test_an_overlong_headline_is_truncated(self):
+        self._tick(at_hour=8, run_agent=_fake_run_agent(f"TITLE: {'x' * 200}\n\nBody."))
+        item = InboxItems.objects.get(item_type=digest_mod.ITEM_TYPE_DIGEST)
+        self.assertLessEqual(len(item.item_body["title"]), digest_mod._TITLE_MAX)
+
+    def test_a_title_with_no_body_sends_nothing(self):
+        # An edition that is all headline has nothing to say; stamping
+        # without sending is the NOTHING_TO_REPORT rule.
+        _, push, _ = self._tick(at_hour=8, run_agent=_fake_run_agent("TITLE: All quiet"))
+        self.assertEqual(list(InboxItems.objects.filter(item_type=digest_mod.ITEM_TYPE_DIGEST)), [])
+        push.assert_not_called()
+        self.user.refresh_from_db()
+        self.assertIsNotNone(self.user.digest_last_sent_at)
+
+    # --- the sentinel --------------------------------------------------------
+
+    def test_a_digest_that_mentions_the_sentinel_survives(self):
+        # The old substring check would have deleted this edition. A
+        # conversational digest can absolutely say the words.
+        body = "TITLE: Quiet week\n\nThe API side has **nothing to report**, which is the story."
+        self._tick(at_hour=8, run_agent=_fake_run_agent(body))
+        item = InboxItems.objects.get(item_type=digest_mod.ITEM_TYPE_DIGEST)
+        self.assertIn("nothing to report", item.item_body["text"])
+
+    def test_the_bare_sentinel_still_suppresses(self):
+        for raw in ("NOTHING_TO_REPORT", "  nothing_to_report  ", "**NOTHING_TO_REPORT**"):
+            self.user.digest_last_sent_at = None
+            self.user.save(update_fields=["digest_last_sent_at"])
+            self._tick(at_hour=8, run_agent=_fake_run_agent(raw))
+            self.assertEqual(
+                list(InboxItems.objects.filter(item_type=digest_mod.ITEM_TYPE_DIGEST)), [], raw
+            )
+
+    # --- --preview -----------------------------------------------------------
+
+    def test_preview_prints_and_persists_nothing(self):
+        ra, push, out = self._tick(
+            at_hour=8,
+            preview=True,
+            user_id=str(self.user.id),
+            run_agent=_fake_run_agent("TITLE: Three things are stuck\n\nMorning."),
+        )
+        ra.assert_called_once()  # it really generates — that's the point
+        self.assertIn("TITLE: Three things are stuck", out)
+        self.assertIn("Morning.", out)
+        self.assertEqual(list(InboxItems.objects.filter(item_type=digest_mod.ITEM_TYPE_DIGEST)), [])
+        push.assert_not_called()
+        self.user.refresh_from_db()
+        self.assertIsNone(self.user.digest_last_sent_at)
+
+    def test_preview_ignores_the_once_per_period_guard(self):
+        self._tick(at_hour=8)  # a real send stamps
+        ra, _, _ = self._tick(at_hour=8, preview=True, user_id=str(self.user.id))
+        ra.assert_called_once()
+
+
 class DigestPreferenceEndpointTests(BaseAPITestCase):
     URL = "/api/v2/user/preferences/digest/"
 
