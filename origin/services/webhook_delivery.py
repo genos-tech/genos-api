@@ -101,6 +101,11 @@ def validate_webhook_url(url: str) -> str:
     they already know what they typed — so a vague error would just cost
     a support round trip.
     """
+    # `urlparse` accepts bytes and raises on other non-strings, so a
+    # JSON body carrying `"url": 123` became a 500 rather than the
+    # explanatory 400 the rest of this function exists to produce.
+    if url is not None and not isinstance(url, str):
+        raise WebhookUrlError("Webhook URL must be a string.")
     parsed = urlparse(url or "")
     if parsed.scheme != "https":
         raise WebhookUrlError("Webhook URLs must use https.")

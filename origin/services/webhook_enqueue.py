@@ -72,9 +72,16 @@ def _iso(value):
 def task_payload(task) -> dict:
     """The public shape of a task in a webhook body.
 
-    Deliberately the same snake_case field names the public API returns,
-    so an integrator who reads `/api/public/v1/tasks/` and one who
-    receives `task.created` are looking at the same object.
+    Deliberately the SAME KEY SET the public API returns, so an
+    integrator who reads `/api/public/v1/tasks/` and one who receives
+    `task.created` are looking at the same object.
+
+    That was a claim before it was a fact: this payload carried
+    `team_id` and no `start_date`, while the REST serializer carried
+    `start_date` and no `team_id`. Neither omission was deliberate.
+    `test_api_contract.test_the_webhook_task_shape_matches_the_rest_one`
+    now compares the two key sets, so the next divergence fails rather
+    than quietly making this docstring untrue.
     """
     return {
         "id": task.task_id,
@@ -87,6 +94,7 @@ def task_payload(task) -> dict:
         "assignee_id": str(task.assignee_id) if task.assignee_id else None,
         "reporter_id": str(task.reporter_id) if task.reporter_id else None,
         "due_date": _iso(task.due_date),
+        "start_date": _iso(task.start_date),
         "created_at": _iso(task.ts_created_at),
         "updated_at": _iso(task.ts_updated_at),
     }
