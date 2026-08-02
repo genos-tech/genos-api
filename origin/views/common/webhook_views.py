@@ -76,13 +76,33 @@ def _validate_scope(team, events, request_data):
             ),
         )
 
-    if project_ids:
+    # Parse FIRST, then compare parsed-to-parsed. Comparing raw input
+    # against ids read back from the database mixes types: a JSON client
+    # sending `["12"]` — which is ordinary — had its own project reported
+    # as unknown, because `"12" not in {12}`. And a value that is not a
+    # scalar at all (`[{"id": 1}]`) raised `unhashable type` out of the
+    # membership test — a 500 on request input.
+    parsed_projects = []
+    for raw in project_ids:
+        try:
+            parsed_projects.append(int(raw))
+        except (TypeError, ValueError):
+            return (
+                None,
+                None,
+                Response(
+                    {"error": "project_ids must be a list of project ids."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            )
+
+    if parsed_projects:
         valid = set(
-            ProjectMaster.objects.filter(
-                team=team, project_id__in=[p for p in project_ids if str(p).isdigit()]
-            ).values_list("project_id", flat=True)
+            ProjectMaster.objects.filter(team=team, project_id__in=parsed_projects).values_list(
+                "project_id", flat=True
+            )
         )
-        missing = [p for p in project_ids if p not in valid]
+        missing = [p for p in parsed_projects if p not in valid]
         if missing:
             return (
                 None,
@@ -155,7 +175,7 @@ def _validate_scope(team, events, request_data):
                 ),
             )
 
-    return [int(p) for p in project_ids], [str(c) for c in channel_ids], None
+    return parsed_projects, [str(c) for c in channel_ids], None
 
 
 def _require_manager(request, team_id):

@@ -104,7 +104,12 @@ def comment_payload(comment, task) -> dict:
         "team_id": str(task.team_id) if task.team_id else None,
         "author_id": str(comment.sender_id) if comment.sender_id else None,
         "body": comment.comment_body,
-        "created_at": _iso(getattr(comment, "ts_created_at", None)),
+        # `ts_sent_at`, not `ts_created_at`. Both this model and `Message`
+        # name it that way, and a defensive `getattr(..., None)` here
+        # silently published `"created_at": null` on every delivery
+        # rather than failing. Attribute access, so the next rename is a
+        # test failure instead of a quiet hole in the payload.
+        "created_at": _iso(comment.ts_sent_at),
     }
 
 
@@ -130,7 +135,7 @@ def message_payload(message, channel) -> dict:
         "body_text": message.body_text or "",
         "thread_root_id": message.thread_root_id,
         "is_thread_reply": bool(message.is_thread_reply),
-        "created_at": _iso(getattr(message, "ts_created_at", None)),
+        "created_at": _iso(message.ts_sent_at),
     }
 
 

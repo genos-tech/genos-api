@@ -240,6 +240,12 @@ class ChatEmissionTests(BaseAPITestCase):
         self.assertIsNotNone(delivery)
         self.assertEqual(delivery.payload["body_text"], "hello there")
         self.assertEqual(delivery.payload["channel_id"], str(self.group.id))
+        # The payload is built eagerly, before commit, from a
+        # just-created instance — so the auto-populated fields have to be
+        # present at that moment, not merely present after a refresh.
+        self.assertIsNotNone(delivery.payload["created_at"])
+        self.assertIn("thread_root_id", delivery.payload)
+        self.assertFalse(delivery.payload["is_thread_reply"])
 
     def test_an_unnamed_channel_is_not_queued(self):
         other = Channel.objects.create(team=self.team, kind=ChannelKind.GM, title="Other")
@@ -309,6 +315,9 @@ class CommentEmissionTests(BaseAPITestCase):
         self.assertIsNotNone(delivery)
         self.assertEqual(delivery.payload["task_id"], self.task.task_id)
         self.assertEqual(delivery.payload["project_id"], self.project.project_id)
+        # Was silently null: the model field is `ts_sent_at`, and a
+        # `getattr(..., "ts_created_at", None)` published the miss.
+        self.assertIsNotNone(delivery.payload["created_at"])
 
     def test_a_comment_outside_the_project_filter_is_not_queued(self):
         elsewhere = ProjectMaster.objects.create(
@@ -389,3 +398,109 @@ class ChannelListTeamFilterTests(BaseAPITestCase):
         Channel.objects.create(team=foreign_team, kind=ChannelKind.GM, title="Not yours")
         res = self.client.get("/api/v3/channels/", {"team_id": str(foreign_team.team_id)})
         self.assertEqual(res.data["channels"], [])
+
+
+class ScopeInputShapeTests(BaseAPITestCase):
+    """Ids arrive from JSON, so their Python type is not ours to assume.
+
+    Both of these were real: comparing raw request input against ids read
+    back from the database mixes types, and the membership test itself
+    raises on a value that is not hashable.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectMaster.objects.create(
+            team=self.team, project_name="Mine", owner=self.user
+        )
+        self.authenticate(self.user)
+
+    def _create(self, project_ids):
+        return self.client.post(
+            WEBHOOKS,
+            {
+                "team_id": str(self.team.team_id),
+                "url": "https://example.com/hook",
+                "events": [EVENT_TASK_CREATED],
+                "project_ids": project_ids,
+            },
+            format="json",
+        )
+
+    def test_a_project_id_sent_as_a_string_is_accepted(self):
+        """JSON clients commonly send ids as strings. `"12" not in {12}`
+        reported the caller's own project as unknown."""
+        res = self._create([str(self.project.project_id)])
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual(res.data["project_ids"], [self.project.project_id])
+
+    def test_an_integer_project_id_still_works(self):
+        res = self._create([self.project.project_id])
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["project_ids"], [self.project.project_id])
+
+    def test_a_non_scalar_project_id_is_400_not_500(self):
+        """`p not in valid` raises `unhashable type: 'dict'` — a 500 on
+        request input, reachable by anyone who can create a webhook."""
+        res = self._create([{"id": 1}])
+        self.assertEqual(res.status_code, 400)
+
+    def test_a_non_numeric_project_id_is_400(self):
+        res = self._create(["not-a-number"])
+        self.assertEqual(res.status_code, 400)
+
+    def test_a_project_id_from_another_team_is_still_refused_as_a_string(self):
+        """Parsing must not become a way past the ownership check."""
+        outsider = User.objects.create_user(
+            username="sistout", email="sistout@example.com", password="pw"
+        )
+        other_team = TeamMaster.objects.create(
+            team_name="SIST Other", team_email="sistout@team.com", owner=outsider
+        )
+        foreign = ProjectMaster.objects.create(
+            team=other_team, project_name="Theirs", owner=outsider
+        )
+        res = self._create([str(foreign.project_id)])
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("Unknown projects", res.data["error"])
+
+
+class ChannelMemberIdShapeTests(BaseAPITestCase):
+    """The counterparty check parses UUIDs; casing must not matter.
+
+    `str(uuid.UUID(x))` canonicalises, so an uppercase id resolves
+    normally — checked here rather than assumed, because the same
+    normalisation makes two *spellings of one id* collapse, which is
+    refused on purpose.
+    """
+
+    def test_an_uppercase_uuid_is_accepted(self):
+        self.authenticate(self.user)
+        res = self.client.post(
+            "/api/v3/channels/",
+            {
+                "kind": ChannelKind.GM,
+                "team_id": str(self.team.team_id),
+                "title": "Upper",
+                "member_user_ids": [str(self.user2.id).upper()],
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+
+    def test_the_same_id_twice_in_two_spellings_is_refused(self):
+        """Deliberate: the request asks for two members and names one
+        person, so it is malformed rather than something to quietly
+        deduplicate into a different channel than was requested."""
+        self.authenticate(self.user)
+        res = self.client.post(
+            "/api/v3/channels/",
+            {
+                "kind": ChannelKind.GM,
+                "team_id": str(self.team.team_id),
+                "title": "Dup",
+                "member_user_ids": [str(self.user2.id), str(self.user2.id).upper()],
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, 404)
