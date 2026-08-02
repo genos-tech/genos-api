@@ -33,6 +33,7 @@ from origin.models.task.task_activity_models import TaskActivity, TaskActivityAc
 from origin.models.task.task_models import TaskMaster
 from origin.services.github_webhooks import parse_pr_url, parse_pr_url_full
 from origin.services.oauth.tokens import get_valid_access_token
+from origin.views.utils.scope_guards import can_access_task
 
 logger = logging.getLogger(__name__)
 
@@ -1058,6 +1059,16 @@ class GithubPullsForTaskView(APIView):
         task_id = request.GET.get("task_id")
         if not task_id:
             return Response({"detail": "task_id_required"}, status=status.HTTP_400_BAD_REQUEST)
+        # The task id is a walkable integer, and the response carries the
+        # task's display id — which is the project code — plus PR titles
+        # and branch names.
+        #
+        # 404, matching what this endpoint already returns for an unknown
+        # id, so "no such task" and "not yours" are indistinguishable.
+        # Answering `{"pulls": []}` here instead would have been an
+        # existence oracle: 200 for a real task, 404 for a made-up one.
+        if not can_access_task(task_id, request.user.id):
+            return Response({"detail": "task_not_found"}, status=status.HTTP_404_NOT_FOUND)
         resolved, err = _resolve_task_display_id(task_id)
         if err is not None:
             return err

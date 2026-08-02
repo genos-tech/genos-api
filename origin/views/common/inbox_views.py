@@ -91,7 +91,15 @@ class InboxItemView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        inbox_item = InboxItems.objects.get(team=team_id, item_id=item_id)
+        # An inbox item belongs to its RECEIVER. Without this filter,
+        # anyone could mark another person's items read — or flip a
+        # pending request to rejected, which silently answers it on their
+        # behalf. Scoping the fetch is both the check and the lookup.
+        inbox_item = InboxItems.objects.filter(
+            team=team_id, item_id=item_id, receiver=request.user
+        ).first()
+        if inbox_item is None:
+            return Response({"error": "Inbox item not found."}, status=status.HTTP_404_NOT_FOUND)
 
         update_data = request.data.copy()
         # Remove None values from the updated_data if it's None
