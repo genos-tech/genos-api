@@ -791,7 +791,11 @@ SEARCH_ENGINE = {
     # Phase 8 — conversation session memory.
     # How many prior (query, answer) pairs to prepend into the model
     # context on follow-up /ask/ calls within the same session.
-    "SESSION_MAX_PRIOR_TURNS": int(os.environ.get("SESSION_MAX_PRIOR_TURNS", "3")),
+    # Raised 3 → 10 for the Genos page: a persistent main-page surface
+    # hosts long mixed-topic conversations, and a 3-turn window made
+    # "as I said earlier…" fail four turns in. Bounded per-answer by
+    # SESSION_PRIOR_ANSWER_MAX_CHARS.
+    "SESSION_MAX_PRIOR_TURNS": int(os.environ.get("SESSION_MAX_PRIOR_TURNS", "10")),
     # Minutes of inactivity before a session is considered expired.
     # An expired session ID silently creates a fresh session.
     "SESSION_TTL_MINUTES": int(os.environ.get("SESSION_TTL_MINUTES", "30")),
@@ -1020,9 +1024,12 @@ SEARCH_ENGINE = {
     # turns verbatim. Lets long conversations retain early-turn context
     # the verbatim window would otherwise drop. Costs one summary LLM
     # call per turn that triggers the summary path (i.e. only when the
-    # session already has > N prior turns). Off by default.
+    # session already has > N prior turns). On by default since the
+    # Genos page made long-lived sessions the norm — this is the
+    # "recap" that keeps a resumed conversation coherent past the
+    # verbatim window. Flip the env var to roll back without a deploy.
     "RAG_SESSION_ROLLING_SUMMARY": (
-        os.environ.get("RAG_SESSION_ROLLING_SUMMARY", "false").lower() == "true"
+        os.environ.get("RAG_SESSION_ROLLING_SUMMARY", "true").lower() == "true"
     ),
     # Phase 4.2 — re-sort source chips by citation density at end-of-turn.
     # When True, the final `sources` event (emitted just before `done`)
