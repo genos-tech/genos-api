@@ -279,6 +279,12 @@ class MilestoneBurndownView(AuthenticatedAPIView):
         if last_day < start_day:
             return Response({"burndown": [], "total": 0}, status=status.HTTP_200_OK)
 
+        # Walkable-id batch, same shape as TaskDependencyBatchListView
+        # (closed in #255). Narrow to the ids the caller can actually
+        # reach rather than refusing the whole call, so a chart
+        # containing one stray id still renders the rest.
+        task_ids = [t for t in task_ids if can_access_task(t, request.user.id)]
+
         tasks = list(
             TaskMaster.objects.filter(task_id__in=task_ids).values_list("task_id", "status")
         )
@@ -442,6 +448,12 @@ class TaskVelocityView(AuthenticatedAPIView):
         # `taskact_task_created_idx (task, -ts_created_at)` index covers
         # the task_id__in + ts filter. `new_value` is JSON but status
         # diffs are stored as plain strings, so equality/membership works.
+        # Walkable-id batch, same shape as TaskDependencyBatchListView
+        # (closed in #255). Narrow to the ids the caller can actually
+        # reach rather than refusing the whole call, so a chart
+        # containing one stray id still renders the rest.
+        task_ids = [t for t in task_ids if can_access_task(t, request.user.id)]
+
         rows = (
             TaskActivity.objects.filter(task_id__in=task_ids)
             .filter(Q(team_id=team_id) | Q(team__isnull=True))

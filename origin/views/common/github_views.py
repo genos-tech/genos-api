@@ -989,6 +989,8 @@ class GithubBranchesForTaskView(APIView):
         task_id = request.GET.get("task_id")
         if not task_id:
             return Response({"detail": "task_id_required"}, status=status.HTTP_400_BAD_REQUEST)
+        if not can_access_task(task_id, request.user.id):
+            return Response({"detail": "task_not_found"}, status=status.HTTP_404_NOT_FOUND)
         resolved, err = _resolve_task_display_id(task_id)
         if err is not None:
             return err
@@ -1136,6 +1138,10 @@ class GithubPullsForTasksView(APIView):
             return Response({"pulls_by_task": pulls_by_task})
 
         with_display: list[tuple[TaskMaster, str]] = []
+        # Same walkable-id batch as the task-dependency endpoint closed
+        # in #255: narrow rather than refuse, so one stray id does not
+        # blank the whole PR column.
+        task_ids = [t for t in task_ids if can_access_task(t, request.user.id)]
         for task in TaskMaster.objects.filter(task_id__in=task_ids).select_related("project"):
             display_id = task.display_id
             if not display_id or display_id.startswith("#"):
