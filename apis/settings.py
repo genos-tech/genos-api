@@ -324,6 +324,13 @@ REST_FRAMEWORK = {
         "rest_framework_simplejwt.authentication.JWTAuthentication",
         "origin.views.common.api_key_auth.ApiKeyAuthentication",
     ),
+    # Per-KEY rate limit for the public API. Env-overridable because the
+    # right number depends on who is integrating, and finding that out
+    # should not need a deploy. Scoped throttles only fire on views that
+    # declare them, so this affects nothing else.
+    "DEFAULT_THROTTLE_RATES": {
+        "public_api": os.environ.get("PUBLIC_API_RATE", "120/min"),
+    },
     # Per-IP throttling behind a proxy: both prod edges (Railway, Cloud
     # Run's front end) sit exactly one hop in front of gunicorn and
     # append the real client address to X-Forwarded-For. NUM_PROXIES=1
