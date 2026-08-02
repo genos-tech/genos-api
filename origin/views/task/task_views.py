@@ -38,7 +38,14 @@ from origin.views.utils.mention_handler import extractMentionedUsers, resolve_gr
 from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
-from origin.views.utils.scope_guards import can_access_task
+from origin.views.utils.scope_guards import (
+    can_access_task,
+    is_guest,
+    is_project_member,
+    is_team_member,
+    member_project_ids,
+    require_team_member_or_response,
+)
 from origin.views.utils.upload_limits import check_upload_size
 
 from .common_color import EFFORT_LEVEL_COLOR_MAP, PRIORITY_COLOR_MAP, status_color
@@ -853,6 +860,26 @@ class TaskMetaView(AuthenticatedAPIView):
         return Response(personal_notes, status=status.HTTP_200_OK)
 
 
+def _team_task_scope(user_id, team_id) -> Q:
+    """Which tasks in `team_id` this member may see in a team-wide list.
+
+    Their projects, plus tasks whose `project` is NULL. That second
+    clause is not laziness: `ProjectMaster` deletion is SET_NULL, so an
+    orphaned task legitimately belongs to no project and would otherwise
+    vanish from the team list the moment a project was removed — a
+    regression `test_get_team_tasks_handles_null_fks` already guards.
+
+    Orphans are safe to include here ONLY because the caller has already
+    been confirmed a team member. A guest gets no orphan clause: they
+    reach the product through specific projects, and a task with no
+    project is by definition not one of them.
+    """
+    scope = Q(project_id__in=member_project_ids(user_id, team_id=team_id))
+    if is_team_member(team_id, user_id) and not is_guest(team_id, user_id):
+        scope |= Q(project__isnull=True)
+    return scope
+
+
 class GetTeamTasksView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
@@ -863,10 +890,19 @@ class GetTeamTasksView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Scope to the caller's PROJECTS, not the team. `team_id` is a
+        # client-supplied string and was the only filter, so this
+        # returned every task in a named team with assignee emails
+        # attached. `TaskMetaView` already derives exactly this list; the
+        # shared helper is the same derivation.
+        if res := require_team_member_or_response(request.user, team_id):
+            return res
+        scope = _team_task_scope(request.user.id, team_id)
+
         # select_related on the FKs accessed in the loop (assignee, team,
         # project) collapses 3 per-row lookups into JOINs on the main query.
         task_with_tags = (
-            TaskMaster.objects.filter(team=team_id, is_init_task=False)
+            TaskMaster.objects.filter(scope, team=team_id, is_init_task=False)
             .select_related("assignee", "team", "project")
             .prefetch_related("task_tags")
         )
@@ -935,8 +971,13 @@ class GetTeamTasksByTagView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Same team-wide shape as GetTeamTasksView, same fix.
+        if res := require_team_member_or_response(request.user, team_id):
+            return res
         task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
-            team=team_id, is_init_task=False
+            _team_task_scope(request.user.id, team_id),
+            team=team_id,
+            is_init_task=False,
         )
 
         projects = {}
@@ -990,6 +1031,8 @@ class ChildTaskView(AuthenticatedAPIView):
                 {"error": "Wrong parameters."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if not is_project_member(raw_project_id, request.user.id):
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
 
         try:
             project_id = int(raw_project_id)
@@ -1181,6 +1224,14 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
         if len(target_task) == 0:
             return Response({}, status=status.HTTP_200_OK)
 
+        # Guard the RESULT, not the input: the lookup is by thread, so
+        # there is no task id to check until now. An empty body — the
+        # same answer as "no task on this thread" — rather than a 404,
+        # because the caller may legitimately be in the chat while the
+        # linked task lives in a project they are not in.
+        if not can_access_task(target_task[0][1], request.user.id):
+            return Response({}, status=status.HTTP_200_OK)
+
         # select_related collapses the five FK walks the serialization
         # below does per row (project, its system user, team, assignee,
         # reporter) into the base query — without it each request paid
@@ -1356,6 +1407,11 @@ class GetTaskView(AuthenticatedAPIView):
 
         project_id = int(raw_project_id)
         task_id = int(raw_task_id)
+        # team_id and project_id were both caller-supplied, so the task
+        # id alone decided what came back — attachments, collaborators
+        # and all. Same rule as the task write paths.
+        if not can_access_task(task_id, request.user.id):
+            return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
 
         # Get the specific task with its attachments. select_related
         # collapses the five FK walks the serialization below does per
@@ -2068,6 +2124,10 @@ class TaskCommentsView(AuthenticatedAPIView):
                 "task_id must be an integer",
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Comments carry their authors' identities, and `user_id` above
+        # was read but never used as a gate.
+        if not can_access_task(task_id, request.user.id):
+            return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
         if task_id:
             # Fetch ALL reactions for this task in a single SQL (JOIN via the
             # double-underscore traversal on sender). Group by comment_id in
@@ -2392,6 +2452,9 @@ class TaskDependencyView(AuthenticatedAPIView):
                 {"error": "task_id must be an integer."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        if not can_access_task(task_id, request.user.id):
+            return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
 
         # `blocking` = rows where the current task is the blocker; the
         # "other" endpoint is the blocked side.
