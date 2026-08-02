@@ -1,5 +1,6 @@
 from django.urls import include, path
 
+from origin.views.common.api_key_views import ApiKeyDetailView, ApiKeyListCreateView
 from origin.views.common.auth_views import *
 from origin.views.common.billing_views import (
     BillingCheckoutView,
@@ -326,6 +327,11 @@ urlpatterns = [
         name="calendar_sync_backfill",
     ),
     # Team
+    # Public-API credentials (readiness plan §4.4). JWT-only by design:
+    # a leaked key must not be able to mint more keys or revoke the ones
+    # that would let you notice.
+    path("api/v2/api-keys/", ApiKeyListCreateView.as_view(), name="api_keys"),
+    path("api/v2/api-keys/<uuid:key_id>/", ApiKeyDetailView.as_view(), name="api_key_detail"),
     path("api/v2/team/create/", TeamMasterView.as_view(), name="join_team"),
     path("api/v2/team/profile/", TeamMasterView.as_view(), name="team_profile"),
     path("api/v2/team/exist/", CheckTeamExistsView.as_view(), name="exist_team"),

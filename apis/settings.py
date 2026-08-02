@@ -316,8 +316,13 @@ WEBPUSH_MEDIA_BASE_URL = os.environ.get("WEBPUSH_MEDIA_BASE_URL", "")
 GIPHY_API_KEY = os.environ.get("GIPHY_API_KEY", "")
 
 REST_FRAMEWORK = {
+    # Order matters, but not for correctness: the API-key class returns
+    # None unless the header actually says `ApiKey`, so the two never
+    # compete for the same credential. JWT stays first because it is the
+    # overwhelmingly common case and short-circuits sooner.
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "origin.views.common.api_key_auth.ApiKeyAuthentication",
     ),
     # Per-IP throttling behind a proxy: both prod edges (Railway, Cloud
     # Run's front end) sit exactly one hop in front of gunicorn and
@@ -524,8 +529,7 @@ SEARCH_ENGINE = {
     # truncated to 1536 dims via Matryoshka so it drops into the
     # existing 1536-dim OpenSearch index without recreating it. Bump
     # VERTEX_EMBEDDING_DIMENSIONS (and the index) if you want full 3072.
-    "VERTEX_EMBEDDING_MODEL": os.environ.get("VERTEX_EMBEDDING_MODEL")
-    or "gemini-embedding-001",
+    "VERTEX_EMBEDDING_MODEL": os.environ.get("VERTEX_EMBEDDING_MODEL") or "gemini-embedding-001",
     # NB `... or "1536"`, not a get() default. `os.environ.get(k, d)` returns
     # the default only when the key is ABSENT — a key that is present but
     # EMPTY yields "" and int("") raises at import, taking the whole process
@@ -610,8 +614,7 @@ SEARCH_ENGINE = {
     # that spent its whole budget on tools is holding real retrieved
     # material, and "did not reach a final answer" throws it away.
     # Setting this to false restores the historical hard error exactly.
-    "AGENT_STEP_CAP_WRAPUP": os.environ.get("AGENT_STEP_CAP_WRAPUP", "true").lower()
-    == "true",
+    "AGENT_STEP_CAP_WRAPUP": os.environ.get("AGENT_STEP_CAP_WRAPUP", "true").lower() == "true",
     # Ops kill-switch for individual agent tools: comma-separated tool
     # names to hide from the model (e.g. "search_web,create_task"), so a
     # risky new tool can ship dark / be switched off per environment with
@@ -1342,9 +1345,7 @@ SEARCH_ENGINE["AGENT_EFFORT_LEVELS"] = (
 # like an unset preference (DEFAULT_EFFORT), so rollback is safe.
 # Router cost must be measured before flipping (AGENT_COST_OPTIMIZATION
 # has the method); it fails open to "medium" on any error or garbage.
-SEARCH_ENGINE["AGENT_AUTO_EFFORT"] = (
-    os.environ.get("AGENT_AUTO_EFFORT", "false").lower() == "true"
-)
+SEARCH_ENGINE["AGENT_AUTO_EFFORT"] = os.environ.get("AGENT_AUTO_EFFORT", "false").lower() == "true"
 
 # Per-effort thinking budgets (llm_models.yaml `efforts.*.thinking_budget`)
 # applied to the agent loop's Gemini calls. Separate from
@@ -1430,9 +1431,7 @@ SEARCH_ENGINE["AI_COST_METER"] = os.environ.get("AI_COST_METER", "false").lower(
 # start of shadow-mode data collection, which is a deliberate act.
 # Making credits AUTHORITATIVE is a Phase 2 decision and deliberately
 # has no flag yet — it should not be one typo away.
-SEARCH_ENGINE["AI_CREDITS_SHADOW"] = (
-    os.environ.get("AI_CREDITS_SHADOW", "false").lower() == "true"
-)
+SEARCH_ENGINE["AI_CREDITS_SHADOW"] = os.environ.get("AI_CREDITS_SHADOW", "false").lower() == "true"
 
 # PHASE 2 — make credits the CUSTOMER'S LIMIT, replacing the daily ask
 # count. Requires AI_CREDITS_SHADOW (without a ledger being written, a
@@ -1471,9 +1470,7 @@ SEARCH_ENGINE["AI_CREDITS_AUTHORITATIVE"] = (
 SEARCH_ENGINE["AI_CEILING_ROUTE_CHEAPEST"] = (
     os.environ.get("AI_CEILING_ROUTE_CHEAPEST", "false").lower() == "true"
 )
-SEARCH_ENGINE["AI_CEILING_PAUSE"] = (
-    os.environ.get("AI_CEILING_PAUSE", "false").lower() == "true"
-)
+SEARCH_ENGINE["AI_CEILING_PAUSE"] = os.environ.get("AI_CEILING_PAUSE", "false").lower() == "true"
 
 # Free-tier daily ask circuit breaker (V2 §4.3) — OPT-IN, off by
 # default (product decision 2026-07-28): with credits authoritative a
@@ -1544,17 +1541,13 @@ SEARCH_ENGINE["AI_MONTHLY_BUDGET_JPY"] = float(os.environ.get("AI_MONTHLY_BUDGET
 #
 #    Not instant: an in-flight model call finishes, so real spend can
 #    exceed this by one call. Bounded, and the excess is ours.
-SEARCH_ENGINE["AI_REQUEST_MAX_JPY_MILLI"] = int(
-    os.environ.get("AI_REQUEST_MAX_JPY_MILLI") or "0"
-)
+SEARCH_ENGINE["AI_REQUEST_MAX_JPY_MILLI"] = int(os.environ.get("AI_REQUEST_MAX_JPY_MILLI") or "0")
 #    USD-denominated twin, and the one to prefer — the cost system's base
 #    unit is USD because that is what providers invoice (see
 #    `search_engine/money.py`). The yen variable above still works and
 #    still bounds the loop; this one is what the USD quote/absorb columns
 #    are written from. Both 0 = no per-request ceiling.
-SEARCH_ENGINE["AI_REQUEST_MAX_USD_MICRO"] = int(
-    os.environ.get("AI_REQUEST_MAX_USD_MICRO") or "0"
-)
+SEARCH_ENGINE["AI_REQUEST_MAX_USD_MICRO"] = int(os.environ.get("AI_REQUEST_MAX_USD_MICRO") or "0")
 # 2. PER-USER DAILY ALERT — observation only, never blocks. USD; 0 = off.
 #    Logs a WARNING (not ERROR — that would red the cron) naming the user
 #    when their day's ledger spend crosses this. Deliberately not
@@ -1567,12 +1560,8 @@ SEARCH_ENGINE["AI_REQUEST_MAX_USD_MICRO"] = int(
 #    Reads the legacy AI_USER_DAILY_ALERT_JPY only as a name to fail
 #    loudly on: an operator who still has the yen variable set would
 #    otherwise silently lose their alert when the code switched to USD.
-SEARCH_ENGINE["AI_USER_DAILY_ALERT_USD"] = float(
-    os.environ.get("AI_USER_DAILY_ALERT_USD") or "0"
-)
-if os.environ.get("AI_USER_DAILY_ALERT_JPY") and not os.environ.get(
-    "AI_USER_DAILY_ALERT_USD"
-):
+SEARCH_ENGINE["AI_USER_DAILY_ALERT_USD"] = float(os.environ.get("AI_USER_DAILY_ALERT_USD") or "0")
+if os.environ.get("AI_USER_DAILY_ALERT_JPY") and not os.environ.get("AI_USER_DAILY_ALERT_USD"):
     from django.core.exceptions import ImproperlyConfigured
 
     raise ImproperlyConfigured(
@@ -1646,6 +1635,7 @@ FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "http://localhost:3000")
 # the same SECRET_KEY or footer links minted by one 400 at the other.
 API_PUBLIC_BASE_URL = os.environ.get("API_PUBLIC_BASE_URL", "")
 
+
 # --- Stripe billing (self-serve subscription tiers) ---
 # Entirely optional: with SECRET_KEY unset the billing endpoints report
 # {enabled: false} and the frontend keeps its "coming soon" placeholder —
@@ -1669,9 +1659,7 @@ def _stripe_prices_by_currency() -> dict[str, dict[str, str]]:
     try:
         parsed = json.loads(raw)
     except ValueError as exc:
-        raise ImproperlyConfigured(
-            f"STRIPE_PRICES_BY_CURRENCY is not valid JSON: {exc}"
-        ) from exc
+        raise ImproperlyConfigured(f"STRIPE_PRICES_BY_CURRENCY is not valid JSON: {exc}") from exc
     if not isinstance(parsed, dict):
         raise ImproperlyConfigured(
             'STRIPE_PRICES_BY_CURRENCY must be {"usd": {"core": "price_..."}}'
