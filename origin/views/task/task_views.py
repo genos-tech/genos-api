@@ -17,7 +17,7 @@ from origin.models.task.task_models import *
 from origin.search_engine.purge import purge_task, purge_task_comment
 from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
 from origin.serializers.task.task_serializers import *
-from origin.services import unified_writer
+from origin.services import unified_writer, webhook_enqueue
 from origin.services.custom_fields import sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.task_cache import (
@@ -1876,7 +1876,22 @@ class TaskCommentsView(AuthenticatedAPIView):
 
         serializer = TaskCommentsSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            comment_obj = serializer.save()
+            # Outbound webhook. Before the mirror below, so a mirror
+            # failure cannot cost the integrator the event — and reading
+            # the task fresh rather than trusting `request.data`, since
+            # the payload names the project the subscription filters on.
+            try:
+                webhook_comment_task = (
+                    TaskMaster.objects.filter(task_id=request.data["task_id"])
+                    .only("task_id", "team_id", "project_id", "project_task_number")
+                    .select_related("project")
+                    .first()
+                )
+                if webhook_comment_task is not None:
+                    webhook_enqueue.schedule_comment_event(comment_obj, webhook_comment_task)
+            except Exception:  # noqa: BLE001 — an observer must not break the write
+                logger.warning("webhook comment enqueue failed", exc_info=True)
             # Track B dual-write: mirror the comment as a v3 thread-reply
             # Message under the PM task header. Lets PM task threads
             # render comments via the unified message path instead of a
