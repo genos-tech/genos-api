@@ -1569,6 +1569,10 @@ class GetProjectTasksView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
         project_id = request.GET.get("project_id")
+        # Both values came from the query string, so naming a project id
+        # returned its whole task list with assignee emails.
+        if project_id and not is_project_member(project_id, request.user.id):
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
 
         if team_id is None or project_id is None:
             return Response(
@@ -2321,6 +2325,9 @@ class TaskCommentMentionView(AuthenticatedAPIView):
                 {"error": "team_id, task_id, and comment_id are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Mentions name people. Same gate as the comments themselves.
+        if not can_access_task(task_id, request.user.id):
+            return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
 
         mentions = TaskCommentMentionFact.objects.filter(
             team=team_id,

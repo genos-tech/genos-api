@@ -14,16 +14,53 @@ from origin.views.utils.incremental import (
     capture_server_time,
     check_since,
 )
+from origin.views.utils.scope_guards import is_guest, is_team_member
 
 
 #############################
 # Team Master views
 #############################
+def _require_team(request, team_id):
+    """`None` when the caller belongs to `team_id`, else a 404 `Response`.
+
+    A join REQUEST is the one place a non-member legitimately writes into
+    a team, so `InboxItemForJoinTeamRequestView` deliberately does not
+    call this — asking to join is the whole point of that endpoint. Every
+    other create path here is a member acting inside their own team.
+    """
+    if not team_id:
+        return Response({"error": "team_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+    if not is_team_member(team_id, request.user.id) and not is_guest(team_id, request.user.id):
+        return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+    return None
+
+
 class InboxItemView(AuthenticatedAPIView):
+    """Inbox items.
+
+    ⚠️ **The sender is the authenticated user, never a body field.**
+    Every create path here used to read `request.data["sender_id"]`
+    verbatim, so any authenticated user could post an item claiming to be
+    from anyone, to anyone, in any team.
+
+    That is not a disclosure bug — it is a spoofing primitive. Inbox
+    items render as "<name> wants to join your project" with an
+    Approve button, so a forged sender is a phishing message delivered
+    inside the product, wearing a colleague's name, in the surface people
+    trust precisely because it is inside the product.
+
+    `receiver` stays a body field: addressing a message to somebody is
+    the point. `team` likewise — but see the membership guard below,
+    because addressing one into a team you have nothing to do with is
+    not.
+    """
+
     def post(self, request):
+        if res := _require_team(request, request.data.get("team_id")):
+            return res
         data = {
             "team": request.data["team_id"],
-            "sender": request.data["sender_id"],
+            "sender": request.user.id,
             "receiver": request.data["receiver_id"],
             "item_body": request.data["item_body"],
             "item_type": request.data["item_type"],  # Must be '0'
@@ -182,7 +219,7 @@ class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
 
         data = {
             "team": request.data["team_id"],
-            "sender": request.data["sender_id"],
+            "sender": request.user.id,
             "receiver": team_owner_id[0],  # Send to the team owner
             "item_body": request.data["item_body"],
             "item_type": request.data["item_type"],  # Must be '1'
@@ -234,6 +271,8 @@ class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
 
 class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
     def post(self, request):
+        if res := _require_team(request, request.data.get("team_id")):
+            return res
         project_owner_id = ProjectMaster.objects.filter(
             team_id=request.data["team_id"],
             project_id=request.data["item_optionals"]["project_id"],
@@ -241,7 +280,7 @@ class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
 
         data = {
             "team": request.data["team_id"],
-            "sender": request.data["sender_id"],
+            "sender": request.user.id,
             "receiver": project_owner_id[0],  # Send to the project owner
             "item_body": request.data["item_body"],
             "item_type": request.data["item_type"],  # Must be '2'
@@ -387,6 +426,8 @@ class JoinGMFromInboxView(AuthenticatedAPIView):
 
 class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
     def post(self, request):
+        if res := _require_team(request, request.data.get("team_id")):
+            return res
         # Resolve the GM's owner via its v3 channel. The FE sends the v3
         # channel UUID as `gm_id` (v3 GMs have no legacy chat id);
         # `Channel.owner` is the GM owner who should receive the request.
@@ -400,7 +441,7 @@ class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
 
         data = {
             "team": request.data["team_id"],
-            "sender": request.data["sender_id"],
+            "sender": request.user.id,
             "receiver": gm_owner_id,  # Send to the gm owner
             "item_body": request.data["item_body"],
             "item_type": request.data["item_type"],  # Must be '3'
