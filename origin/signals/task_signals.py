@@ -43,6 +43,7 @@ from origin.services.calendar_sync import (
 from origin.services.task_cache import invalidate_project_tasks_cache
 
 _calendar_logger = logging.getLogger("origin.calendar_sync")
+_webhook_logger = logging.getLogger("origin.webhooks")
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +281,7 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
                 "is_milestone": instance.is_milestone,
             },
         )
+        _schedule_task_webhook(instance, created=True)
         return
 
     original = getattr(instance, "_activity_original", None)
@@ -366,6 +368,26 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
             old_value=old,
             new_value=new,
             metadata=metadata,
+        )
+
+    # ONE webhook per save, after the whole diff — a subscriber wants
+    # "this task changed", not one delivery per column. Emitted here
+    # rather than off `Activity` because Activity is recipient-scoped
+    # and would fan one event out per person notified.
+    new_status = instance.status if original.get("status") != instance.status else None
+    _schedule_task_webhook(instance, created=False, status_changed_to=new_status)
+
+
+def _schedule_task_webhook(instance, *, created: bool, status_changed_to=None) -> None:
+    """Best-effort: an integration is an observer, and an observer must
+    never be able to fail the action it observes."""
+    try:
+        from origin.services.webhook_enqueue import schedule_task_event
+
+        schedule_task_event(instance, created=created, status_changed_to=status_changed_to)
+    except Exception:  # noqa: BLE001 — never break a task write
+        _webhook_logger.warning(
+            "task webhook scheduling failed for task=%s", instance.pk, exc_info=True
         )
 
 
