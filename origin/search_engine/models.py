@@ -776,6 +776,21 @@ class AiCreditEntry(models.Model):
     plan_entitlement_version = models.CharField(max_length=64, blank=True, default="")
     # Reversals point at the entry they reverse.
     ref_id = models.BigIntegerField(blank=True, null=True)
+    # The outside thing that caused this entry — today, the Stripe
+    # Checkout Session id behind a purchased grant.
+    #
+    # This is the DEDUP KEY for additive grants, and it exists because
+    # the webhook layer has none. Idempotency there is *convergence*:
+    # every write is an assignment (set the tier), so Stripe's
+    # at-least-once delivery is harmless. Granting credits is additive,
+    # and a redelivered event would grant them twice — so uniqueness has
+    # to come from the database, exactly as it already does for a charge.
+    #
+    # `request_id` could not be reused: it is a UUIDField and a `cs_…`
+    # does not fit one.
+    # 255, not 64: a live `cs_live_…` session id runs to ~90 characters
+    # and the ceiling should not be the thing that discovers that.
+    external_ref = models.CharField(max_length=255, blank=True, null=True)
     # Manual entries carry an operator-facing why + who.
     reason = models.CharField(max_length=200, blank=True, default="")
     actor = models.CharField(max_length=64, blank=True, default="")
@@ -805,6 +820,15 @@ class AiCreditEntry(models.Model):
                 fields=["user_id", "period", "plan"],
                 condition=models.Q(entry_type="grant", kind="monthly"),
                 name="uq_credit_monthly_grant",
+            ),
+            # One grant per external cause. Partial, so the column stays
+            # NULL for everything that has no outside cause — a NULL is
+            # not equal to another NULL, so unconstrained rows do not
+            # collide with each other.
+            models.UniqueConstraint(
+                fields=["external_ref"],
+                condition=models.Q(entry_type="grant", external_ref__isnull=False),
+                name="uq_credit_grant_per_external_ref",
             ),
         ]
 

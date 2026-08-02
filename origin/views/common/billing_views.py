@@ -97,6 +97,84 @@ class BillingCheckoutView(AuthenticatedAPIView):
         return Response({"url": url})
 
 
+def _credit_packs_available_for(user) -> tuple[bool, str]:
+    """May this user buy credit packs? Returns (allowed, reason-if-not).
+
+    Two refusals, both of which would otherwise sell something inert:
+
+    * **Credits are not the enforced limit.** In shadow mode the balance
+      binds nobody, so a pack buys literally nothing.
+    * **The plan is unlimited.** `balance_breakdown` returns None before
+      it reads the ledger for an unlimited plan, so purchased credits
+      would be invisible and unspendable.
+
+    The EFFECTIVE tier, not `user.tier` — a team plan lifts its members,
+    so someone can be on enterprise without their own row saying so, and
+    they are exactly who must not be sold a pack.
+    """
+    from origin.search_engine import credit_ledger  # noqa: PLC0415
+    from origin.search_engine.quota import get_effective_tier  # noqa: PLC0415
+
+    if not credit_ledger.credits_authoritative():
+        return False, "AI credits are not currently enforced on this deployment."
+    tier = get_effective_tier(str(user.id))
+    if credit_ledger.entitlement_milli(tier) is None:
+        return False, "Your plan already includes unlimited AI credits."
+    return True, ""
+
+
+class BillingCreditPacksView(AuthenticatedAPIView):
+    """GET /api/v2/billing/credit-packs/ → what is on sale, and to whom.
+
+    Authenticated rather than public, unlike `/billing/plans/`: the
+    `available` flag depends on the caller's effective tier, which is
+    per-user data and must not land on an `AllowAny` view.
+    """
+
+    def get(self, request):
+        currency = _requested_currency(request)
+        allowed, reason = _credit_packs_available_for(request.user)
+        packs = []
+        for pack in stripe_billing.purchasable_credit_packs(currency):
+            packs.append(
+                {
+                    "pack": pack,
+                    "credits": stripe_billing.credit_pack_credits_milli(pack) // 1000,
+                    "price": stripe_billing.credit_pack_price_display(pack, currency),
+                }
+            )
+        return Response(
+            {
+                "packs": packs,
+                "currency": currency,
+                "available": allowed,
+                "unavailable_reason": reason,
+            }
+        )
+
+
+class BillingCreditPackCheckoutView(AuthenticatedAPIView):
+    """POST /api/v2/billing/credit-packs/checkout/  body: {"pack": "pack_100"}
+
+    Returns `{"url": ...}`. No credits are granted here — only the
+    verified webhook (or the reconcile behind it) posts to the ledger.
+    """
+
+    def post(self, request):
+        pack = (request.data or {}).get("pack") or ""
+        allowed, reason = _credit_packs_available_for(request.user)
+        if not allowed:
+            return Response({"error": reason}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            url = stripe_billing.create_credit_pack_checkout_session(
+                request.user, pack, _requested_currency(request)
+            )
+        except stripe_billing.BillingError as e:
+            logger.warning("credit pack checkout failed for %s: %s", request.user.email, e)
+            return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response({"url": url})
+
+
 def _portal_flow_or_error(data):
     """Validate the optional `flow` / `plan` deep-link params.
 
@@ -271,6 +349,15 @@ class BillingRefreshView(AuthenticatedAPIView):
     def post(self, request):
         try:
             summary = stripe_billing.reconcile_from_stripe(request.user)
+            # Separate call, deliberately NOT folded into the function
+            # above: that one early-returns for an enterprise tier and
+            # for a missing customer id, so a pack would silently never
+            # reconcile for some of the users most likely to need it.
+            # Idempotent on the session id, so running it every time is
+            # free.
+            granted = stripe_billing.reconcile_credit_packs(request.user)
+            if granted:
+                summary = f"{summary}; granted {granted} credit pack(s)"
             for team in (
                 TeamMaster.objects.filter(owner=request.user, is_deleted=False)
                 .exclude(stripe_customer_id__isnull=True)

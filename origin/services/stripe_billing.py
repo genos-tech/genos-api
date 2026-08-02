@@ -164,10 +164,12 @@ def supported_currencies() -> list[str]:
     exist — the failure that produces a checkout button leading to a
     dead end.
     """
-    found = {default_currency()} if any(
-        price_for_plan(p, default_currency()) for p in PURCHASABLE_PLANS
-    ) else set()
-    for code in (settings.STRIPE.get("PRICES_BY_CURRENCY") or {}):
+    found = (
+        {default_currency()}
+        if any(price_for_plan(p, default_currency()) for p in PURCHASABLE_PLANS)
+        else set()
+    )
+    for code in settings.STRIPE.get("PRICES_BY_CURRENCY") or {}:
         if any(price_for_plan(p, code) for p in PURCHASABLE_PLANS):
             found.add(code.lower())
     ordered = sorted(found - {default_currency()})
@@ -396,6 +398,203 @@ def create_checkout_session(user: CustomUser, plan: str, currency: str | None = 
 
 
 # --------------------------------------------------------------------------- #
+# Credit packs — one-off purchases                                            #
+# --------------------------------------------------------------------------- #
+#
+# Everything below is deliberately parallel to the subscription code
+# above but shares none of its lookups, because the two must not be able
+# to reach each other's price maps. `tier_for_price` scans the plan
+# prices to decide which tier a paid price represents; a pack price
+# visible to it would make buying credits grant a subscription.
+
+
+def credit_pack_price(pack: str, currency: str | None = None) -> str:
+    """The Stripe price id for a pack in a currency, or "" if unsold there."""
+    code = (currency or default_currency()).lower()
+    return (settings.STRIPE.get("CREDIT_PACK_PRICES") or {}).get(code, {}).get(pack, "")
+
+
+def credit_pack_credits_milli(pack: str) -> int:
+    """What the pack grants, from the versioned policy — never from the event.
+
+    The webhook must not read a quantity off anything the buyer's
+    browser touched, so the amount is looked up here by pack id and the
+    id is the only thing that travels.
+    """
+    policy = getattr(settings, "CREDIT_POLICY", None)
+    if policy is None:
+        return 0
+    return int(getattr(policy, "credit_packs_milli", {}).get(pack, 0))
+
+
+def purchasable_credit_packs(currency: str | None = None) -> list[str]:
+    """Packs sellable in this currency, largest first.
+
+    Both halves must be present: a price in this currency AND an amount
+    in the policy. Either alone is a misconfiguration that would take
+    money for nothing or offer a pack that cannot be charged, so it is
+    simply not offered — the same rule `purchasable_plans` follows.
+    """
+    priced = (settings.STRIPE.get("CREDIT_PACK_PRICES") or {}).get(
+        (currency or default_currency()).lower(), {}
+    )
+    packs = [p for p in priced if credit_pack_credits_milli(p) > 0 and priced[p]]
+    return sorted(packs, key=credit_pack_credits_milli, reverse=True)
+
+
+def credit_pack_price_display(pack: str, currency: str | None = None) -> dict | None:
+    """`{amount, currency}` for a pack, read from Stripe and cached 1h.
+
+    Mirrors `price_display` for plans, including its fail-soft None: a
+    Stripe hiccup should grey out a price, not take the page down.
+    """
+    price_id = credit_pack_price(pack, currency)
+    if not price_id:
+        return None
+    if not billing_enabled():
+        return None
+    cache_key = f"stripe_price_display:{price_id}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
+    try:
+        stripe = _stripe()
+        price = json.loads(str(stripe.Price.retrieve(price_id)))
+        # No `interval` — a pack is a one-off, and echoing "month" here
+        # would put "/month" beside a price that recurs never.
+        out = {"amount": price.get("unit_amount"), "currency": price.get("currency")}
+    except Exception as e:  # noqa: BLE001
+        log.warning("stripe price lookup failed for credit pack %s: %s", pack, e)
+        return None
+    cache.set(cache_key, out, 3600)
+    return out
+
+
+def create_credit_pack_checkout_session(
+    user: CustomUser, pack: str, currency: str | None = None
+) -> str:
+    """Create a ONE-OFF Checkout Session for a credit pack; return its URL."""
+    if credit_pack_credits_milli(pack) <= 0:
+        raise BillingError(f"Unknown credit pack {pack!r}.")
+    price_id = credit_pack_price(pack, currency)
+    if not price_id:
+        raise BillingError(
+            f"Credit pack {pack!r} has no configured Stripe price in "
+            f"{(currency or default_currency()).upper()}."
+        )
+    stripe = _stripe()
+    customer_id = ensure_customer(user)
+    base = settings.FRONTEND_BASE_URL.rstrip("/")
+    params = {
+        # NOT "subscription" — this is the only one-off purchase in the
+        # product, and the difference is the whole point: it must never
+        # create a recurring charge.
+        "mode": "payment",
+        "customer": customer_id,
+        "line_items": [{"price": price_id, "quantity": 1}],
+        "client_reference_id": str(user.id),
+        # ⚠️ NO `plan` KEY. `handle_event` reads `metadata.plan` off a
+        # completed session and sets that subscription tier outright, so
+        # a pack carrying one would hand out a paid plan for the price of
+        # a credit pack.
+        "metadata": {"genos_user_id": str(user.id), "genos_credit_pack": pack},
+        "success_url": f"{base}{RETURN_PATH}?billing=credits",
+        "cancel_url": f"{base}{RETURN_PATH}?billing=cancelled",
+        "automatic_tax": {"enabled": settings.STRIPE.get("AUTOMATIC_TAX", False)},
+    }
+    if settings.STRIPE.get("TOS_CONSENT"):
+        params["consent_collection"] = {"terms_of_service": "required"}
+    try:
+        session = stripe.checkout.Session.create(**params)
+    except Exception as e:  # noqa: BLE001
+        raise BillingError(f"Could not start checkout: {e}")
+    return session["url"]
+
+
+def _grant_credit_pack(session: dict) -> tuple[bool, str]:
+    """Post the purchased grant for a completed pack session. Idempotent.
+
+    Returns `(posted, summary)` rather than the summary alone. The caller
+    that counts repairs needs to know whether a row was actually
+    written, and reading that out of the text is a trap — "already
+    granted" contains "granted".
+    """
+    from origin.search_engine import credit_ledger  # noqa: PLC0415
+
+    metadata = session.get("metadata") or {}
+    pack = metadata.get("genos_credit_pack") or ""
+    credits_milli = credit_pack_credits_milli(pack)
+    if credits_milli <= 0:
+        log.warning("credit pack session with unusable pack %r", pack)
+        return False, f"ignored: unknown credit pack {pack!r}"
+
+    # `client_reference_id` first, exactly like the subscription arm:
+    # it is set server-side at session creation and the browser never
+    # touches it. The customer id is the fallback for a session whose
+    # reference is missing.
+    user = CustomUser.objects.filter(
+        id=session.get("client_reference_id") or None, is_deleted=False
+    ).first() or _user_by_customer(session.get("customer"))
+    if user is None:
+        log.warning("credit pack session %s has no resolvable user", session.get("id"))
+        return False, "ignored: unknown user"
+    _bind_customer(user, session.get("customer"))
+
+    # Only a PAID session grants. A `mode=payment` session can COMPLETE
+    # with `payment_status: "unpaid"` — that is the normal shape for
+    # konbini and bank transfer, both ordinary in the default (JPY)
+    # market. Granting then would hand out credits for money that may
+    # never arrive; the later `async_payment_succeeded` grants instead.
+    if session.get("payment_status") not in ("paid", "no_payment_required"):
+        log.info("credit pack session %s completed but unpaid; deferring", session.get("id"))
+        return False, "pack deferred: awaiting payment"
+
+    posted = credit_ledger.post_purchase(
+        user_id=str(user.id),
+        credits_milli=credits_milli,
+        external_ref=str(session.get("id") or ""),
+        reason=f"credit pack {pack}",
+    )
+    return posted, (
+        f"granted {credits_milli // 1000} credits to {user.id}" if posted else "already granted"
+    )
+
+
+def reconcile_credit_packs(user: CustomUser, *, limit: int = 20) -> int:
+    """Post any pack grant a lost webhook never delivered. Returns the count.
+
+    There is no self-heal for one-time payments otherwise: the existing
+    `reconcile_from_stripe` lists Subscriptions only, so a dropped
+    `checkout.session.completed` would leave a customer who paid with
+    nothing to show for it and no way to fix it themselves.
+
+    Safe to call on every return from Stripe because `post_purchase` is
+    idempotent on the session id — a session already granted posts
+    nothing.
+    """
+    if not user.stripe_customer_id or not billing_enabled():
+        return 0
+    try:
+        stripe = _stripe()
+        sessions = stripe.checkout.Session.list(customer=user.stripe_customer_id, limit=limit)
+    except Exception:  # noqa: BLE001 — a repair path must not break the caller
+        log.warning("could not list checkout sessions for reconcile", exc_info=True)
+        return 0
+
+    granted = 0
+    for session in json.loads(str(sessions)).get("data", []):
+        metadata = session.get("metadata") or {}
+        if not metadata.get("genos_credit_pack"):
+            continue
+        if session.get("status") != "complete":
+            continue
+        posted, _summary = _grant_credit_pack(session)
+        if posted:
+            granted += 1
+    return granted
+
+
+# --------------------------------------------------------------------------- #
 # Customer portal (+ deep-link flows)                                         #
 # --------------------------------------------------------------------------- #
 #
@@ -495,9 +694,7 @@ def _portal_flow_data(stripe, customer_id: str, flow: str, plan: str | None) -> 
             # personal subscription but the SEAT COUNT for a team one,
             # and a confirm flow that omits it would resize the team as
             # a side effect of changing plan.
-            "items": [
-                {"id": item["id"], "price": price_id, "quantity": item.get("quantity") or 1}
-            ],
+            "items": [{"id": item["id"], "price": price_id, "quantity": item.get("quantity") or 1}],
         },
     }
 
@@ -526,11 +723,11 @@ def _portal_url(stripe, customer_id: str, flow: str | None, plan: str | None, wh
             # dashboard setting, invisible from here and separate from
             # STRIPE_PRICE_* — so degrade to the portal home (where the
             # user can still act) and make the drift loud in the logs.
-            log.warning("portal flow %r failed for %s — using portal home instead: %s", flow, what, e)
+            log.warning(
+                "portal flow %r failed for %s — using portal home instead: %s", flow, what, e
+            )
     try:
-        session = stripe.billing_portal.Session.create(
-            customer=customer_id, return_url=return_url
-        )
+        session = stripe.billing_portal.Session.create(customer=customer_id, return_url=return_url)
     except Exception as e:  # noqa: BLE001
         raise BillingError(f"Could not open the {what}: {e}")
     return session["url"]
@@ -611,6 +808,23 @@ def handle_event(event) -> str:
     we'll never act on."""
     etype = event.get("type") or ""
     obj = (event.get("data") or {}).get("object") or {}
+
+    # A credit pack is the only ONE-OFF purchase in the product, and it
+    # is branched on `mode` BEFORE anything else. Falling through would
+    # reach the arm that reads `metadata.plan` and sets that subscription
+    # tier outright — a pack carrying a stray `plan` key would hand out a
+    # paid plan for the price of a top-up. Branching on mode makes that
+    # unexpressible rather than merely avoided.
+    #
+    # `async_payment_succeeded` matters more here than it looks: JPY is
+    # the default currency and konbini / bank transfer are ordinary
+    # Japanese payment methods. Those COMPLETE a session with
+    # `payment_status: "unpaid"` and settle minutes-to-days later. Both
+    # events route here and both key on the same session id, so the
+    # ledger's uniqueness makes a double-fire a no-op.
+    if etype in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
+        if (obj.get("mode") or "") == "payment":
+            return _grant_credit_pack(obj)[1]
 
     if etype == "checkout.session.completed":
         # Team purchases carry the team id in session metadata (set
@@ -777,9 +991,7 @@ def ensure_team_customer(team: TeamMaster) -> str:
     return customer["id"]
 
 
-def create_team_checkout_session(
-    team: TeamMaster, plan: str, currency: str | None = None
-) -> str:
+def create_team_checkout_session(team: TeamMaster, plan: str, currency: str | None = None) -> str:
     """Quantity-based Checkout Session for a team (owner-gated in the
     view). Same prices as personal plans; quantity = current seats."""
     if plan not in PURCHASABLE_PLANS:
@@ -919,6 +1131,7 @@ def reconcile_team_from_stripe(team: TeamMaster) -> str:
 # --------------------------------------------------------------------------- #
 # Subscription overview (read-only)                                           #
 # --------------------------------------------------------------------------- #
+
 
 def subscription_overview(user: CustomUser) -> dict | None:
     """The user's current subscription, shaped for the Plan & Usage tab.
