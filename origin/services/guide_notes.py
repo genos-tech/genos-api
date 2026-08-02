@@ -658,6 +658,120 @@ GUIDE_NOTES: list[tuple[str, list]] = [
             ),
         ),
     ),
+    (
+        "Connecting Genos to other tools: API, MCP, and realtime",
+        _body(
+            (
+                "Who this page is for",
+                [
+                    "This page is for anyone connecting Genos to something "
+                    "else — a script, another app, or an AI coding agent. "
+                    "One part needs no programming at all: you paste one "
+                    "address into an AI coding agent's settings, and it can "
+                    "then work your tasks directly. If none of that is you, "
+                    "skip this page; nothing else in Genos depends on it.",
+                    "An API key acts as the person who created it, so it "
+                    "only ever sees what that person can see, and the "
+                    "realtime stream acts as whoever is signed in. Webhooks "
+                    "are the exception: a team owner or editor sets one up "
+                    "for the whole team, and it carries that team's events "
+                    "whoever created it.",
+                ],
+            ),
+            (
+                "Getting a key",
+                [
+                    (
+                        _B,
+                        "Create keys in Settings → Developer. A key is shown "
+                        "once, when you make it — copy it then, because "
+                        "there is no readable copy afterwards. Revoke one "
+                        "any time and it stops working on the next request.",
+                    ),
+                    (
+                        _B,
+                        "Pick read or write. A read key sees what you can "
+                        "see and changes nothing; a write key can also "
+                        "create and update.",
+                    ),
+                    (
+                        _B,
+                        "Keys made on that screen are personal: they act as "
+                        "you across every team you belong to, so each "
+                        "request has to name which team it means. "
+                        "Team-scoped keys, which carry their own team, "
+                        "exist in the API but cannot yet be created here.",
+                    ),
+                ],
+            ),
+            (
+                "Which one to reach for",
+                [
+                    (
+                        _B,
+                        "The REST API — for a script or another app that "
+                        "reads or creates Genos data on demand: your "
+                        "projects, their tasks, and single tasks to create "
+                        "or update. Use it for reports, imports, and "
+                        "anything you run on a schedule.",
+                    ),
+                    (
+                        _B,
+                        "Webhooks — when you would rather Genos told you. A "
+                        "team owner or editor gives it a public https "
+                        "address, and it posts there as tasks change, or as "
+                        "messages arrive in the channels you name, so you "
+                        "hear about changes as they happen instead of "
+                        "checking on a timer.",
+                    ),
+                    (
+                        _B,
+                        "MCP (Model Context Protocol) — when you want an AI "
+                        "coding agent to work your tasks directly instead of "
+                        "you pasting descriptions into it. Add Genos to an "
+                        "MCP client as an HTTP server at "
+                        "https://api.genosai.dev/api/public/v1/mcp"
+                        "?team_id=<your team's id> — no trailing slash "
+                        "before the question mark — sending the header "
+                        "Authorization: ApiKey <your key>. The scheme is the "
+                        "literal word ApiKey, not Bearer. The agent can then "
+                        "read tasks itself and, with a write key, update "
+                        "them and comment back.",
+                    ),
+                    (
+                        _B,
+                        "The realtime stream — for something live: a "
+                        "dashboard, or a bot that reacts the moment a "
+                        "message arrives. It carries the same live events "
+                        "the Genos app itself uses — messages, reactions, "
+                        "who has read what, who is online — and signs in "
+                        "with your Genos login rather than an API key. That "
+                        "is the dividing line: realtime where a person is "
+                        "signed in, webhooks for one server talking to "
+                        "another.",
+                    ),
+                ],
+            ),
+            (
+                "Checking it works",
+                [
+                    "Start with GET /api/public/v1/me/. It reports the "
+                    "person, the team, and the scope your key acts with, so "
+                    "you learn the key is live before something subtler "
+                    "fails. The team comes back empty for a personal key — "
+                    "that is your cue that you have to name a team on each "
+                    "request yourself.",
+                    (
+                        _B,
+                        "Settings → Developer also links to the Genos "
+                        "Developers page — the full reference for the REST "
+                        "API, MCP, webhooks, and every realtime event, with "
+                        "working examples.",
+                    ),
+                ],
+            ),
+        ),
+    ),
 ]
 
 
