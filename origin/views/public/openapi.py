@@ -421,6 +421,57 @@ OPENAPI = {
                 },
             },
         },
+        # Documented as one opaque POST on purpose. The body is JSON-RPC
+        # 2.0 and its real schema is the MCP specification, not ours —
+        # enumerating `initialize` / `tools/list` / `tools/call` here
+        # would be a second, worse copy of a document that already exists
+        # and versions independently. What belongs in *our* spec is that
+        # the route exists, what authenticates it, and where to read the
+        # rest.
+        "/api/public/v1/mcp": {
+            "post": {
+                "tags": ["mcp"],
+                "summary": "Model Context Protocol endpoint",
+                "description": (
+                    "Speaks [MCP](https://modelcontextprotocol.io) over Streamable "
+                    "HTTP, so an AI coding agent can read and work your Genos tasks "
+                    "directly. Point a client at this URL with your API key:\n\n"
+                    "```\nclaude mcp add --transport http genos \\\n"
+                    "  https://api.genosai.dev/api/public/v1/mcp \\\n"
+                    '  --header "Authorization: ApiKey gnos_..."\n```\n\n'
+                    "A personal access token must also name a team, as "
+                    "`?team_id=<uuid>` on the URL; a team-scoped key carries its "
+                    "own. A read-only key sees only the read tools — writing "
+                    "tasks and comments needs a write-scoped key.\n\n"
+                    "Stateless: no sessions, and no GET stream (both were removed "
+                    "in revision 2026-07-28). Supported revisions are returned by "
+                    "`initialize` and `server/discover`."
+                ),
+                "parameters": [
+                    {
+                        "name": "team_id",
+                        "in": "query",
+                        "schema": {"type": "string", "format": "uuid"},
+                        "description": "Required for a personal access token.",
+                    }
+                ],
+                "requestBody": {
+                    "required": True,
+                    **_json({"type": "object", "description": "A JSON-RPC 2.0 request."}),
+                },
+                "responses": {
+                    "200": {
+                        "description": "A JSON-RPC 2.0 response.",
+                        **_json({"type": "object"}),
+                    },
+                    "202": {"description": "A JSON-RPC notification was accepted."},
+                    "400": _error("Malformed request, or no team named."),
+                    "401": _error("Missing or invalid key."),
+                    "403": _error("Disallowed Origin."),
+                    "404": _error("Unknown JSON-RPC method, or team not found."),
+                },
+            }
+        },
     },
 }
 
