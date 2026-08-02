@@ -112,6 +112,30 @@ def is_guest(team_id, user_id) -> bool:
     return ProjectMembers.objects.filter(team=team_id, attendee=user_id).exists()
 
 
+def is_team_participant(team_id, user_id) -> bool:
+    """Does `user_id` belong to `team_id` in ANY capacity?
+
+    Full member, team owner, or guest. This answers a different question
+    from `is_team_member`, and the difference matters at exactly one kind
+    of site: **may these two people be put in a room together.**
+
+    `is_team_member` asks "may you act on the team" and correctly denies
+    guests everything team-wide. But a guest you share a project with is
+    a legitimate person to message, so gating a DM counterparty on
+    `is_team_member` would deny it. Gating on nothing — which is what the
+    channel-create paths did — lets you open a DM with a stranger in
+    another tenant entirely.
+
+    Deliberately not narrowed to "shares a project with the caller".
+    Which teammates may message which is a product decision; being able
+    to reach across tenants is the security defect, and that is what this
+    closes. Note also that a caller must already KNOW the counterparty's
+    user id: guests appear in no roster and no people picker, so this is
+    not an enumeration surface.
+    """
+    return is_team_member(team_id, user_id) or is_guest(team_id, user_id)
+
+
 def guest_project_ids(team_id, user_id) -> list:
     """The projects a guest may see in this team — nothing else exists
     for them. Same shape as `member_project_ids`, narrowed to one team."""
