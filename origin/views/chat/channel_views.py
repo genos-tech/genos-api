@@ -18,6 +18,7 @@ leak channel existence.
 import uuid
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.storage import default_storage
 from django.db import transaction
 from django.db.models import Count, OuterRef, Subquery
@@ -50,6 +51,7 @@ from origin.services.member_roles import (
     resolve_gm_role,
 )
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.scope_guards import is_team_participant
 from origin.views.utils.upload_limits import check_upload_size
 
 User = get_user_model()
@@ -64,6 +66,41 @@ def _canonical_dm_pair(user_a_id, user_b_id):
     """
     a, b = str(user_a_id), str(user_b_id)
     return (a, b) if a < b else (b, a)
+
+
+def _users_in_team(user_ids, team_id):
+    """Resolve `user_ids` to users, or `None` if any is not in the team.
+
+    All-or-nothing on purpose. Silently dropping the ids that don't
+    belong would create a channel whose member list quietly differs from
+    what the caller asked for — and would leak, by omission, which ids
+    were rejected. One 404 for "unknown", "malformed", and "not in this
+    team" alike means the endpoint answers nothing about who exists.
+
+    Malformed ids are filtered before the query rather than caught after:
+    `id` is a UUIDField, so a bad value raises `ValidationError` out of
+    `to_python` and would otherwise be a 500 on attacker-supplied input.
+    """
+    wanted = {str(uid) for uid in user_ids if uid}
+    if not wanted:
+        return []
+    valid = set()
+    for uid in wanted:
+        try:
+            valid.add(str(uuid.UUID(uid)))
+        except (ValueError, AttributeError, TypeError):
+            return None
+    if len(valid) != len(wanted):
+        # Two spellings of the same UUID (case, hyphenation) collapsed —
+        # treat as a malformed request rather than silently deduplicating.
+        return None
+
+    users = list(User.objects.filter(id__in=valid))
+    if len(users) != len(valid):
+        return None
+    if not all(is_team_participant(team_id, u.id) for u in users):
+        return None
+    return users
 
 
 def _verify_team_member(user, team_id):
@@ -299,6 +336,15 @@ class ChannelListView(AuthenticatedAPIView):
         single-member channel in its snapshot. A self-DM has one
         ``ChannelMember`` and a ``ChannelDirectPair`` with
         ``user_lo == user_hi``.
+
+        Note the deliberate asymmetry between the pair and the team: a
+        ``ChannelDirectPair`` is globally unique, so two people who share
+        *two* teams have one DM channel between them, and it is returned
+        whichever team was named in the request. That is intended — a DM
+        is between people, not tenants. What both callers must satisfy is
+        that they belong to the team named NOW, which is what the caller
+        check above and the counterparty check below enforce; someone
+        removed from the team can no longer open or re-open the DM.
         """
         other_user_id = body.get("other_user_id")
         if not other_user_id:
@@ -313,7 +359,25 @@ class ChannelListView(AuthenticatedAPIView):
         is_self_dm = str(other_user_id) == str(request.user.id)
         try:
             other = User.objects.get(id=other_user_id)
-        except User.DoesNotExist:
+        except (User.DoesNotExist, DjangoValidationError):
+            # ValidationError, not ValueError: `id` is a UUIDField, and a
+            # malformed one raises out of `to_python` — uncaught, that is
+            # a 500 on attacker-supplied input.
+            return Response(
+                {"error": "other_user_id not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # The counterparty must belong to this team. Without this, any
+        # authenticated user could open a DM with ANY user in the install
+        # by id — creating a real channel, with a real ChannelMember row
+        # for someone in a different tenant, and a message surface into
+        # it. `_verify_team_member` above gates only the *caller*.
+        #
+        # Same 404 as an unknown id, so "no such user" and "not in your
+        # team" are indistinguishable and this cannot be used to probe
+        # which user ids exist.
+        if not is_team_participant(team.team_id, other.id):
             return Response(
                 {"error": "other_user_id not found."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -391,8 +455,11 @@ class ChannelListView(AuthenticatedAPIView):
         # creator if accidentally included (we add them separately as
         # owner).
         unique_member_ids = {str(m) for m in member_user_ids if m} - {str(request.user.id)}
-        members = list(User.objects.filter(id__in=unique_member_ids)) if unique_member_ids else []
-        if len(members) != len(unique_member_ids):
+        members = _users_in_team(unique_member_ids, team.team_id)
+        if members is None:
+            # One or more ids were unknown, malformed, or named somebody
+            # outside this team — all the same 404, so the endpoint can't
+            # be used to test whether a user id exists.
             return Response(
                 {"error": "One or more member_user_ids not found."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -566,7 +633,11 @@ class ChannelDetailView(AuthenticatedAPIView):
                 )
             try:
                 new_owner = User.objects.get(id=new_owner_user_id)
-            except (User.DoesNotExist, ValueError):
+            # DjangoValidationError, not ValueError, is what a malformed
+            # UUID actually raises — the `ValueError` here never fired.
+            # (No ACL change needed: the incoming owner is separately
+            # required to be an active ChannelMember just below.)
+            except (User.DoesNotExist, DjangoValidationError):
                 return Response(
                     {"error": "owner_user_id not found."},
                     status=status.HTTP_404_NOT_FOUND,
@@ -721,8 +792,11 @@ class ChannelMembersView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         unique_ids = {str(u) for u in user_ids if u}
-        users = list(User.objects.filter(id__in=unique_ids))
-        if len(users) != len(unique_ids):
+        # Scoped to the CHANNEL's team, not the caller's: the caller is
+        # already verified as a member of this channel, and the channel
+        # is what the new members are being added to.
+        users = _users_in_team(unique_ids, channel.team_id)
+        if users is None:
             return Response(
                 {"error": "One or more user_ids not found."},
                 status=status.HTTP_404_NOT_FOUND,
