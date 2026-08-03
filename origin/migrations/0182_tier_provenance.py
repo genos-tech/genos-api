@@ -31,10 +31,10 @@ _SOURCE_CHOICES = [(_STRIPE, "Stripe"), (_OPERATOR, "Operator")]
 
 def pin_enterprise(apps, schema_editor):
     apps.get_model("origin", "CustomUser").objects.filter(tier="enterprise").update(
-        tier_source=_OPERATOR
+        tier_set_by=_OPERATOR
     )
     apps.get_model("origin", "TeamMaster").objects.filter(plan="enterprise").update(
-        plan_source=_OPERATOR
+        plan_set_by=_OPERATOR
     )
 
 
@@ -46,12 +46,12 @@ class Migration(migrations.Migration):
     operations = [
         migrations.AddField(
             model_name="customuser",
-            name="tier_source",
+            name="tier_set_by",
             field=models.CharField(choices=_SOURCE_CHOICES, default=_STRIPE, max_length=16),
         ),
         migrations.AddField(
             model_name="teammaster",
-            name="plan_source",
+            name="plan_set_by",
             field=models.CharField(choices=_SOURCE_CHOICES, default=_STRIPE, max_length=16),
         ),
         migrations.RunPython(pin_enterprise, migrations.RunPython.noop),

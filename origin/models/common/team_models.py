@@ -5,8 +5,8 @@ from django.db import models
 
 from origin.models.common.user_models import (
     TIER_CHOICES,
-    TIER_SOURCE_CHOICES,
-    TIER_SOURCE_STRIPE,
+    TIER_SET_BY_CHOICES,
+    TIER_SET_BY_STRIPE,
     CustomUser,
 )
 
@@ -44,13 +44,13 @@ class TeamMaster(models.Model):
         default="free",
         db_index=True,
     )
-    # Who last wrote `plan` — the team twin of `CustomUser.tier_source`,
+    # Who last wrote `plan` — the team twin of `CustomUser.tier_set_by`,
     # same rules and same reason (a hand-set team plan is not Stripe's to
-    # take away). See TIER_SOURCE_CHOICES.
-    plan_source = models.CharField(
+    # take away). See TIER_SET_BY_CHOICES.
+    plan_set_by = models.CharField(
         max_length=16,
-        choices=TIER_SOURCE_CHOICES,
-        default=TIER_SOURCE_STRIPE,
+        choices=TIER_SET_BY_CHOICES,
+        default=TIER_SET_BY_STRIPE,
     )
     # The team's Stripe customer (per-seat subscription). Mirrors
     # CustomUser.stripe_customer_id: bound on first team checkout,

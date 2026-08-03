@@ -25,7 +25,7 @@ from unittest import mock
 
 from django.test import override_settings
 
-from origin.models.common.user_models import TIER_SOURCE_OPERATOR, TIER_SOURCE_STRIPE
+from origin.models.common.user_models import TIER_SET_BY_OPERATOR, TIER_SET_BY_STRIPE
 from origin.search_engine import quota
 from origin.services import stripe_billing
 
@@ -1599,7 +1599,7 @@ class TierProvenanceTests(BillingTestBase):
     """An operator-set tier is not Stripe's to take away.
 
     `reconcile_from_stripe` rewrites the tier from what Stripe says, and
-    "Stripe says nothing" means free — so before `tier_source` existed, a
+    "Stripe says nothing" means free — so before `tier_set_by` existed, a
     comped account was demoted the next time its owner came back from
     checkout or the portal. It stayed nearly unreachable only by
     accident (the reconcile bails at "no billing account" when there is
@@ -1620,17 +1620,17 @@ class TierProvenanceTests(BillingTestBase):
     _sub = staticmethod(ReconcileTests._sub)
     _list_mock = staticmethod(ReconcileTests._list_mock)
 
-    def _pin(self, tier, source=TIER_SOURCE_OPERATOR, customer="cus_abc"):
+    def _pin(self, tier, source=TIER_SET_BY_OPERATOR, customer="cus_abc"):
         self.user.tier = tier
-        self.user.tier_source = source
+        self.user.tier_set_by = source
         self.user.stripe_customer_id = customer
-        self.user.save(update_fields=["tier", "tier_source", "stripe_customer_id"])
+        self.user.save(update_fields=["tier", "tier_set_by", "stripe_customer_id"])
 
-    def _pin_team(self, plan, source=TIER_SOURCE_OPERATOR, customer="cus_team_1"):
+    def _pin_team(self, plan, source=TIER_SET_BY_OPERATOR, customer="cus_team_1"):
         self.team.plan = plan
-        self.team.plan_source = source
+        self.team.plan_set_by = source
         self.team.stripe_customer_id = customer
-        self.team.save(update_fields=["plan", "plan_source", "stripe_customer_id"])
+        self.team.save(update_fields=["plan", "plan_set_by", "stripe_customer_id"])
 
     # ---- the reconcile ---------------------------------------------- #
 
@@ -1642,14 +1642,14 @@ class TierProvenanceTests(BillingTestBase):
             summary = stripe_billing.reconcile_from_stripe(self.user)
         self.user.refresh_from_db()
         self.assertEqual(self.user.tier, "max")
-        self.assertEqual(self.user.tier_source, TIER_SOURCE_OPERATOR)
+        self.assertEqual(self.user.tier_set_by, TIER_SET_BY_OPERATOR)
         self.assertIn("unchanged", summary)
         self.assertEqual(quota.get_effective_tier(self.user.id), "max")
 
     def test_reconcile_still_demotes_a_stripe_set_tier(self):
         """The pin must not cost us the repair it protects against —
         a lapsed subscriber is still reset."""
-        self._pin("max", source=TIER_SOURCE_STRIPE)
+        self._pin("max", source=TIER_SET_BY_STRIPE)
         with self._list_mock(self._sub(status_="canceled")):
             summary = stripe_billing.reconcile_from_stripe(self.user)
         self.user.refresh_from_db()
@@ -1662,7 +1662,7 @@ class TierProvenanceTests(BillingTestBase):
             summary = stripe_billing.reconcile_from_stripe(self.user)
         self.user.refresh_from_db()
         self.assertEqual(self.user.tier, "core")
-        self.assertEqual(self.user.tier_source, TIER_SOURCE_STRIPE)
+        self.assertEqual(self.user.tier_set_by, TIER_SET_BY_STRIPE)
         self.assertIn("core", summary)
 
     def test_subscribing_at_the_pinned_tier_still_releases_the_pin(self):
@@ -1675,7 +1675,7 @@ class TierProvenanceTests(BillingTestBase):
             stripe_billing.reconcile_from_stripe(self.user)
         self.user.refresh_from_db()
         self.assertEqual(self.user.tier, "pro")
-        self.assertEqual(self.user.tier_source, TIER_SOURCE_STRIPE)
+        self.assertEqual(self.user.tier_set_by, TIER_SET_BY_STRIPE)
 
         # ...and now the demotion lands, because billing owns it again.
         with self._list_mock():
@@ -1697,7 +1697,7 @@ class TierProvenanceTests(BillingTestBase):
     def test_summary_is_honest_when_the_tier_was_already_free(self):
         """No pin, nothing to do: still not "tier set to free", because
         nothing was set."""
-        self._pin("free", source=TIER_SOURCE_STRIPE)
+        self._pin("free", source=TIER_SET_BY_STRIPE)
         with self._list_mock():
             summary = stripe_billing.reconcile_from_stripe(self.user)
         self.assertEqual(summary, "unchanged: tier stays free")
@@ -1731,7 +1731,7 @@ class TierProvenanceTests(BillingTestBase):
         stripe_billing.handle_event(self.checkout_completed_event(plan="max"))
         self.user.refresh_from_db()
         self.assertEqual(self.user.tier, "max")
-        self.assertEqual(self.user.tier_source, TIER_SOURCE_STRIPE)
+        self.assertEqual(self.user.tier_set_by, TIER_SET_BY_STRIPE)
 
     def test_enterprise_survives_a_deleted_webhook(self):
         """The reconcile always skipped enterprise; `handle_event` never
@@ -1777,7 +1777,7 @@ class TierProvenanceTests(BillingTestBase):
         self.assertEqual(quota.get_effective_tier(self.user2.id), "pro")
 
     def test_team_reconcile_still_demotes_a_stripe_set_plan(self):
-        self._pin_team("pro", source=TIER_SOURCE_STRIPE)
+        self._pin_team("pro", source=TIER_SET_BY_STRIPE)
         with self._list_mock():
             summary = stripe_billing.reconcile_team_from_stripe(self.team)
         self.team.refresh_from_db()

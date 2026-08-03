@@ -8,7 +8,7 @@ Primary subactions:
     python manage.py feature_access set-tier --email user@example.com \\
         --tier pro          # one of: free | pro | max | enterprise
 
-    # Tiers set here are PINNED (`tier_source='operator'`): Stripe's
+    # Tiers set here are PINNED (`tier_set_by='operator'`): Stripe's
     # reconcile will not reset them to free when the account has no
     # subscription, which is what silently un-comped people before. A
     # real subscription still wins and hands the account back to
@@ -38,16 +38,16 @@ from origin.models.common.feature_models import UserFeatureAccess
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import (
     TIER_CHOICES,
-    TIER_SOURCE_CHOICES,
-    TIER_SOURCE_OPERATOR,
-    TIER_SOURCE_STRIPE,
+    TIER_SET_BY_CHOICES,
+    TIER_SET_BY_OPERATOR,
+    TIER_SET_BY_STRIPE,
     CustomUser,
 )
 from origin.search_engine.quota import invalidate_effective_tier
 
 _KNOWN_FEATURES = [f for f, _ in UserFeatureAccess.FEATURE_CHOICES]
 _KNOWN_TIERS = [t for t, _ in TIER_CHOICES]
-_KNOWN_SOURCES = [s for s, _ in TIER_SOURCE_CHOICES]
+_KNOWN_SET_BY = [s for s, _ in TIER_SET_BY_CHOICES]
 
 
 class Command(BaseCommand):
@@ -70,8 +70,8 @@ class Command(BaseCommand):
         )
         set_tier.add_argument(
             "--source",
-            default=TIER_SOURCE_OPERATOR,
-            choices=_KNOWN_SOURCES,
+            default=TIER_SET_BY_OPERATOR,
+            choices=_KNOWN_SET_BY,
             help=(
                 "Who owns the tier from now on. 'operator' (default) protects it from"
                 " Stripe's reset-to-free; 'stripe' hands it back to billing."
@@ -97,8 +97,8 @@ class Command(BaseCommand):
         )
         set_team_plan.add_argument(
             "--source",
-            default=TIER_SOURCE_OPERATOR,
-            choices=_KNOWN_SOURCES,
+            default=TIER_SET_BY_OPERATOR,
+            choices=_KNOWN_SET_BY,
             help="Team twin of set-tier's --source.",
         )
         set_team_plan.add_argument(
@@ -169,14 +169,14 @@ class Command(BaseCommand):
     def _set_tier(self, options):
         user = self._resolve_user(options["email"])
         new_tier = options["tier"]
-        new_source = options["source"]
+        new_set_by = options["source"]
         previous = user.tier or "free"
-        previous_source = user.tier_source or TIER_SOURCE_STRIPE
+        previous_set_by = user.tier_set_by or TIER_SET_BY_STRIPE
 
-        if previous == new_tier and previous_source == new_source:
+        if previous == new_tier and previous_set_by == new_set_by:
             self.stdout.write(
                 self.style.WARNING(
-                    f"{user.email} is already on tier '{new_tier}' ({new_source}-set). No change."
+                    f"{user.email} is already on tier '{new_tier}' ({new_set_by}-set). No change."
                 )
             )
             return
@@ -186,8 +186,8 @@ class Command(BaseCommand):
         # right tier purely to PIN it, and the old early-return made that
         # a silent no-op.
         user.tier = new_tier
-        user.tier_source = new_source
-        user.save(update_fields=["tier", "tier_source"])
+        user.tier_set_by = new_set_by
+        user.save(update_fields=["tier", "tier_set_by"])
         invalidate_effective_tier([user.id])
 
         note = options.get("note") or ""
@@ -196,9 +196,9 @@ class Command(BaseCommand):
             f"'{previous}' → '{new_tier}'" if previous != new_tier else f"'{new_tier}' (unchanged)"
         )
         self.stdout.write(
-            self.style.SUCCESS(f"Tier for {user.email}: {moved} — now {new_source}-set.{suffix}")
+            self.style.SUCCESS(f"Tier for {user.email}: {moved} — now {new_set_by}-set.{suffix}")
         )
-        if new_source == TIER_SOURCE_OPERATOR:
+        if new_set_by == TIER_SET_BY_OPERATOR:
             self.stdout.write(
                 "  Stripe will not reset this tier to free. A real subscription still"
                 " takes over (and hands it back to billing)."
@@ -214,22 +214,22 @@ class Command(BaseCommand):
             raise CommandError(f"'{team_id}' is not a valid team UUID.")
 
         new_plan = options["plan"]
-        new_source = options["source"]
+        new_set_by = options["source"]
         previous = team.plan or "free"
-        previous_source = team.plan_source or TIER_SOURCE_STRIPE
+        previous_set_by = team.plan_set_by or TIER_SET_BY_STRIPE
 
-        if previous == new_plan and previous_source == new_source:
+        if previous == new_plan and previous_set_by == new_set_by:
             self.stdout.write(
                 self.style.WARNING(
                     f"Team '{team.team_name}' is already on plan '{new_plan}'"
-                    f" ({new_source}-set). No change."
+                    f" ({new_set_by}-set). No change."
                 )
             )
             return
 
         team.plan = new_plan
-        team.plan_source = new_source
-        team.save(update_fields=["plan", "plan_source"])
+        team.plan_set_by = new_set_by
+        team.save(update_fields=["plan", "plan_set_by"])
 
         # Evict members' cached effective tiers so the change lands
         # immediately instead of after the 60s cache TTL.
@@ -247,7 +247,7 @@ class Command(BaseCommand):
         )
         self.stdout.write(
             self.style.SUCCESS(
-                f"Plan for team '{team.team_name}': {moved} — now {new_source}-set "
+                f"Plan for team '{team.team_name}': {moved} — now {new_set_by}-set "
                 f"({len(member_ids)} active member(s) affected).{suffix}"
             )
         )

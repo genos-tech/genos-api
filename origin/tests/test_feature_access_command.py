@@ -4,7 +4,7 @@ path, and the provenance it now writes.
 A tier set here is a comp, a trial, or a support gesture: Stripe knows
 nothing about it, and "Stripe knows nothing" is precisely what
 `reconcile_from_stripe` otherwise reads as "lapsed → free". The command
-is therefore the only writer of `tier_source='operator'`, which makes it
+is therefore the only writer of `tier_set_by='operator'`, which makes it
 the only thing standing between a comped account and a silent demotion
 on its owner's next return from checkout.
 
@@ -19,7 +19,7 @@ from unittest import mock
 from django.core.management import call_command
 from django.test import override_settings
 
-from origin.models.common.user_models import TIER_SOURCE_OPERATOR, TIER_SOURCE_STRIPE
+from origin.models.common.user_models import TIER_SET_BY_OPERATOR, TIER_SET_BY_STRIPE
 from origin.search_engine import quota
 from origin.services import stripe_billing
 
@@ -60,7 +60,7 @@ class FeatureAccessTierTests(BaseAPITestCase):
     def test_set_tier_pins_by_default(self):
         output = self._set_tier("--tier", "max")
         self.assertEqual(self.user.tier, "max")
-        self.assertEqual(self.user.tier_source, TIER_SOURCE_OPERATOR)
+        self.assertEqual(self.user.tier_set_by, TIER_SET_BY_OPERATOR)
         self.assertIn("operator-set", output)
         self.assertEqual(quota.get_effective_tier(self.user.id), "max")
 
@@ -74,7 +74,7 @@ class FeatureAccessTierTests(BaseAPITestCase):
         self.user.save(update_fields=["tier"])
 
         output = self._set_tier("--tier", "max")
-        self.assertEqual(self.user.tier_source, TIER_SOURCE_OPERATOR)
+        self.assertEqual(self.user.tier_set_by, TIER_SET_BY_OPERATOR)
         # And it must SAY so, or the operator can't tell it landed.
         self.assertIn("unchanged", output)
         self.assertIn("operator-set", output)
@@ -83,7 +83,7 @@ class FeatureAccessTierTests(BaseAPITestCase):
     def test_source_stripe_hands_the_account_back(self):
         self._set_tier("--tier", "pro")
         output = self._set_tier("--tier", "pro", "--source", "stripe")
-        self.assertEqual(self.user.tier_source, TIER_SOURCE_STRIPE)
+        self.assertEqual(self.user.tier_set_by, TIER_SET_BY_STRIPE)
         self.assertIn("stripe-set", output)
 
     def test_a_true_no_op_says_no_change(self):
@@ -121,7 +121,7 @@ class FeatureAccessTierTests(BaseAPITestCase):
     def test_set_team_plan_pins_by_default(self):
         output = self._set_team_plan("--plan", "pro")
         self.assertEqual(self.team.plan, "pro")
-        self.assertEqual(self.team.plan_source, TIER_SOURCE_OPERATOR)
+        self.assertEqual(self.team.plan_set_by, TIER_SET_BY_OPERATOR)
         self.assertIn("operator-set", output)
         # Members inherit the plan as their effective tier.
         self.assertEqual(quota.get_effective_tier(self.user2.id), "pro")
@@ -130,6 +130,6 @@ class FeatureAccessTierTests(BaseAPITestCase):
         self.team.plan = "pro"
         self.team.save(update_fields=["plan"])
         output = self._set_team_plan("--plan", "pro")
-        self.assertEqual(self.team.plan_source, TIER_SOURCE_OPERATOR)
+        self.assertEqual(self.team.plan_set_by, TIER_SET_BY_OPERATOR)
         self.assertIn("unchanged", output)
         self.assertNotIn("No change", output)

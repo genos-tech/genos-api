@@ -60,8 +60,8 @@ from django.core.cache import cache
 
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import (
-    TIER_SOURCE_OPERATOR,
-    TIER_SOURCE_STRIPE,
+    TIER_SET_BY_OPERATOR,
+    TIER_SET_BY_STRIPE,
     CustomUser,
 )
 from origin.search_engine.quota import invalidate_effective_tier
@@ -299,7 +299,7 @@ def _set_personal_tier(
     tier: str,
     *,
     reason: str,
-    source: str = TIER_SOURCE_STRIPE,
+    source: str = TIER_SET_BY_STRIPE,
 ) -> bool:
     """The same write `feature_access set-tier` performs, attributed.
 
@@ -314,12 +314,12 @@ def _set_personal_tier(
     (`tier_for_price` returns only PURCHASABLE_PLANS) — and an operator's
     comp is not Stripe's to remove. Every other Stripe write is a real
     subscription, which applies AND returns the account to billing
-    management. See TIER_SOURCE_CHOICES for why that asymmetry is the
+    management. See TIER_SET_BY_CHOICES for why that asymmetry is the
     point rather than an inconsistency.
     """
     previous = user.tier or "free"
-    previous_source = user.tier_source or TIER_SOURCE_STRIPE
-    if source == TIER_SOURCE_STRIPE and previous_source == TIER_SOURCE_OPERATOR and tier == "free":
+    previous_set_by = user.tier_set_by or TIER_SET_BY_STRIPE
+    if source == TIER_SET_BY_STRIPE and previous_set_by == TIER_SET_BY_OPERATOR and tier == "free":
         log.info(
             "stripe billing: tier for %s stays %s — operator-set, not Stripe's to remove (%s)",
             user.email,
@@ -334,8 +334,8 @@ def _set_personal_tier(
     # Recorded even when the tier itself doesn't move: someone comped at
     # `pro` who then subscribes to `pro` must lose the pin, or they keep
     # the tier for free the day they cancel.
-    if previous_source != source:
-        updates["tier_source"] = source
+    if previous_set_by != source:
+        updates["tier_set_by"] = source
     if not updates:
         return False
 
@@ -349,7 +349,7 @@ def _set_personal_tier(
         user.email,
         previous,
         tier,
-        previous_source,
+        previous_set_by,
         source,
         reason,
     )
@@ -1025,7 +1025,7 @@ def _set_team_plan(
     plan: str,
     *,
     reason: str,
-    source: str = TIER_SOURCE_STRIPE,
+    source: str = TIER_SET_BY_STRIPE,
 ) -> bool:
     """The same write `feature_access set-team-plan` performs; evicts
     every member's effective-tier cache so the grant lands at once.
@@ -1033,8 +1033,8 @@ def _set_team_plan(
     Provenance rules and return value are the personal twin's — see
     `_set_personal_tier`."""
     previous = team.plan or "free"
-    previous_source = team.plan_source or TIER_SOURCE_STRIPE
-    if source == TIER_SOURCE_STRIPE and previous_source == TIER_SOURCE_OPERATOR and plan == "free":
+    previous_set_by = team.plan_set_by or TIER_SET_BY_STRIPE
+    if source == TIER_SET_BY_STRIPE and previous_set_by == TIER_SET_BY_OPERATOR and plan == "free":
         log.info(
             "stripe billing: plan for team %s stays %s — operator-set, not Stripe's to remove (%s)",
             team.team_name,
@@ -1046,8 +1046,8 @@ def _set_team_plan(
     updates: dict[str, str] = {}
     if previous != plan:
         updates["plan"] = plan
-    if previous_source != source:
-        updates["plan_source"] = source
+    if previous_set_by != source:
+        updates["plan_set_by"] = source
     if not updates:
         return False
 
@@ -1061,7 +1061,7 @@ def _set_team_plan(
         team.team_name,
         previous,
         plan,
-        previous_source,
+        previous_set_by,
         source,
         reason,
     )
@@ -1309,7 +1309,7 @@ def reconcile_from_stripe(user: CustomUser) -> str:
       * only grace statuses (past_due / incomplete / paused) → unchanged
         (dunning may still recover; a terminal webhook will follow),
       * nothing live at all → free, UNLESS the tier is operator-set
-        (`tier_source`), in which case the comp is left alone — see
+        (`tier_set_by`), in which case the comp is left alone — see
         `_set_personal_tier`,
       * `enterprise` is operator-managed and never touched here.
     """

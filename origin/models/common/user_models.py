@@ -75,11 +75,15 @@ TIER_CHOICES = [
 # applies and flips the source back to 'stripe' — otherwise a comped user
 # who later subscribes would keep the pin and stay on a paid tier for
 # free once they cancelled.
-TIER_SOURCE_STRIPE = "stripe"
-TIER_SOURCE_OPERATOR = "operator"
-TIER_SOURCE_CHOICES = [
-    (TIER_SOURCE_STRIPE, "Stripe"),
-    (TIER_SOURCE_OPERATOR, "Operator"),
+#
+# NOT to be confused with the `tier_source` key in `/agent/features/`,
+# which is 'personal' | 'team' and answers a different question: which
+# ENTITY granted the effective tier. Hence `tier_set_by` here.
+TIER_SET_BY_STRIPE = "stripe"
+TIER_SET_BY_OPERATOR = "operator"
+TIER_SET_BY_CHOICES = [
+    (TIER_SET_BY_STRIPE, "Stripe"),
+    (TIER_SET_BY_OPERATOR, "Operator"),
 ]
 
 
@@ -215,13 +219,13 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         db_index=True,
     )
 
-    # Who last wrote `tier` — see TIER_SOURCE_CHOICES. 'operator' means
+    # Who last wrote `tier` — see TIER_SET_BY_CHOICES. 'operator' means
     # Stripe may not take the tier away; it does NOT mean Stripe is
     # locked out, since a real subscription hands the account back.
-    tier_source = models.CharField(
+    tier_set_by = models.CharField(
         max_length=16,
-        choices=TIER_SOURCE_CHOICES,
-        default=TIER_SOURCE_STRIPE,
+        choices=TIER_SET_BY_CHOICES,
+        default=TIER_SET_BY_STRIPE,
     )
 
     # Stripe customer id ("cus_..."), set the first time the user starts
