@@ -23,6 +23,11 @@ Design:
     the `stripe` package missing) everything degrades to
     `billing_enabled() == False` and the API returns 503s — the tier
     system itself keeps working, operator-managed.
+  * Every tier write goes through `_set_personal_tier` /
+    `_set_team_plan`, and they are the only two. Those check
+    provenance: a tier an operator set by hand is not Stripe's to reset
+    to free (SUBSCRIPTION_TIERS.md §8.3). A real subscription still
+    wins and hands the account back to billing.
 
 Event handling (see `handle_event`):
   * `checkout.session.completed` — bind customer id, set tier from the
@@ -35,6 +40,11 @@ Event handling (see `handle_event`):
     then fires a terminal status).
   * `customer.subscription.deleted` — → `free`. This is what fires at
     period end after "cancel at period end".
+
+Every reset-to-free above is declined for an operator-set tier, and the
+summary each arm returns is phrased from what the write RETURNED — it is
+logged, echoed in the webhook's 200 body, and handed to the browser by
+`/billing/refresh/`.
 
 All writes are idempotent (set tier + evict the effective-tier cache),
 so Stripe's at-least-once delivery needs no dedup table.
@@ -49,7 +59,11 @@ from django.conf import settings
 from django.core.cache import cache
 
 from origin.models.common.team_models import TeamMaster, TeamMembers
-from origin.models.common.user_models import CustomUser
+from origin.models.common.user_models import (
+    TIER_SET_BY_OPERATOR,
+    TIER_SET_BY_STRIPE,
+    CustomUser,
+)
 from origin.search_engine.quota import invalidate_effective_tier
 
 log = logging.getLogger(__name__)
@@ -280,15 +294,66 @@ def price_display(plan: str, currency: str | None = None) -> dict | None:
     return out
 
 
-def _set_personal_tier(user: CustomUser, tier: str, *, reason: str) -> None:
-    """The same write `feature_access set-tier` performs, attributed."""
+def _set_personal_tier(
+    user: CustomUser,
+    tier: str,
+    *,
+    reason: str,
+    source: str = TIER_SET_BY_STRIPE,
+) -> bool:
+    """The same write `feature_access set-tier` performs, attributed.
+
+    Returns True when the tier actually moved — callers phrase their
+    summary from it, because a Stripe-sourced write can be DECLINED here
+    and a summary that says "tier set to free" next to a row that still
+    says `pro` is how a support ticket becomes an hour of log reading.
+
+    The one thing declined: a Stripe write to `free` against an
+    operator-set tier. `free` is precisely the removal — it is the only
+    tier Stripe ever writes that isn't a live subscription's plan
+    (`tier_for_price` returns only PURCHASABLE_PLANS) — and an operator's
+    comp is not Stripe's to remove. Every other Stripe write is a real
+    subscription, which applies AND returns the account to billing
+    management. See TIER_SET_BY_CHOICES for why that asymmetry is the
+    point rather than an inconsistency.
+    """
     previous = user.tier or "free"
-    if previous == tier:
-        return
-    user.tier = tier
-    user.save(update_fields=["tier"])
-    invalidate_effective_tier([user.id])
-    log.info("stripe billing: tier for %s: %s -> %s (%s)", user.email, previous, tier, reason)
+    previous_set_by = user.tier_set_by or TIER_SET_BY_STRIPE
+    if source == TIER_SET_BY_STRIPE and previous_set_by == TIER_SET_BY_OPERATOR and tier == "free":
+        log.info(
+            "stripe billing: tier for %s stays %s — operator-set, not Stripe's to remove (%s)",
+            user.email,
+            previous,
+            reason,
+        )
+        return False
+
+    updates: dict[str, str] = {}
+    if previous != tier:
+        updates["tier"] = tier
+    # Recorded even when the tier itself doesn't move: someone comped at
+    # `pro` who then subscribes to `pro` must lose the pin, or they keep
+    # the tier for free the day they cancel.
+    if previous_set_by != source:
+        updates["tier_set_by"] = source
+    if not updates:
+        return False
+
+    for field, value in updates.items():
+        setattr(user, field, value)
+    user.save(update_fields=list(updates))
+    if "tier" in updates:
+        invalidate_effective_tier([user.id])
+    log.info(
+        "stripe billing: tier for %s: %s -> %s [source %s -> %s] (%s)",
+        user.email,
+        previous,
+        tier,
+        previous_set_by,
+        source,
+        reason,
+    )
+    return "tier" in updates
 
 
 def _bind_customer(user: CustomUser, customer_id: str | None) -> None:
@@ -894,11 +959,18 @@ def handle_event(event) -> str:
             _set_personal_tier(user, tier, reason=f"{etype}:{status_}")
             return f"tier set to {tier}"
         if status_ in ("canceled", "unpaid", "incomplete_expired"):
+            # Summaries are phrased from what the write RETURNED, here
+            # and at every other demotion site: an operator-set tier
+            # declines the reset, and a summary that claims otherwise is
+            # logged, echoed in the webhook's 200 body, and returned to
+            # the browser by `/billing/refresh/`.
             if team is not None:
-                _set_team_plan(team, "free", reason=f"{etype}:{status_}")
-                return "team plan set to free"
-            _set_personal_tier(user, "free", reason=f"{etype}:{status_}")
-            return "tier set to free"
+                if _set_team_plan(team, "free", reason=f"{etype}:{status_}"):
+                    return "team plan set to free"
+                return f"unchanged: team plan stays {team.plan or 'free'}"
+            if _set_personal_tier(user, "free", reason=f"{etype}:{status_}"):
+                return "tier set to free"
+            return f"unchanged: tier stays {user.tier or 'free'}"
         # past_due / incomplete / paused: keep the current tier —
         # Stripe is still retrying payment (dunning) or checkout never
         # finished; a terminal event will follow either way.
@@ -911,10 +983,12 @@ def handle_event(event) -> str:
             log.warning("stripe webhook: %s for unknown customer %r", etype, obj.get("customer"))
             return "ignored: unknown customer"
         if team is not None:
-            _set_team_plan(team, "free", reason=etype)
-            return "team plan set to free"
-        _set_personal_tier(user, "free", reason=etype)
-        return "tier set to free"
+            if _set_team_plan(team, "free", reason=etype):
+                return "team plan set to free"
+            return f"unchanged: team plan stays {team.plan or 'free'}"
+        if _set_personal_tier(user, "free", reason=etype):
+            return "tier set to free"
+        return f"unchanged: tier stays {user.tier or 'free'}"
 
     return f"ignored event type {etype!r}"
 
@@ -946,22 +1020,52 @@ def team_seats(team_id) -> int:
     return max(TeamMembers.objects.filter(team_id=team_id, is_deleted=False).count(), 1)
 
 
-def _set_team_plan(team: TeamMaster, plan: str, *, reason: str) -> None:
+def _set_team_plan(
+    team: TeamMaster,
+    plan: str,
+    *,
+    reason: str,
+    source: str = TIER_SET_BY_STRIPE,
+) -> bool:
     """The same write `feature_access set-team-plan` performs; evicts
-    every member's effective-tier cache so the grant lands at once."""
+    every member's effective-tier cache so the grant lands at once.
+
+    Provenance rules and return value are the personal twin's — see
+    `_set_personal_tier`."""
     previous = team.plan or "free"
-    if previous == plan:
-        return
-    team.plan = plan
-    team.save(update_fields=["plan"])
-    invalidate_effective_tier(_team_member_ids(team.team_id))
+    previous_set_by = team.plan_set_by or TIER_SET_BY_STRIPE
+    if source == TIER_SET_BY_STRIPE and previous_set_by == TIER_SET_BY_OPERATOR and plan == "free":
+        log.info(
+            "stripe billing: plan for team %s stays %s — operator-set, not Stripe's to remove (%s)",
+            team.team_name,
+            previous,
+            reason,
+        )
+        return False
+
+    updates: dict[str, str] = {}
+    if previous != plan:
+        updates["plan"] = plan
+    if previous_set_by != source:
+        updates["plan_set_by"] = source
+    if not updates:
+        return False
+
+    for field, value in updates.items():
+        setattr(team, field, value)
+    team.save(update_fields=list(updates))
+    if "plan" in updates:
+        invalidate_effective_tier(_team_member_ids(team.team_id))
     log.info(
-        "stripe billing: plan for team %s: %s -> %s (%s)",
+        "stripe billing: plan for team %s: %s -> %s [source %s -> %s] (%s)",
         team.team_name,
         previous,
         plan,
+        previous_set_by,
+        source,
         reason,
     )
+    return "plan" in updates
 
 
 def _bind_team_customer(team: TeamMaster, customer_id: str | None) -> None:
@@ -1133,8 +1237,9 @@ def reconcile_team_from_stripe(team: TeamMaster) -> str:
         return "unchanged: active subscription with unmapped price"
     if in_grace:
         return "unchanged: subscription in dunning grace"
-    _set_team_plan(team, "free", reason="reconcile")
-    return "team plan set to free"
+    if _set_team_plan(team, "free", reason="reconcile"):
+        return "team plan set to free"
+    return f"unchanged: team plan stays {team.plan or 'free'}"
 
 
 # --------------------------------------------------------------------------- #
@@ -1203,7 +1308,9 @@ def reconcile_from_stripe(user: CustomUser) -> str:
         misconfiguration; don't guess),
       * only grace statuses (past_due / incomplete / paused) → unchanged
         (dunning may still recover; a terminal webhook will follow),
-      * nothing live at all → free,
+      * nothing live at all → free, UNLESS the tier is operator-set
+        (`tier_set_by`), in which case the comp is left alone — see
+        `_set_personal_tier`,
       * `enterprise` is operator-managed and never touched here.
     """
     if (user.tier or "free") == "enterprise":
@@ -1248,5 +1355,6 @@ def reconcile_from_stripe(user: CustomUser) -> str:
         return "unchanged: active subscription with unmapped price"
     if in_grace:
         return "unchanged: subscription in dunning grace"
-    _set_personal_tier(user, "free", reason="reconcile")
-    return "tier set to free"
+    if _set_personal_tier(user, "free", reason="reconcile"):
+        return "tier set to free"
+    return f"unchanged: tier stays {user.tier or 'free'}"
