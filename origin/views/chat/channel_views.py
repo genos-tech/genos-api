@@ -1062,6 +1062,13 @@ class ChannelProfileImageView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Avatars were the one upload family with NO size check at all —
+        # not tier-aware, not even a flat cap — so a free user capped at
+        # 5 MB per attachment could store an arbitrarily large "avatar".
+        # Same tier ceiling as every other upload; see `upload_limits`.
+        if res := check_upload_size(request.user, profile_image):
+            return res
+
         # Django's storage layer resolves the final on-disk path and
         # collision-suffixes the filename if needed. Read `.name` after
         # save to capture whatever it actually stored.

@@ -46,6 +46,7 @@ from origin.views.utils.scope_guards import (
     is_team_member,
     require_team_member_or_response,
 )
+from origin.views.utils.upload_limits import check_upload_size
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +198,13 @@ class TeamProfileImageView(AuthenticatedAPIView):
                 {"error": "team_profile_image is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # Avatars were the one upload family with NO size check at all —
+        # not tier-aware, not even a flat cap — so a free user capped at
+        # 5 MB per attachment could store an arbitrarily large "avatar".
+        # Same tier ceiling as every other upload; see `upload_limits`.
+        if res := check_upload_size(request.user, team_profile_image):
+            return res
 
         try:
             team_data = TeamMaster.objects.get(team_id=team_id)

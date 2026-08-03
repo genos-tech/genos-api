@@ -176,3 +176,89 @@ class UploadEndpointIntegrationTests(UploadTestBase):
             format="multipart",
         )
         self.assertEqual(res.status_code, 200)
+
+
+@override_settings(SEARCH_ENGINE=_search_engine_with_quotas(UPLOAD_QUOTAS))
+class AvatarUploadSizeTests(UploadTestBase):
+    """Avatars are subject to the same per-tier ceiling as everything else.
+
+    They were the one upload family with NO size check at all — not
+    tier-aware, not even a flat cap. The asymmetry was the tell: a free
+    user 413'd on a 2 MiB chat attachment could store an arbitrarily
+    large file as their avatar, on the same media volume, and every
+    surface renders it inline.
+
+    All four are asserted rather than one representative, because they
+    are four separate views in four modules that happen to share a
+    contract — exactly the shape where a fix lands on three of them.
+    """
+
+    def _big(self, name="big.png"):
+        # 2 MiB against the 1 MiB free cap in UPLOAD_QUOTAS.
+        return SimpleUploadedFile(name, b"x" * (2 * MIB), content_type="image/png")
+
+    def _assert_rejected(self, res):
+        self.assertEqual(res.status_code, 413)
+        self.assertEqual(res.data["category"], "upload_size")
+        self.assertTrue(res.data["limit_reached"])
+
+    def test_user_avatar_over_tier_limit_is_rejected(self):
+        self._assert_rejected(
+            self.client.put(
+                "/api/v2/user/profile/image/",
+                {"user_profile_image": self._big()},
+                format="multipart",
+            )
+        )
+
+    def test_team_avatar_over_tier_limit_is_rejected(self):
+        self._assert_rejected(
+            self.client.put(
+                "/api/v2/team/profile/image/",
+                {"team_id": str(self.team.team_id), "team_profile_image": self._big()},
+                format="multipart",
+            )
+        )
+
+    def test_project_avatar_over_tier_limit_is_rejected(self):
+        project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Avatar Project",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        ProjectMembers.objects.create(team=self.team, project=project, attendee=self.user)
+        self._assert_rejected(
+            self.client.put(
+                "/api/v2/project/profile/image/",
+                {"project_id": str(project.project_id), "profile_image": self._big()},
+                format="multipart",
+            )
+        )
+
+    def test_channel_avatar_over_tier_limit_is_rejected(self):
+        from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
+
+        channel = Channel.objects.create(
+            team=self.team,
+            kind=ChannelKind.GM,
+            title="Avatar GM",
+            owner=self.user,
+        )
+        ChannelMember.objects.create(channel=channel, user=self.user, role="owner")
+        self._assert_rejected(
+            self.client.put(
+                f"/api/v3/channels/{channel.id}/profile/image/",
+                {"profile_image": self._big()},
+                format="multipart",
+            )
+        )
+
+    def test_an_avatar_under_the_limit_still_uploads(self):
+        """The guard must not have closed the endpoint outright."""
+        res = self.client.put(
+            "/api/v2/user/profile/image/",
+            {"user_profile_image": SimpleUploadedFile("ok.png", b"x" * 1024, "image/png")},
+            format="multipart",
+        )
+        self.assertEqual(res.status_code, 200)

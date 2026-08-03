@@ -17,6 +17,7 @@ from origin.services.calendar_sync import (
 )
 from origin.services.user_time import is_valid_timezone, user_today
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.upload_limits import check_upload_size
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,13 @@ class UserProfileImageView(AuthenticatedAPIView):
                 {"error": "user_profile_image is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # Avatars were the one upload family with NO size check at all —
+        # not tier-aware, not even a flat cap — so a free user capped at
+        # 5 MB per attachment could store an arbitrarily large "avatar".
+        # Same tier ceiling as every other upload; see `upload_limits`.
+        if res := check_upload_size(request.user, user_profile_image):
+            return res
 
         user_data = CustomUser.objects.get(id=request_user_id)
 
