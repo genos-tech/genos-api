@@ -32,6 +32,7 @@ from origin.views.utils.scope_guards import (
     require_project_member_or_response,
     require_team_member_or_response,
 )
+from origin.views.utils.upload_limits import check_upload_size
 
 _PROJECT_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
 
@@ -1645,6 +1646,13 @@ class ProjectProfileImageView(AuthenticatedAPIView):
         }
 
         if res := validate_request_data(data):
+            return res
+
+        # Avatars were the one upload family with NO size check at all —
+        # not tier-aware, not even a flat cap — so a free user capped at
+        # 5 MB per attachment could store an arbitrarily large "avatar".
+        # Same tier ceiling as every other upload; see `upload_limits`.
+        if res := check_upload_size(request.user, profile_image):
             return res
 
         try:
