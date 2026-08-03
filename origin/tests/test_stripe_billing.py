@@ -25,6 +25,7 @@ from unittest import mock
 
 from django.test import override_settings
 
+from origin.models.common.user_models import TIER_SOURCE_OPERATOR, TIER_SOURCE_STRIPE
 from origin.search_engine import quota
 from origin.services import stripe_billing
 
@@ -215,9 +216,7 @@ class CheckoutAndPortalViewTests(BillingTestBase):
             "sk_test_x",
         )
         # ensure_customer verifies the stored customer against Stripe.
-        alive = stripe.Customer.construct_from(
-            {"id": "cus_abc", "object": "customer"}, "sk_test_x"
-        )
+        alive = stripe.Customer.construct_from({"id": "cus_abc", "object": "customer"}, "sk_test_x")
         with (
             override_settings(STRIPE=stripe_settings),
             mock.patch("stripe.Customer.retrieve", return_value=alive),
@@ -317,7 +316,7 @@ class PortalFlowTests(BillingTestBase):
     def _portal_kwargs(self, *, flow=None, plan=None, subs=(None,), create=None):
         """Run create_portal_session and return the kwargs Stripe got."""
         subs = tuple(s for s in subs if s is not None)
-        with self._list_mock(*subs), (create or self._session_mock()) as created:
+        with self._list_mock(*subs), create or self._session_mock() as created:
             url = stripe_billing.create_portal_session(self.user, flow=flow, plan=plan)
         self.assertEqual(url, "https://stripe/bps_x")
         return created.call_args.kwargs
@@ -397,9 +396,7 @@ class PortalFlowTests(BillingTestBase):
             "stripe.billing_portal.Session.create",
             side_effect=[Exception("no such configuration feature"), ok],
         )
-        kwargs = self._portal_kwargs(
-            flow="update", plan="max", subs=(self._sub(),), create=create
-        )
+        kwargs = self._portal_kwargs(flow="update", plan="max", subs=(self._sub(),), create=create)
         self.assertNotIn("flow_data", kwargs)
 
     def test_view_rejects_an_unknown_flow(self):
@@ -762,9 +759,7 @@ class RefreshViewTests(BillingTestBase):
             user.save(update_fields=["tier"])
             return "tier set to max"
 
-        with mock.patch.object(
-            stripe_billing, "reconcile_from_stripe", side_effect=fake_reconcile
-        ):
+        with mock.patch.object(stripe_billing, "reconcile_from_stripe", side_effect=fake_reconcile):
             res = self.client.post(REFRESH_URL, {}, format="json")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["personal_tier"], "max")
@@ -1112,9 +1107,7 @@ class TeamBillingTests(BillingTestBase):
 
     def test_portal_owner_only(self):
         self.authenticate(self.user2)
-        res = self.client.post(
-            TEAM_PORTAL_URL, {"team_id": str(self.team.team_id)}, format="json"
-        )
+        res = self.client.post(TEAM_PORTAL_URL, {"team_id": str(self.team.team_id)}, format="json")
         self.assertEqual(res.status_code, 404)
 
     # ---- checkout session shape ------------------------------------- #
@@ -1449,12 +1442,8 @@ class MultiCurrencyPricingTests(BillingTestBase):
     def test_supported_currencies_are_derived_from_configured_prices(self):
         """Declared lists go stale; a currency must not appear on the
         pricing page before its Stripe prices exist."""
-        self.assertEqual(
-            sorted(stripe_billing.supported_currencies()), ["eur", "jpy", "usd"]
-        )
-        self.assertEqual(
-            stripe_billing.supported_currencies()[0], "jpy", "default comes first"
-        )
+        self.assertEqual(sorted(stripe_billing.supported_currencies()), ["eur", "jpy", "usd"])
+        self.assertEqual(stripe_billing.supported_currencies()[0], "jpy", "default comes first")
 
     def test_tier_for_price_resolves_every_currency(self):
         """A euro subscriber's renewal carries the euro price id. If only
@@ -1603,3 +1592,207 @@ class PlansCreditAllowanceTests(BillingTestBase):
         limits = self._limits("pro")
         self.assertIsNotNone(limits["llm_ask_daily"])
         self.assertIsNotNone(limits["web_search_daily"])
+
+
+@override_settings(STRIPE=STRIPE_TEST_SETTINGS)
+class TierProvenanceTests(BillingTestBase):
+    """An operator-set tier is not Stripe's to take away.
+
+    `reconcile_from_stripe` rewrites the tier from what Stripe says, and
+    "Stripe says nothing" means free — so before `tier_source` existed, a
+    comped account was demoted the next time its owner came back from
+    checkout or the portal. It stayed nearly unreachable only by
+    accident (the reconcile bails at "no billing account" when there is
+    no `stripe_customer_id`, and a comp that never bought anything had
+    none) — until credit packs, whose `ensure_customer` binds a customer
+    id to an account with no subscription: exactly the shape read as
+    "lapsed → free".
+
+    The asymmetry under test: a pin blocks the DEMOTION, never a real
+    subscription. Anything else would leave a comped user who later
+    subscribes holding a paid tier for free the day they cancel.
+
+    Stripe mocks are the ones `ReconcileTests` documents — real SDK
+    objects, because the service JSON-renders whatever the SDK hands
+    back and a plain-dict mock asserts a shape Stripe doesn't produce.
+    """
+
+    _sub = staticmethod(ReconcileTests._sub)
+    _list_mock = staticmethod(ReconcileTests._list_mock)
+
+    def _pin(self, tier, source=TIER_SOURCE_OPERATOR, customer="cus_abc"):
+        self.user.tier = tier
+        self.user.tier_source = source
+        self.user.stripe_customer_id = customer
+        self.user.save(update_fields=["tier", "tier_source", "stripe_customer_id"])
+
+    def _pin_team(self, plan, source=TIER_SOURCE_OPERATOR, customer="cus_team_1"):
+        self.team.plan = plan
+        self.team.plan_source = source
+        self.team.stripe_customer_id = customer
+        self.team.save(update_fields=["plan", "plan_source", "stripe_customer_id"])
+
+    # ---- the reconcile ---------------------------------------------- #
+
+    def test_reconcile_keeps_a_comped_tier(self):
+        """The headline case: comped at max, no subscription, back from
+        Stripe. Before provenance this read `free`."""
+        self._pin("max")
+        with self._list_mock():
+            summary = stripe_billing.reconcile_from_stripe(self.user)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "max")
+        self.assertEqual(self.user.tier_source, TIER_SOURCE_OPERATOR)
+        self.assertIn("unchanged", summary)
+        self.assertEqual(quota.get_effective_tier(self.user.id), "max")
+
+    def test_reconcile_still_demotes_a_stripe_set_tier(self):
+        """The pin must not cost us the repair it protects against —
+        a lapsed subscriber is still reset."""
+        self._pin("max", source=TIER_SOURCE_STRIPE)
+        with self._list_mock(self._sub(status_="canceled")):
+            summary = stripe_billing.reconcile_from_stripe(self.user)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "free")
+        self.assertEqual(summary, "tier set to free")
+
+    def test_a_real_subscription_overrides_the_pin_and_releases_it(self):
+        self._pin("max")
+        with self._list_mock(self._sub(price="price_core_789")):
+            summary = stripe_billing.reconcile_from_stripe(self.user)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "core")
+        self.assertEqual(self.user.tier_source, TIER_SOURCE_STRIPE)
+        self.assertIn("core", summary)
+
+    def test_subscribing_at_the_pinned_tier_still_releases_the_pin(self):
+        """The leak that hides behind a no-op write: comped at pro, then
+        actually subscribes to pro. The tier never moves, so a
+        `previous == tier` early return would leave the pin on — and the
+        day they cancel, they keep pro for free."""
+        self._pin("pro")
+        with self._list_mock(self._sub(price="price_pro_123")):
+            stripe_billing.reconcile_from_stripe(self.user)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "pro")
+        self.assertEqual(self.user.tier_source, TIER_SOURCE_STRIPE)
+
+        # ...and now the demotion lands, because billing owns it again.
+        with self._list_mock():
+            stripe_billing.reconcile_from_stripe(self.user)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "free")
+
+    def test_summary_never_claims_a_write_that_did_not_happen(self):
+        """The summary is logged, echoed in the webhook's 200 body, and
+        returned to the browser by `/billing/refresh/`. "tier set to
+        free" beside a row that still says max is how a support ticket
+        becomes an hour of log reading."""
+        self._pin("max")
+        with self._list_mock():
+            summary = stripe_billing.reconcile_from_stripe(self.user)
+        self.assertNotIn("set to free", summary)
+        self.assertIn("max", summary)
+
+    def test_summary_is_honest_when_the_tier_was_already_free(self):
+        """No pin, nothing to do: still not "tier set to free", because
+        nothing was set."""
+        self._pin("free", source=TIER_SOURCE_STRIPE)
+        with self._list_mock():
+            summary = stripe_billing.reconcile_from_stripe(self.user)
+        self.assertEqual(summary, "unchanged: tier stays free")
+
+    # ---- webhooks ---------------------------------------------------- #
+
+    def test_subscription_deleted_keeps_a_comped_tier(self):
+        self._pin("pro")
+        summary = stripe_billing.handle_event(
+            {
+                "id": "evt_d",
+                "type": "customer.subscription.deleted",
+                "data": {"object": {"customer": "cus_abc"}},
+            }
+        )
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "pro")
+        self.assertIn("unchanged", summary)
+
+    def test_terminal_status_keeps_a_comped_tier(self):
+        self._pin("pro")
+        summary = stripe_billing.handle_event(
+            self.subscription_event(etype="customer.subscription.updated", status_="canceled")
+        )
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "pro")
+        self.assertIn("unchanged", summary)
+
+    def test_checkout_completed_releases_the_pin(self):
+        self._pin("core")
+        stripe_billing.handle_event(self.checkout_completed_event(plan="max"))
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "max")
+        self.assertEqual(self.user.tier_source, TIER_SOURCE_STRIPE)
+
+    def test_enterprise_survives_a_deleted_webhook(self):
+        """The reconcile always skipped enterprise; `handle_event` never
+        did, so a stray terminal event could demote a contract account.
+        Migration 0182 pins every existing enterprise row, which closes
+        it — that backfill is only sound because no configured price maps
+        to enterprise (pinned below)."""
+        self._pin("enterprise")
+        stripe_billing.handle_event(
+            {
+                "id": "evt_d2",
+                "type": "customer.subscription.deleted",
+                "data": {"object": {"customer": "cus_abc"}},
+            }
+        )
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "enterprise")
+
+    def test_no_price_maps_to_enterprise(self):
+        """The premise migration 0182 backfills on: an `enterprise` row
+        can only have been set by hand. `tier_for_price` iterates
+        PURCHASABLE_PLANS, and the checkout arm refuses any plan outside
+        it — so nothing Stripe sends can produce one."""
+        self.assertNotIn("enterprise", stripe_billing.PURCHASABLE_PLANS)
+        for price in ("price_core_789", "price_pro_123", "price_max_456", "price_unknown"):
+            self.assertNotEqual(stripe_billing.tier_for_price(price), "enterprise")
+        summary = stripe_billing.handle_event(self.checkout_completed_event(plan="enterprise"))
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "free")
+        self.assertIn("deferred", summary)
+
+    # ---- teams -------------------------------------------------------- #
+
+    def test_team_reconcile_keeps_a_comped_plan(self):
+        self._pin_team("pro")
+        with self._list_mock():
+            summary = stripe_billing.reconcile_team_from_stripe(self.team)
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.plan, "pro")
+        self.assertIn("unchanged", summary)
+        # Members inherit through the effective tier, so the comp is
+        # only really intact if this resolves.
+        self.assertEqual(quota.get_effective_tier(self.user2.id), "pro")
+
+    def test_team_reconcile_still_demotes_a_stripe_set_plan(self):
+        self._pin_team("pro", source=TIER_SOURCE_STRIPE)
+        with self._list_mock():
+            summary = stripe_billing.reconcile_team_from_stripe(self.team)
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.plan, "free")
+        self.assertEqual(summary, "team plan set to free")
+
+    def test_team_subscription_deleted_keeps_a_comped_plan(self):
+        self._pin_team("max")
+        summary = stripe_billing.handle_event(
+            {
+                "id": "evt_td",
+                "type": "customer.subscription.deleted",
+                "data": {"object": {"customer": "cus_team_1"}},
+            }
+        )
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.plan, "max")
+        self.assertIn("unchanged", summary)

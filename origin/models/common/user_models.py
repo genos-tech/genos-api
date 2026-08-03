@@ -55,6 +55,33 @@ TIER_CHOICES = [
     ("enterprise", "Enterprise"),
 ]
 
+# Provenance for the tier above (and for `TeamMaster.plan`). Records who
+# LAST WROTE the value, not what anyone intended by it — that distinction
+# is the whole design:
+#
+#   'stripe'   — billing owns this tier. A subscription that lapses must
+#                reset it to free; that repair is the entire purpose of
+#                `reconcile_from_stripe`.
+#   'operator' — set by hand (`feature_access set-tier`): a comp, a
+#                trial, a support gesture. Stripe knows nothing about it,
+#                and "Stripe knows nothing" is exactly what the reconcile
+#                otherwise reads as "lapsed → free".
+#
+# Without this column both cases are the identical string "tier is pro,
+# Stripe has nothing", so protecting the comp would mean never demoting
+# the lapsed subscriber.
+#
+# An operator pin blocks the DEMOTION only. A real subscription still
+# applies and flips the source back to 'stripe' — otherwise a comped user
+# who later subscribes would keep the pin and stay on a paid tier for
+# free once they cancelled.
+TIER_SOURCE_STRIPE = "stripe"
+TIER_SOURCE_OPERATOR = "operator"
+TIER_SOURCE_CHOICES = [
+    (TIER_SOURCE_STRIPE, "Stripe"),
+    (TIER_SOURCE_OPERATOR, "Operator"),
+]
+
 
 class CustomUser(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -186,6 +213,15 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         choices=TIER_CHOICES,
         default="free",
         db_index=True,
+    )
+
+    # Who last wrote `tier` — see TIER_SOURCE_CHOICES. 'operator' means
+    # Stripe may not take the tier away; it does NOT mean Stripe is
+    # locked out, since a real subscription hands the account back.
+    tier_source = models.CharField(
+        max_length=16,
+        choices=TIER_SOURCE_CHOICES,
+        default=TIER_SOURCE_STRIPE,
     )
 
     # Stripe customer id ("cus_..."), set the first time the user starts

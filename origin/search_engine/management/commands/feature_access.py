@@ -8,6 +8,13 @@ Primary subactions:
     python manage.py feature_access set-tier --email user@example.com \\
         --tier pro          # one of: free | pro | max | enterprise
 
+    # Tiers set here are PINNED (`tier_source='operator'`): Stripe's
+    # reconcile will not reset them to free when the account has no
+    # subscription, which is what silently un-comped people before. A
+    # real subscription still wins and hands the account back to
+    # billing. To do that by hand — e.g. the comp is over and normal
+    # billing should resume — pass `--source stripe`.
+
     # Set a TEAM's plan (one payer, every member benefits). A member's
     # effective tier is the best of their own tier and their teams'
     # plans — see `origin.search_engine.quota.get_effective_tier`.
@@ -29,11 +36,18 @@ from django.core.management.base import BaseCommand, CommandError
 
 from origin.models.common.feature_models import UserFeatureAccess
 from origin.models.common.team_models import TeamMaster, TeamMembers
-from origin.models.common.user_models import TIER_CHOICES, CustomUser
+from origin.models.common.user_models import (
+    TIER_CHOICES,
+    TIER_SOURCE_CHOICES,
+    TIER_SOURCE_OPERATOR,
+    TIER_SOURCE_STRIPE,
+    CustomUser,
+)
 from origin.search_engine.quota import invalidate_effective_tier
 
 _KNOWN_FEATURES = [f for f, _ in UserFeatureAccess.FEATURE_CHOICES]
 _KNOWN_TIERS = [t for t, _ in TIER_CHOICES]
+_KNOWN_SOURCES = [s for s, _ in TIER_SOURCE_CHOICES]
 
 
 class Command(BaseCommand):
@@ -55,6 +69,15 @@ class Command(BaseCommand):
             help=f"Target tier. One of: {', '.join(_KNOWN_TIERS)}",
         )
         set_tier.add_argument(
+            "--source",
+            default=TIER_SOURCE_OPERATOR,
+            choices=_KNOWN_SOURCES,
+            help=(
+                "Who owns the tier from now on. 'operator' (default) protects it from"
+                " Stripe's reset-to-free; 'stripe' hands it back to billing."
+            ),
+        )
+        set_tier.add_argument(
             "--note",
             default="",
             help="Optional comment for the operator log (not persisted).",
@@ -71,6 +94,12 @@ class Command(BaseCommand):
             required=True,
             choices=_KNOWN_TIERS,
             help=f"Target plan. One of: {', '.join(_KNOWN_TIERS)}",
+        )
+        set_team_plan.add_argument(
+            "--source",
+            default=TIER_SOURCE_OPERATOR,
+            choices=_KNOWN_SOURCES,
+            help="Team twin of set-tier's --source.",
         )
         set_team_plan.add_argument(
             "--note",
@@ -140,23 +169,40 @@ class Command(BaseCommand):
     def _set_tier(self, options):
         user = self._resolve_user(options["email"])
         new_tier = options["tier"]
+        new_source = options["source"]
         previous = user.tier or "free"
+        previous_source = user.tier_source or TIER_SOURCE_STRIPE
 
-        if previous == new_tier:
+        if previous == new_tier and previous_source == new_source:
             self.stdout.write(
-                self.style.WARNING(f"{user.email} is already on tier '{new_tier}'. No change.")
+                self.style.WARNING(
+                    f"{user.email} is already on tier '{new_tier}' ({new_source}-set). No change."
+                )
             )
             return
 
+        # Deliberately NOT short-circuited on `previous == new_tier`:
+        # the common repair is re-running this on someone already at the
+        # right tier purely to PIN it, and the old early-return made that
+        # a silent no-op.
         user.tier = new_tier
-        user.save(update_fields=["tier"])
+        user.tier_source = new_source
+        user.save(update_fields=["tier", "tier_source"])
         invalidate_effective_tier([user.id])
 
         note = options.get("note") or ""
         suffix = f"  Note: {note}" if note else ""
-        self.stdout.write(
-            self.style.SUCCESS(f"Tier for {user.email}: '{previous}' → '{new_tier}'.{suffix}")
+        moved = (
+            f"'{previous}' → '{new_tier}'" if previous != new_tier else f"'{new_tier}' (unchanged)"
         )
+        self.stdout.write(
+            self.style.SUCCESS(f"Tier for {user.email}: {moved} — now {new_source}-set.{suffix}")
+        )
+        if new_source == TIER_SOURCE_OPERATOR:
+            self.stdout.write(
+                "  Stripe will not reset this tier to free. A real subscription still"
+                " takes over (and hands it back to billing)."
+            )
 
     def _set_team_plan(self, options):
         team_id = options["team_id"]
@@ -168,18 +214,22 @@ class Command(BaseCommand):
             raise CommandError(f"'{team_id}' is not a valid team UUID.")
 
         new_plan = options["plan"]
+        new_source = options["source"]
         previous = team.plan or "free"
+        previous_source = team.plan_source or TIER_SOURCE_STRIPE
 
-        if previous == new_plan:
+        if previous == new_plan and previous_source == new_source:
             self.stdout.write(
                 self.style.WARNING(
-                    f"Team '{team.team_name}' is already on plan '{new_plan}'. No change."
+                    f"Team '{team.team_name}' is already on plan '{new_plan}'"
+                    f" ({new_source}-set). No change."
                 )
             )
             return
 
         team.plan = new_plan
-        team.save(update_fields=["plan"])
+        team.plan_source = new_source
+        team.save(update_fields=["plan", "plan_source"])
 
         # Evict members' cached effective tiers so the change lands
         # immediately instead of after the 60s cache TTL.
@@ -192,9 +242,12 @@ class Command(BaseCommand):
 
         note = options.get("note") or ""
         suffix = f"  Note: {note}" if note else ""
+        moved = (
+            f"'{previous}' → '{new_plan}'" if previous != new_plan else f"'{new_plan}' (unchanged)"
+        )
         self.stdout.write(
             self.style.SUCCESS(
-                f"Plan for team '{team.team_name}': '{previous}' → '{new_plan}' "
+                f"Plan for team '{team.team_name}': {moved} — now {new_source}-set "
                 f"({len(member_ids)} active member(s) affected).{suffix}"
             )
         )

@@ -3,7 +3,12 @@ import uuid
 
 from django.db import models
 
-from origin.models.common.user_models import TIER_CHOICES, CustomUser
+from origin.models.common.user_models import (
+    TIER_CHOICES,
+    TIER_SOURCE_CHOICES,
+    TIER_SOURCE_STRIPE,
+    CustomUser,
+)
 
 
 def profile_image_path(instance, filename):
@@ -38,6 +43,14 @@ class TeamMaster(models.Model):
         choices=TIER_CHOICES,
         default="free",
         db_index=True,
+    )
+    # Who last wrote `plan` — the team twin of `CustomUser.tier_source`,
+    # same rules and same reason (a hand-set team plan is not Stripe's to
+    # take away). See TIER_SOURCE_CHOICES.
+    plan_source = models.CharField(
+        max_length=16,
+        choices=TIER_SOURCE_CHOICES,
+        default=TIER_SOURCE_STRIPE,
     )
     # The team's Stripe customer (per-seat subscription). Mirrors
     # CustomUser.stripe_customer_id: bound on first team checkout,
