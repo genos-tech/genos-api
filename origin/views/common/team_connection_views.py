@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q
 from rest_framework import status
 from rest_framework.response import Response
@@ -34,6 +35,13 @@ from origin.models.common.team_models import (
     TeamMaster,
 )
 from origin.models.common.user_models import CustomUser
+from origin.services.cross_team_notices import (
+    ITEM_TYPE_EXTERNAL_SHARE,
+    ITEM_TYPE_TEAM_CONNECTION,
+    connection_request_body,
+    notify_team_owner,
+    pending_notices,
+)
 from origin.services.external_grants import (
     ExternalGrantError,
     add_external_participants,
@@ -66,8 +74,8 @@ logger = logging.getLogger(__name__)
 # convention the rest of the ACL layer follows (`scope_guards`).
 _NOT_FOUND_CODES = {"not_found", "team_unavailable", "bad_object", "not_owned"}
 
-INBOX_TEAM_CONNECTION = 7
-INBOX_EXTERNAL_SHARE = 8
+INBOX_TEAM_CONNECTION = ITEM_TYPE_TEAM_CONNECTION
+INBOX_EXTERNAL_SHARE = ITEM_TYPE_EXTERNAL_SHARE
 
 
 def _error_response(exc):
@@ -127,39 +135,6 @@ def _grant_payload(grant: ExternalGrant, viewing_team_id) -> dict:
     }
 
 
-def _notify_owner(*, team_id, sender, item_type, item_body, item_optionals) -> None:
-    """Drop a request row in the receiving team owner's inbox.
-
-    Written server-side, unlike the older join-request flows where the
-    client posts to `/api/v2/inbox/joinXRequest/` after the fact. A
-    cross-team request that silently failed to reach anyone would look
-    to the asker exactly like one nobody had answered yet.
-
-    Best-effort: the connection or share is already committed, and a
-    notification problem must not fail it. The row is also discoverable
-    from the connection list, so a lost inbox item delays the response
-    rather than losing the request.
-    """
-    try:
-        owner_id = (
-            TeamMaster.objects.filter(team_id=team_id).values_list("owner_id", flat=True).first()
-        )
-        if not owner_id:
-            return
-        InboxItems.objects.create(
-            team_id=team_id,
-            sender=sender,
-            receiver_id=owner_id,
-            item_body=item_body,
-            item_type=item_type,
-            item_optionals=item_optionals,
-            is_read=False,
-            request_status="pending",
-        )
-    except Exception:  # noqa: BLE001 — never fail the request over its notice
-        logger.exception("inbox notification failed for team=%s type=%s", team_id, item_type)
-
-
 class TeamConnectionView(AuthenticatedAPIView):
     """GET  /api/v2/team/connection/?team_id=  — this team's connections.
     POST /api/v2/team/connection/            — ask another team to connect.
@@ -197,19 +172,20 @@ class TeamConnectionView(AuthenticatedAPIView):
         except TeamConnectionError as exc:
             return _error_response(exc)
 
-        _notify_owner(
+        notify_team_owner(
             team_id=target_team_id,
             sender=request.user,
             item_type=INBOX_TEAM_CONNECTION,
-            item_body={
-                "title": "Team connection request",
-                "text": f"{_team_name(team_id)} would like to connect with your team.",
-            },
+            item_body=connection_request_body(
+                requesting_team_name=_team_name(team_id),
+                addressed_team_name=_team_name(target_team_id),
+            ),
             item_optionals={
                 "connection_id": str(conn.id),
                 "requesting_team_id": str(team_id),
                 "requesting_team_name": _team_name(team_id),
             },
+            push_title=f"{_team_name(team_id)} would like to connect with your team",
         )
         return Response(
             _connection_payload(conn, team_id),
@@ -319,24 +295,7 @@ class ExternalShareView(AuthenticatedAPIView):
         except ExternalGrantError as exc:
             return _error_response(exc)
 
-        _notify_owner(
-            team_id=grant.guest_team_id,
-            sender=request.user,
-            item_type=INBOX_EXTERNAL_SHARE,
-            item_body={
-                "title": "External share offer",
-                "text": (
-                    f"{_team_name(grant.owner_team_id)} shared a "
-                    f"{grant.get_object_type_display()} with your team."
-                ),
-            },
-            item_optionals={
-                "grant_id": str(grant.id),
-                "object_type": grant.object_type,
-                "object_id": grant.object_id,
-                "owner_team_name": _team_name(grant.owner_team_id),
-            },
-        )
+        # The guest team's owner is notified by `offer_grant` itself.
         return Response(
             _grant_payload(grant, grant.owner_team_id),
             status=status.HTTP_201_CREATED,
@@ -425,6 +384,71 @@ class ExternalShareObjectView(AuthenticatedAPIView):
             {"shares": visible_shares_for_object(object_type, object_id, request.user)},
             status=status.HTTP_200_OK,
         )
+
+
+class CrossTeamNoticeView(AuthenticatedAPIView):
+    """GET /api/v2/team/notice/ — the card(s) to relay for one request.
+
+    Keyed by `connection_id`, by `grant_id`, or by the object a share was
+    just created on (`object_type` + `object_id`) — that last form because
+    creating an external chat offers it to several teams at once and the
+    creator never sees the grant ids.
+
+    Exists so the ASKING side can push its own request into the answering
+    side's open inbox. Django files these rows itself, unlike inbox types
+    1-4 which the sockets service files and delivers in one step, so
+    without this the addressee sees nothing until a page reload — and a
+    request nobody notices is a feature that stops at step one.
+
+    The relay is triggered by the requester's browser, so the payload is
+    read back here rather than accepted from it; otherwise the event would
+    be a way to push arbitrary inbox content at any user. Authorisation is
+    "you are the side that asked": a member of the team that filed the
+    request, and it must still be unanswered.
+
+    Nothing to relay is an empty list, never an error. A request that was
+    already answered and one the caller has no standing over are the same
+    non-event here, and telling them apart would leak which is which.
+    """
+
+    def get(self, request):
+        connection_id = request.GET.get("connection_id")
+        grant_id = request.GET.get("grant_id")
+        object_type = request.GET.get("object_type")
+        object_id = request.GET.get("object_id")
+        if not connection_id and not grant_id and not (object_type and object_id):
+            return Response(
+                {"error": "connection_id, grant_id, or object_type + object_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        notices = []
+        try:
+            if connection_id:
+                conn = TeamConnection.objects.filter(
+                    id=connection_id, status=ShareStatus.PENDING
+                ).first()
+                if conn is not None and is_team_member(conn.requested_by_team_id, request.user.id):
+                    notices = pending_notices(
+                        item_type=INBOX_TEAM_CONNECTION, key="connection_id", values=[conn.id]
+                    )
+            else:
+                grants = ExternalGrant.objects.filter(status=ShareStatus.PENDING)
+                if grant_id:
+                    grants = grants.filter(id=grant_id)
+                else:
+                    grants = grants.filter(object_type=object_type, object_id=str(object_id))
+                mine = [g for g in grants if is_team_member(g.owner_team_id, request.user.id)]
+                notices = pending_notices(
+                    item_type=INBOX_EXTERNAL_SHARE,
+                    key="grant_id",
+                    values=[g.id for g in mine],
+                )
+        except (DjangoValidationError, ValueError, TypeError):
+            # An id that isn't an id names nothing. Same empty answer as an
+            # id that names something the caller may not relay.
+            notices = []
+        return Response({"notices": notices}, status=status.HTTP_200_OK)
 
 
 class ExternalShareParticipantsView(AuthenticatedAPIView):

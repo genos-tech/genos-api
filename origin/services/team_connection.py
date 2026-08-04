@@ -35,6 +35,7 @@ from origin.models.common.team_models import (
     TeamConnection,
     TeamMaster,
 )
+from origin.services.cross_team_notices import notify_connection_answer
 from origin.services.member_roles import can_manage, resolve_team_role
 
 
@@ -191,6 +192,10 @@ def respond_to_connection(connection: TeamConnection, actor, accept: bool) -> Te
     connection.status = ShareStatus.ACTIVE if accept else ShareStatus.DECLINED
     connection.approved_by = actor
     connection.save(update_fields=["status", "approved_by", "ts_updated_at"])
+    # Here rather than in the view, for the same reason the request notice
+    # is: this is the only place a connection is answered, so the asking
+    # team cannot be left waiting on a decision that was already made.
+    notify_connection_answer(connection, actor, accept)
     return connection
 
 

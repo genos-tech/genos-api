@@ -618,6 +618,9 @@ class ChannelListView(AuthenticatedAPIView):
                 for m in members:
                     ChannelMember.objects.create(channel=channel, user=m, role="member")
                 for guest_team_id in {str(g) for g in guest_team_ids if g}:
+                    # Each offer also puts an invitation in that team
+                    # owner's inbox — inside `offer_grant`, so a chat can
+                    # never name a team that was never told about it.
                     offer_grant(
                         owner_team_id=team.team_id,
                         guest_team_id=guest_team_id,
