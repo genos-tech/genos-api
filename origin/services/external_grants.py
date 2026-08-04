@@ -134,6 +134,48 @@ def _resolve_object_team(object_type, object_id):
     return str(row["team_id"]) if row and row["team_id"] else None
 
 
+def _note_folder_shareable_or_raise(folder_id) -> None:
+    """A folder may only be lent out if it is explicitly PRIVATE.
+
+    A public team folder resolves to "every member of the host team gets
+    editor" and emits a `team:<id>` sentinel into the search index
+    (`views/utils/note_folder_role.py`). Neither ever covers outsiders, so
+    a public folder is not a leak — but it makes the folder's ACL mean two
+    different things at once, and the host would be sharing a space whose
+    membership it cannot see the boundary of.
+
+    Inherited visibility (`NULL`) is refused for a sharper reason: it can
+    be flipped from an ancestor the host was not looking at, silently
+    changing what the share means after the fact. An externally shared
+    folder must say what it is, in its own row.
+    """
+    from origin.models.note.personal_note_models import PersonalNoteFolder
+
+    visibility = (
+        PersonalNoteFolder.objects.filter(folder_id=folder_id)
+        .values_list("visibility", flat=True)
+        .first()
+    )
+    if visibility != PersonalNoteFolder.VISIBILITY_PRIVATE:
+        raise ExternalGrantError("folder_not_private")
+
+
+def externally_shared(object_type, object_id) -> bool:
+    """Is any team currently holding, or being offered, this object?
+
+    Pending counts. A share the other team has not answered yet is still
+    a commitment the host has made, so settings that would change what
+    was offered must be refused while it is outstanding.
+    """
+    if object_id is None:
+        return False
+    return (
+        ExternalGrant.objects.filter(object_type=object_type, object_id=str(object_id))
+        .filter(status__in=(ShareStatus.PENDING, ShareStatus.ACTIVE))
+        .exists()
+    )
+
+
 def _manager_or_raise(team_id, actor) -> None:
     team = TeamMaster.objects.filter(team_id=team_id, is_deleted=False).first()
     if team is None:
@@ -178,6 +220,9 @@ def offer_grant(
         raise ExternalGrantError("bad_object")
     if actual_owner != str(owner_team_id):
         raise ExternalGrantError("not_owned")
+
+    if object_type == ExternalGrant.ObjectType.NOTE_FOLDER:
+        _note_folder_shareable_or_raise(object_id)
 
     connection = get_connection(owner_team_id, guest_team_id)
     object_id = str(object_id)
@@ -331,6 +376,101 @@ def grant_admitting(object_type, object_id, user_id) -> ExternalGrant | None:
         if is_team_member(grant.guest_team_id, user_id):
             return grant
     return None
+
+
+def visible_shares_for_object(object_type, object_id, user) -> list[dict]:
+    """The shares on one object, as the caller is allowed to see them.
+
+    Shared by every surface's "who else is in this" panel. Written once
+    because the visibility rule is subtle in the same way for all of them:
+
+    * A **host-team member** sees every guest team. The host consented to
+      each share, so a share it could not inspect would be unauditable.
+    * A **guest-team member** sees only their OWN team's row. In a chat or
+      project shared with three organizations, the participants are all
+      visible in the member list anyway — but which organization each
+      belongs to is the host's business and each guest's, not the other
+      guests'.
+    * Anyone else gets nothing, and callers are expected to turn that into
+      a 404 rather than an empty list where the object itself is secret.
+
+    `canAdmit` is computed here rather than by the client so that the
+    "only that guest team's managers may add people" rule has exactly one
+    definition. It is never true for the host: the host may veto an
+    individual, never staff the other side.
+    """
+    rows = []
+    host_side = is_team_member(
+        _resolve_object_team(object_type, object_id), getattr(user, "id", None)
+    )
+    for grant in ExternalGrant.objects.filter(
+        object_type=object_type,
+        object_id=str(object_id),
+    ).exclude(status=ShareStatus.DECLINED):
+        team = TeamMaster.objects.filter(team_id=grant.guest_team_id, is_deleted=False).first()
+        if team is None:
+            continue
+        mine = is_team_member(team.team_id, getattr(user, "id", None))
+        if not (host_side or mine):
+            continue
+        rows.append(
+            {
+                "grantId": str(grant.id),
+                "teamId": str(team.team_id),
+                "teamName": team.team_name,
+                "roleCeiling": grant.role_ceiling,
+                "status": grant.status,
+                "side": "given" if host_side else "received",
+                "canAdmit": (
+                    mine
+                    and grant.status == ShareStatus.ACTIVE
+                    and can_manage(resolve_team_role(team, getattr(user, "id", None)))
+                ),
+                "participants": _participant_profiles(grant),
+            }
+        )
+    return rows
+
+
+def _participant_profiles(grant: ExternalGrant) -> list[dict]:
+    if grant.status != ShareStatus.ACTIVE:
+        return []
+    from origin.models.common.user_models import CustomUser
+
+    return [
+        {
+            "userId": str(u["id"]),
+            "userName": u["username"],
+            "email": u["email"],
+            "avatarUrl": u["profile_image_file_name"],
+        }
+        for u in CustomUser.objects.filter(id__in=participant_ids(grant)).values(
+            "id", "username", "email", "profile_image_file_name"
+        )
+    ]
+
+
+def may_read_object_shares(object_type, object_id, user) -> bool:
+    """Is this person entitled to ask who an object is shared with?
+
+    Host-team members, and members of a guest team that holds a share on
+    it. Note this is looser than "participates in the object": a guest
+    team's manager has to be able to see a share BEFORE anyone from their
+    team is in it, or the roster they are supposed to administer is
+    invisible until somebody else populates it.
+    """
+    owner_team = _resolve_object_team(object_type, object_id)
+    if owner_team is None:
+        return False
+    user_id = getattr(user, "id", None)
+    if is_team_member(owner_team, user_id):
+        return True
+    return any(
+        is_team_member(g.guest_team_id, user_id)
+        for g in ExternalGrant.objects.filter(
+            object_type=object_type, object_id=str(object_id)
+        ).exclude(status=ShareStatus.DECLINED)
+    )
 
 
 def host_team_ids_for_user(user_id) -> set[str]:

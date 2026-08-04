@@ -37,12 +37,14 @@ from origin.models.common.user_models import CustomUser
 from origin.services.external_grants import (
     ExternalGrantError,
     add_external_participants,
+    may_read_object_shares,
     offer_grant,
     participant_ids,
     remove_external_participants,
     respond_to_grant,
     revoke_grant,
     set_role_ceiling,
+    visible_shares_for_object,
 )
 from origin.services.team_connection import (
     TeamConnectionError,
@@ -386,6 +388,41 @@ class ExternalShareRevokeView(AuthenticatedAPIView):
             return _error_response(exc)
         return Response(
             {"grantId": str(grant_id), "withdrawn": withdrawn},
+            status=status.HTTP_200_OK,
+        )
+
+
+class ExternalShareObjectView(AuthenticatedAPIView):
+    """GET /api/v2/team/share/object/?object_type=&object_id=
+
+    "Who is this object shared with", asked from the object rather than
+    from a team. The distinction matters: an external participant reads a
+    shared project or folder while switched into the HOST team's shell and
+    belongs to neither team, so `ExternalShareView` — which gates on
+    membership of the team named in the query — refuses them their own
+    share. Keying on the object lets both sides use one call.
+
+    Read-only. Offering and revoking stay on `/team/share/` (host
+    managers) and the roster stays on `/team/share/participants/` (guest
+    managers), so no authority is duplicated here.
+    """
+
+    def get(self, request):
+        object_type = request.GET.get("object_type")
+        object_id = request.GET.get("object_id")
+        if not object_type or not object_id:
+            return Response(
+                {"error": "object_type and object_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if object_type not in ExternalGrant.ObjectType.values:
+            return Response({"error": "bad_object"}, status=status.HTTP_400_BAD_REQUEST)
+        if not may_read_object_shares(object_type, object_id, request.user):
+            # 404, not 403: a caller with no relationship to the object
+            # learns nothing about whether it exists.
+            return Response({"error": "not_found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            {"shares": visible_shares_for_object(object_type, object_id, request.user)},
             status=status.HTTP_200_OK,
         )
 
