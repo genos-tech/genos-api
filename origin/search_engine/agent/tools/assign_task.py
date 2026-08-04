@@ -12,20 +12,29 @@ ACL contract (three layers):
      same set that `fetch_task` and `update_task` enforce.  A user who
      cannot read a task cannot assign it.
   3. Assignee guard: when assigning to another user, that user must be
-     an active TeamMember of ctx.team_id.  This prevents cross-team
-     assignments and prevents assigning to an arbitrary UUID supplied
-     by the LLM that happens to be a valid user in another tenant.
+     an active member of ctx.team_id OR already able to see the task
+     (in the same `task_acl_user_ids` set as layer 2). Either way the
+     candidate set is bounded by this tenant, so the LLM cannot assign
+     to an arbitrary UUID that happens to be valid in another one.
+
+     The second half of that "or" is what a shared project needs: an
+     external collaborator holds a `ProjectMembers` row and no
+     `TeamMembers` row — that absence IS the guest model — so a
+     membership-only rule refused the very people the project was shared
+     with, while still listing them in `list_project_members`. The first
+     half stays because a task need not belong to a project at all, and
+     its ACL is then just {assignee, reporter}.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.views.utils.scope_guards import is_team_member
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -63,18 +72,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     new_assignee_username: str | None = None
 
     if raw_assignee_id and raw_assignee_id != "null":
-        # Layer 3 — assignee must be an active member of THIS team.
-        # This query is intentionally scoped to ctx.team_id so the LLM
-        # cannot supply an arbitrary UUID from a different tenant.
-        in_team = TeamMembers.objects.filter(
-            team_id=ctx.team_id,
-            attendee_id=raw_assignee_id,
-            is_deleted=False,
-        ).exists()
-        if not in_team:
+        # Layer 3 — a teammate, or someone the task's own ACL already
+        # covers. Both sets are scoped to this team, so neither can reach
+        # a UUID from a different tenant.
+        assignable = str(raw_assignee_id) in allowed or is_team_member(ctx.team_id, raw_assignee_id)
+        if not assignable:
             raise ToolError(
-                f"User {raw_assignee_id!r} is not an active member of this team. "
-                "Use get_team_members to find valid user ids."
+                f"User {raw_assignee_id!r} is not an active member of this team, "
+                "and is not on this task's project. Use get_team_members or "
+                "list_project_members to find valid user ids."
             )
 
         try:
@@ -119,7 +125,8 @@ ASSIGN_TASK = Tool(
         "To assign: pass task_id + assignee_id (a UUID from "
         "get_current_user or get_team_members). "
         "To unassign: omit assignee_id or pass null. "
-        "The new assignee must be an active member of the current team. "
+        "The new assignee must be a member of the current team, or "
+        "someone already on the task's project. "
         "Use get_current_user first when the user says 'assign to me'."
     ),
     parameters_schema={
