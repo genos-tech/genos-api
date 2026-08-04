@@ -111,8 +111,18 @@ def resolve_role_in_index(folder_id, *, folders, grants, member, user_id):
 
 
 def get_folder_role(user_id, folder_id, team_id=None):
-    """Effective role_id on one team folder, or None."""
+    """Effective role_id on one team folder, or None.
+
+    `folder_id` is coerced to int because the index is keyed by the
+    `BigAutoField` value: a caller passing the id as a string — which a
+    JSON body may well do — otherwise missed the index entirely and was
+    told it had no role, a denial indistinguishable from a real one.
+    """
     if folder_id is None:
+        return None
+    try:
+        folder_id = int(folder_id)
+    except (TypeError, ValueError):
         return None
 
     if team_id is None:

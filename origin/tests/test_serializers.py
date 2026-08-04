@@ -624,7 +624,8 @@ class ChannelSerializerTests(BaseAPITestCase):
         data = ChannelSerializer(ch).data
         expected = {
             "id", "kind", "title", "profileImageUrl", "projectId", "ownerId",
-            "isPrivate", "isExternal", "legacyChatId", "latestMessage",
+            "isPrivate", "isExternal", "teamId", "hostTeamName",
+            "legacyChatId", "latestMessage",
             "unreadCount", "members", "dmPartner", "tsCreated", "tsUpdated",
         }
         self.assertEqual(set(data.keys()), expected)
@@ -633,6 +634,10 @@ class ChannelSerializerTests(BaseAPITestCase):
         self.assertEqual(data["profileImageUrl"], "channels/eng.png")
         self.assertFalse(data["isPrivate"])
         self.assertFalse(data["isExternal"])
+        self.assertEqual(str(data["teamId"]), str(self.team.team_id))
+        # Named only on an external chat: on an internal one the owning
+        # team is the team you are already in.
+        self.assertIsNone(data["hostTeamName"])
         # GM is not DM/MDM -> members is [] and dmPartner is None.
         self.assertEqual(data["members"], [])
         self.assertIsNone(data["dmPartner"])

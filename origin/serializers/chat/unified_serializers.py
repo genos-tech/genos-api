@@ -316,6 +316,14 @@ class ChannelSerializer(serializers.ModelSerializer):
     # while outsiders are still in the room. The client uses it for the
     # badge and to hide member-management affordances that do not apply.
     isExternal = serializers.BooleanField(source="is_external", read_only=True)
+    # The team that owns the channel, and its name. Needed because the
+    # chat list now includes chats another team shared with yours: the row
+    # is in your sidebar, but it is their room, and `isExternal` alone
+    # cannot tell a guest ("someone else's chat") from a host ("my chat
+    # with outsiders in it") — both are external. Comparing `teamId`
+    # against the team you are viewing distinguishes them.
+    teamId = serializers.UUIDField(source="team_id", read_only=True, allow_null=True)
+    hostTeamName = serializers.SerializerMethodField()
     # The legacy per-kind integer chat id this channel was backfilled
     # from. Exposed during the v3 cutover so FE entry points that still
     # carry legacy ids (Spotlight / ChatSearch / activity & flagged
@@ -363,6 +371,8 @@ class ChannelSerializer(serializers.ModelSerializer):
             "ownerId",
             "isPrivate",
             "isExternal",
+            "teamId",
+            "hostTeamName",
             "legacyChatId",
             "latestMessage",
             "unreadCount",
@@ -371,6 +381,26 @@ class ChannelSerializer(serializers.ModelSerializer):
             "tsCreated",
             "tsUpdated",
         ]
+
+    def get_hostTeamName(self, obj):
+        """The owning team's name when the chat is somebody else's.
+
+        Only for external chats, and only when the owning team is not the
+        team being viewed. Both sides of a shared chat are external, and
+        the host's own row needs no "shared by" label — naming your team
+        on your own chat is noise, and it would make the field useless as
+        the guest-side signal, which is the only thing the client wants
+        it for. Absent a `viewer_team_id` in the context (single-channel
+        responses, which the client reads with the team already in hand)
+        the owning team is named for any external chat.
+        """
+        if not obj.is_external:
+            return None
+        viewer_team_id = self.context.get("viewer_team_id")
+        if viewer_team_id and str(obj.team_id) == str(viewer_team_id):
+            return None
+        team = getattr(obj, "team", None)
+        return str(team.team_name) if team is not None else None
 
     def _active_members(self, obj):
         members = getattr(obj, "active_members", None)

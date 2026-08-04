@@ -21,7 +21,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Count, OuterRef, Subquery
+from django.db.models import Count, OuterRef, Q, Subquery
 from django.db.models.functions import Coalesce
 from django.http import Http404
 from rest_framework import status
@@ -46,6 +46,7 @@ from origin.services.external_grants import (
     ExternalGrantError,
     active_grants_for_object,
     add_external_participants,
+    external_objects_for_member,
     grant_admitting,
     offer_grant,
     remove_external_participants,
@@ -328,7 +329,18 @@ class ChannelListView(AuthenticatedAPIView):
             # Narrowing only — `_user_channels_qs` has already restricted
             # this to the caller's own memberships, so naming a team you
             # are not in yields nothing rather than anything new.
-            qs = qs.filter(team_id=team_id)
+            #
+            # Plus the chats another team shared WITH this one that this
+            # person was admitted to. They are the caller's own memberships
+            # too, and narrowing by the owning team's id was hiding them
+            # from the only sidebar the caller looks at: an external chat
+            # showed up solely while viewing the host team, which is not
+            # where anyone goes to read their messages.
+            shared = external_objects_for_member(ExternalGrant.ObjectType.CHANNEL, team_id, user.id)
+            scope = Q(team_id=team_id)
+            if shared:
+                scope |= Q(id__in=list(shared.keys()))
+            qs = qs.filter(scope)
 
         channels = list(qs)
         if not channels:
@@ -380,7 +392,14 @@ class ChannelListView(AuthenticatedAPIView):
         for c in channels:
             c.active_members = members_by_channel.get(c.id, [])
 
-        data = ChannelSerializer(channels, many=True, context={"request": request}).data
+        # `viewer_team_id` decides whether a row gets a "shared by" label:
+        # the host's own external chat is external too, and only the guest
+        # side needs to be told whose room it is.
+        data = ChannelSerializer(
+            channels,
+            many=True,
+            context={"request": request, "viewer_team_id": team_id},
+        ).data
         return Response({"channels": data})
 
     def post(self, request):

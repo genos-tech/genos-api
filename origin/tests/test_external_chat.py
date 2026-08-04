@@ -419,9 +419,11 @@ class ExternalChatSharesEndpointTests(ExternalChatTestCase):
         share = res.data["shares"][0]
         self.assertEqual(share["side"], "given")
         self.assertEqual(share["teamName"], self.team_b.team_name)
+        # Two, not one: accepting the offer admits the approver, so that
+        # Approve is the moment access begins rather than a promise of it.
         self.assertEqual(
-            [p["userId"] for p in share["participants"]],
-            [str(self.b_viewer.id)],
+            {p["userId"] for p in share["participants"]},
+            {str(self.b_viewer.id), str(self.b_owner.id)},
         )
         # The host may veto, never staff — so never `canAdmit`.
         self.assertFalse(share["canAdmit"])

@@ -100,6 +100,21 @@ class CrossTeamTestCase(BaseAPITestCase):
         TeamMembers.objects.create(team=team, attendee=user, member_role=role)
         return user
 
+    def _in_project(self, user, project=None) -> bool:
+        """Is this person on the host project's roster?
+
+        Asked about one person rather than by counting rows, because
+        accepting a share admits the approver: a suite that asserted
+        `ProjectMembers.objects.count() == 0` to mean "the person we just
+        refused did not get in" now counts the approver as well and says
+        nothing about the person it is testing.
+        """
+        from origin.models.project.prj_models import ProjectMembers
+
+        return ProjectMembers.objects.filter(
+            project=project or self.project, attendee=user
+        ).exists()
+
     # ------------------------------------------------------------------
 
     def connect_a_and_b(self):

@@ -165,23 +165,34 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
         if folder_id is not None:
             from origin.views.utils.note_folder_role import get_folder_role  # noqa: PLC0415
 
-            folder_scope = (
-                PersonalNoteFolder.objects.filter(folder_id=folder_id, team=data["team"])
-                .values_list("scope", flat=True)
+            # Scoped by folder id alone, and the folder's OWN team is then
+            # taken as the note's. A team folder shared with the caller's
+            # team belongs to the host, so a lookup scoped to the team the
+            # client is currently viewing failed to find it — and had it
+            # succeeded, the note would have been filed under the wrong
+            # team, where the folder's own listing does not look for it.
+            # The role check below is what decides whether they may write
+            # there; it does not become laxer for being asked about the
+            # right team.
+            folder = (
+                PersonalNoteFolder.objects.filter(folder_id=folder_id)
+                .values("scope", "team_id")
                 .first()
             )
-            if folder_scope is None:
+            if folder is None:
                 return Response(
                     {"error": "Target folder not found."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            folder_scope = folder["scope"]
             if folder_scope == PersonalNoteFolder.SCOPE_TEAM:
-                role = get_folder_role(request_user_id, folder_id, data["team"])
+                role = get_folder_role(request_user_id, folder_id, folder["team_id"])
                 if role is None or role > ROLE_EDITOR:
                     return Response(
                         {"error": "You do not have permission to add notes to that folder."},
                         status=status.HTTP_403_FORBIDDEN,
                     )
+                data["team"] = str(folder["team_id"])
             elif not PersonalNoteFolder.objects.filter(
                 folder_id=folder_id, team=data["team"], owner=data["owner"]
             ).exists():

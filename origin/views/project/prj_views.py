@@ -12,10 +12,11 @@ from rest_framework.response import Response
 
 from origin.models.chat.unified_models import Channel
 from origin.models.common.inbox_models import InboxItems
-from origin.models.common.team_models import TeamMembers
+from origin.models.common.team_models import ExternalGrant, TeamMaster, TeamMembers
 from origin.models.project.prj_models import *
 from origin.serializers.project.prj_serializers import *
 from origin.services.custom_fields import CUSTOM_FIELD_TYPES, validate_field_options
+from origin.services.external_grants import external_objects_for_member
 from origin.services.member_roles import (
     ASSIGNABLE_ROLES,
     OWNER,
@@ -266,6 +267,12 @@ class ProjectMasterView(AuthenticatedAPIView):
             res = {
                 "projectId": project_data["project_id"],
                 "projectName": project_data["project_name"],
+                # The team that owns the project — not necessarily the team
+                # the caller is in, now that a project shared with another
+                # team opens from that team's own list. The client needs it
+                # to keep host-only controls (offering the project onward)
+                # off a guest's copy of this modal.
+                "teamId": project_data["team_id"],
                 "code": project_data.get("code"),
                 "ownerUserId": project_data["owner_id"],
                 "profileImagePath": project_data["profile_image_file_name"],
@@ -349,6 +356,38 @@ class CheckProjectExistsView(AuthenticatedAPIView):
         return Response({"project_exists": exists}, status=status.HTTP_200_OK)
 
 
+def _host_team_names(external_grants: dict) -> dict:
+    """team_id -> team name, for the teams owning the shared rows."""
+    if not external_grants:
+        return {}
+    owner_ids = {str(g.owner_team_id) for g in external_grants.values()}
+    return {
+        str(team_id): name
+        for team_id, name in TeamMaster.objects.filter(team_id__in=owner_ids).values_list(
+            "team_id", "team_name"
+        )
+    }
+
+
+def _external_fields(external_grants: dict, host_names: dict, object_id) -> dict:
+    """The three fields that mark a row as somebody else's.
+
+    Absent rather than false on an ordinary row: every list this appears in
+    is cached and sent to every member, and a field that is always present
+    invites a client to trust `isExternal === false` as "definitely mine"
+    on a payload that predates the field.
+    """
+    grant = external_grants.get(str(object_id))
+    if grant is None:
+        return {}
+    owner_team_id = str(grant.owner_team_id)
+    return {
+        "isExternal": True,
+        "hostTeamId": owner_team_id,
+        "hostTeamName": host_names.get(owner_team_id, ""),
+    }
+
+
 class ProjectsView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
@@ -389,10 +428,20 @@ class ProjectsView(AuthenticatedAPIView):
         # affordance — an outsider enumerating the host's projects is the
         # roster-exposure failure in a different costume.
         visible_project_ids = None
+        # Projects another team shared with THIS team, that this person was
+        # admitted to. They belong in the caller's own list: a shared
+        # project is work you do, and requiring people to notice the host
+        # company in their team switcher and change teams to reach it meant
+        # nobody found it at all. Keyed per-person, so a colleague who was
+        # never admitted still sees nothing.
+        external_grants = {}
         if is_team_member(team_id, attendee_id):
             # Keeps the deleted-team check that the plain guard performs.
             if res := require_team_member_or_response(request.user, team_id):
                 return res
+            external_grants = external_objects_for_member(
+                ExternalGrant.ObjectType.PROJECT, team_id, attendee_id
+            )
         else:
             visible_project_ids = guest_project_ids(team_id, attendee_id)
             if not visible_project_ids:
@@ -403,12 +452,18 @@ class ProjectsView(AuthenticatedAPIView):
         if cached is not None:
             return Response(cached, status=status.HTTP_200_OK)
 
+        # Deliberately not scoped by `team`: the row that matters for an
+        # external project is the one written against the HOST team, and
+        # scoping here would report every shared project as un-joined.
         member_exists_subquery = ProjectMembers.objects.filter(
-            project=OuterRef("project_id"), team=team_id, attendee=attendee_id
+            project=OuterRef("project_id"), attendee=attendee_id
         )
 
+        owned_or_shared = Q(team=team_id)
+        if external_grants:
+            owned_or_shared |= Q(project_id__in=list(external_grants.keys()))
         projects = (
-            ProjectMaster.objects.filter(team=team_id)
+            ProjectMaster.objects.filter(owned_or_shared)
             .annotate(is_joined=Exists(member_exists_subquery))
             .order_by("ts_updated_at")
             .reverse()
@@ -442,6 +497,10 @@ class ProjectsView(AuthenticatedAPIView):
         ):
             project_labels[assignment.project_id].append(_label_payload(assignment.label))
 
+        # The owning team's name, for the "shared by <team>" label. Looked
+        # up once here rather than per row, and only when there is
+        # something external in the list at all.
+        host_names = _host_team_names(external_grants)
         team_projects = [
             {
                 "projectId": project.project_id,
@@ -451,6 +510,11 @@ class ProjectsView(AuthenticatedAPIView):
                 "isPrivate": project.is_private,
                 "isJoined": project.is_joined,
                 "systemUserId": project.project_system_user.id,
+                # Named so the client can badge the row and, more
+                # importantly, address the host team when it loads the
+                # project's tasks — those endpoints are still scoped to the
+                # team that OWNS the project.
+                **_external_fields(external_grants, host_names, project.project_id),
             }
             for project in projects
         ]
@@ -500,6 +564,19 @@ class JoinProjectView(AuthenticatedAPIView):
         # confirm the id names a real project (channel_views convention).
         if project is None or not is_project_member(project_id, request.user.id):
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Staffing the project is for the team that owns it. Any project
+        # MEMBER may add someone (the documented project policy), but a
+        # member from outside the team is an external participant, and
+        # letting them add host employees to the host's own project would
+        # be the grant working in reverse. They have a roster of their own
+        # — `add_external_participants`, clamped to the grant's ceiling and
+        # limited to their own colleagues.
+        if not is_team_member(team_id, request.user.id):
+            return Response(
+                {"error": "Only members of this team can add project members."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         # System users are attached by the project-creation flow and
         # never hold a team membership row of their own at this point.
