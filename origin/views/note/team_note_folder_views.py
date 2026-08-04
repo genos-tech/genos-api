@@ -32,13 +32,13 @@ from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 
+from origin.models.common.team_models import ExternalGrant
 from origin.models.common.user_models import CustomUser
 from origin.models.note.common_note_models import (
     NoteFolderPermission,
     NoteFolderTagLink,
     NotePermissionMaster,
 )
-from origin.models.common.team_models import ExternalGrant
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.services.external_grants import externally_shared
