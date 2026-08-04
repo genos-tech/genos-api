@@ -10,6 +10,7 @@ from origin.serializers.common.notification_serializers import (
     PushSubscriptionSerializer,
 )
 from origin.services import presence
+from origin.services.external_grants import presence_team_ids_for_user
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 
@@ -103,3 +104,32 @@ class PresenceHeartbeatView(AuthenticatedAPIView):
         device_id = str(request.data.get("device_id") or "")[:64]
         presence.clear_visible(request.user.id, device_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PresenceAudienceView(AuthenticatedAPIView):
+    """Which team rooms the socket layer should publish my heartbeat to.
+
+    Asked by `genos-sockets` once per heartbeat (cached there), because
+    that service broadcasts online/offline into a room per team and only
+    knew about the teams a person can switch into. Anyone reached through
+    a cross-team share is in neither side's room, so they rendered
+    permanently offline to the people they are actually working with.
+
+    Only ever the caller's own audience. `user_id` is accepted because the
+    socket layer's HTTP cache keys on the query string and would otherwise
+    serve one person's audience to the next caller — it is checked against
+    the token and refused if it names anyone else, which is also what
+    stops that cache being poisoned with a chosen key.
+    """
+
+    def get(self, request):
+        claimed = request.GET.get("user_id")
+        if claimed and str(claimed) != str(request.user.id):
+            return Response(
+                {"error": "Only the data owner can request."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return Response(
+            {"teamIds": sorted(presence_team_ids_for_user(request.user.id))},
+            status=status.HTTP_200_OK,
+        )

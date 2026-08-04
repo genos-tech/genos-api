@@ -46,6 +46,7 @@ from origin.views.utils.incremental import (
     check_since,
 )
 from origin.views.utils.scope_guards import (
+    external_people_for_member,
     external_visible_user_ids,
     guest_visible_user_ids,
     is_project_member,
@@ -1004,6 +1005,68 @@ class GetAllTeamsView(AuthenticatedAPIView):
         return Response(teams, status=status.HTTP_200_OK)
 
 
+def _external_people_rows(team_id, team_name, user_id) -> list:
+    """Roster rows for the other teams' people this member works with.
+
+    Shaped exactly like a member row, plus `isExternal` and the `home*`
+    fields, so every client surface that renders a person keeps working
+    without knowing this kind exists. `teamId` stays the team being asked
+    about — it is the roster the row belongs to, which is how the client
+    caches and reads it — and the person's real team travels beside it as
+    `homeTeamId` / `homeTeamName` / `homeTeamImgPath`. Conflating the two
+    is what a team badge on the avatar exists to prevent.
+
+    `memberRole` is `guest`: there is no team membership row to read a
+    role from, and `guest` is the value every role chip already renders as
+    an external collaborator.
+    """
+    people = external_people_for_member(team_id, user_id)
+    if not people:
+        return []
+    icons = dict(
+        TeamMaster.objects.filter(team_id__in={p["teamId"] for p in people.values()}).values_list(
+            "team_id", "profile_image_file_name"
+        )
+    )
+    rows = []
+    users = CustomUser.objects.filter(id__in=people.keys(), is_deleted=False).values(
+        "id",
+        "username",
+        "email",
+        "profile_image_file_name",
+        "is_offline_forced",
+        "role",
+        "base_country",
+        "custom_status",
+        "ts_created_at",
+    )
+    for user in users:
+        home = people[str(user["id"])]
+        rows.append(
+            {
+                "teamId": team_id,
+                "teamName": team_name,
+                "userId": user["id"],
+                "userName": user["username"],
+                "userEmail": user["email"],
+                "avatarImgPath": user["profile_image_file_name"],
+                "isOfflineForced": user["is_offline_forced"] or "",
+                "role": user["role"] or "",
+                "memberRole": GUEST,
+                "baseCountry": user["base_country"] or "",
+                "customStatus": user["custom_status"] or "",
+                "tsLastSeen": "",
+                "tsJoined": user["ts_created_at"],
+                "isDeleted": False,
+                "isExternal": True,
+                "homeTeamId": home["teamId"],
+                "homeTeamName": home["teamName"],
+                "homeTeamImgPath": icons.get(home["teamId"]) or "",
+            }
+        )
+    return rows
+
+
 class GetTeamMembersView(AuthenticatedAPIView):
     """The roster of one team: every member's name, EMAIL, avatar, job
     title, permission role, country and status.
@@ -1013,6 +1076,19 @@ class GetTeamMembersView(AuthenticatedAPIView):
     returned its entire roster to any authenticated user. It is still
     accepted for client compatibility and still unused — the gate is
     membership of `team_id`, which is the question that was missing.
+
+    Members also get the other teams' people they share work with, marked
+    `isExternal` and carrying their OWN team's id, name and icon. This is
+    the client's only people directory: everything that renders a person
+    — an avatar, an assignee cell, a member row, the profile modal —
+    resolves through the roster it caches from here, so anyone missing
+    renders as a blank circle with no name. Cross-team collaborators were
+    missing, which is why they appeared as empty rows on both sides.
+
+    They are people to RECOGNIZE, not people to hand things to. Every
+    "add someone to this team/project/chat" picker filters `isExternal`
+    out, because access across teams comes from a share and its
+    participant roster, never from an internal add.
     """
 
     def get(self, request):
@@ -1110,6 +1186,9 @@ class GetTeamMembersView(AuthenticatedAPIView):
                     "isDeleted": bool(attendee["is_deleted"] or attendee["attendee__is_deleted"]),
                 }
             )
+
+        if guest_visible is None:
+            response_data.extend(_external_people_rows(team_id, team_name, request.user.id))
 
         return Response(
             build_delta_response(
