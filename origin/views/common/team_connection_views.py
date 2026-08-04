@@ -83,7 +83,7 @@ def _error_response(exc):
     code = exc.code
     if code in _NOT_FOUND_CODES:
         return Response({"error": code}, status=status.HTTP_404_NOT_FOUND)
-    if code == "not_a_manager":
+    if code in ("not_a_manager", "not_the_owner"):
         return Response({"error": code}, status=status.HTTP_403_FORBIDDEN)
     return Response({"error": code}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -93,23 +93,41 @@ def _team_name(team_id) -> str:
     return row["team_name"] if row else ""
 
 
-def _owner_team_ids(viewing_team_id) -> set:
-    """Connected teams that OWN something currently shared with this one.
+def _sharing_sides(viewing_team_id) -> tuple[set, set]:
+    """Which connected teams own work here, and which are guests in ours.
 
     A connection is symmetric — either side may ask for it, and `direction`
     records only who asked. Sharing is not symmetric: one team owns the
     project and the other works in it, and THAT is the fact someone reading
-    this list needs. One query for the whole list rather than per row.
+    this list needs. Two queries for the whole list rather than per row.
+
+    Both, not just the first, because "not the owner" is two different
+    situations: they are our guest, or nothing has been shared either way
+    yet. A single flag made those indistinguishable and the row had to
+    hedge in prose.
     """
-    return {
+    live = ExternalGrant.objects.filter(status=ShareStatus.ACTIVE)
+    owners = {
         str(team_id)
-        for team_id in ExternalGrant.objects.filter(
-            guest_team_id=viewing_team_id, status=ShareStatus.ACTIVE
-        ).values_list("owner_team_id", flat=True)
+        for team_id in live.filter(guest_team_id=viewing_team_id).values_list(
+            "owner_team_id", flat=True
+        )
     }
+    guests = {
+        str(team_id)
+        for team_id in live.filter(owner_team_id=viewing_team_id).values_list(
+            "guest_team_id", flat=True
+        )
+    }
+    return owners, guests
 
 
-def _connection_payload(conn: TeamConnection, viewing_team_id, owner_team_ids=frozenset()) -> dict:
+def _connection_payload(
+    conn: TeamConnection,
+    viewing_team_id,
+    owner_team_ids=frozenset(),
+    guest_team_ids=frozenset(),
+) -> dict:
     """Shape a connection from one team's point of view.
 
     The row stores its pair sorted (see `TeamConnection`), so "the other
@@ -117,10 +135,10 @@ def _connection_payload(conn: TeamConnection, viewing_team_id, owner_team_ids=fr
     client only ever cares about the counterparty and whether the ball is
     in its court, which is what `direction` answers.
 
-    `isOwner` says the other team owns shared work you have access to.
-    Defaults false for the caller that has just CREATED a connection —
-    correct rather than merely convenient, since nothing has been shared
-    across a connection nobody has answered yet.
+    `isOwner` says the other team owns shared work you have access to;
+    `isGuest` says they work in yours. Both are false on a connection
+    nobody has shared anything across yet, which is a real third state
+    and not a fallback.
     """
     lo, hi = str(conn.team_lo_id), str(conn.team_hi_id)
     other = hi if lo == str(viewing_team_id) else lo
@@ -133,6 +151,7 @@ def _connection_payload(conn: TeamConnection, viewing_team_id, owner_team_ids=fr
             "outgoing" if str(conn.requested_by_team_id) == str(viewing_team_id) else "incoming"
         ),
         "isOwner": other in owner_team_ids,
+        "isGuest": other in guest_team_ids,
         "tsCreated": conn.ts_created_at,
         "tsUpdated": conn.ts_updated_at,
     }
@@ -176,9 +195,13 @@ class TeamConnectionView(AuthenticatedAPIView):
             .exclude(status=ShareStatus.DECLINED)
             .order_by("-ts_updated_at")
         )
-        owner_team_ids = _owner_team_ids(team_id)
+        owner_team_ids, guest_team_ids = _sharing_sides(team_id)
         return Response(
-            {"connections": [_connection_payload(c, team_id, owner_team_ids) for c in rows]},
+            {
+                "connections": [
+                    _connection_payload(c, team_id, owner_team_ids, guest_team_ids) for c in rows
+                ]
+            },
             status=status.HTTP_200_OK,
         )
 
@@ -312,7 +335,14 @@ class ExternalShareView(AuthenticatedAPIView):
                 guest_team_id=data["guest_team_id"],
                 object_type=data["object_type"],
                 object_id=data["object_id"],
-                role_ceiling=data.get("role_ceiling") or "viewer",
+                # Editor unless the host says otherwise, matching the
+                # external-chat create path. Viewer was the default here
+                # and nothing in the UI could change it, so every share
+                # ever made was read-only: the guest team accepted a
+                # project they could not add a task to and a folder they
+                # could not write a note in. A share whose point is
+                # collaboration defaults to being able to collaborate.
+                role_ceiling=data.get("role_ceiling") or "editor",
                 actor=request.user,
             )
         except ExternalGrantError as exc:

@@ -385,19 +385,25 @@ class ChannelSerializer(serializers.ModelSerializer):
     def get_hostTeamName(self, obj):
         """The owning team's name when the chat is somebody else's.
 
-        Only for external chats, and only when the owning team is not the
-        team being viewed. Both sides of a shared chat are external, and
-        the host's own row needs no "shared by" label — naming your team
-        on your own chat is noise, and it would make the field useless as
-        the guest-side signal, which is the only thing the client wants
-        it for. Absent a `viewer_team_id` in the context (single-channel
-        responses, which the client reads with the team already in hand)
-        the owning team is named for any external chat.
+        Keyed on the owning team differing from the team being viewed,
+        not on `is_external`: a shared PROJECT's PM chat is an ordinary
+        internal channel that happens to sit in the host's team, and it
+        appears in a guest's sidebar for the same reason an external GM
+        does. Both need the label; only `is_external` distinguished them.
+
+        The host's own row is never labelled. Both sides of a shared chat
+        are external, and naming your own team on your own chat is noise
+        — it would also make the field useless as the guest-side signal,
+        which is the only thing the client wants it for. Absent a
+        `viewer_team_id` in the context (single-channel responses, read
+        with the team already in hand) the owning team is named for any
+        external chat.
         """
-        if not obj.is_external:
-            return None
         viewer_team_id = self.context.get("viewer_team_id")
-        if viewer_team_id and str(obj.team_id) == str(viewer_team_id):
+        if viewer_team_id:
+            if str(obj.team_id) == str(viewer_team_id):
+                return None
+        elif not obj.is_external:
             return None
         team = getattr(obj, "team", None)
         return str(team.team_name) if team is not None else None
