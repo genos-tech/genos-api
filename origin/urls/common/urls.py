@@ -60,6 +60,7 @@ from origin.views.common.ownership_claim_views import (
 )
 from origin.views.common.runtime_config_views import RuntimeConfigView
 from origin.views.common.team_connection_views import (
+    CrossTeamNoticeView,
     ExternalShareObjectView,
     ExternalShareParticipantsView,
     ExternalShareRespondView,
@@ -440,6 +441,14 @@ urlpatterns = [
         "api/v2/team/share/participants/",
         ExternalShareParticipantsView.as_view(),
         name="external_share_participants",
+    ),
+    # Read-back for the live relay of a cross-team request. The sockets
+    # service calls this with the requester's token so the addressee's
+    # open inbox gets the card without a reload.
+    path(
+        "api/v2/team/notice/",
+        CrossTeamNoticeView.as_view(),
+        name="cross_team_notice",
     ),
     # Mention groups (Slack-style @group). team-scoped CRUD + bulk
     # group→user resolver used by the Flask mention pipeline.

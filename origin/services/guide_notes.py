@@ -748,26 +748,46 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                 [
                     (
                         _B,
-                        "Open the team menu at the top of the left sidebar, "
-                        'choose "Show Team Profile", and find "Connected '
-                        'teams".',
+                        "Ask the other company for their team ID. It is on "
+                        "their team profile — the team menu at the top of the "
+                        'left sidebar, then "Show Team Profile" — under Team '
+                        "ID, and it is safe to send in an email: on its own it "
+                        "grants nothing.",
                     ),
                     (
                         _B,
-                        "Paste the other team's ID and send a connection "
-                        "request. Their team ID is on their own team profile, "
-                        "so ask them for it.",
+                        "Open your own team profile the same way, find "
+                        '"Connected teams", paste their ID and choose Request '
+                        "connection. It appears in your list straight away, "
+                        'marked "Waiting for them to approve".',
                     ),
                     (
                         _B,
-                        "Their owner or editor approves it from their Inbox → "
-                        "Requests. You only ever do this once per company.",
+                        "The request goes to their team OWNER, who finds it in "
+                        'Inbox → Requests as a "Team Connection" card with '
+                        "Approve and Reject on it. Their owner or an editor "
+                        'can also answer it from "Connected teams" in their '
+                        "own team profile — the same request, either place.",
+                    ),
+                    (
+                        _B,
+                        "Once approved, both teams see the other in Connected "
+                        'teams, labelled "You invited them" or "They invited '
+                        'you" so it is always clear who asked whom. You only '
+                        "do this once per company, no matter how much you go "
+                        "on to share.",
                     ),
                     (
                         _B,
                         "Only an owner or editor can request or approve a "
                         "connection. Anyone on the team can see who you are "
                         "connected to.",
+                    ),
+                    (
+                        _B,
+                        "Nothing arrived? Check they gave you the team ID and "
+                        "not their own user or project id, and that it is the "
+                        "team OWNER looking — the card goes to them.",
                     ),
                 ],
             ),
@@ -807,9 +827,10 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                     ),
                     (
                         _B,
-                        "The other team's owner or editor accepts the share "
-                        "from their Inbox. Accepting admits nobody yet — it "
-                        "opens the door.",
+                        "The other team's owner gets it in Inbox → Requests as "
+                        'a "Shared With Your Team" card, and accepts it there. '
+                        "Accepting admits nobody yet — it opens the door, and "
+                        "the next step is theirs.",
                     ),
                 ],
             ),

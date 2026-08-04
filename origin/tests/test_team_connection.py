@@ -155,7 +155,10 @@ class TeamConnectionEndpointTests(CrossTeamTestCase):
             format="json",
         )
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(InboxItems.objects.get().request_status, "approved")
+        # By type: answering also writes an activity row back to the asking
+        # team, so the inbox holds two items by now.
+        settled = InboxItems.objects.get(item_type=INBOX_TEAM_CONNECTION)
+        self.assertEqual(settled.request_status, "approved")
 
     def test_a_non_manager_gets_403_and_writes_nothing(self):
         self.authenticate(self.a_viewer)

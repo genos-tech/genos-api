@@ -134,6 +134,34 @@ def _resolve_object_team(object_type, object_id):
     return str(row["team_id"]) if row and row["team_id"] else None
 
 
+def object_display_name(object_type, object_id) -> str:
+    """What to call this object in a notice. Empty when it has no name.
+
+    A chat's title is genuinely optional (`Channel.title` defaults to ""),
+    so callers must treat the empty string as "say it without a name"
+    rather than printing a blank where a name should be.
+    """
+    try:
+        if object_type == ExternalGrant.ObjectType.CHANNEL:
+            from origin.models.chat.unified_models import Channel
+
+            row = Channel.objects.filter(id=object_id).values("title").first()
+            return (row or {}).get("title") or ""
+        if object_type == ExternalGrant.ObjectType.PROJECT:
+            from origin.models.project.prj_models import ProjectMaster
+
+            row = ProjectMaster.objects.filter(project_id=object_id).values("project_name").first()
+            return (row or {}).get("project_name") or ""
+        if object_type == ExternalGrant.ObjectType.NOTE_FOLDER:
+            from origin.models.note.personal_note_models import PersonalNoteFolder
+
+            row = PersonalNoteFolder.objects.filter(folder_id=object_id).values("name").first()
+            return (row or {}).get("name") or ""
+    except (DjangoValidationError, ValueError, TypeError):
+        return ""
+    return ""
+
+
 def _note_folder_shareable_or_raise(folder_id) -> None:
     """A folder may only be lent out if it is explicitly PRIVATE.
 
@@ -227,6 +255,8 @@ def offer_grant(
     connection = get_connection(owner_team_id, guest_team_id)
     object_id = str(object_id)
 
+    from origin.services.cross_team_notices import notify_share_offer
+
     existing = ExternalGrant.objects.filter(
         guest_team_id=guest_team_id, object_type=object_type, object_id=object_id
     ).first()
@@ -250,9 +280,10 @@ def offer_grant(
                 "ts_updated_at",
             ]
         )
+        notify_share_offer(existing, actor)
         return existing
 
-    return ExternalGrant.objects.create(
+    grant = ExternalGrant.objects.create(
         connection=connection,
         owner_team_id=owner_team_id,
         guest_team_id=guest_team_id,
@@ -262,6 +293,13 @@ def offer_grant(
         status=ShareStatus.PENDING,
         invited_by=actor,
     )
+    # Notified HERE, not by the caller. There are two callers — the share
+    # endpoint and external-chat creation — and the second one shipped
+    # without a notice, so the guest team was named in a chat nobody had
+    # told them about and could neither find nor staff it. Doing it at the
+    # only place a grant is created makes that impossible to repeat.
+    notify_share_offer(grant, actor)
+    return grant
 
 
 def respond_to_grant(grant: ExternalGrant, actor, accept: bool) -> ExternalGrant:
@@ -281,6 +319,11 @@ def respond_to_grant(grant: ExternalGrant, actor, accept: bool) -> ExternalGrant
     grant.status = ShareStatus.ACTIVE if accept else ShareStatus.DECLINED
     grant.approved_by = actor
     grant.save(update_fields=["status", "approved_by", "ts_updated_at"])
+    # The host asked; tell them the answer. A decline is otherwise silent,
+    # because declined grants are withheld from the lists on purpose.
+    from origin.services.cross_team_notices import notify_share_answer
+
+    notify_share_answer(grant, actor, accept)
     return grant
 
 
