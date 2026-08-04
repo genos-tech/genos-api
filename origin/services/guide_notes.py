@@ -559,11 +559,43 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                         "it's included from the Core plan up. Without it, "
                         "Genos answers only from your workspace.",
                     ),
+                ],
+            ),
+            (
+                "Finding an answer you already had",
+                [
+                    "The Genos page keeps a history list beside the "
+                    "conversation, so a question you asked last week is "
+                    "something to reopen rather than ask again. It shows your "
+                    "twenty most recent conversations, and two things reach "
+                    "past that:",
                     (
                         _B,
-                        "Earlier questions are kept in the history list on "
-                        "the Genos page, so you can reopen a past "
-                        "conversation instead of asking again from scratch.",
+                        "The search box above the list matches the text of "
+                        "your past questions — every question in a "
+                        "conversation, not only the first one shown on the "
+                        "row. So a match can surface a conversation whose "
+                        "visible label doesn't contain your words, which is "
+                        "usually right: the question you remember asking was "
+                        "often several turns in. It searches your whole "
+                        "history, not just the twenty on screen.",
+                    ),
+                    (
+                        _B,
+                        "Pin a conversation with the pin on its row and it "
+                        "stays at the top under Pinned, above Recent, however "
+                        "old it gets. Pinning is the fix for an ask you'll "
+                        "want repeatedly — a decision, a summary you keep "
+                        "re-reading — because pinned conversations are exempt "
+                        "from that twenty-row limit. Unpin from the same pin.",
+                    ),
+                    (
+                        _B,
+                        "Pinning does not extend how long history is kept. "
+                        "Your plan's Genos history window still applies, so a "
+                        "conversation old enough to fall outside it stops "
+                        "appearing even when pinned — and comes back, still "
+                        "pinned, if you upgrade. Nothing was deleted.",
                     ),
                 ],
             ),
