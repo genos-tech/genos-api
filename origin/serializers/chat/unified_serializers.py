@@ -309,6 +309,13 @@ class ChannelSerializer(serializers.ModelSerializer):
     projectId = serializers.IntegerField(source="project_id", read_only=True, allow_null=True)
     ownerId = serializers.UUIDField(source="owner_id", read_only=True, allow_null=True)
     isPrivate = serializers.BooleanField(source="is_private")
+    # A cross-team chat. Read-only on purpose: it is decided at creation
+    # (`ChannelListView._create_group`) and there is no meaningful
+    # conversion afterwards — an internal chat cannot become external
+    # without a grant, and an external one cannot stop being external
+    # while outsiders are still in the room. The client uses it for the
+    # badge and to hide member-management affordances that do not apply.
+    isExternal = serializers.BooleanField(source="is_external", read_only=True)
     # The legacy per-kind integer chat id this channel was backfilled
     # from. Exposed during the v3 cutover so FE entry points that still
     # carry legacy ids (Spotlight / ChatSearch / activity & flagged
@@ -355,6 +362,7 @@ class ChannelSerializer(serializers.ModelSerializer):
             "projectId",
             "ownerId",
             "isPrivate",
+            "isExternal",
             "legacyChatId",
             "latestMessage",
             "unreadCount",

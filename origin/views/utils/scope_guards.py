@@ -76,12 +76,17 @@ _PROJECT_MISSING = "Project not found."
 # hundred-odd call sites, and it cannot drift.
 
 
-def _no_such(query):
-    """Run a membership `.exists()`, treating an unparseable id as False."""
+def _no_such(query, default=False):
+    """Run a membership `.exists()`, treating an unparseable id as False.
+
+    `default` is for the few callers that answer with a set of visible
+    users rather than a boolean — an empty set is their fail-closed
+    answer, and returning `False` there would be a truthiness accident.
+    """
     try:
         return query()
     except (DjangoValidationError, ValueError, TypeError):
-        return False
+        return default
 
 
 def is_team_member(team_id, user_id) -> bool:
@@ -145,9 +150,11 @@ def is_guest(team_id, user_id) -> bool:
 def is_team_participant(team_id, user_id) -> bool:
     """Does `user_id` belong to `team_id` in ANY capacity?
 
-    Full member, team owner, or guest. This answers a different question
-    from `is_team_member`, and the difference matters at exactly one kind
-    of site: **may these two people be put in a room together.**
+    Full member, team owner, guest, or a member of a connected team that
+    holds an active share on something this team owns. This answers a
+    different question from `is_team_member`, and the difference matters
+    at exactly one kind of site: **may these two people be put in a room
+    together.**
 
     `is_team_member` asks "may you act on the team" and correctly denies
     guests everything team-wide. But a guest you share a project with is
@@ -162,8 +169,23 @@ def is_team_participant(team_id, user_id) -> bool:
     closes. Note also that a caller must already KNOW the counterparty's
     user id: guests appear in no roster and no people picker, so this is
     not an enumeration surface.
+
+    ## NOT an admission check for an object
+
+    The external clause makes two organizations that already share
+    *something* mutually reachable, which is the point — you cannot
+    collaborate with someone you may not message. It does NOT say the
+    person may join any given channel, project, or folder. Object
+    membership always requires a grant on THAT object
+    (`external_grants.grant_admitting`). Using this predicate to gate an
+    add-to-object path would let one share silently become access to
+    everything the host owns.
     """
-    return is_team_member(team_id, user_id) or is_guest(team_id, user_id)
+    return (
+        is_team_member(team_id, user_id)
+        or is_guest(team_id, user_id)
+        or is_external_participant(team_id, user_id)
+    )
 
 
 def are_teams_connected(team_a_id, team_b_id) -> bool:
@@ -262,6 +284,53 @@ def guest_visible_user_ids(team_id, user_id) -> set:
     }
     visible.add(str(user_id))
     return visible
+
+
+def external_visible_user_ids(team_id, user_id) -> set:
+    """Everyone an external participant may see in a host team.
+
+    The cross-team counterpart of `guest_visible_user_ids`, and needed for
+    the same reason: the host's roster is withheld, so visibility has to
+    be assembled from the objects the person actually shares. A channel or
+    note-folder share leaves no `ProjectMembers` row, so
+    `guest_visible_user_ids` returns nothing for those people and the host
+    team would render with an empty roster — not even themselves in it,
+    which breaks any client lookup keyed on "find me in this team".
+
+    Only co-participants of objects they are already in, whose identities
+    that object's own member list discloses anyway. Never the roster.
+    """
+    if team_id is None or user_id is None:
+        return set()
+    from origin.models.chat.unified_models import ChannelMember
+    from origin.models.common.team_models import ExternalGrant, ShareStatus
+    from origin.models.note.common_note_models import NoteFolderPermission
+
+    def _query():
+        visible = set()
+        grants = ExternalGrant.objects.filter(owner_team_id=team_id, status=ShareStatus.ACTIVE)
+        for grant in grants:
+            if not is_team_member(grant.guest_team_id, user_id):
+                continue
+            if grant.object_type == ExternalGrant.ObjectType.CHANNEL:
+                rows = ChannelMember.objects.filter(
+                    channel_id=grant.object_id, is_deleted=False
+                ).values_list("user_id", flat=True)
+            elif grant.object_type == ExternalGrant.ObjectType.NOTE_FOLDER:
+                rows = NoteFolderPermission.objects.filter(folder_id=grant.object_id).values_list(
+                    "user_id", flat=True
+                )
+            else:
+                # Projects already resolve through
+                # `guest_visible_user_ids` — an external project member
+                # holds a real `ProjectMembers` row.
+                continue
+            ids = {str(uid) for uid in rows if uid}
+            if str(user_id) in ids:
+                visible |= ids
+        return visible
+
+    return _no_such(_query, default=set())
 
 
 def can_access_task(task_id, user_id) -> bool:

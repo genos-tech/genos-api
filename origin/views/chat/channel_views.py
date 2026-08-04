@@ -36,11 +36,20 @@ from origin.models.chat.unified_models import (
     Message,
     ReadCursor,
 )
-from origin.models.common.team_models import TeamMaster
+from origin.models.common.team_models import ExternalGrant, TeamMaster
 from origin.serializers.chat.unified_serializers import (
     ChannelMemberSerializer,
     ChannelSerializer,
     MessageSerializer,
+)
+from origin.services.external_grants import (
+    ExternalGrantError,
+    active_grants_for_object,
+    add_external_participants,
+    grant_admitting,
+    offer_grant,
+    participant_ids,
+    remove_external_participants,
 )
 from origin.services.member_roles import (
     ASSIGNABLE_ROLES,
@@ -49,9 +58,10 @@ from origin.services.member_roles import (
     is_assignable,
     member_role_to_channel_role,
     resolve_gm_role,
+    resolve_team_role,
 )
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.views.utils.scope_guards import is_team_participant
+from origin.views.utils.scope_guards import is_guest, is_team_member, is_team_participant
 from origin.views.utils.upload_limits import check_upload_size
 
 User = get_user_model()
@@ -68,8 +78,44 @@ def _canonical_dm_pair(user_a_id, user_b_id):
     return (a, b) if a < b else (b, a)
 
 
-def _users_in_team(user_ids, team_id):
-    """Resolve `user_ids` to users, or `None` if any is not in the team.
+def _grant_error_status(exc):
+    """Map an `ExternalGrantError` code onto a status code.
+
+    Same 404-never-403 convention as the rest of this module: a caller who
+    named an object or team they have no business with is told it is not
+    there. `not_a_manager` is a genuine 403 because the caller has already
+    proved they belong — hiding that would just be confusing.
+    """
+    if exc.code in ("not_found", "bad_object", "not_owned", "team_unavailable"):
+        return status.HTTP_404_NOT_FOUND
+    if exc.code == "not_a_manager":
+        return status.HTTP_403_FORBIDDEN
+    return status.HTTP_400_BAD_REQUEST
+
+
+def _channel_admissible(user_id, team_id, channel=None):
+    """May this person be a member of this channel?
+
+    Deliberately STRICTER than `is_team_participant`, and the difference
+    is the cross-team security boundary. `is_team_participant` says two
+    people may be in a room together at all, and now includes members of
+    a connected team that shares *something* with this one — right for a
+    DM counterparty, far too broad here. Channel membership must be
+    grant-bound to THIS channel, or one share would quietly become
+    access to every group chat the host owns.
+
+    So: host-side participants (member, owner, guest) always; anyone else
+    only with an active `ExternalGrant` naming this exact channel.
+    """
+    if is_team_member(team_id, user_id) or is_guest(team_id, user_id):
+        return True
+    if channel is None:
+        return False
+    return grant_admitting(ExternalGrant.ObjectType.CHANNEL, channel.id, user_id) is not None
+
+
+def _users_in_team(user_ids, team_id, channel=None):
+    """Resolve `user_ids` to users, or `None` if any may not be admitted.
 
     All-or-nothing on purpose. Silently dropping the ids that don't
     belong would create a channel whose member list quietly differs from
@@ -80,6 +126,11 @@ def _users_in_team(user_ids, team_id):
     Malformed ids are filtered before the query rather than caught after:
     `id` is a UUIDField, so a bad value raises `ValidationError` out of
     `to_python` and would otherwise be a 500 on attacker-supplied input.
+
+    Pass `channel` when adding to an existing channel: an external chat
+    also admits members of a guest team holding an active grant on that
+    channel. Without it the check is host-team-only, which is what every
+    internal channel wants.
     """
     wanted = {str(uid) for uid in user_ids if uid}
     if not wanted:
@@ -98,7 +149,7 @@ def _users_in_team(user_ids, team_id):
     users = list(User.objects.filter(id__in=valid))
     if len(users) != len(valid):
         return None
-    if not all(is_team_participant(team_id, u.id) for u in users):
+    if not all(_channel_admissible(u.id, team_id, channel) for u in users):
         return None
     return users
 
@@ -151,6 +202,35 @@ def _get_channel_for_user(channel_id, user):
         return _user_channels_qs(user).get(id=channel_id)
     except Channel.DoesNotExist:
         raise Http404("Channel not found.")
+
+
+def _get_channel_for_roster_admin(channel_id, user):
+    """Like `_get_channel_for_user`, plus the guest team's administrators.
+
+    Needed because of the order things happen in a cross-team share. When
+    a guest team accepts a grant, NOBODY from that team is in the channel
+    yet — their managers admit their own people afterwards. Scoping the
+    roster endpoints to membership alone would leave the guest side with a
+    channel they have consented to and cannot staff, and the only way out
+    would be the host adding the first person, which is precisely the
+    delegation this design removes.
+
+    Widened for *reaching the roster endpoint* only. Who may actually be
+    admitted is still `_channel_admissible` plus the grant service, and a
+    guest manager still cannot touch the host's own members.
+    """
+    try:
+        return _get_channel_for_user(channel_id, user)
+    except Http404:
+        pass
+    channel = Channel.objects.filter(id=channel_id, is_deleted=False, is_external=True).first()
+    if channel is None:
+        raise Http404("Channel not found.")
+    for grant in active_grants_for_object(ExternalGrant.ObjectType.CHANNEL, channel.id):
+        team = TeamMaster.objects.filter(team_id=grant.guest_team_id, is_deleted=False).first()
+        if team is not None and can_manage(resolve_team_role(team, user.id)):
+            return channel
+    raise Http404("Channel not found.")
 
 
 def _annotate_unread(qs, user):
@@ -460,11 +540,27 @@ class ChannelListView(AuthenticatedAPIView):
 
     @staticmethod
     def _create_group(request, team, kind, body):
-        """GM/MDM create. Accepts an arbitrary member list."""
+        """GM/MDM create. Accepts an arbitrary member list.
+
+        `is_external: true` (GM only) makes a cross-team chat. It forces
+        `is_private` on and takes `guest_team_ids`: connected teams that
+        are offered access in the same call, so creating an external chat
+        is one round trip rather than create-then-share. Offering is
+        owner/editor-only and requires an active connection, both enforced
+        by `offer_grant` — creating the empty channel is not, because an
+        external chat with no grants shares nothing with anybody.
+
+        `member_user_ids` stays host-side either way. The host puts its own
+        people in; each guest team's managers then admit their own, which
+        is the whole point of the delegation model and is deliberately not
+        something the host can do on their behalf.
+        """
         title = (body.get("title") or "").strip()
+        is_external = bool(body.get("is_external", False))
         is_private = bool(body.get("is_private", False))
         profile_image_url = body.get("profile_image_url") or ""
         member_user_ids = body.get("member_user_ids") or []
+        guest_team_ids = body.get("guest_team_ids") or []
 
         if kind == ChannelKind.GM and not title:
             return Response(
@@ -476,6 +572,22 @@ class ChannelListView(AuthenticatedAPIView):
                 {"error": "member_user_ids must be a list."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if is_external:
+            if kind != ChannelKind.GM:
+                return Response(
+                    {"error": "Only a group message can be external."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not isinstance(guest_team_ids, list):
+                return Response(
+                    {"error": "guest_team_ids must be a list."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            # Never optional. A public external channel could be
+            # self-joined by every member of the host team
+            # (`ChannelJoinView`), which is access no grant approved — and
+            # the guest side would have no way to know it happened.
+            is_private = True
 
         # Validate member ids exist; collapse duplicates and drop the
         # creator if accidentally included (we add them separately as
@@ -491,18 +603,34 @@ class ChannelListView(AuthenticatedAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        with transaction.atomic():
-            channel = Channel.objects.create(
-                team=team,
-                kind=kind,
-                title=title,
-                is_private=is_private,
-                profile_image_url=profile_image_url,
-                owner=request.user,
-            )
-            ChannelMember.objects.create(channel=channel, user=request.user, role="owner")
-            for m in members:
-                ChannelMember.objects.create(channel=channel, user=m, role="member")
+        try:
+            with transaction.atomic():
+                channel = Channel.objects.create(
+                    team=team,
+                    kind=kind,
+                    title=title,
+                    is_private=is_private,
+                    is_external=is_external,
+                    profile_image_url=profile_image_url,
+                    owner=request.user,
+                )
+                ChannelMember.objects.create(channel=channel, user=request.user, role="owner")
+                for m in members:
+                    ChannelMember.objects.create(channel=channel, user=m, role="member")
+                for guest_team_id in {str(g) for g in guest_team_ids if g}:
+                    offer_grant(
+                        owner_team_id=team.team_id,
+                        guest_team_id=guest_team_id,
+                        object_type=ExternalGrant.ObjectType.CHANNEL,
+                        object_id=channel.id,
+                        role_ceiling=body.get("role_ceiling") or "editor",
+                        actor=request.user,
+                    )
+        except ExternalGrantError as exc:
+            # Rolled back with the channel: a half-created external chat
+            # that named a team it never actually offered access to would
+            # look shared and be nothing of the kind.
+            return Response({"error": exc.code}, status=_grant_error_status(exc))
 
         return Response(
             {"channel": ChannelSerializer(channel, context={"request": request}).data},
@@ -636,7 +764,17 @@ class ChannelDetailView(AuthenticatedAPIView):
             channel.profile_image_url = url
             update_fields.append("profile_image_url")
         if "is_private" in body:
-            channel.is_private = bool(body.get("is_private"))
+            next_private = bool(body.get("is_private"))
+            if channel.is_external and not next_private:
+                # A public external chat would be self-joinable by the
+                # whole host team (`ChannelJoinView`), handing out access
+                # no grant ever approved — and the guest side would never
+                # see it happen.
+                return Response(
+                    {"error": "An external chat must stay private."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            channel.is_private = next_private
             update_fields.append("is_private")
         new_owner_user_id = body.get("owner_user_id") if "owner_user_id" in body else None
         if "owner_user_id" in body:
@@ -795,7 +933,7 @@ class ChannelMembersView(AuthenticatedAPIView):
         gets their row re-activated, not duplicated. DM channels return
         400 because their member set is fixed by ChannelDirectPair.
         """
-        channel = _get_channel_for_user(channel_id, request.user)
+        channel = _get_channel_for_roster_admin(channel_id, request.user)
         if channel.kind == ChannelKind.DM:
             return Response(
                 {"error": "Cannot add members to a DM channel."},
@@ -820,28 +958,82 @@ class ChannelMembersView(AuthenticatedAPIView):
         unique_ids = {str(u) for u in user_ids if u}
         # Scoped to the CHANNEL's team, not the caller's: the caller is
         # already verified as a member of this channel, and the channel
-        # is what the new members are being added to.
-        users = _users_in_team(unique_ids, channel.team_id)
+        # is what the new members are being added to. Passing the channel
+        # also admits guest-team people holding a grant on it.
+        users = _users_in_team(
+            unique_ids, channel.team_id, channel if channel.is_external else None
+        )
         if users is None:
             return Response(
                 {"error": "One or more user_ids not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        try:
+            added = self._add_members(channel, users, request.user)
+        except ExternalGrantError as exc:
+            return Response({"error": exc.code}, status=_grant_error_status(exc))
+        except PermissionError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+
+        return Response(
+            {"members": ChannelMemberSerializer(added, many=True).data},
+            status=status.HTTP_201_CREATED,
+        )
+
+    @staticmethod
+    def _add_members(channel, users, actor):
+        """Write the membership rows, routing external adds through the grant.
+
+        On an external chat the two kinds of member have different rules,
+        and running them through one code path is what would lose the
+        distinction:
+
+        * A **host-team** person is ordinary channel management, so the
+          actor has to belong to the host team. Otherwise a guest-team
+          manager could staff the host's own chat.
+        * A **guest-team** person goes through
+          `add_external_participants`, which is where "only a manager of
+          THAT guest team, only their own members, never above the grant's
+          ceiling" is enforced. Re-implementing those three checks here is
+          exactly how they would drift apart.
+
+        An internal channel keeps its original behaviour untouched: any
+        member may add any teammate.
+        """
+        if not channel.is_external:
+            with transaction.atomic():
+                return [
+                    ChannelMember.objects.update_or_create(
+                        channel=channel,
+                        user=u,
+                        defaults={"is_deleted": False, "role": "member"},
+                    )[0]
+                    for u in users
+                ]
+
+        host_side, external = [], []
+        for u in users:
+            grant = grant_admitting(ExternalGrant.ObjectType.CHANNEL, channel.id, u.id)
+            (external if grant else host_side).append((u, grant))
+
+        if host_side and not is_team_member(channel.team_id, actor.id):
+            raise PermissionError("Only a member of the host team can add its people.")
+
         added = []
         with transaction.atomic():
-            for u in users:
+            for u, _ in host_side:
                 obj, _created = ChannelMember.objects.update_or_create(
                     channel=channel,
                     user=u,
                     defaults={"is_deleted": False, "role": "member"},
                 )
                 added.append(obj)
-
-        return Response(
-            {"members": ChannelMemberSerializer(added, many=True).data},
-            status=status.HTTP_201_CREATED,
-        )
+            for u, grant in external:
+                # Writes the ChannelMember row itself, at the clamped role.
+                add_external_participants(grant, [u.id], actor)
+                added.append(ChannelMember.objects.get(channel=channel, user=u))
+        return added
 
 
 class ChannelJoinView(AuthenticatedAPIView):
@@ -983,7 +1175,7 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
         return Response(ChannelMemberSerializer(member).data, status=status.HTTP_200_OK)
 
     def delete(self, request, channel_id, user_id):
-        channel = _get_channel_for_user(channel_id, request.user)
+        channel = _get_channel_for_roster_admin(channel_id, request.user)
         if channel.kind == ChannelKind.DM:
             return Response(
                 {"error": "Cannot remove members from a DM channel."},
@@ -996,11 +1188,31 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
             )
 
         is_self = str(user_id) == str(request.user.id)
+        # On an external chat, a guest team's owner/editor may also pull
+        # one of their OWN people out — that is the other half of running
+        # your own roster, and without it a guest team could add someone
+        # and then have to ask the host to remove them.
+        grant = (
+            grant_admitting(ExternalGrant.ObjectType.CHANNEL, channel.id, user_id)
+            if channel.is_external
+            else None
+        )
         if not (is_self or can_manage(resolve_gm_role(channel, request.user.id))):
-            return Response(
-                {"error": "Only the channel owner or an editor can remove other members."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            if grant is None:
+                return Response(
+                    {"error": "Only the channel owner or an editor can remove other members."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            try:
+                removed = remove_external_participants(grant, [user_id], request.user)
+            except ExternalGrantError as exc:
+                return Response({"error": exc.code}, status=_grant_error_status(exc))
+            if (
+                not removed
+                and not ChannelMember.objects.filter(channel=channel, user_id=user_id).exists()
+            ):
+                raise Http404("Member not found.")
+            return Response(status=status.HTTP_204_NO_CONTENT)
 
         try:
             member = ChannelMember.objects.get(channel=channel, user_id=user_id)
@@ -1081,6 +1293,70 @@ class ChannelProfileImageView(AuthenticatedAPIView):
             {"channel": ChannelSerializer(channel, context={"request": request}).data},
             status=status.HTTP_200_OK,
         )
+
+
+class ChannelSharesView(AuthenticatedAPIView):
+    """GET /api/v3/channels/{channel_id}/shares/ — the teams in this chat.
+
+    Exists because the team-scoped `/api/v2/team/share/` cannot answer
+    this question for the guest side. A guest participant reads the chat
+    from the HOST team's shell, and they are not a member of the host
+    team, so a team-scoped lookup keyed on the team they are currently
+    viewing refuses them their own share. Keying on the channel instead
+    lets both sides use one call.
+
+    Read-only, and deliberately so: offering, revoking and changing a
+    ceiling stay on `/api/v2/team/share/` (host managers), and the roster
+    stays on this channel's own members endpoints. `canAdmit` tells the
+    client which side of the share it is on so it can render the right
+    affordances without guessing.
+    """
+
+    def get(self, request, channel_id):
+        channel = _get_channel_for_roster_admin(channel_id, request.user)
+        if not channel.is_external:
+            return Response({"shares": []}, status=status.HTTP_200_OK)
+
+        host_side = is_team_member(channel.team_id, request.user.id)
+        shares = []
+        for grant in active_grants_for_object(ExternalGrant.ObjectType.CHANNEL, channel.id):
+            team = TeamMaster.objects.filter(team_id=grant.guest_team_id).first()
+            if team is None:
+                continue
+            mine = is_team_member(team.team_id, request.user.id)
+            # Withhold other guest teams' rosters from a guest. In a
+            # multi-team chat every participant is visible in the member
+            # list anyway, but which ORGANISATION each belongs to is the
+            # host's business and the other guest's — not this one's.
+            if not (host_side or mine):
+                continue
+            participants = User.objects.filter(id__in=participant_ids(grant)).values(
+                "id", "username", "email", "profile_image_file_name"
+            )
+            shares.append(
+                {
+                    "grantId": str(grant.id),
+                    "teamId": str(team.team_id),
+                    "teamName": team.team_name,
+                    "roleCeiling": grant.role_ceiling,
+                    "status": grant.status,
+                    "side": "given" if host_side else "received",
+                    # Adding is the guest team's managers' privilege, and
+                    # only for their own team. The host never appears here
+                    # as `true` — it may veto, not staff.
+                    "canAdmit": mine and can_manage(resolve_team_role(team, request.user.id)),
+                    "participants": [
+                        {
+                            "userId": str(u["id"]),
+                            "userName": u["username"],
+                            "email": u["email"],
+                            "avatarUrl": u["profile_image_file_name"],
+                        }
+                        for u in participants
+                    ],
+                }
+            )
+        return Response({"shares": shares}, status=status.HTTP_200_OK)
 
 
 # Cap inline editor uploads. Mirrors `MAX_ATTACHMENT_BYTES` in
