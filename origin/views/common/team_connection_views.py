@@ -93,13 +93,34 @@ def _team_name(team_id) -> str:
     return row["team_name"] if row else ""
 
 
-def _connection_payload(conn: TeamConnection, viewing_team_id) -> dict:
+def _owner_team_ids(viewing_team_id) -> set:
+    """Connected teams that OWN something currently shared with this one.
+
+    A connection is symmetric — either side may ask for it, and `direction`
+    records only who asked. Sharing is not symmetric: one team owns the
+    project and the other works in it, and THAT is the fact someone reading
+    this list needs. One query for the whole list rather than per row.
+    """
+    return {
+        str(team_id)
+        for team_id in ExternalGrant.objects.filter(
+            guest_team_id=viewing_team_id, status=ShareStatus.ACTIVE
+        ).values_list("owner_team_id", flat=True)
+    }
+
+
+def _connection_payload(conn: TeamConnection, viewing_team_id, owner_team_ids=frozenset()) -> dict:
     """Shape a connection from one team's point of view.
 
     The row stores its pair sorted (see `TeamConnection`), so "the other
     team" has to be derived per viewer rather than read off a field. The
     client only ever cares about the counterparty and whether the ball is
     in its court, which is what `direction` answers.
+
+    `isOwner` says the other team owns shared work you have access to.
+    Defaults false for the caller that has just CREATED a connection —
+    correct rather than merely convenient, since nothing has been shared
+    across a connection nobody has answered yet.
     """
     lo, hi = str(conn.team_lo_id), str(conn.team_hi_id)
     other = hi if lo == str(viewing_team_id) else lo
@@ -111,6 +132,7 @@ def _connection_payload(conn: TeamConnection, viewing_team_id) -> dict:
         "direction": (
             "outgoing" if str(conn.requested_by_team_id) == str(viewing_team_id) else "incoming"
         ),
+        "isOwner": other in owner_team_ids,
         "tsCreated": conn.ts_created_at,
         "tsUpdated": conn.ts_updated_at,
     }
@@ -154,8 +176,9 @@ class TeamConnectionView(AuthenticatedAPIView):
             .exclude(status=ShareStatus.DECLINED)
             .order_by("-ts_updated_at")
         )
+        owner_team_ids = _owner_team_ids(team_id)
         return Response(
-            {"connections": [_connection_payload(c, team_id) for c in rows]},
+            {"connections": [_connection_payload(c, team_id, owner_team_ids) for c in rows]},
             status=status.HTTP_200_OK,
         )
 

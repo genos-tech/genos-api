@@ -28,11 +28,13 @@ Cycle checks and subtree walks in this module therefore key on TEAM
 alone, never on owner.
 """
 
+from collections import defaultdict
+
 from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 
-from origin.models.common.team_models import ExternalGrant
+from origin.models.common.team_models import ExternalGrant, TeamMaster
 from origin.models.common.user_models import CustomUser
 from origin.models.note.common_note_models import (
     NoteFolderPermission,
@@ -41,7 +43,7 @@ from origin.models.note.common_note_models import (
 )
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
-from origin.services.external_grants import externally_shared
+from origin.services.external_grants import external_objects_for_member, externally_shared
 from origin.services.group_expansion import expand_groups
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.note.note_folder_tag_views import sync_folder_tags
@@ -169,6 +171,9 @@ def _require_host_member(team_id, user_id):
 
     Read and write on the notes themselves stay role-based and untouched.
     Returns a Response to bail out with, or None to proceed.
+
+    One exception, in `_guest_may_rename`: a subfolder an outsider made
+    inside the share, and its name only.
     """
     if is_team_member(team_id, user_id):
         return None
@@ -176,6 +181,30 @@ def _require_host_member(team_id, user_id):
         {"error": "Only members of the owning team can manage this folder."},
         status=status.HTTP_403_FORBIDDEN,
     )
+
+
+def _guest_may_rename(folder, user_id, team_id, payload) -> bool:
+    """May this outsider rename this folder, and nothing else about it?
+
+    An editor admitted through a share can create subfolders inside it and
+    can delete the ones they own (DELETE is owner-gated, not
+    team-gated). Renaming was the only one of the three they could not do,
+    which left a typo permanent unless they deleted the folder and its
+    contents and started again.
+
+    Narrow on purpose. It is their OWN folder (owner role), never the
+    shared folder itself (which is the host's, and is the thing the grant
+    names), and the request must carry nothing but a name — moving it
+    would drag content out of the share, re-scoping it is refused
+    everywhere else in this file, and tags belong to the host's catalog.
+    """
+    if folder.parent_folder_id is None:
+        return False
+    if externally_shared(ExternalGrant.ObjectType.NOTE_FOLDER, folder.folder_id):
+        return False
+    if get_folder_role(user_id, folder.folder_id, team_id) != ROLE_OWNER:
+        return False
+    return set(payload.keys()) <= {"team_id", "user_id", "folder_id", "name"}
 
 
 def _creates_cycle(team_id, folder_id, target_parent_id) -> bool:
@@ -199,12 +228,140 @@ def _creates_cycle(team_id, folder_id, target_parent_id) -> bool:
     return False
 
 
+def _walks_up_to(folder_id, roots: set, folders) -> bool:
+    """Is `folder_id` the shared folder itself, or inside it?
+
+    Needed because reach in the host team is broader than one share: the
+    same person may hold folder rows there through a grant to a DIFFERENT
+    team of theirs, or through a mention group. Those are legitimate
+    access, but they do not belong in THIS team's folder list, so the
+    subtree is the unit rather than "everything I can read over there".
+    """
+    current = folder_id
+    visited = set()
+    while current is not None and str(current) not in visited:
+        visited.add(str(current))
+        if str(current) in roots:
+            return True
+        folder = folders.get(current)
+        if folder is None:
+            return False
+        current = folder.parent_folder_id
+    return False
+
+
+def _external_reach(user_id, viewing_team_id) -> list:
+    """What this person reaches through folders shared WITH `viewing_team_id`.
+
+    Returns one entry per host team: `(host_team_id, roots, host_folders,
+    reachable_roles)`. Shared by the folder list and the note list so the
+    two cannot disagree about which foreign folders are in play — a note
+    visible in a folder that isn't, or the reverse, is a bug that only
+    shows up as an empty folder.
+    """
+    shared = external_objects_for_member(
+        ExternalGrant.ObjectType.NOTE_FOLDER, viewing_team_id, user_id
+    )
+    if not shared:
+        return []
+
+    roots_by_host = defaultdict(set)
+    for folder_id, grant in shared.items():
+        roots_by_host[str(grant.owner_team_id)].add(str(folder_id))
+
+    out = []
+    for host_team_id, roots in roots_by_host.items():
+        host_folders = load_team_folder_index(host_team_id)
+        # The host team's own resolver, so inheritance, private overrides
+        # and viewer/editor roles behave over there exactly as they do at
+        # home. `member=False` inside it is what keeps the host's public
+        # folders out of an outsider's reach.
+        reachable = {
+            folder_id: role
+            for folder_id, role in readable_team_folder_roles(user_id, host_team_id).items()
+            if _walks_up_to(folder_id, roots, host_folders)
+        }
+        if reachable:
+            out.append((host_team_id, roots, host_folders, reachable))
+    return out
+
+
+def _external_folders(user_id, viewing_team_id) -> list:
+    """Folders another team shared with this one, as rows for its own list.
+
+    Each shared folder is a subtree of the HOST team's tree, so it arrives
+    with a `parentFolderId` pointing at a folder the caller cannot see.
+    The share itself is re-rooted (`parentFolderId: None`) and its
+    descendants keep their real parents, which makes it render as a
+    top-level folder here and an ordinary subtree underneath.
+    """
+    reach = _external_reach(user_id, viewing_team_id)
+    if not reach:
+        return []
+    host_names = {
+        str(team_id): name
+        for team_id, name in TeamMaster.objects.filter(
+            team_id__in=[host_team_id for host_team_id, _, _, _ in reach]
+        ).values_list("team_id", "team_name")
+    }
+
+    out = []
+    for host_team_id, roots, host_folders, reachable in reach:
+        for row in _serialize_folders(list(reachable.keys()), reachable, host_folders):
+            row["isExternal"] = True
+            row["hostTeamId"] = host_team_id
+            row["hostTeamName"] = host_names.get(host_team_id, "")
+            if str(row["folderId"]) in roots:
+                row["parentFolderId"] = None
+            out.append(row)
+    return out
+
+
+def _resolve_folder(folder_id, viewing_team_id, user_id):
+    """One team folder by id, reached from the team the caller is VIEWING.
+
+    The client sends the team whose Team Notes it is showing, and every
+    handler here used to scope its lookup by it — sound while a folder in
+    this list always belonged to that team. Sharing broke that: a folder
+    another team shared belongs to the HOST, so the scoped lookup answered
+    "not found" for every write on it, including on the subfolders the
+    caller had just been allowed to create inside it.
+
+    Resolve by id instead and take the owning team from the folder, then
+    confirm the caller reaches it: their own team's folder, or one inside a
+    subtree shared with the team they are viewing. Anything else reads as
+    missing rather than forbidden — the same answer the team-scoped lookup
+    gave, so a guessed id still can't confirm that somebody else's folder
+    exists.
+
+    Returns `(folder, owning_team_id)`, or `(None, None)`.
+    """
+    try:
+        folder = PersonalNoteFolder.objects.get(folder_id=folder_id, scope=SCOPE)
+    except (PersonalNoteFolder.DoesNotExist, ValueError, TypeError):
+        return None, None
+
+    owning_team_id = str(folder.team_id)
+    if owning_team_id == str(viewing_team_id):
+        return folder, owning_team_id
+    reach = _external_reach(user_id, viewing_team_id)
+    for host_team_id, _roots, _host_folders, reachable in reach:
+        if host_team_id == owning_team_id and folder.folder_id in reachable:
+            return folder, owning_team_id
+    return None, None
+
+
 class TeamNoteFolderView(AuthenticatedAPIView):
     def get(self, request):
         """Every team folder the caller can reach.
 
         Resolution runs off one shared in-memory index, so the cost is
         flat in the number of folders rather than per-folder tree walks.
+
+        Plus the folders another team shared with this one. They live in
+        the host's tree, but this is the list the caller's Team Notes
+        renders from, and a folder only reachable by switching companies
+        in the team picker was a folder nobody found.
         """
         request_user_id = request.user.id
 
@@ -217,14 +374,13 @@ class TeamNoteFolderView(AuthenticatedAPIView):
             return res
 
         roles = readable_team_folder_roles(request_user_id, data["team_id"])
-        if not roles:
-            return Response([], status=status.HTTP_200_OK)
-
         folders = load_team_folder_index(data["team_id"])
-        return Response(
-            _serialize_folders(list(roles.keys()), roles, folders),
-            status=status.HTTP_200_OK,
-        )
+        payload = _serialize_folders(list(roles.keys()), roles, folders) if roles else []
+        # Appended after the home team's own folders, and deliberately not
+        # merged into the sort: someone else's folder is a different kind
+        # of thing and reads better grouped than interleaved by name.
+        payload += _external_folders(request_user_id, data["team_id"])
+        return Response(payload, status=status.HTTP_200_OK)
 
     def post(self, request):
         """Create a team folder.
@@ -249,12 +405,6 @@ class TeamNoteFolderView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
-        if not is_team_member(data["team_id"], request_user_id):
-            return Response(
-                {"error": "You are not a member of this team."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
         name = str(data["name"]).strip()
         if name == "" or len(name) > 255:
             return Response(
@@ -265,7 +415,37 @@ class TeamNoteFolderView(AuthenticatedAPIView):
         parent_folder_id = request.data.get("parent_folder_id")
         visibility = request.data.get("visibility")
 
+        # Which team the folder will belong to. For a SUBFOLDER that is the
+        # parent's team, not the team the client happens to be viewing: a
+        # folder shared with you belongs to the host, and a child filed
+        # under the viewer's team instead would sit in a tree neither side
+        # can see.
+        owning_team_id = data["team_id"]
+        if parent_folder_id is not None:
+            parent_team_id = (
+                PersonalNoteFolder.objects.filter(folder_id=parent_folder_id, scope=SCOPE)
+                .values_list("team_id", flat=True)
+                .first()
+            )
+            if parent_team_id is None:
+                return Response(
+                    {"error": "Parent folder not found."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            owning_team_id = str(parent_team_id)
+
+        # Team membership gates a ROOT folder only. A subfolder is
+        # authorized by the role on its parent, which is what lets an
+        # editor admitted through a share organize the work inside it —
+        # the parity the feature claimed and did not have: they could write
+        # notes in the shared folder but not group them.
+        is_host_member = is_team_member(owning_team_id, request_user_id)
         if parent_folder_id is None:
+            if not is_host_member:
+                return Response(
+                    {"error": "You are not a member of this team."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             if visibility not in VALID_VISIBILITIES:
                 return Response(
                     {"error": 'A top-level folder must be "public" or "private".'},
@@ -277,15 +457,23 @@ class TeamNoteFolderView(AuthenticatedAPIView):
                     {"error": 'visibility must be "public", "private", or null to inherit.'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            if not _can_write(get_folder_role(request_user_id, parent_folder_id, data["team_id"])):
+            if not _can_write(get_folder_role(request_user_id, parent_folder_id, owning_team_id)):
                 return Response(
                     {"error": "You do not have permission to add folders here."},
                     status=status.HTTP_403_FORBIDDEN,
                 )
+            if not is_host_member:
+                # An outsider's subfolder inherits and grants nobody.
+                # `visibility="public"` would hand every member of a
+                # company they don't work for a folder inside their own
+                # share, and an explicit roster would re-share the host's
+                # data onward to a third party — the one thing every other
+                # path in this feature refuses.
+                visibility = None
 
         with transaction.atomic():
             folder = PersonalNoteFolder.objects.create(
-                team_id=data["team_id"],
+                team_id=owning_team_id,
                 owner_id=request_user_id,
                 parent_folder_id=parent_folder_id,
                 name=name,
@@ -296,7 +484,7 @@ class TeamNoteFolderView(AuthenticatedAPIView):
             # inferred, so the roster and member count tell the truth and
             # ownership can later be transferred like any other grant.
             NoteFolderPermission.objects.create(
-                team_id=data["team_id"],
+                team_id=owning_team_id,
                 folder=folder,
                 user_id=request_user_id,
                 role_id=ROLE_OWNER,
@@ -304,15 +492,15 @@ class TeamNoteFolderView(AuthenticatedAPIView):
             )
             _grant_members(
                 folder=folder,
-                team_id=data["team_id"],
+                team_id=owning_team_id,
                 granted_by_id=request_user_id,
-                user_ids=request.data.get("user_ids") or [],
-                groups=request.data.get("groups") or [],
+                user_ids=(request.data.get("user_ids") or []) if is_host_member else [],
+                groups=(request.data.get("groups") or []) if is_host_member else [],
                 role_id=request.data.get("role_id") or ROLE_EDITOR,
             )
-            sync_folder_tags(folder, data["team_id"], request.data.get("tag_ids"))
+            sync_folder_tags(folder, owning_team_id, request.data.get("tag_ids"))
 
-        folders = load_team_folder_index(data["team_id"])
+        folders = load_team_folder_index(owning_team_id)
         return Response(
             _serialize_folders([folder.folder_id], {folder.folder_id: ROLE_OWNER}, folders)[0],
             status=status.HTTP_201_CREATED,
@@ -336,21 +524,22 @@ class TeamNoteFolderView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
-        try:
-            folder = PersonalNoteFolder.objects.get(
-                folder_id=data["folder_id"], team=data["team_id"], scope=SCOPE
-            )
-        except PersonalNoteFolder.DoesNotExist:
+        folder, owning_team_id = _resolve_folder(
+            data["folder_id"], data["team_id"], request_user_id
+        )
+        if folder is None:
             return Response({"error": "Folder not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if not _can_write(get_folder_role(request_user_id, folder.folder_id, data["team_id"])):
+        if not _can_write(get_folder_role(request_user_id, folder.folder_id, owning_team_id)):
             return Response(
                 {"error": "You do not have permission to modify this folder."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        if res := _require_host_member(data["team_id"], request_user_id):
-            return res
+        if not is_team_member(owning_team_id, request_user_id) and not _guest_may_rename(
+            folder, request_user_id, owning_team_id, request.data
+        ):
+            return _require_host_member(owning_team_id, request_user_id)
 
         if "name" in request.data and request.data.get("name") is not None:
             name = str(request.data["name"]).strip()
@@ -407,21 +596,24 @@ class TeamNoteFolderView(AuthenticatedAPIView):
         if "parent_folder_id" in request.data:
             target_parent_id = request.data.get("parent_folder_id")
             if target_parent_id is not None:
+                # Within the owning team only: a folder cannot change hands
+                # by being moved, and the owning team is the one whose tree
+                # this folder lives in.
                 if not PersonalNoteFolder.objects.filter(
-                    folder_id=target_parent_id, team=data["team_id"], scope=SCOPE
+                    folder_id=target_parent_id, team=owning_team_id, scope=SCOPE
                 ).exists():
                     return Response(
                         {"error": "Target folder not found."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 if not _can_write(
-                    get_folder_role(request_user_id, target_parent_id, data["team_id"])
+                    get_folder_role(request_user_id, target_parent_id, owning_team_id)
                 ):
                     return Response(
                         {"error": "You do not have permission to move it there."},
                         status=status.HTTP_403_FORBIDDEN,
                     )
-                if _creates_cycle(data["team_id"], folder.folder_id, target_parent_id):
+                if _creates_cycle(owning_team_id, folder.folder_id, target_parent_id):
                     return Response(
                         {"error": "Cannot move a folder into its own descendant."},
                         status=status.HTTP_400_BAD_REQUEST,
@@ -442,13 +634,13 @@ class TeamNoteFolderView(AuthenticatedAPIView):
         # Key presence, like the structural fields: omitting `tag_ids`
         # leaves tags alone, sending `[]` clears them.
         if "tag_ids" in request.data:
-            sync_folder_tags(folder, data["team_id"], request.data.get("tag_ids") or [])
+            sync_folder_tags(folder, owning_team_id, request.data.get("tag_ids") or [])
 
         if narrowed:
-            resync_folder_subtree(folder.folder_id, data["team_id"])
+            resync_folder_subtree(folder.folder_id, owning_team_id)
 
-        folders = load_team_folder_index(data["team_id"])
-        role = get_folder_role(request_user_id, folder.folder_id, data["team_id"])
+        folders = load_team_folder_index(owning_team_id)
+        role = get_folder_role(request_user_id, folder.folder_id, owning_team_id)
         return Response(
             _serialize_folders([folder.folder_id], {folder.folder_id: role}, folders)[0],
             status=status.HTTP_200_OK,
@@ -478,21 +670,25 @@ class TeamNoteFolderView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
-        try:
-            folder = PersonalNoteFolder.objects.get(
-                folder_id=data["folder_id"], team=data["team_id"], scope=SCOPE
-            )
-        except PersonalNoteFolder.DoesNotExist:
+        folder, owning_team_id = _resolve_folder(
+            data["folder_id"], data["team_id"], request_user_id
+        )
+        if folder is None:
             return Response({"error": "Folder not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if get_folder_role(request_user_id, folder.folder_id, data["team_id"]) != ROLE_OWNER:
+        # Owner of the folder — which an outsider is, for a subfolder they
+        # made inside a share. Nothing widens here: the refusal below still
+        # stands when anyone else's note or folder is inside, so this
+        # deletes only their own work, and the shared folder itself is
+        # owned by the host and stays out of reach.
+        if get_folder_role(request_user_id, folder.folder_id, owning_team_id) != ROLE_OWNER:
             return Response(
                 {"error": "Only the folder owner can delete it."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        folder_ids = collect_folder_subtree_ids(folder.folder_id, data["team_id"])
-        note_ids = collect_note_ids_in_folders(folder_ids, data["team_id"])
+        folder_ids = collect_folder_subtree_ids(folder.folder_id, owning_team_id)
+        note_ids = collect_note_ids_in_folders(folder_ids, owning_team_id)
 
         foreign_notes = (
             PersonalNoteMaster.objects.filter(note_id__in=note_ids)
@@ -550,29 +746,36 @@ class TeamNoteMetaView(AuthenticatedAPIView):
         # Resolve the readable FOLDER set once, then fetch its notes in a
         # single query. Asking `get_folder_role` per note would be an
         # N+1 across the whole space.
-        roles = readable_team_folder_roles(request_user_id, data["team_id"])
-        if not roles:
-            return Response([], status=status.HTTP_200_OK)
+        #
+        # One pass per team whose folders are in play: the caller's own,
+        # then each host team that shared a folder with it. Notes in a
+        # shared folder carry the HOST team's id, so a single query scoped
+        # to the caller's team returned the folder with nothing in it.
+        scopes = [(data["team_id"], readable_team_folder_roles(request_user_id, data["team_id"]))]
+        scopes += [
+            (host_team_id, reachable)
+            for host_team_id, _, _, reachable in _external_reach(request_user_id, data["team_id"])
+        ]
 
-        notes = (
-            PersonalNoteMaster.objects.filter(
-                team=data["team_id"], folder_id__in=list(roles.keys())
+        payload = []
+        for team_id, roles in scopes:
+            if not roles:
+                continue
+            notes = (
+                PersonalNoteMaster.objects.filter(team=team_id, folder_id__in=list(roles.keys()))
+                .select_related("owner")
+                .order_by("-ts_updated_at")
+                .values(
+                    "note_id",
+                    "parent_note_id",
+                    "folder_id",
+                    "title",
+                    "ts_updated_at",
+                    "owner__id",
+                    "owner__username",
+                )
             )
-            .select_related("owner")
-            .order_by("-ts_updated_at")
-            .values(
-                "note_id",
-                "parent_note_id",
-                "folder_id",
-                "title",
-                "ts_updated_at",
-                "owner__id",
-                "owner__username",
-            )
-        )
-
-        return Response(
-            [
+            payload += [
                 {
                     "noteType": NOTE_TYPE,
                     "noteId": n["note_id"],
@@ -585,9 +788,9 @@ class TeamNoteMetaView(AuthenticatedAPIView):
                     "roleId": roles.get(n["folder_id"]),
                 }
                 for n in notes
-            ],
-            status=status.HTTP_200_OK,
-        )
+            ]
+
+        return Response(payload, status=status.HTTP_200_OK)
 
 
 def _grant_members(*, folder, team_id, granted_by_id, user_ids, groups, role_id):
@@ -650,13 +853,23 @@ class TeamNoteFolderMemberView(AuthenticatedAPIView):
     """The roster on one team folder."""
 
     def _load(self, request, data):
-        try:
-            folder = PersonalNoteFolder.objects.get(
-                folder_id=data["folder_id"], team=data["team_id"], scope=SCOPE
+        """The folder, the team that OWNS it, and an error to bail out with.
+
+        The owning team is not always the team in the request: a folder
+        shared with the caller's team belongs to the host, and every check
+        below has to be made against that team rather than the one the
+        client is viewing.
+        """
+        folder, owning_team_id = _resolve_folder(
+            data["folder_id"], data["team_id"], request.user.id
+        )
+        if folder is None:
+            return (
+                None,
+                None,
+                Response({"error": "Folder not found."}, status=status.HTTP_404_NOT_FOUND),
             )
-        except PersonalNoteFolder.DoesNotExist:
-            return None, Response({"error": "Folder not found."}, status=status.HTTP_404_NOT_FOUND)
-        return folder, None
+        return folder, owning_team_id, None
 
     def get(self, request):
         request_user_id = request.user.id
@@ -668,11 +881,11 @@ class TeamNoteFolderMemberView(AuthenticatedAPIView):
         if res := validate_request_data(data):
             return res
 
-        folder, err = self._load(request, data)
+        folder, owning_team_id, err = self._load(request, data)
         if err:
             return err
 
-        if get_folder_role(request_user_id, folder.folder_id, data["team_id"]) is None:
+        if get_folder_role(request_user_id, folder.folder_id, owning_team_id) is None:
             return Response(
                 {"error": "You do not have access to this folder."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -718,17 +931,17 @@ class TeamNoteFolderMemberView(AuthenticatedAPIView):
         if res := validate_request_data(data):
             return res
 
-        folder, err = self._load(request, data)
+        folder, owning_team_id, err = self._load(request, data)
         if err:
             return err
 
-        if not _can_write(get_folder_role(request_user_id, folder.folder_id, data["team_id"])):
+        if not _can_write(get_folder_role(request_user_id, folder.folder_id, owning_team_id)):
             return Response(
                 {"error": "You do not have permission to manage this folder's members."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        if res := _require_host_member(data["team_id"], request_user_id):
+        if res := _require_host_member(owning_team_id, request_user_id):
             return res
 
         role_id = request.data.get("role_id") or ROLE_EDITOR
@@ -741,7 +954,7 @@ class TeamNoteFolderMemberView(AuthenticatedAPIView):
 
         _grant_members(
             folder=folder,
-            team_id=data["team_id"],
+            team_id=owning_team_id,
             granted_by_id=request_user_id,
             user_ids=request.data.get("user_ids") or [],
             groups=request.data.get("groups") or [],
@@ -765,17 +978,17 @@ class TeamNoteFolderMemberView(AuthenticatedAPIView):
         if res := validate_request_data(data):
             return res
 
-        folder, err = self._load(request, data)
+        folder, owning_team_id, err = self._load(request, data)
         if err:
             return err
 
-        if not _can_write(get_folder_role(request_user_id, folder.folder_id, data["team_id"])):
+        if not _can_write(get_folder_role(request_user_id, folder.folder_id, owning_team_id)):
             return Response(
                 {"error": "You do not have permission to manage this folder's members."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        if res := _require_host_member(data["team_id"], request_user_id):
+        if res := _require_host_member(owning_team_id, request_user_id):
             return res
 
         target = NoteFolderPermission.objects.filter(
@@ -800,6 +1013,6 @@ class TeamNoteFolderMemberView(AuthenticatedAPIView):
 
         # Revoking NARROWS access — purge now rather than leave the
         # content findable by someone who just lost it.
-        resync_folder_subtree(folder.folder_id, data["team_id"])
+        resync_folder_subtree(folder.folder_id, owning_team_id)
 
         return Response({"message": "Member removed."}, status=status.HTTP_200_OK)

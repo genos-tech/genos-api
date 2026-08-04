@@ -92,10 +92,20 @@ class GrantLifecycleTests(CrossTeamTestCase):
             respond_to_grant(grant, self.a_owner, accept=True)
         self.assertEqual(ctx.exception.code, "not_a_manager")
 
-    def test_accepting_admits_nobody(self):
-        """Acceptance opens the door; it does not walk anyone through it."""
+    def test_accepting_admits_the_approver_and_nobody_else(self):
+        """Acceptance walks ONE person through the door: the one who opened it.
+
+        It used to admit nobody, which read well as a rule and left the
+        share unusable — the roster that admits people is reached through
+        the object, and nobody could open the object. The approver is the
+        person we know wants in, and stopping there keeps a fifty-person
+        team out of another company's project.
+        """
         self.active_project_grant()
-        self.assertEqual(ProjectMembers.objects.count(), 0)
+        self.assertEqual(
+            [str(uid) for uid in ProjectMembers.objects.values_list("attendee_id", flat=True)],
+            [str(self.b_owner.id)],
+        )
 
     def test_re_offering_after_a_revoke_reuses_the_row(self):
         grant = self.active_project_grant()
@@ -150,7 +160,7 @@ class DelegatedRosterTests(CrossTeamTestCase):
         with self.assertRaises(ExternalGrantError) as ctx:
             add_external_participants(grant, [self.b_viewer.id], self.b_viewer)
         self.assertEqual(ctx.exception.code, "not_a_manager")
-        self.assertEqual(ProjectMembers.objects.count(), 0)
+        self.assertFalse(self._in_project(self.b_viewer))
 
     def test_the_grant_cannot_be_re_shared_to_a_third_party(self):
         """The bound that stops one grant becoming transitive access."""
@@ -158,7 +168,7 @@ class DelegatedRosterTests(CrossTeamTestCase):
         with self.assertRaises(ExternalGrantError) as ctx:
             add_external_participants(grant, [self.c_owner.id], self.b_editor)
         self.assertEqual(ctx.exception.code, "not_guest_member")
-        self.assertEqual(ProjectMembers.objects.count(), 0)
+        self.assertFalse(self._in_project(self.c_owner))
 
     def test_a_host_member_is_not_admissible_as_a_guest_participant(self):
         grant = self.active_project_grant()
@@ -185,19 +195,20 @@ class DelegatedRosterTests(CrossTeamTestCase):
         grant = self.active_project_grant()
         with self.assertRaises(ExternalGrantError):
             add_external_participants(grant, [self.b_viewer.id, self.c_owner.id], self.b_editor)
-        self.assertEqual(ProjectMembers.objects.count(), 0)
+        self.assertFalse(self._in_project(self.b_viewer))
+        self.assertFalse(self._in_project(self.c_owner))
 
     def test_the_guest_team_may_remove_its_own_people(self):
         grant = self.active_project_grant()
         add_external_participants(grant, [self.b_viewer.id], self.b_editor)
         self.assertEqual(remove_external_participants(grant, [self.b_viewer.id], self.b_editor), 1)
-        self.assertEqual(ProjectMembers.objects.count(), 0)
+        self.assertFalse(self._in_project(self.b_viewer))
 
     def test_the_host_keeps_a_veto_over_an_individual(self):
         grant = self.active_project_grant()
         add_external_participants(grant, [self.b_viewer.id], self.b_editor)
         self.assertEqual(remove_external_participants(grant, [self.b_viewer.id], self.a_owner), 1)
-        self.assertEqual(ProjectMembers.objects.count(), 0)
+        self.assertFalse(self._in_project(self.b_viewer))
 
     def test_the_host_cannot_add_the_guest_teams_people(self):
         """Host has the veto, guest has the administration."""
@@ -277,7 +288,9 @@ class RevocationCascadeTests(CrossTeamTestCase):
     def test_the_guest_team_may_also_hand_a_grant_back(self):
         grant = self.active_project_grant()
         add_external_participants(grant, [self.b_viewer.id], self.b_editor)
-        self.assertEqual(revoke_grant(grant, self.b_owner), 1)
+        # Two rows: the viewer just admitted, and the approver, who was
+        # admitted by accepting the offer.
+        self.assertEqual(revoke_grant(grant, self.b_owner), 2)
 
     def test_an_outsider_cannot_revoke_a_grant(self):
         grant = self.active_project_grant()
@@ -301,7 +314,8 @@ class RevocationCascadeTests(CrossTeamTestCase):
         add_external_participants(folder_grant, [self.b_viewer.id], self.b_editor)
 
         withdrawn = revoke_connection(grant.connection, self.a_owner)
-        self.assertEqual(withdrawn, 2)
+        # Four: an admitted viewer plus the approver, on each of two grants.
+        self.assertEqual(withdrawn, 4)
         self.assertEqual(ProjectMembers.objects.count(), 0)
         self.assertEqual(NoteFolderPermission.objects.count(), 0)
         for row in ExternalGrant.objects.all():
@@ -341,7 +355,7 @@ class RevocationCascadeTests(CrossTeamTestCase):
             format="json",
         )
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(ProjectMembers.objects.count(), 0)
+        self.assertFalse(self._in_project(self.b_viewer))
 
 
 class ChannelParticipationTests(CrossTeamTestCase):
@@ -383,11 +397,15 @@ class ChannelParticipationTests(CrossTeamTestCase):
 
         row = ChannelMember.objects.get(channel=self.channel, user=self.b_viewer)
         self.assertTrue(row.is_deleted)
-        self.assertEqual(participant_ids(grant), [])
+        # The approver keeps their own row throughout — removing one person
+        # is not revoking the share.
+        self.assertEqual(participant_ids(grant), [str(self.b_owner.id)])
 
         add_external_participants(grant, [self.b_viewer.id], self.b_editor)
-        self.assertEqual(ChannelMember.objects.filter(channel=self.channel).count(), 1)
-        self.assertEqual(participant_ids(grant), [str(self.b_viewer.id)])
+        self.assertEqual(
+            ChannelMember.objects.filter(channel=self.channel, user=self.b_viewer).count(), 1
+        )
+        self.assertEqual(set(participant_ids(grant)), {str(self.b_viewer.id), str(self.b_owner.id)})
 
     def test_grant_admitting_identifies_the_route_in(self):
         grant = self._grant()
@@ -439,7 +457,10 @@ class ParticipantEndpointTests(CrossTeamTestCase):
 
         res = self.client.get(f"/api/v2/team/share/participants/?grant_id={grant.id}")
         self.assertEqual(res.status_code, 200)
-        self.assertEqual([p["userId"] for p in res.data["participants"]], [str(self.b_viewer.id)])
+        self.assertEqual(
+            {p["userId"] for p in res.data["participants"]},
+            {str(self.b_viewer.id), str(self.b_owner.id)},
+        )
 
         res = self.client.delete(
             "/api/v2/team/share/participants/",
@@ -455,7 +476,7 @@ class ParticipantEndpointTests(CrossTeamTestCase):
         self.authenticate(self.a_viewer)
         res = self.client.get(f"/api/v2/team/share/participants/?grant_id={grant.id}")
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(len(res.data["participants"]), 1)
+        self.assertEqual(len(res.data["participants"]), 2)
 
     def test_an_outsider_reading_the_roster_gets_404(self):
         grant = self.active_project_grant()

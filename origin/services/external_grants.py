@@ -55,6 +55,8 @@ are not optional.
 
 from __future__ import annotations
 
+import uuid
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 
@@ -306,8 +308,18 @@ def respond_to_grant(grant: ExternalGrant, actor, accept: bool) -> ExternalGrant
     """Accept or decline an offered grant, as a manager of the GUEST team.
 
     The guest side answers because it is the side taking on the access.
-    Accepting admits nobody by itself — the roster is a separate,
-    repeatable act (`add_external_participants`).
+
+    Accepting admits the APPROVER, and only them. It used to admit nobody
+    at all, on the reasoning that the roster is a separate repeatable act
+    (`add_external_participants`) — but that left no way to perform it:
+    the roster UI lives inside the shared object's own profile, which
+    needs access to open, and accepting granted none. Approve appeared to
+    do nothing, and the share was unreachable by any route.
+
+    One person, not the whole team, because the guest team's roster is its
+    own business and a fifty-person team should not silently land in
+    another company's project. The approver is the one person we know
+    wants in: they just said so.
     """
     if grant is None:
         raise ExternalGrantError("not_found")
@@ -319,6 +331,12 @@ def respond_to_grant(grant: ExternalGrant, actor, accept: bool) -> ExternalGrant
     grant.status = ShareStatus.ACTIVE if accept else ShareStatus.DECLINED
     grant.approved_by = actor
     grant.save(update_fields=["status", "approved_by", "ts_updated_at"])
+    if accept:
+        # Straight to the writer: `add_external_participants` would re-ask
+        # the questions this function has already answered (manages the
+        # guest team, grant is live), and the answers cannot have changed
+        # inside the same call.
+        _write_participant(grant, actor.id, grant.role_ceiling)
     # The host asked; tell them the answer. A decline is otherwise silent,
     # because declined grants are withheld from the lists on purpose.
     from origin.services.cross_team_notices import notify_share_answer
@@ -546,6 +564,98 @@ def host_team_ids_for_user(user_id) -> set[str]:
         if str(user_id) in {str(uid) for uid in _rows_for_grant(grant)}:
             teams.add(str(grant.owner_team_id))
     return teams
+
+
+def external_objects_for_member(object_type, guest_team_id, user_id) -> dict[str, ExternalGrant]:
+    """Objects of one type this person reaches from inside `guest_team_id`.
+
+    Maps `str(object_id)` -> the grant that admits them, and is the
+    inverse of `participant_ids`: that answers "who is in this object",
+    this answers "which of another team's objects am I in".
+
+    It exists so a shared project, external chat or shared note folder can
+    appear in the guest team's OWN list. Before it, every list filtered on
+    the owning team's id, so the only way to reach shared work was to
+    notice the host team in the team switcher and change teams — which
+    nothing told anyone to do, and which put another company's name in
+    your workspace switcher as the price of collaborating with them.
+
+    Two conditions and both are required: the guest team holds a LIVE
+    grant on the object, and this person holds the participation row that
+    grant authorized. A colleague of an admitted person gets nothing. That
+    is the whole reason this is keyed on rows rather than on the grant —
+    the grant names a team, but reach is always per-person, and a helper
+    that returned "everything my team was offered" would hand every list
+    a set of objects most of its members may not open.
+    """
+    if guest_team_id is None or user_id is None:
+        return {}
+    grants = ExternalGrant.objects.filter(
+        status=ShareStatus.ACTIVE,
+        guest_team_id=guest_team_id,
+        object_type=object_type,
+    )
+    by_object = {str(g.object_id): g for g in grants}
+    if not by_object:
+        return {}
+    held = _objects_held_by(object_type, list(by_object.keys()), user_id)
+    return {object_id: by_object[object_id] for object_id in held if object_id in by_object}
+
+
+def _objects_held_by(object_type, object_ids: list[str], user_id) -> set[str]:
+    """Which of `object_ids` this person holds a participation row on.
+
+    One query per call rather than `_rows_for_grant` per grant, because
+    this runs on every list request — the read path, not the admit path.
+
+    Ids are sifted by shape first. `object_id` is a text column serving
+    three tables keyed differently (integer projects, UUID channels and
+    folders), so a single malformed row would otherwise raise inside the
+    `__in` lookup and take down the whole sidebar rather than one share.
+    """
+    object_ids = [oid for oid in object_ids if _well_formed_id(object_type, oid)]
+    if not object_ids:
+        return set()
+    if object_type == ExternalGrant.ObjectType.CHANNEL:
+        from origin.models.chat.unified_models import ChannelMember
+
+        rows = ChannelMember.objects.filter(
+            channel_id__in=object_ids, user_id=user_id, is_deleted=False
+        ).values_list("channel_id", flat=True)
+    elif object_type == ExternalGrant.ObjectType.PROJECT:
+        from origin.models.project.prj_models import ProjectMembers
+
+        rows = ProjectMembers.objects.filter(
+            project_id__in=object_ids, attendee_id=user_id
+        ).values_list("project_id", flat=True)
+    elif object_type == ExternalGrant.ObjectType.NOTE_FOLDER:
+        from origin.models.note.common_note_models import NoteFolderPermission
+
+        rows = NoteFolderPermission.objects.filter(
+            folder_id__in=object_ids, user_id=user_id
+        ).values_list("folder_id", flat=True)
+    else:
+        return set()
+    return {str(object_id) for object_id in rows}
+
+
+def _well_formed_id(object_type, object_id) -> bool:
+    """Could this id name a row in the table the object type lives in?
+
+    Projects and note folders are `BigAutoField`; only a channel is a
+    UUID. Getting this backwards is silent — the ids are all strings in
+    `object_id`, so a wrong guess simply drops every share of that type
+    from every list rather than raising anywhere.
+    """
+    if object_id in (None, ""):
+        return False
+    if object_type == ExternalGrant.ObjectType.CHANNEL:
+        try:
+            uuid.UUID(str(object_id))
+        except (ValueError, TypeError, AttributeError):
+            return False
+        return True
+    return str(object_id).isdigit()
 
 
 def participant_ids(grant: ExternalGrant) -> list[str]:

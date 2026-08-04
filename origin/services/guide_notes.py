@@ -829,8 +829,49 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                         _B,
                         "The other team's owner gets it in Inbox → Requests as "
                         'a "Shared With Your Team" card, and accepts it there. '
-                        "Accepting admits nobody yet — it opens the door, and "
-                        "the next step is theirs.",
+                        "The card names the item and your team, and the person "
+                        "who accepts is let in straight away — so they can "
+                        "open it, look at it, and decide who else on their side "
+                        "needs it.",
+                    ),
+                ],
+            ),
+            (
+                "Where the shared item turns up",
+                [
+                    "This is the question everybody asks next, and the answer "
+                    "is: in your own workspace, in the ordinary place for that "
+                    "kind of thing. You do not go looking in the other "
+                    "company's team for it.",
+                    (
+                        _B,
+                        "A shared project appears in your own project list, "
+                        "with a share icon next to its name; hover it to see "
+                        "which team it belongs to.",
+                    ),
+                    (
+                        _B,
+                        "An external chat appears in your own chat list, "
+                        "badged with the name of the team whose room it is.",
+                    ),
+                    (
+                        _B,
+                        "A shared note folder appears at the top level of your "
+                        'Team Notes, marked "Shared" with the owning team\'s '
+                        "name. Everything already inside it comes with it.",
+                    ),
+                    (
+                        _B,
+                        "Only people who were admitted see it. A colleague on "
+                        "your team who has not been added sees nothing at all "
+                        "— accepting the share does not put it in everyone's "
+                        "sidebar.",
+                    ),
+                    (
+                        _B,
+                        "Nothing there? Somebody has to admit you. Ask whoever "
+                        "on your team approved the share — the next section is "
+                        "how they do it.",
                     ),
                 ],
             ),
@@ -843,6 +884,21 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                     "like — no request back to you, no approval, however long "
                     "afterwards. You approved the team and the item; they "
                     "staff their side of it.",
+                    (
+                        _B,
+                        "How: open the item — the shared project's profile, "
+                        "the external chat's profile, or the shared folder's "
+                        'members dialog — and find "Teams with access". Your '
+                        "own team's row has a person-plus button; it lists your "
+                        "colleagues, and clicking one admits them.",
+                    ),
+                    (
+                        _B,
+                        "The ordinary member picker on a shared item is not the "
+                        "way in. That one adds people to the OWNING team's "
+                        'item, so it is not shown to you — "Teams with access" '
+                        "replaces it.",
+                    ),
                     (
                         _B,
                         "They can only add people who are actually members of "
@@ -863,19 +919,80 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                 ],
             ),
             (
-                "What an outside participant sees",
+                "Working inside a shared item",
                 [
+                    "Inside the thing that was shared, the two teams work as "
+                    "one team. That is the whole point, and it is worth being "
+                    "specific about, because the boundary is around the item "
+                    "rather than inside it.",
                     (
                         _B,
-                        "They switch into your team from their own team menu, "
-                        'where it appears with a "Guest" label.',
+                        "In a shared project, either side can create and edit "
+                        "tasks, move them, comment, attach files, write task "
+                        "notes, and set up milestones and sprints. Its project "
+                        "chat works the same for everyone in it.",
                     ),
                     (
                         _B,
-                        "Inside, they see only what was shared with them: the "
-                        "shared project (not your other projects), the "
-                        "external chat, the shared folder. Not your team's "
-                        "other chats, notes, or member list.",
+                        "In an external chat, everyone in the room sends "
+                        "messages, replies in threads, reacts and mentions "
+                        "each other normally.",
+                    ),
+                    (
+                        _B,
+                        "In a shared note folder, either side writes notes, "
+                        "edits them together in real time, and creates "
+                        "subfolders to organise the work. A subfolder you "
+                        "create in someone else's shared folder is yours to "
+                        "rename and delete.",
+                    ),
+                    (
+                        _B,
+                        "A viewer-ceiling share is the exception: those "
+                        "participants read, and do not write.",
+                    ),
+                ],
+            ),
+            (
+                "What stays with the owning team",
+                [
+                    "The team that owns the item keeps the decisions that are "
+                    "about the item itself rather than the work in it:",
+                    (
+                        _B,
+                        "Renaming or deleting the shared project, chat or "
+                        "folder; moving the folder, or changing who in the "
+                        "owning team can reach it.",
+                    ),
+                    (
+                        _B,
+                        "Sharing it onward. A team it was shared with cannot "
+                        "pass it to a third company, and cannot invite the "
+                        "owning team's own people into it.",
+                    ),
+                    (
+                        _B,
+                        "Ending the share. If they do, it disappears from your "
+                        "workspace immediately — including anything your side "
+                        "wrote inside it, which stays with them.",
+                    ),
+                ],
+            ),
+            (
+                "What an outside participant does not see",
+                [
+                    (
+                        _B,
+                        "Only what was shared: the shared project, not the "
+                        "owning team's other projects; the external chat, not "
+                        "their other chats; the shared folder, not their other "
+                        "notes. Never their member list.",
+                    ),
+                    (
+                        _B,
+                        "The owning team's other work does not become visible "
+                        "by being nearby. A public folder in their Team Notes "
+                        'means "everyone in their team", which is not you.',
                     ),
                     (
                         _B,
@@ -888,6 +1005,13 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                         "They keep their own plan and their own AI limits — "
                         "their usage is never billed to you, and yours is "
                         "never billed to them.",
+                    ),
+                    (
+                        _B,
+                        "The owning team can also appear in their team menu "
+                        'with a "Guest" label, which opens the same shared '
+                        "items from the owner's side of the fence. It is an "
+                        "extra way in, not the main one.",
                     ),
                 ],
             ),

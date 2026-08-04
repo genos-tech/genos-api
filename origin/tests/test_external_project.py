@@ -120,7 +120,14 @@ class ExternalProjectMembershipTests(CrossTeamTestCase):
         self.assertFalse(is_guest(self.team_a.team_id, self.b_viewer.id))
 
     def test_joining_by_id_is_still_refused_to_an_outsider(self):
-        """`JoinProjectView` stays closed; grants are the only way in."""
+        """`JoinProjectView` stays closed; grants are the only way in.
+
+        The approver holds a project row now (accepting admits them), so
+        they are a project member — and the project's own policy lets any
+        member add people. What stops this is the separate check that the
+        actor belongs to the team owning the project: an external
+        participant may not staff the host's project, in either direction.
+        """
         self.authenticate(self.b_owner)
         res = self.client.post(
             "/api/v2/project/join/",
@@ -131,9 +138,32 @@ class ExternalProjectMembershipTests(CrossTeamTestCase):
             },
             format="json",
         )
-        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.status_code, 403)
         self.assertFalse(
             ProjectMembers.objects.filter(project=self.project, attendee=self.b_editor).exists()
+        )
+
+    def test_an_external_participant_cannot_add_a_host_employee_either(self):
+        """The same refusal in the direction that actually tempts abuse.
+
+        Adding a HOST-team member passes every other check in the view —
+        they are in the team, the actor is in the project — so before the
+        owning-team check an outsider could quietly staff the host's
+        project with the host's own people.
+        """
+        self.authenticate(self.b_owner)
+        res = self.client.post(
+            "/api/v2/project/join/",
+            {
+                "team_id": str(self.team_a.team_id),
+                "project_id": self.project.project_id,
+                "attendee_id": str(self.a_editor.id),
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, 403)
+        self.assertFalse(
+            ProjectMembers.objects.filter(project=self.project, attendee=self.a_editor).exists()
         )
 
 
@@ -212,7 +242,12 @@ class ExternalProjectSharePanelTests(CrossTeamTestCase):
         share = res.data["shares"][0]
         self.assertEqual(share["side"], "given")
         self.assertFalse(share["canAdmit"])
-        self.assertEqual([p["userId"] for p in share["participants"]], [str(self.b_viewer.id)])
+        # The approver is in the project too — accepting admits them, so
+        # that Approve grants access rather than merely permitting it.
+        self.assertEqual(
+            {p["userId"] for p in share["participants"]},
+            {str(self.b_viewer.id), str(self.b_owner.id)},
+        )
 
     def test_a_guest_manager_can_read_and_admit(self):
         self.authenticate(self.b_owner)
