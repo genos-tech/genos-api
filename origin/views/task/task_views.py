@@ -8,6 +8,7 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 from django.db.models import Case, F, IntegerField, Max, Q, Value, When
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
@@ -193,35 +194,162 @@ def _cascade_project_to_subtasks(root_task_id, project_id):
         claim_project_task_number(child)
 
 
-def _cascade_milestone_to_subtasks(parent_task_id, milestone_id, depth_limit=10):
-    """Push `milestone_id` down the `parent_task_id` chain.
+def _cascade_tree_position_to_subtasks(task, depth_limit=10):
+    """Push a task's settled position in the hierarchy onto everything
+    below it.
 
-    When a task is moved between milestones, its descendant sub-tasks
-    transitively move with it — `milestone_views.py` aggregations and
-    the sprint board both filter by `milestone_id`, so failing to
-    cascade silently under-counts.
+    A task's place in the tree is denormalized across three columns, and
+    a move has to carry all of them:
+
+      * `milestone_id` / `sprint_id` — `milestone_views.py` aggregations
+        and the sprint board filter on these, so a descendant left
+        behind silently under-counts in the milestone it actually
+        belongs to and over-counts in the one it left.
+      * `root_task_id` — every "rooted-at-chain-top" surface (task
+        diagram, sub-task drawer, the diagram shortcut) anchors on it.
+        A descendant still pointing at the old chain opens a tree it is
+        no longer part of: the diagram for such a sub-task showed
+        neither its parent nor its milestone, because it BFS'd down from
+        a root the sub-task had left.
+
+    `parent_task_id` is deliberately NOT touched: the edges *inside* the
+    moved sub-tree don't change when its top moves, and rewriting them
+    would flatten the chain.
+
+    `ts_updated_at` is bumped by hand because a queryset `.update()`
+    skips `auto_now` (and `post_save`). Without it the clients that sync
+    tasks incrementally (`getProjectTasks?since=`) never learn the
+    descendants moved, and keep showing them under the old milestone
+    until something forces a full reload.
     """
-    collected = _collect_descendant_task_ids(parent_task_id, depth_limit=depth_limit)
-    if collected:
-        # Mirror the milestone's sprint onto the cascade so descendants
-        # follow the same milestone → sprint mapping as their root. A
-        # cleared milestone (`milestone_id is None`) cascades a cleared
-        # sprint to keep the invariant "task without milestone has no
-        # auto-derived sprint".
-        sprint_id = None
-        if milestone_id is not None:
-            from origin.models.task.milestone_models import MilestoneMaster
+    collected = _collect_descendant_task_ids(task.task_id, depth_limit=depth_limit)
+    if not collected:
+        return
+    TaskMaster.objects.filter(task_id__in=collected).update(
+        milestone_id=task.milestone_id,
+        sprint_id=task.sprint_id,
+        root_task_id=task.root_task_id,
+        ts_updated_at=timezone.now(),
+    )
 
-            try:
-                m_for_sprint = MilestoneMaster.objects.only("sprint_id").get(
-                    milestone_id=milestone_id
-                )
-                sprint_id = m_for_sprint.sprint_id
-            except MilestoneMaster.DoesNotExist:
-                pass
-        TaskMaster.objects.filter(task_id__in=collected).update(
-            milestone_id=milestone_id, sprint_id=sprint_id
+
+def _normalize_task_id(value):
+    """Coerce a client-supplied task id to an int, mapping every flavor
+    of "no parent" (absent, None, empty, the string "null") to None.
+
+    The frontend sends `parent_task_id` as both a number and a string
+    depending on the caller, and the comparisons below decide whether a
+    reparent happened — so `"12" != 12` would silently look like a move.
+    """
+    if value in (None, "", "null"):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_root_task_id(task_id, parent_task_id, depth_limit=64):
+    """The top of the parent chain a task sits in, given the parent edge
+    it is ABOUT to have.
+
+    Mirrors `set_root_task_id` (which only ever runs on create) for the
+    update path. Takes the parent explicitly because the caller resolves
+    this before writing the new edge to the row.
+    """
+    if parent_task_id is None:
+        return task_id
+    current = parent_task_id
+    visited = {task_id}
+    for _ in range(depth_limit):
+        if current in visited:
+            # Corrupt data: a cycle. Anchor here rather than spin.
+            return current
+        visited.add(current)
+        row = (
+            TaskMaster.objects.filter(task_id=current)
+            .values_list("task_id", "parent_task_id")
+            .first()
         )
+        if row is None:
+            # The parent has been hard-deleted. Anchor on the task
+            # itself rather than on a row nothing can load — same
+            # fallback `set_root_task_id` makes.
+            return task_id
+        if row[1] is None:
+            return current
+        current = row[1]
+    return current
+
+
+def _milestone_for_parent(parent_task_id):
+    """The milestone a task inherits by hanging under `parent_task_id`.
+
+    Either the parent IS a milestone's backing task (so the child lives
+    directly in that milestone), or the parent is an ordinary task and
+    the child inherits whatever milestone the parent itself lives in.
+    Mirrors the inference `TaskMasterView.post` runs at create time.
+    """
+    from origin.models.task.milestone_models import MilestoneMaster
+
+    if parent_task_id is None:
+        return None
+    backed = (
+        MilestoneMaster.objects.filter(task_id=parent_task_id, is_deleted=False)
+        .values_list("milestone_id", flat=True)
+        .first()
+    )
+    if backed is not None:
+        return backed
+    return (
+        TaskMaster.objects.filter(task_id=parent_task_id)
+        .values_list("milestone_id", flat=True)
+        .first()
+    )
+
+
+def _reparent_task(task, parent_task_id):
+    """Settle a task's own links after its parent edge changed with no
+    `milestone` key in the payload.
+
+    The diagram's structure edges patch `parent_task_id` alone, so
+    without this a task dragged under a row in another milestone kept
+    the milestone — and the root — of the place it came from. Which
+    milestone a task belongs to and which chain it roots at are both
+    consequences of where it hangs, so a parent change has to recompute
+    both.
+
+    Milestone backing tasks are left alone: their `milestone_id` points
+    at the milestone they back, and deriving it from a parent would
+    break that link.
+    """
+    if task.is_milestone:
+        return
+    milestone_id = _milestone_for_parent(parent_task_id)
+    sprint_id = None
+    if milestone_id is not None:
+        from origin.models.task.milestone_models import MilestoneMaster
+
+        sprint_id = (
+            MilestoneMaster.objects.filter(milestone_id=milestone_id)
+            .values_list("sprint_id", flat=True)
+            .first()
+        )
+    task.parent_task_id = parent_task_id
+    task.milestone_id = milestone_id
+    # Sprint is always derived from the milestone (there's no direct
+    # sprint picker on a task), so it follows the milestone here too.
+    task.sprint_id = sprint_id
+    task.root_task_id = _resolve_root_task_id(task.task_id, parent_task_id)
+    task.save(
+        update_fields=[
+            "milestone_id",
+            "parent_task_id",
+            "root_task_id",
+            "sprint_id",
+            "ts_updated_at",
+        ]
+    )
 
 
 class TaskMasterView(AuthenticatedAPIView):
@@ -472,10 +600,32 @@ class TaskMasterView(AuthenticatedAPIView):
         milestone_in_request = "milestone" in request.data
         requested_milestone_id = request.data.get("milestone") if milestone_in_request else None
 
-        # Get parent task id from request data
-        parent_task_id = (
-            request.data.get("parent_task_id") if "parent_task_id" in request.data else None
-        )
+        # Get parent task id from request data.
+        #
+        # A parent change is a MOVE within the hierarchy — it decides
+        # which milestone the task belongs to and which chain it roots
+        # at — so the old value is captured here, before
+        # `serializer.save()` overwrites it and makes the comparison
+        # impossible. Normalized because callers send the id as both a
+        # number and a string, and `"12" != 12` would read as a move.
+        parent_in_request = "parent_task_id" in request.data
+        parent_task_id = _normalize_task_id(request.data.get("parent_task_id"))
+        parent_changed = parent_in_request and parent_task_id != task.parent_task_id
+
+        # A task can't hang under itself or under one of its own
+        # descendants. The payload names an arbitrary task id, and a
+        # cycle would strand that whole sub-tree outside every tree walk
+        # in the product — milestone rollups, the diagram's BFS, the
+        # cascade below — leaving no surface able to reach it and undo
+        # the move.
+        if parent_changed and parent_task_id is not None:
+            if parent_task_id == task.task_id or parent_task_id in _collect_descendant_task_ids(
+                task.task_id
+            ):
+                return Response(
+                    {"error": "A task cannot be moved under itself or one of its own sub-tasks."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         # Same "key absent vs explicit null" trap for `due_date`: the
         # frontend sends `due_date: null` when the user picks TBD, but
@@ -690,14 +840,34 @@ class TaskMasterView(AuthenticatedAPIView):
                     task.due_date = None
                     task.save(update_fields=["due_date", "ts_updated_at"])
 
-            # Bridge milestone <-> parent_task_id / root_task_id and
-            # cascade the new milestone_id to descendant sub-tasks so
-            # aggregations (sprint board, milestone rollups) stay
-            # consistent. Mirrors `TaskMasterView.post`'s bridge.
-            if milestone_in_request:
+            # Settle the task's own place in the hierarchy, then carry
+            # its sub-tree along. Mirrors `TaskMasterView.post`'s bridge.
+            #
+            # Exactly one of the two branches runs. A payload carrying
+            # `milestone` is authoritative about where the task belongs
+            # (the picker sends it, and so does every full save), while a
+            # payload that changes only `parent_task_id` — the diagram's
+            # structure edges, which patch that field alone — leaves the
+            # milestone to be DERIVED from the new parent. Before, the
+            # second kind ran neither bridge nor cascade, so dragging a
+            # task under a row in another milestone left it, and
+            # everything beneath it, filed under the old one.
+            if milestone_in_request or parent_changed:
                 task.refresh_from_db()
-                _bridge_milestone_to_parent(task, requested_milestone_id, parent_task_id)
-                _cascade_milestone_to_subtasks(task.task_id, requested_milestone_id)
+                before = (task.milestone_id, task.sprint_id, task.root_task_id)
+                if milestone_in_request:
+                    _bridge_milestone_to_parent(task, requested_milestone_id, parent_task_id)
+                else:
+                    _reparent_task(task, parent_task_id)
+                task.refresh_from_db()
+                # Only cascade when the task's own position actually
+                # moved. Every full save re-sends `milestone` unchanged,
+                # so cascading unconditionally would rewrite the entire
+                # sub-tree on an ordinary title edit — bumping
+                # `ts_updated_at` on rows that didn't move and churning
+                # every incremental client sync.
+                if (task.milestone_id, task.sprint_id, task.root_task_id) != before:
+                    _cascade_tree_position_to_subtasks(task)
 
             # Take the sub-tasks along. Runs AFTER the milestone block so the
             # root's own links are already settled — that block has cleared
