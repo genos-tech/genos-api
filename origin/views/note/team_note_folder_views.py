@@ -32,6 +32,7 @@ from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 
+from origin.models.common.team_models import ExternalGrant
 from origin.models.common.user_models import CustomUser
 from origin.models.note.common_note_models import (
     NoteFolderPermission,
@@ -40,6 +41,7 @@ from origin.models.note.common_note_models import (
 )
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
+from origin.services.external_grants import externally_shared
 from origin.services.group_expansion import expand_groups
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.note.note_folder_tag_views import sync_folder_tags
@@ -147,6 +149,33 @@ def _serialize_folders(folder_ids, roles, folders):
 
 def _can_write(role_id):
     return role_id is not None and role_id <= ROLE_EDITOR
+
+
+def _require_host_member(team_id, user_id):
+    """Refuse folder ADMINISTRATION to anyone outside the owning team.
+
+    Cross-team sharing put a new kind of person in this file: an external
+    editor, who holds a `NoteFolderPermission` row on a folder belonging to
+    a team they are not in. Editor is the right level for the content —
+    writing notes in the shared folder is the whole point — but every
+    handler that reaches this guard edits the FOLDER rather than a note,
+    and none of that is an outsider's to do:
+
+    * renaming, re-parenting or re-scoping the host's folder;
+    * changing who else is in it. `_grant_members` would happily let an
+      external editor add HOST team members (they pass its membership
+      filter), and the roster DELETE would let them evict the host's own
+      people from the host's folder.
+
+    Read and write on the notes themselves stay role-based and untouched.
+    Returns a Response to bail out with, or None to proceed.
+    """
+    if is_team_member(team_id, user_id):
+        return None
+    return Response(
+        {"error": "Only members of the owning team can manage this folder."},
+        status=status.HTTP_403_FORBIDDEN,
+    )
 
 
 def _creates_cycle(team_id, folder_id, target_parent_id) -> bool:
@@ -320,6 +349,9 @@ class TeamNoteFolderView(AuthenticatedAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        if res := _require_host_member(data["team_id"], request_user_id):
+            return res
+
         if "name" in request.data and request.data.get("name") is not None:
             name = str(request.data["name"]).strip()
             if name == "" or len(name) > 255:
@@ -343,6 +375,27 @@ class TeamNoteFolderView(AuthenticatedAPIView):
             if visibility is None and folder.parent_folder_id is None:
                 return Response(
                     {"error": "A top-level folder cannot inherit its visibility."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            # An externally shared folder must stay explicitly private for
+            # as long as the share stands — the same rule `offer_grant`
+            # applies up front, enforced here so it cannot be undone
+            # afterwards. Public would hand every host member editor and
+            # emit a `team:<id>` search sentinel, making the folder's ACL
+            # mean two things at once; inherit would let an ancestor
+            # silently redefine what was shared. Ending the share is the
+            # way out, and it is one action.
+            if (
+                visibility != PersonalNoteFolder.VISIBILITY_PRIVATE
+                and externally_shared(ExternalGrant.ObjectType.NOTE_FOLDER, folder.folder_id)
+            ):
+                return Response(
+                    {
+                        "error": (
+                            "This folder is shared with another team, so it must stay private. "
+                            "Stop sharing it first."
+                        )
+                    },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             narrowed = (
@@ -559,6 +612,16 @@ def _grant_members(*, folder, team_id, granted_by_id, user_ids, groups, role_id)
         return 0
 
     # Only real teammates — a stale id must not become a grant.
+    #
+    # This deliberately stays closed to external people even though the
+    # folder can now be shared across teams. Cross-team access is written
+    # by `services/external_grants.add_external_participants`, called by
+    # the GUEST team's managers: the host consents to the team and the
+    # folder, never to the individuals. Widening this filter would let the
+    # host pick the other organization's people — the one thing the
+    # one-time-approval design exists to prevent — and would write rows
+    # with no grant behind them, which the revocation cascades then could
+    # not find.
     valid_ids = {
         str(uid)
         for uid in targets
@@ -665,6 +728,9 @@ class TeamNoteFolderMemberView(AuthenticatedAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        if res := _require_host_member(data["team_id"], request_user_id):
+            return res
+
         role_id = request.data.get("role_id") or ROLE_EDITOR
         try:
             role_id = int(role_id)
@@ -708,6 +774,9 @@ class TeamNoteFolderMemberView(AuthenticatedAPIView):
                 {"error": "You do not have permission to manage this folder's members."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        if res := _require_host_member(data["team_id"], request_user_id):
+            return res
 
         target = NoteFolderPermission.objects.filter(
             folder=folder, user_id=data["target_user_id"]

@@ -12,7 +12,8 @@ ACL contract:
   * Soft-deleted users (is_deleted=True) are excluded.
   * ctx.team_id is server-trusted; the tool takes no arguments that
     could influence which team's data is returned.
-  * A GUEST asking gets only the people they share a project with.
+  * Any OUTSIDER asking gets only the people they actually share
+    something with — a project, an external chat, a shared note folder.
     This tool is the shortest path from "who is on this team?" to a
     full roster WITH EMAILS, so leaving it unnarrowed would undo the
     REST-side scoping through the agent — the answer is generated in
@@ -25,7 +26,11 @@ from typing import Any
 
 from origin.models.common.team_models import TeamMembers
 from origin.search_engine.agent.tools.base import Tool, ToolContext
-from origin.views.utils.scope_guards import guest_visible_user_ids
+from origin.views.utils.scope_guards import (
+    external_visible_user_ids,
+    guest_visible_user_ids,
+    is_team_member,
+)
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG001
@@ -38,10 +43,18 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
         .order_by("attendee__username")
     )
 
-    # Empty for anyone who is not a guest, so members are unaffected.
-    guest_visible = guest_visible_user_ids(ctx.team_id, ctx.user_id)
-    if guest_visible:
-        memberships = memberships.filter(attendee_id__in=guest_visible)
+    # Narrow for everyone who is not a member, and narrow on the ANSWER
+    # rather than on whether an answer was found. An earlier version
+    # applied the filter only when the visible set was non-empty, so an
+    # outsider the set could not explain — someone admitted to a chat or a
+    # note folder, who holds no project row — fell through to the whole
+    # roster. "I could not work out what you may see" must mean "nothing",
+    # never "everything".
+    if not is_team_member(ctx.team_id, ctx.user_id):
+        visible = guest_visible_user_ids(ctx.team_id, ctx.user_id) | external_visible_user_ids(
+            ctx.team_id, ctx.user_id
+        )
+        memberships = memberships.filter(attendee_id__in=visible)
 
     members = []
     for m in memberships:

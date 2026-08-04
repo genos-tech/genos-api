@@ -36,34 +36,8 @@ MY_TEAMS = "/api/v2/team/getMyTeams/"
 
 
 class ExternalChatTestCase(CrossTeamTestCase):
-    """Helpers for building an external chat at various stages."""
-
-    def create_external_chat(self, guest_team_ids=None, **extra):
-        """Create one through the API, as team A's owner."""
-        self.authenticate(self.a_owner)
-        body = {
-            "kind": ChannelKind.GM,
-            "team_id": str(self.team_a.team_id),
-            "title": "Cross-team room",
-            "is_external": True,
-        }
-        if guest_team_ids is not None:
-            body["guest_team_ids"] = [str(t) for t in guest_team_ids]
-        body.update(extra)
-        return self.client.post(CHANNELS, body, format="json")
-
-    def shared_chat(self, role_ceiling=EDITOR):
-        """A connected, granted, accepted external chat. Returns (channel, grant)."""
-        self.connect_a_and_b()
-        res = self.create_external_chat([self.team_b.team_id], role_ceiling=role_ceiling)
-        self.assertEqual(res.status_code, 201, res.data)
-        channel = Channel.objects.get(id=res.data["channel"]["id"])
-        grant = ExternalGrant.objects.get(
-            object_type=ExternalGrant.ObjectType.CHANNEL,
-            object_id=str(channel.id),
-            guest_team_id=self.team_b.team_id,
-        )
-        return channel, respond_to_grant(grant, self.b_owner, accept=True)
+    """Channel-endpoint helpers. `create_external_chat` and `shared_chat`
+    live on the shared fixture — the search suite needs them too."""
 
     def members_url(self, channel):
         return f"{CHANNELS}{channel.id}/members/"

@@ -138,7 +138,7 @@ from origin.search_engine.quota import (
 )
 from origin.services.webpush_dispatch import schedule_push_to_user
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.views.utils.scope_guards import is_guest, is_team_member
+from origin.views.utils.scope_guards import participates_in_team
 
 log = logging.getLogger(__name__)
 
@@ -955,7 +955,7 @@ class AgentAskView(AuthenticatedAPIView):
         # an aspiration rather than a fact — and the agent surface reads
         # far more than the REST one, through tools whose own ACL notes
         # assume the team is already established.
-        if not is_team_member(team_id, user_id) and not is_guest(team_id, user_id):
+        if not participates_in_team(team_id, user_id):
             return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 
         ctx = ToolContext(team_id=str(team_id), user_id=user_id)

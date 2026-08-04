@@ -63,15 +63,20 @@ class CrossTeamTestCase(BaseAPITestCase):
 
         # Objects to share. One per surface, so a writer regression shows
         # up in the phase that owns it rather than three phases later.
+        # `project_system_user` is normally stamped by the create endpoint
+        # and is non-null in every real row; the project list serializes it
+        # unconditionally, so a fixture row without one 500s that endpoint.
         self.project = ProjectMaster.objects.create(
             team=self.team_a,
             project_name="Host Project",
             owner=self.a_owner,
+            project_system_user=self.a_owner,
         )
         self.foreign_project = ProjectMaster.objects.create(
             team=self.team_c,
             project_name="Stranger Project",
             owner=self.c_owner,
+            project_system_user=self.c_owner,
         )
         self.folder = PersonalNoteFolder.objects.create(
             team=self.team_a,
@@ -98,23 +103,90 @@ class CrossTeamTestCase(BaseAPITestCase):
     # ------------------------------------------------------------------
 
     def connect_a_and_b(self):
-        """An ACTIVE connection between the host and the guest team."""
-        from origin.services.team_connection import request_connection, respond_to_connection
+        """An ACTIVE connection between the host and the guest team.
 
+        Idempotent, because a test that shares two objects connects the
+        teams twice and the connection is deliberately once-per-pair —
+        re-requesting a live one is an error in production and noise here.
+        """
+        from origin.models.common.team_models import ShareStatus
+        from origin.services.team_connection import (
+            get_connection,
+            request_connection,
+            respond_to_connection,
+        )
+
+        existing = get_connection(self.team_a.team_id, self.team_b.team_id)
+        if existing is not None and existing.status == ShareStatus.ACTIVE:
+            return existing
         conn = request_connection(self.team_a.team_id, self.team_b.team_id, self.a_owner)
         return respond_to_connection(conn, self.b_owner, accept=True)
 
     def active_project_grant(self, role_ceiling=EDITOR):
         """A connection, a project grant, and B's acceptance of it."""
         from origin.models.common.team_models import ExternalGrant
+
+        return self._active_grant(
+            ExternalGrant.ObjectType.PROJECT, self.project.project_id, role_ceiling
+        )
+
+    def active_folder_grant(self, role_ceiling=EDITOR, folder=None):
+        """A connection, a note-folder grant, and B's acceptance of it."""
+        from origin.models.common.team_models import ExternalGrant
+
+        return self._active_grant(
+            ExternalGrant.ObjectType.NOTE_FOLDER,
+            (folder or self.folder).folder_id,
+            role_ceiling,
+        )
+
+    def create_external_chat(self, guest_team_ids=None, **extra):
+        """Create an external GM through the API, as team A's owner.
+
+        Through the API rather than the ORM because the create path is what
+        stamps `is_external`, forces privacy and writes the offers — a
+        hand-built `Channel` row is a chat no product code would produce.
+        """
+        from origin.models.chat.unified_models import ChannelKind
+
+        self.authenticate(self.a_owner)
+        body = {
+            "kind": ChannelKind.GM,
+            "team_id": str(self.team_a.team_id),
+            "title": "Cross-team room",
+            "is_external": True,
+        }
+        if guest_team_ids is not None:
+            body["guest_team_ids"] = [str(t) for t in guest_team_ids]
+        body.update(extra)
+        return self.client.post("/api/v3/channels/", body, format="json")
+
+    def shared_chat(self, role_ceiling=EDITOR):
+        """A connected, granted, accepted external chat: (channel, grant)."""
+        from origin.models.chat.unified_models import Channel
+        from origin.models.common.team_models import ExternalGrant
+        from origin.services.external_grants import respond_to_grant
+
+        self.connect_a_and_b()
+        res = self.create_external_chat([self.team_b.team_id], role_ceiling=role_ceiling)
+        self.assertEqual(res.status_code, 201, res.data)
+        channel = Channel.objects.get(id=res.data["channel"]["id"])
+        grant = ExternalGrant.objects.get(
+            object_type=ExternalGrant.ObjectType.CHANNEL,
+            object_id=str(channel.id),
+            guest_team_id=self.team_b.team_id,
+        )
+        return channel, respond_to_grant(grant, self.b_owner, accept=True)
+
+    def _active_grant(self, object_type, object_id, role_ceiling):
         from origin.services.external_grants import offer_grant, respond_to_grant
 
         self.connect_a_and_b()
         grant = offer_grant(
             owner_team_id=self.team_a.team_id,
             guest_team_id=self.team_b.team_id,
-            object_type=ExternalGrant.ObjectType.PROJECT,
-            object_id=self.project.project_id,
+            object_type=object_type,
+            object_id=object_id,
             role_ceiling=role_ceiling,
             actor=self.a_owner,
         )

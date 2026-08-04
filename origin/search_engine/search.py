@@ -28,6 +28,7 @@ import logging
 import math
 import re
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Literal, Optional
@@ -877,47 +878,61 @@ def memory_exclude_lanes(user_id: str) -> frozenset[str]:
 # --------------------------------------------------------------------------- #
 
 
-# Seconds a guest/member verdict may be reused inside `_build_filter`.
+# Seconds a membership verdict may be reused inside `_build_filter`.
 _GUEST_CACHE_TTL = 30
 
 
 @lru_cache(maxsize=512)
-def _is_guest_cached(team_id: str, user_id: str, bucket: int) -> bool:
-    from origin.views.utils.scope_guards import is_guest
+def _is_member_cached(team_id: str, user_id: str, bucket: int) -> bool:
+    from origin.views.utils.scope_guards import is_team_member
 
-    return is_guest(team_id, user_id)
+    return is_team_member(team_id, user_id)
 
 
-def _is_guest_in_team(team_id, user_id) -> bool:
-    """Is this searcher an external collaborator in this team?
+def _may_match_team_sentinel(team_id, user_id) -> bool:
+    """May this searcher match the `team:<id>` ACL sentinel?
 
-    Two indexed `exists()` queries, memoised for a few seconds because
+    Only a real member of the team. The question is asked in exactly that
+    direction on purpose. It used to be asked as "is this person a guest",
+    which meant "do they hold a `ProjectMembers` row here" — true of a
+    project guest, but FALSE of someone let into the team's chat or a
+    shared note folder by a cross-team grant, who holds no project row at
+    all. Those people would have been handed the sentinel, and with it
+    every public Team Notes folder in a company they do not work for.
+    Membership is the property the sentinel actually stands for, so it is
+    the property to check.
+
+    One indexed `exists()`, memoised for a few seconds because
     `_build_filter` runs on every lane of every search and the answer
-    changes only when someone's membership does. The `bucket` argument
-    is what expires the cache: it is the current time floored to
-    `_GUEST_CACHE_TTL`, so a stale "not a guest" can persist for at most
-    that long — and erring that way is safe, because a *former* guest
-    who became a member simply misses the sentinel until it rolls over.
-    Fail-closed on a lookup error for the same reason.
+    changes only when someone's membership does. The `bucket` argument is
+    what expires the cache: the current time floored to
+    `_GUEST_CACHE_TTL`, so a new member misses public-folder hits for at
+    most that long — the direction worth erring in.
     """
     if not team_id or not user_id:
         return False
+    # Ids that are not UUIDs at all never reach the membership question.
+    # They name no team, so the `{"term": {"team_id": ...}}` clause beside
+    # this one already matches nothing and the sentinel is inert — while
+    # answering "not a member" here would make every caller that only
+    # checks the filter's SHAPE (several suites do, without a database)
+    # depend on DB-valid ids.
+    try:
+        uuid.UUID(str(team_id))
+        uuid.UUID(str(user_id))
+    except (ValueError, TypeError, AttributeError):
+        return True
     try:
         bucket = int(time.time() // _GUEST_CACHE_TTL)
-        return _is_guest_cached(str(team_id), str(user_id), bucket)
+        return _is_member_cached(str(team_id), str(user_id), bucket)
     except (DjangoValidationError, ValueError, TypeError):
-        # A malformed id can't name a real guest, and it can't name a
-        # real team either — the `{"term": {"team_id": ...}}` clause
-        # alongside this one already matches nothing — so the sentinel
-        # is harmless here. Treating it as "guest" instead would make
-        # every filter-shape caller depend on DB-valid UUIDs.
         return False
     except Exception:  # noqa: BLE001 — a search must not 500 on this
-        # A genuine lookup failure IS worth failing closed on: dropping
-        # the sentinel only loses public-Team-Notes hits, whereas
-        # keeping it on a wrong verdict would show a guest the team wiki.
-        log.warning("guest lookup failed for team=%s user=%s", team_id, user_id)
-        return True
+        # Fail closed: dropping the sentinel only loses public-Team-Notes
+        # hits, whereas keeping it on a wrong verdict would show an
+        # outsider the team wiki.
+        log.warning("membership lookup failed for team=%s user=%s", team_id, user_id)
+        return False
 
 
 def _build_filter(
@@ -938,14 +953,15 @@ def _build_filter(
     # SENTINEL. Matching the sentinel here is what keeps a public
     # folder's chunks from having to carry one entry per member.
     #
-    # A GUEST must not match it. The sentinel means "any member of this
-    # team", and an external collaborator is deliberately not one — a
-    # public Team Notes folder grants EDITOR to every team member, so
-    # matching here would hand a guest the whole team wiki through
-    # search. Their own reachable content still matches on `user_id`,
-    # which is how project chat, tasks and task notes reach them.
+    # An OUTSIDER must not match it — neither a project guest nor someone
+    # a cross-team grant let into one chat or one folder. The sentinel
+    # means "any member of this team", and a public Team Notes folder
+    # grants EDITOR to every team member, so matching here would hand the
+    # whole team wiki to someone outside the company. Their own reachable
+    # content still matches on `user_id`, which is how a shared project's
+    # tasks, an external chat and a shared folder reach them.
     acl_terms = [user_id]
-    if not _is_guest_in_team(team_id, user_id):
+    if _may_match_team_sentinel(team_id, user_id):
         acl_terms.append(f"team:{team_id}")
 
     filt: list[dict] = [

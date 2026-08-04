@@ -27,6 +27,7 @@ from origin.services.project_code import derive_project_code
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data
 from origin.views.utils.scope_guards import (
+    guest_project_ids,
     is_project_member,
     is_team_member,
     require_project_member_or_response,
@@ -375,8 +376,27 @@ class ProjectsView(AuthenticatedAPIView):
         # makes that flow work. Team membership is the right gate — it
         # keeps other tenants out without removing the product
         # behaviour.
-        if res := require_team_member_or_response(request.user, team_id):
-            return res
+        # An outsider gets a NARROWED list rather than a 404. A guest —
+        # including a cross-team participant on a shared project, who is
+        # one by construction — otherwise has no way to see the project
+        # they were admitted to: every other project endpoint keys on
+        # project membership, but this one is how the sidebar learns the
+        # project exists at all.
+        #
+        # Narrowed, not gated: the unnarrowed list is deliberately the
+        # whole team's projects because it is the "find a project to ask
+        # to join" surface (`ModalJoinProject`). That is a members-only
+        # affordance — an outsider enumerating the host's projects is the
+        # roster-exposure failure in a different costume.
+        visible_project_ids = None
+        if is_team_member(team_id, attendee_id):
+            # Keeps the deleted-team check that the plain guard performs.
+            if res := require_team_member_or_response(request.user, team_id):
+                return res
+        else:
+            visible_project_ids = guest_project_ids(team_id, attendee_id)
+            if not visible_project_ids:
+                return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 
         cache_key = f"project:list:{team_id}:{attendee_id}"
         cached = cache.get(cache_key)
@@ -393,6 +413,8 @@ class ProjectsView(AuthenticatedAPIView):
             .order_by("ts_updated_at")
             .reverse()
         )
+        if visible_project_ids is not None:
+            projects = projects.filter(project_id__in=visible_project_ids)
         project_tags = defaultdict(list)
         for project_tag in (
             ProjectTags.objects.filter(team=team_id).order_by("ts_updated_at").reverse()

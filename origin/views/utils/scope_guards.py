@@ -243,6 +243,44 @@ def is_external_participant(team_id, user_id) -> bool:
     return _no_such(_query)
 
 
+def has_external_participation(team_id, user_id) -> bool:
+    """Do they hold an actual participation row on something this team owns?
+
+    The stricter sibling of `is_external_participant`, which asks only
+    whether the guest team's managers COULD admit them. Use this one
+    wherever the answer decides what the person may read, because a
+    colleague of an admitted person must not inherit their reach.
+    """
+    if team_id is None or user_id is None:
+        return False
+    from origin.services.external_grants import host_team_ids_for_user
+
+    return _no_such(lambda: str(team_id) in host_team_ids_for_user(user_id))
+
+
+def participates_in_team(team_id, user_id) -> bool:
+    """May this person read anything at all inside `team_id`?
+
+    The gate for whole-team read surfaces — search, a Genos ask, the MCP
+    tool context — where the answer is "let them in, then narrow", never
+    "let them in, therefore show them everything". Each of those surfaces
+    re-filters by per-object ACL underneath; this only decides whether the
+    request is nonsense.
+
+    Three ways in, and the third is why this exists as a function rather
+    than an inline `or`: a member, a project guest, and someone a
+    cross-team grant admitted to a single chat or note folder. That last
+    kind holds no `ProjectMembers` row, so a gate written as "member or
+    guest" refused them — leaving a person with an active share unable to
+    search the very chat they were invited to.
+    """
+    return (
+        is_team_member(team_id, user_id)
+        or is_guest(team_id, user_id)
+        or has_external_participation(team_id, user_id)
+    )
+
+
 def guest_project_ids(team_id, user_id) -> list:
     """The projects a guest may see in this team — nothing else exists
     for them. Same shape as `member_project_ids`, narrowed to one team."""

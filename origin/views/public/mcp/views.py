@@ -24,7 +24,7 @@ from origin.views.public.mcp import protocol, tools
 from origin.views.public.mcp.protocol import JsonRpcError
 from origin.views.public.permissions import HasApiKey, PublicApiThrottle
 from origin.views.public.v1_views import PublicApiView
-from origin.views.utils.scope_guards import is_guest, is_team_member
+from origin.views.utils.scope_guards import participates_in_team
 
 log = logging.getLogger(__name__)
 
@@ -196,7 +196,7 @@ class McpView(PublicApiView):
 
         user_id = str(request.user.id)
         team_id = str(team.team_id)
-        if not is_team_member(team_id, user_id) and not is_guest(team_id, user_id):
+        if not participates_in_team(team_id, user_id):
             raise JsonRpcError(
                 protocol.INVALID_PARAMS,
                 "Team not found.",

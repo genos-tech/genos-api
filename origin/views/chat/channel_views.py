@@ -48,8 +48,8 @@ from origin.services.external_grants import (
     add_external_participants,
     grant_admitting,
     offer_grant,
-    participant_ids,
     remove_external_participants,
+    visible_shares_for_object,
 )
 from origin.services.member_roles import (
     ASSIGNABLE_ROLES,
@@ -1316,47 +1316,14 @@ class ChannelSharesView(AuthenticatedAPIView):
         channel = _get_channel_for_roster_admin(channel_id, request.user)
         if not channel.is_external:
             return Response({"shares": []}, status=status.HTTP_200_OK)
-
-        host_side = is_team_member(channel.team_id, request.user.id)
-        shares = []
-        for grant in active_grants_for_object(ExternalGrant.ObjectType.CHANNEL, channel.id):
-            team = TeamMaster.objects.filter(team_id=grant.guest_team_id).first()
-            if team is None:
-                continue
-            mine = is_team_member(team.team_id, request.user.id)
-            # Withhold other guest teams' rosters from a guest. In a
-            # multi-team chat every participant is visible in the member
-            # list anyway, but which ORGANISATION each belongs to is the
-            # host's business and the other guest's — not this one's.
-            if not (host_side or mine):
-                continue
-            participants = User.objects.filter(id__in=participant_ids(grant)).values(
-                "id", "username", "email", "profile_image_file_name"
-            )
-            shares.append(
-                {
-                    "grantId": str(grant.id),
-                    "teamId": str(team.team_id),
-                    "teamName": team.team_name,
-                    "roleCeiling": grant.role_ceiling,
-                    "status": grant.status,
-                    "side": "given" if host_side else "received",
-                    # Adding is the guest team's managers' privilege, and
-                    # only for their own team. The host never appears here
-                    # as `true` — it may veto, not staff.
-                    "canAdmit": mine and can_manage(resolve_team_role(team, request.user.id)),
-                    "participants": [
-                        {
-                            "userId": str(u["id"]),
-                            "userName": u["username"],
-                            "email": u["email"],
-                            "avatarUrl": u["profile_image_file_name"],
-                        }
-                        for u in participants
-                    ],
-                }
-            )
-        return Response({"shares": shares}, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "shares": visible_shares_for_object(
+                    ExternalGrant.ObjectType.CHANNEL, channel.id, request.user
+                )
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 # Cap inline editor uploads. Mirrors `MAX_ATTACHMENT_BYTES` in

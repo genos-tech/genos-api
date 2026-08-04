@@ -727,6 +727,176 @@ GUIDE_NOTES: list[tuple[str, list]] = [
         ),
     ),
     (
+        "Working with another company: cross-team sharing",
+        _body(
+            (
+                "What this is for",
+                [
+                    "Sometimes the people you need in a chat, a project, or a "
+                    "folder of notes work for someone else — a client, an "
+                    "agency, a contractor. Genos lets you share one specific "
+                    "thing with another team without letting them into the "
+                    "rest of your workspace, and without anyone creating a "
+                    "second account.",
+                    "It works in two steps: connect the two teams once, then "
+                    "share individual items. Connecting on its own gives the "
+                    "other team access to nothing at all.",
+                ],
+            ),
+            (
+                "Step 1: connect the two teams",
+                [
+                    (
+                        _B,
+                        "Open the team menu at the top of the left sidebar, "
+                        'choose "Show Team Profile", and find "Connected '
+                        'teams".',
+                    ),
+                    (
+                        _B,
+                        "Paste the other team's ID and send a connection "
+                        "request. Their team ID is on their own team profile, "
+                        "so ask them for it.",
+                    ),
+                    (
+                        _B,
+                        "Their owner or editor approves it from their Inbox → "
+                        "Requests. You only ever do this once per company.",
+                    ),
+                    (
+                        _B,
+                        "Only an owner or editor can request or approve a "
+                        "connection. Anyone on the team can see who you are "
+                        "connected to.",
+                    ),
+                ],
+            ),
+            (
+                "Step 2: share one thing",
+                [
+                    (
+                        _B,
+                        "A chat — create a new group chat and turn on the "
+                        "external option, then pick the connected teams to "
+                        "invite. An external chat is always private, and "
+                        "stays private; it shows an External badge in the "
+                        "chat list.",
+                    ),
+                    (
+                        _B,
+                        "A project — open the project profile and use the "
+                        '"Teams with access" section to share it with a '
+                        "connected team. Everything in the project comes "
+                        "along: its tasks, their comments, files, task "
+                        "notes, milestones, and the project's own chat "
+                        "channel.",
+                    ),
+                    (
+                        _B,
+                        "A folder of notes — open a Team Notes folder's "
+                        "members dialog and share it there. The folder must "
+                        "be set to private first: a public folder means "
+                        '"everyone in my team", which is not a boundary you '
+                        "can share across.",
+                    ),
+                    (
+                        _B,
+                        "When you share, you choose a ceiling: up to viewer, "
+                        "or up to editor. That is the most the other team's "
+                        "people can be given.",
+                    ),
+                    (
+                        _B,
+                        "The other team's owner or editor accepts the share "
+                        "from their Inbox. Accepting admits nobody yet — it "
+                        "opens the door.",
+                    ),
+                ],
+            ),
+            (
+                "Each side manages its own people",
+                [
+                    "This is the part that saves everyone time. Once a share "
+                    "is accepted, the other team's owner or editor adds and "
+                    "removes their own colleagues on that item whenever they "
+                    "like — no request back to you, no approval, however long "
+                    "afterwards. You approved the team and the item; they "
+                    "staff their side of it.",
+                    (
+                        _B,
+                        "They can only add people who are actually members of "
+                        "their team, and never above the ceiling you set.",
+                    ),
+                    (
+                        _B,
+                        "You keep a veto: you can remove any individual "
+                        "participant from your item at any time. What you "
+                        "cannot do is add their people for them.",
+                    ),
+                    (
+                        _B,
+                        "If someone leaves the other team, their access to "
+                        "your shared items disappears with their membership. "
+                        "You do not have to notice or do anything.",
+                    ),
+                ],
+            ),
+            (
+                "What an outside participant sees",
+                [
+                    (
+                        _B,
+                        "They switch into your team from their own team menu, "
+                        'where it appears with a "Guest" label.',
+                    ),
+                    (
+                        _B,
+                        "Inside, they see only what was shared with them: the "
+                        "shared project (not your other projects), the "
+                        "external chat, the shared folder. Not your team's "
+                        "other chats, notes, or member list.",
+                    ),
+                    (
+                        _B,
+                        "Search and Genos follow the same boundary. They can "
+                        "search and ask questions, and get answers only from "
+                        "the items they were admitted to.",
+                    ),
+                    (
+                        _B,
+                        "They keep their own plan and their own AI limits — "
+                        "their usage is never billed to you, and yours is "
+                        "never billed to them.",
+                    ),
+                ],
+            ),
+            (
+                "Ending it",
+                [
+                    (
+                        _B,
+                        'Stop sharing one item from its "Teams with access" '
+                        "section. Everyone that team had on it loses access "
+                        "immediately.",
+                    ),
+                    (
+                        _B,
+                        "Disconnect the whole team from Connected teams. That "
+                        "ends every chat, project, and folder shared between "
+                        "you, in both directions, at once — so it asks you to "
+                        "confirm, and tells you how many people were removed.",
+                    ),
+                    (
+                        _B,
+                        "Either side can end a share or a connection without "
+                        "the other's agreement. You can reconnect later; the "
+                        "individual shares do not come back on their own.",
+                    ),
+                ],
+            ),
+        ),
+    ),
+    (
         "Settings: every option, and where to find it",
         _body(
             (

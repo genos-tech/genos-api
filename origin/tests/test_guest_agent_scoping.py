@@ -25,7 +25,7 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.get_team_members import GET_TEAM_MEMBERS
-from origin.search_engine.search import _build_filter, _is_guest_cached
+from origin.search_engine.search import _build_filter, _is_member_cached
 from origin.services.member_roles import GUEST
 from origin.tests.test_base import BaseAPITestCase
 
@@ -35,7 +35,7 @@ User = get_user_model()
 class GuestAgentBase(BaseAPITestCase):
     def setUp(self):
         super().setUp()
-        _is_guest_cached.cache_clear()
+        _is_member_cached.cache_clear()
         self.project = ProjectMaster.objects.create(
             team=self.team, project_name="Client Scope", owner=self.user
         )
@@ -54,7 +54,7 @@ class GuestAgentBase(BaseAPITestCase):
         )
 
     def tearDown(self):
-        _is_guest_cached.cache_clear()
+        _is_member_cached.cache_clear()
         super().tearDown()
 
 
@@ -93,10 +93,10 @@ class TestGuestSearchAcl(GuestAgentBase):
         terms = self._acl_terms(self.user2)
         self.assertIn(f"team:{self.team.team_id}", terms)
 
-    def test_the_guest_verdict_is_cached_per_team_and_user(self):
+    def test_the_membership_verdict_is_cached_per_team_and_user(self):
         self._acl_terms(self.guest)
         self._acl_terms(self.user2)
-        info = _is_guest_cached.cache_info()
+        info = _is_member_cached.cache_info()
         self.assertGreaterEqual(info.currsize, 2)
 
 

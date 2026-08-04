@@ -60,6 +60,7 @@ from origin.views.common.ownership_claim_views import (
 )
 from origin.views.common.runtime_config_views import RuntimeConfigView
 from origin.views.common.team_connection_views import (
+    ExternalShareObjectView,
     ExternalShareParticipantsView,
     ExternalShareRespondView,
     ExternalShareRevokeView,
@@ -429,6 +430,11 @@ urlpatterns = [
         "api/v2/team/share/revoke/",
         ExternalShareRevokeView.as_view(),
         name="external_share_revoke",
+    ),
+    path(
+        "api/v2/team/share/object/",
+        ExternalShareObjectView.as_view(),
+        name="external_share_object",
     ),
     path(
         "api/v2/team/share/participants/",

@@ -953,6 +953,13 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 "teamImgPath": team[4],
                 "teamMembers": members_by_team.get(team[0], []),
                 "tsCreatedAt": team[5],
+                # A shell, not a membership: the caller reaches this team
+                # from outside, through a project or a cross-team share.
+                # The client needs to know because the narrowed roster is
+                # otherwise indistinguishable from a small team, and every
+                # member-only affordance rendered here would offer an
+                # action the server refuses.
+                "isGuest": team[0] in guest_team_ids,
             }
             for team in raw_my_teams
         ]
