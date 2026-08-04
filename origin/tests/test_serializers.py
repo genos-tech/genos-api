@@ -624,14 +624,15 @@ class ChannelSerializerTests(BaseAPITestCase):
         data = ChannelSerializer(ch).data
         expected = {
             "id", "kind", "title", "profileImageUrl", "projectId", "ownerId",
-            "isPrivate", "legacyChatId", "latestMessage", "unreadCount",
-            "members", "dmPartner", "tsCreated", "tsUpdated",
+            "isPrivate", "isExternal", "legacyChatId", "latestMessage",
+            "unreadCount", "members", "dmPartner", "tsCreated", "tsUpdated",
         }
         self.assertEqual(set(data.keys()), expected)
         self.assertEqual(data["title"], "Engineering")
         self.assertEqual(data["kind"], ChannelKind.GM)
         self.assertEqual(data["profileImageUrl"], "channels/eng.png")
         self.assertFalse(data["isPrivate"])
+        self.assertFalse(data["isExternal"])
         # GM is not DM/MDM -> members is [] and dmPartner is None.
         self.assertEqual(data["members"], [])
         self.assertIsNone(data["dmPartner"])

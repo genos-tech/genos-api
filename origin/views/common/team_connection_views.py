@@ -281,6 +281,17 @@ class ExternalShareView(AuthenticatedAPIView):
             .exclude(status=ShareStatus.DECLINED)
             .order_by("-ts_updated_at")
         )
+        # Optional narrowing to one object, for the per-object panels (a
+        # chat's or project's own "shared with" section). Narrowing only —
+        # the team filter above is what makes this safe, so an object id
+        # naming something this team has no share on returns nothing
+        # rather than anything new.
+        object_type = request.GET.get("object_type")
+        object_id = request.GET.get("object_id")
+        if object_type:
+            rows = rows.filter(object_type=object_type)
+        if object_id:
+            rows = rows.filter(object_id=str(object_id))
         return Response(
             {"shares": [_grant_payload(g, team_id) for g in rows]},
             status=status.HTTP_200_OK,

@@ -94,6 +94,23 @@ class Channel(models.Model):
         to_field="id",
     )
     is_private = models.BooleanField(default=False)
+    # A cross-team chat: members come from more than one team, admitted
+    # through `ExternalGrant` rows on this channel (see
+    # `origin/services/external_grants.py`).
+    #
+    # `team` stays REQUIRED and names the HOST — the team that created the
+    # channel and owns it. Making it nullable for a "shared" channel was
+    # the obvious alternative and is a trap: `Activity.team` stamping, the
+    # OpenSearch `team_id` filter, and ~141 `filter(team=...)` sites all
+    # assume every channel has exactly one owning tenant. One host with
+    # guests keeps all of that coherent, and matches how the grant model
+    # works everywhere else — somebody owns the object, others are let in.
+    #
+    # Always paired with `kind=GM` and `is_private=True`, enforced at the
+    # create and patch endpoints: an externally-visible channel that could
+    # be self-joined by a whole team would hand out access the grants
+    # never approved.
+    is_external = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

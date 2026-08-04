@@ -23,6 +23,7 @@ from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.serializers.common.team_serializers import TeamMasterSerializer, TeamMembersSerializer
 from origin.services.email import send_templated_email
+from origin.services.external_grants import host_team_ids_for_user
 from origin.services.member_roles import (
     ASSIGNABLE_ROLES,
     GUEST,
@@ -45,6 +46,7 @@ from origin.views.utils.incremental import (
     check_since,
 )
 from origin.views.utils.scope_guards import (
+    external_visible_user_ids,
     guest_visible_user_ids,
     is_project_member,
     is_team_member,
@@ -855,6 +857,33 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 guest_team_ids.add(row[0])
                 raw_my_teams.append(row)
 
+        # Same problem one step further out: cross-team sharing can admit
+        # someone to a host team's CHANNEL or NOTE FOLDER, neither of
+        # which leaves a `ProjectMembers` row, so the loop above misses
+        # them entirely and the object sits in a team the client cannot
+        # name or switch into. These shells are as narrow as the guest
+        # ones — the roster filter below covers them too.
+        external_only = host_team_ids_for_user(user_id) - {str(t) for t in guest_team_ids}
+        if external_only:
+            for row in (
+                TeamMaster.objects.filter(team_id__in=external_only, is_deleted=False)
+                .exclude(
+                    team_id__in=TeamMembers.objects.filter(
+                        attendee=user_id, is_deleted=False
+                    ).values_list("team_id", flat=True)
+                )
+                .values_list(
+                    "team_id",
+                    "team_name",
+                    "team_email",
+                    "owner",
+                    "profile_image_file_name",
+                    "ts_created_at",
+                )
+            ):
+                guest_team_ids.add(row[0])
+                raw_my_teams.append(row)
+
         team_ids = [row[0] for row in raw_my_teams]
         member_rows = (
             TeamMembers.objects.filter(team_id__in=team_ids, attendee__is_system_user=False)
@@ -907,7 +936,10 @@ class GetMyTeamsView(AuthenticatedAPIView):
         # grouping so a user who is a full member of team A and a guest
         # in team B gets the whole roster for A and the narrow one for B.
         for gid in guest_team_ids:
-            visible = guest_visible_user_ids(gid, user_id)
+            # Union, not either/or: the same person can be a guest on a
+            # project AND an external participant in a chat in the same
+            # host team, and each source discloses a different slice.
+            visible = guest_visible_user_ids(gid, user_id) | external_visible_user_ids(gid, user_id)
             members_by_team[gid] = [
                 m for m in members_by_team.get(gid, []) if str(m["userId"]) in visible
             ]
@@ -972,10 +1004,13 @@ class GetTeamMembersView(AuthenticatedAPIView):
             )
         # A guest is not a team member and never will be, so the plain
         # guard would 404 them out of their own project's people picker.
-        # They get the roster narrowed to the projects they're in.
+        # They get the roster narrowed to the projects they're in — or,
+        # for a cross-team participant, to the shared objects they are in.
         guest_visible = None
         if not is_team_member(team_id, request.user.id):
-            guest_visible = guest_visible_user_ids(team_id, request.user.id)
+            guest_visible = guest_visible_user_ids(
+                team_id, request.user.id
+            ) | external_visible_user_ids(team_id, request.user.id)
             if not guest_visible:
                 return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 

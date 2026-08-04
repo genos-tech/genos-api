@@ -333,6 +333,38 @@ def grant_admitting(object_type, object_id, user_id) -> ExternalGrant | None:
     return None
 
 
+def host_team_ids_for_user(user_id) -> set[str]:
+    """Host teams this person actually participates in from outside.
+
+    `GetMyTeamsView` needs this to synthesize the team shell an external
+    member switches into. It already covers project guests by looking for
+    `ProjectMembers` rows; a channel or note-folder participant has no
+    such row, so without this they hold access to an object in a team the
+    client cannot even name — the chat exists and is unreachable.
+
+    Keyed on participation, not on the grant: being a member of a team
+    that HOLDS a grant is not participation, and returning those teams
+    would put a team in every member's switcher the moment one colleague
+    was admitted somewhere.
+    """
+    if user_id is None:
+        return set()
+    from origin.models.common.team_models import TeamMembers
+
+    my_teams = TeamMembers.objects.filter(attendee_id=user_id, is_deleted=False).values_list(
+        "team_id", flat=True
+    )
+    teams = set()
+    for grant in ExternalGrant.objects.filter(
+        status=ShareStatus.ACTIVE, guest_team_id__in=my_teams
+    ):
+        if str(grant.owner_team_id) in teams:
+            continue
+        if str(user_id) in {str(uid) for uid in _rows_for_grant(grant)}:
+            teams.add(str(grant.owner_team_id))
+    return teams
+
+
 def participant_ids(grant: ExternalGrant) -> list[str]:
     """The guest-team people currently admitted under this grant.
 
