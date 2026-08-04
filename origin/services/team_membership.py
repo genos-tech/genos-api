@@ -40,6 +40,37 @@ def add_team_member(team_id, attendee_id) -> None:
     TeamMembers.objects.create(team_id=team_id, attendee_id=attendee_id)
 
 
+def remove_team_member(team_id, attendee_id) -> int:
+    """Soft-delete a membership row and strip the access it underwrote.
+
+    Soft-delete preserves the rejoin path: `TeamMembersView.post`
+    un-deletes rather than inserting a duplicate, which the unique
+    constraint would refuse.
+
+    The cascade is the part that is easy to miss. Under cross-team
+    sharing a team's roster is the authority on who may reach ANOTHER
+    team's shared objects — the guest team's managers admit their own
+    people, and nothing re-checks that at read time — so a departure that
+    stopped at this row would leave someone who quit team B holding
+    access to team A's project indefinitely. Returns the number of
+    cross-team participation rows withdrawn.
+
+    Deliberately a function call rather than a `post_save` signal on
+    `TeamMembers`: a security cascade should be readable at the point the
+    departure is written, not discovered later by grepping for receivers.
+    """
+    from origin.services.external_grants import drop_team_member_participation
+
+    with transaction.atomic():
+        member = TeamMembers.objects.filter(
+            team_id=team_id, attendee_id=attendee_id, is_deleted=False
+        ).first()
+        if member is not None:
+            member.is_deleted = True
+            member.save(update_fields=["is_deleted", "ts_updated_at"])
+        return drop_team_member_participation(team_id, attendee_id)
+
+
 def add_project_guest(team_id, project_id, attendee_id) -> None:
     """Un-delete-or-create the `ProjectMembers` row for a guest.
 

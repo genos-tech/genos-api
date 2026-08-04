@@ -59,6 +59,15 @@ from origin.views.common.ownership_claim_views import (
     TeamOwnershipClaimStatusView,
 )
 from origin.views.common.runtime_config_views import RuntimeConfigView
+from origin.views.common.team_connection_views import (
+    ExternalShareParticipantsView,
+    ExternalShareRespondView,
+    ExternalShareRevokeView,
+    ExternalShareView,
+    TeamConnectionRespondView,
+    TeamConnectionRevokeView,
+    TeamConnectionView,
+)
 from origin.views.common.team_emoji_views import TeamEmojiView
 from origin.views.common.team_views import *
 from origin.views.common.user_views import *
@@ -391,6 +400,40 @@ urlpatterns = [
         "api/v2/team/getTeamMemberInfo/",
         GetTeamMemberInfoView.as_view(),
         name="get_team_member_info",
+    ),
+    # Cross-team sharing. Two one-time approvals (connect, then share)
+    # and one repeatable roster the guest team runs itself — see
+    # views/common/team_connection_views.py.
+    path(
+        "api/v2/team/connection/",
+        TeamConnectionView.as_view(),
+        name="team_connection",
+    ),
+    path(
+        "api/v2/team/connection/respond/",
+        TeamConnectionRespondView.as_view(),
+        name="team_connection_respond",
+    ),
+    path(
+        "api/v2/team/connection/revoke/",
+        TeamConnectionRevokeView.as_view(),
+        name="team_connection_revoke",
+    ),
+    path("api/v2/team/share/", ExternalShareView.as_view(), name="external_share"),
+    path(
+        "api/v2/team/share/respond/",
+        ExternalShareRespondView.as_view(),
+        name="external_share_respond",
+    ),
+    path(
+        "api/v2/team/share/revoke/",
+        ExternalShareRevokeView.as_view(),
+        name="external_share_revoke",
+    ),
+    path(
+        "api/v2/team/share/participants/",
+        ExternalShareParticipantsView.as_view(),
+        name="external_share_participants",
     ),
     # Mention groups (Slack-style @group). team-scoped CRUD + bulk
     # group→user resolver used by the Flask mention pipeline.

@@ -33,7 +33,11 @@ from origin.services.member_roles import (
     resolve_project_role,
     resolve_team_role,
 )
-from origin.services.team_membership import InviteAcceptError, accept_invite
+from origin.services.team_membership import (
+    InviteAcceptError,
+    accept_invite,
+    remove_team_member,
+)
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
     build_delta_response,
@@ -479,8 +483,11 @@ class LeaveTeamView(AuthenticatedAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        member.is_deleted = True
-        member.save(update_fields=["is_deleted", "ts_updated_at"])
+        # Not a bare `is_deleted = True`: leaving also has to give up
+        # whatever this team's cross-team shares granted this person in
+        # OTHER teams. See `remove_team_member` for why that cascade
+        # cannot be skipped.
+        remove_team_member(team_id, attendee_id)
         return Response(
             {"team_id": team_id, "attendee_id": attendee_id},
             status=status.HTTP_200_OK,
