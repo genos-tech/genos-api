@@ -166,6 +166,61 @@ def is_team_participant(team_id, user_id) -> bool:
     return is_team_member(team_id, user_id) or is_guest(team_id, user_id)
 
 
+def are_teams_connected(team_a_id, team_b_id) -> bool:
+    """Do these two teams have an ACTIVE `TeamConnection`?
+
+    Thin re-export of `services/team_connection.are_connected` so view
+    code has one import for membership questions. Imported inside the
+    function because the connection service reaches back into this module
+    for `is_team_member`, and a module-level import would close the loop.
+
+    Being connected authorizes *naming* the other team in a grant. It is
+    never sufficient for access on its own — that always comes from a
+    participation row — so a guard written as "connected, therefore
+    allowed" is wrong at every call site.
+    """
+    from origin.services.team_connection import are_connected
+
+    return are_connected(team_a_id, team_b_id)
+
+
+def is_external_participant(team_id, user_id) -> bool:
+    """Is `user_id` admissible to this team's data from ANOTHER team?
+
+    True when they are not a member of `team_id` themselves, but belong
+    to a team holding an active `ExternalGrant` on something `team_id`
+    owns. The cross-team sibling of `is_guest`, and like `is_guest` it is
+    a description of the data rather than a stored flag.
+
+    Two things it deliberately does NOT mean:
+
+    * Not "has access". Admissibility is the guest team's managers being
+      *able* to admit them; access is the participation row they may or
+      may not have been given. Only the row grants anything.
+    * Not a substitute for `is_team_member`. Use it where an outsider must
+      be told apart from a stranger — labelling, or letting a client boot
+      into a host team's shell — never to grant.
+
+    Note that an external participant on a shared PROJECT also satisfies
+    `is_guest`, because the access they get is an ordinary
+    `ProjectMembers` row. That overlap is intended: it is what makes every
+    existing guest narrowing apply to them for free.
+    """
+    if team_id is None or user_id is None:
+        return False
+    if is_team_member(team_id, user_id):
+        return False
+    from origin.models.common.team_models import ExternalGrant, ShareStatus
+
+    def _query():
+        guest_team_ids = ExternalGrant.objects.filter(
+            owner_team_id=team_id, status=ShareStatus.ACTIVE
+        ).values_list("guest_team_id", flat=True)
+        return any(is_team_member(gt, user_id) for gt in set(guest_team_ids))
+
+    return _no_such(_query)
+
+
 def guest_project_ids(team_id, user_id) -> list:
     """The projects a guest may see in this team — nothing else exists
     for them. Same shape as `member_project_ids`, narrowed to one team."""

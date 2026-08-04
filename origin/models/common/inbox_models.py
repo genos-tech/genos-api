@@ -40,13 +40,24 @@ class InboxItems(models.Model):
     #    6: "Genos digest" (proactive tier digest, UX tier model §8 —
     #       system-authored: `sender` is NULL, `item_body` carries
     #       {title, text}; not a request, `request_status` is "")
+    #    7: "team connection request" (another TEAM asks to connect — see
+    #       origin/services/team_connection.py; `receiver` is the asked
+    #       team's owner, `team` is the asked team, `item_optionals`
+    #       carries {connection_id, requesting_team_id,
+    #       requesting_team_name}. The only request item whose subject is
+    #       a team rather than a person)
+    #    8: "external share offer" (a connected team offers access to one
+    #       object — origin/services/external_grants.py; `receiver` is
+    #       the GUEST team's owner, `team` is the guest team, and
+    #       `item_optionals` carries {grant_id, object_type, object_id,
+    #       owner_team_name})
     # }
     #########################################################
     item_type = models.IntegerField(blank=False)
     item_optionals = models.JSONField(blank=True, null=True)
     is_read = models.BooleanField(default=False)
     #########################################################
-    # request_status: only relevant for request items (item_type 1-5)
+    # request_status: only relevant for request items (item_type 1-5, 7-8)
     #   "pending"  = waiting for action
     #   "approved" = approved by owner
     #   "rejected" = rejected by owner
