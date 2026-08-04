@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from origin.models.project.prj_models import *
 from origin.models.task.task_models import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.views.utils.scope_guards import is_project_member
+from origin.views.utils.scope_guards import is_project_member, reachable_project_ids
 
 from .common_color import status_color
 
@@ -47,12 +47,8 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
 
         # Get all tasks in all project
         if project_id == -1:
-            project_ids = list(
-                ProjectMembers.objects.filter(
-                    Q(team=team_id, attendee=request_user_id)
-                ).values_list("project_id", flat=True)
-            )
-            scope_filter = Q(project__in=project_ids)
+            # Includes projects another team shared with this one.
+            scope_filter = Q(project__in=reachable_project_ids(request_user_id, team_id))
         else:
             # The `-1` branch above derives the scope from membership,
             # which made this endpoint LOOK scoped. Naming a project
@@ -63,10 +59,12 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
                 return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
             scope_filter = Q(project=project_id)
 
+        # No `team=` clause: both branches above have already narrowed to
+        # projects this person is in, and a project shared by another team
+        # holds tasks filed under THAT team — the clause only ever dropped
+        # the shared work this endpoint is asked for.
         tasks = (
-            TaskMaster.objects.filter(
-                scope_filter, team=team_id, status__in=statuses, is_init_task=False
-            )
+            TaskMaster.objects.filter(scope_filter, status__in=statuses, is_init_task=False)
             .values_list(
                 "project__project_id",
                 "project__project_name",
@@ -94,7 +92,7 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
         finished_task_ids: set[int] = set()
         if statuses != ["Closed"] and statuses != ["Deleted"] and include_all == False:
             for _tid, _pid, _status in TaskMaster.objects.filter(
-                scope_filter, team=team_id, is_init_task=False
+                scope_filter, is_init_task=False
             ).values_list("task_id", "parent_task_id", "status"):
                 parent_by_id[_tid] = _pid
                 if _status in ("Closed", "Deleted"):

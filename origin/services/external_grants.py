@@ -605,8 +605,55 @@ def host_team_ids_for_user(user_id) -> set[str]:
     ):
         if str(grant.owner_team_id) in teams:
             continue
-        if str(user_id) in {str(uid) for uid in _rows_for_grant(grant)}:
+        if str(user_id) in {str(uid) for uid in rows_for_grant(grant)}:
             teams.add(str(grant.owner_team_id))
+    return teams
+
+
+def presence_team_ids_for_user(user_id) -> set[str]:
+    """Which team rooms this person's online status belongs in.
+
+    Their own teams, the host teams they participate in from outside, and
+    the guest teams they share an object with. The last two are the
+    additions: the socket layer publishes a heartbeat to team rooms, so
+    presence stopped at the team boundary and every cross-team
+    collaborator rendered as permanently offline to the other side —
+    people who are in the same chat, looking at each other's names greyed
+    out.
+
+    Symmetric on purpose. `host_team_ids_for_user` already answers one
+    direction (a guest's status reaching the host), and the other is the
+    same question asked from the host's side; publishing only one way
+    would leave presence working in one team and broken in the other,
+    which reads as a bug rather than a boundary.
+
+    Co-participation is the unit, as everywhere else here: holding a grant
+    is not enough, and a colleague of an admitted person is not included.
+    """
+    if user_id is None:
+        return set()
+    from origin.models.common.team_models import TeamMembers
+
+    mine = {
+        str(tid)
+        for tid in TeamMembers.objects.filter(attendee_id=user_id, is_deleted=False).values_list(
+            "team_id", flat=True
+        )
+    } | {
+        str(tid)
+        for tid in TeamMaster.objects.filter(owner_id=user_id, is_deleted=False).values_list(
+            "team_id", flat=True
+        )
+    }
+    teams = set(mine) | host_team_ids_for_user(user_id)
+    for grant in ExternalGrant.objects.filter(
+        status=ShareStatus.ACTIVE, owner_team_id__in=mine
+    ).exclude(guest_team_id__in=mine):
+        guest_team_id = str(grant.guest_team_id)
+        if guest_team_id in teams:
+            continue
+        if str(user_id) in {str(uid) for uid in rows_for_grant(grant)}:
+            teams.add(guest_team_id)
     return teams
 
 
@@ -649,7 +696,7 @@ def external_objects_for_member(object_type, guest_team_id, user_id) -> dict[str
 def _objects_held_by(object_type, object_ids: list[str], user_id) -> set[str]:
     """Which of `object_ids` this person holds a participation row on.
 
-    One query per call rather than `_rows_for_grant` per grant, because
+    One query per call rather than `rows_for_grant` per grant, because
     this runs on every list request — the read path, not the admit path.
 
     Ids are sifted by shape first. `object_id` is a text column serving
@@ -712,12 +759,18 @@ def participant_ids(grant: ExternalGrant) -> list[str]:
     """
     if grant is None:
         return []
-    candidates = _rows_for_grant(grant)
+    candidates = rows_for_grant(grant)
     return [str(uid) for uid in candidates if is_team_member(grant.guest_team_id, uid)]
 
 
-def _rows_for_grant(grant: ExternalGrant) -> list:
-    """Every user id holding a participation row on the grant's object."""
+def rows_for_grant(grant: ExternalGrant) -> list:
+    """Every user id holding a participation row on the grant's object.
+
+    Both sides of the share, unnarrowed — `participant_ids` is the guest
+    half. Public because "who is in this object" is also the question the
+    people directory asks (`scope_guards.external_people_for_member`), and
+    it needs the host's people too.
+    """
     if grant.object_type == ExternalGrant.ObjectType.CHANNEL:
         from origin.models.chat.unified_models import ChannelMember
 

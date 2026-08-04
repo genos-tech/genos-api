@@ -42,6 +42,7 @@ from origin.views.common.mention_group_views import (
 )
 from origin.views.common.notification_views import (
     NotificationPreferenceView,
+    PresenceAudienceView,
     PresenceHeartbeatView,
     PushSubscriptionView,
 )
@@ -256,6 +257,11 @@ urlpatterns = [
         "api/v2/user/presence/heartbeat/",
         PresenceHeartbeatView.as_view(),
         name="user_presence_heartbeat",
+    ),
+    path(
+        "api/v2/user/presence/teams/",
+        PresenceAudienceView.as_view(),
+        name="user_presence_teams",
     ),
     # Runtime config — per-chat-type rollout flags + panic switch.
     # Polled by the client every 60s. Source of truth for whether a

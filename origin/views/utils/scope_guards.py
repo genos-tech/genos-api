@@ -47,6 +47,7 @@ delete — so project queries must not filter on one. `TeamMembers` does.
 from __future__ import annotations
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db.models import Q
 from django.http import Http404
 from rest_framework import status
 from rest_framework.permissions import BasePermission
@@ -287,6 +288,131 @@ def guest_project_ids(team_id, user_id) -> list:
     if not is_guest(team_id, user_id):
         return []
     return member_project_ids(user_id, team_id=team_id)
+
+
+def external_people_for_member(team_id, user_id) -> dict:
+    """The other teams' people this person shares work with, from `team_id`.
+
+    Answers both directions, because the client asks the same question
+    either way: it caches one roster per team and renders everyone from
+    it. Viewing the team that OWNS a share, the answer is the guest team's
+    admitted people; viewing the team that RECEIVED one, it is the host's
+    people on that object. Splitting this into two helpers meant one side
+    of every shared chat rendered with names and the other with blanks.
+
+    Co-participation on a specific object is the unit — the same rule that
+    decides access, and the same one `external_visible_user_ids` uses from
+    the outside. Never "everyone in a team that holds a grant": a
+    colleague of an admitted person gets no access and is nobody here, and
+    a colleague of the ADMITTING person sees nothing either, so sharing
+    one project does not put the other company in every desk's directory.
+
+    Returns `{user_id: {"teamId": ..., "teamName": ...}}` rather than a
+    set, because the caller's next question is always which team they are
+    from: a name with no team beside it reads as one of your own staff,
+    which is the misunderstanding this whole feature exists to avoid.
+    """
+    if team_id is None or user_id is None:
+        return {}
+    from origin.models.chat.unified_models import ChannelMember
+    from origin.models.common.team_models import ExternalGrant, ShareStatus
+    from origin.models.note.common_note_models import NoteFolderPermission
+    from origin.services.external_grants import rows_for_grant
+
+    def _reaches(grant) -> bool:
+        """Is this person on the granted object themselves?"""
+        if grant.object_type == ExternalGrant.ObjectType.CHANNEL:
+            return ChannelMember.objects.filter(
+                channel_id=grant.object_id, user_id=user_id, is_deleted=False
+            ).exists()
+        if grant.object_type == ExternalGrant.ObjectType.PROJECT:
+            return is_project_member(grant.object_id, user_id)
+        if grant.object_type == ExternalGrant.ObjectType.NOTE_FOLDER:
+            return NoteFolderPermission.objects.filter(
+                folder_id=grant.object_id, user_id=user_id
+            ).exists()
+        return False
+
+    def _query():
+        people: dict = {}
+        names: dict = {}
+
+        def team_name(tid):
+            if tid not in names:
+                names[tid] = (
+                    TeamMaster.objects.filter(team_id=tid)
+                    .values_list("team_name", flat=True)
+                    .first()
+                    or ""
+                )
+            return names[tid]
+
+        grants = ExternalGrant.objects.filter(
+            Q(owner_team_id=team_id) | Q(guest_team_id=team_id),
+            status=ShareStatus.ACTIVE,
+        )
+        for grant in grants:
+            if not _reaches(grant):
+                continue
+            sides = [str(grant.owner_team_id), str(grant.guest_team_id)]
+            uids = {str(uid) for uid in rows_for_grant(grant)} - {str(user_id)}
+            if not uids:
+                continue
+            # Which of the two teams each person belongs to, in two
+            # queries rather than one per head: a busy channel makes the
+            # per-head form the most expensive thing on the roster path.
+            homes: dict = {}
+            for tid, aid in TeamMembers.objects.filter(
+                team_id__in=sides, attendee_id__in=uids, is_deleted=False
+            ).values_list("team_id", "attendee_id"):
+                homes.setdefault(str(aid), set()).add(str(tid))
+            for tid, oid in TeamMaster.objects.filter(
+                team_id__in=sides, owner_id__in=uids
+            ).values_list("team_id", "owner_id"):
+                homes.setdefault(str(oid), set()).add(str(tid))
+            for uid, member_of in homes.items():
+                # Anyone in the roster being asked about is already in it.
+                if str(team_id) in member_of or uid in people:
+                    continue
+                home = sorted(member_of)[0]
+                people[uid] = {"teamId": home, "teamName": team_name(home)}
+        return people
+
+    return _no_such(_query, default={})
+
+
+def reachable_project_ids(user_id, team_id) -> list:
+    """Every project this person may open while viewing `team_id`.
+
+    `member_project_ids` answers only for projects filed under the team
+    being viewed, which is right until another team shares one: the
+    guest's `ProjectMembers` row is written against the HOST team, so a
+    team-wide task list scoped that way returns nothing for exactly the
+    work they were invited to do. Team-wide lists (the dashboard's
+    capacity roll-up, the task-meta tree, assigned-task counts) were all
+    empty in a shared project for that reason while the project's own
+    list was full.
+
+    Safe to filter tasks on without a `team=` clause beside it: every id
+    in here is either filed under `team_id` or is an object this person
+    holds a participation row on.
+    """
+    if user_id is None or team_id is None:
+        return []
+    from origin.models.common.team_models import ExternalGrant
+    from origin.services.external_grants import external_objects_for_member
+
+    mine = set(member_project_ids(user_id, team_id=team_id))
+    shared = _no_such(
+        lambda: set(
+            external_objects_for_member(
+                ExternalGrant.ObjectType.PROJECT, team_id, user_id
+            ).keys()
+        ),
+        default=set(),
+    )
+    # `object_id` is a text column; the project FK is an integer.
+    return list(mine | {int(pid) for pid in shared if str(pid).isdigit()})
 
 
 def guest_visible_user_ids(team_id, user_id) -> set:

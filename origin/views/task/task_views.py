@@ -46,7 +46,7 @@ from origin.views.utils.scope_guards import (
     is_guest,
     is_project_member,
     is_team_member,
-    member_project_ids,
+    reachable_project_ids,
     require_team_member_or_response,
 )
 from origin.views.utils.upload_limits import check_upload_size
@@ -963,16 +963,13 @@ class TaskMetaView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
-        project_ids = list(
-            ProjectMembers.objects.filter(
-                team=data["team_id"], attendee=request_user_id
-            ).values_list("project_id", flat=True)
-        )
+        # Includes the projects another team shared with this one. Filed
+        # under the HOST team, so pairing this with `team=` would drop
+        # them — the tree is how the client knows a task exists at all.
+        project_ids = reachable_project_ids(request_user_id, data["team_id"])
 
         raw_personal_notes = (
-            TaskMaster.objects.filter(
-                team=data["team_id"], project__in=project_ids, is_init_task=False
-            )
+            TaskMaster.objects.filter(project__in=project_ids, is_init_task=False)
             .filter(~Q(status="Deleted"))
             .annotate(
                 taskId=F("task_id"),
@@ -996,9 +993,7 @@ class TaskMetaView(AuthenticatedAPIView):
         )
 
         finished_task_ids = set(
-            TaskMaster.objects.filter(
-                team=data["team_id"], project__in=project_ids, is_init_task=False
-            )
+            TaskMaster.objects.filter(project__in=project_ids, is_init_task=False)
             .filter(Q(status__in=["Deleted", "Closed"]))
             .values_list("task_id", flat=True)
         )
@@ -1045,10 +1040,17 @@ def _team_task_scope(user_id, team_id) -> Q:
     been confirmed a team member. A guest gets no orphan clause: they
     reach the product through specific projects, and a task with no
     project is by definition not one of them.
+
+    Projects are `reachable_project_ids`, which includes the ones another
+    team shared with this one — so callers must NOT add `team=team_id`
+    beside this scope. A shared project's tasks are filed under the HOST
+    team, and that extra clause is what left the dashboard, the table and
+    the board empty in a project a guest could otherwise open. The scope
+    is already per-person, so the team clause added nothing but that bug.
     """
-    scope = Q(project_id__in=member_project_ids(user_id, team_id=team_id))
+    scope = Q(project_id__in=reachable_project_ids(user_id, team_id))
     if is_team_member(team_id, user_id) and not is_guest(team_id, user_id):
-        scope |= Q(project__isnull=True)
+        scope |= Q(project__isnull=True, team=team_id)
     return scope
 
 
@@ -1074,7 +1076,7 @@ class GetTeamTasksView(AuthenticatedAPIView):
         # select_related on the FKs accessed in the loop (assignee, team,
         # project) collapses 3 per-row lookups into JOINs on the main query.
         task_with_tags = (
-            TaskMaster.objects.filter(scope, team=team_id, is_init_task=False)
+            TaskMaster.objects.filter(scope, is_init_task=False)
             .select_related("assignee", "team", "project")
             .prefetch_related("task_tags")
         )
@@ -1148,7 +1150,6 @@ class GetTeamTasksByTagView(AuthenticatedAPIView):
             return res
         task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
             _team_task_scope(request.user.id, team_id),
-            team=team_id,
             is_init_task=False,
         )
 
@@ -1879,7 +1880,11 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
             )
 
         task_with_tags = (
-            TaskMaster.objects.filter(team=team_id, assignee=user_id, is_init_task=False)
+            TaskMaster.objects.filter(
+                _team_task_scope(request.user.id, team_id),
+                assignee=user_id,
+                is_init_task=False,
+            )
             .select_related("assignee", "team", "project")
             .prefetch_related("task_tags")
         )
