@@ -25,6 +25,41 @@ def _mock_reindex():
     return mock.patch("origin.services.demo_seeder.kick_off_demo_reindex")
 
 
+class GuideNotesContentTests(BaseAPITestCase):
+    """The guide is a large hand-authored body of text that reaches users
+    without anyone reviewing the rendered result, and Spotlight cites it
+    as the manual. These are the failures that would ship silently.
+    """
+
+    def test_every_note_has_a_title_and_a_body(self):
+        for title, body in GUIDE_NOTES:
+            self.assertTrue(title.strip(), "a guide note has an empty title")
+            self.assertTrue(body, f"guide note {title!r} has an empty body")
+
+    def test_titles_are_unique(self):
+        # Duplicated titles make a citation ambiguous ("see the settings
+        # page" — which one?) and look like a copy-paste accident in the
+        # user's own note list.
+        titles = [title for title, _ in GUIDE_NOTES]
+        self.assertEqual(len(titles), len(set(titles)))
+
+    def test_no_note_body_contains_an_empty_text_block(self):
+        # `_body` emits a trailing blank paragraph per section by design;
+        # an empty HEADING or bullet instead means a section was left
+        # half-written.
+        for title, body in GUIDE_NOTES:
+            for block in body:
+                if block.get("type") == "paragraph":
+                    continue
+                text = "".join(
+                    item.get("text", "") for item in block.get("content", []) or []
+                )
+                self.assertTrue(
+                    text.strip(),
+                    f"guide note {title!r} has an empty {block.get('type')} block",
+                )
+
+
 class GuideNotesOnJoinTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()

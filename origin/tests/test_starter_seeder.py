@@ -16,8 +16,10 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectTags
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.services.demo_seeder import delete_demo_environment
+from origin.services.starter_seeder import EXAMPLES_BLUEPRINT, STARTER_BLUEPRINT
 from origin.tests.test_base import BaseAPITestCase
 
 
@@ -46,14 +48,20 @@ class StarterWorkspaceTests(BaseAPITestCase):
         self.assertEqual(str(project.owner_id), str(self.user.id))
 
         tasks = TaskMaster.objects.filter(team=team, project=project)
-        # 6 blueprint tasks + the milestone's backing task.
-        self.assertEqual(tasks.count(), 7)
+        # Both blueprints' tasks, plus one backing task per milestone.
+        self.assertEqual(
+            tasks.count(),
+            len(STARTER_BLUEPRINT["tasks"]) + len(EXAMPLES_BLUEPRINT["tasks"]) + 2,
+        )
         # Every task belongs to the real user — no bot residue possible.
         for task in tasks:
             self.assertEqual(str(task.assignee_id), str(self.user.id))
             self.assertEqual(str(task.reporter_id), str(self.user.id))
 
-        self.assertEqual(ProjectTags.objects.filter(project=project).count(), 3)
+        self.assertEqual(
+            ProjectTags.objects.filter(project=project).count(),
+            len(STARTER_BLUEPRINT["tags"]),
+        )
         self.assertEqual(TaskDependency.objects.filter(team=team).count(), 1)
         from origin.services.guide_notes import GUIDE_FOLDER_NAME, GUIDE_NOTES
 
@@ -69,12 +77,45 @@ class StarterWorkspaceTests(BaseAPITestCase):
             ).exists()
         )
         self.assertEqual(
-            ToDoItem.objects.filter(group__team=team, group__user=self.user).count(), 2
+            ToDoItem.objects.filter(group__team=team, group__user=self.user).count(), 3
         )
         # Membership was seeded, so the client's follow-up join is a no-op.
         self.assertTrue(TeamMembers.objects.filter(team=team, attendee=self.user).exists())
         # The PM channel signal fired (per-row ProjectMembers save).
         self.assertTrue(Channel.objects.filter(project=project).exists())
+
+    def test_examples_milestone_gives_every_trade_a_worked_example(self):
+        # Signup never says what kind of work the person does, so the
+        # second milestone carries one example per trade. Asserted by
+        # name: silently losing one leaves that whole audience with an
+        # onboarding tour that reads as "not for me", which is the exact
+        # failure this milestone exists to prevent.
+        team = self._create_team(with_starter=True)
+        project = ProjectMaster.objects.get(team=team)
+
+        milestones = MilestoneMaster.objects.filter(team=team, project=project)
+        self.assertEqual(milestones.count(), 2)
+        examples = milestones.get(title=EXAMPLES_BLUEPRINT["milestone"]["title"])
+
+        # The backing task carries no milestone FK, so this is exactly
+        # the blueprint's tasks — the sub-task included, since it
+        # inherits its parent's milestone.
+        example_tasks = TaskMaster.objects.filter(milestone=examples)
+        self.assertEqual(example_tasks.count(), len(EXAMPLES_BLUEPRINT["tasks"]))
+        titles = " ".join(example_tasks.values_list("title", flat=True)).lower()
+        for trade in (
+            "engineering",
+            "planning",
+            "marketing",
+            "research",
+            "studying",
+            "operations",
+        ):
+            self.assertIn(trade, titles)
+
+        # One example is a sub-task of another, so the starter shows what
+        # a task subtree looks like and not just a flat list.
+        self.assertTrue(example_tasks.filter(parent_task_id__isnull=False).exists())
 
     def test_starter_never_touches_is_demo_and_no_bots_are_created(self):
         users_before = CustomUser.objects.count()
