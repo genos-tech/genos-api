@@ -96,17 +96,27 @@ class TeamConnectionServiceTests(CrossTeamTestCase):
         self.assertEqual(ctx.exception.code, "already_connected")
 
     def test_either_side_may_revoke(self):
+        """The team that was invited can walk away, not only the inviter."""
         conn = self.connect_a_and_b()
-        revoke_connection(conn, self.b_editor)
+        revoke_connection(conn, self.b_owner)
         conn.refresh_from_db()
         self.assertEqual(conn.status, ShareStatus.REVOKED)
         self.assertFalse(are_connected(self.team_a.team_id, self.team_b.team_id))
+
+    def test_an_editor_cannot_revoke(self):
+        """Ending a connection deletes access in two companies. Owner only."""
+        conn = self.connect_a_and_b()
+        with self.assertRaises(TeamConnectionError) as ctx:
+            revoke_connection(conn, self.b_editor)
+        self.assertEqual(ctx.exception.code, "not_the_owner")
+        conn.refresh_from_db()
+        self.assertEqual(conn.status, ShareStatus.ACTIVE)
 
     def test_an_outsider_cannot_revoke(self):
         conn = self.connect_a_and_b()
         with self.assertRaises(TeamConnectionError) as ctx:
             revoke_connection(conn, self.c_owner)
-        self.assertEqual(ctx.exception.code, "not_a_manager")
+        self.assertEqual(ctx.exception.code, "not_the_owner")
 
     def test_a_team_is_never_connected_to_itself(self):
         self.assertFalse(are_connected(self.team_a.team_id, self.team_a.team_id))

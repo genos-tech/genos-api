@@ -829,6 +829,27 @@ class GetMyTeamsView(AuthenticatedAPIView):
             )
         )
 
+        # A team you OWN, even without a membership row. `TeamMaster.owner`
+        # is the source of truth for ownership and the row is optional (see
+        # `services/member_roles`), so an owner who has none was reaching
+        # the loops below and being classified as a GUEST in their own
+        # team: narrowed roster, member-only controls hidden, and an
+        # "Owner" chip on the team profile that belonged to the other side
+        # of a share. Whatever else follows, a team you own is yours.
+        owned_team_ids = set()
+        member_team_ids = {row[0] for row in raw_my_teams}
+        for row in TeamMaster.objects.filter(owner=user_id, is_deleted=False).values_list(
+            "team_id",
+            "team_name",
+            "team_email",
+            "owner",
+            "profile_image_file_name",
+            "ts_created_at",
+        ):
+            owned_team_ids.add(row[0])
+            if row[0] not in member_team_ids:
+                raw_my_teams.append(row)
+
         # A guest has no TeamMembers row anywhere — that absence is the
         # model — so the query above returns nothing and the client has
         # no team to boot into. Add the SHELL of each team they hold a
@@ -838,11 +859,7 @@ class GetMyTeamsView(AuthenticatedAPIView):
         guest_team_ids = set()
         for row in (
             ProjectMembers.objects.filter(attendee=user_id, team__is_deleted=False)
-            .exclude(
-                team_id__in=TeamMembers.objects.filter(
-                    attendee=user_id, is_deleted=False
-                ).values_list("team_id", flat=True)
-            )
+            .exclude(team_id__in=member_team_ids | owned_team_ids)
             .values_list(
                 "team__team_id",
                 "team__team_name",
@@ -863,15 +880,13 @@ class GetMyTeamsView(AuthenticatedAPIView):
         # them entirely and the object sits in a team the client cannot
         # name or switch into. These shells are as narrow as the guest
         # ones — the roster filter below covers them too.
-        external_only = host_team_ids_for_user(user_id) - {str(t) for t in guest_team_ids}
+        external_only = host_team_ids_for_user(user_id) - {
+            str(t) for t in guest_team_ids | member_team_ids | owned_team_ids
+        }
         if external_only:
             for row in (
                 TeamMaster.objects.filter(team_id__in=external_only, is_deleted=False)
-                .exclude(
-                    team_id__in=TeamMembers.objects.filter(
-                        attendee=user_id, is_deleted=False
-                    ).values_list("team_id", flat=True)
-                )
+                .exclude(team_id__in=member_team_ids | owned_team_ids)
                 .values_list(
                     "team_id",
                     "team_name",

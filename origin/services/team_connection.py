@@ -17,11 +17,12 @@ one correct answer per operation:
     request   a manager of the REQUESTING team
     approve   a manager of the OTHER team (never the asker)
     decline   a manager of the OTHER team
-    revoke    a manager of EITHER side
+    revoke    the OWNER of either side
 
-Revoke is deliberately available to both. A connection is a mutual
-arrangement, so either party can end it without the other's agreement,
-and neither has to negotiate its way out of a share it regrets.
+Revoke is deliberately available to both sides — a connection is a mutual
+arrangement, so either party can end it without the other's agreement —
+but only to the owner, because it deletes live access across two
+companies at once. See `revoke_connection`.
 """
 
 from __future__ import annotations
@@ -202,8 +203,15 @@ def respond_to_connection(connection: TeamConnection, actor, accept: bool) -> Te
 def revoke_connection(connection: TeamConnection, actor) -> int:
     """End the relationship and every share inside it.
 
-    Returns the number of participation rows withdrawn. Either side may
-    revoke (see the module docstring).
+    Returns the number of participation rows withdrawn.
+
+    The team OWNER, on either side — not every manager. Requesting a
+    connection is a proposal the other team still has to accept, and
+    declining costs nothing; ending one deletes live access for everybody
+    in every share it carries, in both companies, with no way back but to
+    negotiate the whole thing again. That is the owner's call. Either side
+    may still make it, because a connection is mutual and neither party
+    should need the other's agreement to walk away.
 
     The cascade is the security-critical half. No read path consults
     `TeamConnection` or `ExternalGrant`, so flipping statuses without
@@ -216,18 +224,11 @@ def revoke_connection(connection: TeamConnection, actor) -> int:
         raise TeamConnectionError("not_found")
 
     actor_id = getattr(actor, "id", None)
-    lo_ok = can_manage(
-        resolve_team_role(
-            TeamMaster.objects.filter(team_id=connection.team_lo_id).first(), actor_id
-        )
-    )
-    hi_ok = can_manage(
-        resolve_team_role(
-            TeamMaster.objects.filter(team_id=connection.team_hi_id).first(), actor_id
-        )
-    )
-    if not (lo_ok or hi_ok):
-        raise TeamConnectionError("not_a_manager")
+    sides = TeamMaster.objects.filter(
+        team_id__in=[connection.team_lo_id, connection.team_hi_id]
+    ).values_list("owner_id", flat=True)
+    if not any(str(owner_id) == str(actor_id) for owner_id in sides):
+        raise TeamConnectionError("not_the_owner")
 
     withdrawn = 0
     with transaction.atomic():

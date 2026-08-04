@@ -348,17 +348,32 @@ def respond_to_grant(grant: ExternalGrant, actor, accept: bool) -> ExternalGrant
 def set_role_ceiling(grant: ExternalGrant, role_ceiling: str, actor) -> ExternalGrant:
     """Change what the guest team may hand out. Host managers only.
 
-    Lowering does NOT retroactively demote people already admitted;
-    doing so silently would be a surprise, and the host's blunt
-    instrument is revoke. The new ceiling binds every subsequent add.
+    Raising it DOES promote the people already admitted. The host raising
+    a ceiling is saying "these people may edit"; leaving the existing
+    roster read-only would mean the control appeared to do nothing, and
+    the guest team's only route to the new role would be for their
+    manager to eject each colleague and re-add them.
+
+    Lowering does NOT retroactively demote. Quietly taking write access
+    away from someone mid-edit is a worse surprise than the host having
+    to decide; their blunt instrument for that is revoke.
     """
     if grant is None:
         raise ExternalGrantError("not_found")
     if role_ceiling not in (VIEWER, EDITOR):
         raise ExternalGrantError("bad_role")
     _manager_or_raise(grant.owner_team_id, actor)
+    raising = grant.role_ceiling == VIEWER and role_ceiling == EDITOR
     grant.role_ceiling = role_ceiling
     grant.save(update_fields=["role_ceiling", "ts_updated_at"])
+    if raising:
+        # `participant_ids`, not every row on the object: the host's own
+        # people hold rows there too, and rewriting one of those through
+        # `_write_participant` would restamp a colleague as an external
+        # guest of their own project.
+        with transaction.atomic():
+            for user_id in participant_ids(grant):
+                _write_participant(grant, user_id, role_ceiling)
     return grant
 
 
@@ -458,12 +473,16 @@ def visible_shares_for_object(object_type, object_id, user) -> list[dict]:
     `canAdmit` is computed here rather than by the client so that the
     "only that guest team's managers may add people" rule has exactly one
     definition. It is never true for the host: the host may veto an
-    individual, never staff the other side.
+    individual, never staff the other side. `canSetCeiling` is its mirror
+    — the host decides how much the other team may do, and only the host.
     """
     rows = []
-    host_side = is_team_member(
-        _resolve_object_team(object_type, object_id), getattr(user, "id", None)
-    )
+    user_id = getattr(user, "id", None)
+    owner_team_id = _resolve_object_team(object_type, object_id)
+    owner_team_name = _team_name(owner_team_id)
+    host_side = is_team_member(owner_team_id, user_id)
+    owner_team = TeamMaster.objects.filter(team_id=owner_team_id).first() if host_side else None
+    host_manager = owner_team is not None and can_manage(resolve_team_role(owner_team, user_id))
     for grant in ExternalGrant.objects.filter(
         object_type=object_type,
         object_id=str(object_id),
@@ -471,7 +490,7 @@ def visible_shares_for_object(object_type, object_id, user) -> list[dict]:
         team = TeamMaster.objects.filter(team_id=grant.guest_team_id, is_deleted=False).first()
         if team is None:
             continue
-        mine = is_team_member(team.team_id, getattr(user, "id", None))
+        mine = is_team_member(team.team_id, user_id)
         if not (host_side or mine):
             continue
         rows.append(
@@ -479,18 +498,34 @@ def visible_shares_for_object(object_type, object_id, user) -> list[dict]:
                 "grantId": str(grant.id),
                 "teamId": str(team.team_id),
                 "teamName": team.team_name,
+                # Who owns the object, named rather than implied. The row
+                # used to say "You shared this" or "Shared with you" off
+                # `side` alone, which is a statement about the READER —
+                # and it read as a lie to anyone who belongs to both
+                # teams, which during a rollout is everybody testing it.
+                # Two team names cannot be wrong for any reader.
+                "ownerTeamId": str(owner_team_id) if owner_team_id else None,
+                "ownerTeamName": owner_team_name,
                 "roleCeiling": grant.role_ceiling,
                 "status": grant.status,
                 "side": "given" if host_side else "received",
                 "canAdmit": (
                     mine
                     and grant.status == ShareStatus.ACTIVE
-                    and can_manage(resolve_team_role(team, getattr(user, "id", None)))
+                    and can_manage(resolve_team_role(team, user_id))
                 ),
+                "canSetCeiling": host_manager and grant.status == ShareStatus.ACTIVE,
                 "participants": _participant_profiles(grant),
             }
         )
     return rows
+
+
+def _team_name(team_id) -> str:
+    if team_id is None:
+        return ""
+    row = TeamMaster.objects.filter(team_id=team_id).values("team_name").first()
+    return row["team_name"] if row else ""
 
 
 def _participant_profiles(grant: ExternalGrant) -> list[dict]:
@@ -552,8 +587,17 @@ def host_team_ids_for_user(user_id) -> set[str]:
         return set()
     from origin.models.common.team_models import TeamMembers
 
-    my_teams = TeamMembers.objects.filter(attendee_id=user_id, is_deleted=False).values_list(
-        "team_id", flat=True
+    # Owned teams count. `TeamMaster.owner` is the source of truth for
+    # ownership and the membership row is optional, so an owner without one
+    # would hold grants their own team was offered and see none of them.
+    my_teams = set(
+        TeamMembers.objects.filter(attendee_id=user_id, is_deleted=False).values_list(
+            "team_id", flat=True
+        )
+    ) | set(
+        TeamMaster.objects.filter(owner_id=user_id, is_deleted=False).values_list(
+            "team_id", flat=True
+        )
     )
     teams = set()
     for grant in ExternalGrant.objects.filter(

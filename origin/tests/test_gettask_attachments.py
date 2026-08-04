@@ -124,13 +124,20 @@ class TestGetTaskAttachmentModes(TestCase):
         # 1 auth-user fetch + 1 joined task row + 1 attachment prefetch +
         # 1 collaborators prefetch (one query regardless of how many
         # collaborators the task has — still O(1), never N+1)
-        # + 1 for the `can_access_task` membership check.
+        # + 1 for the `can_access_task` membership check
+        # + 1 for `align_team_to_object` reading which team owns the task.
         #
-        # That fifth query is the price of the endpoint no longer serving
-        # any task in the install to anyone who counts to its id, and it
-        # is a fixed cost, not an N+1. Here it short-circuits on the
-        # reporter match; a caller who is neither assignee nor reporter
-        # pays one or two more for the project-membership lookup.
-        with self.assertNumQueries(5):
+        # The membership check is the price of the endpoint no longer
+        # serving any task in the install to anyone who counts to its id.
+        # Here it short-circuits on the reporter match; a caller who is
+        # neither assignee nor reporter pays one or two more for the
+        # project-membership lookup.
+        #
+        # The owning-team lookup is the price of a guest of another team
+        # being able to open a task in a project shared with them at all —
+        # their request names their own team, and every filter here reads
+        # `team_id`. One indexed lookup, cached per object for five
+        # minutes, and both are fixed costs rather than N+1s.
+        with self.assertNumQueries(6):
             resp = self._get_task("&attachments=meta")
         self.assertEqual(resp.status_code, 200)

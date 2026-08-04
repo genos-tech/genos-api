@@ -340,6 +340,19 @@ class ChannelListView(AuthenticatedAPIView):
             scope = Q(team_id=team_id)
             if shared:
                 scope |= Q(id__in=list(shared.keys()))
+            # And the PM chat of a project shared with this team. A project
+            # grant admits its guests to the project's own channel (via the
+            # `ProjectMembers` -> `ChannelMember` mirror), but nothing named
+            # that channel here, so the row stayed out of the guest's
+            # sidebar. It was not merely a missing conversation: the PM chat
+            # is where a project's avatar lives and the only route into the
+            # project profile, so a shared project rendered with no icon and
+            # no way to open its settings.
+            shared_projects = external_objects_for_member(
+                ExternalGrant.ObjectType.PROJECT, team_id, user.id
+            )
+            if shared_projects:
+                scope |= Q(kind=ChannelKind.PM, project_id__in=list(shared_projects.keys()))
             qs = qs.filter(scope)
 
         channels = list(qs)
