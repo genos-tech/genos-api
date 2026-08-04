@@ -2813,10 +2813,18 @@ class AgentModelsView(AuthenticatedAPIView):
         return Response(payload)
 
 
-# Cap how many recent sessions the list endpoint returns. Keeps the
-# response small on workspaces with deep history; the UI exposes only
-# this many today (no search / no pagination — see roadmap §11).
+# Cap how many recent UNPINNED sessions the list endpoint returns. Keeps
+# the response small on workspaces with deep history; the UI browses only
+# this many (no pagination — see roadmap §11). `search` is how a user
+# reaches further back than this slice.
 _HISTORY_LIST_LIMIT = 20
+
+# Pinned sessions are returned ON TOP of that slice rather than competing
+# for its rows: a pin whose session had aged past row 20 would otherwise
+# be unreachable, which is the one thing pinning exists to prevent. Still
+# bounded — a user who pins hundreds shouldn't be able to grow the
+# response without limit.
+_PINNED_LIST_LIMIT = 50
 
 
 # `reconstruct_sources_for_run` now lives in `agent.controller` (next to the
@@ -2825,13 +2833,24 @@ _HISTORY_LIST_LIMIT = 20
 
 
 class AgentSessionsListView(AuthenticatedAPIView):
-    """GET /api/v2/agent/sessions/?team_id=<id>
+    """GET /api/v2/agent/sessions/?team_id=<id>[&search=<text>]
 
     Lists this user's recent agent conversations within `team_id` so the
-    frontend can render the History panel inside Spotlight. Read-only,
-    ACL-scoped to (team_id, user_id) — never returns another user's
-    sessions. Ordered by `-last_active_at`, capped at
-    `_HISTORY_LIST_LIMIT` rows.
+    frontend can render the ask-history sidebar (and the History panel
+    inside Spotlight). Read-only, ACL-scoped to (team_id, user_id) —
+    never returns another user's sessions.
+
+    Pinned sessions come first (newest pin first), then unpinned ones by
+    `-last_active_at`. The two are capped separately: see
+    `_PINNED_LIST_LIMIT` / `_HISTORY_LIST_LIMIT`.
+
+    `search` filters to sessions where ANY of the questions asked
+    matches, not just the first one shown on the row — the interesting
+    ask is often several turns into a conversation, and matching only
+    the row's own label would make the search look broken to the user
+    who remembers asking it. Applied across the whole retention window
+    rather than the recent slice, so it reaches sessions the sidebar
+    can't scroll to.
 
     Each row carries enough metadata to render a list item (relative
     timestamp + first-query preview + turn count) without fetching the
@@ -2845,7 +2864,8 @@ class AgentSessionsListView(AuthenticatedAPIView):
                     "created_at":      "<iso>",
                     "last_active_at":  "<iso>",
                     "first_query":     "...",  # first run's query, possibly truncated
-                    "turn_count":      int     # AgentRun count for this session
+                    "turn_count":      int,    # AgentRun count for this session
+                    "is_pinned":       bool
                 },
                 ...
             ]
@@ -2856,6 +2876,11 @@ class AgentSessionsListView(AuthenticatedAPIView):
     # small. Long queries get an ellipsis suffix — the detail view
     # has the full text.
     _FIRST_QUERY_PREVIEW_LEN = 140
+
+    # Longer terms can't match anything a user would recognise and only
+    # make the LIKE scan more expensive, so clamp rather than reject:
+    # a truncated search still returns something useful.
+    _MAX_SEARCH_LEN = 200
 
     def get(self, request):
         user_id = str(getattr(request.user, "id", ""))
@@ -2876,19 +2901,44 @@ class AgentSessionsListView(AuthenticatedAPIView):
         # removed, so an upgrade restores full history (the Slack
         # model, SUBSCRIPTION_TIERS.md §5). Permissive (None) for
         # every tier until the flip.
+        #
+        # Pinning does NOT exempt a session from this: the window is a
+        # plan boundary, and letting a pin reach past it would turn
+        # pinning into a way to buy nothing and keep everything. A pin on
+        # a session that falls out of the window survives in the DB and
+        # comes back on upgrade, like the session itself.
         history_days = get_agent_history_retention_days(user_id)
         if history_days is not None:
             sessions_qs = sessions_qs.filter(
                 last_active_at__gte=timezone.now() - timedelta(days=history_days)
             )
-        sessions_qs = sessions_qs.order_by("-last_active_at")[:_HISTORY_LIST_LIMIT]
-        sessions = list(sessions_qs)
+
+        search = (request.GET.get("search") or "").strip()[: self._MAX_SEARCH_LEN]
+        if search:
+            # `distinct()` because a session with several matching turns
+            # would otherwise come back once per matching run.
+            sessions_qs = sessions_qs.filter(runs__query__icontains=search).distinct()
+
+        # Two buckets, two caps (see the module constants). Ordering the
+        # pinned bucket by `-pinned_at` puts the most recently pinned at
+        # the top, which is where the user just looked.
+        pinned = list(
+            sessions_qs.filter(pinned_at__isnull=False).order_by("-pinned_at")[
+                :_PINNED_LIST_LIMIT
+            ]
+        )
+        recent = list(
+            sessions_qs.filter(pinned_at__isnull=True).order_by("-last_active_at")[
+                :_HISTORY_LIST_LIMIT
+            ]
+        )
+        sessions = pinned + recent
         if not sessions:
             return Response({"sessions": []})
 
         # Hydrate per-session metadata in one extra query each. With the
-        # cap above this is at most 20 round-trips; on a real workspace
-        # this is dominated by AgentRun read latency, not query count.
+        # caps above this is bounded; on a real workspace this is
+        # dominated by AgentRun read latency, not query count.
         # If history list latency ever matters, switch to a single
         # GROUP BY query. Not worth it at this scale.
         sessions_payload = []
@@ -2906,6 +2956,7 @@ class AgentSessionsListView(AuthenticatedAPIView):
                     "last_active_at": s.last_active_at.isoformat(),
                     "first_query": first_query,
                     "turn_count": turn_count,
+                    "is_pinned": s.pinned_at is not None,
                 }
             )
 
@@ -2999,6 +3050,59 @@ class AgentSessionDetailView(AuthenticatedAPIView):
                 "turns": _build_turns_payload(session),
             }
         )
+
+
+class AgentSessionPinView(AuthenticatedAPIView):
+    """POST / DELETE /api/v2/agent/sessions/<session_id>/pin/
+
+    Pin (POST) or unpin (DELETE) one of the caller's own ask-history
+    sessions, so it stays at the top of the sidebar instead of sliding
+    out of the recent slice. Both verbs are idempotent, and POST keeps
+    the ORIGINAL pin time when the session is already pinned — a
+    double-click must not reshuffle the pin order.
+
+    No `team_id`, unlike the list/detail endpoints: those enumerate a
+    team's rows and need it to scope the query, whereas this addresses
+    one session by its own id, and `user_id` is already a complete ACL
+    (a session has exactly one owner). A foreign or unknown id is a 404,
+    never "exists but not yours".
+
+    Deliberately NOT gated on the tier history window that hides old
+    sessions from the list. The window governs which conversations a
+    plan can *read*; pin state is the user's own metadata about a row
+    they already own. Gating it would also strand pins: after a
+    downgrade the user could no longer remove one.
+    """
+
+    def post(self, request, session_id: str):
+        return self._set_pinned(request, session_id, pin=True)
+
+    def delete(self, request, session_id: str):
+        return self._set_pinned(request, session_id, pin=False)
+
+    def _set_pinned(self, request, session_id: str, *, pin: bool):
+        user_id = str(getattr(request.user, "id", ""))
+        if not user_id:
+            return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        try:
+            session = AgentSession.objects.get(session_id=session_id, user_id=user_id)
+        except (AgentSession.DoesNotExist, ValidationError, ValueError):
+            # ValidationError / ValueError cover a malformed UUID; all
+            # three surface as the same 404 (see the class docstring).
+            return Response(
+                {"error": "Session not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        pinned_at = (session.pinned_at or timezone.now()) if pin else None
+        if pinned_at != session.pinned_at:
+            session.pinned_at = pinned_at
+            # `update_fields` so this can't clobber a concurrent /ask/
+            # bumping `last_active_at` on the same row.
+            session.save(update_fields=["pinned_at"])
+
+        return Response({"session_id": str(session.session_id), "is_pinned": pinned_at is not None})
 
 
 def _build_turns_payload(session: AgentSession) -> list[dict[str, Any]]:

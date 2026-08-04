@@ -93,6 +93,19 @@ class AgentSession(models.Model):
     rolling_summary_text = models.TextField(blank=True, default="")
     rolling_summary_through = models.PositiveIntegerField(default=0)
 
+    # ----- Pinned to the top of the user's ask history (null = not
+    # pinned). A column here rather than a join table like chat's `Pin`:
+    # that one exists because a channel is shared, so each user needs
+    # their own pin row, whereas a session has exactly one owner
+    # (`user_id` above) and nobody else can see it.
+    #
+    # A timestamp rather than a boolean so the sidebar can order pins by
+    # when they were pinned. Deliberately NOT indexed: the list query
+    # narrows by (team_id, user_id) on the index below first, and a
+    # user's pinned set is small enough to sort in memory — an index
+    # here would tax every session write to save nothing.
+    pinned_at = models.DateTimeField(blank=True, null=True)
+
     class Meta:
         indexes = [
             models.Index(fields=["team_id", "user_id", "-last_active_at"]),
