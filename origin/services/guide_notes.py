@@ -466,6 +466,110 @@ GUIDE_NOTES: list[tuple[str, list]] = [
         ),
     ),
     (
+        "Searching and asking: how to get better answers",
+        _body(
+            (
+                "One box, two different tools",
+                [
+                    "Cmd-K opens a box that does two jobs, and which one you "
+                    "get depends on what you type. A few words gives you "
+                    "instant keyword results — messages, tasks, notes and "
+                    "todos whose text matches. A whole question, sent with "
+                    "Enter, makes Genos read the matching material and answer "
+                    "it. Short and specific searches; a sentence asks.",
+                ],
+            ),
+            (
+                "Narrowing a search",
+                [
+                    (
+                        _B,
+                        "The chips under the box limit results by kind — "
+                        "chat, task, note, todo, or answers Genos gave you "
+                        "before. There is also a project filter and a date "
+                        "range.",
+                    ),
+                    (
+                        _B,
+                        "There is no query syntax. Quotation marks, AND, OR, "
+                        "a leading minus and field:value are all read as "
+                        "ordinary words, so reach for the chips instead of "
+                        "typing a filter. Search matches meaning as well as "
+                        "spelling, which is why a plain phrase usually beats "
+                        "keyword-guessing.",
+                    ),
+                    (
+                        _B,
+                        "Both tools are limited to what your account can "
+                        "already open. A teammate's private notes, or a "
+                        "channel you're not in, cannot show up — for you or "
+                        "for Genos.",
+                    ),
+                ],
+            ),
+            (
+                "Asking well",
+                [
+                    (
+                        _B,
+                        "Name things with @ (people) and # (projects, tasks) "
+                        "inside the question itself. \"What's left on #WRD "
+                        'before Friday?" beats "what\'s left" because it '
+                        "removes the guess about which work you mean.",
+                    ),
+                    (
+                        _B,
+                        "Ask where the material already is: a thread and a "
+                        "note each have their own Ask button, which scopes "
+                        "the question to that one conversation or document "
+                        "instead of the whole workspace.",
+                    ),
+                    (
+                        _B,
+                        "Answers carry citations. Click one to open the "
+                        "source — an answer is only as good as what it cites, "
+                        "so the citations are the part worth checking.",
+                    ),
+                    (
+                        _B,
+                        "Clicking a search result opens a preview on top of "
+                        "your place in the list, so you don't lose it. "
+                        "Cmd-click (Ctrl-click) opens the real page instead.",
+                    ),
+                    (
+                        _B,
+                        "Save a good answer as a note and it becomes "
+                        "searchable itself. Rate answers with 👍/👎.",
+                    ),
+                ],
+            ),
+            (
+                "When it can't find something",
+                [
+                    (
+                        _B,
+                        "Brand-new content takes a moment to become "
+                        "searchable. If a task you just made doesn't come up, "
+                        "wait a beat and retry before concluding it's lost.",
+                    ),
+                    (
+                        _B,
+                        "Web search is a separate thing from workspace "
+                        "search: it's a toggle in Settings → Spotlight, and "
+                        "it's included from the Core plan up. Without it, "
+                        "Genos answers only from your workspace.",
+                    ),
+                    (
+                        _B,
+                        "Earlier questions are kept in the history list on "
+                        "the Genos page, so you can reopen a past "
+                        "conversation instead of asking again from scratch.",
+                    ),
+                ],
+            ),
+        ),
+    ),
+    (
         "Notifications: in-app, push, and email",
         _body(
             (
@@ -591,6 +695,456 @@ GUIDE_NOTES: list[tuple[str, list]] = [
         ),
     ),
     (
+        "Settings: every option, and where to find it",
+        _body(
+            (
+                "Opening Settings",
+                [
+                    "The gear at the bottom of the left sidebar opens "
+                    "Settings. On a phone, it's the Account tab, then "
+                    "Settings. It opens over whatever you were doing rather "
+                    "than navigating away, so you don't lose your place. The "
+                    "sections below are its tabs, in order.",
+                ],
+            ),
+            (
+                "General",
+                [
+                    (
+                        _B,
+                        "Appearance — Light, Dark, or System (System follows "
+                        "your OS and changes with it). Separately, an accent "
+                        "colour: purple, blue, teal, emerald, amber, rose or "
+                        "slate. The phone's Account tab has a quick "
+                        "light/dark switch, but only the full setting here "
+                        "can choose System.",
+                    ),
+                    (
+                        _B,
+                        "Language — English, 日本語, 中文, العربية, हिन्दी, "
+                        "Français, Español. Arabic switches the whole layout "
+                        "right-to-left. This also sets the language your "
+                        "notification emails arrive in. Anything not yet "
+                        "translated falls back to English rather than showing "
+                        "blank.",
+                    ),
+                    (
+                        _B,
+                        "Privacy — whether to share anonymous usage "
+                        "analytics.",
+                    ),
+                ],
+            ),
+            (
+                "Plan & Usage",
+                [
+                    "Your team's plan, meters for what you've used, and the "
+                    "upgrade and billing links. This page is the authority on "
+                    "your own numbers — see the plans page of this guide for "
+                    "what each tier includes. Only a team's owner sees its "
+                    "billing section.",
+                ],
+            ),
+            (
+                "Spotlight",
+                [
+                    (
+                        _B,
+                        "Which AI model (or, on plans with it, which effort "
+                        "level) Genos uses, plus your usage so far. Some "
+                        "models are listed but not yet selectable — they show "
+                        "as coming soon rather than being hidden.",
+                    ),
+                    (
+                        _B,
+                        "Switches for AI answers in Spotlight and for web "
+                        "search. The same panel is reachable from the gear on "
+                        "the Genos page.",
+                    ),
+                ],
+            ),
+            (
+                "Chat",
+                [
+                    (
+                        _B,
+                        "Message layout: roomy bubbles, or compact rows that "
+                        "fit more on screen.",
+                    ),
+                    (
+                        _B,
+                        "Your three one-click reaction emoji.",
+                    ),
+                    (
+                        _B,
+                        "Whether double-clicking a message turns it into a "
+                        "to-do.",
+                    ),
+                ],
+            ),
+            (
+                "Tasks",
+                [
+                    (
+                        _B,
+                        "Whether the quick-add row insists on the fields your "
+                        "project marks required, or lets you fill them in "
+                        "later.",
+                    ),
+                    (
+                        _B,
+                        "Whether a task closes itself when its linked pull "
+                        "request merges (needs GitHub connected).",
+                    ),
+                    (
+                        _B,
+                        "Whether task due dates sync to Google Calendar, "
+                        "including a one-off backfill of existing tasks "
+                        "(needs Google connected, with calendar access "
+                        "granted).",
+                    ),
+                ],
+            ),
+            (
+                "Notifications, Mention groups, Custom emoji",
+                [
+                    (
+                        _B,
+                        "Notifications — the master switch, the browser "
+                        "permission prompt, per-category toggles for push and "
+                        "for email separately, your muted chats and muted "
+                        "threads/tasks/notes, and the two digests. Covered in "
+                        "full on the notifications page of this guide.",
+                    ),
+                    (
+                        _B,
+                        "Mention groups — define a name that @-mentions a set "
+                        "of people at once. Any member can create one.",
+                    ),
+                    (
+                        _B,
+                        "Custom emoji — upload your team's own. Names are "
+                        "lowercase letters, numbers, underscore, plus and "
+                        "hyphen, up to 50 characters; files up to 512 KB as "
+                        "png, jpg, gif, webp or svg. Any member can upload; "
+                        "only whoever uploaded one can delete it.",
+                    ),
+                ],
+            ),
+            (
+                "Shortcuts, Account, Integrations, Developer",
+                [
+                    (
+                        _B,
+                        "Shortcuts — a read-only list of the keyboard "
+                        "shortcuts. They aren't re-bindable.",
+                    ),
+                    (
+                        _B,
+                        "Account — export your data as a JSON file, or delete "
+                        "your account. Deleting asks you to type DELETE and "
+                        "confirm with your password, and is refused while you "
+                        "still own a team that has other members in it: hand "
+                        "that team over first.",
+                    ),
+                    (
+                        _B,
+                        "Integrations — connect Google and GitHub, and choose "
+                        "which repositories Genos may see.",
+                    ),
+                    (
+                        _B,
+                        "Developer — personal API keys and team webhooks. "
+                        "Anyone can make a key; webhooks need to be a team "
+                        "owner or editor. See the API page of this guide.",
+                    ),
+                ],
+            ),
+            (
+                "Your profile (a separate window)",
+                [
+                    "Your avatar in the sidebar opens your profile, which is "
+                    "not part of Settings: display name (up to 50 "
+                    "characters), avatar (jpg or png, size capped by your "
+                    "plan), a custom status of up to 50 characters, an "
+                    "Appear offline switch that hides your presence from "
+                    "everyone, your job title and your base country. Clicking "
+                    "anyone else's avatar opens the same window read-only, "
+                    "with a button to DM them.",
+                ],
+            ),
+            (
+                "Things people look for that aren't there",
+                [
+                    (
+                        _B,
+                        "Changing your password while signed in — there's no "
+                        "screen for it. Use the forgotten-password link on "
+                        "the sign-in page, which emails you a reset.",
+                    ),
+                    (
+                        _B,
+                        "Changing your email address — not available in the "
+                        "app; your address is shown read-only on your "
+                        "profile.",
+                    ),
+                    (
+                        _B,
+                        "A timezone picker — deliberately absent. Genos reads "
+                        "your timezone from your browser and follows it, so "
+                        "due dates and digests land on your clock wherever "
+                        "you are.",
+                    ),
+                    (
+                        _B,
+                        "Task table columns and sorting — these live on the "
+                        "task table itself, in its column settings, not in "
+                        "Settings.",
+                    ),
+                ],
+            ),
+        ),
+    ),
+    (
+        "Keyboard shortcuts, in full",
+        _body(
+            (
+                "Two conventions, and why keys differ",
+                [
+                    "Where a shortcut uses a modifier, Mac uses Cmd and "
+                    "Windows/Linux generally uses Ctrl or Alt — each shortcut "
+                    "below says which. Settings → Shortcuts shows the same "
+                    "list inside the app.",
+                ],
+            ),
+            (
+                "Anywhere in Genos",
+                [
+                    (
+                        _B,
+                        "Cmd-K (Ctrl-K) — open Spotlight. On the Genos page "
+                        "it puts the cursor in that page's own box instead of "
+                        "opening a second one on top.",
+                    ),
+                    (
+                        _B,
+                        "Escape — close Spotlight. Escape generally closes "
+                        "whatever is topmost: a menu, a window, or an "
+                        "@-mention list before the window holding it.",
+                    ),
+                    (
+                        _B,
+                        "Switch surface: hold Cmd (hold Alt on "
+                        "Windows/Linux) and tap Ctrl. Each tap moves through "
+                        "Inbox, Chat, Tasks, Notes and Genos in the order you "
+                        "last used them, so one tap is \"back to where I "
+                        "was\". Add Shift to go backwards, release the held "
+                        "key to commit, or press Escape to cancel and stay "
+                        "put.",
+                    ),
+                ],
+            ),
+            (
+                "Jump straight to an action",
+                [
+                    "Hold Ctrl and Cmd together (Ctrl and Alt on "
+                    "Windows/Linux), then a letter:",
+                    (_B, "T — go to Tasks and start a new task."),
+                    (_B, "N — go to Notes and start a new personal note."),
+                    (_B, "C — the compact calendar."),
+                    (_B, "M — create a Meet link and copy it to your clipboard."),
+                    (_B, "H — the History window."),
+                    (_B, "G — the dependency graph for the task you're previewing."),
+                ],
+            ),
+            (
+                "In the Spotlight / Genos box",
+                [
+                    (_B, "Up and Down — move through the results."),
+                    (
+                        _B,
+                        "Enter — open the highlighted result as a preview. "
+                        "With nothing highlighted, Enter sends your question "
+                        "instead.",
+                    ),
+                    (
+                        _B,
+                        "Shift-Enter — a new line inside a long question, "
+                        "without sending it.",
+                    ),
+                    (
+                        _B,
+                        "Cmd-click or Ctrl-click a result — go to the real "
+                        "page rather than previewing it.",
+                    ),
+                ],
+            ),
+            (
+                "In chat",
+                [
+                    (
+                        _B,
+                        "Cmd-Enter or Ctrl-Enter — send. Either modifier "
+                        "works on every platform. Plain Enter makes a new "
+                        "line, on purpose: it stops half-finished messages "
+                        "being sent.",
+                    ),
+                    (
+                        _B,
+                        "The same combination sends a thread reply, saves an "
+                        "edit, and posts a task comment.",
+                    ),
+                    (
+                        _B,
+                        "Cmd-click (or Alt-click) a message — open its thread "
+                        "without leaving the conversation.",
+                    ),
+                    (
+                        _B,
+                        "Cmd-Shift-Left/Right (Alt-Shift on Windows/Linux) — "
+                        "move between chat tabs; with Up/Down instead, move "
+                        "through the conversation list. Both are ignored "
+                        "while you're typing in a field.",
+                    ),
+                ],
+            ),
+            (
+                "In tasks and notes",
+                [
+                    (
+                        _B,
+                        "Quick-add row: Enter creates the task, Escape "
+                        "discards the row.",
+                    ),
+                    (
+                        _B,
+                        "The full create-task form: Cmd-Enter on Mac, "
+                        "Ctrl-Enter on Windows/Linux. This one is strict "
+                        "about the platform, unlike the chat composer which "
+                        "takes either.",
+                    ),
+                    (
+                        _B,
+                        "In any editor, three backticks then Enter starts a "
+                        "code block.",
+                    ),
+                    (
+                        _B,
+                        "In a title field, Enter finishes editing and saves.",
+                    ),
+                ],
+            ),
+        ),
+    ),
+    (
+        "Plans, limits, and what happens when you hit one",
+        _body(
+            (
+                "Where to look",
+                [
+                    "Settings → Plan & Usage shows your plan and your live "
+                    "usage; the plans page compares tiers and handles "
+                    "upgrades through Stripe. A plan applies to the whole "
+                    "team, and only the team's owner sees the billing "
+                    "section. The figures below are the shape of the tiers — "
+                    "trust the Usage page for your own current numbers.",
+                ],
+            ),
+            (
+                "What each plan includes",
+                [
+                    (
+                        _B,
+                        "Free — 20 AI asks and 10 web searches a day, 50 "
+                        "tasks and 50 notes a month, 180 days of message "
+                        "history, uploads up to 5 MB, 30 days of Genos "
+                        "conversation history, no integrations.",
+                    ),
+                    (
+                        _B,
+                        "Core — 100 asks and 25 web searches a day, 200 tasks "
+                        "and notes a month, a year of message history, 25 MB "
+                        "uploads, 180 days of Genos history, web search and "
+                        "Google Calendar.",
+                    ),
+                    (
+                        _B,
+                        "Pro — 250 asks and 60 web searches a day, 500 tasks "
+                        "and notes a month, unlimited message history, 50 MB "
+                        "uploads, a year of Genos history, GitHub as well, "
+                        "the highest effort levels, team-wide agent memory, a "
+                        "weekly proactive digest, and MCP.",
+                    ),
+                    (
+                        _B,
+                        "Max — 500 asks and 150 web searches a day, unlimited "
+                        "tasks and notes, 100 MB uploads, unlimited Genos "
+                        "history, and a daily digest.",
+                    ),
+                    (
+                        _B,
+                        "Enterprise — unlimited asks and searches, 200 MB "
+                        "uploads, arranged by contacting us rather than "
+                        "bought in-app.",
+                    ),
+                ],
+            ),
+            (
+                "Credits",
+                [
+                    (
+                        _B,
+                        "AI work also draws on a monthly credit allowance "
+                        "that comes with the plan: 5 on Free, 30 on Core, 70 "
+                        "on Pro, 150 on Max. Asking, summarizing a thread and "
+                        "summarizing a note are the things that cost.",
+                    ),
+                    (
+                        _B,
+                        "You can buy extra credits in packs of 10, 50 or 100. "
+                        "Bought credits don't expire at the end of the month "
+                        "the way the monthly allowance does.",
+                    ),
+                    (
+                        _B,
+                        "A single request is capped at 5 credits, so no one "
+                        "question can quietly eat the month.",
+                    ),
+                ],
+            ),
+            (
+                "Hitting a limit",
+                [
+                    (
+                        _B,
+                        "Daily limits reset the next day; nothing is lost, "
+                        "and the work you already did stays.",
+                    ),
+                    (
+                        _B,
+                        "History limits hide rather than delete. Messages and "
+                        "past Genos conversations older than your window stop "
+                        "appearing, and upgrading brings them back — they were "
+                        "never thrown away.",
+                    ),
+                    (
+                        _B,
+                        "An upload refused as too large is your plan's "
+                        "per-file cap, not a broken file. The cap is per file, "
+                        "not per day.",
+                    ),
+                    (
+                        _B,
+                        "What Genos may do for you also varies by plan: "
+                        "reading on Free, creating and updating from Core, "
+                        "and larger reorganizing work above that. It always "
+                        "asks before writing anything, on every plan.",
+                    ),
+                ],
+            ),
+        ),
+    ),
+    (
         "Tips, shortcuts, and getting unstuck",
         _body(
             (
@@ -654,6 +1208,330 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                     'have permission to do?", "how do sprints work?" — '
                     "and it will answer with the relevant page cited.",
                     "Questions Genos can't answer: genos.support@genosai.dev",
+                ],
+            ),
+        ),
+    ),
+    (
+        "Fixes for specific problems",
+        _body(
+            (
+                "Notifications",
+                [
+                    (
+                        _B,
+                        "Nothing arriving at all — check the browser "
+                        "permission chip in Settings → Notifications first. "
+                        "If the browser itself is blocking Genos, no setting "
+                        "in the app can override that.",
+                    ),
+                    (
+                        _B,
+                        "Nothing on an iPhone — Safari only delivers push to "
+                        "an installed app. Add Genos to your home screen, "
+                        "open it from there, and allow notifications.",
+                    ),
+                    (
+                        _B,
+                        "Quiet for one conversation only — it's probably "
+                        "muted. Settings → Notifications lists every mute you "
+                        "hold, chats and threads/tasks/notes alike, and "
+                        "unmutes from there.",
+                    ),
+                    (
+                        _B,
+                        "Too much email — push and email have separate "
+                        "category toggles, so you can keep the in-app pings "
+                        "and turn the mail off. Every notification email also "
+                        "has an unsubscribe link, and the digest has its own "
+                        "opt-out.",
+                    ),
+                    (
+                        _B,
+                        "A push you expected showed up as a quiet toast "
+                        "instead — that's deliberate. The screen you're "
+                        "actively looking at gets a toast; your other devices "
+                        "still get the push.",
+                    ),
+                ],
+            ),
+            (
+                "Access",
+                [
+                    (
+                        _B,
+                        "A project or note won't open — you're probably not a "
+                        "member. Where it's offered, use request access: the "
+                        "owner approves or declines from their Inbox.",
+                    ),
+                    (
+                        _B,
+                        "You can't invite anyone — inviting needs owner or "
+                        "editor. Ask an owner to make you an editor.",
+                    ),
+                    (
+                        _B,
+                        "The owner has gone quiet — an editor can file an "
+                        "ownership claim, and if the owner doesn't respond "
+                        "within 30 days ownership transfers. A team can't be "
+                        "stranded by one absent account.",
+                    ),
+                    (
+                        _B,
+                        "Account deletion is refused — you still own a team "
+                        "with other people in it. Transfer that team, then "
+                        "delete.",
+                    ),
+                ],
+            ),
+            (
+                "Genos and search",
+                [
+                    (
+                        _B,
+                        "It can't find something you just made — indexing "
+                        "takes a moment. Retry shortly.",
+                    ),
+                    (
+                        _B,
+                        "It says it can't see something you can see — check "
+                        "you're in the team you think you're in; the sidebar's "
+                        "team name at the top switches teams, and each team's "
+                        "content is separate.",
+                    ),
+                    (
+                        _B,
+                        "It answered from something out of date — the guide "
+                        "and your notes are ordinary notes that you can edit. "
+                        "Fix the note and the answer follows.",
+                    ),
+                    (
+                        _B,
+                        "You've run out of asks for today — the count resets "
+                        "tomorrow, and Settings → Plan & Usage shows where you "
+                        "stand.",
+                    ),
+                    (
+                        _B,
+                        "A model you want is greyed out — some are listed as "
+                        "coming soon, and the deeper effort levels need a "
+                        "higher plan.",
+                    ),
+                ],
+            ),
+            (
+                "Everything else",
+                [
+                    (
+                        _B,
+                        "An upload was refused — it's over your plan's "
+                        "per-file size cap.",
+                    ),
+                    (
+                        _B,
+                        "The page looks stale or a button does nothing — "
+                        "reload the tab. A tab left open for days keeps "
+                        "running the code it started with.",
+                    ),
+                    (
+                        _B,
+                        "You deleted a note's content by accident — open its "
+                        "version history and restore an earlier revision. "
+                        "Revisions are recorded automatically.",
+                    ),
+                    (
+                        _B,
+                        "You deleted this guide and want it back — it's "
+                        "deliberately not re-created on its own, so ask "
+                        "support to restore it.",
+                    ),
+                    (
+                        _B,
+                        "Still stuck: genos.support@genosai.dev",
+                    ),
+                ],
+            ),
+        ),
+    ),
+    (
+        "Playbooks: how different kinds of work fit Genos",
+        _body(
+            (
+                "How to read this page",
+                [
+                    "Genos doesn't assume you write software. Below is one "
+                    "starting shape per kind of work — pick the closest, "
+                    "ignore the rest. They all use the same three pieces "
+                    "(chat, tasks, notes) arranged differently, so nothing "
+                    "here needs a setting you don't already have.",
+                ],
+            ),
+            (
+                "Engineers",
+                [
+                    (
+                        _B,
+                        "One project per service or repo. Connect GitHub so "
+                        "pull requests link to tasks, and turn on closing a "
+                        "task when its PR merges — then the board keeps "
+                        "itself current.",
+                    ),
+                    (
+                        _B,
+                        "Use dependencies for real blockers: mark B blocked by "
+                        "A and Genos sets and clears B's Blocked status "
+                        "itself. The graph view shows what's actually holding "
+                        "the release.",
+                    ),
+                    (
+                        _B,
+                        "Keep design docs as task notes so the plan sits on "
+                        "the work, and ask Genos things like \"what changed "
+                        'on #API this week?" instead of reading the whole '
+                        "channel.",
+                    ),
+                ],
+            ),
+            (
+                "Product and project managers",
+                [
+                    (
+                        _B,
+                        "Milestones for dated outcomes, sprints for cadence, "
+                        "and the task table when you need a spreadsheet view. "
+                        "Save the filters you keep rebuilding as named filter "
+                        "sets and share them with the project.",
+                    ),
+                    (
+                        _B,
+                        "Define the custom fields your process needs and mark "
+                        "them required, so tasks can't arrive half-specified.",
+                    ),
+                    (
+                        _B,
+                        "Task Weight, capacity and velocity views answer \"is "
+                        'this plan real?"; a proactive digest on the higher '
+                        "plans surfaces overdue and stale work before a "
+                        "standup does.",
+                    ),
+                    (
+                        _B,
+                        'Ask for status rather than assembling it: "what\'s at '
+                        'risk before Friday?", "what did we close last '
+                        'sprint?"',
+                    ),
+                ],
+            ),
+            (
+                "Marketing",
+                [
+                    (
+                        _B,
+                        "A project per campaign or channel, with a milestone "
+                        "per launch date. Tags for medium — blog, email, "
+                        "social, paid — then filter to one at a time.",
+                    ),
+                    (
+                        _B,
+                        "Draft copy in notes so several people can write in "
+                        "the same document at once, and keep the brief as the "
+                        "task note above the drafts.",
+                    ),
+                    (
+                        _B,
+                        "The campaign's channel keeps approvals attached to "
+                        "the work; pin the final approved asset to the channel "
+                        "so nobody ships last week's version.",
+                    ),
+                ],
+            ),
+            (
+                "Research and analysis",
+                [
+                    (
+                        _B,
+                        "One note per source or interview, in a folder per "
+                        "study, and one task per open question. Notes are the "
+                        "material; tasks are what you still owe.",
+                    ),
+                    (
+                        _B,
+                        "Because Genos cites its sources, asking across a "
+                        "folder of interviews gives you an answer you can "
+                        "check — click through to the exact note before you "
+                        "quote it.",
+                    ),
+                    (
+                        _B,
+                        "Ask a single long document its own questions from the "
+                        "note's Ask button, and save the answer as a new note "
+                        "to build a summary layer over your raw material.",
+                    ),
+                ],
+            ),
+            (
+                "Students",
+                [
+                    (
+                        _B,
+                        "A project per course, a milestone per exam or "
+                        "deadline, and lecture notes in a folder per subject. "
+                        "Due dates put every course on one calendar.",
+                    ),
+                    (
+                        _B,
+                        "The daily to-do pane beside chat suits study "
+                        "sessions: it's a per-day checklist, separate from "
+                        "the real coursework tasks.",
+                    ),
+                    (
+                        _B,
+                        "Ask your own notes questions before an exam — "
+                        '"explain what I wrote about elasticity" — and use '
+                        "group chats for study groups.",
+                    ),
+                ],
+            ),
+            (
+                "Operations, back office, and support",
+                [
+                    (
+                        _B,
+                        "Recurring procedures belong in notes as checklists, "
+                        "with a task per run. Reusable task body templates "
+                        "mean each run starts from the same steps instead of "
+                        "someone's memory.",
+                    ),
+                    (
+                        _B,
+                        "One project per process — onboarding, invoicing, "
+                        "vendor reviews — with required fields for the "
+                        "details that must never be missing.",
+                    ),
+                    (
+                        _B,
+                        "Flag a message to turn a request that arrived in chat "
+                        "into a personal follow-up, and turn the ones that "
+                        "need tracking into tasks so they stop living in "
+                        "someone's head.",
+                    ),
+                    (
+                        _B,
+                        "Every task keeps an activity trail of who changed "
+                        "what and when, which is usually what an audit is "
+                        "asking for.",
+                    ),
+                ],
+            ),
+            (
+                "Whatever the work is",
+                [
+                    "The pattern underneath all of these: discussion in chat, "
+                    "commitments as tasks, durable knowledge in notes — and "
+                    "Genos reading all three so you can ask instead of "
+                    "hunting. Start with one real project rather than a "
+                    "perfect structure; the structure is easy to change "
+                    "later, and an empty workspace teaches you nothing.",
                 ],
             ),
         ),
@@ -768,6 +1646,154 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                         "API, MCP, webhooks, and every realtime event, with "
                         "working examples.",
                     ),
+                ],
+            ),
+        ),
+    ),
+    (
+        "API keys and webhooks, step by step",
+        _body(
+            (
+                "Making a key",
+                [
+                    "Settings → Developer, then create a key. You give it a "
+                    "name, choose whether it may only read or also write, and "
+                    "optionally an expiry anywhere from 1 day to 10 years. "
+                    "Keys begin with gnos_ so they're recognisable in a log.",
+                    (
+                        _B,
+                        "The key is shown once, at that moment. Copy it "
+                        "straight into wherever it's going to live; there is "
+                        "no way to read it again afterwards, only to delete it "
+                        "and make another.",
+                    ),
+                    (
+                        _B,
+                        "It acts as you — anything you can see, it can see. "
+                        "Treat it like your password: never in a public "
+                        "repository, never in code that runs in a browser.",
+                    ),
+                    (
+                        _B,
+                        "Deleting a key stops it working on its very next "
+                        "request, so it's the right response to a key you "
+                        "think has leaked.",
+                    ),
+                ],
+            ),
+            (
+                "Using it",
+                [
+                    "Send the header Authorization: ApiKey <your key>. The "
+                    "scheme is the literal word ApiKey — Bearer is for the "
+                    "app's own sign-in and is refused here, and equally a key "
+                    "cannot be used to create or delete keys. That separation "
+                    "is deliberate: a leaked key can't mint more of itself.",
+                    (
+                        _B,
+                        "GET /api/public/v1/me/ — who the key acts as, and "
+                        "with what scope. Start here to prove the key works "
+                        "before debugging anything subtler.",
+                    ),
+                    (
+                        _B,
+                        "GET /api/public/v1/projects/ — your projects.",
+                    ),
+                    (
+                        _B,
+                        "GET and POST /api/public/v1/tasks/ — list tasks, or "
+                        "create one.",
+                    ),
+                    (
+                        _B,
+                        "GET and PATCH /api/public/v1/tasks/<id>/ — read or "
+                        "update a single task.",
+                    ),
+                    (
+                        _B,
+                        "GET /api/public/v1/openapi.json — the machine-readable "
+                        "description of all of the above, and the one endpoint "
+                        "that needs no key at all.",
+                    ),
+                    (
+                        _B,
+                        "Each key is limited to 120 requests a minute. A "
+                        "personal key belongs to you rather than to one team, "
+                        "so requests have to say which team they mean — that's "
+                        "why me/ comes back with no team attached.",
+                    ),
+                ],
+            ),
+            (
+                "Webhooks",
+                [
+                    "A webhook is Genos telling your server, instead of your "
+                    "script asking on a timer. A team owner or editor adds an "
+                    "https address in Settings → Developer and picks the "
+                    "events it should receive:",
+                    (_B, "task.created, task.updated, task.completed"),
+                    (_B, "task.comment_created"),
+                    (
+                        _B,
+                        "message.created — and this one only ever covers "
+                        "channels you name explicitly. An empty list means no "
+                        "chat events, not all of them, and direct messages can "
+                        "never be sent to a webhook at all.",
+                    ),
+                    (
+                        _B,
+                        "Deliveries are recorded, so you can see what was "
+                        "actually sent. If your endpoint fails 10 times in a "
+                        "row Genos disables it rather than hammering a dead "
+                        "server — fix the endpoint and turn it back on.",
+                    ),
+                ],
+            ),
+            (
+                "MCP, for AI coding agents",
+                [
+                    "On Pro and above, point an AI coding agent at Genos and "
+                    "it can work your tasks directly. Add it as an HTTP MCP "
+                    "server at https://api.genosai.dev/api/public/v1/mcp"
+                    "?team_id=<your team's id> — no trailing slash before the "
+                    "question mark — with the same ApiKey header as above. The "
+                    "agent gets tools for reading tasks and "
+                    "notes and searching the workspace; with a write key it "
+                    "can also create tasks, update them and comment back. "
+                    "Natural-language queries beat keywords in its search "
+                    "tool, the same as they do for you.",
+                ],
+            ),
+            (
+                "Things that don't exist yet",
+                [
+                    (
+                        _B,
+                        "Public links. Nothing in Genos can be shared with "
+                        "someone who isn't signed in and permitted — a link "
+                        "you paste anywhere still checks the reader's access.",
+                    ),
+                    (
+                        _B,
+                        "Spreadsheet export. Settings → Account exports your "
+                        "own data as JSON, and a note exports as Markdown from "
+                        "its menu, but there's no CSV of tasks or chat.",
+                    ),
+                    (
+                        _B,
+                        "Slack, Notion, Jira and Asana connections. Google and "
+                        "GitHub are the two integrations that exist; links to "
+                        "other tools pasted in a task are just links.",
+                    ),
+                ],
+            ),
+            (
+                "The full reference",
+                [
+                    "Settings → Developer links to the Genos Developers page, "
+                    "which is the complete specification — every field, every "
+                    "event payload, and working examples — for all of the "
+                    "above.",
                 ],
             ),
         ),
