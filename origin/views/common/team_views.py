@@ -153,7 +153,9 @@ class TeamMasterView(AuthenticatedAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             collision = (
-                TeamMaster.objects.filter(team_name=new_name).exclude(team_id=team.team_id).exists()
+                TeamMaster.objects.filter(team_name=new_name)
+                .exclude(team_id=team.team_id)
+                .exists()
             )
             if collision:
                 return Response(
@@ -955,7 +957,9 @@ class GetMyTeamsView(AuthenticatedAPIView):
             # Union, not either/or: the same person can be a guest on a
             # project AND an external participant in a chat in the same
             # host team, and each source discloses a different slice.
-            visible = guest_visible_user_ids(gid, user_id) | external_visible_user_ids(gid, user_id)
+            visible = guest_visible_user_ids(gid, user_id) | external_visible_user_ids(
+                gid, user_id
+            )
             members_by_team[gid] = [
                 m for m in members_by_team.get(gid, []) if str(m["userId"]) in visible
             ]
@@ -1023,11 +1027,18 @@ def _external_people_rows(team_id, team_name, user_id) -> list:
     people = external_people_for_member(team_id, user_id)
     if not people:
         return []
-    icons = dict(
-        TeamMaster.objects.filter(team_id__in={p["teamId"] for p in people.values()}).values_list(
-            "team_id", "profile_image_file_name"
-        )
-    )
+    # Keyed by `str`, because `team_id` is a UUID column and the ids
+    # beside it here are strings: a UUID and its own text form are not
+    # equal keys, so the straight `dict(values_list(...))` looked up
+    # nothing and every external avatar fell back to a letter while the
+    # team NAME (looked up through a queryset filter, which does coerce)
+    # rendered fine.
+    icons = {
+        str(tid): path
+        for tid, path in TeamMaster.objects.filter(
+            team_id__in={p["teamId"] for p in people.values()}
+        ).values_list("team_id", "profile_image_file_name")
+    }
     rows = []
     users = CustomUser.objects.filter(id__in=people.keys(), is_deleted=False).values(
         "id",

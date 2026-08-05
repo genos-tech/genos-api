@@ -66,6 +66,18 @@ class TheHostSeesTheGuestTeamsPeopleTests(CrossTeamTestCase):
         self.assertEqual(row["userName"], self.b_owner.username)
         self.assertEqual(row["userEmail"], self.b_owner.email)
 
+    def test_their_teams_picture_travels_with_them(self):
+        """The badge on their avatar is their team's own picture, and a
+        letter only when that team has none. A UUID column keyed a dict of
+        icons that was looked up by the string form of the same id, so it
+        matched nothing and every external avatar wore a letter while the
+        team's NAME beside it was right — the mismatch that made it look
+        like the picture simply wasn't being sent."""
+        self.team_b.profile_image_file_name = "teams/team-b.png"
+        self.team_b.save(update_fields=["profile_image_file_name"])
+        row = self._roster(self.a_owner)[str(self.b_owner.id)]
+        self.assertEqual(row["homeTeamImgPath"], "teams/team-b.png")
+
     def test_they_read_as_a_guest_rather_than_a_teammate(self):
         self.assertEqual(self._roster(self.a_owner)[str(self.b_owner.id)]["memberRole"], "guest")
 
@@ -196,6 +208,51 @@ class SharedWorkFillsTheTeamWideListsTests(CrossTeamTestCase):
         res = self.client.get(TEAM_TASKS, {"team_id": str(self.team_c.team_id)})
         self.assertEqual(res.status_code, 200, res.data)
         self.assertEqual(res.data, [])
+
+
+class TheProjectListSaysHowManyRowsToHoldTests(CrossTeamTestCase):
+    """A delta answer has to be checkable, or a wrong cache is permanent.
+
+    The client stores a watermark meaning "everything older is already
+    here" and afterwards only ever asks what changed. Nothing in a later
+    answer can contradict that — an unchanged row is never mentioned — so
+    a client that took a watermark without the rows shows an empty table
+    forever. It happened to every guest whose share predated the fix, and
+    survived it. `totalCount` is the one number that lets them notice.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.grant = self.active_project_grant()
+        for title in ("Old milestone", "Old child", "Old subtask"):
+            TaskMaster.objects.create(
+                team=self.team_a, project=self.project, title=title, status="Open"
+            )
+
+    def _tasks(self, user, **extra):
+        self.authenticate(user)
+        params = {"team_id": str(self.team_b.team_id), "project_id": str(self.project.project_id)}
+        params.update(extra)
+        res = self.client.get("/api/v2/task/getProjectTasks/", params)
+        self.assertEqual(res.status_code, 200, res.data)
+        return res.data["data"]
+
+    def test_an_answer_about_changes_says_how_many_rows_there_are(self):
+        """Asked what changed since a moment when nothing has, the guest is
+        told nothing changed AND that they should be holding three rows."""
+        data = self._tasks(self.b_owner, since="2999-01-01T00:00:00Z")
+        self.assertEqual(data["tasks"], [])
+        self.assertEqual(data["totalCount"], 3)
+
+    def test_a_full_answer_is_its_own_count(self):
+        data = self._tasks(self.b_owner)
+        self.assertEqual(len(data["tasks"]), 3)
+        self.assertNotIn("totalCount", data)
+
+    def test_the_count_is_the_hosts_whole_project(self):
+        """Not "the rows filed under the team asking" — that is zero for a
+        guest, and a zero target can never prompt anyone to ask again."""
+        self.assertEqual(self._tasks(self.b_owner, since="2999-01-01T00:00:00Z")["totalCount"], 3)
 
 
 class PresenceReachesTheOtherTeamTests(CrossTeamTestCase):
