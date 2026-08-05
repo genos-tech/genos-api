@@ -20,6 +20,7 @@ from origin.services.milestone_service import (
 )
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_collaborators import sync_task_collaborators
+from origin.services.task_project_move import milestone_subtree_task_ids, relocate_tasks
 from origin.services.thread_link import find_thread_link_conflict
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import resolve_group_members
@@ -348,6 +349,29 @@ class MilestoneView(AuthenticatedAPIView):
         if not is_project_member(milestone.project_id, request.user.id):
             return _deny_not_found("Milestone")
 
+        # Project move. A milestone is the top of its own hierarchy, so
+        # unlike a sub-task it may change project — and everything filed
+        # under it moves with it (see `milestone_subtree_task_ids`).
+        # Resolved before the transaction so a bad destination 404s without
+        # half-applying the rest of the patch.
+        source_project_id = milestone.project_id
+        source_team_id = milestone.team_id
+        project_move = None
+        if request.data.get("project_id") not in (None, "", "null"):
+            try:
+                dest_project = ProjectMaster.objects.get(
+                    project_id=request.data.get("project_id"), is_deleted=False
+                )
+            except (ProjectMaster.DoesNotExist, ValueError, TypeError):
+                return _deny_not_found("Project")
+            # Membership is checked against the DESTINATION as well as the
+            # source above — otherwise naming a project id would file a
+            # milestone into a project (in any team) the caller can't reach.
+            if not is_project_member(dest_project.project_id, request.user.id):
+                return _deny_not_found("Project")
+            if str(dest_project.project_id) != str(source_project_id):
+                project_move = dest_project
+
         # Validate custom field values BEFORE the transaction below —
         # rejecting them mid-transaction (after milestone.save()) would
         # return a 400 for a patch that had already half-applied.
@@ -367,7 +391,19 @@ class MilestoneView(AuthenticatedAPIView):
             # Sprint move support: explicit `sprint_id` key (including
             # `None`) is honored; absent key leaves the sprint as-is.
             sprint_changed = False
-            if "sprint_id" in request.data:
+            if project_move is not None:
+                milestone.project = project_move
+                milestone.team_id = project_move.team_id
+                # Sprints are defined per project, so whatever sprint this
+                # milestone sits in does not exist in the destination and no
+                # mapping between the two is meaningful. It lands unplanned
+                # and the user re-picks a sprint there. Any `sprint_id` in
+                # the same payload is ignored for the same reason — it names
+                # a sprint in one project or the other, and both are wrong.
+                milestone.sprint = None
+                # Fans the cleared sprint out to the member tasks below.
+                sprint_changed = True
+            elif "sprint_id" in request.data:
                 sprint_changed = True
                 new_sprint_id = request.data.get("sprint_id")
                 if new_sprint_id in (None, "null", ""):
@@ -408,6 +444,13 @@ class MilestoneView(AuthenticatedAPIView):
             if "due_date" in request.data:
                 milestone.due_date = _parse_iso_date(request.data.get("due_date"))
 
+            if project_move is not None:
+                # Tags are project-scoped rows, and another tenant's labels
+                # once a team boundary is crossed. Cleared after the field
+                # loop so a `tags` value in the same payload can't reinstate
+                # the source project's labels.
+                milestone.tags = None
+
             milestone.save()
             _sync_backing_task(milestone)
 
@@ -446,6 +489,23 @@ class MilestoneView(AuthenticatedAPIView):
             if "assignee_ids" in request.data:
                 self._sync_assignees(milestone, request.data.get("assignee_ids") or [])
 
+            # Carry the milestone's world into the destination project.
+            # LAST in the transaction: `_sync_backing_task` above may have
+            # only just created the backing task (legacy rows), and it
+            # writes the backing row wholesale — so the project / team /
+            # per-project number this settles have to be written after it.
+            if project_move is not None:
+                relocate_tasks(
+                    milestone_subtree_task_ids(milestone),
+                    project_id=milestone.project_id,
+                    team_id=milestone.team_id,
+                    clear_sprint=True,
+                )
+                # The assignee join denormalizes the team for scoped reads.
+                MilestoneAssignees.objects.filter(milestone=milestone).update(
+                    team_id=milestone.team_id
+                )
+
         # Re-read with prefetch to render the latest assignee list.
         milestone = (
             MilestoneMaster.objects.prefetch_related(
@@ -457,8 +517,13 @@ class MilestoneView(AuthenticatedAPIView):
         # `_sync_backing_task` mirrors most milestone fields onto the
         # backing TaskMaster row, and the sprint-changed branch updates
         # every milestone-linked task. Drop the project-tasks cache so
-        # the table reflects the changes on next read.
+        # the table reflects the changes on next read. A project move also
+        # emptied the SOURCE project's table, keyed by the team that owned
+        # it before the move (which differs from the destination's team when
+        # either project is externally shared).
         invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
+        if project_move is not None:
+            invalidate_project_tasks_cache(source_team_id, source_project_id)
 
         # Compute @mention delta for the description so the FE can emit
         # `task_body_mention` and Flask can broadcast live activity rows.
