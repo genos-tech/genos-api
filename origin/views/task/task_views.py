@@ -30,6 +30,10 @@ from origin.services.task_cache import (
 )
 from origin.services.task_collaborators import sync_task_collaborators
 from origin.services.task_comment_fanout import fan_out_task_comment
+from origin.services.task_project_move import (
+    collect_descendant_task_ids as _collect_descendant_task_ids,
+)
+from origin.services.task_project_move import relocate_task_satellites, relocate_tasks
 from origin.services.thread_link import find_thread_link_conflict
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
@@ -135,32 +139,7 @@ def _bridge_milestone_to_parent(task, requested_milestone_id, parent_task_id):
         task.save(update_fields=update_fields)
 
 
-def _collect_descendant_task_ids(root_task_id, depth_limit=10):
-    """Every task below `root_task_id` in the `parent_task_id` chain
-    (the root itself excluded).
-
-    BFS down the chain with a depth cap to defang any cyclic / corrupt
-    parent_task_id loops that might exist in the wild. The cap is
-    generous (10) because real task hierarchies are shallow.
-    """
-    collected = set()
-    frontier = {root_task_id}
-    for _ in range(depth_limit):
-        if not frontier:
-            break
-        children = set(
-            TaskMaster.objects.filter(parent_task_id__in=frontier)
-            .exclude(task_id__in=collected | {root_task_id})
-            .values_list("task_id", flat=True)
-        )
-        if not children:
-            break
-        collected |= children
-        frontier = children
-    return collected
-
-
-def _cascade_project_to_subtasks(root_task_id, project_id):
+def _cascade_project_to_subtasks(root_task_id, project_id, team_id):
     """Move a task's descendants into `project_id` alongside it.
 
     A task's identity is project-scoped — its `<CODE>-<n>` display id,
@@ -168,30 +147,42 @@ def _cascade_project_to_subtasks(root_task_id, project_id):
     behind keep the old project's ids and keep showing in the old
     project's table under a parent that is no longer there.
 
-    Numbers are re-claimed rather than carried: they're unique per
-    project, so a child's number can already be taken in the destination
-    — the same collision the moved task itself hits. Milestone / sprint
-    links are cleared by the milestone cascade the caller runs; they
-    point at rows the OLD project owns.
+    `team_id` rides along because the destination project may be owned by
+    ANOTHER team (an externally shared project), and the task list is read
+    with both columns. See `origin/services/task_project_move.py` for the
+    rest of what a move has to carry.
 
     Only descendants are touched. If the moved task itself has a parent,
     that parent stays behind and the cross-project edge survives — see
     the caller.
     """
-    descendants = _collect_descendant_task_ids(root_task_id)
-    if not descendants:
-        return
-    # Null every number BEFORE re-claiming. A child still holding the
-    # source project's number can collide with a row already in the
-    # destination, and NULL is exempt from the unique constraint — the
-    # same null-then-reclaim the moved task uses.
-    TaskMaster.objects.filter(task_id__in=descendants).update(
-        project_id=project_id, project_task_number=None
+    relocate_tasks(
+        _collect_descendant_task_ids(root_task_id),
+        project_id=project_id,
+        team_id=team_id,
     )
-    # Re-fetch AFTER the bulk update so each instance carries the new
-    # project — `claim_project_task_number` counts within `project_id`.
-    for child in TaskMaster.objects.filter(task_id__in=descendants):
-        claim_project_task_number(child)
+
+
+def _is_sub_task(task) -> bool:
+    """Is this task nested under an ORDINARY task?
+
+    Only a milestone or a top-level task may change project. A task
+    hanging directly off a milestone's backing row counts as top-level:
+    the milestone is its container, not its parent in the sub-task sense,
+    and it leaves that milestone behind when it moves.
+
+    A dangling `parent_task_id` (parent hard-deleted) reads as top-level —
+    the same fallback `_resolve_root_task_id` makes — so a move is never
+    blocked on data we can no longer resolve.
+    """
+    if task.parent_task_id is None or task.is_milestone:
+        return False
+    parent_is_milestone = (
+        TaskMaster.objects.filter(task_id=task.parent_task_id)
+        .values_list("is_milestone", flat=True)
+        .first()
+    )
+    return parent_is_milestone is False
 
 
 def _cascade_tree_position_to_subtasks(task, depth_limit=10):
@@ -717,11 +708,63 @@ class TaskMasterView(AuthenticatedAPIView):
         # here — `serializer.save()` below mutates `task` in place, so the
         # old project id is unrecoverable afterwards.
         old_project_id = task.project_id
+        # The SOURCE project's team, which is not necessarily the moved
+        # row's team once the move lands: the destination may be an
+        # externally shared project owned by another team. Captured for the
+        # source-side cache invalidation at the end.
+        old_team_id = task.team_id
         project_changed = (
             "project" in update_data
             and update_data["project"] is not None
             and str(update_data["project"]) != str(old_project_id)
         )
+
+        if project_changed:
+            try:
+                dest_project = ProjectMaster.objects.get(
+                    project_id=update_data["project"], is_deleted=False
+                )
+            except (ProjectMaster.DoesNotExist, ValueError, TypeError):
+                return Response(
+                    {"error": "Destination project not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            # `can_access_task` above authorizes the SOURCE only. Without
+            # this, naming any project id in the payload filed the task
+            # into a project — in any team — the caller has no membership
+            # of. 404 rather than 403: project ids are sequential.
+            if not is_project_member(dest_project.project_id, request.user.id):
+                return Response(
+                    {"error": "Destination project not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            # Only a milestone or a top-level task may change project; a
+            # sub-task follows its parent. Moving one on its own left it
+            # nested under a `parent_task_id` in the project it came from,
+            # so the destination's table — which nests rows under their
+            # parent — had nowhere to draw it and the row was invisible in
+            # both projects.
+            #
+            # The create form's scaffold row is exempt: it is POSTed under
+            # whatever project the page was showing, so finalizing it in a
+            # different project is a "move" of a task that does not exist
+            # to the user yet. `is_init_task` is still True at this point —
+            # the finalize PUT is what clears it.
+            if not task.is_init_task and _is_sub_task(task):
+                return Response(
+                    {
+                        "error": "A sub-task follows its parent task's project.",
+                        "code": "subtask_project_move_forbidden",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            # The row's team follows its project. An externally shared
+            # project is owned by the HOST team, and `GetProjectTasksView`
+            # filters on `team` AND `project` — a moved row that kept its
+            # old team matched neither project's list, which is what made
+            # a move into (or out of) a shared project look like it did
+            # nothing at all.
+            update_data["team"] = dest_project.team_id
 
         # `project_task_number` is only unique WITHIN a project, so it can't
         # ride along on a move: re-sending the source project's number with
@@ -875,16 +918,24 @@ class TaskMasterView(AuthenticatedAPIView):
             # and their per-project numbers to move.
             if project_changed:
                 task.refresh_from_db()
-                _cascade_project_to_subtasks(task.task_id, task.project_id)
+                _cascade_project_to_subtasks(task.task_id, task.project_id, task.team_id)
+                # The moved row's own columns were written by the serializer
+                # above; this carries the rows keyed to it (its notes, its
+                # dependency edges) across the same boundary.
+                relocate_task_satellites(
+                    {task.task_id}, project_id=task.project_id, team_id=task.team_id
+                )
 
             # Drop the project-tasks cache so the next sidebar fetch
             # reflects the update. `task` carries the post-save project, so
             # this clears the destination; a move must also clear the SOURCE
             # project, or the moved task lingers in its cached list for the
-            # full TTL.
+            # full TTL. The source is keyed by the team that owned it BEFORE
+            # the move — a cross-team move otherwise invalidates a key
+            # nothing ever wrote.
             invalidate_for_task(task)
             if project_changed:
-                invalidate_project_tasks_cache(task.team_id, old_project_id)
+                invalidate_project_tasks_cache(old_team_id, old_project_id)
 
             return Response(
                 {
@@ -897,6 +948,13 @@ class TaskMasterView(AuthenticatedAPIView):
                     # so the live activity chip can render the friendly id
                     # without waiting for the next REST refetch.
                     "task": {**serializer.data, "displayId": task.display_id},
+                    # Set when this PUT MOVED the task between projects. Both
+                    # projects' task lists changed by more than the one row
+                    # the client sent — the whole sub-tree came along and
+                    # every moved row was renumbered — and by the time the
+                    # response is read, only the server still knows where the
+                    # task came from. Clients use it to re-pull both.
+                    "movedFromProjectId": old_project_id if project_changed else None,
                     "newly_mentioned_user_ids": newly_mentioned_user_ids,
                     "all_mentioned_user_ids": all_mentioned_user_ids,
                     "removed_user_ids": removed_user_ids,
