@@ -40,6 +40,57 @@ def add_team_member(team_id, attendee_id) -> None:
     TeamMembers.objects.create(team_id=team_id, attendee_id=attendee_id)
 
 
+def drop_in_team_access(team_id, attendee_id) -> None:
+    """Give up the access the departing membership underwrote INSIDE the team.
+
+    `TeamMembers` is not what most reads check. A project asks
+    `ProjectMembers`, a channel asks `ChannelMember`, a team folder asks
+    `NoteFolderPermission` — each keyed on the user and the object, none
+    of them on the membership row. So a departure that stopped at the
+    membership row left every one of those rows granting exactly what it
+    granted before, and the project rows did worse than keep access:
+    `GetMyTeamsView` synthesizes a GUEST SHELL for any team the caller
+    holds a `ProjectMembers` row in, so the team someone just left
+    reappeared in their switcher with its projects still open. Same rule
+    as `drop_team_member_participation`, applied to the near side.
+
+    Rows a cross-team grant wrote are left alone where the table records
+    that provenance (`NoteFolderPermission.via_group_type`): those are
+    underwritten by ANOTHER team's roster and are that grant's business,
+    not this departure's. Channel and project rows carry no provenance
+    column — one row serves native and granted access alike — so they
+    go, and the guest team's managers can re-admit through
+    `add_external_participants`, which is the path that wrote them.
+    Erring toward revoking is deliberate: a row wrongly kept is silent
+    access after leaving, a row wrongly dropped is a re-invite.
+    """
+    from origin.models.chat.unified_models import ChannelMember
+    from origin.models.note.common_note_models import NoteFolderPermission
+    from origin.models.project.prj_models import ProjectMembers
+
+    # Scoped by the PROJECT's team rather than the row's denormalized
+    # `team_id`, which is nullable. A hard delete because the table has no
+    # `is_deleted` column, and the `post_delete` receiver on it soft-deletes
+    # the matching PM `ChannelMember` row (`signals/pm_channel_signals.py`).
+    ProjectMembers.objects.filter(project__team_id=team_id, attendee_id=attendee_id).delete()
+
+    # Every channel of the team at once — GM, PM, DM, note chats. Soft,
+    # because that is this table's convention, and the re-entry paths all
+    # un-delete in place (`ChannelMembersView.post`, the DM reopen in
+    # `channel_views`, the PM backfill receiver).
+    ChannelMember.objects.filter(
+        channel__team_id=team_id, user_id=attendee_id, is_deleted=False
+    ).update(is_deleted=True)
+
+    # Keyed on the `team` column rather than the folder's, because that is
+    # the column the read path resolves through (`load_my_folder_grants`
+    # filters `team=`), so it is exactly the set of rows that can grant
+    # anything in this team.
+    NoteFolderPermission.objects.filter(team_id=team_id, user_id=attendee_id).exclude(
+        via_group_type="external_grant"
+    ).delete()
+
+
 def remove_team_member(team_id, attendee_id) -> int:
     """Soft-delete a membership row and strip the access it underwrote.
 
@@ -47,13 +98,16 @@ def remove_team_member(team_id, attendee_id) -> int:
     un-deletes rather than inserting a duplicate, which the unique
     constraint would refuse.
 
-    The cascade is the part that is easy to miss. Under cross-team
-    sharing a team's roster is the authority on who may reach ANOTHER
-    team's shared objects — the guest team's managers admit their own
-    people, and nothing re-checks that at read time — so a departure that
-    stopped at this row would leave someone who quit team B holding
-    access to team A's project indefinitely. Returns the number of
-    cross-team participation rows withdrawn.
+    The cascade is the part that is easy to miss, and it runs in two
+    directions. Outward, under cross-team sharing a team's roster is the
+    authority on who may reach ANOTHER team's shared objects — the guest
+    team's managers admit their own people, and nothing re-checks that at
+    read time — so stopping at this row would leave someone who quit team
+    B holding access to team A's project indefinitely. Inward, the team's
+    own projects, channels and note folders each keep their own
+    membership row, and those outlive the departure too; see
+    `drop_in_team_access`. Returns the number of cross-team participation
+    rows withdrawn.
 
     Deliberately a function call rather than a `post_save` signal on
     `TeamMembers`: a security cascade should be readable at the point the
@@ -68,6 +122,7 @@ def remove_team_member(team_id, attendee_id) -> int:
         if member is not None:
             member.is_deleted = True
             member.save(update_fields=["is_deleted", "ts_updated_at"])
+        drop_in_team_access(team_id, attendee_id)
         return drop_team_member_participation(team_id, attendee_id)
 
 
