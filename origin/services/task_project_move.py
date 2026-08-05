@@ -23,6 +23,8 @@ from django.utils import timezone
 
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster, claim_project_task_number
+from origin.views.utils.foreign_team_scope import forget_object_team
+from origin.views.utils.note_role import NOTE_TYPE_TASK
 
 logger = logging.getLogger(__name__)
 
@@ -126,10 +128,13 @@ def relocate_tasks(
 
 
 def relocate_task_satellites(task_ids, *, project_id, team_id) -> None:
-    """Carry the rows keyed to a task across the project boundary with it.
+    """Carry everything else keyed to a task across the boundary with it.
 
     Split from `relocate_tasks` for the endpoint that writes the moved
-    task's own columns through a serializer and only needs this half.
+    task's own columns through a serializer and only needs this half —
+    which makes this the one function BOTH move paths run over every id
+    they touch, and therefore the place for anything that has to be
+    settled per moved task rather than per move.
     """
     task_ids = {int(task_id) for task_id in task_ids if task_id is not None}
     if not task_ids:
@@ -138,10 +143,20 @@ def relocate_task_satellites(task_ids, *, project_id, team_id) -> None:
     # tree is read with `team=<id>, project__in=<ids>` — so a note left
     # behind disappears from both projects' trees while still being
     # reachable from the task it hangs off.
-    TaskNoteMaster.objects.filter(task_id__in=task_ids).update(
-        project_id=project_id, team_id=team_id
-    )
+    notes = TaskNoteMaster.objects.filter(task_id__in=task_ids)
+    moved_note_ids = list(notes.values_list("note_id", flat=True))
+    notes.update(project_id=project_id, team_id=team_id)
     _settle_dependencies(task_ids, team_id=team_id)
+    # A move is the one thing in the product that changes which team an
+    # object belongs to, and the request-scoping layer caches that answer
+    # for five minutes on the premise that nothing does. Left stale, it
+    # hides the move from exactly the requests that have to know about it
+    # — see `forget_object_team`. Both kinds of row this function has just
+    # rewritten are cached under that premise.
+    for task_id in task_ids:
+        forget_object_team("task", task_id)
+    for note_id in moved_note_ids:
+        forget_object_team("note", note_id, NOTE_TYPE_TASK)
 
 
 def _settle_dependencies(task_ids, *, team_id) -> None:

@@ -22,6 +22,7 @@ no sprint because sprints are defined per project.
 from datetime import date
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -38,6 +39,11 @@ User = get_user_model()
 
 class ProjectMoveTestBase(TestCase):
     def setUp(self):
+        # `foreign_team_scope` caches which team an object belongs to, and
+        # the test cache is a single in-process dict that outlives each
+        # case while the rows roll back — so task id 1 from the previous
+        # test would answer for task id 1 here.
+        cache.clear()
         self.client = APIClient()
         self.user = User.objects.create_user(
             username="mover", email="mover@move.test", password="testpass123"
@@ -88,6 +94,18 @@ class ProjectMoveTestBase(TestCase):
 
     def _put(self, payload):
         return self.client.put("/api/v2/task/", payload, format="json")
+
+    def _open_task(self, task):
+        """Reload one task the way the client does after a save: with the
+        team the user is VIEWING, which stays their own across a move."""
+        return self.client.get(
+            "/api/v2/task/getTask/",
+            {
+                "team_id": self.team.team_id,
+                "project_id": task.project_id,
+                "task_id": task.task_id,
+            },
+        )
 
     def _move_task(self, task, dest_project, **extra):
         return self._put(
@@ -338,6 +356,24 @@ class CrossTeamTaskMoveTests(ProjectMoveTestBase):
         self.assertEqual(res.status_code, 200, res.data)
         return {row["id"] for row in res.data["data"]["tasks"]}
 
+    def _child_task_ids(self, parent):
+        res = self.client.get(
+            "/api/v2/task/childTasks/",
+            {
+                "team_id": self.team.team_id,
+                "project_id": parent.project_id,
+                "current_task_id": parent.task_id,
+            },
+        )
+        self.assertEqual(res.status_code, 200, res.data)
+        return {row["id"] for row in res.data}
+
+    def _open_note(self, note):
+        return self.client.get(
+            "/api/v2/note/task/single/",
+            {"team_id": self.team.team_id, "note_id": note.note_id},
+        )
+
     def test_move_into_a_shared_project_takes_the_team_with_it(self):
         task = self._make_task(self.project_a)
 
@@ -376,6 +412,77 @@ class CrossTeamTaskMoveTests(ProjectMoveTestBase):
         child.refresh_from_db()
         self.assertEqual(str(child.team_id), str(self.host_team.team_id))
         self.assertIn(str(child.task_id), self._project_task_ids(self.shared_project))
+
+    def test_the_moved_task_can_still_be_opened_afterwards(self):
+        """A 200 on the move, then a 400 on the client's own reload of the
+        task it had open: `GET /task/getTask/ 400 (Bad Request)`.
+
+        Opening the task BEFORE the move is the whole test. It fills
+        `foreign_team_scope`'s object -> team cache with the team the task
+        is about to leave, and that cached answer then equals the `team_id`
+        the client keeps sending — so the request looks self-consistent, no
+        rewrite happens, and the view filters on a team the task left five
+        seconds ago. The move had worked; only reading it back failed.
+        """
+        task = self._make_task(self.project_a, title="moving")
+        self.assertEqual(self._open_task(task).status_code, 200)
+
+        self._move_task(task, self.shared_project)
+
+        task.refresh_from_db()
+        res = self._open_task(task)
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data[0]["id"], task.task_id)
+
+    def test_the_task_can_still_be_opened_after_it_moves_back_out(self):
+        """The same staleness inverted: the cached team is now the one the
+        task LEFT, so the layer rewrites a request that was already right
+        and the read misses in the other direction."""
+        task = self._make_task(self.shared_project, title="going home")
+        self.assertEqual(self._open_task(task).status_code, 200)
+
+        self._move_task(task, self.project_a)
+
+        task.refresh_from_db()
+        res = self._open_task(task)
+        self.assertEqual(res.status_code, 200, res.data)
+
+    def test_a_sub_task_that_came_along_can_be_opened_too(self):
+        """The riders' teams are rewritten by a bulk `.update()`, which is
+        exactly the kind of write no signal fires for."""
+        root = self._make_task(self.project_a, title="root")
+        child = self._make_task(self.project_a, title="child", parent_task_id=root.task_id)
+        self.assertEqual(self._open_task(child).status_code, 200)
+
+        self._move_task(root, self.shared_project)
+
+        child.refresh_from_db()
+        self.assertEqual(self._open_task(child).status_code, 200)
+
+    def test_a_note_on_the_moved_task_can_still_be_opened(self):
+        """The note's own team is rewritten by the same move, and the note
+        read is scoped the same way the task read is."""
+        task = self._make_task(self.project_a, title="documented")
+        note = TaskNoteMaster.objects.create(
+            team=self.team, project=self.project_a, owner=self.user, task=task, title="N"
+        )
+        self.assertEqual(self._open_note(note).status_code, 200)
+
+        self._move_task(task, self.shared_project)
+
+        self.assertEqual(self._open_note(note).status_code, 200)
+
+    def test_the_moved_tasks_child_list_still_answers(self):
+        """What the preview's sub-task block reads. It asks by project, so
+        it is the destination project's team that has to be found here."""
+        root = self._make_task(self.project_a, title="root")
+        child = self._make_task(self.project_a, title="child", parent_task_id=root.task_id)
+        self._child_task_ids(root)
+
+        self._move_task(root, self.shared_project)
+
+        root.refresh_from_db()
+        self.assertEqual(self._child_task_ids(root), {child.task_id})
 
     def test_dependency_edges_that_would_straddle_teams_are_dropped(self):
         """`TaskDependency` allows cross-project edges but not cross-team
@@ -550,12 +657,15 @@ class CrossTeamMilestoneMoveTests(ProjectMoveTestBase):
             parent_task_id=self.milestone.task_id,
         )
 
-    def test_milestone_and_its_tasks_take_the_host_team(self):
-        res = self.client.patch(
+    def _move_milestone(self):
+        return self.client.patch(
             f"/api/v2/milestone/{self.milestone.milestone_id}/",
             {"project_id": self.shared_project.project_id},
             format="json",
         )
+
+    def test_milestone_and_its_tasks_take_the_host_team(self):
+        res = self._move_milestone()
 
         self.assertEqual(res.status_code, 200, res.data)
         self.milestone.refresh_from_db()
@@ -574,3 +684,26 @@ class CrossTeamMilestoneMoveTests(ProjectMoveTestBase):
         ids = {row["id"] for row in listed.data["data"]["tasks"]}
         self.assertIn(str(self.member.task_id), ids)
         self.assertIn(str(self.milestone.task_id), ids)
+
+    def test_the_backing_task_can_still_be_opened_after_the_move(self):
+        """The reported 400, in the flow that produced it: the preview
+        reloads the milestone's backing task the moment the patch lands,
+        with the team the user is still viewing. Reading it beforehand is
+        what the open preview already did, and what leaves a stale answer
+        behind in the object -> team cache."""
+        backing = TaskMaster.objects.get(task_id=self.milestone.task_id)
+        self.assertEqual(self._open_task(backing).status_code, 200)
+
+        self._move_milestone()
+
+        backing.refresh_from_db()
+        res = self._open_task(backing)
+        self.assertEqual(res.status_code, 200, res.data)
+
+    def test_a_task_in_the_milestone_can_still_be_opened_after_the_move(self):
+        self.assertEqual(self._open_task(self.member).status_code, 200)
+
+        self._move_milestone()
+
+        self.member.refresh_from_db()
+        self.assertEqual(self._open_task(self.member).status_code, 200)

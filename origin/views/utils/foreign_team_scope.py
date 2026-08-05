@@ -41,7 +41,10 @@ This is a substitution, never a grant:
   rewriting it would invert the meaning of the call.
 
 Cost is one indexed lookup per request that carries both a `team_id` and
-an object id, cached briefly because an object's team does not change.
+an object id, cached briefly. An object's team is *nearly* immutable — the
+one thing that rewrites it is a move into a project another team owns, so
+whatever performs such a move has to call `forget_object_team`. See its
+docstring for what a stale entry does.
 """
 
 from __future__ import annotations
@@ -103,9 +106,29 @@ def _note_type(request) -> int:
     return _NOTE_PERSONAL
 
 
+def _cache_key(kind: str, object_id, note_type: int) -> str:
+    return f"objteam:{kind}:{note_type if kind == 'note' else ''}:{object_id}"
+
+
+def forget_object_team(kind: str, object_id, note_type: int = _NOTE_PERSONAL) -> None:
+    """Drop the cached owning team for one object, after it changed teams.
+
+    A stale entry here is worse than no cache at all: the rewrite is
+    skipped precisely when it is needed. A task moved into an externally
+    shared project now belongs to the HOST team, but for the rest of the
+    TTL this still answers with the team it came from — which equals the
+    `team_id` the guest's client keeps sending, so `align_team_to_object`
+    reads the request as already consistent and leaves it alone. Every
+    view then filters on the old team and matches nothing: the task the
+    user just moved 400s on its own reload ("Failed to fetch expected
+    task data") while plainly sitting in the destination project.
+    """
+    cache.delete(_cache_key(kind, object_id, note_type))
+
+
 def _owning_team(kind: str, object_id, note_type: int) -> str | None:
     """The team a given object belongs to, or None if there is no such object."""
-    cache_key = f"objteam:{kind}:{note_type if kind == 'note' else ''}:{object_id}"
+    cache_key = _cache_key(kind, object_id, note_type)
     cached = cache.get(cache_key)
     if cached is not None:
         # Absence is cached as "" so a probe for a nonexistent id does not
