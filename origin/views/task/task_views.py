@@ -163,26 +163,30 @@ def _cascade_project_to_subtasks(root_task_id, project_id, team_id):
     )
 
 
-def _is_sub_task(task) -> bool:
-    """Is this task nested under an ORDINARY task?
+def _is_nested_task(task) -> bool:
+    """Is anything filed above this task?
 
-    Only a milestone or a top-level task may change project. A task
-    hanging directly off a milestone's backing row counts as top-level:
-    the milestone is its container, not its parent in the sub-task sense,
-    and it leaves that milestone behind when it moves.
+    Only a milestone or a ROOT task — one with no parent task at all —
+    may change project. Everything else follows what it sits under, and
+    that includes a task living directly in a milestone: those hang off
+    the milestone's backing row via `parent_task_id` (see
+    `_bridge_milestone_to_parent`), so the milestone owns which project
+    they are in and `milestone_views.patch` is what moves them.
 
-    A dangling `parent_task_id` (parent hard-deleted) reads as top-level —
-    the same fallback `_resolve_root_task_id` makes — so a move is never
-    blocked on data we can no longer resolve.
+    This used to make an exception for exactly that case, reasoning that
+    a milestone contains its tasks rather than parenting them, so one
+    could move out on its own and shed the milestone. It cannot: the
+    milestone stays where it is, and rule ii says its tasks travel WITH
+    it, not away from it.
+
+    A dangling `parent_task_id` (parent hard-deleted) reads as root — the
+    same fallback `_resolve_root_task_id` makes — so a move is never
+    blocked on data we can no longer resolve, which would strand the row
+    in its project for good.
     """
     if task.parent_task_id is None or task.is_milestone:
         return False
-    parent_is_milestone = (
-        TaskMaster.objects.filter(task_id=task.parent_task_id)
-        .values_list("is_milestone", flat=True)
-        .first()
-    )
-    return parent_is_milestone is False
+    return TaskMaster.objects.filter(task_id=task.parent_task_id).exists()
 
 
 def _cascade_tree_position_to_subtasks(task, depth_limit=10):
@@ -738,22 +742,29 @@ class TaskMasterView(AuthenticatedAPIView):
                     {"error": "Destination project not found."},
                     status=status.HTTP_404_NOT_FOUND,
                 )
-            # Only a milestone or a top-level task may change project; a
-            # sub-task follows its parent. Moving one on its own left it
-            # nested under a `parent_task_id` in the project it came from,
-            # so the destination's table — which nests rows under their
-            # parent — had nowhere to draw it and the row was invisible in
-            # both projects.
+            # Only a milestone or a root task may change project; anything
+            # filed underneath follows what it sits in. Moving one on its
+            # own left it nested under a `parent_task_id` in the project it
+            # came from, so the destination's table — which nests rows
+            # under their parent — had nowhere to draw it and the row was
+            # invisible in both projects.
             #
             # The create form's scaffold row is exempt: it is POSTed under
             # whatever project the page was showing, so finalizing it in a
             # different project is a "move" of a task that does not exist
             # to the user yet. `is_init_task` is still True at this point —
             # the finalize PUT is what clears it.
-            if not task.is_init_task and _is_sub_task(task):
+            if not task.is_init_task and _is_nested_task(task):
                 return Response(
                     {
-                        "error": "A sub-task follows its parent task's project.",
+                        "error": (
+                            "A task follows the project of the task or milestone "
+                            "it is filed under."
+                        ),
+                        # Kept from when this rule covered sub-tasks only:
+                        # the project table nests a milestone's tasks under
+                        # its row too, so the name still reads true from
+                        # the UI, and the client already maps it.
                         "code": "subtask_project_move_forbidden",
                     },
                     status=status.HTTP_400_BAD_REQUEST,
