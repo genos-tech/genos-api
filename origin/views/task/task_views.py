@@ -1108,7 +1108,9 @@ class GetTeamTasksView(AuthenticatedAPIView):
                     "assigneeId": t.assignee.id if t.assignee else None,
                     "assigneeEmail": t.assignee.email if t.assignee else None,
                     "assigneeName": t.assignee.username if t.assignee else None,
-                    "assigneeImgPath": (t.assignee.profile_image_file_name if t.assignee else None),
+                    "assigneeImgPath": (
+                        t.assignee.profile_image_file_name if t.assignee else None
+                    ),
                     "parentTaskId": t.parent_task_id,
                     "rootTaskId": t.root_task_id,
                     "threadId": t.thread_id,
@@ -1739,6 +1741,21 @@ class GetTaskView(AuthenticatedAPIView):
 
 
 class GetProjectTasksView(AuthenticatedAPIView):
+    """One project's whole task list — the rows the table, board and
+    dashboard are drawn from.
+
+    An incremental answer also carries `totalCount`: how many rows the
+    caller's store should hold for this project once it has applied the
+    delta. A checkpoint is a promise that everything older is already
+    held, and a client that took one without the rows behind it can never
+    discover that on its own — every later sync asks only for changes, so
+    the gap is permanent and silent. It showed up as a guest opening a
+    shared project to an empty table and dashboard while a single task
+    previewed fine beside them, and it stayed empty after the server was
+    fixed. Handing over the count lets the client notice it is short and
+    ask for everything again.
+    """
+
     def get(self, request):
         team_id = request.GET.get("team_id")
         project_id = request.GET.get("project_id")
@@ -1843,10 +1860,16 @@ class GetProjectTasksView(AuthenticatedAPIView):
 
         if since is None:
             set_cached_project_tasks(team_id, project_id, response_data)
+        payload = {"tasks": response_data}
+        if since is not None:
+            # Only on the incremental path: a full answer IS the count,
+            # and the full path is the cached one — no reason to spend a
+            # query there.
+            payload["totalCount"] = TaskMaster.objects.filter(
+                team=team_id, project=project_id, is_init_task=False, is_deleted=False
+            ).count()
         return Response(
-            build_delta_response(
-                {"tasks": response_data}, server_time, force_full_reload=force_full
-            ),
+            build_delta_response(payload, server_time, force_full_reload=force_full),
             status=status.HTTP_200_OK,
         )
 
@@ -2065,9 +2088,7 @@ class TaskCommentsView(AuthenticatedAPIView):
             # (mirrors the message-send proxy contract).
             fanout = fan_out_task_comment(comment_obj)
             activities_wire = (
-                ActivitySerializer(fanout.activities, many=True).data
-                if fanout.activities
-                else []
+                ActivitySerializer(fanout.activities, many=True).data if fanout.activities else []
             )
             comment_mentioned_ids = fanout.mentioned_user_ids
             # A task comment IS delivered to a non-project-member, and
@@ -2425,7 +2446,9 @@ class TaskCommentMentionView(AuthenticatedAPIView):
 
         if not team_id or not mentioned_user_ids or not task_id or not comment_id:
             return Response(
-                {"error": "`team_id`, `mentioned_user_ids`, `task_id`, `comment_id` are required."},
+                {
+                    "error": "`team_id`, `mentioned_user_ids`, `task_id`, `comment_id` are required."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
