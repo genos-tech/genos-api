@@ -85,6 +85,8 @@ from origin.views.chat.personal_tag_views import (
 from origin.views.chat.pin_flag_views import (
     FlagListView,
     FlagView,
+    MessageReminderListView,
+    MessageReminderView,
     PinListView,
     PinView,
 )
@@ -194,6 +196,17 @@ urlpatterns = [
         "api/v3/pins/",
         PinListView.as_view(),
         name="v3_pin_list",
+    ),
+    # Message reminders ("remind me in 3 hours") — a flag with a time on it
+    path(
+        "api/v3/messages/<uuid:message_id>/reminder/",
+        MessageReminderView.as_view(),
+        name="v3_message_reminder",
+    ),
+    path(
+        "api/v3/reminders/",
+        MessageReminderListView.as_view(),
+        name="v3_reminder_list",
     ),
     # Personal tags (per-user PRIVATE labels on GM channels)
     path(

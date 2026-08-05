@@ -80,14 +80,24 @@ web container boots in this order (see the Dockerfile `CMD` — preserve the
 sequence): decode the optional Vertex service-account key →
 `collectstatic` → `migrate` → `opensearch_setup` → `gunicorn apis.wsgi`.
 
-Three additional cron services share the same image, each with its own config
-and `startCommand`:
+Additional cron services share the same image, each with its own config and
+`startCommand`:
 
-| Config                        | Schedule       | Job                                             |
-| ----------------------------- | -------------- | ----------------------------------------------- |
-| `railway-reindexer.toml`      | every 10 min   | Incremental OpenSearch reindex                  |
-| `railway-judge-sampler.toml`  | hourly         | Online LLM-judge quality sampling               |
-| `railway-demo-cleanup.toml`   | daily 03:00 UTC| Delete expired demo users + their data          |
+| Config                              | Schedule        | Job                                            |
+| ----------------------------------- | --------------- | ---------------------------------------------- |
+| `railway-reminder-tick.toml`        | every minute    | Fire due message reminders (push + inbox)      |
+| `railway-webhook-deliver.toml`      | every minute    | Drain the outbound webhook outbox              |
+| `railway-email-notify.toml`         | every 5 min     | Drain the email notification outbox            |
+| `railway-reindexer.toml`            | every 10 min    | Incremental OpenSearch reindex                 |
+| `railway-email-digest.toml`         | hourly          | Per-user email digest                          |
+| `railway-agent-digest.toml`         | hourly          | Proactive Genos digest (fires at 08:00 local)   |
+| `railway-judge-sampler.toml`        | hourly          | Online LLM-judge quality sampling              |
+| `railway-demo-cleanup.toml`         | daily 03:00 UTC | Delete expired demo users + their data         |
+| `railway-opensearch-maintenance.toml`| daily 05:00 UTC| Index maintenance                              |
+| `railway-ai-cost-dashboard-*.toml`  | daily/weekly/monthly | AI cost rollups                           |
+
+The minutely pair is minutely on purpose: a reminder or a webhook that lands
+five minutes late has missed the moment it was for.
 
 See `docs/RAILWAY_DEPLOY.md` (in genos-platform) for the operator runbook.
 
