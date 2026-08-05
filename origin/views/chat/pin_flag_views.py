@@ -17,9 +17,18 @@ JSON lists), so a deleted channel's pins are auto-removed on cascade.
 `PATCH  /api/v3/messages/{message_id}/flag/`    mark done / reopen
 `DELETE /api/v3/messages/{message_id}/flag/`    unflag (hard delete)
 `GET    /api/v3/flags/?status=active|completed` list the user's flags
+
+`POST   /api/v3/messages/{message_id}/reminder/` remind me at T (and flag)
+`DELETE /api/v3/messages/{message_id}/reminder/` cancel the reminder
+`GET    /api/v3/reminders/`                      list pending reminders
+
+Reminders live here rather than in their own module because they are a
+flag with a time on it: setting one flags the message, and both ways of
+finishing with a flag (unflag, mark done) cancel it — which is why the
+flag handlers below call into `message_reminders` too.
 """
 
-from django.utils import timezone
+from django.utils import dateparse, timezone
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -27,7 +36,12 @@ from origin.models.chat.unified_models import (
     Flag,
     Pin,
 )
-from origin.serializers.chat.unified_serializers import FlagSerializer, PinSerializer
+from origin.serializers.chat.unified_serializers import (
+    FlagSerializer,
+    MessageReminderSerializer,
+    PinSerializer,
+)
+from origin.services import message_reminders
 from origin.views.chat.message_views import _verify_member_or_404
 from origin.views.chat.reaction_views_v3 import _verify_message_member
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -119,12 +133,22 @@ class FlagView(AuthenticatedAPIView):
         completed = bool(request.data.get("completed", False))
         flag.completed_at = timezone.now() if completed else None
         flag.save(update_fields=["completed_at"])
+        # Marking it done retires any reminder: the reminder's job was to
+        # bring this back to you, and you just said you're finished with
+        # it. Reopening does NOT resurrect the reminder — the time the user
+        # picked has usually passed by then, so they set a new one.
+        if completed:
+            message_reminders.cancel_pending(user=request.user, message=message)
         return Response(FlagSerializer(flag).data, status=status.HTTP_200_OK)
 
     def delete(self, request, message_id):
         # Verify membership before delete so we don't leak existence.
         message = _verify_message_member(message_id, request.user)
         Flag.objects.filter(user=request.user, message=message).delete()
+        # Unflagging is the other way of being done with it (see PATCH).
+        # Without this the reminder would arrive pointing at a message the
+        # user has already dismissed from the list it would send them to.
+        message_reminders.cancel_pending(user=request.user, message=message)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -147,6 +171,79 @@ class FlagListView(AuthenticatedAPIView):
         return Response(
             {
                 "flags": FlagSerializer(qs, many=True).data,
+                "server_time": timezone.now().isoformat(),
+            }
+        )
+
+
+class MessageReminderView(AuthenticatedAPIView):
+    """POST   /api/v3/messages/{message_id}/reminder/  remind me at T
+    DELETE /api/v3/messages/{message_id}/reminder/  cancel
+
+    POST body: `{"remindAt": "<ISO-8601 instant>"}`. Flags the message as a
+    side effect, and returns the flag alongside the reminder so the client
+    can reflect both from one round trip.
+
+    `remindAt` is an absolute instant computed by the CLIENT, presets
+    included ("tomorrow 9am" is 9am wherever the user is, and the browser
+    is the only party that reliably knows that). The server's job is to
+    refuse instants it cannot honour: the past, and beyond a year.
+    """
+
+    def post(self, request, message_id):
+        message = _verify_message_member(message_id, request.user)
+        raw = (request.data or {}).get("remindAt")
+        remind_at = dateparse.parse_datetime(raw) if isinstance(raw, str) else None
+        if remind_at is None:
+            return Response(
+                {"error": "remindAt must be an ISO-8601 datetime."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if timezone.is_naive(remind_at):
+            # A naive instant is ambiguous, and guessing costs the user the
+            # one thing this feature sells: arriving at the right moment.
+            return Response(
+                {"error": "remindAt must carry a UTC offset."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            message_reminders.validate_remind_at(remind_at)
+        except message_reminders.ReminderWindowError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        reminder, flag = message_reminders.set_reminder(
+            user=request.user, message=message, remind_at=remind_at
+        )
+        return Response(
+            {
+                "reminder": MessageReminderSerializer(reminder).data,
+                "flag": FlagSerializer(flag).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def delete(self, request, message_id):
+        # Cancelling the reminder leaves the flag alone: "stop nagging me"
+        # is not "forget about this". Idempotent, like unflagging.
+        message = _verify_message_member(message_id, request.user)
+        message_reminders.cancel_pending(user=request.user, message=message)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class MessageReminderListView(AuthenticatedAPIView):
+    """GET /api/v3/reminders/
+
+    The requesting user's pending reminders, soonest first. Read at boot so
+    a message bubble can say "reminder set for …" — the client cannot infer
+    that from its flag cache, and a reminder you can't see is one you set
+    twice.
+    """
+
+    def get(self, request):
+        qs = message_reminders.pending_for_user(request.user)
+        return Response(
+            {
+                "reminders": MessageReminderSerializer(qs, many=True).data,
                 "server_time": timezone.now().isoformat(),
             }
         )

@@ -168,12 +168,19 @@ def _push_spec(act) -> dict | None:
     return None
 
 
-def _queue_push(*, recipient_id, category, title, body, url, tag, actor=None) -> bool:
+def _queue_push(
+    *, recipient_id, category, title, body, url, tag, actor=None, skip_visible=True
+) -> bool:
     """Core fan-out for ONE recipient: preference gate + presence skip +
     active-subscription lookup + queue the HTTP send. Returns True when at
     least one send was queued. The single place this gating lives so every
     push surface (activities, inbox, …) stays consistent — duplicating it
     per-path is what produced the original notification gaps.
+
+    `skip_visible=False` delivers to a device the user is currently looking
+    at. Only for notifications whose whole point is a specific MOMENT (a
+    reminder the user set themselves) — everything else is news about what
+    someone else did, which the open app already shows.
     """
     recipient_id = str(recipient_id)
     if not should_push(recipient_id, category):
@@ -187,7 +194,8 @@ def _queue_push(*, recipient_id, category, title, body, url, tag, actor=None) ->
     # user. Keyed per user, a laptop left open silenced the phone too,
     # which made push look broken to anyone who works with the app on a
     # second screen.
-    subs = [s for s in subs if not presence.is_device_visible(recipient_id, s["device_id"])]
+    if skip_visible:
+        subs = [s for s in subs if not presence.is_device_visible(recipient_id, s["device_id"])]
     if not subs:
         return False
     # The service worker can't compute an unread total with the app
@@ -332,6 +340,45 @@ def schedule_push_for_inbox_item(item, *, title: str | None = None) -> None:
         from origin.services.email_enqueue import enqueue_email_for_inbox_item
 
         enqueue_email_for_inbox_item(item, title=title)
+
+    transaction.on_commit(_run)
+
+
+def schedule_push_for_reminder(*, recipient_id, title, body, url, tag, actor=None) -> None:
+    """Deliver a due message reminder ("remind me in 3 hours") as push.
+
+    Two deliberate departures from every other surface here:
+
+    - **It reaches a screen you are looking at** (`skip_visible=False`).
+      The presence skip exists because news about what someone else did is
+      already visible in the open app; a reminder is a MOMENT the user
+      asked for, and the open app has no way to announce it — swallowing it
+      because a tab happened to be focused is exactly the failure the
+      feature exists to prevent.
+    - **Push only, no email.** The email outbox coalesces and holds back on
+      away/cooldown rules tuned for other-people's-activity; a reminder
+      delivered an unknown number of minutes late is not a reminder.
+    """
+    if not recipient_id:
+        return
+    rid = str(recipient_id)
+
+    def _run():
+        if not vapid_configured():
+            return
+        try:
+            _queue_push(
+                recipient_id=rid,
+                category="message_reminder",
+                title=title,
+                body=body,
+                url=url,
+                tag=tag,
+                actor=actor,
+                skip_visible=False,
+            )
+        except Exception as exc:  # noqa: BLE001 — never break the caller
+            logger.warning("[webpush] reminder push error for %s: %s", rid, exc)
 
     transaction.on_commit(_run)
 

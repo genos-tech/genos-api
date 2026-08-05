@@ -1,0 +1,34 @@
+# Railway config for the `reminder-tick` cron service (message reminders —
+# "remind me about this message in 3 hours").
+#
+# Same Docker image as `backend-django`, run as a cron: the container
+# starts each tick, runs `manage.py message_reminder_tick`, exits.
+#
+# What this does:
+#   EVERY MINUTE, fire the MessageReminder rows whose time has come. Each
+#   fires once — `fired_at` is stamped in the same transaction that files
+#   the Inbox item, and the stamp is also the claim — so overlapping passes
+#   are safe and a crashed pass redelivers on the next tick rather than
+#   losing the reminder.
+#
+# ⚠️ EVERY MINUTE IS THE PRODUCT. The shortest preset is 20 minutes, so a
+# five-minute cron would make every reminder up to 5 minutes late and
+# "remind me in 20 minutes" a lie. Cheap to run: one indexed query over a
+# partial index that is empty most ticks.
+#
+# ENV (per-service on Railway — NOT inherited): DATABASE_URL, plus the
+# WEBPUSH_VAPID_* pair and WEBPUSH_MEDIA_BASE_URL — ⚠️ LOAD-BEARING, they
+# are the delivery channel. Without VAPID the reminder still lands in the
+# Inbox but the push (the part the user is waiting for) silently no-ops.
+# REDIS_URL is wanted but not required: it backs the presence lookup, which
+# this job deliberately ignores (a reminder reaches you even at your desk).
+# No LLM/Vertex vars — this cron never calls a model.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+cronSchedule = "* * * * *"
+startCommand = "sh /app/railway-reminder-tick-entrypoint.sh"
+restartPolicyType = "NEVER"

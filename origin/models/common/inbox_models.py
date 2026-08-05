@@ -51,6 +51,15 @@ class InboxItems(models.Model):
     #       the GUEST team's owner, `team` is the guest team, and
     #       `item_optionals` carries {grant_id, object_type, object_id,
     #       owner_team_name})
+    #    9: "message reminder" (a reminder the user set on a chat message
+    #       came due — origin/services/message_reminders.py; `receiver` is
+    #       the person who asked for it, `sender` the message's author,
+    #       `item_body` carries {title, text} and `item_optionals` the
+    #       facts the client needs to phrase and link it: {kind,
+    #       message_id, channel_id, chat_kind, thread_root_id,
+    #       sender_name, preview, href, remind_at}. Not a request, so
+    #       `request_status` is "". Lives in the Activities half of the
+    #       inbox with 0 and 6)
     # }
     #########################################################
     item_type = models.IntegerField(blank=False)

@@ -558,6 +558,74 @@ class Flag(models.Model):
         ]
 
 
+class MessageReminder(models.Model):
+    """ "Remind me about this message at T" — a due row, one per (user,
+    message), drained by the `message_reminder_tick` cron.
+
+    Rides ON TOP of `Flag` rather than replacing it: setting a reminder
+    flags the message too, so the thing you asked to be reminded about is
+    already sitting in the flagged list when the reminder arrives. Both
+    ways of finishing with a flag (unflag, or mark done) cancel a pending
+    reminder — the reminder exists to bring you back to something
+    outstanding, and nagging about a bookmark you already closed is the
+    fastest way to teach someone to ignore reminders.
+
+    `fired_at` is both the done-stamp and the claim: the tick's UPDATE
+    filters on `fired_at IS NULL`, so two overlapping passes cannot fire
+    the same row twice (same "the filter IS the lock" trick as
+    `webhook_deliver_tick`). Stamped in the same transaction that files
+    the inbox item, so a crash mid-tick rolls both back and the next pass
+    retries rather than dropping the reminder.
+
+    `remind_at` is stored UTC and computed CLIENT-side, including for the
+    "tomorrow 9am" style presets. The user's timezone is the browser's to
+    know (`CustomUser.timezone` is a best-effort capture that can be NULL,
+    and a reminder that fires at the wrong 9am is worse than none), so the
+    server only ever validates the instant it is handed.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="message_reminders",
+        to_field="id",
+    )
+    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name="reminders")
+    remind_at = models.DateTimeField()
+    # Null = still pending. Set when the tick has filed the inbox item.
+    fired_at = models.DateTimeField(null=True, blank=True)
+    # Null = not cancelled. Set (rather than deleted) so "you asked for a
+    # reminder and it never came" can be answered from the row itself.
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            # At most one PENDING reminder per message per user. Rescheduling
+            # cancels the old row and inserts a new one (see
+            # `services.message_reminders.set_reminder`) so the history of
+            # what fired stays intact; without the condition that history
+            # would collide with the live row.
+            models.UniqueConstraint(
+                fields=["user", "message"],
+                condition=models.Q(fired_at__isnull=True, cancelled_at__isnull=True),
+                name="uniq_pending_reminder",
+            ),
+        ]
+        indexes = [
+            # The tick's only query: pending rows that are due. Partial, so
+            # it stays small no matter how much fired history accumulates.
+            models.Index(
+                fields=["remind_at"],
+                condition=models.Q(fired_at__isnull=True, cancelled_at__isnull=True),
+                name="reminder_due_idx",
+            ),
+            models.Index(fields=["user", "remind_at"], name="reminder_user_due_idx"),
+        ]
+
+
 class ActivityType(models.IntegerChoices):
     """Discriminator for `Activity.activity_type`. Mirrors the legacy
     sidebar's filter chips so the UI can keep the same surface."""

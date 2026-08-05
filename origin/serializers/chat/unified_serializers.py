@@ -27,6 +27,7 @@ from origin.models.chat.unified_models import (
     MessageAttachment,
     MessageMention,
     MessageReaction,
+    MessageReminder,
     Pin,
     ReadCursor,
 )
@@ -498,6 +499,24 @@ class FlagSerializer(serializers.ModelSerializer):
     class Meta:
         model = Flag
         fields = ["id", "messageId", "tsCreated", "completedAt"]
+
+
+class MessageReminderSerializer(serializers.ModelSerializer):
+    """One pending message reminder.
+
+    Only the pending ones are ever read back, so there is no `firedAt` /
+    `cancelledAt` on the wire: those states are the absence of a row from
+    the list the client keeps.
+    """
+
+    id = serializers.UUIDField(read_only=True)
+    messageId = serializers.UUIDField(source="message_id", read_only=True)
+    remindAt = serializers.DateTimeField(source="remind_at", read_only=True)
+    tsCreated = serializers.DateTimeField(source="ts_created_at", read_only=True)
+
+    class Meta:
+        model = MessageReminder
+        fields = ["id", "messageId", "remindAt", "tsCreated"]
 
 
 class ActivitySerializer(serializers.ModelSerializer):
