@@ -240,10 +240,14 @@ class MessageReminderListView(AuthenticatedAPIView):
     """
 
     def get(self, request):
-        qs = message_reminders.pending_for_user(request.user)
+        pending = list(message_reminders.pending_for_user(request.user))
+        # Nothing else can tell us the dispatcher is dead: an unfired
+        # reminder produces no push, no inbox item and no log line. See
+        # `warn_if_overdue`.
+        message_reminders.warn_if_overdue(pending)
         return Response(
             {
-                "reminders": MessageReminderSerializer(qs, many=True).data,
+                "reminders": MessageReminderSerializer(pending, many=True).data,
                 "server_time": timezone.now().isoformat(),
             }
         )

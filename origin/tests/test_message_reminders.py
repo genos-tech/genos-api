@@ -362,3 +362,42 @@ class MessageReminderTickTests(_ReminderMixin, BaseAPITestCase):
         self.reminder.refresh_from_db()
         self.assertIsNone(self.reminder.fired_at)
         self.assertFalse(InboxItems.objects.exists())
+
+
+class OverdueWarningTests(_ReminderMixin, BaseAPITestCase):
+    """A tick that never runs produces no push, no inbox item and no log
+    line of its own. The client's boot fetch is the one thing that still
+    sees the evidence — a missing cron service reached production behind
+    exactly that silence."""
+
+    def setUp(self):
+        super().setUp()
+        self.channel = self._make_gm(members=("user",))
+        self.message = self._make_message(self.channel, sender=self.user2, seq=1)
+        Flag.objects.create(user=self.user, message=self.message)
+
+    def _pending(self, *, minutes_ago):
+        MessageReminder.objects.create(
+            user=self.user,
+            message=self.message,
+            remind_at=timezone.now() - timedelta(minutes=minutes_ago),
+        )
+        return list(message_reminders.pending_for_user(self.user))
+
+    def test_long_overdue_reminders_warn(self):
+        pending = self._pending(minutes_ago=45)
+        with self.assertLogs("origin.services.message_reminders", level="WARNING") as logs:
+            late = message_reminders.warn_if_overdue(pending)
+        self.assertGreater(late, 40 * 60)
+        self.assertIn("message_reminder_tick", logs.output[0])
+
+    def test_a_tick_running_slightly_behind_is_not_news(self):
+        pending = self._pending(minutes_ago=1)
+        with patch.object(message_reminders.logger, "warning") as warn:
+            message_reminders.warn_if_overdue(pending)
+        warn.assert_not_called()
+
+    def test_nothing_pending_says_nothing(self):
+        with patch.object(message_reminders.logger, "warning") as warn:
+            self.assertEqual(message_reminders.warn_if_overdue([]), 0)
+        warn.assert_not_called()

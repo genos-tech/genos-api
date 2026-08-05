@@ -56,6 +56,11 @@ PAST_TOLERANCE = timedelta(minutes=2)
 # notification about a message.
 PREVIEW_MAX = 140
 
+# How far past its time a still-pending reminder has to be before it means
+# something is wrong rather than "the tick is a few seconds behind".
+# Matches `message_reminder_tick.LATE_MINUTES`.
+OVERDUE_WARN_AFTER = timedelta(minutes=10)
+
 
 class ReminderWindowError(ValueError):
     """`remind_at` is in the past or beyond `MAX_HORIZON`."""
@@ -130,6 +135,34 @@ def pending_for_user(user):
         .select_related("message")
         .order_by("remind_at")
     )
+
+
+def warn_if_overdue(reminders, *, now=None) -> int:
+    """Log a warning when reminders are piling up past their time. Returns
+    how late the oldest one is, in seconds.
+
+    The tick reports its own lateness — but a tick that is not running
+    reports nothing, and neither does anything else: the reminder simply
+    never arrives, and the inbox stays empty because the inbox item is the
+    tick's work too. That silence is how a missing `reminder-tick` service
+    survived a production release. The client's boot fetch reads exactly the
+    rows that would be overdue, so it costs nothing to notice here.
+
+    `reminders` must be ordered by `remind_at` (as `pending_for_user`
+    returns them), oldest first.
+    """
+    if not reminders:
+        return 0
+    now = now or timezone.now()
+    late = int((now - reminders[0].remind_at).total_seconds())
+    if late > OVERDUE_WARN_AFTER.total_seconds():
+        logger.warning(
+            "[reminders] %s pending reminder(s), oldest %s minutes past its time — "
+            "is the message_reminder_tick cron running?",
+            len(reminders),
+            late // 60,
+        )
+    return late
 
 
 def _truncate(text: str) -> str:
