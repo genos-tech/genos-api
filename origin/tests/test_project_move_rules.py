@@ -9,12 +9,14 @@ the row kept the guest's — matched neither project's list and simply
 disappeared. Its notes, which carry their own copy of both columns, went
 with it.
 
-**The rule.** Only a milestone or a top-level task changes project, and
-everything filed underneath comes along. A sub-task moved alone kept a
-`parent_task_id` in the project it left, and the destination's table nests
-rows under their parent, so it was invisible in both places. A milestone
-could not move at all; now it can, and it lands with no sprint because
-sprints are defined per project.
+**The rule.** Only a milestone or a ROOT task — one with no parent task at
+all — changes project, and everything filed underneath comes along. Anything
+moved alone kept a `parent_task_id` in the project it left, and the
+destination's table nests rows under their parent, so it was invisible in
+both places. A task living in a milestone counts as filed underneath: it
+hangs off the milestone's backing row, so the milestone owns which project
+it is in. A milestone could not move at all; now it can, and it lands with
+no sprint because sprints are defined per project.
 """
 
 from datetime import date
@@ -101,7 +103,7 @@ class ProjectMoveTestBase(TestCase):
 
 
 class TaskProjectMoveRuleTests(ProjectMoveTestBase):
-    """Rule i: only a milestone or a top-level task may change project."""
+    """Rule i: only a milestone or a root task may change project."""
 
     def test_top_level_task_moves(self):
         task = self._make_task(self.project_a)
@@ -112,10 +114,12 @@ class TaskProjectMoveRuleTests(ProjectMoveTestBase):
         task.refresh_from_db()
         self.assertEqual(task.project_id, self.project_b.project_id)
 
-    def test_task_directly_under_a_milestone_moves(self):
-        """A milestone contains its tasks rather than parenting them in the
-        sub-task sense, so they are top-level for this rule — and they shed
-        the milestone they leave behind."""
+    def test_task_inside_a_milestone_cannot_move_on_its_own(self):
+        """The milestone owns which project its tasks are in, and rule ii
+        says they travel WITH it. This once succeeded, on the reasoning that
+        a milestone contains its tasks rather than parenting them — so the
+        task moved out and shed the milestone, which is the opposite of
+        what the milestone moving would have done to it."""
         milestone = self._make_milestone(self.project_a)
         task = self._make_task(
             self.project_a,
@@ -126,10 +130,45 @@ class TaskProjectMoveRuleTests(ProjectMoveTestBase):
 
         res = self._move_task(task, self.project_b)
 
-        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.status_code, 400, res.data)
+        self.assertEqual(res.data.get("code"), "subtask_project_move_forbidden")
         task.refresh_from_db()
-        self.assertEqual(task.project_id, self.project_b.project_id)
-        self.assertIsNone(task.milestone_id)
+        self.assertEqual(task.project_id, self.project_a.project_id)
+        self.assertEqual(task.milestone_id, milestone.milestone_id)
+
+    def test_sub_task_of_a_task_inside_a_milestone_cannot_move_either(self):
+        """Two levels down, and neither level is allowed to leave alone."""
+        milestone = self._make_milestone(self.project_a)
+        member = self._make_task(
+            self.project_a,
+            milestone=milestone,
+            parent_task_id=milestone.task_id,
+            root_task_id=milestone.task_id,
+        )
+        sub = self._make_task(
+            self.project_a,
+            title="sub",
+            milestone=milestone,
+            parent_task_id=member.task_id,
+            root_task_id=milestone.task_id,
+        )
+
+        res = self._move_task(sub, self.project_b)
+
+        self.assertEqual(res.status_code, 400, res.data)
+        sub.refresh_from_db()
+        self.assertEqual(sub.project_id, self.project_a.project_id)
+
+    def test_a_milestones_backing_row_is_not_treated_as_nested(self):
+        """It has no parent task, so the rule lets it through. Milestones are
+        moved through `milestone_views.patch`, which is also what resets the
+        sprint — this only pins that the rule does not stand in the way."""
+        milestone = self._make_milestone(self.project_a)
+        backing = TaskMaster.objects.get(task_id=milestone.task_id)
+
+        res = self._move_task(backing, self.project_b)
+
+        self.assertEqual(res.status_code, 200, res.data)
 
     def test_sub_task_cannot_move_on_its_own(self):
         parent = self._make_task(self.project_a, title="parent")

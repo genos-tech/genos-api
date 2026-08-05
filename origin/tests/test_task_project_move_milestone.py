@@ -18,6 +18,13 @@ opposite intent:
 
 Ownership disambiguates: a milestone belonging to the destination
 project is kept, anything else is cleared. These tests pin both sides.
+
+Note the narrow ground the "stale source milestone" cases now stand on.
+Rule i (`test_project_move_rules`) refuses a project change outright for
+any task with a parent task, and a task filed in a milestone hangs off
+that milestone's backing row — so the only member that reaches this code
+is one whose milestone has no backing row yet, which is exactly the state
+`_bridge_milestone_to_parent` produces when `m.task_id` is None.
 """
 
 from django.contrib.auth import get_user_model
@@ -63,14 +70,19 @@ class TaskProjectMoveMilestoneTests(TestCase):
         self.milestone_a = self._make_milestone(self.project_a, "MS A")
         self.milestone_b = self._make_milestone(self.project_b, "MS B")
 
-    def _make_milestone(self, project, title):
-        backing = TaskMaster.objects.create(
-            team=self.team,
-            project=project,
-            title=title,
-            status="Open",
-            is_milestone=True,
-        )
+    def _make_milestone(self, project, title, *, backed=True):
+        # `backed=False` is a milestone whose backing row has not been
+        # created yet. Its members carry `milestone_id` with no parent
+        # task, so they are root tasks as far as rule i is concerned.
+        backing = None
+        if backed:
+            backing = TaskMaster.objects.create(
+                team=self.team,
+                project=project,
+                title=title,
+                status="Open",
+                is_milestone=True,
+            )
         return MilestoneMaster.objects.create(
             team=self.team,
             project=project,
@@ -123,38 +135,25 @@ class TaskProjectMoveMilestoneTests(TestCase):
 
     def test_stale_source_milestone_is_cleared_on_move(self):
         """The task preview re-sends the task's existing milestone with the
-        new project; keeping it would re-parent the task back into the
-        source project. Pins the pre-existing move semantics."""
-        task = self._make_task(
-            self.project_a,
-            milestone_id=self.milestone_a.milestone_id,
-            parent_task_id=self.milestone_a.task_id,
-            root_task_id=self.milestone_a.task_id,
-        )
+        new project; keeping it would leave the task pointing at a milestone
+        in the project it just left. Pins the pre-existing move semantics.
 
-        self._move(
-            task,
-            self.project_b,
-            milestone=self.milestone_a.milestone_id,
-            parent_task_id=self.milestone_a.task_id,
-        )
+        Uses an unbacked milestone, per the module docstring: a member with
+        a parent task cannot get this far any more."""
+        stale = self._make_milestone(self.project_a, "MS A unbacked", backed=False)
+        task = self._make_task(self.project_a, milestone_id=stale.milestone_id)
+
+        self._move(task, self.project_b, milestone=stale.milestone_id)
 
         self.assertEqual(task.project_id, self.project_b.project_id)
         self.assertIsNone(task.milestone_id)
         self.assertIsNone(task.sprint_id)
-        # The only parent was the stale milestone's backing task — the
-        # clear branch detaches it too.
-        self.assertIsNone(task.parent_task_id)
 
     def test_move_without_milestone_key_still_clears_stale_link(self):
         """A partial PUT ({task_id, project}) — e.g. the task-graph
         diagram — must still shed the source project's milestone."""
-        task = self._make_task(
-            self.project_a,
-            milestone_id=self.milestone_a.milestone_id,
-            parent_task_id=self.milestone_a.task_id,
-            root_task_id=self.milestone_a.task_id,
-        )
+        stale = self._make_milestone(self.project_a, "MS A unbacked", backed=False)
+        task = self._make_task(self.project_a, milestone_id=stale.milestone_id)
 
         self._move(task, self.project_b)
 
