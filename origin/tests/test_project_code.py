@@ -416,31 +416,31 @@ class TestTaskProjectMove(TestCase):
         self.assertEqual(moved[1].parent_task_id, root["task_id"])
         self.assertEqual(moved[2].parent_task_id, child["task_id"])
 
-    def test_move_clears_the_old_projects_milestone_link(self):
-        """The client sends the source project's `milestone` right back on a
-        move (the project picker resets `tags` but not milestone/sprint). Left
-        alone, the bridge re-parents the task onto that milestone's backing
-        task — dragging it back into the project it just left."""
+    def test_a_task_in_a_milestone_does_not_move_on_its_own(self):
+        """Rule i: the milestone owns which project its tasks are in, so a
+        member travels when the MILESTONE moves and never by itself.
+
+        This used to be a move that needed cleaning up afterwards. The client
+        sends the source project's `milestone` right back (the project picker
+        resets `tags` but not milestone/sprint), and left alone the bridge
+        re-parented the task onto that milestone's backing task, dragging it
+        into the project it had just left. Refusing the move settles it a
+        step earlier; `test_task_project_move_milestone` still covers the
+        stale-link clear for the one member that can still reach it."""
         milestone_id, backing_task_id = self._create_milestone(self.project_a, "Alpha goal")
         moving = self._create_task(self.project_a, title="under the milestone")
         # Land it in the milestone first, the way the picker would.
         resp = self._put_task(moving["task_id"], self.project_a, milestone=milestone_id)
         self.assertEqual(resp.status_code, 200, resp.data)
+
+        # Now try to move it to Beta, still sending Alpha's milestone.
+        resp = self._put_task(moving["task_id"], self.project_b, milestone=milestone_id)
+
+        self.assertEqual(resp.status_code, 400, resp.data)
         task = TaskMaster.objects.get(task_id=moving["task_id"])
+        self.assertEqual(task.project_id, self.project_a)
         self.assertEqual(task.milestone_id, milestone_id)
         self.assertEqual(task.parent_task_id, backing_task_id)
-
-        # Now move it to Beta, still sending Alpha's milestone.
-        resp = self._put_task(moving["task_id"], self.project_b, milestone=milestone_id)
-        self.assertEqual(resp.status_code, 200, resp.data)
-
-        task = TaskMaster.objects.get(task_id=moving["task_id"])
-        self.assertEqual(task.project_id, self.project_b)
-        # No link may point back into Alpha.
-        self.assertIsNone(task.milestone_id)
-        self.assertIsNone(task.sprint_id)
-        self.assertIsNone(task.parent_task_id)
-        self.assertEqual(task.root_task_id, task.task_id)
 
     def test_move_frees_the_source_number_for_reuse(self):
         moving = self._create_task(self.project_a, title="draft", is_init_task=True)
