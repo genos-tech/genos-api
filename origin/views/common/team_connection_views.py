@@ -93,41 +93,7 @@ def _team_name(team_id) -> str:
     return row["team_name"] if row else ""
 
 
-def _sharing_sides(viewing_team_id) -> tuple[set, set]:
-    """Which connected teams own work here, and which are guests in ours.
-
-    A connection is symmetric — either side may ask for it, and `direction`
-    records only who asked. Sharing is not symmetric: one team owns the
-    project and the other works in it, and THAT is the fact someone reading
-    this list needs. Two queries for the whole list rather than per row.
-
-    Both, not just the first, because "not the owner" is two different
-    situations: they are our guest, or nothing has been shared either way
-    yet. A single flag made those indistinguishable and the row had to
-    hedge in prose.
-    """
-    live = ExternalGrant.objects.filter(status=ShareStatus.ACTIVE)
-    owners = {
-        str(team_id)
-        for team_id in live.filter(guest_team_id=viewing_team_id).values_list(
-            "owner_team_id", flat=True
-        )
-    }
-    guests = {
-        str(team_id)
-        for team_id in live.filter(owner_team_id=viewing_team_id).values_list(
-            "guest_team_id", flat=True
-        )
-    }
-    return owners, guests
-
-
-def _connection_payload(
-    conn: TeamConnection,
-    viewing_team_id,
-    owner_team_ids=frozenset(),
-    guest_team_ids=frozenset(),
-) -> dict:
+def _connection_payload(conn: TeamConnection, viewing_team_id) -> dict:
     """Shape a connection from one team's point of view.
 
     The row stores its pair sorted (see `TeamConnection`), so "the other
@@ -135,10 +101,12 @@ def _connection_payload(
     client only ever cares about the counterparty and whether the ball is
     in its court, which is what `direction` answers.
 
-    `isOwner` says the other team owns shared work you have access to;
-    `isGuest` says they work in yours. Both are false on a connection
-    nobody has shared anything across yet, which is a real third state
-    and not a fallback.
+    `direction` is also the whole of what this endpoint says about the
+    relationship. Who owns any given shared chat, project or note folder
+    is a property of that object, answered by `/team/share/object/` where
+    the reader is looking at the object itself — not something to
+    aggregate onto a team row, where "they own something of ours and we
+    own something of theirs" has no honest single answer.
     """
     lo, hi = str(conn.team_lo_id), str(conn.team_hi_id)
     other = hi if lo == str(viewing_team_id) else lo
@@ -150,8 +118,6 @@ def _connection_payload(
         "direction": (
             "outgoing" if str(conn.requested_by_team_id) == str(viewing_team_id) else "incoming"
         ),
-        "isOwner": other in owner_team_ids,
-        "isGuest": other in guest_team_ids,
         "tsCreated": conn.ts_created_at,
         "tsUpdated": conn.ts_updated_at,
     }
@@ -195,13 +161,8 @@ class TeamConnectionView(AuthenticatedAPIView):
             .exclude(status=ShareStatus.DECLINED)
             .order_by("-ts_updated_at")
         )
-        owner_team_ids, guest_team_ids = _sharing_sides(team_id)
         return Response(
-            {
-                "connections": [
-                    _connection_payload(c, team_id, owner_team_ids, guest_team_ids) for c in rows
-                ]
-            },
+            {"connections": [_connection_payload(c, team_id) for c in rows]},
             status=status.HTTP_200_OK,
         )
 

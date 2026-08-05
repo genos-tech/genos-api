@@ -217,18 +217,20 @@ class TeamConnectionEndpointTests(CrossTeamTestCase):
         self.assertEqual(res.status_code, 404)
 
 
-class ConnectionSharingSidesTests(CrossTeamTestCase):
-    """`isOwner` / `isGuest` on a listed connection.
+class ConnectionSidesTests(CrossTeamTestCase):
+    """What a listed connection claims about the two teams, and no more.
 
-    These two say who owns the work shared across a connection, and the
-    team profile renders them as the row's "Owner" / "Guest" chip. They
-    describe THE OTHER TEAM and are read from live `ExternalGrant` rows,
-    so they have nothing to do with `direction` — which team asked to
-    connect is settled history and grants nobody anything.
+    `direction` — who asked — is the whole of it, and the team profile
+    renders it as the row's "Owner" / "Guest" chip: the team that invited
+    owns the connection, the team that accepted is its guest.
 
-    Both flags being true is a legitimate state, not a contradiction: two
-    teams that have each shared something with the other are host and
-    guest to each other at once. The UI has to be able to say so.
+    The row used to carry `isOwner` / `isGuest` read off live
+    `ExternalGrant` rows instead, which is a different question with a
+    different answer. Two teams that have each shared something with the
+    other are host and guest at once, so that row either claimed both or
+    picked one and contradicted the same connection viewed from the other
+    team. Ownership of shared work is a property of the work, and
+    `/team/share/object/` answers it where the reader can see the object.
     """
 
     def _row(self, team, actor) -> dict:
@@ -260,77 +262,51 @@ class ConnectionSharingSidesTests(CrossTeamTestCase):
         )
         return respond_to_grant(grant, self.a_owner, accept=True)
 
-    def test_connecting_alone_names_no_host_and_no_guest(self):
-        # Connected, nothing shared: a real third state. Labelling either
-        # side here would claim access neither team has.
+    def test_the_two_sides_disagree_about_nothing(self):
+        # A asked B. Exactly one of them is the asker, and both rows say
+        # the same thing about who it was — the property the sharing-based
+        # chip could not hold, since it made both profiles label the other
+        # team "Owner" at the same time.
         self.connect_a_and_b()
-        for team, actor in ((self.team_a, self.a_owner), (self.team_b, self.b_owner)):
-            row = self._row(team, actor)
-            self.assertFalse(row["isOwner"])
-            self.assertFalse(row["isGuest"])
+        self.assertEqual(self._row(self.team_a, self.a_owner)["direction"], "outgoing")
+        self.assertEqual(self._row(self.team_b, self.b_owner)["direction"], "incoming")
 
-    def test_who_asked_to_connect_does_not_decide_who_hosts(self):
-        # A asked B to connect, and A hosts the only shared project — so
-        # the asker is the host here. Reading `direction` instead would
-        # get this exactly backwards.
+    def test_sharing_a_project_does_not_change_who_asked(self):
+        # A asked B to connect AND hosts the shared project. Those are
+        # independent facts, and this row reports only the first.
         self.active_project_grant()
         self.assertEqual(self._row(self.team_a, self.a_owner)["direction"], "outgoing")
-        self.assertTrue(self._row(self.team_b, self.b_owner)["isOwner"])
+        self.assertEqual(self._row(self.team_b, self.b_owner)["direction"], "incoming")
 
-    def test_one_share_reads_as_host_on_one_side_and_guest_on_the_other(self):
-        self.active_project_grant()
-        # A owns the project, so B is A's guest...
-        a_row = self._row(self.team_a, self.a_owner)
-        self.assertFalse(a_row["isOwner"])
-        self.assertTrue(a_row["isGuest"])
-        # ...and from B's side, A is the team that owns it.
-        b_row = self._row(self.team_b, self.b_owner)
-        self.assertTrue(b_row["isOwner"])
-        self.assertFalse(b_row["isGuest"])
-
-    def test_sharing_both_ways_makes_each_team_host_and_guest(self):
-        # The state behind the reported bug: both teams' profiles showed
-        # the other with an "Owner" chip and nothing else, because the
-        # client picked `isOwner` first and dropped the other half. The
-        # payload is symmetric here, and correctly so.
+    def test_sharing_both_ways_still_names_one_asker(self):
+        # The state behind the reported bug. With work shared in both
+        # directions there is no single host to name, but there is still
+        # exactly one team that asked to connect.
         self.active_project_grant()
         self._share_b_project_with_a()
-        for team, actor in ((self.team_a, self.a_owner), (self.team_b, self.b_owner)):
-            row = self._row(team, actor)
-            self.assertTrue(row["isOwner"], f"{team.team_name} should see a host")
-            self.assertTrue(row["isGuest"], f"{team.team_name} should see a guest")
+        self.assertEqual(self._row(self.team_a, self.a_owner)["direction"], "outgoing")
+        self.assertEqual(self._row(self.team_b, self.b_owner)["direction"], "incoming")
 
-    def test_an_unanswered_offer_names_nobody_yet(self):
-        # Only ACTIVE grants count. A pending offer is a commitment, not
-        # access, and chipping it would announce a share the guest team
-        # has not accepted.
-        from origin.models.common.team_models import ExternalGrant
-        from origin.services.external_grants import offer_grant
+    def test_the_row_makes_no_claim_about_shared_work(self):
+        # Ownership of a share is answered on the object. Reintroducing it
+        # here is what put two meanings of "Owner" on one screen.
+        self.active_project_grant()
+        self._share_b_project_with_a()
+        row = self._row(self.team_a, self.a_owner)
+        self.assertNotIn("isOwner", row)
+        self.assertNotIn("isGuest", row)
 
-        self.connect_a_and_b()
-        offer_grant(
-            owner_team_id=self.team_a.team_id,
-            guest_team_id=self.team_b.team_id,
-            object_type=ExternalGrant.ObjectType.PROJECT,
-            object_id=self.project.project_id,
-            role_ceiling="editor",
-            actor=self.a_owner,
-        )
-        self.assertFalse(self._row(self.team_b, self.b_owner)["isOwner"])
-        self.assertFalse(self._row(self.team_a, self.a_owner)["isGuest"])
-
-    def test_a_third_team_is_not_dragged_into_the_sides(self):
-        # `_sharing_sides` is computed once for the whole list, so a bug
-        # there would spill one connection's host onto another's row.
+    def test_each_row_reports_its_own_asker(self):
+        # One response, two connections, opposite directions: a per-list
+        # shortcut would flatten these onto one another.
         from origin.services.team_connection import request_connection, respond_to_connection
 
-        self.active_project_grant()
-        conn = request_connection(self.team_a.team_id, self.team_c.team_id, self.a_owner)
-        respond_to_connection(conn, self.c_owner, accept=True)
+        self.connect_a_and_b()
+        conn = request_connection(self.team_c.team_id, self.team_a.team_id, self.c_owner)
+        respond_to_connection(conn, self.a_owner, accept=True)
 
         self.authenticate(self.a_owner)
         res = self.client.get(f"/api/v2/team/connection/?team_id={self.team_a.team_id}")
         rows = {r["teamId"]: r for r in res.data["connections"]}
-        self.assertTrue(rows[str(self.team_b.team_id)]["isGuest"])
-        self.assertFalse(rows[str(self.team_c.team_id)]["isGuest"])
-        self.assertFalse(rows[str(self.team_c.team_id)]["isOwner"])
+        self.assertEqual(rows[str(self.team_b.team_id)]["direction"], "outgoing")
+        self.assertEqual(rows[str(self.team_c.team_id)]["direction"], "incoming")
