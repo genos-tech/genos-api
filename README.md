@@ -99,7 +99,11 @@ Additional cron services share the same image, each with its own config and
 The minutely pair is minutely on purpose: a reminder or a webhook that lands
 five minutes late has missed the moment it was for.
 
-See `docs/RAILWAY_DEPLOY.md` (in genos-platform) for the operator runbook.
+⚠️ **Each of these is a service somebody has to create** (Railway reads one
+config per service), and a cron that was never created fails silently — the
+`reminder-tick` omission shipped that way and reminders simply never
+arrived. Every row above has a numbered section in the runbook:
+`operations/RAILWAY_DEPLOY.md` in **genos-docs** §4.7–§4.19.
 
 ## CI
 
