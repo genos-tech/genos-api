@@ -512,6 +512,13 @@ class ActivitySerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(read_only=True)
     activityType = serializers.IntegerField(source="activity_type", read_only=True)
     recipientUserId = serializers.UUIDField(source="recipient_id", read_only=True)
+    # The team this entry belongs to. On the wire because the recipient
+    # may belong to several teams and the sidebar shows one team at a
+    # time: the client stores it on the cached row and drops rows from
+    # any team but the active one — which is what keeps a live
+    # `activity.created` push (routed to the per-USER room, so it
+    # arrives whichever team is on screen) out of the wrong feed.
+    teamId = serializers.UUIDField(source="team_id", read_only=True)
     channelId = serializers.UUIDField(source="channel_id", read_only=True)
     channelKind = serializers.SerializerMethodField()
     messageId = serializers.UUIDField(source="message_id", read_only=True)
@@ -533,6 +540,7 @@ class ActivitySerializer(serializers.ModelSerializer):
             "id",
             "activityType",
             "recipientUserId",
+            "teamId",
             "channelId",
             "channelKind",
             "messageId",

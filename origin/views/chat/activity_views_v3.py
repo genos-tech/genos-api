@@ -1,11 +1,15 @@
 """
 v3 activity feed endpoints.
 
-  GET    /api/v3/activities/?since=ISO            — list activities for the
+  GET    /api/v3/activities/?since=ISO&team_id=   — list activities for the
                                                     requesting user, newest
                                                     first. `since` is an
                                                     optional ISO 8601 cutoff;
                                                     omitted ⇒ last 30 days.
+                                                    `team_id` narrows to one
+                                                    team — a user in two teams
+                                                    must not see one team's
+                                                    feed while in the other.
   PUT    /api/v3/activities/{id}/read/             — mark one entry read.
   PUT    /api/v3/activities/read-all/              — mark every entry the
                                                     user can see read
@@ -19,6 +23,7 @@ the `ActivityFact` model (now deleted). FE reads from this directly
 and also receives live `activity.created` events over the v3 WS.
 """
 
+import uuid
 from datetime import timedelta
 
 from django.utils import timezone
@@ -53,14 +58,49 @@ def _parse_since(raw):
 
 
 class ActivityListView(AuthenticatedAPIView):
+    """GET /api/v3/activities/?since=ISO&team_id=UUID
+
+    `?team_id=` narrows to one team, and the sidebar now sends it.
+
+    It used to pass nothing, which meant a user who belongs to two teams
+    got both teams' entries in one list — team A's mentions and replies
+    showed up while team B was on screen. An `Activity` belongs to
+    exactly one team (`Activity.team` is non-null, surface mentions
+    included), so narrowing is all it takes. Same fix, same reasoning as
+    `ChannelListView`, which the chat list already relies on; unnarrowed
+    is the compatibility path rather than the intended one.
+    """
+
     def get(self, request):
         since = _parse_since(request.GET.get("since"))
         if since is None:
             since = timezone.now() - timedelta(days=_DEFAULT_SINCE_DAYS)
+        team_id = request.GET.get("team_id")
+        if team_id:
+            # Parse before filtering. `Activity.team` points at a UUID
+            # column, so `filter(team_id="abc")` raises ValidationError
+            # out of the ORM — a 500 on request input, reachable by
+            # anyone now that the sidebar sends this on every load. An
+            # unparseable id names no team, which is the same answer as
+            # a team you have no entries in.
+            try:
+                team_id = str(uuid.UUID(str(team_id)))
+            except (ValueError, AttributeError, TypeError):
+                return Response(
+                    {
+                        "activities": [],
+                        "since": since.isoformat(),
+                        "server_time": timezone.now().isoformat(),
+                    }
+                )
+        # The team narrowing has to land BEFORE the `[:_MAX_ROWS]` slice
+        # below — a filter on a sliced queryset raises.
+        narrowing = {"team_id": team_id} if team_id else {}
         qs = (
             Activity.objects.filter(
                 recipient=request.user,
                 ts_created_at__gte=since,
+                **narrowing,
             )
             .select_related(
                 "actor",
