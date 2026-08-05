@@ -1254,15 +1254,21 @@ class GetTeamTasksByTagView(AuthenticatedAPIView):
 
 
 class ChildTaskView(AuthenticatedAPIView):
-    # Status precedence used by the sub-task list. Mirrors the previous
-    # two-pass Python sort but pushed into SQL so we don't have to
-    # materialize/order rows in memory.
+    # Status precedence used by the sub-task list, pushed into SQL so we
+    # don't have to materialize/order rows in memory. Mirrors the
+    # canonical `STATUS_RANK` in the frontend's `utils/sortTask.ts`, so a
+    # sub-task list reads in the same status order as the task table.
+    #
+    # "Blocked" must stay listed: it postdates this tuple, and anything
+    # missing here falls to `default` below — i.e. blocked sub-tasks sank
+    # underneath Deleted ones.
     _STATUS_ORDER = (
         ("Open", 0),
         ("WIP", 1),
-        ("Pending", 2),
-        ("Closed", 3),
-        ("Deleted", 4),
+        ("Blocked", 2),
+        ("Pending", 3),
+        ("Closed", 4),
+        ("Deleted", 5),
     )
 
     def get(self, request):

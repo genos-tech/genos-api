@@ -341,6 +341,35 @@ class TestTaskViews(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def test_child_tasks_ordered_by_status_precedence(self):
+        # `TaskSubTasksBlock` renders this list verbatim, so the ORDER BY
+        # here IS the sub-task sort order the user sees. "Blocked" reached
+        # the status enum after the view's order tuple was written and fell
+        # through to the catch-all rank, which sorted blocked sub-tasks
+        # below deleted ones.
+        parent = self._create_task(title="Parent").data["task"]
+        for label in ("Deleted", "Blocked", "Closed", "Open", "Pending", "WIP"):
+            self._create_task(
+                title=f"{label} child",
+                status=label,
+                parent_task_id=parent["task_id"],
+            )
+
+        response = self.client.get(
+            "/api/v2/task/childTasks/",
+            {
+                "team_id": str(self.team.team_id),
+                "project_id": self.project.project_id,
+                "current_task_id": parent["task_id"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [child["status"]["status"] for child in response.data],
+            ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"],
+        )
+
     # ── Unauthorized ───────────────────────────────────────────────
 
     def test_unauthenticated_request(self):
