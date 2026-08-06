@@ -36,7 +36,9 @@ from origin.services.v3_activity import (
     create_comment_participant_activities,
     create_mention_activities,
     create_message_activities,
+    create_reaction_activity,
     create_thread_reply_activity,
+    message_surface,
     task_surface,
     thread_surface,
 )
@@ -185,15 +187,111 @@ class MessageActivitySuppressionTests(BaseAPITestCase):
         )
         self.assertEqual([str(r.recipient_id) for r in rows], [str(third.id)])
 
-    def test_a_mention_is_never_suppressed(self):
-        """A direct @-mention is an address, not ambient chatter — people
-        come back to the feed to find it."""
+    def test_a_mention_in_the_open_chat_is_suppressed_too(self):
+        """Being @-mentioned in a chat you are reading is the same
+        non-event as being messaged in it — you watched it arrive."""
         presence.mark_viewing(self.user2.id, channel_surface(self.channel.id), DEVICE)
+        rows = create_mention_activities(
+            message=self.message, mentioned_user_ids=[str(self.user2.id)], actor=self.user
+        )
+        self.assertEqual(rows, [])
+        self.assertEqual(Activity.objects.count(), 0)
+
+    def test_a_mention_is_written_when_the_recipient_is_reading_elsewhere(self):
+        other = Channel.objects.create(team=self.team, kind=ChannelKind.GM, title="Other")
+        presence.mark_viewing(self.user2.id, channel_surface(other.id), DEVICE)
         rows = create_mention_activities(
             message=self.message, mentioned_user_ids=[str(self.user2.id)], actor=self.user
         )
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].activity_type, ActivityType.MENTION)
+
+    def test_only_the_looking_mention_target_is_dropped(self):
+        third = self._third_member()
+        presence.mark_viewing(self.user2.id, channel_surface(self.channel.id), DEVICE)
+        rows = create_mention_activities(
+            message=self.message,
+            mentioned_user_ids=[str(self.user2.id), str(third.id)],
+            actor=self.user,
+        )
+        self.assertEqual([str(r.recipient_id) for r in rows], [str(third.id)])
+
+    def test_a_bot_mention_is_never_suppressed(self):
+        """A task-assignment card @-mentions its assignee from the project
+        bot. That is work being handed over, not conversation, and PM
+        channels write no plain-message row — so the feed entry is the only
+        durable trace and must survive having the chat open."""
+        from django.contrib.auth import get_user_model
+
+        bot = get_user_model().objects.create_user(
+            username="bot", email="bot@example.com", password="pw123456", is_system_user=True
+        )
+        card = Message.objects.create(
+            channel=self.channel, sender=bot, seq=2, body={"text": "task"}, body_text="task"
+        )
+        presence.mark_viewing(self.user2.id, channel_surface(self.channel.id), DEVICE)
+        rows = create_mention_activities(
+            message=card, mentioned_user_ids=[str(self.user2.id)], actor=bot
+        )
+        self.assertEqual(len(rows), 1)
+
+
+class ReactionSuppressionTests(BaseAPITestCase):
+    """A reaction lands under a message that is already on screen — the
+    emoji animates in, so a feed row about it is a second copy."""
+
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+        self.channel = Channel.objects.create(
+            team=self.team, kind=ChannelKind.DM, title="", owner=self.user
+        )
+        ChannelMember.objects.create(channel=self.channel, user=self.user, role="member")
+        ChannelMember.objects.create(channel=self.channel, user=self.user2, role="member")
+        # user2 wrote it, so user2 is who a reaction would be announced to.
+        self.message = Message.objects.create(
+            channel=self.channel, sender=self.user2, seq=1, body={"text": "hi"}, body_text="hi"
+        )
+
+    def _react(self, message=None):
+        return create_reaction_activity(
+            message=message or self.message, emoji="👍", actor=self.user
+        )
+
+    def test_row_is_written_when_the_sender_is_not_looking(self):
+        rows = self._react()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].activity_type, ActivityType.REACTION)
+
+    def test_no_row_when_the_sender_has_the_chat_open(self):
+        presence.mark_viewing(self.user2.id, channel_surface(self.channel.id), DEVICE)
+        self.assertEqual(self._react(), [])
+        self.assertEqual(Activity.objects.count(), 0)
+
+    def test_a_sender_reading_a_different_chat_still_gets_the_row(self):
+        other = Channel.objects.create(team=self.team, kind=ChannelKind.GM, title="Other")
+        presence.mark_viewing(self.user2.id, channel_surface(other.id), DEVICE)
+        self.assertEqual(len(self._react()), 1)
+
+    def test_a_reaction_on_a_thread_reply_follows_the_thread(self):
+        root = Message.objects.create(
+            channel=self.channel, sender=self.user, seq=2, body={"text": "r"}, body_text="r"
+        )
+        reply = Message.objects.create(
+            channel=self.channel,
+            sender=self.user2,
+            seq=3,
+            body={"text": "re"},
+            body_text="re",
+            thread_root=root,
+            is_thread_reply=True,
+        )
+        # Reading the timeline behind the pane is not reading the thread.
+        presence.mark_viewing(self.user2.id, channel_surface(self.channel.id), DEVICE)
+        self.assertEqual(len(self._react(reply)), 1)
+
+        presence.mark_viewing(self.user2.id, thread_surface(root.id), DEVICE)
+        self.assertEqual(self._react(reply), [])
 
 
 class ThreadReplySuppressionTests(BaseAPITestCase):
@@ -268,6 +366,200 @@ class TaskCommentSuppressionTests(BaseAPITestCase):
         """The comment renders in the task preview, not the project chat."""
         presence.mark_viewing(self.user2.id, channel_surface(self.channel.id), DEVICE)
         self.assertEqual(len(self._fan_out()), 1)
+
+    def _comment_mirror(self, sender):
+        """A real comment mirror: `metadata.taskCommentId` is what tells it
+        apart from the task's own card message, which carries `task_id`
+        too but is read in the channel."""
+        return Message.objects.create(
+            channel=self.channel,
+            sender=sender,
+            seq=2,
+            body={"text": "c2"},
+            body_text="c2",
+            task_id=self.task.task_id,
+            metadata={"taskCommentId": 77},
+        )
+
+    def test_a_comment_mention_is_suppressed_for_someone_on_the_task(self):
+        mirror = self._comment_mirror(self.user)
+        presence.mark_viewing(self.user2.id, task_surface(self.task.task_id), DEVICE)
+        self.assertEqual(
+            create_mention_activities(
+                message=mirror, mentioned_user_ids=[str(self.user2.id)], actor=self.user
+            ),
+            [],
+        )
+
+    def test_a_comment_mention_is_written_for_someone_on_another_task(self):
+        mirror = self._comment_mirror(self.user)
+        presence.mark_viewing(self.user2.id, task_surface(self.task.task_id + 1), DEVICE)
+        self.assertEqual(
+            len(
+                create_mention_activities(
+                    message=mirror, mentioned_user_ids=[str(self.user2.id)], actor=self.user
+                )
+            ),
+            1,
+        )
+
+    def test_a_comment_reaction_is_suppressed_for_someone_on_the_task(self):
+        mirror = self._comment_mirror(self.user2)
+        presence.mark_viewing(self.user2.id, task_surface(self.task.task_id), DEVICE)
+        self.assertEqual(create_reaction_activity(message=mirror, emoji="👍", actor=self.user), [])
+
+    def test_a_comment_reaction_is_written_when_the_task_is_closed(self):
+        mirror = self._comment_mirror(self.user2)
+        self.assertEqual(
+            len(create_reaction_activity(message=mirror, emoji="👍", actor=self.user)), 1
+        )
+
+
+class MessageSurfaceTests(BaseAPITestCase):
+    """Which surface each kind of message is judged against.
+
+    Single-valued on purpose: a mention judged against a WIDER set than
+    the thread-reply fan-out that follows it in `message_views` would not
+    be silenced, it would be relabelled — the recipient loses the mention
+    row and gains a thread-reply one.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.channel = Channel.objects.create(
+            team=self.team, kind=ChannelKind.GM, title="C", owner=self.user
+        )
+        self.root = Message.objects.create(
+            channel=self.channel, sender=self.user, seq=1, body={}, body_text="r"
+        )
+        # `Message.task_id` is a real FK, so the task has to exist.
+        project = ProjectMaster.objects.create(team=self.team, project_name="P", owner=self.user)
+        self.task = TaskMaster.objects.create(
+            team=self.team, project=project, title="T", status="Open", reporter=self.user
+        )
+
+    def test_a_top_level_message_is_read_in_its_channel(self):
+        self.assertEqual(message_surface(self.root), channel_surface(self.channel.id))
+
+    def test_a_thread_reply_is_read_in_its_thread(self):
+        reply = Message.objects.create(
+            channel=self.channel,
+            sender=self.user,
+            seq=2,
+            body={},
+            body_text="re",
+            thread_root=self.root,
+            is_thread_reply=True,
+        )
+        self.assertEqual(message_surface(reply), thread_surface(self.root.id))
+
+    def test_a_task_comment_is_read_on_its_task_not_in_the_thread(self):
+        """The mirror is a thread reply AND carries a task id, so the
+        precedence between those two branches is the whole point."""
+        mirror = Message.objects.create(
+            channel=self.channel,
+            sender=self.user,
+            seq=3,
+            body={},
+            body_text="c",
+            task_id=self.task.task_id,
+            thread_root=self.root,
+            is_thread_reply=True,
+            metadata={"taskCommentId": 9},
+        )
+        self.assertEqual(message_surface(mirror), task_surface(self.task.task_id))
+
+    def test_a_task_card_message_is_read_in_its_channel(self):
+        """`task_id` alone does not make a message a comment — the card
+        that opens a task thread has one and is read in the chat."""
+        card = Message.objects.create(
+            channel=self.channel,
+            sender=self.user,
+            seq=4,
+            body={},
+            body_text="card",
+            task_id=self.task.task_id,
+        )
+        self.assertEqual(message_surface(card), channel_surface(self.channel.id))
+
+
+class SuppressedMentionIsNotRelabelledTests(BaseAPITestCase):
+    """A silenced mention must not reappear under another type.
+
+    `message_views` treats "was mentioned" as beating a thread-reply row.
+    If it read that from the rows the mention producer RETURNED, then
+    suppressing a mention would drop the recipient out of the exclude set
+    and hand them a THREAD_REPLY row for the same message instead — the
+    notification moved, not removed. This exercises the whole fan-out, so
+    it fails if that bookkeeping ever goes back to counting rows.
+    """
+
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+        self.channel = Channel.objects.create(
+            team=self.team, kind=ChannelKind.GM, title="C", owner=self.user
+        )
+        ChannelMember.objects.create(channel=self.channel, user=self.user, role="member")
+        ChannelMember.objects.create(channel=self.channel, user=self.user2, role="member")
+        self.root = Message.objects.create(
+            channel=self.channel, sender=self.user2, seq=1, body=[], body_text="root"
+        )
+
+    def _send_mentioning_user2(self, parent_id):
+        from origin.views.chat.message_views import (
+            _allocate_seq_and_create_message_with_activities,
+        )
+
+        body = [
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "mention", "props": {"userId": str(self.user2.id), "user": "u2"}}
+                ],
+            }
+        ]
+        _msg, activities = _allocate_seq_and_create_message_with_activities(
+            channel=self.channel,
+            sender=self.user,
+            body=body,
+            body_text="@u2",
+            parent_id=parent_id,
+            metadata={},
+        )
+        return activities
+
+    def _reply_mentioning_user2(self):
+        return self._send_mentioning_user2(str(self.root.id))
+
+    def test_a_mention_in_a_thread_beats_the_reply_row_as_before(self):
+        """Baseline: nobody is looking, so exactly one MENTION and no
+        THREAD_REPLY — the pre-existing 'mention beats reply' rule."""
+        types = [a.activity_type for a in self._reply_mentioning_user2()]
+        self.assertEqual(types, [ActivityType.MENTION])
+
+    def test_reading_the_thread_leaves_no_row_of_any_type(self):
+        presence.mark_viewing(self.user2.id, thread_surface(self.root.id), DEVICE)
+        self.assertEqual(self._reply_mentioning_user2(), [])
+        self.assertEqual(Activity.objects.filter(recipient=self.user2).count(), 0)
+
+    def test_reading_only_the_channel_still_earns_the_mention(self):
+        """The reply is behind a pane, so having the timeline open is not
+        having seen it — and the row must be the MENTION, not a reply."""
+        presence.mark_viewing(self.user2.id, channel_surface(self.channel.id), DEVICE)
+        types = [a.activity_type for a in self._reply_mentioning_user2()]
+        self.assertEqual(types, [ActivityType.MENTION])
+
+    def test_a_mention_still_beats_the_plain_message_row(self):
+        """Same rule on the other branch: a top-level @-mention produces
+        the MENTION row and no MESSAGE row alongside it."""
+        types = [a.activity_type for a in self._send_mentioning_user2(None)]
+        self.assertEqual(types, [ActivityType.MENTION])
+
+    def test_a_suppressed_mention_does_not_become_a_plain_message_row(self):
+        presence.mark_viewing(self.user2.id, channel_surface(self.channel.id), DEVICE)
+        self.assertEqual(self._send_mentioning_user2(None), [])
+        self.assertEqual(Activity.objects.filter(recipient=self.user2).count(), 0)
 
 
 class SurfaceTokenFormatTests(BaseAPITestCase):
