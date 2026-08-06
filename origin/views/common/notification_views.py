@@ -86,11 +86,18 @@ class PresenceHeartbeatView(AuthenticatedAPIView):
     subscription with. The dispatcher then suppresses push for THAT
     device only — the open, focused tab gets the in-app toast, while the
     user's other devices still receive the push.
+
+    The optional `surface` says WHICH conversation is on screen (see
+    `services/presence.mark_viewing`), which lets the activity producers
+    skip a sidebar row for someone already reading it. Sent on the same
+    beat, plus an extra beat whenever the surface changes, so navigating
+    between chats retracts the old claim promptly.
     """
 
     def post(self, request):
         device_id = str(request.data.get("device_id") or "")[:64]
         presence.mark_visible(request.user.id, device_id)
+        presence.mark_viewing(request.user.id, request.data.get("surface") or "", device_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def delete(self, request):
@@ -103,6 +110,7 @@ class PresenceHeartbeatView(AuthenticatedAPIView):
         """
         device_id = str(request.data.get("device_id") or "")[:64]
         presence.clear_visible(request.user.id, device_id)
+        presence.clear_viewing(request.user.id, device_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
