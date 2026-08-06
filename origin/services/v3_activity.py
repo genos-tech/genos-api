@@ -18,15 +18,21 @@ A conversational activity tells someone about a conversation they are not
 in. When they ARE in it — the DM open on screen right now, the message
 they would be told about already rendered a few pixels away — the row is
 noise, and the feed it lands in is the one place the product uses to say
-"here is what you missed". So the three producers that fan a plain
-message out to an audience (`create_message_activities`,
-`create_thread_reply_activity`, `create_comment_participant_activities`)
-drop recipients whom `services/presence` reports as viewing that exact
-surface.
+"here is what you missed". So every conversational producer here drops
+recipients whom `services/presence` reports as viewing that message's
+surface: plain messages, thread replies, task comments, @-mentions and
+reactions alike. Being @-mentioned or reacted to in a chat you are
+reading is the same non-event as being messaged in it — you watched it
+happen.
 
-Deliberately NOT applied to mentions or reactions: an @-mention is a
-direct address that people come back to the feed to find, and both are
-low-volume enough that neither was the noise being complained about.
+The surface is the message's own (`message_surface`), never the
+recipient's whereabouts in general, so a mention inside a thread is
+suppressed only for someone reading THAT thread — having the channel
+open behind the pane still earns the row.
+
+The one @-mention that survives is a system-user one: a task-assignment
+card is a bot handing you work, not a conversation, and PM channels write
+no plain-message row, so that feed entry is the only durable trace of it.
 
 Suppression is per-recipient, which `Activity` already is — the other
 members of the same channel still get their row.
@@ -98,6 +104,36 @@ def task_surface(task_id) -> str:
     """Viewing token for an open task preview, whose comment stream is the
     conversation surface for that task."""
     return f"task:{task_id}"
+
+
+def message_surface(message: Message) -> str:
+    """The one surface that shows `message` to a reader.
+
+    Each branch picks the place the message is actually *read*, which is
+    not always the channel it is stored in:
+
+      - A task comment is mirrored into the project channel, but people
+        read it in the task preview's comment stream (`metadata
+        .taskCommentId` is what marks the mirror — a task's own card
+        message carries `task_id` too and is read in the channel).
+      - A thread reply lives behind a pane, so the channel timeline does
+        NOT show it — hence thread before channel, and why someone
+        reading the main timeline still hears about replies.
+
+    Kept single-valued to agree exactly with the surface each fan-out
+    producer already picks for the same message. If a mention were judged
+    against a wider set than the thread-reply fan-out that follows it,
+    suppressing the mention would just re-file the recipient under the
+    other type — a moved row, not a silenced one.
+    """
+    metadata = message.metadata or {}
+    if message.task_id is not None and metadata.get("taskCommentId") is not None:
+        return task_surface(message.task_id)
+    if message.thread_root_id:
+        return thread_surface(message.thread_root_id)
+    if message.channel_id:
+        return channel_surface(message.channel_id)
+    return ""
 
 
 def _drop_active_viewers(recipient_ids: Iterable[str], surface: str, *, kind: str) -> List[str]:
@@ -258,6 +294,12 @@ def create_mention_activities(
       - users that don't exist (silent skip — the mention row was already
         rejected at the MessageMention.bulk_create boundary if the id
         wasn't valid).
+      - anyone reading the surface the mention was written on: they saw it
+        arrive (module docstring).
+
+    Callers that treat "was mentioned" as beating another activity type
+    must key that on the ids they PASSED IN, not on the rows returned —
+    otherwise a mention suppressed here reappears as a thread-reply row.
     """
     actor_id = str(actor.id)
     targets = [
@@ -265,6 +307,13 @@ def create_mention_activities(
     ]
     if not targets:
         return []
+    # A bot @-mention is an assignment, not a conversation — see the
+    # module docstring. Same guard `create_message_activities` uses to keep
+    # task-create / status cards out of the plain-message fan-out.
+    if not getattr(message.sender, "is_system_user", False):
+        targets = _drop_active_viewers(targets, message_surface(message), kind="mention")
+        if not targets:
+            return []
     channel = message.channel
     rows = [
         Activity(
@@ -543,12 +592,22 @@ def create_comment_participant_activities(
 
 def create_reaction_activity(*, message: Message, emoji: str, actor: CustomUser) -> List[Activity]:
     """Single `Activity(type=REACTION)` for the message sender when
-    someone else reacts. Self-reactions produce no row."""
+    someone else reacts. Self-reactions produce no row.
+
+    Nothing is written when the sender is reading the surface their
+    message is on — the emoji appears under it live, and a feed row saying
+    so is a second copy of something already on screen. Reactions on a
+    task comment are judged against the task, so this covers the
+    comment-reaction case too (`message_surface`).
+    """
     if message.sender_id is None:
         return []
     actor_id = str(actor.id)
     sender_id = str(message.sender_id)
     if sender_id == actor_id:
+        return []
+    still_unaware = _drop_active_viewers([sender_id], message_surface(message), kind="reaction")
+    if not still_unaware:
         return []
     channel = message.channel
     row = Activity.objects.create(

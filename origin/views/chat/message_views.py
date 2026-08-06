@@ -231,16 +231,25 @@ def _allocate_seq_and_create_message_with_activities(
     if not created:
         return msg, []
     activities = []
+    mention_target_ids = _valid_mention_user_ids(channel, body or [])
     mention_acts = v3_activity.create_mention_activities(
         message=msg,
-        mentioned_user_ids=_valid_mention_user_ids(channel, body or []),
+        mentioned_user_ids=mention_target_ids,
         actor=sender,
     )
     activities.extend(mention_acts)
-    # Recipients who got the more-specific MENTION activity for THIS message.
-    # Used to suppress a duplicate THREAD_REPLY row (mention beats reply) and,
-    # below, to keep them out of the plain-message activity fan-out too.
-    mentioned_recipient_ids = {str(a.recipient_id) for a in mention_acts}
+    # Recipients the MENTION activity was aimed at for THIS message. Used to
+    # suppress a duplicate THREAD_REPLY row (mention beats reply) and, below,
+    # to keep them out of the plain-message activity fan-out too.
+    #
+    # Keyed on who was mentioned rather than on `mention_acts`, because the
+    # producer drops recipients who are reading the message's surface: reading
+    # the returned rows would let a mention silenced for that reason come back
+    # as a thread-reply row instead, which is a relabelled notification, not a
+    # suppressed one.
+    mentioned_recipient_ids = {
+        str(uid) for uid in mention_target_ids if uid and str(uid) != str(sender.id)
+    }
     if parent is not None:
         activities.extend(
             v3_activity.create_thread_reply_activity(
@@ -273,7 +282,11 @@ def _allocate_seq_and_create_message_with_activities(
     # above). Members who already got a more-specific activity (a mention)
     # for THIS message are excluded so they aren't double-notified.
     if parent is None:
-        already_notified = {str(a.recipient_id) for a in activities}
+        # Unions the mention TARGETS for the same reason `mentioned_recipient_ids`
+        # is built from them: a mention silenced because the recipient is reading
+        # the chat must not resurface as a plain-message notification, which is
+        # also a different push category and so a different mute setting.
+        already_notified = {str(a.recipient_id) for a in activities} | mentioned_recipient_ids
         member_ids = (
             ChannelMember.objects.filter(channel=channel, is_deleted=False)
             .exclude(user_id=sender.id)
