@@ -282,8 +282,21 @@ class MessageReminderTickTests(_ReminderMixin, BaseAPITestCase):
         push.assert_called_once()
         kwargs = push.call_args.kwargs
         self.assertEqual(str(kwargs["recipient_id"]), str(self.user.id))
-        self.assertEqual(kwargs["url"], f"/workspace/chat/gm/{self.channel.id}")
+        self.assertEqual(
+            kwargs["url"], f"/workspace/chat/gm/{self.channel.id}/message/{self.message.seq}"
+        )
         self.assertEqual(kwargs["tag"], f"message_reminder:{self.reminder.id}")
+
+    def test_the_link_names_the_message_so_the_client_can_focus_it(self):
+        """A link that stops at the channel drops the reader into the chat
+        with no way to tell which message the reminder was about."""
+        with patch.object(message_reminders, "schedule_push_for_reminder"):
+            message_reminders.fire_due()
+        item = InboxItems.objects.get(receiver=self.user)
+        self.assertEqual(
+            item.item_optionals["href"],
+            f"/workspace/chat/gm/{self.channel.id}/message/{self.message.seq}",
+        )
 
     def test_thread_reply_links_to_the_thread(self):
         """Opening the parent chat leaves a thread reply out of sight."""
@@ -303,9 +316,11 @@ class MessageReminderTickTests(_ReminderMixin, BaseAPITestCase):
         with patch.object(message_reminders, "schedule_push_for_reminder"):
             message_reminders.fire_due()
         item = InboxItems.objects.get(item_optionals__message_id=str(reply.id))
+        # Thread AND message: the thread segment opens the right pane, the
+        # message segment picks the reply out of it.
         self.assertEqual(
             item.item_optionals["href"],
-            f"/workspace/chat/gm/{self.channel.id}/thread/{root.id}",
+            f"/workspace/chat/gm/{self.channel.id}/thread/{root.id}/message/{reply.seq}",
         )
 
     def test_fires_exactly_once_across_passes(self):

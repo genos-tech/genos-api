@@ -171,18 +171,31 @@ def _truncate(text: str) -> str:
 
 
 def chat_href(message) -> str:
-    """Deep link to where the message lives, in the shape the frontend
-    router understands (`parseInternalUrl`): the channel, plus the thread
-    segment when the message is a reply, since opening the parent chat
-    leaves a thread reply out of sight."""
+    """Deep link to the message, in the shape the frontend router
+    understands (`parseInternalUrl` / `parseChatRoute`).
+
+    Three segments, each earning its place: the channel; the thread when
+    the message is a reply, since opening the parent chat leaves a reply
+    out of sight; and the message itself, so the client scrolls to and
+    highlights the bubble. Without that last one the link lands on the
+    chat and the reader has to work out which message they asked to be
+    reminded about — which is most of what the reminder was for.
+
+    The message segment is the per-channel `seq`, the same id the in-app
+    "Copy link to message" writes.
+    """
     channel = message.channel
     try:
         token = ChannelKind(channel.kind).label
     except (ValueError, AttributeError):
         return "/workspace/chat"
-    base = f"/workspace/chat/{token}/{channel.id}"
+    href = f"/workspace/chat/{token}/{channel.id}"
     root_id = message.thread_root_id or (message.parent_id if message.is_thread_reply else None)
-    return f"{base}/thread/{root_id}" if root_id else base
+    if root_id:
+        href += f"/thread/{root_id}"
+    if message.seq:
+        href += f"/message/{message.seq}"
+    return href
 
 
 def _card(message, reminder) -> tuple[dict, dict]:
