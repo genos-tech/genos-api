@@ -178,6 +178,86 @@ class PresenceTests(BaseAPITestCase):
         self.assertTrue(presence.is_device_visible(self.user2.id, ""))
 
 
+@override_settings(CACHES=LOCMEM)
+class PresenceScopeTests(BaseAPITestCase):
+    """WHICH devices a visible tab silences — a per-category choice.
+
+    `"device"` is the default and is covered by `DispatchTests`; these pin
+    the two deliberate departures from it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+
+    def _sub(self, device_id=""):
+        return PushSubscription.objects.create(
+            user=self.user2,
+            endpoint=f"https://example.com/{uuid.uuid4()}",
+            p256dh="p256",
+            auth="auth",
+            device_id=device_id,
+        )
+
+    def _queue(self, **kwargs):
+        """Call the fan-out with the send mocked and the pool synchronous."""
+        with (
+            mock.patch.object(webpush_dispatch, "send_web_push") as send,
+            mock.patch.object(
+                webpush_dispatch._executor, "submit", side_effect=lambda fn, **kw: fn(**kw)
+            ),
+        ):
+            webpush_dispatch._queue_push(
+                recipient_id=self.user2.id,
+                category="agent_run_done",
+                title="Your AI answer is ready",
+                body="",
+                url="/workspace/genos",
+                tag="agent_run_done:run-1",
+                **kwargs,
+            )
+        return send
+
+    def test_user_scope_silences_every_device_when_one_is_visible(self):
+        """Asking Genos on the laptop must not buzz the phone.
+
+        This answer is to a question the user asked seconds ago, and the
+        laptop they asked from is already showing it. Under the default
+        per-device scope the phone still got a card for an answer they
+        were sitting there watching arrive.
+        """
+        self._sub(device_id="laptop-abc")
+        self._sub(device_id="phone-xyz")
+        presence.mark_visible(self.user2.id, "laptop-abc")
+
+        self._queue(presence_scope="user").assert_not_called()
+
+    def test_user_scope_still_pushes_when_no_device_is_visible(self):
+        # They really did walk away — the case the notice exists for.
+        self._sub(device_id="laptop-abc")
+        self._sub(device_id="phone-xyz")
+        self.assertEqual(self._queue(presence_scope="user").call_count, 2)
+
+    def test_device_scope_leaves_the_other_devices_notifying(self):
+        # The contrast that keeps this a per-category choice rather than
+        # a blanket change: same presence, default scope, phone still
+        # gets its card.
+        self._sub(device_id="laptop-abc")
+        phone = self._sub(device_id="phone-xyz")
+        presence.mark_visible(self.user2.id, "laptop-abc")
+
+        send = self._queue(presence_scope="device")
+        send.assert_called_once()
+        self.assertEqual(send.call_args.kwargs["subscription_id"], phone.id)
+
+    def test_ignore_scope_reaches_a_device_being_looked_at(self):
+        # Reminders: the open app has no way to raise the moment itself,
+        # so presence must not swallow it.
+        self._sub(device_id="laptop-abc")
+        presence.mark_visible(self.user2.id, "laptop-abc")
+        self._queue(presence_scope="ignore").assert_called_once()
+
+
 class ChatUrlTests(BaseAPITestCase):
     def test_url_token_per_kind(self):
         for kind, token in [
