@@ -1748,7 +1748,9 @@ def _push_run_complete(run, *, failed: bool) -> None:
     The in-app half of this lives in the frontend (`agentRunNotice.ts`);
     this is the away half. Gating (category preference, push master,
     presence, active subscriptions) all happens inside `_queue_push` —
-    the only policy here is the duration floor.
+    the only policy here is the duration floor and the presence SCOPE
+    (`"user"`, so a visible device silences the user's other devices
+    rather than just itself).
 
     The page ALSO raises its own card for this category (it can't see the
     gates below, so deferring would risk notifying nobody). The two are
@@ -1776,6 +1778,12 @@ def _push_run_complete(run, *, failed: bool) -> None:
             # Keyed on the run so a retry of the same ask still gets its
             # own card, but a duplicate close can't double-notify.
             tag=f"agent_run_done:{run.run_id}",
+            # An answer to a question the user asked seconds ago from one
+            # of their own devices, unlike everything else that pushes.
+            # If ANY of their devices is being looked at, that device is
+            # already showing this — so no device gets a card, rather
+            # than every other one buzzing while they watch it arrive.
+            presence_scope="user",
         )
     except Exception:  # noqa: BLE001 — a push must never fail a run
         log.exception("Completion push failed for run %s", getattr(run, "run_id", "?"))

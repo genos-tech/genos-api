@@ -113,6 +113,20 @@ class PushRunCompleteTests(BaseAPITestCase):
         self.assertEqual(kwargs["title"], "Your AI answer is ready")
         self.assertEqual(kwargs["tag"], f"agent_run_done:{run.run_id}")
 
+    def test_asks_for_user_wide_presence_suppression(self):
+        """One visible device silences the fan-out for ALL of them.
+
+        Every other push category is per-device, because news about what
+        someone else did is exactly what a phone is for. This one is an
+        answer the user asked for seconds ago from a device that is
+        already showing it, so a card on their other devices is the same
+        answer arriving twice.
+        """
+        run = self._run(age_seconds=120)
+        with mock.patch(PUSH_TARGET) as push:
+            agent_views._push_run_complete(run, failed=False)
+        self.assertEqual(push.call_args.kwargs["presence_scope"], "user")
+
     def test_skips_a_run_that_finished_immediately(self):
         # Answered before the user could plausibly have gone anywhere —
         # an OS card for that reads as noise, not as a completion.

@@ -169,7 +169,7 @@ def _push_spec(act) -> dict | None:
 
 
 def _queue_push(
-    *, recipient_id, category, title, body, url, tag, actor=None, skip_visible=True
+    *, recipient_id, category, title, body, url, tag, actor=None, presence_scope="device"
 ) -> bool:
     """Core fan-out for ONE recipient: preference gate + presence skip +
     active-subscription lookup + queue the HTTP send. Returns True when at
@@ -177,10 +177,26 @@ def _queue_push(
     push surface (activities, inbox, …) stays consistent — duplicating it
     per-path is what produced the original notification gaps.
 
-    `skip_visible=False` delivers to a device the user is currently looking
-    at. Only for notifications whose whole point is a specific MOMENT (a
-    reminder the user set themselves) — everything else is news about what
-    someone else did, which the open app already shows.
+    `presence_scope` chooses how a visible tab silences this push:
+
+    * ``"device"`` (default) — skip only the devices being looked at.
+      News about what someone ELSE did arrives at an unpredictable
+      moment, so the phone in your pocket is the whole point: keyed per
+      user instead, one laptop left open silenced every other device
+      indefinitely, which made push look broken on a second screen.
+    * ``"user"`` — skip EVERY device while any one of them is visible.
+      For news about something the user THEMSELVES just started from one
+      of these devices seconds ago. They know they asked, the device
+      they asked from is already showing it, and a second card in their
+      pocket is just the same answer arriving twice.
+    * ``"ignore"`` — deliver even to a device being looked at. Only for
+      notifications whose whole point is a specific MOMENT (a reminder
+      the user set themselves), which the open app can't announce.
+
+    ``"user"`` reads presence off the subscription rows, so a visible
+    device with no push subscription of its own won't silence the
+    others. That's the fail-open direction this module prefers
+    throughout: a redundant card beats a missing one.
     """
     recipient_id = str(recipient_id)
     if not should_push(recipient_id, category):
@@ -190,12 +206,13 @@ def _queue_push(
             "id", "endpoint", "p256dh", "auth", "device_id"
         )
     )
-    # Skip only the devices actually being looked at — PER DEVICE, not per
-    # user. Keyed per user, a laptop left open silenced the phone too,
-    # which made push look broken to anyone who works with the app on a
-    # second screen.
-    if skip_visible:
-        subs = [s for s in subs if not presence.is_device_visible(recipient_id, s["device_id"])]
+    if presence_scope != "ignore":
+        visible = {
+            s["id"] for s in subs if presence.is_device_visible(recipient_id, s["device_id"])
+        }
+        if visible and presence_scope == "user":
+            return False
+        subs = [s for s in subs if s["id"] not in visible]
     if not subs:
         return False
     # The service worker can't compute an unread total with the app
@@ -349,7 +366,7 @@ def schedule_push_for_reminder(*, recipient_id, title, body, url, tag, actor=Non
 
     Two deliberate departures from every other surface here:
 
-    - **It reaches a screen you are looking at** (`skip_visible=False`).
+    - **It reaches a screen you are looking at** (`presence_scope="ignore"`).
       The presence skip exists because news about what someone else did is
       already visible in the open app; a reminder is a MOMENT the user
       asked for, and the open app has no way to announce it — swallowing it
@@ -375,7 +392,7 @@ def schedule_push_for_reminder(*, recipient_id, title, body, url, tag, actor=Non
                 url=url,
                 tag=tag,
                 actor=actor,
-                skip_visible=False,
+                presence_scope="ignore",
             )
         except Exception as exc:  # noqa: BLE001 — never break the caller
             logger.warning("[webpush] reminder push error for %s: %s", rid, exc)
@@ -383,10 +400,15 @@ def schedule_push_for_reminder(*, recipient_id, title, body, url, tag, actor=Non
     transaction.on_commit(_run)
 
 
-def schedule_push_to_user(*, recipient_id, category, title, url, actor=None, tag=None) -> None:
+def schedule_push_to_user(
+    *, recipient_id, category, title, url, actor=None, tag=None, presence_scope="device"
+) -> None:
     """Defer a one-off notification (push + email enqueue) to a single
     user not backed by an Activity or InboxItems row (e.g. the GM-join
-    approval notice to the requester). Fires after commit; never raises."""
+    approval notice to the requester). Fires after commit; never raises.
+
+    `presence_scope` is forwarded to `_queue_push` — see its docstring.
+    Notices about something the user started themselves want `"user"`."""
     if not recipient_id:
         return
     rid = str(recipient_id)
@@ -409,6 +431,7 @@ def schedule_push_to_user(*, recipient_id, category, title, url, actor=None, tag
                 url=url,
                 tag=resolved_tag,
                 actor=actor,
+                presence_scope=presence_scope,
             )
         except Exception as exc:  # noqa: BLE001 — never break the caller
             logger.warning("[webpush] user push error for %s: %s", rid, exc)
