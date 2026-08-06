@@ -35,6 +35,7 @@ from origin.services.oauth.accounts import (
     resolve_account_for,
 )
 from origin.services.oauth.base import ProviderProfile, TokenResponse
+from origin.services.oauth.google import GoogleOAuthProvider
 from origin.views.common.oauth_views import OAuthCallbackView, _can_sign_in_with
 
 User = get_user_model()
@@ -687,6 +688,10 @@ class LoginRouteIsolationTests(TestCase):
     the moment a second row can exist: someone adding their personal
     Gmail to see one more calendar would be handing that Google account
     the keys to their work Genos account.
+
+    The gate's one exception is an identity that IS the account's own
+    email address, which is not a grant at all: whoever holds that
+    mailbox can already take the account over through password reset.
     """
 
     def setUp(self):
@@ -719,15 +724,36 @@ class LoginRouteIsolationTests(TestCase):
     def test_calendar_only_second_account_cannot_sign_in(self):
         """The case this gate exists for."""
         personal = self._account(self.signup_user, "personal-sub")
-        self.assertFalse(_can_sign_in_with(personal))
+        self.assertFalse(_can_sign_in_with(personal, provider_email="personal@gmail.com"))
 
-    def test_google_connected_by_an_email_signup_user_cannot_sign_in(self):
-        """An email/password user's Google row is a pure API connection.
-        They keep their password, so refusing it here locks nobody out."""
+    def test_an_email_signup_user_can_sign_in_with_their_own_google(self):
+        """They signed up with a password, connected the Google account
+        at the same address for its calendar, and now want to use it to
+        sign in. Their mailbox already reaches the account via password
+        reset, so there is nothing to protect them from here."""
         email_user = User.objects.create_user(
             username="emailer", email="e@example.com", password="pw123456"
         )
         row = self._account(email_user, "e-sub")
+        self.assertTrue(_can_sign_in_with(row, provider_email="E@Example.com"))
+
+    def test_an_email_signup_users_other_google_still_cannot_sign_in(self):
+        """The address is what the exception turns on — a different
+        Google account connected to the same user is still just an API
+        connection."""
+        email_user = User.objects.create_user(
+            username="emailer2", email="e2@example.com", password="pw123456"
+        )
+        row = self._account(email_user, "e2-other-sub")
+        self.assertFalse(_can_sign_in_with(row, provider_email="someone.else@gmail.com"))
+
+    def test_an_unknown_provider_email_fails_closed(self):
+        """A provider that returns no address can't be matched against
+        anything, and must not fall through to allowed."""
+        email_user = User.objects.create_user(
+            username="emailer3", email="e3@example.com", password="pw123456"
+        )
+        row = self._account(email_user, "e3-sub")
         self.assertFalse(_can_sign_in_with(row))
 
     def test_sole_signup_row_still_works_if_the_flag_is_wrong(self):
@@ -774,6 +800,81 @@ class LoginRouteIsolationTests(TestCase):
 
         self.assertIn("not_a_login_account", resp.url)
         mock_jwt.assert_not_called()
+
+    @patch("origin.views.common.oauth_views.OAuthCallbackView._issue_jwt")
+    def test_callback_names_the_method_that_would_have_worked(self, mock_jwt):
+        """The failure page can only say something useful if it knows how
+        the account actually signs in."""
+        personal = self._account(self.signup_user, "named-sub")
+        view = OAuthCallbackView()
+
+        resp = view._handle_login(
+            provider_name="google",
+            profile=ProviderProfile(
+                provider_user_id=personal.provider_user_id,
+                email="personal@example.com",
+                display_name="Personal",
+            ),
+            token_response=TokenResponse(
+                access_token="tok",
+                refresh_token="ref",
+                expires_in_seconds=3600,
+                granted_scopes=CALENDAR_SCOPES,
+            ),
+            next_path="/workspace",
+        )
+
+        self.assertIn("primary=google", resp.url)
+
+    @patch("origin.views.common.oauth_views.OAuthCallbackView._issue_jwt")
+    def test_callback_signs_in_through_the_accounts_own_google(self, mock_jwt):
+        """The other side of the gate, end to end: a calendar connection
+        at the account's own address does mint a session — and doing so
+        must not cost the user the calendar. A login grant carries only
+        openid/email/profile, so writing it over the row's Calendar-scoped
+        token would break event access until the next refresh."""
+        mock_jwt.return_value = ("access-jwt", "refresh-jwt")
+        email_user = User.objects.create_user(
+            username="callbacker", email="cb@example.com", password="pw123456"
+        )
+        row = self._account(
+            email_user, "cb-sub", provider_email="cb@example.com", scopes=CALENDAR_SCOPES
+        )
+        view = OAuthCallbackView()
+
+        resp = view._handle_login(
+            provider_name="google",
+            profile=ProviderProfile(
+                provider_user_id="cb-sub", email="cb@example.com", display_name="CB"
+            ),
+            token_response=TokenResponse(
+                access_token="login-scoped-token",
+                refresh_token=None,
+                expires_in_seconds=3600,
+                granted_scopes=["openid", "email", "profile"],
+            ),
+            next_path="/workspace",
+        )
+
+        self.assertNotIn("error=", resp.url)
+        mock_jwt.assert_called_once_with(email_user)
+
+        row.refresh_from_db()
+        self.assertEqual(row.access_token_encrypted, "placeholder")
+        self.assertEqual(row.scopes, CALENDAR_SCOPES)
+
+    def test_login_asks_google_which_account(self):
+        """Without the chooser Google resolves a login against whatever
+        session the browser already holds, so "Continue with Google" picks
+        an account the user never named — and any refusal that follows is
+        unintelligible to them."""
+        url = GoogleOAuthProvider().authorize_url(
+            state="st", intent="login", redirect_uri="https://api.example.com/cb"
+        )
+        self.assertIn("prompt=select_account", url)
+        # The forced re-consent stays connect-only: login needs no
+        # refresh_token, so it would be a screen for nothing.
+        self.assertNotIn("consent", url)
 
 
 class RecurrencePassthroughTests(TestCase):

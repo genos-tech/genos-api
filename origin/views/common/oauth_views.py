@@ -288,19 +288,18 @@ class OAuthCallbackView(APIView):
         )
 
         if existing:
-            # Connecting an account for its CALENDAR must not silently
-            # turn it into a way to sign in. This lookup is keyed only on
-            # the provider identity, so without this gate any account the
-            # user attached for API access would authenticate a login —
-            # somebody adding their personal Gmail to see one more
-            # calendar would be handing that Google account the keys to
-            # their work Genos account.
-            #
-            # Latent before multi-account (a user could only ever hold
-            # one Google row, and it was their signup row), reachable the
-            # moment a second row can exist.
-            if not _can_sign_in_with(existing):
-                return HttpResponseRedirect(_frontend_failure_url(reason="not_a_login_account"))
+            # This lookup is keyed only on the provider identity, so
+            # without a gate ANY account the user attached for API access
+            # would authenticate a login. `primary` names the method that
+            # will work, so the failure page can say more than "not this
+            # one".
+            if not _can_sign_in_with(existing, provider_email=profile.email):
+                return HttpResponseRedirect(
+                    _frontend_failure_url(
+                        reason="not_a_login_account",
+                        primary=existing.user.primary_auth_provider,
+                    )
+                )
             user = existing.user
             # Deactivated accounts must not sign in. The password path
             # gets this free (`authenticate()` → `user_can_authenticate`),
@@ -311,7 +310,13 @@ class OAuthCallbackView(APIView):
             # session that 401s on everything. Refuse at the door instead.
             if not user.is_active:
                 return HttpResponseRedirect(_frontend_failure_url(reason="account_inactive"))
-            self._save_tokens(existing, token_response)
+            # Deliberately NOT storing this round trip's token. A login
+            # grant carries openid/email/profile and nothing else, and we
+            # never read it again — we mint our own JWT. Writing it over
+            # what the row already holds would downgrade a Calendar-scoped
+            # token to a useless one and reset its expiry, breaking the
+            # user's calendar until the next refresh, as the price of
+            # signing in.
         else:
             # First time this provider identity has signed in. If our
             # CustomUser table already has a row with the same email,
@@ -556,13 +561,13 @@ class IntegrationsDisconnectAccountView(APIView):
         return _disconnect_account(account)
 
 
-def _can_sign_in_with(account: ConnectedAccount) -> bool:
+def _can_sign_in_with(account: ConnectedAccount, *, provider_email: Optional[str] = None) -> bool:
     """Whether this row may authenticate a LOGIN.
 
-    True only for the row the user established as their sign-in route —
-    their signup row. An account attached later for API access (a second
-    Google account added to see its calendar) is not a credential and
-    must never be accepted here.
+    True for the row the user established as their sign-in route (their
+    signup row), and for a row whose provider identity is the account's
+    own email address. Anything else — a second Google account added to
+    see its calendar — is a pure API connection, not a credential.
 
     `_is_last_signin_route` is the fallback for the same reason it guards
     deletion: if `is_login_identity` were ever wrong, a provider-signup
@@ -571,7 +576,28 @@ def _can_sign_in_with(account: ConnectedAccount) -> bool:
     provider is their signup row, so a second, calendar-only account
     still can't slip through.
     """
-    return account.is_login_identity or _is_last_signin_route(account)
+    if account.is_login_identity or _is_last_signin_route(account):
+        return True
+
+    # Connecting an account for its calendar deliberately does not make
+    # it a way to sign in: that is what stops a colleague's Google
+    # account, attached to see one more calendar, from unlocking the
+    # Genos account it was attached to.
+    #
+    # An identity that IS the account's own email address is the one
+    # exception, because it grants nothing new. Whoever completed this
+    # flow controls that mailbox, and controlling it is already enough to
+    # take the account over through password reset. Refusing only strands
+    # the ordinary case — someone who signed up with a password, later
+    # connected the matching Google account, and now wants to sign in
+    # with it.
+    #
+    # Compared against the address the provider returned on THIS round
+    # trip, never the stored `provider_email`, so a row left behind by an
+    # address the user has since given up cannot stand in for a live
+    # identity. Callers passing nothing fail closed.
+    own_email = (account.user.email or "").strip().lower()
+    return bool(own_email) and (provider_email or "").strip().lower() == own_email
 
 
 def _is_last_signin_route(account: ConnectedAccount) -> bool:
