@@ -11,6 +11,25 @@ Returned `Activity` rows are picked up by the WS layer
 (`socketio_events_v3/message_handlers` and `reaction_handlers`) and
 broadcast as `activity.created` to each recipient's `user:{id}` room
 so their sidebar updates without a refresh.
+
+## Recipients who are already looking
+
+A conversational activity tells someone about a conversation they are not
+in. When they ARE in it — the DM open on screen right now, the message
+they would be told about already rendered a few pixels away — the row is
+noise, and the feed it lands in is the one place the product uses to say
+"here is what you missed". So the three producers that fan a plain
+message out to an audience (`create_message_activities`,
+`create_thread_reply_activity`, `create_comment_participant_activities`)
+drop recipients whom `services/presence` reports as viewing that exact
+surface.
+
+Deliberately NOT applied to mentions or reactions: an @-mention is a
+direct address that people come back to the feed to find, and both are
+low-volume enough that neither was the noise being complained about.
+
+Suppression is per-recipient, which `Activity` already is — the other
+members of the same channel still get their row.
 """
 
 from __future__ import annotations
@@ -56,6 +75,49 @@ SURFACE_CHAT_NOTE = 8
 # comments, and a per-member row on every PM message would be noise (the
 # product decision behind the chat-activity feedback round).
 _MESSAGE_ACTIVITY_KINDS = (ChannelKind.DM, ChannelKind.GM, ChannelKind.MDM)
+
+
+def channel_surface(channel_id) -> str:
+    """Viewing token for a channel's main timeline.
+
+    These three builders are the backend half of a contract with the
+    frontend, which mints the same strings from its notification "active
+    surface" (`services/notifications/viewingSurface.ts`). Both sides have
+    a test pinning the literal format; change one and the other stops
+    matching, which fails open (the row gets written) rather than loudly.
+    """
+    return f"channel:{channel_id}"
+
+
+def thread_surface(thread_root_message_id) -> str:
+    """Viewing token for an open thread pane, keyed on the thread root."""
+    return f"thread:{thread_root_message_id}"
+
+
+def task_surface(task_id) -> str:
+    """Viewing token for an open task preview, whose comment stream is the
+    conversation surface for that task."""
+    return f"task:{task_id}"
+
+
+def _drop_active_viewers(recipient_ids: Iterable[str], surface: str, *, kind: str) -> List[str]:
+    """`recipient_ids` minus whoever is looking at `surface` right now."""
+    from origin.services import presence
+
+    ids = list(recipient_ids)
+    if not ids or not surface:
+        return ids
+    viewers = presence.viewers_of(surface, ids)
+    if not viewers:
+        return ids
+    logger.info(
+        "[v3_activity] %s: skipped %s of %s recipient(s) viewing %s",
+        kind,
+        len(viewers),
+        len(ids),
+        surface,
+    )
+    return [uid for uid in ids if uid not in viewers]
 
 
 def surface_activity_id(*, surface_type: int, entity_key: str, recipient_id: str) -> uuid.UUID:
@@ -332,6 +394,12 @@ def create_thread_reply_activity(
     if not recipients:
         logger.info("[v3_activity] thread_reply skipped: no other participants")
         return []
+    # Keyed on the thread root, not the channel: someone reading the main
+    # timeline is NOT reading this thread (replies live behind a pane), so
+    # they still get told.
+    recipients = _drop_active_viewers(recipients, thread_surface(root_id), kind="thread_reply")
+    if not recipients:
+        return []
     rows = [
         Activity(
             team_id=_team_id_for_channel(channel),
@@ -372,6 +440,8 @@ def create_message_activities(
       - The actor and falsy ids are skipped; the caller is expected to pass
         `recipient_ids` already minus anyone who got a more-specific MENTION
         activity for this message (mention beats a plain-message row).
+      - Recipients with this channel open on screen are skipped — they are
+        reading the message, not missing it (module docstring).
 
     The caller appends the returned rows to the broadcast list so each
     recipient's sidebar updates live via `activity.created`. These rows are
@@ -394,6 +464,7 @@ def create_message_activities(
             continue
         seen.add(s)
         targets.append(s)
+    targets = _drop_active_viewers(targets, channel_surface(channel.id), kind="message")
     if not targets:
         return []
     rows = [
@@ -446,6 +517,11 @@ def create_comment_participant_activities(
             continue
         seen.add(s)
         targets.append(s)
+    # The comment's own surface is the task preview it renders in, so the
+    # token is the task rather than the PM mirror channel — a project
+    # member with the PM chat open is not reading this task's comments.
+    if message.task_id is not None:
+        targets = _drop_active_viewers(targets, task_surface(message.task_id), kind="task_comment")
     if not targets:
         return []
     channel = message.channel
