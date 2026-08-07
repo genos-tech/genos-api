@@ -148,6 +148,32 @@ class ReadCursorViewTests(_ChannelMixin, BaseAPITestCase):
         )
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_non_uuid_message_id_returns_400_not_500(self):
+        """`Message.id` is a UUIDField, so a non-UUID string used to blow
+        up in `get_prep_value` as an uncaught 500. The web client reaches
+        this in normal use: an unacked message renders from an optimistic
+        echo keyed by its `corr-<random>` correlation id, and a mark-read
+        that fires before the ack forwards that placeholder."""
+        self.authenticate()
+        resp = self.client.put(
+            self.url,
+            {"last_read_message_id": "corr-iuxb112kesbmsiu9ms3"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_non_uuid_thread_root_id_returns_400_not_500(self):
+        self.authenticate()
+        resp = self.client.put(
+            self.url,
+            {
+                "last_read_message_id": str(self.m1.id),
+                "thread_root_id": "corr-iuxb112kesbmsiu9ms3",
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_message_from_other_channel_returns_404(self):
         """A real message that belongs to a DIFFERENT channel → 404 (the
         view scopes the lookup to `channel=channel`)."""

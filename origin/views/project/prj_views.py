@@ -553,6 +553,15 @@ class JoinProjectView(AuthenticatedAPIView):
     the person being added is already in the team, so a project cannot be
     used to pull in a total outsider.
 
+    ONE case is exempt from "the actor is inside the project": a team
+    member joining a PUBLIC project by themselves. That is what public
+    means here — the project is listed to the whole team with a Join
+    button (`ModalJoinProject`), and gating it on prior membership made
+    the button a guaranteed 404. Private projects keep the request →
+    owner-approval flow (`JoinProjectFromInboxView`); a non-team-member
+    still gets the same 404 as before, so the relaxation cannot be used
+    to discover projects from outside the team.
+
     Adding a member has a side effect worth remembering: the
     `_sync_pm_channel_member` signal mirrors the row into the project's
     PM channel, so this grants chat access too.
@@ -573,9 +582,21 @@ class JoinProjectView(AuthenticatedAPIView):
         project = ProjectMaster.objects.filter(
             project_id=project_id, team=team_id, is_deleted=False
         ).first()
+        # Self-service join of a public project (see the class docstring).
+        # Team membership is required HERE rather than left to the 403
+        # below so that an outsider still gets the indistinguishable 404
+        # instead of a 403 that confirms the project id is real.
+        is_public_self_join = (
+            project is not None
+            and not project.is_private
+            and str(attendee_id) == str(request.user.id)
+            and is_team_member(team_id, request.user.id)
+        )
         # 404 for "not yours" as well as "not there" — a 403 would
         # confirm the id names a real project (channel_views convention).
-        if project is None or not is_project_member(project_id, request.user.id):
+        if project is None or not (
+            is_public_self_join or is_project_member(project_id, request.user.id)
+        ):
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
 
         # Staffing the project is for the team that owns it. Any project

@@ -14,6 +14,8 @@ truth wins). This matches the legacy behaviour and prevents a stale
 client from rewinding the user's read state.
 """
 
+import uuid
+
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -24,6 +26,22 @@ from origin.models.chat.unified_models import (
 from origin.serializers.chat.unified_serializers import ReadCursorSerializer
 from origin.views.chat.message_views import _verify_member_or_404
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+
+
+def _as_uuid(value):
+    """Parse a client-supplied message id, or None if it isn't a UUID.
+
+    `Message.id` is a `UUIDField`, so handing it a non-UUID string makes
+    Django raise `ValidationError` from `get_prep_value` — an uncaught
+    500, not the 400 a malformed request deserves. This is reachable in
+    normal use: the web client renders an optimistic echo keyed by its
+    `corr-<random>` correlation id, and a mark-read that fires before
+    the server ack lands forwards that placeholder as the cursor.
+    """
+    try:
+        return uuid.UUID(str(value))
+    except (AttributeError, TypeError, ValueError):
+        return None
 
 
 class ReadCursorView(AuthenticatedAPIView):
@@ -52,9 +70,16 @@ class ReadCursorView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        target_id = _as_uuid(last_read_message_id)
+        if target_id is None:
+            return Response(
+                {"error": "last_read_message_id must be a UUID."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Verify the target message exists and belongs to this channel.
         try:
-            target = Message.objects.get(id=last_read_message_id, channel=channel)
+            target = Message.objects.get(id=target_id, channel=channel)
         except Message.DoesNotExist:
             return Response(
                 {"error": "last_read_message_id not found in this channel."},
@@ -63,8 +88,15 @@ class ReadCursorView(AuthenticatedAPIView):
 
         # For thread cursors: enforce that the target is inside the thread.
         if thread_root_id is not None:
+            root_id = _as_uuid(thread_root_id)
+            if root_id is None:
+                return Response(
+                    {"error": "thread_root_id must be a UUID."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            thread_root_id = root_id
             try:
-                Message.objects.get(id=thread_root_id, channel=channel)
+                Message.objects.get(id=root_id, channel=channel)
             except Message.DoesNotExist:
                 return Response(
                     {"error": "thread_root_id not found in this channel."},
