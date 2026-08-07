@@ -273,6 +273,12 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 "is_offline_forced": data["user"]["is_offline_forced"],
                 "role": data["user"]["role"],
                 "base_country": data["user"]["base_country"],
+                # The client mirrors these into localStorage and builds
+                # `myself` from it, so without them your own profile card
+                # comes back blank after every sign-out.
+                "phone_number": data["user"]["phone_number"],
+                "current_location": data["user"]["current_location"],
+                "about_me": data["user"]["about_me"],
                 "custom_status": data["user"]["custom_status"],
             }
         )
@@ -351,6 +357,9 @@ class DemoSignInView(APIView):
             "is_offline_forced": user.is_offline_forced,
             "role": user.role or "",
             "base_country": user.base_country or "",
+            "phone_number": user.phone_number or "",
+            "current_location": user.current_location or "",
+            "about_me": user.about_me or "",
             "custom_status": user.custom_status or "",
             "team_id": team_info["team_id"],
             "team_name": team_info["team_name"],

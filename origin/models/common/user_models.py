@@ -110,6 +110,28 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     # Storage stays UTC — `settings.TIME_ZONE` is unchanged. This field only
     # affects which calendar day a moment falls in.
     timezone = models.CharField(max_length=64, blank=True, null=True)
+    # Where the user SAYS they are, as an IANA zone name picked from the
+    # profile editor. NULL means they never picked one.
+    #
+    # Deliberately a separate column from `timezone` above rather than a
+    # writable path into it. `timezone` is browser-derived and rewritten on
+    # every boot, so a manual value stored there would survive exactly
+    # until the user's laptop next disagreed with it. Keeping the two apart
+    # lets the implicit signal stay implicit and the explicit one win:
+    # readers resolve local time as `current_location or timezone`.
+    #
+    # A zone rather than free text because it has to answer two questions
+    # at once — where someone is, and what time it is there — and a zone
+    # answers both exactly. The city component is the display label. If
+    # this ever needs to hold prose ("Remote, travelling"), widen the
+    # validation in `UserSerializer` and give local time its own column.
+    current_location = models.CharField(max_length=64, blank=True, null=True)
+    # Free-text self-introduction rendered as markdown, shown on the
+    # profile card. NULL / "" means the section is hidden entirely rather
+    # than showing an empty box. Length is capped in the serializer, not
+    # here: this rides along in every team-roster row, so the cap is about
+    # payload size and it belongs where the error message can say so.
+    about_me = models.TextField(blank=True, null=True)
     # UI language ("en", "ja"), captured from the app's active locale the
     # same way `timezone` is captured from the browser: reported by the
     # client at boot, never typed by the user, unknown values stored as

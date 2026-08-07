@@ -1,4 +1,5 @@
 import hashlib
+import zoneinfo
 
 from django.utils import timezone
 from rest_framework import serializers
@@ -6,6 +7,12 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from origin.models.common import user_models
 from origin.models.common.invite_models import TeamInvite
+
+# Ceiling on `about_me`. Generous for a profile blurb and small enough that
+# a roster of a few hundred people stays a sensible response — this field
+# is embedded in every team-member row, so the cap is a payload budget as
+# much as a UI one.
+ABOUT_ME_MAX_LENGTH = 500
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -22,6 +29,9 @@ class UserSerializer(serializers.ModelSerializer):
             "custom_status",
             "role",
             "base_country",
+            "timezone",
+            "current_location",
+            "about_me",
             "last_seen",
             "ts_created_at",
             "ts_updated_at",
@@ -37,12 +47,47 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "last_seen",
+            # Browser-derived and owned by `PATCH /user/preferences/timezone/`.
+            # Exposed here so a profile read can show someone's local time
+            # without a second request, but not writable on this path: the
+            # user-chosen equivalent is `current_location`, and letting both
+            # be set here would make "which one did the client mean" a
+            # question the server can't answer.
+            "timezone",
             "ts_created_at",
             "ts_updated_at",
             "token",
             "token_expiration",
             "ts_last_login_at",
         ]
+
+    def validate_current_location(self, value):
+        """An IANA zone name, or empty to clear it.
+
+        Validated against the system's zone database rather than a list we
+        maintain, so it accepts exactly what `zoneinfo.ZoneInfo` will later
+        accept. Storing a name that doesn't resolve would fail at render
+        time instead — on whoever happened to open the profile.
+        """
+        if value in (None, ""):
+            return value
+        if value not in zoneinfo.available_timezones():
+            raise serializers.ValidationError(f"'{value}' is not a known IANA timezone name.")
+        return value
+
+    def validate_about_me(self, value):
+        if value is None:
+            return value
+        # Trailing whitespace is invisible but still counts against the
+        # cap, so trim before measuring — otherwise a user pasting text
+        # with a trailing newline gets rejected for a character they can't
+        # see and can't find.
+        cleaned = value.strip()
+        if len(cleaned) > ABOUT_ME_MAX_LENGTH:
+            raise serializers.ValidationError(
+                f"Keep this under {ABOUT_ME_MAX_LENGTH} characters (currently {len(cleaned)})."
+            )
+        return cleaned
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
