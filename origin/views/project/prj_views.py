@@ -210,6 +210,9 @@ class ProjectMasterView(AuthenticatedAPIView):
                     "attendee__role",
                     "member_role",
                     "attendee__base_country",
+                    "attendee__current_location",
+                    "attendee__timezone",
+                    "attendee__about_me",
                     "attendee__custom_status",
                     "attendee__ts_created_at",
                     "attendee__is_system_user",
@@ -242,6 +245,16 @@ class ProjectMasterView(AuthenticatedAPIView):
                             if attendee["attendee__base_country"]
                             else ""
                         ),
+                        # No `phoneNumber` here, and it isn't an oversight.
+                        # A project roster spans teams — `team__team_id` is
+                        # per-row precisely because guests and shared-in
+                        # collaborators appear alongside colleagues — so
+                        # "the caller is a teammate of this person" is not
+                        # something membership of the project establishes.
+                        # The team roster is where a phone number belongs.
+                        "currentLocation": attendee["attendee__current_location"] or "",
+                        "timezone": attendee["attendee__timezone"] or "",
+                        "aboutMe": attendee["attendee__about_me"] or "",
                         "customStatus": (
                             attendee["attendee__custom_status"]
                             if attendee["attendee__custom_status"]

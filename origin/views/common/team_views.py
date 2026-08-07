@@ -153,9 +153,7 @@ class TeamMasterView(AuthenticatedAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             collision = (
-                TeamMaster.objects.filter(team_name=new_name)
-                .exclude(team_id=team.team_id)
-                .exists()
+                TeamMaster.objects.filter(team_name=new_name).exclude(team_id=team.team_id).exists()
             )
             if collision:
                 return Response(
@@ -925,6 +923,19 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 # "owner" using `teamOwnerId`. See services/member_roles.
                 memberRole=F("member_role"),
                 baseCountry=F("attendee__base_country"),
+                # Phone rides along for TEAMMATES only. The external-guest
+                # rows built by `_external_people_rows` deliberately omit
+                # it — someone from another team is in this roster because
+                # a share put you on the same object, which is not a reason
+                # to hand them a phone number.
+                phoneNumber=F("attendee__phone_number"),
+                # Both zones travel: `currentLocation` is what the user
+                # picked, `timezone` is what their browser reported. The
+                # client shows the first and falls back to the second, so
+                # it needs both to make that choice.
+                currentLocation=F("attendee__current_location"),
+                timezone=F("attendee__timezone"),
+                aboutMe=F("attendee__about_me"),
                 isSystemUser=F("attendee__is_system_user"),
             )
             .values(
@@ -941,6 +952,10 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 "role",
                 "memberRole",
                 "baseCountry",
+                "phoneNumber",
+                "currentLocation",
+                "timezone",
+                "aboutMe",
                 "isSystemUser",
             )
         )
@@ -957,12 +972,10 @@ class GetMyTeamsView(AuthenticatedAPIView):
             # Union, not either/or: the same person can be a guest on a
             # project AND an external participant in a chat in the same
             # host team, and each source discloses a different slice.
-            visible = guest_visible_user_ids(gid, user_id) | external_visible_user_ids(
-                gid, user_id
-            )
-            members_by_team[gid] = [
+            visible = guest_visible_user_ids(gid, user_id) | external_visible_user_ids(gid, user_id)
+            members_by_team[gid] = _without_phone(
                 m for m in members_by_team.get(gid, []) if str(m["userId"]) in visible
-            ]
+            )
 
         my_teams = [
             {
@@ -1009,6 +1022,23 @@ class GetAllTeamsView(AuthenticatedAPIView):
         return Response(teams, status=status.HTTP_200_OK)
 
 
+def _without_phone(rows) -> list:
+    """Roster rows with `phoneNumber` removed, for a caller outside the team.
+
+    Guests and cross-team participants both read team rosters — a guest
+    through the one project they were invited to, an external participant
+    through the one object shared with them — and both get there without
+    a `TeamMembers` row. Every other field on these rows is context the
+    share itself implies; a phone number is the one that assumes the
+    reader is a colleague.
+
+    Applied as a projection over the built rows rather than a second,
+    narrower query so that the rule lives in exactly one place and can't
+    drift between the two views that need it.
+    """
+    return [{key: value for key, value in row.items() if key != "phoneNumber"} for row in rows]
+
+
 def _external_people_rows(team_id, team_name, user_id) -> list:
     """Roster rows for the other teams' people this member works with.
 
@@ -1040,6 +1070,11 @@ def _external_people_rows(team_id, team_name, user_id) -> list:
         ).values_list("team_id", "profile_image_file_name")
     }
     rows = []
+    # `phone_number` is deliberately absent from this projection. These
+    # rows describe people from ANOTHER team, surfaced here only because a
+    # cross-team share put them on an object with you. Their job title and
+    # status are the context that share needs; their phone number is not,
+    # and the only way to be sure it never ships is to never select it.
     users = CustomUser.objects.filter(id__in=people.keys(), is_deleted=False).values(
         "id",
         "username",
@@ -1048,6 +1083,9 @@ def _external_people_rows(team_id, team_name, user_id) -> list:
         "is_offline_forced",
         "role",
         "base_country",
+        "current_location",
+        "timezone",
+        "about_me",
         "custom_status",
         "ts_created_at",
     )
@@ -1065,6 +1103,9 @@ def _external_people_rows(team_id, team_name, user_id) -> list:
                 "role": user["role"] or "",
                 "memberRole": GUEST,
                 "baseCountry": user["base_country"] or "",
+                "currentLocation": user["current_location"] or "",
+                "timezone": user["timezone"] or "",
+                "aboutMe": user["about_me"] or "",
                 "customStatus": user["custom_status"] or "",
                 "tsLastSeen": "",
                 "tsJoined": user["ts_created_at"],
@@ -1152,6 +1193,10 @@ class GetTeamMembersView(AuthenticatedAPIView):
                 "attendee__is_offline_forced",
                 "attendee__role",
                 "attendee__base_country",
+                "attendee__phone_number",
+                "attendee__current_location",
+                "attendee__timezone",
+                "attendee__about_me",
                 "attendee__custom_status",
                 "attendee__ts_created_at",
                 "attendee__is_system_user",
@@ -1184,6 +1229,12 @@ class GetTeamMembersView(AuthenticatedAPIView):
                         if attendee["attendee__base_country"]
                         else ""
                     ),
+                    # Teammates only. `_external_people_rows` builds the
+                    # guest rows for this same roster and omits this key.
+                    "phoneNumber": attendee["attendee__phone_number"] or "",
+                    "currentLocation": attendee["attendee__current_location"] or "",
+                    "timezone": attendee["attendee__timezone"] or "",
+                    "aboutMe": attendee["attendee__about_me"] or "",
                     "customStatus": (
                         attendee["attendee__custom_status"]
                         if attendee["attendee__custom_status"]
@@ -1200,6 +1251,10 @@ class GetTeamMembersView(AuthenticatedAPIView):
 
         if guest_visible is None:
             response_data.extend(_external_people_rows(team_id, team_name, request.user.id))
+        else:
+            # `guest_visible` is only set when the caller failed
+            # `is_team_member`, so this branch IS the outside-caller case.
+            response_data = _without_phone(response_data)
 
         return Response(
             build_delta_response(
@@ -1252,6 +1307,10 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
                 "attendee__role",
                 "member_role",
                 "attendee__base_country",
+                "attendee__phone_number",
+                "attendee__current_location",
+                "attendee__timezone",
+                "attendee__about_me",
                 "attendee__custom_status",
                 "attendee__is_system_user",
             )
@@ -1283,6 +1342,12 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
             "role": member_info.get("attendee__role", ""),
             "memberRole": member_info.get("member_role", "viewer"),
             "baseCountry": member_info.get("attendee__base_country", ""),
+            # This view is reachable only for a member of a team the caller
+            # is themselves in, so the teammates-only rule already holds.
+            "phoneNumber": member_info.get("attendee__phone_number") or "",
+            "currentLocation": member_info.get("attendee__current_location") or "",
+            "timezone": member_info.get("attendee__timezone") or "",
+            "aboutMe": member_info.get("attendee__about_me") or "",
             "customStatus": member_info.get("attendee__custom_status", ""),
             "isSystemUser": member_info.get("attendee__is_system_user", None),
         }

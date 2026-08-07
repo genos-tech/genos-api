@@ -159,6 +159,45 @@ class TestGuestMentionSource(GuestRosterBase):
         self.assertEqual(res.status_code, 404)
 
 
+class TestGuestDoesNotGetPhoneNumbers(GuestRosterBase):
+    """A guest sees WHO they share a project with, not how to phone them.
+
+    Narrowing the roster answers "who exists?"; it says nothing about how
+    much of each surviving row a guest should get. `phoneNumber` is the
+    one field on a member row that assumes the reader is a colleague, and
+    a guest — invited to one project by one person — is not.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user.phone_number = "+81 90-1234-5678"
+        self.user.save(update_fields=["phone_number"])
+
+    def test_guest_roster_rows_carry_no_phone_key(self):
+        self.authenticate(self.guest)
+        res = self.client.get(TEAM_MEMBERS, {"team_id": str(self.team.team_id)})
+        rows = res.data["data"]["members"]
+        self.assertTrue(rows, "the shared member should still be visible")
+        for row in rows:
+            self.assertNotIn("phoneNumber", row)
+
+    def test_guest_team_shell_carries_no_phone_key(self):
+        self.authenticate(self.guest)
+        res = self.client.get(MY_TEAMS)
+        for row in res.data[0]["teamMembers"]:
+            self.assertNotIn("phoneNumber", row)
+
+    def test_a_real_member_still_gets_it(self):
+        # The control: withholding from guests is only worth testing if
+        # the field reaches colleagues in the first place.
+        self.authenticate(self.user2)
+        res = self.client.get(TEAM_MEMBERS, {"team_id": str(self.team.team_id)})
+        rows = res.data["data"]["members"]
+        mine = [r for r in rows if r["userEmail"] == self.user.email]
+        self.assertEqual(len(mine), 1)
+        self.assertEqual(mine[0]["phoneNumber"], "+81 90-1234-5678")
+
+
 class TestGuestInTwoTeams(GuestRosterBase):
     def test_full_member_in_one_team_and_guest_in_another(self):
         """The narrowing is per-team, not per-user: being a guest
@@ -185,3 +224,32 @@ class TestGuestInTwoTeams(GuestRosterBase):
         # ...narrow roster in the team they're a guest in.
         client_emails = {m["userEmail"] for m in by_team[str(self.team.team_id)]["teamMembers"]}
         self.assertNotIn(self.bystander.email, client_emails)
+
+    def test_phone_visibility_is_per_team_too(self):
+        """One response, both rules — the same person is a colleague in
+        one team of this payload and an outsider in the other."""
+        from origin.models.common.team_models import TeamMaster
+
+        home = TeamMaster.objects.create(
+            team_name="Guest Home Team 2", team_email="guesthome2@example.com", owner=self.guest
+        )
+        TeamMembers.objects.create(team=home, attendee=self.guest)
+        colleague = User.objects.create_user(
+            username="colleague2",
+            email="colleague2@agency.example",
+            password="pw",
+            phone_number="+44 7700 900000",
+        )
+        TeamMembers.objects.create(team=home, attendee=colleague)
+        self.user.phone_number = "+81 90-1234-5678"
+        self.user.save(update_fields=["phone_number"])
+
+        self.authenticate(self.guest)
+        res = self.client.get(MY_TEAMS)
+        by_team = {str(t["teamId"]): t for t in res.data}
+
+        home_rows = {m["userEmail"]: m for m in by_team[str(home.team_id)]["teamMembers"]}
+        self.assertEqual(home_rows[colleague.email]["phoneNumber"], "+44 7700 900000")
+
+        for row in by_team[str(self.team.team_id)]["teamMembers"]:
+            self.assertNotIn("phoneNumber", row)

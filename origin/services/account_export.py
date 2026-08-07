@@ -178,6 +178,8 @@ def build_export(user) -> dict:
             "job_title": user.role,
             "custom_status": user.custom_status,
             "base_country": user.base_country,
+            "current_location": user.current_location,
+            "about_me": user.about_me,
             "timezone": user.timezone,
             "language": user.language,
             "auth_provider": user.primary_auth_provider,
