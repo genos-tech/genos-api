@@ -209,10 +209,37 @@ class ProjectJoinAuthorizationTests(BaseAPITestCase):
             ProjectMembers.objects.filter(project=self.project, attendee=self.outsider).exists()
         )
 
-    def test_team_member_outside_the_project_cannot_add_themselves(self):
+    def test_team_member_cannot_add_themselves_to_a_private_project(self):
+        """Private projects keep the request → owner-approval flow. Only
+        the PUBLIC case below is self-service."""
+        private = ProjectMaster.objects.create(
+            team=self.team, project_name="Private Join Project", owner=self.user, is_private=True
+        )
         self.authenticate(self.team_only)
-        res = self.client.post(PROJECT_JOIN, self._payload(self.team_only), format="json")
+        res = self.client.post(
+            PROJECT_JOIN,
+            {
+                "team_id": str(self.team.team_id),
+                "project_id": private.project_id,
+                "attendee_id": str(self.team_only.id),
+            },
+            format="json",
+        )
         self.assertEqual(res.status_code, 404)
+        self.assertFalse(
+            ProjectMembers.objects.filter(project=private, attendee=self.team_only).exists()
+        )
+
+    def test_team_member_cannot_add_a_third_party_to_a_public_project(self):
+        """The public exemption is self-join only — it must not become a
+        way for a non-member to staff someone else's project."""
+        self.assertFalse(self.project.is_private)
+        self.authenticate(self.team_only)
+        res = self.client.post(PROJECT_JOIN, self._payload(self.user2), format="json")
+        self.assertEqual(res.status_code, 404)
+        self.assertFalse(
+            ProjectMembers.objects.filter(project=self.project, attendee=self.user2).exists()
+        )
 
     def test_outsider_cannot_be_added_by_a_project_member(self):
         """A project must not be usable to pull in someone outside the team."""
@@ -249,6 +276,17 @@ class ProjectJoinAuthorizationTests(BaseAPITestCase):
         is the documented project policy."""
         ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
         self.authenticate(self.user2)  # a plain project member
+        res = self.client.post(PROJECT_JOIN, self._payload(self.team_only), format="json")
+        self.assertEqual(res.status_code, 201)
+        self.assertTrue(
+            ProjectMembers.objects.filter(project=self.project, attendee=self.team_only).exists()
+        )
+
+    def test_team_member_may_self_join_a_public_project(self):
+        """What the "Join" button in `ModalJoinProject` does. Gating this
+        on prior project membership made the button always 404."""
+        self.assertFalse(self.project.is_private)
+        self.authenticate(self.team_only)
         res = self.client.post(PROJECT_JOIN, self._payload(self.team_only), format="json")
         self.assertEqual(res.status_code, 201)
         self.assertTrue(
