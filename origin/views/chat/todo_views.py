@@ -7,12 +7,13 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
-from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
+from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem, ToDoSchedule
 from origin.search_engine.purge import purge_todo_item
 from origin.serializers.chat.todo_serializers import (
     ToDoCategorySerializer,
     ToDoGroupSerializer,
     ToDoItemSerializer,
+    ToDoScheduleSerializer,
 )
 from origin.services.user_time import user_today
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -288,4 +289,126 @@ class ToDoCategoryDetailView(AuthenticatedAPIView):
         if category is None:
             return Response({"error": "forbidden"}, status=status.HTTP_403_FORBIDDEN)
         category.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ToDoScheduleListView(AuthenticatedAPIView):
+    """GET (list) / POST (create) /api/v2/todo/schedules/.
+
+    A schedule is a recurring rule (an RRULE string) that the CLIENT
+    expands into daily items — the server only stores the rule and the
+    `last_materialized_date` cursor the client advances via PATCH.
+    """
+
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        if res := validate_request_data({"team_id": team_id}):
+            return res
+        # List active AND inactive so the modal can show paused rules.
+        schedules = ToDoSchedule.objects.filter(
+            team_id=team_id, user_id=request.user.id
+        ).order_by("-ts_created_at")
+        return Response(
+            ToDoScheduleSerializer(schedules, many=True).data, status=status.HTTP_200_OK
+        )
+
+    def post(self, request):
+        team_id = request.data.get("team_id")
+        title = (request.data.get("title") or "").strip()
+        rrule = (request.data.get("rrule") or "").strip()
+        start_date = _parse_date(request.data.get("start_date"))
+        if res := validate_request_data(
+            {"team_id": team_id, "title": title, "rrule": rrule, "start_date": start_date}
+        ):
+            return res
+
+        category = None
+        category_id = request.data.get("category_id")
+        if category_id is not None:
+            category = ToDoCategory.objects.filter(
+                category_id=category_id, user_id=request.user.id
+            ).first()
+            if category is None:
+                return Response(
+                    {"error": "category_id not found for this user."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        schedule = ToDoSchedule.objects.create(
+            team_id=team_id,
+            user_id=request.user.id,
+            title=title,
+            rrule=rrule,
+            start_date=start_date,
+            category=category,
+            is_active=bool(request.data.get("is_active", True)),
+        )
+        return Response(
+            ToDoScheduleSerializer(schedule).data, status=status.HTTP_201_CREATED
+        )
+
+
+class ToDoScheduleDetailView(AuthenticatedAPIView):
+    """PATCH / DELETE /api/v2/todo/schedules/<schedule_id>/."""
+
+    def _get_owned(self, request, schedule_id):
+        schedule = get_object_or_404(ToDoSchedule, schedule_id=schedule_id)
+        if schedule.user_id != request.user.id:
+            return None
+        return schedule
+
+    def patch(self, request, schedule_id):
+        schedule = self._get_owned(request, schedule_id)
+        if schedule is None:
+            return Response({"error": "forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
+        if "title" in request.data:
+            schedule.title = (request.data.get("title") or "").strip()
+        if "rrule" in request.data:
+            schedule.rrule = (request.data.get("rrule") or "").strip()
+        if "start_date" in request.data:
+            parsed = _parse_date(request.data.get("start_date"))
+            if parsed is None:
+                return Response(
+                    {"error": "invalid start_date."}, status=status.HTTP_400_BAD_REQUEST
+                )
+            schedule.start_date = parsed
+        if "is_active" in request.data:
+            schedule.is_active = bool(request.data.get("is_active"))
+        if "last_materialized_date" in request.data:
+            # Nullable on purpose: null resets the cursor (re-arm the
+            # rule for today). Any non-null value must parse.
+            raw = request.data.get("last_materialized_date")
+            if raw is None:
+                schedule.last_materialized_date = None
+            else:
+                parsed = _parse_date(raw)
+                if parsed is None:
+                    return Response(
+                        {"error": "invalid last_materialized_date."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                schedule.last_materialized_date = parsed
+        if "category_id" in request.data:
+            cat_id = request.data.get("category_id")
+            if cat_id is None:
+                schedule.category = None
+            else:
+                category = ToDoCategory.objects.filter(
+                    category_id=cat_id, user_id=request.user.id
+                ).first()
+                if category is None:
+                    return Response(
+                        {"error": "category_id not found for this user."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                schedule.category = category
+        schedule.save()
+        return Response(ToDoScheduleSerializer(schedule).data, status=status.HTTP_200_OK)
+
+    def delete(self, request, schedule_id):
+        schedule = self._get_owned(request, schedule_id)
+        if schedule is None:
+            return Response({"error": "forbidden"}, status=status.HTTP_403_FORBIDDEN)
+        schedule.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

@@ -1,6 +1,11 @@
 from rest_framework import serializers
 
-from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
+from origin.models.chat.todo_models import (
+    ToDoCategory,
+    ToDoGroup,
+    ToDoItem,
+    ToDoSchedule,
+)
 
 
 class ToDoCategorySerializer(serializers.ModelSerializer):
@@ -41,6 +46,32 @@ class ToDoItemSerializer(serializers.ModelSerializer):
             "tsCreatedAt",
             "tsUpdatedAt",
             "tsCompletedAt",
+        ]
+
+
+class ToDoScheduleSerializer(serializers.ModelSerializer):
+    scheduleId = serializers.IntegerField(source="schedule_id", read_only=True)
+    categoryId = serializers.IntegerField(source="category_id", allow_null=True, required=False)
+    isActive = serializers.BooleanField(source="is_active", required=False)
+    startDate = serializers.DateField(source="start_date")
+    lastMaterializedDate = serializers.DateField(
+        source="last_materialized_date", allow_null=True, required=False
+    )
+    tsCreatedAt = serializers.DateTimeField(source="ts_created_at", read_only=True)
+    tsUpdatedAt = serializers.DateTimeField(source="ts_updated_at", read_only=True)
+
+    class Meta:
+        model = ToDoSchedule
+        fields = [
+            "scheduleId",
+            "categoryId",
+            "title",
+            "rrule",
+            "startDate",
+            "isActive",
+            "lastMaterializedDate",
+            "tsCreatedAt",
+            "tsUpdatedAt",
         ]
 
 
