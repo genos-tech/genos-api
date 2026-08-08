@@ -63,6 +63,65 @@ class ToDoCategory(models.Model):
         ]
 
 
+class ToDoSchedule(models.Model):
+    """A recurring rule that materializes into daily ToDoItems.
+
+    The rule itself (an RRULE string) and the "how far have we created
+    items" cursor live here; the occurrence math runs on the CLIENT,
+    which expands the RRULE, creates the day's item via the normal
+    POST /todo/items/ path, then PATCHes `last_materialized_date`
+    forward. Keeping expansion off the server avoids a Python RRULE
+    dependency and lets this stay a plain CRUD store.
+    """
+
+    schedule_id = models.BigAutoField(primary_key=True)
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        to_field="team_id",
+        related_name="todo_schedules",
+    )
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        to_field="id",
+        related_name="todo_schedules",
+    )
+    title = models.CharField(max_length=512)
+    # Optional tag so materialized items land pre-tagged. SET_NULL to
+    # match ToDoItem.category — deleting a category doesn't delete the
+    # rules that referenced it.
+    category = models.ForeignKey(
+        ToDoCategory,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="schedules",
+    )
+    # An RRULE string, e.g. "RRULE:FREQ=WEEKLY;BYDAY=MO". Built and read
+    # back by the frontend's calendar rrule utils.
+    rrule = models.CharField(max_length=512)
+    # Recurrence anchor and the earliest date an item may be created for.
+    start_date = models.DateField()
+    # Soft pause — an inactive rule stops materializing without losing
+    # its history.
+    is_active = models.BooleanField(default=True)
+    # The last local_date we created an item for. The idempotency guard:
+    # re-opening the app the same day can't duplicate because the client
+    # only materializes when this is strictly before today.
+    last_materialized_date = models.DateField(null=True, blank=True)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["user", "is_active"], name="todo_sched_user_active_idx"
+            ),
+        ]
+
+
 class ToDoItem(models.Model):
     item_id = models.BigAutoField(primary_key=True)
     group = models.ForeignKey(

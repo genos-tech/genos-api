@@ -22,4 +22,10 @@ urlpatterns = [
         ToDoCategoryDetailView.as_view(),
         name="todo_category_detail",
     ),
+    path("api/v2/todo/schedules/", ToDoScheduleListView.as_view(), name="todo_schedules"),
+    path(
+        "api/v2/todo/schedules/<int:schedule_id>/",
+        ToDoScheduleDetailView.as_view(),
+        name="todo_schedule_detail",
+    ),
 ]
