@@ -29,6 +29,7 @@ from typing import Any
 from django.db import transaction
 
 from origin.models.project.prj_models import ProjectMembers
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.task_enums import (
@@ -39,6 +40,7 @@ from origin.search_engine.agent.tools.task_enums import (
     VALID_PRIORITIES,
     VALID_STATUSES,
 )
+from origin.services.milestone_service import sync_backing_task
 from origin.services.task_cache import invalidate_project_tasks_cache
 
 _MAX_BULK_UPDATES = 30
@@ -165,6 +167,20 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "Bulk update validation failed (nothing was applied):\n- " + "\n- ".join(errors[:25])
         )
 
+    # Backing-task rows in the batch whose authoritative values live on a
+    # MilestoneMaster side table. Fetched in one query so the apply loop
+    # can mirror changes onto the milestone (and let `sync_backing_task`
+    # push them back down) instead of writing the mirror row directly,
+    # which the next milestone PATCH would silently revert — see
+    # update_task's milestone branch for the full rationale.
+    milestone_by_task_id = {
+        m.task_id: m
+        for m in MilestoneMaster.objects.filter(
+            task_id__in=[t.task_id for t, _c, _r in planned if t.is_milestone],
+            is_deleted=False,
+        )
+    }
+
     # ---- phase 2: apply all diffs atomically ----
     updated: list[dict[str, Any]] = []
     noops: list[int] = []
@@ -184,11 +200,25 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 if not update_fields:
                     noops.append(task.task_id)
                     continue
-                # "ts_updated_at" is required alongside the changed
-                # columns — auto_now only fires for fields named in
-                # update_fields, and the incremental reindexer keys off
-                # it. See update_task.
-                task.save(update_fields=[*update_fields, "ts_updated_at"])
+                milestone = milestone_by_task_id.get(task.task_id)
+                if milestone is not None:
+                    # Mirror the changed columns onto the milestone (each
+                    # shares its name with the backing task here) and let
+                    # `sync_backing_task` re-derive the backing row so the
+                    # milestone preview and the table stay in agreement.
+                    for field in update_fields:
+                        setattr(milestone, field, getattr(task, field))
+                    milestone.save()
+                    sync_backing_task(milestone)
+                    task.refresh_from_db()
+                else:
+                    # "ts_updated_at" is required alongside the changed
+                    # columns — auto_now only fires for fields named in
+                    # update_fields, and the incremental reindexer keys off
+                    # it. See update_task. (`sync_backing_task` above saves
+                    # the backing row wholesale, bumping every auto_now
+                    # field, so the milestone branch needs no explicit list.)
+                    task.save(update_fields=[*update_fields, "ts_updated_at"])
                 updated.append(
                     {
                         "task_id": task.task_id,
