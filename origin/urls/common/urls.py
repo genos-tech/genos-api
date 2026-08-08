@@ -287,6 +287,11 @@ urlpatterns = [
         name="spotlight_web_search_preference",
     ),
     path(
+        "api/v2/user/preferences/ui-settings/",
+        UiSettingsPreferenceView.as_view(),
+        name="ui_settings_preference",
+    ),
+    path(
         "api/v2/user/preferences/digest/",
         DigestPreferenceView.as_view(),
         name="digest_preference",
