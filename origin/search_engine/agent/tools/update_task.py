@@ -20,10 +20,16 @@ import uuid
 from datetime import date
 from typing import Any
 
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
+from origin.services.milestone_service import sync_backing_task
+
+# Backing-task columns whose milestone twin has a different name. Every
+# other mirrored field shares its name across the two models.
+_MILESTONE_FIELD_ALIASES = {"content": "description"}
 
 _VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"}
 # Canonical enums live in `frontend/.../taskMeta.ts`. Keep in sync —
@@ -184,13 +190,47 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         }
 
     try:
-        # `ts_updated_at` is auto_now, but Django only runs pre_save() on
-        # the fields named in update_fields — omit it and the timestamp
-        # silently stays put. It's the incremental reindexer's watermark
-        # (task_chunker filters ts_updated_at__gte) and list_tasks' sort
-        # key, so a status change that doesn't move it never reaches
-        # search. The REST path lists it explicitly for the same reason.
-        task.save(update_fields=[*update_fields, "ts_updated_at"])
+        milestone = (
+            MilestoneMaster.objects.filter(task_id=task.task_id, is_deleted=False).first()
+            if task.is_milestone
+            else None
+        )
+        if milestone is not None:
+            # A milestone is a task with `is_milestone=True`, but its
+            # AUTHORITATIVE values live on the MilestoneMaster side table;
+            # the backing TaskMaster row is a mirror `sync_backing_task`
+            # overwrites on the next milestone PATCH. Writing only the
+            # backing row (the plain `task.save` below) made the table
+            # show the new status while the preview kept the old one, and
+            # the next milestone edit silently reverted the backing row —
+            # data loss. So mirror the same changed fields onto the
+            # milestone and let `sync_backing_task` push them back down.
+            #
+            # The values are already assigned to `task`; copy them across
+            # by field name (aliasing the two columns that differ) rather
+            # than re-parsing the args.
+            for field in update_fields:
+                milestone_field = _MILESTONE_FIELD_ALIASES.get(field, field)
+                setattr(milestone, milestone_field, getattr(task, field))
+            milestone.save()
+            sync_backing_task(milestone)
+            # `sync_backing_task` re-derived and saved the backing row from
+            # the milestone, so the `task` instance mutated above is stale
+            # — re-read it for the response payload.
+            task.refresh_from_db()
+        else:
+            # `ts_updated_at` is auto_now, but Django only runs pre_save()
+            # on the fields named in update_fields — omit it and the
+            # timestamp silently stays put. It's the incremental
+            # reindexer's watermark (task_chunker filters
+            # ts_updated_at__gte) and list_tasks' sort key, so a status
+            # change that doesn't move it never reaches search. The REST
+            # path lists it explicitly for the same reason. (The milestone
+            # branch above saves the backing row wholesale, which bumps
+            # every auto_now field, so it needs no explicit list.)
+            task.save(update_fields=[*update_fields, "ts_updated_at"])
+    except ToolError:
+        raise
     except Exception as e:  # noqa: BLE001
         raise ToolError(f"Failed to update task: {e}")
 
