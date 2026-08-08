@@ -767,8 +767,11 @@ class ProjectMembersView(AuthenticatedAPIView):
         if res := require_project_member_or_response(request.user, project_id):
             return res
 
+        # Deleted accounts are soft-deleted and anonymised, not removed, so
+        # their ProjectMembers rows survive — filter them out here (the
+        # `attendee` FK is nullable, so this also drops any orphaned row).
         attendees = (
-            ProjectMembers.objects.filter(project=project_id)
+            ProjectMembers.objects.filter(project=project_id, attendee__is_deleted=False)
             .select_related("attendee")
             .values("attendee__id", "attendee__username")
         )
