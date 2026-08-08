@@ -232,6 +232,18 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     # forwards `allow_web_search` on each agent ask.
     spotlight_web_search_enabled = models.BooleanField(default=False)
 
+    # Free-form bag of cross-device UI preferences (theme, locale, chat
+    # bubble style, sidebar item visibility, …). Persisted per-account so
+    # these follow the user across devices/sessions, unlike the many
+    # device-local settings that stay in browser localStorage (auth
+    # mirrors, drafts, last-opened nav state). The frontend's
+    # `useUiSettings` provider owns the key vocabulary; the API stays
+    # schemaless and only shallow-merges posted keys, so a new synced
+    # preference is a frontend-only change (no migration). A single flat
+    # object of JSON-serialisable scalars — see the PATCH view for the
+    # value-type guard.
+    ui_settings = models.JSONField(default=dict, blank=True)
+
     # Subscription tier. Free is the default; admins move users to
     # 'pro' or 'max' via `manage.py feature_access set-tier`.
     tier = models.CharField(

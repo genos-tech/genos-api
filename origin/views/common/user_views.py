@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 
@@ -256,6 +257,104 @@ class SpotlightWebSearchPreferenceView(AuthenticatedAPIView):
             {"spotlight_web_search_enabled": value},
             status=status.HTTP_200_OK,
         )
+
+
+class UiSettingsPreferenceView(AuthenticatedAPIView):
+    """GET / PATCH the calling user's cross-device UI settings blob.
+
+    Backs `CustomUser.ui_settings` — a schemaless bag of preferences
+    (theme, locale, chat bubble style, sidebar item visibility, …) the
+    frontend `useUiSettings` provider owns. Scoped to `request.user`; no
+    user_id is accepted, so a leaked token can't rewrite someone else's
+    settings.
+
+    Persisting these server-side (rather than only in browser
+    localStorage) is what makes them follow the user across
+    devices/sessions.
+
+    GET returns `{ "ui_settings": { ... } }`. PATCH SHALLOW-MERGES the
+    posted keys into the stored object (send only what changed; omitted
+    keys are left as-is), so two independent settings screens don't
+    clobber each other. A key whose value is `null` is DELETED from the
+    blob — that's how the client resets a preference to its built-in
+    default. Values must be JSON scalars or a flat array/object of them;
+    the store is deliberately shallow and small, not a document db.
+    """
+
+    # Reject a payload that could bloat the row or smuggle in a deep,
+    # unbounded structure. Generous enough for every real preference.
+    _MAX_KEYS = 100
+    _MAX_KEY_LEN = 128
+    _MAX_SERIALIZED_BYTES = 16 * 1024
+
+    def get(self, request):
+        settings_blob = request.user.ui_settings
+        if not isinstance(settings_blob, dict):
+            settings_blob = {}
+        return Response({"ui_settings": settings_blob}, status=status.HTTP_200_OK)
+
+    def _value_ok(self, value) -> bool:
+        """A value is storable if it's a JSON scalar, or a flat list /
+        dict whose members are all scalars. One level deep only — the
+        blob is a preference bag, not a document store."""
+        if value is None or isinstance(value, (bool, int, float, str)):
+            return True
+        if isinstance(value, list):
+            return all(v is None or isinstance(v, (bool, int, float, str)) for v in value)
+        if isinstance(value, dict):
+            return all(
+                isinstance(k, str)
+                and (v is None or isinstance(v, (bool, int, float, str)))
+                for k, v in value.items()
+            )
+        return False
+
+    def patch(self, request):
+        patch = request.data
+        if not isinstance(patch, dict) or not patch:
+            return Response(
+                {"error": "Request body must be a non-empty object of settings to merge."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(patch) > self._MAX_KEYS:
+            return Response(
+                {"error": f"Too many keys (max {self._MAX_KEYS})."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        for key, value in patch.items():
+            if not isinstance(key, str) or not key or len(key) > self._MAX_KEY_LEN:
+                return Response(
+                    {"error": f"Invalid settings key: {key!r}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not self._value_ok(value):
+                return Response(
+                    {"error": f"Unsupported value for {key!r} — use JSON scalars or a flat list/object."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        current = request.user.ui_settings
+        if not isinstance(current, dict):
+            current = {}
+        merged = dict(current)
+        for key, value in patch.items():
+            # `null` deletes the key so the client can reset a preference
+            # to its built-in default rather than pinning an explicit one.
+            if value is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = value
+
+        if len(json.dumps(merged).encode("utf-8")) > self._MAX_SERIALIZED_BYTES:
+            return Response(
+                {"error": "Settings blob too large."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        request.user.ui_settings = merged
+        request.user.save(update_fields=["ui_settings"])
+        return Response({"ui_settings": merged}, status=status.HTTP_200_OK)
 
 
 class AutoSyncTasksToCalendarPreferenceView(AuthenticatedAPIView):
