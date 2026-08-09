@@ -15,7 +15,13 @@ from rest_framework import status
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
-from origin.services.guide_notes import GUIDE_FOLDER_NAME, GUIDE_NOTES, seed_guide_notes
+from origin.services.guide_notes import (
+    GUIDE_FOLDER_NAME,
+    GUIDE_NOTES,
+    JAPANESE_GUIDE_FOLDER_NAME,
+    JAPANESE_GUIDE_NOTES,
+    seed_guide_notes,
+)
 from origin.tests.test_base import BaseAPITestCase
 
 JOIN_URL = "/api/v2/team/join/"
@@ -32,32 +38,36 @@ class GuideNotesContentTests(BaseAPITestCase):
     """
 
     def test_every_note_has_a_title_and_a_body(self):
-        for title, body in GUIDE_NOTES:
-            self.assertTrue(title.strip(), "a guide note has an empty title")
-            self.assertTrue(body, f"guide note {title!r} has an empty body")
+        for guide_notes in (GUIDE_NOTES, JAPANESE_GUIDE_NOTES):
+            for title, body in guide_notes:
+                self.assertTrue(title.strip(), "a guide note has an empty title")
+                self.assertTrue(body, f"guide note {title!r} has an empty body")
 
     def test_titles_are_unique(self):
         # Duplicated titles make a citation ambiguous ("see the settings
         # page" — which one?) and look like a copy-paste accident in the
         # user's own note list.
-        titles = [title for title, _ in GUIDE_NOTES]
-        self.assertEqual(len(titles), len(set(titles)))
+        for guide_notes in (GUIDE_NOTES, JAPANESE_GUIDE_NOTES):
+            titles = [title for title, _ in guide_notes]
+            self.assertEqual(len(titles), len(set(titles)))
 
     def test_no_note_body_contains_an_empty_text_block(self):
         # `_body` emits a trailing blank paragraph per section by design;
         # an empty HEADING or bullet instead means a section was left
         # half-written.
-        for title, body in GUIDE_NOTES:
-            for block in body:
-                if block.get("type") == "paragraph":
-                    continue
-                text = "".join(
-                    item.get("text", "") for item in block.get("content", []) or []
-                )
-                self.assertTrue(
-                    text.strip(),
-                    f"guide note {title!r} has an empty {block.get('type')} block",
-                )
+        for guide_notes in (GUIDE_NOTES, JAPANESE_GUIDE_NOTES):
+            for title, body in guide_notes:
+                for block in body:
+                    if block.get("type") == "paragraph":
+                        continue
+                    text = "".join(item.get("text", "") for item in block.get("content", []) or [])
+                    self.assertTrue(
+                        text.strip(),
+                        f"guide note {title!r} has an empty {block.get('type')} block",
+                    )
+
+    def test_both_editions_have_the_same_number_of_notes(self):
+        self.assertEqual(len(JAPANESE_GUIDE_NOTES), len(GUIDE_NOTES))
 
 
 class GuideNotesOnJoinTests(BaseAPITestCase):
@@ -89,12 +99,12 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
                 format="json",
             )
 
-    def _guide_notes(self, user, team):
+    def _guide_notes(self, user, team, folder_name=GUIDE_FOLDER_NAME):
         return PersonalNoteMaster.objects.filter(
             team=team, owner=user, folder_id__isnull=False
         ).filter(
             folder_id__in=PersonalNoteFolder.objects.filter(
-                team=team, owner=user, name=GUIDE_FOLDER_NAME
+                team=team, owner=user, name=folder_name
             ).values_list("folder_id", flat=True)
         )
 
@@ -103,14 +113,19 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         notes = self._guide_notes(self.user, self.fresh_team)
         self.assertEqual(notes.count(), len(GUIDE_NOTES))
+        japanese_notes = self._guide_notes(self.user, self.fresh_team, JAPANESE_GUIDE_FOLDER_NAME)
+        self.assertEqual(japanese_notes.count(), len(JAPANESE_GUIDE_NOTES))
+        note_ids = list(notes.values_list("note_id", flat=True)) + list(
+            japanese_notes.values_list("note_id", flat=True)
+        )
         # Owner-role rows exist (the note APIs 403 without them).
         self.assertEqual(
             NotePermissionMaster.objects.filter(
                 team=self.fresh_team,
                 user=self.user,
-                note_id__in=notes.values_list("note_id", flat=True),
+                note_id__in=note_ids,
             ).count(),
-            len(GUIDE_NOTES),
+            len(GUIDE_NOTES) + len(JAPANESE_GUIDE_NOTES),
         )
         member = TeamMembers.objects.get(team=self.fresh_team, attendee=self.user)
         self.assertIsNotNone(member.guide_seeded_at)
@@ -128,10 +143,29 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
         self.assertEqual(self._guide_notes(self.user, self.team).count(), len(GUIDE_NOTES))
         self.assertEqual(
             PersonalNoteFolder.objects.filter(
-                team=self.team, owner=self.user, name=GUIDE_FOLDER_NAME
+                team=self.team,
+                owner=self.user,
+                name__in=(GUIDE_FOLDER_NAME, JAPANESE_GUIDE_FOLDER_NAME),
             ).count(),
-            1,
+            2,
         )
+
+    def test_missing_language_is_repaired_for_a_stamped_membership(self):
+        self._join(self.user, self.team)
+        japanese_folder = PersonalNoteFolder.objects.get(
+            team=self.team,
+            owner=self.user,
+            name=JAPANESE_GUIDE_FOLDER_NAME,
+        )
+        PersonalNoteMaster.objects.filter(folder_id=japanese_folder.folder_id).delete()
+        japanese_folder.delete()
+
+        self.assertTrue(seed_guide_notes(self.user, self.team))
+        self.assertEqual(
+            self._guide_notes(self.user, self.team, JAPANESE_GUIDE_FOLDER_NAME).count(),
+            len(JAPANESE_GUIDE_NOTES),
+        )
+        self.assertEqual(self._guide_notes(self.user, self.team).count(), len(GUIDE_NOTES))
 
     def test_deleted_guide_stays_deleted(self):
         # Personal-folder deletion is a HARD recursive delete; the
@@ -139,7 +173,9 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
         # re-ambushing the user with a fresh copy.
         self._join(self.user, self.team)
         PersonalNoteFolder.objects.filter(
-            team=self.team, owner=self.user, name=GUIDE_FOLDER_NAME
+            team=self.team,
+            owner=self.user,
+            name__in=(GUIDE_FOLDER_NAME, JAPANESE_GUIDE_FOLDER_NAME),
         ).delete()
         PersonalNoteMaster.objects.filter(team=self.team, owner=self.user).delete()
         self._join(self.user, self.team)
@@ -147,6 +183,10 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
         # force=True is the deliberate re-seed lever.
         seed_guide_notes(self.user, self.team, force=True)
         self.assertEqual(self._guide_notes(self.user, self.team).count(), len(GUIDE_NOTES))
+        self.assertEqual(
+            self._guide_notes(self.user, self.team, JAPANESE_GUIDE_FOLDER_NAME).count(),
+            len(JAPANESE_GUIDE_NOTES),
+        )
 
     def test_joining_someone_else_seeds_nothing(self):
         # Caller ≠ attendee: notes are personal, so nobody gets seeded.
@@ -158,8 +198,12 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
     def test_each_member_gets_their_own_copy(self):
         self._join(self.user, self.team)
         self._join(self.user2, self.team)
-        self.assertEqual(self._guide_notes(self.user, self.team).count(), len(GUIDE_NOTES))
-        self.assertEqual(self._guide_notes(self.user2, self.team).count(), len(GUIDE_NOTES))
+        for user in (self.user, self.user2):
+            self.assertEqual(self._guide_notes(user, self.team).count(), len(GUIDE_NOTES))
+            self.assertEqual(
+                self._guide_notes(user, self.team, JAPANESE_GUIDE_FOLDER_NAME).count(),
+                len(JAPANESE_GUIDE_NOTES),
+            )
 
     def test_demo_users_are_excluded(self):
         self.user.is_demo = True

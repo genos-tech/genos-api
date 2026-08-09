@@ -19,7 +19,12 @@ from origin.models.project.prj_models import ProjectMaster, ProjectTags
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.services.demo_seeder import delete_demo_environment
-from origin.services.starter_seeder import EXAMPLES_BLUEPRINT, STARTER_BLUEPRINT
+from origin.services.starter_seeder import (
+    EXAMPLES_BLUEPRINT,
+    JAPANESE_EXAMPLES_BLUEPRINT,
+    JAPANESE_STARTER_BLUEPRINT,
+    STARTER_BLUEPRINT,
+)
 from origin.tests.test_base import BaseAPITestCase
 
 
@@ -43,41 +48,53 @@ class StarterWorkspaceTests(BaseAPITestCase):
     def test_opt_in_seeds_the_full_starter_content(self):
         team = self._create_team(with_starter=True)
 
-        project = ProjectMaster.objects.get(team=team)
-        self.assertEqual(project.project_name, "Getting started with Genos")
-        self.assertEqual(str(project.owner_id), str(self.user.id))
-
-        tasks = TaskMaster.objects.filter(team=team, project=project)
-        # Both blueprints' tasks, plus one backing task per milestone.
-        self.assertEqual(
-            tasks.count(),
-            len(STARTER_BLUEPRINT["tasks"]) + len(EXAMPLES_BLUEPRINT["tasks"]) + 2,
+        project_blueprints = (
+            (STARTER_BLUEPRINT, EXAMPLES_BLUEPRINT),
+            (JAPANESE_STARTER_BLUEPRINT, JAPANESE_EXAMPLES_BLUEPRINT),
         )
-        # Every task belongs to the real user — no bot residue possible.
-        for task in tasks:
-            self.assertEqual(str(task.assignee_id), str(self.user.id))
-            self.assertEqual(str(task.reporter_id), str(self.user.id))
+        self.assertEqual(ProjectMaster.objects.filter(team=team).count(), 2)
+        for starter_blueprint, examples_blueprint in project_blueprints:
+            project = ProjectMaster.objects.get(team=team, project_name=starter_blueprint["name"])
+            self.assertEqual(str(project.owner_id), str(self.user.id))
 
-        self.assertEqual(
-            ProjectTags.objects.filter(project=project).count(),
-            len(STARTER_BLUEPRINT["tags"]),
+            tasks = TaskMaster.objects.filter(team=team, project=project)
+            # Both blueprints' tasks, plus one backing task per milestone.
+            self.assertEqual(
+                tasks.count(),
+                len(starter_blueprint["tasks"]) + len(examples_blueprint["tasks"]) + 2,
+            )
+            # Every task belongs to the real user — no bot residue possible.
+            for task in tasks:
+                self.assertEqual(str(task.assignee_id), str(self.user.id))
+                self.assertEqual(str(task.reporter_id), str(self.user.id))
+
+            self.assertEqual(
+                ProjectTags.objects.filter(project=project).count(),
+                len(starter_blueprint["tags"]),
+            )
+
+        self.assertEqual(TaskDependency.objects.filter(team=team).count(), 2)
+        from origin.services.guide_notes import (
+            GUIDE_FOLDER_NAME,
+            GUIDE_NOTES,
+            JAPANESE_GUIDE_FOLDER_NAME,
+            JAPANESE_GUIDE_NOTES,
         )
-        self.assertEqual(TaskDependency.objects.filter(team=team).count(), 1)
-        from origin.services.guide_notes import GUIDE_FOLDER_NAME, GUIDE_NOTES
 
         self.assertEqual(
             PersonalNoteMaster.objects.filter(team=team, owner=self.user).count(),
-            len(GUIDE_NOTES),
+            len(GUIDE_NOTES) + len(JAPANESE_GUIDE_NOTES),
         )
         from origin.models.note.personal_note_models import PersonalNoteFolder
 
-        self.assertTrue(
-            PersonalNoteFolder.objects.filter(
-                team=team, owner=self.user, name=GUIDE_FOLDER_NAME
-            ).exists()
-        )
+        for folder_name in (GUIDE_FOLDER_NAME, JAPANESE_GUIDE_FOLDER_NAME):
+            self.assertTrue(
+                PersonalNoteFolder.objects.filter(
+                    team=team, owner=self.user, name=folder_name
+                ).exists()
+            )
         self.assertEqual(
-            ToDoItem.objects.filter(group__team=team, group__user=self.user).count(), 3
+            ToDoItem.objects.filter(group__team=team, group__user=self.user).count(), 6
         )
         # Membership was seeded, so the client's follow-up join is a no-op.
         self.assertTrue(TeamMembers.objects.filter(team=team, attendee=self.user).exists())
@@ -91,7 +108,7 @@ class StarterWorkspaceTests(BaseAPITestCase):
         # onboarding tour that reads as "not for me", which is the exact
         # failure this milestone exists to prevent.
         team = self._create_team(with_starter=True)
-        project = ProjectMaster.objects.get(team=team)
+        project = ProjectMaster.objects.get(team=team, project_name=STARTER_BLUEPRINT["name"])
 
         milestones = MilestoneMaster.objects.filter(team=team, project=project)
         self.assertEqual(milestones.count(), 2)
@@ -132,7 +149,7 @@ class StarterWorkspaceTests(BaseAPITestCase):
         team = self._create_team(with_starter=True)
         delete_demo_environment(self.user)  # returns early: is_demo False
         self.assertTrue(TeamMaster.objects.filter(team_id=team.team_id).exists())
-        self.assertTrue(ProjectMaster.objects.filter(team=team).exists())
+        self.assertEqual(ProjectMaster.objects.filter(team=team).count(), 2)
 
     def test_without_opt_in_nothing_is_seeded(self):
         team = self._create_team(with_starter=None)
