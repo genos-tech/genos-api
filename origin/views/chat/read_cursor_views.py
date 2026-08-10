@@ -20,12 +20,80 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.chat.unified_models import (
+    Activity,
+    ActivityType,
     Message,
     ReadCursor,
 )
 from origin.serializers.chat.unified_serializers import ReadCursorSerializer
 from origin.views.chat.message_views import _verify_member_or_404
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+
+# Activity types whose backing message's `seq` faithfully marks "when the
+# recipient could first see it" — so reading the channel up to that seq
+# genuinely means they saw the activity. MESSAGE / MENTION / THREAD_REPLY /
+# TASK_ASSIGN are all created at the same instant as the message they point
+# at, so their message always sits at or above the recipient's prior cursor.
+#
+# REACTION is deliberately excluded: a reaction to an OLD message mints a
+# NEW activity that points back at that old (low-seq) message. The
+# recipient's cursor is already past it, so a seq-based sweep would wrongly
+# clear a reaction notification they never actually saw. Reaction activities
+# stay clickable-to-read (their own endpoint) — they are never auto-cleared
+# by a read-cursor advance.
+_SEQ_CLEARABLE_ACTIVITY_TYPES = (
+    ActivityType.MESSAGE,
+    ActivityType.MENTION,
+    ActivityType.THREAD_REPLY,
+    ActivityType.TASK_ASSIGN,
+)
+
+
+def _clear_activities_up_to(*, user, channel, target, thread_root_id):
+    """Mark the user's unread channel activities read once their read
+    cursor reaches `target`.
+
+    Complements the presence layer's `_drop_active_viewers`, which
+    suppresses CREATING an activity for a message the recipient is
+    actively viewing: this clears the ones that were created while they
+    were away, the moment their cursor sweeps past the backing message.
+
+    Scoped three ways so it only ever clears what the cursor advance
+    actually covered:
+      - `recipient=user, is_read=False` — never touch another user's rows
+        or redo already-read ones.
+      - `message__seq__lte=target.seq` — only activities at or before the
+        message just read. `seq` (not ts) is the comparator, matching the
+        cursor's own forward-only ordering.
+      - thread scope — a MAIN-timeline cursor (thread_root_id is None)
+        clears only main-timeline activities (`message__thread_root__isnull`);
+        a THREAD cursor clears only that thread's activities
+        (`message__thread_root_id=thread_root_id`). Without this a thread
+        read would wrongly clear main-timeline activities that happen to
+        have a lower seq, and vice-versa.
+
+    Surface activities (task-body / note @-mentions) have `message=NULL`
+    and are excluded by the `message__seq` filter — they only clear via
+    their own read endpoints. Returns the list of cleared activity ids
+    (as strings) so the caller can echo them to the client for a live
+    sidebar update; empty when nothing matched.
+    """
+    qs = Activity.objects.filter(
+        recipient=user,
+        channel=channel,
+        is_read=False,
+        activity_type__in=_SEQ_CLEARABLE_ACTIVITY_TYPES,
+        message__seq__lte=target.seq,
+    )
+    if thread_root_id is None:
+        qs = qs.filter(message__thread_root__isnull=True)
+    else:
+        qs = qs.filter(message__thread_root_id=thread_root_id)
+
+    cleared_ids = [str(pk) for pk in qs.values_list("id", flat=True)]
+    if cleared_ids:
+        Activity.objects.filter(id__in=cleared_ids).update(is_read=True)
+    return cleared_ids
 
 
 def _as_uuid(value):
@@ -124,4 +192,25 @@ class ReadCursorView(AuthenticatedAPIView):
             cursor.last_read_message = target
             cursor.save(update_fields=["last_read_message", "last_read_at", "ts_updated_at"])
 
-        return Response(ReadCursorSerializer(cursor).data)
+        # Clear the recipient's unread activities up to the cursor's FINAL
+        # position (the just-set target, or the existing higher seq on a
+        # no-op rewind). Reading `cursor.last_read_message` — not `target` —
+        # is deliberate: it also covers the get_or_create first-advance case,
+        # where the row is created with `target` via defaults and the
+        # forward-only block above is skipped (target.seq == existing_seq).
+        # Idempotent (filters is_read=False), so a rewind no-op re-clears an
+        # already-cleared subset harmlessly and self-heals a prior failure.
+        read_activity_ids = _clear_activities_up_to(
+            user=request.user,
+            channel=channel,
+            target=cursor.last_read_message,
+            thread_root_id=thread_root_id,
+        )
+
+        # `readActivityIds` rides along on the cursor payload the socket
+        # layer already broadcasts to the user's own room (`read.advanced`),
+        # so every tab clears the same sidebar rows without an extra fetch.
+        # Absent/empty ⇒ nothing to clear; older clients simply ignore it.
+        data = ReadCursorSerializer(cursor).data
+        data["readActivityIds"] = read_activity_ids
+        return Response(data)
