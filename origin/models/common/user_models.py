@@ -96,6 +96,14 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     profile_image_file_name = models.CharField(blank=True, null=True)
     is_offline_forced = models.BooleanField(default=False)
     custom_status = models.CharField(max_length=50, blank=True, null=True)
+    # Absolute UTC instant at which the custom status auto-clears — Slack's
+    # "clear status after". NULL = never expires. A PAST value means expired:
+    # the status is treated as cleared on read (masked client-side), and the
+    # owner's own client PUT-clears both custom_status and this to null so the
+    # DB converges. Deliberately no server-side tick to reset it — every reader
+    # evaluates validity lazily, mirroring how NotificationPreference.snooze_*
+    # is honoured at read time by the delivery gates.
+    custom_status_expiry = models.DateTimeField(null=True, blank=True)
     role = models.CharField(max_length=50, blank=True, null=True)
     base_country = models.CharField(max_length=50, blank=True, null=True)
     # IANA timezone name ("Asia/Tokyo"), captured from the browser.

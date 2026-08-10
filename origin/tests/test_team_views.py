@@ -267,6 +267,39 @@ class TestGetTeamMemberInfo(BaseAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNone(response.data["customStatus"])
 
+    def test_custom_status_expiry_returned(self):
+        """The Slack "clear status after" instant rides alongside customStatus
+        so teammates can read "back Tuesday"."""
+        self.user.custom_status = "On Holiday"
+        self.user.custom_status_expiry = "2026-08-11T09:00:00Z"
+        self.user.save(update_fields=["custom_status", "custom_status_expiry"])
+
+        self.authenticate()
+        response = self.client.get(
+            "/api/v2/team/getTeamMemberInfo/",
+            {
+                "team_id": str(self.team.team_id),
+                "user_id": str(self.user.id),
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("customStatusExpiry", response.data)
+        self.assertIsNotNone(response.data["customStatusExpiry"])
+
+    def test_custom_status_expiry_none_when_not_set(self):
+        """customStatusExpiry should be None (not absent) when no expiry is set."""
+        self.authenticate()
+        response = self.client.get(
+            "/api/v2/team/getTeamMemberInfo/",
+            {
+                "team_id": str(self.team.team_id),
+                "user_id": str(self.user.id),
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("customStatusExpiry", response.data)
+        self.assertIsNone(response.data["customStatusExpiry"])
+
     def test_member_not_found(self):
         self.authenticate()
         fake_user_id = str(uuid.uuid4())

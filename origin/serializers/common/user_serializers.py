@@ -27,6 +27,7 @@ class UserSerializer(serializers.ModelSerializer):
             "profile_image_file_name",
             "is_offline_forced",
             "custom_status",
+            "custom_status_expiry",
             "role",
             "base_country",
             "timezone",

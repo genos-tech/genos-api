@@ -429,6 +429,26 @@ class UserSerializerTests(BaseAPITestCase):
         # Clean up the file written to MEDIA_ROOT.
         self.user.profile_image_url.delete(save=False)
 
+    def test_custom_status_expiry_present_and_null_by_default(self):
+        """The Slack "clear status after" instant is exposed and defaults to null."""
+        data = UserSerializer(self.user).data
+        self.assertIn("custom_status_expiry", data)
+        self.assertIsNone(data["custom_status_expiry"])
+
+    def test_custom_status_expiry_iso_roundtrips_under_partial(self):
+        """PUT /user/profile/ path: an ISO instant is accepted and parsed."""
+        s = UserSerializer(
+            self.user, data={"custom_status_expiry": "2026-08-11T09:00:00Z"}, partial=True
+        )
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertIsNotNone(s.validated_data["custom_status_expiry"])
+
+    def test_custom_status_expiry_null_clears_under_partial(self):
+        """"Don't clear"/auto-clear both send explicit null; partial must accept it."""
+        s = UserSerializer(self.user, data={"custom_status_expiry": None}, partial=True)
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertIsNone(s.validated_data["custom_status_expiry"])
+
 
 class UserCreateSerializerTests(BaseAPITestCase):
     def test_valid_create_payload(self):

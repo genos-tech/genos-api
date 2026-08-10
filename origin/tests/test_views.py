@@ -296,6 +296,45 @@ class TestAuthEndpoints(TestCase):
         self.user.refresh_from_db()
         self.assertEqual(self.user.username, "Trimmed Name")
 
+    def test_user_profile_update_sets_custom_status_expiry(self):
+        # Slack "clear status after": PUT accepts an ISO instant and persists it.
+        refresh = RefreshToken.for_user(self.user)
+        access = str(refresh.access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+        response = self.client.put(
+            "/api/v2/user/profile/",
+            {
+                "user_id": str(self.user.id),
+                "custom_status": "On Holiday",
+                "custom_status_expiry": "2026-08-11T09:00:00Z",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.custom_status, "On Holiday")
+        self.assertIsNotNone(self.user.custom_status_expiry)
+
+    def test_user_profile_update_clears_custom_status_expiry_with_null(self):
+        # Explicit null must survive the view's None-stripping so the owner
+        # can switch to "Don't clear" (or auto-clear) and the stale expiry
+        # actually goes away rather than persisting.
+        self.user.custom_status = "On Holiday"
+        self.user.custom_status_expiry = "2026-08-11T09:00:00Z"
+        self.user.save(update_fields=["custom_status", "custom_status_expiry"])
+
+        refresh = RefreshToken.for_user(self.user)
+        access = str(refresh.access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+        response = self.client.put(
+            "/api/v2/user/profile/",
+            {"user_id": str(self.user.id), "custom_status_expiry": None},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertIsNone(self.user.custom_status_expiry)
+
     def test_user_profile_update_rejects_other_user(self):
         # Self-only: editing another user's profile is forbidden even
         # with a valid token.
