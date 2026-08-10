@@ -12,6 +12,7 @@ specific differences:
 """
 
 from origin.models.common.notification_models import NotificationPreference
+from origin.services.notification_snooze import is_snoozed
 
 # Push-specific defaults when the user has no explicit override. Every
 # activity-feed category defaults ON (the product intent is "all
@@ -74,6 +75,10 @@ def should_push(user_id, category: str) -> bool:
     if prefs is None:
         # No row yet => every toggle is at its default; push master on.
         return _PUSH_DEFAULTS.get(category, True)
+    # Slack-style pause silences every category across all channels while
+    # active — checked before the per-category logic so nothing slips past.
+    if is_snoozed(prefs):
+        return False
     if not prefs.push_enabled or not prefs.master_enabled:
         return False
     coarse_field = _COARSE_FIELD.get(category)

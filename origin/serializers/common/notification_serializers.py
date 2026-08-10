@@ -26,6 +26,8 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
             "category_settings",
             "muted_chats",
             "muted_targets",
+            "snooze_until",
+            "snooze_schedule",
             "ts_updated_at",
         ]
         read_only_fields = ["ts_updated_at"]
@@ -47,6 +49,43 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("category_settings values must be booleans.")
             normalized[key] = enabled
         return normalized
+
+    def validate_snooze_schedule(self, value):
+        # Recurring daily quiet window, or None to clear it. Shape:
+        # `{"enabled": bool, "start": "HH:MM", "end": "HH:MM"}`. The times are
+        # local wall-clock (see `notification_snooze.resolve_snooze_zone`); an
+        # overnight window (start > end) is valid and intended. `start == end`
+        # is accepted here but read as "never paused" by the predicate.
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("snooze_schedule must be an object or null.")
+
+        enabled = value.get("enabled")
+        if not isinstance(enabled, bool):
+            raise serializers.ValidationError("snooze_schedule.enabled must be a boolean.")
+
+        def _valid_hhmm(v):
+            if not isinstance(v, str):
+                return False
+            parts = v.split(":")
+            if len(parts) != 2:
+                return False
+            try:
+                hours, minutes = int(parts[0]), int(parts[1])
+            except (TypeError, ValueError):
+                return False
+            return 0 <= hours <= 23 and 0 <= minutes <= 59
+
+        start = value.get("start")
+        end = value.get("end")
+        if not _valid_hhmm(start) or not _valid_hhmm(end):
+            raise serializers.ValidationError(
+                "snooze_schedule.start and .end must be 'HH:MM' strings (00:00–23:59)."
+            )
+
+        # Normalize to just the recognized keys so stray fields don't persist.
+        return {"enabled": enabled, "start": start, "end": end}
 
     def validate_muted_targets(self, value):
         if not isinstance(value, list):

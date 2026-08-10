@@ -59,6 +59,24 @@ class NotificationPreference(models.Model):
     # Per-object mutes (thread/task/note), optionally category-scoped.
     muted_targets = models.JSONField(default=list, blank=True)
 
+    # Slack-style "pause notifications" / Do-Not-Disturb. Two independent
+    # forms, either of which counts as snoozed (see
+    # `services/notification_snooze.is_snoozed`), and while snoozed BOTH
+    # server channels (push + email) and the client's in-app toasts are
+    # suppressed:
+    #   - `snooze_until`: a one-shot "pause until this instant". Stored as an
+    #     absolute UTC datetime, so it is timezone-independent. NULL / a past
+    #     value means no active one-shot snooze. The client clears it by
+    #     PUTting an explicit null.
+    #   - `snooze_schedule`: a recurring daily quiet window in the user's
+    #     LOCAL wall-clock, `{"enabled": bool, "start": "HH:MM", "end":
+    #     "HH:MM"}`, overnight-capable (start > end spans midnight). The zone
+    #     is resolved `current_location or timezone` — the same order the
+    #     frontend and the profile card use — NOT `user_time.user_zone`,
+    #     which ignores `current_location`.
+    snooze_until = models.DateTimeField(null=True, blank=True)
+    snooze_schedule = models.JSONField(null=True, blank=True)
+
     ts_updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
