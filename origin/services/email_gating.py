@@ -26,6 +26,7 @@ still emails. `muted_chats` IS honored, by the enqueue path for the
 """
 
 from origin.models.common.notification_models import NotificationPreference
+from origin.services.notification_snooze import is_snoozed
 from origin.services.webpush_gating import _COARSE_FIELD
 
 # Prefix for email-channel keys inside `category_settings`.
@@ -66,6 +67,12 @@ def should_email(user_id, category: str) -> bool:
     if prefs is None:
         # No row yet => every toggle is at its default; email master on.
         return default
+    # Slack-style pause silences every category across all channels. This is
+    # re-checked at send time (not just enqueue), so a snooze that lapses
+    # before the cron tick correctly releases queued mail, and one active at
+    # send time suppresses it even if enqueue happened before the pause.
+    if is_snoozed(prefs):
+        return False
     if not prefs.email_enabled or not prefs.master_enabled:
         return False
     coarse_field = _COARSE_FIELD.get(category)

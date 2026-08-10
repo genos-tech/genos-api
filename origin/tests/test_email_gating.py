@@ -87,6 +87,29 @@ class ShouldEmailTests(BaseAPITestCase):
         NotificationPreference.objects.create(user=self.user2)
         self.assertTrue(should_email(self.user2.id, "mention_chat"))
 
+    def test_snooze_until_blocks_all_categories(self):
+        # A Slack-style pause silences email regardless of per-category prefs.
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        NotificationPreference.objects.create(
+            user=self.user2, snooze_until=timezone.now() + timedelta(hours=1)
+        )
+        self.assertFalse(should_email(self.user2.id, "mention_chat"))
+        self.assertFalse(should_email(self.user2.id, "task_assign"))
+        self.assertFalse(should_email(self.user2.id, "inbox"))
+
+    def test_expired_snooze_does_not_block(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        NotificationPreference.objects.create(
+            user=self.user2, snooze_until=timezone.now() - timedelta(minutes=1)
+        )
+        self.assertTrue(should_email(self.user2.id, "mention_chat"))
+
 
 class EmailEnabledPreferenceEndpointTests(BaseAPITestCase):
     """`email_enabled` rides the existing notification-preferences view."""

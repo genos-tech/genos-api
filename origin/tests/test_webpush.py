@@ -55,6 +55,28 @@ class ShouldPushTests(BaseAPITestCase):
         NotificationPreference.objects.create(user=self.user2)
         self.assertTrue(should_push(self.user2.id, "mention_chat"))
 
+    def test_snooze_until_blocks_all_categories(self):
+        # A Slack-style pause silences push regardless of per-category prefs.
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        NotificationPreference.objects.create(
+            user=self.user2, snooze_until=timezone.now() + timedelta(hours=1)
+        )
+        for cat in ("mention_chat", "task_comments", "chats", "reactions"):
+            self.assertFalse(should_push(self.user2.id, cat), cat)
+
+    def test_expired_snooze_does_not_block(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        NotificationPreference.objects.create(
+            user=self.user2, snooze_until=timezone.now() - timedelta(minutes=1)
+        )
+        self.assertTrue(should_push(self.user2.id, "mention_chat"))
+
     def test_new_categories_default_on(self):
         for cat in ("mention_task", "mention_note", "task_comments", "reactions"):
             self.assertTrue(should_push(self.user2.id, cat), cat)

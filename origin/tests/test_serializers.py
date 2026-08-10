@@ -250,6 +250,72 @@ class NotificationPreferenceCategorySettingsTests(BaseAPITestCase):
 
 
 # ======================================================================
+# NotificationPreferenceSerializer snooze fields
+# ======================================================================
+class NotificationPreferenceSnoozeTests(BaseAPITestCase):
+    def _serializer(self, data, instance=None):
+        return NotificationPreferenceSerializer(instance, data=data, partial=True)
+
+    def test_valid_schedule_normalizes(self):
+        s = self._serializer(
+            {"snooze_schedule": {"enabled": True, "start": "17:00", "end": "09:00"}}
+        )
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertEqual(
+            s.validated_data["snooze_schedule"],
+            {"enabled": True, "start": "17:00", "end": "09:00"},
+        )
+
+    def test_schedule_strips_stray_keys(self):
+        s = self._serializer(
+            {
+                "snooze_schedule": {
+                    "enabled": True,
+                    "start": "09:00",
+                    "end": "17:00",
+                    "days": [1, 2],  # future field, not persisted in v1
+                }
+            }
+        )
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertEqual(
+            s.validated_data["snooze_schedule"],
+            {"enabled": True, "start": "09:00", "end": "17:00"},
+        )
+
+    def test_schedule_none_clears(self):
+        s = self._serializer({"snooze_schedule": None})
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertIsNone(s.validated_data["snooze_schedule"])
+
+    def test_schedule_bad_time_rejected(self):
+        s = self._serializer({"snooze_schedule": {"enabled": True, "start": "25:00", "end": "09:00"}})
+        self.assertFalse(s.is_valid())
+        self.assertIn("snooze_schedule", s.errors)
+
+    def test_schedule_missing_enabled_rejected(self):
+        s = self._serializer({"snooze_schedule": {"start": "09:00", "end": "17:00"}})
+        self.assertFalse(s.is_valid())
+        self.assertIn("snooze_schedule", s.errors)
+
+    def test_schedule_non_dict_rejected(self):
+        s = self._serializer({"snooze_schedule": "soon"})
+        self.assertFalse(s.is_valid())
+        self.assertIn("snooze_schedule", s.errors)
+
+    def test_snooze_until_iso_roundtrips(self):
+        s = self._serializer({"snooze_until": "2026-08-10T13:00:00Z"})
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertIsNotNone(s.validated_data["snooze_until"])
+
+    def test_snooze_until_null_clears_under_partial(self):
+        # `resume()` sends explicit null; partial=True must accept it.
+        s = self._serializer({"snooze_until": None})
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertIsNone(s.validated_data["snooze_until"])
+
+
+# ======================================================================
 # NotificationPreferenceSerializer.validate_muted_targets
 # ======================================================================
 class NotificationPreferenceMutedTargetsTests(BaseAPITestCase):
