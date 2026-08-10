@@ -207,6 +207,8 @@ class NotificationPreferenceSerializerTests(BaseAPITestCase):
                 "category_settings",
                 "muted_chats",
                 "muted_targets",
+                "snooze_until",
+                "snooze_schedule",
                 "ts_updated_at",
             },
         )
