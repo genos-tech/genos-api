@@ -622,6 +622,40 @@ SEARCH_ENGINE = {
     # material, and "did not reach a final answer" throws it away.
     # Setting this to false restores the historical hard error exactly.
     "AGENT_STEP_CAP_WRAPUP": os.environ.get("AGENT_STEP_CAP_WRAPUP", "true").lower() == "true",
+    # Dynamic step budget (default OFF — the static AGENT_MAX_STEPS cap
+    # above is unchanged until an operator flips this). A fixed cap of 10
+    # fails a request that legitimately needs many steps — "update the
+    # following 10 tasks" spends a step per write and runs out before the
+    # closing summary. When ON, the loop EARNS more budget the way a human
+    # would judge it: every step that issues a genuinely NEW tool call
+    # (different tool, or same tool with different args) pushes the ceiling
+    # out by one, up to AGENT_MAX_STEPS_HARD_CAP — so a run doing real,
+    # varied work keeps going, while a run that stops producing new calls
+    # stops earning budget and lands on the wrap-up as before. Independent
+    # of AGENT_EFFORT_LEVELS: when an effort profile is active the profile's
+    # max_steps is the *base* the extension grows from. Only the
+    # controller's own (max_steps=None) paths — the real run_agent /
+    # resume_agent loop — are affected; an explicit caller budget (the
+    # self-critique continuation) is never extended.
+    "AGENT_DYNAMIC_STEPS": os.environ.get("AGENT_DYNAMIC_STEPS", "false").lower() == "true",
+    # The absolute ceiling the dynamic budget can grow to, PER loop
+    # invocation (a resume starts a fresh invocation). The floor of the
+    # runaway guards: even with the per-request cost ceiling and the loop
+    # repeat-limit below, this bounds a pathological run that keeps finding
+    # novel-but-useless calls. `or`, not a get() default — compose may
+    # forward an unset var as "" (see the VERTEX_EMBEDDING_DIMENSIONS note),
+    # and int("") is a boot-fatal ValueError.
+    "AGENT_MAX_STEPS_HARD_CAP": int(os.environ.get("AGENT_MAX_STEPS_HARD_CAP") or "30"),
+    # Loop guard (active only under AGENT_DYNAMIC_STEPS): how many times the
+    # SAME tool batch (identical tool names + identical args) may occur in
+    # one loop invocation before the loop stops and wraps up. This is the
+    # "repeating the same step over and over" case the dynamic budget must
+    # not reward — re-running an identical read returns the identical (often
+    # session-cached) result, so nothing new can come of it. Counted across
+    # the whole invocation, so an A→B→A→B oscillation is caught too, not
+    # just A→A→A. Default 3: a couple of accidental repeats are tolerated,
+    # a genuine loop is not.
+    "AGENT_LOOP_REPEAT_LIMIT": int(os.environ.get("AGENT_LOOP_REPEAT_LIMIT") or "3"),
     # Ops kill-switch for individual agent tools: comma-separated tool
     # names to hide from the model (e.g. "search_web,create_task"), so a
     # risky new tool can ship dark / be switched off per environment with

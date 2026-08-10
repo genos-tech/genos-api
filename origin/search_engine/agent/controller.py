@@ -35,6 +35,7 @@ Event types emitted (full NDJSON protocol):
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -1990,6 +1991,31 @@ def _emit_final_answer_events(
     emit({"type": "done"})
 
 
+def _batch_signature(calls: list[FunctionCall]) -> tuple[tuple[str, str], ...]:
+    """A hashable fingerprint of one step's tool-call batch.
+
+    Two steps share a signature iff they ask for the SAME set of tools
+    with the SAME arguments — the tell of a loop that isn't going
+    anywhere (re-running an identical read returns the identical, often
+    session-cached, result). Args are serialised canonically
+    (sort_keys) so key order can't disguise a repeat; `default=str`
+    keeps a stray non-JSON value from raising. Order-insensitive
+    (`sorted`) so the same two calls emitted in a different order still
+    count as the same batch.
+
+    Only consulted under AGENT_DYNAMIC_STEPS; the static-cap path never
+    builds a signature.
+    """
+    items: list[tuple[str, str]] = []
+    for c in calls:
+        try:
+            args_key = json.dumps(c.args, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            args_key = repr(c.args)
+        items.append((c.name, args_key))
+    return tuple(sorted(items))
+
+
 def _drive_loop(
     *,
     messages: list[AgentMessage],
@@ -2030,14 +2056,46 @@ def _drive_loop(
     # values, byte-identical. Resolved ONCE here — the profile cannot
     # change mid-loop.
     profile = active_effort_profile()
+    # Dynamic step budget (AGENT_DYNAMIC_STEPS): the loop earns extra
+    # steps while it keeps issuing genuinely-new tool calls, up to a hard
+    # cap. Active ONLY on the controller's own (max_steps is None) paths —
+    # an explicit caller budget (the self-critique continuation) is a
+    # deliberate ceiling and is never extended. Resolved BEFORE max_steps
+    # is filled in, because the check IS `max_steps is None`.
+    dynamic_steps = max_steps is None and settings.SEARCH_ENGINE.get(
+        "AGENT_DYNAMIC_STEPS", False
+    )
     if max_steps is None:
         # An explicit max_steps argument still wins over the profile:
         # the critique continuation passes a computed budget that must
         # not be re-derived.
         if profile is not None:
-            max_steps = profile.max_steps
+            base_budget = profile.max_steps
         else:
-            max_steps = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
+            base_budget = int(settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS", 5))
+        if dynamic_steps:
+            # Budget is RELATIVE to where this invocation starts, so a
+            # resume gets a full fresh allowance instead of inheriting
+            # the pre-pause run's shrunk ceiling — the direct cause of
+            # "update 10 tasks" dying mid-way (each approved write pauses
+            # and resumes one step higher, and a static absolute cap of
+            # 10 leaves no room to finish). run_agent starts at 0, so its
+            # initial ceiling is unchanged; only extension can grow it.
+            max_steps = starting_step + base_budget
+            hard_cap = starting_step + int(
+                settings.SEARCH_ENGINE.get("AGENT_MAX_STEPS_HARD_CAP", 30)
+            )
+            # A misconfigured hard cap below the base must never shrink
+            # the budget — clamp up so dynamic mode is at worst a no-op.
+            hard_cap = max(hard_cap, max_steps)
+            # Floor of 1: a batch must be allowed to run at least once, so
+            # a misconfigured limit of 0 can't stop the loop before it has
+            # executed anything (it would otherwise wrap up with no work).
+            repeat_limit = max(1, int(settings.SEARCH_ENGINE.get("AGENT_LOOP_REPEAT_LIMIT", 3)))
+        else:
+            # Legacy absolute cap — byte-identical to the pre-dynamic
+            # path (this is what the flag-off wiring tests pin).
+            max_steps = base_budget
     # Thinking budget rides its own flag so it can flip (and roll back)
     # independently of the effort system itself. `is not None` twice:
     # 0 is a real budget ("thinking off"), absence means model default.
@@ -2119,7 +2177,19 @@ def _drive_loop(
         )
         return parts, fcalls
 
-    for step in range(starting_step, max_steps):
+    # Per-invocation loop-guard state (AGENT_DYNAMIC_STEPS only). Maps a
+    # step's batch signature → how many times it has occurred, so the
+    # loop can (a) stop when one signature repeats past the limit and
+    # (b) decide whether a step did NEW work worth extending the budget
+    # for. Fresh per invocation, so a resume starts clean.
+    batch_sig_counts: dict[tuple[tuple[str, str], ...], int] = {}
+
+    # `while` rather than `for range(...)` so the ceiling can move: under
+    # AGENT_DYNAMIC_STEPS a productive step pushes `max_steps` out (up to
+    # `hard_cap`) at the bottom of the body. With the flag off `max_steps`
+    # never changes, so this is exactly `for step in range(...)`.
+    step = starting_step
+    while step < max_steps:
         # Cooperative cancellation. A Python thread cannot be killed, so
         # the only way to stop burning tokens after the client is gone is
         # to ask between steps. Checked HERE (before the LLM call) rather
@@ -2262,6 +2332,29 @@ def _drive_loop(
                 "".join(accumulated_text_parts), seen_sources_by_id, ctx, emit
             )
             return None
+
+        # ---- Dynamic-budget loop guard (AGENT_DYNAMIC_STEPS only) ----
+        # This step wants tools. Fingerprint the batch: a signature seen
+        # for the first time is NEW work (it will earn a budget extension
+        # below); one that has recurred too many times is a stuck loop we
+        # stop BEFORE paying to execute it again — the repeated call can
+        # only return what it already returned. Breaking here falls into
+        # the step-cap wrap-up, which salvages an answer from the work
+        # already gathered rather than erroring.
+        step_did_new_work = False
+        if dynamic_steps:
+            sig = _batch_signature(accumulated_function_calls)
+            batch_sig_counts[sig] = batch_sig_counts.get(sig, 0) + 1
+            step_did_new_work = batch_sig_counts[sig] == 1
+            if batch_sig_counts[sig] > repeat_limit:
+                log.info(
+                    "Agent run %s: identical tool batch repeated %d× by step %d — "
+                    "stopping the loop and wrapping up (dynamic-step loop guard)",
+                    run_id,
+                    batch_sig_counts[sig],
+                    step,
+                )
+                break
 
         # ---- C3: resolve session-cache hits before any execution ----
         # A follow-up turn re-calling the same read-only tool with the
@@ -2537,6 +2630,24 @@ def _drive_loop(
 
             messages.append(_assistant_function_call_turn(call))
             messages.append(_function_response_turn(call_name, result))
+
+        # ---- Dynamic-budget extension (AGENT_DYNAMIC_STEPS only) ----
+        # Advance the step counter, then — only when we've actually
+        # reached the current ceiling — grant ONE more step if this step
+        # did genuinely new work, capped at `hard_cap`. Growing lazily
+        # (only at the ceiling) and by one keeps the budget tied to
+        # demonstrated progress: a run doing varied work keeps earning
+        # room, a run that stalls into repetition earns none and lands on
+        # the wrap-up. With the flag off `max_steps` never moves, so the
+        # increment alone makes this identical to the old `for range`.
+        step += 1
+        if (
+            dynamic_steps
+            and step >= max_steps
+            and step_did_new_work
+            and max_steps < hard_cap
+        ):
+            max_steps += 1
 
     # Step cap. The loop spent its whole budget on tool calls without
     # ever writing a final answer — but everything it retrieved is
