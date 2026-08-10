@@ -915,6 +915,11 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 tsLastSeen=F("attendee__last_seen"),
                 tsJoined=F("attendee__ts_created_at"),
                 customStatus=F("attendee__custom_status"),
+                # Absolute instant the custom status auto-clears (or null).
+                # Visible to everyone so teammates read "back Tue 9am"; the
+                # client masks the status once this passes. Serializes as an
+                # ISO string the same way `tsLastSeen` does.
+                customStatusExpiry=F("attendee__custom_status_expiry"),
                 isOfflineForced=F("attendee__is_offline_forced"),
                 role=F("attendee__role"),
                 # Permission role (editor/viewer) — NOT `role` above,
@@ -948,6 +953,7 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 "tsLastSeen",
                 "tsJoined",
                 "customStatus",
+                "customStatusExpiry",
                 "isOfflineForced",
                 "role",
                 "memberRole",
@@ -1087,6 +1093,7 @@ def _external_people_rows(team_id, team_name, user_id) -> list:
         "timezone",
         "about_me",
         "custom_status",
+        "custom_status_expiry",
         "ts_created_at",
     )
     for user in users:
@@ -1107,6 +1114,10 @@ def _external_people_rows(team_id, team_name, user_id) -> list:
                 "timezone": user["timezone"] or "",
                 "aboutMe": user["about_me"] or "",
                 "customStatus": user["custom_status"] or "",
+                # Pass the instant through as-is (null when unset) — unlike the
+                # string fields above it must stay a datetime/None so the client
+                # can parse it; "" is not a valid instant.
+                "customStatusExpiry": user["custom_status_expiry"],
                 "tsLastSeen": "",
                 "tsJoined": user["ts_created_at"],
                 "isDeleted": False,
@@ -1198,6 +1209,7 @@ class GetTeamMembersView(AuthenticatedAPIView):
                 "attendee__timezone",
                 "attendee__about_me",
                 "attendee__custom_status",
+                "attendee__custom_status_expiry",
                 "attendee__ts_created_at",
                 "attendee__is_system_user",
                 "attendee__is_deleted",
@@ -1240,6 +1252,9 @@ class GetTeamMembersView(AuthenticatedAPIView):
                         if attendee["attendee__custom_status"]
                         else ""
                     ),
+                    # Instant the status auto-clears (or null). Kept a
+                    # datetime/None, not "" — the client parses it.
+                    "customStatusExpiry": attendee["attendee__custom_status_expiry"],
                     "tsLastSeen": "",
                     "tsJoined": attendee["attendee__ts_created_at"],
                     # Tombstone flag: client evicts when either the
@@ -1312,6 +1327,7 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
                 "attendee__timezone",
                 "attendee__about_me",
                 "attendee__custom_status",
+                "attendee__custom_status_expiry",
                 "attendee__is_system_user",
             )
         )
@@ -1349,6 +1365,10 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
             "timezone": member_info.get("attendee__timezone") or "",
             "aboutMe": member_info.get("attendee__about_me") or "",
             "customStatus": member_info.get("attendee__custom_status", ""),
+            # Instant the status auto-clears (or null); the client masks the
+            # status once it passes. Cached with the rest of the row for 60s —
+            # acceptable staleness, same as customStatus itself.
+            "customStatusExpiry": member_info.get("attendee__custom_status_expiry", None),
             "isSystemUser": member_info.get("attendee__is_system_user", None),
         }
 

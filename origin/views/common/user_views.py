@@ -47,9 +47,17 @@ class UserProfileView(AuthenticatedAPIView):
         user = CustomUser.objects.get(id=user_id)
 
         update_data = request.data.copy()
-        # Remove None values from the update_data
+        # Remove None values from the update_data so an unspecified field is
+        # never written as null. EXCEPT the fields below, whose explicit null
+        # is a meaningful "clear this" the client must be able to send — for
+        # them, null is distinct from "not supplied". `custom_status_expiry`
+        # is cleared to null when a status is set with no expiry (Slack's
+        # "Don't clear") or when it auto-clears on expiry; other nullable
+        # fields (e.g. current_location) are cleared with "" instead, which is
+        # not None and so already survives this strip.
+        NULLABLE_UPDATE_FIELDS = {"custom_status_expiry"}
         for key, val in request.data.items():
-            if val is None:
+            if val is None and key not in NULLABLE_UPDATE_FIELDS:
                 update_data.pop(key)
 
         # Display-name edits: trim and reject empty / whitespace-only so a
