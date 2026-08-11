@@ -234,6 +234,12 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # (per-request `logger.debug(...)`) don't pay the f-string + I/O cost.
 # Override via env: LOG_LEVEL=DEBUG for local debugging.
 _LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+# LOG_FORMAT=json emits single-line JSON so Railway (and any external log
+# dashboard) classify each line by its real level instead of stamping every
+# stdout line "info". Default "text" keeps the human-readable local format.
+# See apis/logging_formatters.py for why and the exact Railway contract.
+_LOG_FORMAT = os.environ.get("LOG_FORMAT", "text").lower()
+_CONSOLE_FORMATTER = "railway_json" if _LOG_FORMAT == "json" else "default"
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -242,12 +248,15 @@ LOGGING = {
             "format": "[%(asctime)s] %(levelname)s %(name)s: %(message)s",
             "datefmt": "%Y-%m-%d %H:%M:%S",
         },
+        "railway_json": {
+            "()": "apis.logging_formatters.RailwayJSONFormatter",
+        },
     },
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
             "stream": "ext://sys.stdout",
-            "formatter": "default",
+            "formatter": _CONSOLE_FORMATTER,
         },
     },
     "loggers": {
