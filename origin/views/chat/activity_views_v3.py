@@ -261,3 +261,65 @@ class ActivitySurfaceView(AuthenticatedAPIView):
             {"activities": ActivitySerializer(rows, many=True).data},
             status=status.HTTP_201_CREATED,
         )
+
+
+class ActivityCommentSurfaceView(AuthenticatedAPIView):
+    """Create "someone commented" surface activities for a comment left on a
+    task body / note — the general-comment fan-out (surface owner +
+    stakeholders hear about a comment even when it @-mentions no one).
+
+    The comment-participant twin of `ActivitySurfaceView`. Where that one
+    takes an explicit recipient delta (the mention set), this one resolves
+    recipients server-side from the authoritative id on the surface, so the
+    body carries no recipient list — only the surface coordinates in `meta`
+    and the `mentioned_user_ids` to EXCLUDE (they get the more-specific
+    MENTION row from the mention endpoint).
+
+    Body:
+      surface_type:        5|6|7|8
+      team_id:             uuid
+      entity_key:          per-comment key, e.g. "comment-participant:<id>"
+      meta:                routing fields (taskId/projectId/noteId/chatId/…)
+      mentioned_user_ids:  [uuid]  — excluded from the participant fan-out
+    """
+
+    def post(self, request):
+        from origin.services import v3_activity
+
+        data = request.data or {}
+        surface_type = data.get("surface_type")
+        team_id = data.get("team_id")
+        entity_key = data.get("entity_key")
+        if surface_type is None or not team_id or not entity_key:
+            return Response(
+                {"error": "surface_type, team_id and entity_key are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Same actor-membership guard as the mention endpoint: the commenter
+        # must belong to the team, so an authenticated user can't fabricate
+        # activities in a team they're not in. (Recipients are separately
+        # validated against team membership inside the producer.)
+        from origin.models.common.team_models import TeamMembers
+
+        if not TeamMembers.objects.filter(
+            team_id=team_id, attendee=request.user, is_deleted=False
+        ).exists():
+            return Response(
+                {"error": "Not a member of this team."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        rows = v3_activity.create_surface_comment_activities(
+            team_id=team_id,
+            actor=request.user,
+            surface_type=int(surface_type),
+            entity_key=str(entity_key),
+            meta=data.get("meta") or {},
+            mentioned_user_ids=data.get("mentioned_user_ids") or [],
+        )
+        from origin.services.webpush_dispatch import schedule_push_for_activities
+
+        schedule_push_for_activities(rows)
+        return Response(
+            {"activities": ActivitySerializer(rows, many=True).data},
+            status=status.HTTP_201_CREATED,
+        )

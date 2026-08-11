@@ -78,7 +78,7 @@ class ShouldPushTests(BaseAPITestCase):
         self.assertTrue(should_push(self.user2.id, "mention_chat"))
 
     def test_new_categories_default_on(self):
-        for cat in ("mention_task", "mention_note", "task_comments", "reactions"):
+        for cat in ("mention_task", "mention_note", "task_comments", "comments", "reactions"):
             self.assertTrue(should_push(self.user2.id, cat), cat)
 
     def test_task_comments_coarse_gate(self):
@@ -86,6 +86,14 @@ class ShouldPushTests(BaseAPITestCase):
         self.assertFalse(should_push(self.user2.id, "task_comments"))
         # An unrelated coarse toggle doesn't affect it.
         self.assertTrue(should_push(self.user, "task_comments"))
+
+    def test_comments_ride_enable_task_comments(self):
+        # The inline-comment participant fan-out has no master switch of its
+        # own — it rides the task-comments coarse group, so turning that off
+        # silences it too (and turning off an unrelated group does not).
+        NotificationPreference.objects.create(user=self.user2, enable_task_comments=False)
+        self.assertFalse(should_push(self.user2.id, "comments"))
+        self.assertTrue(should_push(self.user, "comments"))
 
     def test_surface_mentions_ride_enable_mentions(self):
         NotificationPreference.objects.create(user=self.user2, enable_mentions=False)
@@ -458,6 +466,64 @@ class DispatchTests(BaseAPITestCase):
         payload = send.call_args.kwargs["payload"]
         self.assertEqual(payload["title"], "Alice mentioned you in a note")
         self.assertEqual(payload["url"], "/workspace/notes/my/88")
+
+    def test_comment_participant_task_body_pushes(self):
+        # The general-comment fan-out: a channel-less THREAD_REPLY tagged
+        # `isCommentParticipant` on a task-body surface is "someone left a
+        # comment on your task", routed to the `comments` category with the
+        # task deep-link — NOT a chat thread reply. (Regression guard: an
+        # earlier cut read `act.channel_id`, absent on these fixtures, so the
+        # branch raised AttributeError and NOTHING pushed.)
+        self._sub(self.user2)
+        act = self._activity(
+            self.user2,
+            ActivityType.THREAD_REPLY,
+            surface_type=5,  # SURFACE_TASK_BODY
+            meta={"isCommentParticipant": True, "displayId": "PRG-12", "projectId": 3, "taskId": 12},
+            channel=False,
+        )
+        send = self._run([act])
+        send.assert_called_once()
+        payload = send.call_args.kwargs["payload"]
+        self.assertEqual(payload["title"], "Alice commented")
+        self.assertEqual(payload["body"], "PRG-12")
+        self.assertEqual(payload["url"], "/workspace/tasks/project/3/task/12")
+
+    def test_comment_participant_note_pushes(self):
+        # Same fan-out on a note surface: routes to `comments` with the note
+        # deep-link and no body (notes carry no displayId).
+        self._sub(self.user2)
+        act = self._activity(
+            self.user2,
+            ActivityType.THREAD_REPLY,
+            surface_type=6,  # SURFACE_PERSONAL_NOTE
+            meta={"isCommentParticipant": True, "noteId": 88},
+            channel=False,
+        )
+        send = self._run([act])
+        send.assert_called_once()
+        payload = send.call_args.kwargs["payload"]
+        self.assertEqual(payload["title"], "Alice commented")
+        self.assertEqual(payload["url"], "/workspace/notes/my/88")
+
+    def test_thread_reply_without_participant_flag_is_plain_reply(self):
+        # A channel-less THREAD_REPLY that is NOT the comment fan-out (no
+        # `isCommentParticipant`) must fall through to the ordinary
+        # thread-reply spec, not the `comments` branch — proves the guard is
+        # the flag, not merely the absence of a channel.
+        self._sub(self.user2)
+        act = self._activity(
+            self.user2,
+            ActivityType.THREAD_REPLY,
+            surface_type=5,
+            meta={"taskId": 12},
+            channel=False,
+        )
+        send = self._run([act])
+        send.assert_called_once()
+        self.assertEqual(
+            send.call_args.kwargs["payload"]["title"], "Alice replied in a thread"
+        )
 
     def test_category_override_suppresses_per_type(self):
         # Turning off only the reactions fine-category blocks reaction

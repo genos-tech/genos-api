@@ -125,6 +125,26 @@ def _push_spec(act) -> dict | None:
         return {"category": "reactions", "title": title, "body": body, "url": chat_url}
 
     if atype == ActivityType.THREAD_REPLY:
+        # A channel-less THREAD_REPLY carrying a surface_type is the
+        # general-comment fan-out: someone left an inline comment on a task
+        # body / note and its owner + stakeholders are being told, even with
+        # no @-mention. It rides the host surface (so it deep-links to that
+        # task/note identically to a comment mention) but reads "commented"
+        # and gates under the task-comments group.
+        if channel is None and (act.meta or {}).get("isCommentParticipant"):
+            st = act.surface_type
+            if st in (SURFACE_TASK_BODY, SURFACE_TASK_NOTE):
+                url = _task_url(act.meta) if st == SURFACE_TASK_BODY else _note_url(act.meta, st)
+                body = (act.meta or {}).get("displayId", "")
+            else:
+                url = _note_url(act.meta, st)
+                body = ""
+            return {
+                "category": "comments",
+                "title": f"{actor_name} commented",
+                "body": body,
+                "url": url,
+            }
         msg_meta = getattr(act.message, "metadata", None) or {}
         if msg_meta.get("taskCommentId"):
             return {

@@ -162,6 +162,34 @@ def surface_activity_id(*, surface_type: int, entity_key: str, recipient_id: str
     return uuid.uuid5(_SURFACE_ACTIVITY_NS, f"{surface_type}:{entity_key}:{recipient_id}")
 
 
+def _backfill_task_routing_meta(meta: dict) -> None:
+    """Fill the task routing fields the emit path couldn't compute from the
+    task FK alone, mutating `meta` in place. Shared by every surface
+    producer (mention + comment) so the deep-link + chip resolve the same
+    way regardless of which one wrote the row.
+
+    Guarded on `taskId`, so the task-less note surfaces (personal=6 /
+    chat=8) are untouched; task body (5) and task note (7) get it.
+      - `displayId` ("<code>-<n>", e.g. "PRG-123"): the note/comment save
+        knows the task, not its project code, so the chip would otherwise
+        show the bare "#<task_id>" fallback.
+      - `projectId`: a comment on the TASK BODY only knows its task id (that
+        editor has no project in scope), but the task-body deep-link needs
+        the project id. Fill it from the task's project FK when absent.
+    Both are skipped when the caller already supplied them.
+    """
+    surface_task_id = meta.get("taskId")
+    if surface_task_id and not (meta.get("displayId") and meta.get("projectId")):
+        from origin.models.task.task_models import TaskMaster
+
+        task = TaskMaster.objects.select_related("project").filter(task_id=surface_task_id).first()
+        if task is not None:
+            if not meta.get("displayId"):
+                meta["displayId"] = task.display_id
+            if not meta.get("projectId") and task.project_id is not None:
+                meta["projectId"] = task.project_id
+
+
 def create_surface_mention_activities(
     *,
     team_id,
@@ -192,27 +220,9 @@ def create_surface_mention_activities(
     meta = meta or {}
 
     # Backfill task routing fields the emit path couldn't compute from the
-    # task FK alone — resolved here at the single convergence point for every
-    # surface producer. Guarded on `taskId`, so the task-less note surfaces
-    # (personal=6 / chat=8) are untouched; task body (5) and task note (7)
-    # get it.
-    #   - `displayId` ("<code>-<n>", e.g. "PRG-123"): the note/comment save
-    #     knows the task, not its project code, so the chip would otherwise
-    #     show the bare "#<task_id>" fallback.
-    #   - `projectId`: a comment on the TASK BODY only knows its task id (that
-    #     editor has no project in scope), but the task-body deep-link needs
-    #     the project id. Fill it from the task's project FK when absent.
-    # Both are skipped when the caller already supplied them.
-    surface_task_id = meta.get("taskId")
-    if surface_task_id and not (meta.get("displayId") and meta.get("projectId")):
-        from origin.models.task.task_models import TaskMaster
-
-        task = TaskMaster.objects.select_related("project").filter(task_id=surface_task_id).first()
-        if task is not None:
-            if not meta.get("displayId"):
-                meta["displayId"] = task.display_id
-            if not meta.get("projectId") and task.project_id is not None:
-                meta["projectId"] = task.project_id
+    # task FK alone — resolved at the single convergence point for every
+    # surface producer.
+    _backfill_task_routing_meta(meta)
 
     removed = [str(u) for u in removed_user_ids if u]
     if removed:
@@ -271,6 +281,222 @@ def create_surface_mention_activities(
         len(new_rows),
         len(existing_ids),
         len(removed),
+    )
+    return new_rows
+
+
+def _task_stakeholders(task_id) -> set:
+    """Assignee + collaborators of a task — who to tell about a comment
+    left on the task BODY (surface 5) even without an @-mention.
+
+    Prior *task-comment* senders (the separate legacy task-comment feature)
+    are intentionally NOT included: a BlockNote inline comment's own prior
+    authors live in the collab Yjs doc, invisible to Django, so the durable
+    server-side stakeholder set for a task is its assignee + collaborators —
+    "the task's assigned user plus stakeholders", exactly the report's ask.
+    """
+    from origin.models.task.task_models import TaskMaster
+
+    out: set = set()
+    if task_id is None:
+        return out
+    assignee_id = (
+        TaskMaster.objects.filter(task_id=task_id).values_list("assignee_id", flat=True).first()
+    )
+    if assignee_id is not None:
+        out.add(str(assignee_id))
+    for collab_id in (
+        TaskMaster.objects.filter(task_id=task_id)
+        .values_list("collaborators__id", flat=True)
+        .distinct()
+    ):
+        if collab_id is not None:
+            out.add(str(collab_id))
+    return out
+
+
+def _note_grant_user_ids(note_type: int, note_id) -> set:
+    """Explicit per-note permission grantees (NotePermissionMaster). Shared
+    tail for task-note (note_type=2) and chat-note (note_type=3) recipient
+    resolution — a note shared with someone via the note-sharing dialog is a
+    stakeholder in comments left on it."""
+    from origin.models.note.common_note_models import NotePermissionMaster
+
+    return {
+        str(uid)
+        for uid in NotePermissionMaster.objects.filter(
+            note_type=note_type, note_id=note_id
+        ).values_list("user_id", flat=True)
+        if uid is not None
+    }
+
+
+def _comment_recipients(surface_type: int, meta: dict) -> set:
+    """Owner + stakeholders to notify about a comment on a surface, resolved
+    ENTIRELY server-side from the authoritative id on the row.
+
+    For task/chat notes (surfaces 7/8) the routing FKs (`project_id`,
+    `channel_id`) that decide who can reach the note live on the note row
+    itself — so we resolve them from `noteId` alone and never trust the
+    frontend-forwarded `taskId`/`projectId`/`chatId`, which are only carried
+    for the deep-link. That is both cleaner (one source of truth) and safer
+    (a client can't redirect a comment's fan-out to an arbitrary project).
+
+      - 5 task body   -> task assignee + collaborators
+      - 6 personal    -> note owner + explicit grants
+      - 7 task note   -> note owner + its project's members + explicit grants
+      - 8 chat note   -> note owner + its channel's members + explicit grants
+                         (owner-only when the note has outlived its channel)
+    """
+    from origin.views.utils.mention_membership import (
+        _grantees_of_personal_note,
+        _members_of_channel,
+        _members_of_project,
+    )
+
+    meta = meta or {}
+
+    if surface_type == SURFACE_TASK_BODY:
+        return _task_stakeholders(meta.get("taskId"))
+
+    note_id = meta.get("noteId")
+    if note_id is None:
+        return set()
+
+    if surface_type == SURFACE_PERSONAL_NOTE:
+        # owner + explicit grants (personal notes have no implicit path).
+        return _grantees_of_personal_note(note_id)
+
+    if surface_type == SURFACE_TASK_NOTE:
+        from origin.models.note.task_note_models import TaskNoteMaster
+
+        row = TaskNoteMaster.objects.filter(note_id=note_id).values("project_id", "owner_id").first()
+        if row is None:
+            return set()
+        out: set = set()
+        if row["owner_id"] is not None:
+            out.add(str(row["owner_id"]))
+        out |= _members_of_project(row["project_id"])
+        out |= _note_grant_user_ids(2, note_id)
+        return out
+
+    if surface_type == SURFACE_CHAT_NOTE:
+        from origin.models.note.chat_note_models import ChatNoteMaster
+
+        row = ChatNoteMaster.objects.filter(note_id=note_id).values("channel_id", "owner_id").first()
+        if row is None:
+            return set()
+        out = set()
+        if row["owner_id"] is not None:
+            out.add(str(row["owner_id"]))
+        if row["channel_id"] is not None:
+            out |= _members_of_channel(row["channel_id"])
+        out |= _note_grant_user_ids(3, note_id)
+        return out
+
+    return set()
+
+
+def create_surface_comment_activities(
+    *,
+    team_id,
+    actor: Optional[CustomUser],
+    surface_type: int,
+    entity_key: str,
+    meta: Optional[dict] = None,
+    mentioned_user_ids: Iterable[str] = (),
+) -> List[Activity]:
+    """Notify a surface's owner + stakeholders that a comment was left on it,
+    even when the comment @-mentions no one — the general-comment fan-out the
+    report asked for (the note owner / task assignee + stakeholders must hear
+    about a comment the same way they'd hear about a mention).
+
+    The twin of `create_surface_mention_activities`, with three differences:
+
+      - **Recipients are resolved server-side** from the authoritative id on
+        the surface (`_comment_recipients`) rather than passed in — a comment
+        has no explicit target list the way a mention does.
+      - **`activity_type = THREAD_REPLY`**, not MENTION: this is "someone
+        commented", and THREAD_REPLY is the type the FE feed + notification
+        router already render for comment-shaped events (a bespoke type
+        wouldn't surface today — see `create_self_assign_activity`). It rides
+        the host `surface_type` + `meta.isComment` so the FE routes it to the
+        note/task it was left on and reads "commented", not "replied".
+      - **@-mentioned users are excluded**: they receive the more-specific
+        MENTION row from `create_surface_mention_activities`, so a
+        participant row for them would double-notify (the same "mention beats
+        the plain fan-out" rule the task-comment and thread-reply producers
+        apply).
+
+    Idempotent on a distinct per-comment `entity_key`
+    (`comment-participant:{id}`), so the deterministic PK never collides with
+    the mention producer's `comment:{id}` for the same comment, and a retried
+    emit collapses onto the existing row instead of duplicating.
+    """
+    from origin.models.common.team_models import TeamMembers
+
+    meta = dict(meta or {})
+    # Tags the row for the "commented" FE render + the comment push wording,
+    # and (with surface_type) routes it to the host note/task. Rides the host
+    # surface exactly like a comment mention.
+    meta["isComment"] = True
+    meta["isCommentParticipant"] = True
+    _backfill_task_routing_meta(meta)
+
+    actor_id = str(actor.id) if actor is not None else None
+    mentioned = {str(u) for u in (mentioned_user_ids or []) if u}
+
+    recipients = _comment_recipients(surface_type, meta)
+    if actor_id:
+        recipients.discard(actor_id)
+    recipients -= mentioned
+    if not recipients:
+        return []
+
+    # Recipient ids come from membership/permission tables with no FK to
+    # Activity.recipient, and a since-removed member would 500 the insert —
+    # validate against active team membership first (bulk_create's
+    # ignore_conflicts suppresses only UNIQUE, not FK, violations).
+    valid = {
+        str(uid)
+        for uid in TeamMembers.objects.filter(
+            team_id=team_id, attendee_id__in=list(recipients), is_deleted=False
+        ).values_list("attendee_id", flat=True)
+    }
+    targets = [uid for uid in recipients if uid in valid]
+    if not targets:
+        return []
+
+    rows = [
+        Activity(
+            id=surface_activity_id(
+                surface_type=surface_type, entity_key=entity_key, recipient_id=uid
+            ),
+            team_id=team_id,
+            recipient_id=uid,
+            actor=actor,
+            activity_type=ActivityType.THREAD_REPLY,
+            channel=None,
+            message=None,
+            surface_type=surface_type,
+            meta=meta,
+        )
+        for uid in targets
+    ]
+    # Return only genuinely-new rows so a retried emit (same comment_id)
+    # doesn't re-broadcast / re-push — same idempotency the mention producer
+    # relies on.
+    existing_ids = set(
+        Activity.objects.filter(id__in=[r.id for r in rows]).values_list("id", flat=True)
+    )
+    Activity.objects.bulk_create(rows, ignore_conflicts=True)
+    new_rows = [r for r in rows if r.id not in existing_ids]
+    logger.info(
+        "[v3_activity] surface comment participants: surface=%s entity=%s new=%s existing=%s",
+        surface_type,
+        entity_key,
+        len(new_rows),
+        len(existing_ids),
     )
     return new_rows
 
