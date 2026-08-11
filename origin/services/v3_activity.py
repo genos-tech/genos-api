@@ -191,22 +191,28 @@ def create_surface_mention_activities(
 
     meta = meta or {}
 
-    # Backfill the task's human-readable display id ("<code>-<n>", e.g.
-    # "PRG-123") so the activity chip shows it instead of the bare
-    # "#<task_id>" fallback. The surface emit path carries the task FK
-    # (`taskId`) but not the computed display id — the note save knows the
-    # task, not its project code — so resolve it here at the single
-    # convergence point for every surface producer. Guarded on `taskId`,
-    # so the task-less note surfaces (personal=6 / chat=8) are untouched;
-    # task body (5) and task note (7) get it. Skipped when the caller
-    # already supplied `displayId`.
+    # Backfill task routing fields the emit path couldn't compute from the
+    # task FK alone — resolved here at the single convergence point for every
+    # surface producer. Guarded on `taskId`, so the task-less note surfaces
+    # (personal=6 / chat=8) are untouched; task body (5) and task note (7)
+    # get it.
+    #   - `displayId` ("<code>-<n>", e.g. "PRG-123"): the note/comment save
+    #     knows the task, not its project code, so the chip would otherwise
+    #     show the bare "#<task_id>" fallback.
+    #   - `projectId`: a comment on the TASK BODY only knows its task id (that
+    #     editor has no project in scope), but the task-body deep-link needs
+    #     the project id. Fill it from the task's project FK when absent.
+    # Both are skipped when the caller already supplied them.
     surface_task_id = meta.get("taskId")
-    if surface_task_id and not meta.get("displayId"):
+    if surface_task_id and not (meta.get("displayId") and meta.get("projectId")):
         from origin.models.task.task_models import TaskMaster
 
         task = TaskMaster.objects.select_related("project").filter(task_id=surface_task_id).first()
         if task is not None:
-            meta["displayId"] = task.display_id
+            if not meta.get("displayId"):
+                meta["displayId"] = task.display_id
+            if not meta.get("projectId") and task.project_id is not None:
+                meta["projectId"] = task.project_id
 
     removed = [str(u) for u in removed_user_ids if u]
     if removed:
