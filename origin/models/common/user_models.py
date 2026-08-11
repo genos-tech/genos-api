@@ -134,6 +134,17 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     # this ever needs to hold prose ("Remote, travelling"), widen the
     # validation in `UserSerializer` and give local time its own column.
     current_location = models.CharField(max_length=64, blank=True, null=True)
+    # Whether this user's location (`current_location`/`timezone`) is shown
+    # to OTHER people. Default True: the field exists to answer "don't call
+    # me at 3am", which only works if it's shared, so the useful default is
+    # on and this is an opt-OUT. When False, the roster endpoints blank both
+    # zones for every reader EXCEPT the owner (you always see your own card),
+    # so a colleague's profile shows no location/local-time row rather than a
+    # stale or guessed one. Only the display is gated — the stored zones are
+    # untouched, so server-side date-boundary math (digests "at 8am local")
+    # still works, and flipping the toggle back on restores the rows
+    # immediately with no data to re-collect.
+    location_shared = models.BooleanField(default=True)
     # Free-text self-introduction rendered as markdown, shown on the
     # profile card. NULL / "" means the section is hidden entirely rather
     # than showing an empty box. Length is capped in the serializer, not

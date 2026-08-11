@@ -32,6 +32,11 @@ class UserSerializer(serializers.ModelSerializer):
             "base_country",
             "timezone",
             "current_location",
+            # Opt-out for showing the two zones above to other people. Writable
+            # here so the profile editor's toggle flips it; rides into the
+            # sign-in payload like the other profile fields so the client
+            # hydrates the current value. See CustomUser.location_shared.
+            "location_shared",
             "about_me",
             "last_seen",
             "ts_created_at",

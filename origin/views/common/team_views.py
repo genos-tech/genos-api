@@ -45,6 +45,7 @@ from origin.views.utils.incremental import (
     capture_server_time,
     check_since,
 )
+from origin.views.utils.roster_fields import shown_location
 from origin.views.utils.scope_guards import (
     external_people_for_member,
     external_visible_user_ids,
@@ -940,6 +941,9 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 # it needs both to make that choice.
                 currentLocation=F("attendee__current_location"),
                 timezone=F("attendee__timezone"),
+                # Drives the location opt-out below — not shipped to the
+                # client, only read to decide whether the two zones above are.
+                locationShared=F("attendee__location_shared"),
                 aboutMe=F("attendee__about_me"),
                 isSystemUser=F("attendee__is_system_user"),
             )
@@ -961,6 +965,7 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 "phoneNumber",
                 "currentLocation",
                 "timezone",
+                "locationShared",
                 "aboutMe",
                 "isSystemUser",
             )
@@ -968,6 +973,14 @@ class GetMyTeamsView(AuthenticatedAPIView):
 
         members_by_team = defaultdict(list)
         for member in member_rows:
+            # Honour the owner's location opt-out, then drop the flag itself —
+            # it's a server-side gate, not a field the client consumes.
+            is_self = str(member["userId"]) == user_id
+            location_shared = member.pop("locationShared")
+            member["currentLocation"] = shown_location(
+                member["currentLocation"], location_shared, is_self
+            )
+            member["timezone"] = shown_location(member["timezone"], location_shared, is_self)
             members_by_team[member["teamId"]].append(member)
 
         # In a team where the caller is a GUEST, the roster shrinks to
@@ -1091,6 +1104,7 @@ def _external_people_rows(team_id, team_name, user_id) -> list:
         "base_country",
         "current_location",
         "timezone",
+        "location_shared",
         "about_me",
         "custom_status",
         "custom_status_expiry",
@@ -1098,6 +1112,9 @@ def _external_people_rows(team_id, team_name, user_id) -> list:
     )
     for user in users:
         home = people[str(user["id"])]
+        # These rows are always someone from ANOTHER team, so the reader is
+        # never the owner — the opt-out simply blanks the zones when set.
+        location_shared = user["location_shared"]
         rows.append(
             {
                 "teamId": team_id,
@@ -1110,8 +1127,10 @@ def _external_people_rows(team_id, team_name, user_id) -> list:
                 "role": user["role"] or "",
                 "memberRole": GUEST,
                 "baseCountry": user["base_country"] or "",
-                "currentLocation": user["current_location"] or "",
-                "timezone": user["timezone"] or "",
+                "currentLocation": shown_location(
+                    user["current_location"], location_shared, is_self=False
+                ),
+                "timezone": shown_location(user["timezone"], location_shared, is_self=False),
                 "aboutMe": user["about_me"] or "",
                 "customStatus": user["custom_status"] or "",
                 # Pass the instant through as-is (null when unset) — unlike the
@@ -1207,6 +1226,7 @@ class GetTeamMembersView(AuthenticatedAPIView):
                 "attendee__phone_number",
                 "attendee__current_location",
                 "attendee__timezone",
+                "attendee__location_shared",
                 "attendee__about_me",
                 "attendee__custom_status",
                 "attendee__custom_status_expiry",
@@ -1216,8 +1236,11 @@ class GetTeamMembersView(AuthenticatedAPIView):
             )
         )
 
+        caller_id = request.user.id
         response_data = []
         for attendee in attendees:
+            is_self = str(attendee["attendee__id"]) == str(caller_id)
+            location_shared = attendee["attendee__location_shared"]
             response_data.append(
                 {
                     "teamId": team_id,
@@ -1244,8 +1267,14 @@ class GetTeamMembersView(AuthenticatedAPIView):
                     # Teammates only. `_external_people_rows` builds the
                     # guest rows for this same roster and omits this key.
                     "phoneNumber": attendee["attendee__phone_number"] or "",
-                    "currentLocation": attendee["attendee__current_location"] or "",
-                    "timezone": attendee["attendee__timezone"] or "",
+                    # Location rides to everyone unless the owner opted out;
+                    # then it shows only on their own card. See shown_location.
+                    "currentLocation": shown_location(
+                        attendee["attendee__current_location"], location_shared, is_self
+                    ),
+                    "timezone": shown_location(
+                        attendee["attendee__timezone"], location_shared, is_self
+                    ),
                     "aboutMe": attendee["attendee__about_me"] or "",
                     "customStatus": (
                         attendee["attendee__custom_status"]
@@ -1302,8 +1331,12 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
             return res
 
         # Per-message hot path — cache for 60s. Invalidated by signals when
-        # CustomUser or TeamMembers rows change.
-        cache_key = f"team:member_info:{team_id}:{user_id}"
+        # CustomUser or TeamMembers rows change. The owner sees their own
+        # location even with sharing off, so the cached body differs for a
+        # self-view — key on it, or a self-view would populate the cache and
+        # leak the location to every other caller for the next 60s.
+        is_self = str(user_id) == str(request.user.id)
+        cache_key = f"team:member_info:{team_id}:{user_id}:{int(is_self)}"
         cached = cache.get(cache_key)
         if cached is not None:
             return Response(cached, status=status.HTTP_200_OK)
@@ -1325,6 +1358,7 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
                 "attendee__phone_number",
                 "attendee__current_location",
                 "attendee__timezone",
+                "attendee__location_shared",
                 "attendee__about_me",
                 "attendee__custom_status",
                 "attendee__custom_status_expiry",
@@ -1361,8 +1395,16 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
             # This view is reachable only for a member of a team the caller
             # is themselves in, so the teammates-only rule already holds.
             "phoneNumber": member_info.get("attendee__phone_number") or "",
-            "currentLocation": member_info.get("attendee__current_location") or "",
-            "timezone": member_info.get("attendee__timezone") or "",
+            "currentLocation": shown_location(
+                member_info.get("attendee__current_location"),
+                member_info.get("attendee__location_shared"),
+                is_self,
+            ),
+            "timezone": shown_location(
+                member_info.get("attendee__timezone"),
+                member_info.get("attendee__location_shared"),
+                is_self,
+            ),
             "aboutMe": member_info.get("attendee__about_me") or "",
             "customStatus": member_info.get("attendee__custom_status", ""),
             # Instant the status auto-clears (or null); the client masks the
