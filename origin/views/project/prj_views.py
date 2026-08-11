@@ -26,8 +26,8 @@ from origin.services.member_roles import (
 )
 from origin.services.project_code import derive_project_code
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.views.utils.roster_fields import shown_location
 from origin.views.utils.request_validators import validate_request_data
+from origin.views.utils.roster_fields import shown_location
 from origin.views.utils.scope_guards import (
     guest_project_ids,
     is_project_member,
