@@ -54,6 +54,7 @@ URL shape (see plan §2):
 from django.urls import path
 
 from origin.views.chat.activity_views_v3 import (
+    ActivityCommentSurfaceView,
     ActivityListView,
     ActivityReadAllView,
     ActivityReadBatchView,
@@ -249,6 +250,11 @@ urlpatterns = [
         "api/v3/activities/surface/",
         ActivitySurfaceView.as_view(),
         name="v3_activity_surface",
+    ),
+    path(
+        "api/v3/activities/surface-comment/",
+        ActivityCommentSurfaceView.as_view(),
+        name="v3_activity_surface_comment",
     ),
     # Chat search (replaces legacy /api/v2/search/teamMembersAndGroups/)
     path(

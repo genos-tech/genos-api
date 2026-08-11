@@ -27,6 +27,10 @@ _PUSH_DEFAULTS = {
     "mention_note": True,
     "thread_replies": True,
     "task_comments": True,
+    # A BlockNote inline comment left on a task body / note, fanned out to
+    # the surface's owner + stakeholders even without an @-mention. Rides
+    # the `enable_task_comments` coarse group (see `_COARSE_FIELD`).
+    "comments": True,
     "reactions": True,
     "inbox": True,
     # Plain (non-mention) messages in any chat. Default ON per the product
@@ -58,6 +62,10 @@ _COARSE_FIELD = {
     "mention_note": "enable_mentions",
     "thread_replies": "enable_thread_replies",
     "task_comments": "enable_task_comments",
+    # Inline-comment fan-out rides the same coarse group as task comments —
+    # both are "someone commented on your work" — so a user who turned the
+    # task-comments group off silences these too, no sixth master switch.
+    "comments": "enable_task_comments",
     "inbox": "enable_inbox",
     "chats": "enable_chats",
     # Rides the `inbox` coarse column (mirrors the frontend registry in
