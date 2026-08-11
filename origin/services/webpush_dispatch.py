@@ -131,7 +131,7 @@ def _push_spec(act) -> dict | None:
         # no @-mention. It rides the host surface (so it deep-links to that
         # task/note identically to a comment mention) but reads "commented"
         # and gates under the task-comments group.
-        if act.channel_id is None and (act.meta or {}).get("isCommentParticipant"):
+        if channel is None and (act.meta or {}).get("isCommentParticipant"):
             st = act.surface_type
             if st in (SURFACE_TASK_BODY, SURFACE_TASK_NOTE):
                 url = _task_url(act.meta) if st == SURFACE_TASK_BODY else _note_url(act.meta, st)
