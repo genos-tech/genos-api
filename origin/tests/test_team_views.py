@@ -331,6 +331,101 @@ class TestGetTeamMemberInfo(BaseAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
+class TestLocationSharingOptOut(BaseAPITestCase):
+    """The `location_shared` opt-out across the roster endpoints.
+
+    Default is share-on, so an ordinary member's zones ride to everyone.
+    Turning it off blanks `currentLocation`/`timezone` for other readers
+    but not on the owner's own card, and only the DISPLAY is gated — the
+    stored columns are untouched.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # user2 is in Tokyo and has (by default) not opted out.
+        self.user2.current_location = "Asia/Tokyo"
+        self.user2.timezone = "Asia/Tokyo"
+        self.user2.save(update_fields=["current_location", "timezone"])
+
+    def _member_row(self, response, user):
+        return next(
+            m for m in response.data["data"]["members"] if str(m["userId"]) == str(user.id)
+        )
+
+    def test_location_visible_to_teammates_by_default(self):
+        self.authenticate(self.user)
+        response = self.client.get(
+            "/api/v2/team/getTeamMembers/",
+            {"team_id": str(self.team.team_id)},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        row = self._member_row(response, self.user2)
+        self.assertEqual(row["currentLocation"], "Asia/Tokyo")
+        self.assertEqual(row["timezone"], "Asia/Tokyo")
+
+    def test_location_hidden_from_teammates_when_opted_out(self):
+        self.user2.location_shared = False
+        self.user2.save(update_fields=["location_shared"])
+
+        self.authenticate(self.user)
+        response = self.client.get(
+            "/api/v2/team/getTeamMembers/",
+            {"team_id": str(self.team.team_id)},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        row = self._member_row(response, self.user2)
+        self.assertEqual(row["currentLocation"], "")
+        self.assertEqual(row["timezone"], "")
+
+    def test_owner_still_sees_own_location_when_opted_out(self):
+        self.user2.location_shared = False
+        self.user2.save(update_fields=["location_shared"])
+
+        # user2 reads their OWN row — sharing off must not hide it from them.
+        self.authenticate(self.user2)
+        response = self.client.get(
+            "/api/v2/team/getTeamMembers/",
+            {"team_id": str(self.team.team_id)},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        row = self._member_row(response, self.user2)
+        self.assertEqual(row["currentLocation"], "Asia/Tokyo")
+        self.assertEqual(row["timezone"], "Asia/Tokyo")
+
+    def test_opt_out_does_not_touch_stored_columns(self):
+        self.user2.location_shared = False
+        self.user2.save(update_fields=["location_shared"])
+
+        self.user2.refresh_from_db()
+        # Only the display is gated; the stored zones survive so date-boundary
+        # math still works and re-enabling restores the row instantly.
+        self.assertEqual(self.user2.current_location, "Asia/Tokyo")
+        self.assertEqual(self.user2.timezone, "Asia/Tokyo")
+
+    def test_member_info_hidden_from_teammate_but_shown_to_self(self):
+        # The 60s cache on getTeamMemberInfo keys on caller-is-self, so a
+        # self-view must not populate a body that then leaks to teammates.
+        self.user2.location_shared = False
+        self.user2.save(update_fields=["location_shared"])
+
+        # Self first — would poison a caller-agnostic cache.
+        self.authenticate(self.user2)
+        own = self.client.get(
+            "/api/v2/team/getTeamMemberInfo/",
+            {"team_id": str(self.team.team_id), "user_id": str(self.user2.id)},
+        )
+        self.assertEqual(own.data["currentLocation"], "Asia/Tokyo")
+
+        # Teammate reading the same member must still get it blanked.
+        self.authenticate(self.user)
+        other = self.client.get(
+            "/api/v2/team/getTeamMemberInfo/",
+            {"team_id": str(self.team.team_id), "user_id": str(self.user2.id)},
+        )
+        self.assertEqual(other.data["currentLocation"], "")
+        self.assertEqual(other.data["timezone"], "")
+
+
 class TestUserProfileUpdate(BaseAPITestCase):
     """PUT /api/v2/user/profile/"""
 

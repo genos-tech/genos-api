@@ -79,7 +79,15 @@ def _invalidate_team_members(sender, instance, **kwargs):
     attendee_id = getattr(instance, "attendee_id", None)
     team_id = getattr(instance, "team_id", None)
     if attendee_id is not None and team_id is not None:
-        cache.delete(f"team:member_info:{team_id}:{attendee_id}")
+        # Two variants per member — the trailing flag is whether the caller
+        # is the member themselves (they see their own location even with
+        # sharing off), so clear both.
+        cache.delete_many(
+            [
+                f"team:member_info:{team_id}:{attendee_id}:0",
+                f"team:member_info:{team_id}:{attendee_id}:1",
+            ]
+        )
     if team_id is None:
         if attendee_id is not None:
             cache.delete(f"team:my_teams:{attendee_id}")
@@ -136,7 +144,12 @@ def _invalidate_project_list(sender, instance, **kwargs):
 
 @receiver(post_save, sender=CustomUser)
 def _invalidate_user_profile(sender, instance, **kwargs):
-    """Profile update — wipe every `team:member_info:*:{user_id}` entry.
+    """Profile update — wipe every `team:member_info:*:{user_id}:*` entry.
+
+    A profile edit (e.g. toggling location sharing) changes what this member's
+    row discloses, so both the self-view and other-view cache variants across
+    every team must go. The trailing `:*` covers the self-ness flag the key now
+    carries.
 
     Uses django-redis's `delete_pattern` (a SCAN-based op). Falls back to a
     no-op if the cache backend doesn't implement it (e.g. LocMemCache during
@@ -148,6 +161,6 @@ def _invalidate_user_profile(sender, instance, **kwargs):
     delete_pattern = getattr(cache, "delete_pattern", None)
     if callable(delete_pattern):
         try:
-            delete_pattern(f"team:member_info:*:{user_id}")
+            delete_pattern(f"team:member_info:*:{user_id}:*")
         except Exception:
             pass

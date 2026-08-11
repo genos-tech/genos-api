@@ -26,6 +26,7 @@ from origin.services.member_roles import (
 )
 from origin.services.project_code import derive_project_code
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.roster_fields import shown_location
 from origin.views.utils.request_validators import validate_request_data
 from origin.views.utils.scope_guards import (
     guest_project_ids,
@@ -212,6 +213,7 @@ class ProjectMasterView(AuthenticatedAPIView):
                     "attendee__base_country",
                     "attendee__current_location",
                     "attendee__timezone",
+                    "attendee__location_shared",
                     "attendee__about_me",
                     "attendee__custom_status",
                     "attendee__ts_created_at",
@@ -220,8 +222,11 @@ class ProjectMasterView(AuthenticatedAPIView):
                 .order_by("attendee__email")
             )
 
+            caller_id = request.user.id
             project_members = []
             for attendee in raw_project_members:
+                is_self = str(attendee["attendee__id"]) == str(caller_id)
+                location_shared = attendee["attendee__location_shared"]
                 project_members.append(
                     {
                         "teamId": attendee["team__team_id"],
@@ -252,8 +257,14 @@ class ProjectMasterView(AuthenticatedAPIView):
                         # "the caller is a teammate of this person" is not
                         # something membership of the project establishes.
                         # The team roster is where a phone number belongs.
-                        "currentLocation": attendee["attendee__current_location"] or "",
-                        "timezone": attendee["attendee__timezone"] or "",
+                        # Blanked for a member who turned off location sharing,
+                        # except on their own card. See shown_location.
+                        "currentLocation": shown_location(
+                            attendee["attendee__current_location"], location_shared, is_self
+                        ),
+                        "timezone": shown_location(
+                            attendee["attendee__timezone"], location_shared, is_self
+                        ),
                         "aboutMe": attendee["attendee__about_me"] or "",
                         "customStatus": (
                             attendee["attendee__custom_status"]
