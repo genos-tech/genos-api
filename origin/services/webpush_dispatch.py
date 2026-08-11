@@ -142,17 +142,31 @@ def _push_spec(act) -> dict | None:
 
     if atype == ActivityType.MENTION:
         st = act.surface_type
+        # A mention left inside an inline COMMENT rides the host surface_type
+        # (so it routes/deep-links to that task or note identically) but reads
+        # "in a comment" in the push so the recipient knows where to look.
+        is_comment = bool((act.meta or {}).get("isComment"))
         if st in (SURFACE_TASK_BODY, SURFACE_TASK_NOTE):
+            title = (
+                f"{actor_name} mentioned you in a comment"
+                if is_comment
+                else f"{actor_name} mentioned you in a task"
+            )
             return {
                 "category": "mention_task",
-                "title": f"{actor_name} mentioned you in a task",
+                "title": title,
                 "body": (act.meta or {}).get("displayId", ""),
                 "url": _task_url(act.meta) if st == SURFACE_TASK_BODY else _note_url(act.meta, st),
             }
         if st in (SURFACE_PERSONAL_NOTE, SURFACE_CHAT_NOTE):
+            title = (
+                f"{actor_name} mentioned you in a comment"
+                if is_comment
+                else f"{actor_name} mentioned you in a note"
+            )
             return {
                 "category": "mention_note",
-                "title": f"{actor_name} mentioned you in a note",
+                "title": title,
                 "body": "",
                 "url": _note_url(act.meta, st),
             }
