@@ -61,6 +61,7 @@ from origin.models.common.inbox_models import InboxItems
 from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.controller import run_agent
+from origin.search_engine.agent.languages import LANGUAGE_NAMES
 from origin.search_engine.agent.tools import REGISTRY
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.entity_links import rewrite_citation_md
@@ -118,20 +119,6 @@ cite entities normally so they resolve to real links."""
 # quotes a digest burns context on its own reflection.
 _RECALL_EDITIONS = 2
 _RECALL_CHARS = 900
-
-# The digest is LLM-written, so it is not limited to the locales that
-# have email templates (`resolve_email_locale`'s set is {"ja"} — that's
-# about template directories on disk). Any UI locale the app ships can
-# be asked for directly; anything else falls back to English.
-_LANGUAGE_NAMES = {
-    "en": "English",
-    "ja": "Japanese",
-    "zh": "Chinese",
-    "fr": "French",
-    "es": "Spanish",
-    "hi": "Hindi",
-    "ar": "Arabic",
-}
 
 DEFAULT_TITLE = "Your Genos digest"
 
@@ -239,7 +226,11 @@ def _build_prompt(*, name: str, cadence: str, local, language: str, editions: li
     """
     period = "since yesterday" if cadence == "daily" else "over the past week"
     when = f"{local:%A}, {local:%B} {local.day}"
-    lang = _LANGUAGE_NAMES.get(language, "English")
+    # The digest is LLM-written, so it is not limited to the locales that
+    # have email templates (`resolve_email_locale`'s set is {"ja"} — that's
+    # about template directories on disk). Any UI locale the app ships can
+    # be asked for directly; anything else falls back to English.
+    lang = LANGUAGE_NAMES.get(language, "English")
 
     if editions:
         memory = (

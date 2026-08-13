@@ -52,6 +52,7 @@ from django.utils import timezone
 from origin.search_engine.agent import tool_cache
 from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
 from origin.search_engine.agent.citation_resolver import resolve_unresolved_citations
+from origin.search_engine.agent.languages import language_directive
 from origin.search_engine.agent.prompts import (
     AGENT_CRITIQUE_RETRIEVAL_DIRECTIVE,
     AGENT_SELF_CRITIQUE_PROMPT_TEMPLATE,
@@ -2175,6 +2176,16 @@ def _drive_loop(
     # users and days. Off is a rollback lever, not a steady state.
     if settings.SEARCH_ENGINE.get("AGENT_INJECT_CURRENT_DATE", True):
         system_instruction = f"{system_instruction}\n\n{_current_date_line(ctx.user_id)}"
+    # Answer language (GENOS_CAPABILITY_ROADMAP §3.4). `ctx.locale` is the
+    # asking user's UI locale, forwarded by the view (and rehydrated on
+    # resume). Same tail-append rationale as the date line above: per-user,
+    # low-cardinality, outside the cached prefix. Empty for English /
+    # unknown locales, so the majority path stays byte-identical. Off is a
+    # rollback lever, not a steady state.
+    if settings.SEARCH_ENGINE.get("AGENT_INJECT_LANGUAGE", True):
+        language_line = language_directive(ctx.locale)
+        if language_line:
+            system_instruction = f"{system_instruction}\n\n{language_line}"
 
     def _collect_and_record(
         step_index: int,

@@ -37,6 +37,14 @@ class ToolContext:
     # run, keeping all existing call sites unchanged. Populate via
     # `dataclasses.replace` (frozen).
     resolved_mentions: tuple[dict[str, Any], ...] = ()
+    # Answer-language locale (GENOS_CAPABILITY_ROADMAP §3.4) — the asking
+    # user's UI locale ("ja", "es", …), forwarded by the view from the
+    # request body (falling back to `User.language`) and persisted on
+    # `AgentRun` so a leg resumed after write-approval keeps the same
+    # language. Server-derived, NEVER from the LLM. Empty string on any
+    # run without a known locale, which leaves the prompt untouched.
+    # `_drive_loop` reads it via `language_directive`.
+    locale: str = ""
 
 
 class ToolError(Exception):
