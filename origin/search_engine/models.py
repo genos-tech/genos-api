@@ -169,6 +169,13 @@ class AgentRun(models.Model):
     # never stored). Observational only: debugging, eval sampling,
     # future analytics. Empty list for runs without mentions.
     mentions = models.JSONField(default=list, blank=True)
+    # Answer-language locale (GENOS_CAPABILITY_ROADMAP §3.4) — the UI
+    # locale the ask leg resolved (request body → falling back to
+    # `User.language`). Persisted so a leg resumed after write-approval
+    # (POST /decide/, which carries no body locale) keeps answering in
+    # the same language. "" = no locale resolved → the model infers it
+    # from the query as before.
+    locale = models.CharField(max_length=16, blank=True, default="")
     started_at = models.DateTimeField(auto_now_add=True)
     finished_at = models.DateTimeField(blank=True, null=True)
 

@@ -66,6 +66,7 @@ from origin.search_engine.agent.controller import (
     resume_agent,
     run_agent,
 )
+from origin.search_engine.agent.languages import normalize_locale
 from origin.search_engine.agent.mentions import (
     MentionParseError,
     ResolvedMention,
@@ -958,7 +959,17 @@ class AgentAskView(AuthenticatedAPIView):
         if not participates_in_team(team_id, user_id):
             return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        ctx = ToolContext(team_id=str(team_id), user_id=user_id)
+        # Answer-language locale (GENOS_CAPABILITY_ROADMAP §3.4). Prefer the
+        # request body (the live UI locale the browser just sent) and fall
+        # back to the user's stored `language`; an absent/unknown code
+        # resolves to "" — no directive, i.e. today's infer-from-query
+        # behavior. Persisted on the AgentRun below so a resumed leg keeps
+        # this language even though /decide/ carries no locale.
+        locale = normalize_locale(data.get("locale")) or normalize_locale(
+            getattr(request.user, "language", None)
+        )
+
+        ctx = ToolContext(team_id=str(team_id), user_id=user_id, locale=locale)
 
         # --- Tier-based daily quotas. ---
         # Two pre-flight checks: total LLM asks for the day (LLM_ASK_KEY)
@@ -1255,6 +1266,7 @@ class AgentAskView(AuthenticatedAPIView):
                 query=query,
                 session=session,
                 mentions=[m.as_json() for m in resolved_mentions],
+                locale=locale,
             )
         except Exception:  # noqa: BLE001
             log.exception("Failed to create AgentRun row; continuing without persistence")
@@ -1624,6 +1636,10 @@ class AgentDecideView(AuthenticatedAPIView):
             team_id=run.team_id,
             user_id=run.user_id,
             resolved_mentions=tuple(run.mentions or ()),
+            # Answer-language parity (GENOS_CAPABILITY_ROADMAP §3.4): the
+            # /decide/ body carries no locale, so keep answering in the
+            # language the original ask leg resolved and persisted.
+            locale=run.locale or "",
         )
 
         # Resolve the user's LLM choice for the resumed leg. No quota

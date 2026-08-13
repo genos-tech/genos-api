@@ -520,7 +520,9 @@ Strict response contract:
   No prose, no commentary, no explanation. Just KEEP.
 - Otherwise, produce the FINAL revised answer. No preamble like
   "Here's the revision". No commentary like "I changed X". Just the
-  answer itself, in the same markdown format the original used.
+  answer itself, in the same language and the same markdown format the
+  original used — the draft is already in the user's language, so a
+  rewrite must not switch it (GENOS_CAPABILITY_ROADMAP §3.4).
 - You have NO tool access. Work only from the draft and the tool
   results below. Do not request more searches.
 
