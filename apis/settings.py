@@ -631,6 +631,21 @@ SEARCH_ENGINE = {
     # material, and "did not reach a final answer" throws it away.
     # Setting this to false restores the historical hard error exactly.
     "AGENT_STEP_CAP_WRAPUP": os.environ.get("AGENT_STEP_CAP_WRAPUP", "true").lower() == "true",
+    # Temporal grounding (SPOTLIGHT_TEMPORAL_REASONING.md gap 1). The
+    # model's only innate sense of "now" is its training cutoff, so every
+    # relative-date judgement it makes ("this week", "overdue", "in three
+    # days") is computed against a date it invents — silently and
+    # confidently. When ON, `_drive_loop` appends the asking user's
+    # current calendar date to the system instruction so that reasoning is
+    # anchored to a real "today". Default ON: this fixes a class of
+    # silently-wrong answers, so the kill-switch exists only as a rollback
+    # lever, not because off is a sane steady state. DATE ONLY, never the
+    # wall-clock time — a per-second string would re-key the Gemini
+    # explicit-prefix / OpenAI prefix caches on every step (a guaranteed
+    # hit becomes a guaranteed miss); a date is stable for the whole day,
+    # so the cached prefix still hits within a run.
+    "AGENT_INJECT_CURRENT_DATE": os.environ.get("AGENT_INJECT_CURRENT_DATE", "true").lower()
+    == "true",
     # Dynamic step budget (default OFF — the static AGENT_MAX_STEPS cap
     # above is unchanged until an operator flips this). A fixed cap of 10
     # fails a request that legitimately needs many steps — "update the
