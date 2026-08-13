@@ -47,6 +47,7 @@ from uuid import UUID
 
 from django.conf import settings
 from django.db import connections
+from django.utils import timezone
 
 from origin.search_engine.agent import tool_cache
 from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
@@ -75,6 +76,7 @@ from origin.search_engine.llm.choice import (
 )
 from origin.search_engine.llm.spend import spend_purpose
 from origin.search_engine.models import AgentLlmCall, AgentRun, AgentStep
+from origin.services.user_time import resolve_zone, zone_for_user_id
 
 log = logging.getLogger(__name__)
 
@@ -2016,6 +2018,41 @@ def _batch_signature(calls: list[FunctionCall]) -> tuple[tuple[str, str], ...]:
     return tuple(sorted(items))
 
 
+def _current_date_line(user_id: str | None) -> str:
+    """The "today" anchor appended to the agent's system instruction.
+
+    Gap 1 of SPOTLIGHT_TEMPORAL_REASONING.md: the model's only innate
+    sense of "now" is its training cutoff, so it computes every relative
+    date ("this week", "overdue", "in three days") against a date it
+    invents — and does so silently and confidently. This hands it a real
+    one.
+
+    Resolved in the ASKING USER's timezone, the same way the date-taking
+    tools do (`origin.services.user_time`): agent context is personal
+    scope, so a Tokyo user's "today" is their calendar day, not the
+    server's UTC day, and it matches what those tools already return.
+
+    DATE ONLY, never the wall-clock time. This string is part of the
+    model prefix that the Gemini explicit cache and the OpenAI prefix
+    cache key on; a value that changed every second would turn a
+    guaranteed prefix hit into a guaranteed miss on every loop step. A
+    date is stable for the whole day, so the prefix still hits within a
+    run.
+
+    FAIL-OPEN: date grounding is an enhancement, never a reason to 500 an
+    ask. `ctx.user_id` is a real UUID on every production path, but a
+    malformed id or an unavailable DB must degrade to the server day, not
+    break generation — the same rule the cache layers hold themselves to.
+    """
+    try:
+        zone = zone_for_user_id(user_id)
+    except Exception:  # noqa: BLE001 — see FAIL-OPEN above
+        log.warning("current-date: zone lookup failed for %r; using server zone", user_id)
+        zone = resolve_zone(None)
+    today = timezone.now().astimezone(zone).date()
+    return f"Today's date is {today:%Y-%m-%d (%A)} in the {zone.key} timezone."
+
+
 def _drive_loop(
     *,
     messages: list[AgentMessage],
@@ -2126,6 +2163,18 @@ def _drive_loop(
     system_instruction = base_prompt
     if system_extra:
         system_instruction = f"{base_prompt}\n\n{system_extra}"
+    # Temporal grounding (SPOTLIGHT_TEMPORAL_REASONING.md gap 1). `ctx`
+    # carries the asking user, so this is the one place every surface —
+    # fresh run, resume, and both critique paths — funnels through with
+    # the identity needed to resolve their timezone. Appended LAST, after
+    # any per-run `system_extra`: for Claude the whole `system` string is
+    # already outside the cached prefix (the breakpoint sits on the tools
+    # block), for Gemini the explicit cache digests the whole string
+    # either way, and for OpenAI keeping the varying date at the tail
+    # lets the automatic prefix cache still share the stable head across
+    # users and days. Off is a rollback lever, not a steady state.
+    if settings.SEARCH_ENGINE.get("AGENT_INJECT_CURRENT_DATE", True):
+        system_instruction = f"{system_instruction}\n\n{_current_date_line(ctx.user_id)}"
 
     def _collect_and_record(
         step_index: int,
