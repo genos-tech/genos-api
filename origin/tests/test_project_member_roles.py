@@ -227,3 +227,18 @@ class TestProjectMemberRoles(TestCase):
         self.assertEqual(by_id[str(self.editor.id)]["memberRole"], EDITOR)
         self.assertEqual(by_id[str(self.editor.id)]["role"], "Staff Engineer")
         self.assertEqual(by_id[str(self.viewer.id)]["memberRole"], VIEWER)
+
+    def test_profile_omits_a_member_whose_team_row_was_deactivated(self):
+        """`ProjectMembers` has no `is_deleted` column and isn't cleaned
+        up by every path that ends someone's team membership — the team
+        roster (`ModalTeamProfile`) must stay the source of truth."""
+        TeamMembers.objects.filter(team=self.team, attendee=self.viewer).update(is_deleted=True)
+        res = self.client.get(
+            f"/api/v2/project/profile/?team_id={self.team.team_id}"
+            f"&project_id={self.project.project_id}"
+        )
+        self.assertEqual(res.status_code, 200)
+        ids = {str(m["userId"]) for m in res.data["projectMembers"]}
+        self.assertNotIn(str(self.viewer.id), ids)
+        self.assertIn(str(self.editor.id), ids)
+        self.assertIn(str(self.owner.id), ids)

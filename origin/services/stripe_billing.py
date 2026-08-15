@@ -1007,17 +1007,30 @@ def handle_event(event) -> str:
 
 def _team_member_ids(team_id) -> list:
     return list(
-        TeamMembers.objects.filter(team_id=team_id, is_deleted=False).values_list(
-            "attendee_id", flat=True
-        )
+        TeamMembers.objects.filter(
+            team_id=team_id, is_deleted=False, attendee__is_system_user=False
+        ).values_list("attendee_id", flat=True)
     )
 
 
 def team_seats(team_id) -> int:
-    """Billable seats = active members. Floor of 1 so a pathological
-    empty team can still hold a subscription without a zero-quantity
-    error from Stripe."""
-    return max(TeamMembers.objects.filter(team_id=team_id, is_deleted=False).count(), 1)
+    """Billable seats = active human members. Floor of 1 so a
+    pathological empty team can still hold a subscription without a
+    zero-quantity error from Stripe.
+
+    Excludes system users: every project spins up a hidden PM-bot
+    account that joins the team as an ordinary `TeamMembers` row (see
+    `ModalCreateProject`'s "join the team for the system user" step),
+    so counting all non-deleted rows overstates seats by one per
+    project. `GetMyTeamsView`/`GetTeamMembersView` already exclude
+    them the same way.
+    """
+    return max(
+        TeamMembers.objects.filter(
+            team_id=team_id, is_deleted=False, attendee__is_system_user=False
+        ).count(),
+        1,
+    )
 
 
 def _set_team_plan(
