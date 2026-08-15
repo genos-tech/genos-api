@@ -225,6 +225,14 @@ class ProjectMasterView(AuthenticatedAPIView):
             caller_id = request.user.id
             project_members = []
             for attendee in raw_project_members:
+                # `ProjectMembers` has no `is_deleted` column (removal is a
+                # hard delete), but leaving/being removed from the TEAM
+                # doesn't cascade into every project's roster the same way —
+                # only `LeaveTeamView`'s self-leave path does. Re-check
+                # membership here so a stale row from another removal path
+                # can't outlive the team relationship it depends on.
+                if not is_team_member(attendee["team__team_id"], attendee["attendee__id"]):
+                    continue
                 is_self = str(attendee["attendee__id"]) == str(caller_id)
                 location_shared = attendee["attendee__location_shared"]
                 project_members.append(

@@ -25,6 +25,7 @@ from unittest import mock
 
 from django.test import override_settings
 
+from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import TIER_SET_BY_OPERATOR, TIER_SET_BY_STRIPE
 from origin.search_engine import quota
 from origin.services import stripe_billing
@@ -1069,6 +1070,20 @@ class TeamBillingTests(BillingTestBase):
         self.assertEqual(t["seats"], 2)
         self.assertEqual(t["plan"], "free")
         self.assertFalse(t["has_billing_account"])
+
+    def test_seats_exclude_system_users(self):
+        # Every project spins up a hidden PM-bot account that joins the
+        # team as an ordinary TeamMembers row — it must not inflate the
+        # billed seat count.
+        bot = self.user.__class__.objects.create_user(
+            username="project-bot",
+            email="bot@example.com",
+            password="unused",
+            is_system_user=True,
+        )
+        TeamMembers.objects.create(team=self.team, attendee=bot)
+        res = self.client.get(TEAM_CONFIG_URL)
+        self.assertEqual(res.data["teams"][0]["seats"], 2)
 
     def test_config_empty_for_non_owner(self):
         self.authenticate(self.user2)
