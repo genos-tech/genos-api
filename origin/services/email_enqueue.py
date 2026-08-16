@@ -11,7 +11,9 @@ Enqueue is gated on:
   - `settings.EMAIL_NOTIFICATIONS_ENABLED` (the series' dark-ship flag),
   - `should_email(recipient, category)` — so default-off categories
     (`chats`, `reactions`) never write dead rows,
-  - `is_chat_muted` for the plain-message path (mirror of push).
+  - mute, via the predicates shared with push (`webpush_gating`):
+    `is_activity_muted` on the activity path, `is_chat_muted` on the
+    plain-message path, which has a channel but no Activity row.
 
 `should_email` runs AGAIN at send time in the cron: this check is the
 volume valve (don't fill the outbox with rows nobody wants), that one is
@@ -36,7 +38,7 @@ from origin.services.webpush_dispatch import (
     _task_url,
     _truncate,
 )
-from origin.services.webpush_gating import is_chat_muted
+from origin.services.webpush_gating import is_activity_muted, is_chat_muted
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,13 @@ def enqueue_email_for_activities(activities) -> None:
                 continue
             recipient_id = str(act.recipient_id)
             if not should_email(recipient_id, spec["category"]):
+                continue
+            # Same mute gate as push, through the same predicate. Muting a
+            # chat / thread / task / note has to silence BOTH away channels
+            # or it merely moves the noise from an OS card into an inbox —
+            # and email is the worse place for it, because the outbox row
+            # outlives the moment and still sends later.
+            if is_activity_muted(act, spec["category"]):
                 continue
             rows.append(
                 EmailNotificationEvent(

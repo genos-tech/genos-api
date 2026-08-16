@@ -372,6 +372,34 @@ class NotificationPreferenceMutedTargetsTests(BaseAPITestCase):
         self.assertTrue(s.is_valid(), s.errors)
         self.assertEqual(s.validated_data["muted_targets"], [])
 
+    def test_note_type_round_trips(self):
+        """Which of the three note tables `target_id` names.
+
+        The normalizer rebuilds each entry from a known key list, so an
+        unrecognised field is dropped silently — before this was accepted, a
+        client could send `note_type` and have it vanish, leaving a note mute
+        that could never match server-side.
+        """
+        s = self._serializer(
+            [{"target_type": "note", "target_id": "42", "note_type": 2, "label": "Spec"}]
+        )
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertEqual(
+            s.validated_data["muted_targets"][0],
+            {"target_type": "note", "target_id": "42", "note_type": 2, "label": "Spec"},
+        )
+
+    def test_note_type_rejects_a_bool(self):
+        # bool is a subclass of int; `True` would otherwise pass as note 1.
+        s = self._serializer([{"target_type": "note", "target_id": "42", "note_type": True}])
+        self.assertFalse(s.is_valid())
+
+    def test_entry_without_note_type_still_validates(self):
+        # Entries stored before the field existed must not start 400ing.
+        s = self._serializer([{"target_type": "note", "target_id": "42"}])
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertNotIn("note_type", s.validated_data["muted_targets"][0])
+
     def test_bad_target_type_rejected(self):
         s = self._serializer([{"target_type": "project", "target_id": "1"}])
         self.assertFalse(s.is_valid())

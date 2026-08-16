@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 from django.test import override_settings
 
-from origin.models.chat.unified_models import Activity, ActivityType
+from origin.models.chat.unified_models import Activity, ActivityType, Channel, ChannelKind
 from origin.models.common.inbox_models import InboxItems
 from origin.models.common.notification_models import (
     EmailNotificationEvent,
@@ -118,6 +118,93 @@ class ActivityEnqueueTests(EnqueueTestBase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].category, "task_assign")
         self.assertEqual(rows[0].url, "/workspace/tasks/project/p1/task/t1")
+
+
+@override_settings(EMAIL_NOTIFICATIONS_ENABLED=True)
+class ActivityMuteTests(EnqueueTestBase):
+    """Mute has to reach the email outbox too.
+
+    The message path checked `is_chat_muted`; the ACTIVITY path checked
+    nothing, so muting a chat/thread/task/note still wrote outbox rows for
+    every mention, reaction and reply inside it. Email is the worse channel
+    to leak on: the row outlives the moment and still sends later, so the
+    user gets mail about a thing they muted, minutes after muting it.
+
+    Both channels now share one predicate, which is the point — a mute that
+    silences push but not email is barely a mute.
+    """
+
+    def test_muted_chat_blocks_the_activity_path(self):
+        channel = Channel.objects.create(team=self.team, kind=ChannelKind.GM, title="Busy")
+        NotificationPreference.objects.create(
+            user=self.user2,
+            muted_chats=[{"chat_type": 2, "chat_id": str(channel.id)}],
+        )
+        act = self._mention_activity(channel=channel, surface_type=None)
+        with self.captureOnCommitCallbacks(execute=True):
+            schedule_push_for_activities([act])
+        self.assertEqual(self._rows(), [])
+
+    def test_muting_another_chat_still_emails(self):
+        channel = Channel.objects.create(team=self.team, kind=ChannelKind.GM, title="Busy")
+        other = Channel.objects.create(team=self.team, kind=ChannelKind.GM, title="Other")
+        NotificationPreference.objects.create(
+            user=self.user2,
+            muted_chats=[{"chat_type": 2, "chat_id": str(other.id)}],
+        )
+        act = self._mention_activity(channel=channel, surface_type=None)
+        with self.captureOnCommitCallbacks(execute=True):
+            schedule_push_for_activities([act])
+        self.assertEqual(len(self._rows()), 1)
+
+    def test_muted_task_blocks_the_activity_path(self):
+        NotificationPreference.objects.create(
+            user=self.user2,
+            muted_targets=[{"target_type": "task", "target_id": "t1"}],
+        )
+        act = self._mention_activity()
+        with self.captureOnCommitCallbacks(execute=True):
+            schedule_push_for_activities([act])
+        self.assertEqual(self._rows(), [])
+
+    def test_muted_task_also_blocks_the_email_only_assign(self):
+        """`task_assign` has no push branch at all — email is its ONLY
+        channel, so if the gate were wired into the dispatcher instead of
+        the shared predicate, this row would still be written."""
+        NotificationPreference.objects.create(
+            user=self.user2,
+            muted_targets=[{"target_type": "task", "target_id": "t1"}],
+        )
+        act = self._mention_activity(activity_type=ActivityType.TASK_ASSIGN, surface_type=None)
+        with self.captureOnCommitCallbacks(execute=True):
+            schedule_push_for_activities([act])
+        self.assertEqual(self._rows(), [])
+
+    def test_unmuted_task_still_emails(self):
+        NotificationPreference.objects.create(
+            user=self.user2,
+            muted_targets=[{"target_type": "task", "target_id": "some-other-task"}],
+        )
+        act = self._mention_activity()
+        with self.captureOnCommitCallbacks(execute=True):
+            schedule_push_for_activities([act])
+        self.assertEqual(len(self._rows()), 1)
+
+    def test_scoped_mute_uses_the_email_category_not_the_push_one(self):
+        """The two channels name the same activity differently, so each
+        passes its OWN category to the shared gate. This activity is
+        `mention_task` on both, but the seam is real for others, and a scope
+        evaluated against the wrong vocabulary silently never matches."""
+        NotificationPreference.objects.create(
+            user=self.user2,
+            muted_targets=[
+                {"target_type": "task", "target_id": "t1", "categories": ["mention_task"]}
+            ],
+        )
+        act = self._mention_activity()
+        with self.captureOnCommitCallbacks(execute=True):
+            schedule_push_for_activities([act])
+        self.assertEqual(self._rows(), [])
 
 
 @override_settings(EMAIL_NOTIFICATIONS_ENABLED=True)

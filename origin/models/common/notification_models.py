@@ -19,9 +19,14 @@ class NotificationPreference(models.Model):
     list of `{"chat_type": int, "chat_id": str}` entries that suppress
     every category for messages originating from that chat.
     `muted_targets` is a more general per-object mute list — entries of
-    `{"target_type", "target_id", "chat_type"?, "categories"?, "label"?}`
-    that suppress a specific thread/task/note (optionally only for the
-    listed categories).
+    `{"target_type", "target_id", "chat_type"?, "note_type"?,
+    "categories"?, "label"?}` that suppress a specific thread/task/note
+    (optionally only for the listed categories). A `note` entry needs its
+    `note_type` (1 personal / 2 task / 3 chat) to mute anything
+    server-side: the three note tables have independent primary keys, so a
+    bare note id names up to three different notes. See
+    `services/webpush_gating.is_activity_muted` for the read side, which
+    both away-channels share.
     """
 
     user = models.OneToOneField(

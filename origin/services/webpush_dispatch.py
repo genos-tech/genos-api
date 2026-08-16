@@ -29,7 +29,7 @@ from origin.services.v3_activity import (
     SURFACE_TASK_BODY,
     SURFACE_TASK_NOTE,
 )
-from origin.services.webpush_gating import is_chat_muted, should_push
+from origin.services.webpush_gating import is_activity_muted, is_chat_muted, should_push
 from origin.services.webpush_sender import send_web_push, vapid_configured
 
 logger = logging.getLogger(__name__)
@@ -298,23 +298,14 @@ def dispatch_push_for_activities(activities) -> None:
             spec = _push_spec(act)
             if spec is None:
                 continue
-            # Per-chat mute, same as the plain-message path applies. Without
-            # this, muting a busy channel silenced its messages but NOT the
-            # mentions, reactions and thread replies inside it — so a muted
-            # chat still put an OS card on your phone the moment someone
-            # @mentioned you. The client already drops these (the manager
-            # returns `ignored-muted`), which is exactly why the gap only
-            # showed up on a hidden tab, where the push is the whole
-            # notification.
-            #
-            # Read through `channel` rather than `channel_id` to match how
-            # `_push_spec` gets at it: the channel is nullable (surface-typed
-            # task/note/project activities have none — those are muted
-            # per-object via `muted_targets`, which the server does not read
-            # yet), and `channel_id` is an ORM-only attribute that the
-            # SimpleNamespace activities in the tests don't carry.
-            channel = getattr(act, "channel", None)
-            if channel is not None and is_chat_muted(act.recipient_id, channel.id):
+            # Mute, coarse per-chat AND fine per-object. Without this, muting
+            # a busy channel silenced its messages but NOT the mentions,
+            # reactions and thread replies inside it, and muting a thread /
+            # task / note silenced nothing at all away from the app. The
+            # client already drops all of these (the manager returns
+            # `ignored-muted`), which is exactly why the gap only showed up on
+            # a hidden tab, where the push IS the whole notification.
+            if is_activity_muted(act, spec["category"]):
                 continue
             _queue_push(
                 recipient_id=act.recipient_id,
