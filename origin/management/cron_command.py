@@ -16,18 +16,28 @@ Usage: subclass `CronCommand` instead of `BaseCommand`, and log real
 failures at ERROR (``log.error(...)`` / ``log.exception(...)``) under an
 ``origin.*`` logger. Expected/benign conditions should stay at WARNING or
 below so they don't trip the wire.
+
+It also owns `drain_passes()` — the answer to a scheduler that cannot be
+asked to run every minute. See that method.
 """
 
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Iterator
 
 from django.core.management.base import BaseCommand, CommandError
+from django.db import close_old_connections
 
 # Only watch the app's own loggers — third-party libraries occasionally
 # log at ERROR for conditions we tolerate, and we don't want those to red
 # a cron run.
 WATCHED_LOGGER = "origin"
+
+# Seconds between passes when draining. One minute, because that is the
+# resolution the jobs using this actually want.
+DEFAULT_DRAIN_INTERVAL = 60
 
 
 class _ErrorTripwire(logging.Handler):
@@ -56,6 +66,78 @@ class CronCommand(BaseCommand):
     `execute()` to install/remove the tripwire and raise `CommandError`
     afterwards when errors were seen.
     """
+
+    def create_parser(self, prog_name, subcommand, **kwargs):
+        """Add the drain options to EVERY cron command, not one at a time.
+
+        Put here rather than in each `add_arguments` because the reason
+        they exist is a property of the runner, not of any one job: a
+        second command needing minutely work must not have to rediscover
+        that Railway won't schedule it.
+        """
+        parser = super().create_parser(prog_name, subcommand, **kwargs)
+        parser.add_argument(
+            "--drain-seconds",
+            type=int,
+            default=0,
+            help=(
+                "Keep making passes for up to this many seconds, one every "
+                "--drain-interval, then exit. 0 (the default) means a single "
+                "pass, which is what a human running this by hand wants."
+            ),
+        )
+        parser.add_argument(
+            "--drain-interval",
+            type=int,
+            default=DEFAULT_DRAIN_INTERVAL,
+            help="Seconds between passes while draining.",
+        )
+        return parser
+
+    def drain_passes(self, **options) -> Iterator[int]:
+        """Yield 1, 2, 3… sleeping between passes until the budget is spent.
+
+        **Why this exists.** Railway's cron cannot run a job more often
+        than every 5 minutes — "the shortest time between successive
+        executions of a cron job cannot be less than 5 minutes", and their
+        own docs list more-frequent-than-5-minutes under *when not to use
+        cron*. Two jobs here nevertheless want minutely resolution, and
+        asking for `* * * * *` anyway does not degrade gracefully: the
+        schedule simply does not run (that is how to-do reminders shipped
+        needing a manual poke in the Railway UI after every deploy).
+
+        So the cron fires at a rate Railway supports and the *command*
+        supplies the resolution, by making several passes inside one run.
+
+        **The budget must stay under the cron interval.** Railway does not
+        terminate deployments and skips a scheduled run whose predecessor
+        is still alive, so a drain that overran its window would not be
+        merely late — it would cancel the next tick and halve the rate,
+        which is exactly the failure this is fixing. Hence: never sleep
+        into the deadline, and stop early if a pass itself overran.
+        """
+        seconds = max(0, options.get("drain_seconds") or 0)
+        interval = max(1, options.get("drain_interval") or DEFAULT_DRAIN_INTERVAL)
+        deadline = time.monotonic() + seconds
+        number = 0
+
+        while True:
+            number += 1
+            started = time.monotonic()
+            yield number
+
+            next_start = started + interval
+            # `next_start` covers the common case; the `time.monotonic()`
+            # arm catches a pass that took longer than the whole interval,
+            # where the next one would begin already past the window.
+            if next_start >= deadline or time.monotonic() >= deadline:
+                return
+            time.sleep(max(0.0, next_start - time.monotonic()))
+            # We just held a connection idle for a minute, which is long
+            # enough for the far end (or a pooler) to have hung up on it.
+            # Django does this at request boundaries for the same reason;
+            # a pass is this job's equivalent of a request.
+            close_old_connections()
 
     def execute(self, *args, **options):
         tripwire = _ErrorTripwire()

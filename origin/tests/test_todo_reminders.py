@@ -12,14 +12,17 @@ lie to the user rather than merely break:
 * `ToDoReminderTickTests` — what firing actually produces: an inbox
   Activity card with a to-do-shaped payload, a push with a per-reminder
   tag, and the deep link that makes the card actionable.
-* `ToDoReminderTickCommandTests` — the shared cron drains BOTH kinds. This
-  is the test that catches somebody "cleaning up" the todo half out of
-  `message_reminder_tick`, which would leave setting reminders working and
-  delivery silently dead.
+* `ToDoReminderTickCommandTests` — the shared cron drains BOTH kinds, and
+  one run makes several passes. The first catches somebody "cleaning up" the
+  todo half out of `message_reminder_tick`, which would leave setting
+  reminders working and delivery silently dead. The second catches the
+  drain being undone, which looks like nothing at all until reminders start
+  arriving up to five minutes late.
 """
 
 from datetime import timedelta
 from io import StringIO
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -34,6 +37,7 @@ from origin.models.chat.todo_models import ToDoGroup, ToDoItem, ToDoItemReminder
 from origin.models.common.inbox_models import InboxItems
 from origin.models.common.team_models import TeamMaster
 from origin.services import todo_reminders
+from origin.tests.test_cron_command import FakeDrainClock
 
 User = get_user_model()
 
@@ -339,3 +343,71 @@ class ToDoReminderTickCommandTests(_TodoReminderMixin):
         call_command("message_reminder_tick", "--dry-run", stdout=out)
         self.assertIn("1 to-do reminder(s) due", out.getvalue())
         self.assertFalse(InboxItems.objects.filter(receiver=self.user).exists())
+
+    def test_drain_seconds_makes_several_passes_in_one_run(self):
+        """The end-to-end wiring the Railway service depends on.
+
+        Railway will not schedule below 5 minutes, so the minutely
+        resolution has to come from the command making passes inside one
+        run. Nothing about a broken drain is visible — the cron stays
+        green, reminders just arrive late — so this asserts the passes.
+        """
+        clock = FakeDrainClock()
+        out = StringIO()
+        with clock.patch(), patch(
+            "origin.management.cron_command.close_old_connections"
+        ), patch.object(todo_reminders, "schedule_push_for_reminder"):
+            call_command(
+                "message_reminder_tick",
+                "--drain-seconds",
+                "120",
+                "--drain-interval",
+                "60",
+                stdout=out,
+            )
+        output = out.getvalue()
+        self.assertIn("todo_reminder: 0 fired, 0 skipped (of 0 due, oldest 0s late) [pass 1]", output)
+        self.assertIn("[pass 2]", output)
+        self.assertNotIn("[pass 3]", output)
+
+    def test_a_reminder_coming_due_mid_run_fires_in_a_later_pass(self):
+        """Why each pass re-reads the clock instead of sharing one `now`.
+
+        A run spans minutes. A reminder due at minute 2 of a drain must fire
+        in that run, not wait for the next one — otherwise the extra passes
+        all re-answer the same stale question and the drain buys nothing.
+        """
+        base = timezone.now()
+        # Due 90s in — after passes 1 and 2, before pass 3.
+        reminder = ToDoItemReminder.objects.create(
+            item=self.item, remind_at=base + timedelta(seconds=90)
+        )
+        clock = FakeDrainClock()
+        # The command reaches for `timezone` only to ask what time it is, so
+        # tying that to the drain clock makes the three minutes real for both
+        # without the test taking three minutes.
+        moving_clock = SimpleNamespace(now=lambda: base + timedelta(seconds=clock.elapsed()))
+        out = StringIO()
+        with (
+            clock.patch(),
+            patch("origin.management.cron_command.close_old_connections"),
+            patch("origin.management.commands.message_reminder_tick.timezone", moving_clock),
+            patch.object(todo_reminders, "schedule_push_for_reminder"),
+        ):
+            call_command(
+                "message_reminder_tick",
+                "--drain-seconds",
+                "180",
+                "--drain-interval",
+                "60",
+                stdout=out,
+            )
+        output = out.getvalue()
+        # Passes at +0s and +60s see nothing; the one at +120s fires it 30s
+        # late. Hoist `now` out of the loop and all three read +0s instead.
+        self.assertIn("todo_reminder: 0 fired, 0 skipped (of 0 due, oldest 0s late) [pass 1]", output)
+        self.assertIn("todo_reminder: 0 fired, 0 skipped (of 0 due, oldest 0s late) [pass 2]", output)
+        self.assertIn("todo_reminder: 1 fired, 0 skipped (of 1 due, oldest 30s late) [pass 3]", output)
+        reminder.refresh_from_db()
+        self.assertIsNotNone(reminder.fired_at)
+        self.assertTrue(InboxItems.objects.filter(receiver=self.user).exists())
