@@ -2,19 +2,34 @@
 # "remind me about this message in 3 hours").
 #
 # Same Docker image as `backend-django`, run as a cron: the container
-# starts each tick, runs `manage.py message_reminder_tick`, exits.
+# starts every 5 minutes, runs `manage.py message_reminder_tick` for four
+# one-minute passes, exits.
 #
 # What this does:
-#   EVERY MINUTE, fire the MessageReminder rows whose time has come. Each
-#   fires once — `fired_at` is stamped in the same transaction that files
-#   the Inbox item, and the stamp is also the claim — so overlapping passes
-#   are safe and a crashed pass redelivers on the next tick rather than
-#   losing the reminder.
+#   EVERY MINUTE, fire the MessageReminder and ToDoItemReminder rows whose
+#   time has come. Each fires once — `fired_at` is stamped in the same
+#   transaction that files the Inbox item, and the stamp is also the claim —
+#   so overlapping passes are safe and a crashed pass redelivers on the next
+#   pass rather than losing the reminder.
 #
-# ⚠️ EVERY MINUTE IS THE PRODUCT. The shortest preset is 20 minutes, so a
-# five-minute cron would make every reminder up to 5 minutes late and
-# "remind me in 20 minutes" a lie. Cheap to run: one indexed query over a
-# partial index that is empty most ticks.
+# ⚠️ EVERY MINUTE IS THE PRODUCT — but the cron cannot be the thing that
+# says so. Railway will not schedule a job more often than every 5 minutes
+# ("the shortest time between successive executions of a cron job cannot be
+# less than 5 minutes"), and asking for `* * * * *` anyway does not get you
+# five-minutely: the schedule never fires, and the service sits dead after
+# every deploy until somebody presses the button in the Railway UI. That is
+# what it did, unnoticed, from the day message reminders shipped.
+#
+# So the schedule is what Railway supports and the COMMAND supplies the
+# resolution: `--drain-seconds 240` makes four one-minute passes inside one
+# run (`CronCommand.drain_passes`). The shortest preset is 20 minutes, so a
+# genuinely five-minutely tick would make "remind me in 20 minutes" a lie —
+# hence the drain rather than a shrug. Cheap either way: one indexed query
+# over a partial index that is empty most passes.
+#
+# 240, not 300: Railway does not terminate deployments and SKIPS a scheduled
+# run whose predecessor is still alive, so a drain that overran its window
+# would cancel the next tick and halve the rate. Leave the minute of slack.
 #
 # ENV (per-service on Railway — NOT inherited): DATABASE_URL, plus the
 # WEBPUSH_VAPID_* pair and WEBPUSH_MEDIA_BASE_URL — ⚠️ LOAD-BEARING, they
@@ -29,6 +44,6 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-cronSchedule = "* * * * *"
-startCommand = "sh /app/railway-reminder-tick-entrypoint.sh"
+cronSchedule = "*/5 * * * *"
+startCommand = "sh /app/railway-reminder-tick-entrypoint.sh --drain-seconds 240"
 restartPolicyType = "NEVER"

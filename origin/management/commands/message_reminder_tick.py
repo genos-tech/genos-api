@@ -1,8 +1,16 @@
 """Fire reminders that have come due — messages AND to-dos.
 
-Runs every minute. Each pass takes the pending reminders whose `remind_at`
-has passed, files an Inbox item in the Activities section for each, and
-web-pushes the person who asked for it.
+Makes a pass every minute. Each pass takes the pending reminders whose
+`remind_at` has passed, files an Inbox item in the Activities section for
+each, and web-pushes the person who asked for it.
+
+⚠️ **The cron does not run every minute — this command does.** Railway
+refuses to schedule anything more often than every 5 minutes, so the
+service fires `*/5` and passes `--drain-seconds`, and `drain_passes()`
+makes the four one-minute passes inside that single run. The minutely
+resolution is real; the *scheduling* of it is not the cron's. Asking
+Railway for `* * * * *` anyway is not a degraded schedule but a dead one —
+see `CronCommand.drain_passes`, and `railway-reminder-tick.toml`.
 
 Both kinds drain in one pass, and the command keeps its message-era name so
 the Railway cron service that invokes it needs no change. That is the point:
@@ -18,11 +26,13 @@ picks it up again. `fired_at` doubles as the claim, so overlapping passes
 cannot deliver the same reminder twice (see
 `services/message_reminders.fire`).
 
-⚠️ **Being a minute late is normal; being an hour late is a bug.** A
-minutely cron is what makes "remind me in 20 minutes" mean anything, so a
-backlog is the signal worth watching — hence the `late=` figure in the
-summary line. Individual failures log at ERROR through the service's
-`logger.exception`, which `CronCommand` turns into a failed run.
+⚠️ **Being a minute late is normal; being an hour late is a bug.** Minutely
+passes are what make "remind me in 20 minutes" mean anything, so a backlog
+is the signal worth watching — hence the `late=` figure in the summary line,
+which now carries a `[pass N]` marker while draining so a wedged pass is
+visible as a run that stopped counting. Individual failures log at ERROR
+through the service's `logger.exception`, which `CronCommand` turns into a
+failed run.
 """
 
 from __future__ import annotations
@@ -61,15 +71,29 @@ class Command(CronCommand):
         )
 
     def handle(self, *args, **options):
-        now = timezone.now()
         limit = options["limit"]
 
         if options["dry_run"]:
+            # One report, never a drain: "what is due" is a question, and
+            # asking it four times over four minutes answers a different one.
+            now = timezone.now()
             due = due_reminders(now=now, limit=limit)
             todo_due = todo_reminders.due_reminders(now=now, limit=limit)
             self.stdout.write(f"{len(due)} message reminder(s) due")
             self.stdout.write(f"{len(todo_due)} to-do reminder(s) due")
             return
+
+        # The marker is empty for a single pass, so a hand-run keeps the
+        # exact output the runbook tells people to read.
+        draining = (options.get("drain_seconds") or 0) > 0
+        for number in self.drain_passes(**options):
+            self._fire_pass(limit=limit, marker=f" [pass {number}]" if draining else "")
+
+    def _fire_pass(self, *, limit: int, marker: str) -> None:
+        # `now` is per pass, not per run: a four-minute drain whose passes
+        # all shared one timestamp would keep re-asking for the same due
+        # set and never see the reminders that came due while it ran.
+        now = timezone.now()
 
         # Each kind gets its own `--limit` rather than sharing one budget: a
         # backlog of one kind must not be able to starve the other, since
@@ -89,9 +113,9 @@ class Command(CronCommand):
             )
         self.stdout.write(
             f"message_reminder: {counts['fired']} fired, {counts['skipped']} skipped "
-            f"(of {counts['due']} due, oldest {counts['max_late_seconds']}s late)"
+            f"(of {counts['due']} due, oldest {counts['max_late_seconds']}s late){marker}"
         )
         self.stdout.write(
             f"todo_reminder: {todo_counts['fired']} fired, {todo_counts['skipped']} skipped "
-            f"(of {todo_counts['due']} due, oldest {todo_counts['max_late_seconds']}s late)"
+            f"(of {todo_counts['due']} due, oldest {todo_counts['max_late_seconds']}s late){marker}"
         )

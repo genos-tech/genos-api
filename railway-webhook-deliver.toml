@@ -2,7 +2,8 @@
 # outbound webhooks, readiness plan §4.4).
 #
 # Same Docker image as `backend-django`, run as a cron: the container
-# starts each tick, runs `manage.py webhook_deliver_tick`, exits.
+# starts every 5 minutes, runs `manage.py webhook_deliver_tick` for four
+# one-minute passes, exits.
 #
 # What this does:
 #   EVERY MINUTE, drain the WebhookDelivery outbox. Claims due rows
@@ -15,8 +16,17 @@
 #
 # Every minute rather than every five: a webhook that lands a minute
 # after the event is useful, one that lands five minutes after is a
-# batch job. Retries carry their own backoff, so the tick rate does not
+# batch job. Retries carry their own backoff, so the pass rate does not
 # hammer a failing endpoint.
+#
+# ⚠️ But the CRON cannot be minutely. Railway will not schedule a job more
+# often than every 5 minutes, and `* * * * *` — which this asked for — does
+# not degrade to five-minutely: it does not run at all, leaving the service
+# dead after every deploy until somebody triggers it by hand in the Railway
+# UI. So the schedule is what Railway supports and `--drain-seconds 240`
+# makes four one-minute passes inside one run (`CronCommand.drain_passes`).
+# 240 rather than 300 because Railway SKIPS a run whose predecessor is still
+# alive, so overrunning the window would cancel the next tick.
 #
 # ENV (per-service on Railway — NOT inherited): DATABASE_URL, and
 # OAUTH_TOKEN_ENCRYPTION_KEY, which is ⚠️ LOAD-BEARING: webhook signing
@@ -30,6 +40,6 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-cronSchedule = "* * * * *"
-startCommand = "sh /app/railway-webhook-deliver-entrypoint.sh"
+cronSchedule = "*/5 * * * *"
+startCommand = "sh /app/railway-webhook-deliver-entrypoint.sh --drain-seconds 240"
 restartPolicyType = "NEVER"

@@ -1,7 +1,15 @@
 """Drain the webhook outbox.
 
-Runs every minute. Each pass claims due deliveries atomically, POSTs
-them, and either marks them sent or schedules a backed-off retry.
+Makes a pass every minute. Each pass claims due deliveries atomically,
+POSTs them, and either marks them sent or schedules a backed-off retry.
+
+⚠️ **The cron does not run every minute — this command does.** Railway
+will not schedule anything more often than every 5 minutes, so the service
+fires `*/5` and passes `--drain-seconds`; `CronCommand.drain_passes` makes
+the one-minute passes inside that single run. `* * * * *` was asked for
+here too, and does not degrade to five-minutely — it does not run at all
+until somebody triggers the job by hand in the Railway UI, which is how
+this was found.
 
 Modelled on `email_notify_tick`, which is the proven outbox in this
 repo, with the one addition that path lacks: `next_attempt_at`. Email
@@ -56,8 +64,26 @@ class Command(CronCommand):
         )
 
     def handle(self, *args, **options):
+        if options["dry_run"]:
+            # Reported once, never drained: it mutates nothing worth
+            # repeating and "what is due" is a question about now.
+            self._one_pass(limit=options["limit"], dry_run=True)
+            return
+
+        # Empty marker for a single pass, so a hand-run keeps the exact
+        # output the runbook tells people to read.
+        draining = (options.get("drain_seconds") or 0) > 0
+        for number in self.drain_passes(**options):
+            self._one_pass(
+                limit=options["limit"],
+                dry_run=False,
+                marker=f" [pass {number}]" if draining else "",
+            )
+
+    def _one_pass(self, *, limit: int, dry_run: bool, marker: str = "") -> None:
+        # Per pass, not per run — a drained run spans minutes, and rows
+        # become due (and claims go stale) while it is still going.
         now = timezone.now()
-        limit = options["limit"]
 
         # Stale sweep first, so a row orphaned by a crashed pass rejoins
         # this one rather than waiting for a human.
@@ -78,7 +104,7 @@ class Command(CronCommand):
         )
         due_ids = list(due.values_list("id", flat=True)[:limit])
 
-        if options["dry_run"]:
+        if dry_run:
             self.stdout.write(f"{len(due_ids)} delivery(ies) due")
             return
 
@@ -151,7 +177,7 @@ class Command(CronCommand):
         # WARNING, not ERROR — see the module docstring.
         if failed:
             log.warning("webhook_deliver: %s sent, %s failed", sent, failed)
-        self.stdout.write(f"webhook_deliver: {sent} sent, {failed} failed")
+        self.stdout.write(f"webhook_deliver: {sent} sent, {failed} failed{marker}")
 
     @staticmethod
     def _record_endpoint_failure(endpoint: WebhookEndpoint) -> None:
