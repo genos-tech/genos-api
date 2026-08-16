@@ -315,6 +315,8 @@ class DispatchTests(BaseAPITestCase):
         meta=None,
         msg_metadata=None,
         channel=True,
+        thread_root_id=None,
+        parent_id=None,
     ):
         return SimpleNamespace(
             id=uuid.uuid4(),
@@ -323,7 +325,12 @@ class DispatchTests(BaseAPITestCase):
             actor=SimpleNamespace(username="Alice", profile_image_file_name=""),
             channel=SimpleNamespace(kind=ChannelKind.DM, id="chan-uuid") if channel else None,
             message_id=uuid.uuid4(),
-            message=SimpleNamespace(body_text="hello there", metadata=(msg_metadata or {})),
+            message=SimpleNamespace(
+                body_text="hello there",
+                metadata=(msg_metadata or {}),
+                thread_root_id=thread_root_id,
+                parent_id=parent_id,
+            ),
             surface_type=surface_type,
             meta=(meta or {}),
         )
@@ -409,6 +416,172 @@ class DispatchTests(BaseAPITestCase):
             ]
         )
         send.assert_called_once()
+
+    # --- `muted_targets`: the fine per-object mute -------------------------
+    # The thread/task/note header buttons write these. Until now the server
+    # never read the list, so muting a task or a note silenced the in-app
+    # toast and nothing else — close the tab and every "muted" thing was
+    # loud again. These pin the matching rules, and in particular the two
+    # places where the server deliberately declines to guess.
+
+    def _task_mention(self, **kw):
+        return self._activity(
+            self.user2,
+            ActivityType.MENTION,
+            surface_type=5,  # SURFACE_TASK_BODY
+            meta={"displayId": "PRG-12", "projectId": 3, "taskId": 12},
+            channel=False,
+            **kw,
+        )
+
+    def _note_mention(self, surface_type, note_id=42):
+        return self._activity(
+            self.user2,
+            ActivityType.MENTION,
+            surface_type=surface_type,
+            meta={"noteId": note_id},
+            channel=False,
+        )
+
+    def _mute(self, *entries):
+        NotificationPreference.objects.create(user=self.user2, muted_targets=list(entries))
+
+    def test_muted_task_suppresses(self):
+        self._sub(self.user2)
+        self._mute({"target_type": "task", "target_id": "12"})
+        self._run([self._task_mention()]).assert_not_called()
+
+    def test_muting_another_task_does_not_suppress(self):
+        self._sub(self.user2)
+        self._mute({"target_type": "task", "target_id": "999"})
+        self._run([self._task_mention()]).assert_called_once()
+
+    def test_task_id_matches_a_string_meta_id_too(self):
+        """`target_id` is always a string, but `meta.taskId` is whichever the
+        producer wrote — an int from the socket emitter, a string from the
+        v3 endpoints. Both have to match or the mute is a silent no-op for
+        half the producers."""
+        self._sub(self.user2)
+        self._mute({"target_type": "task", "target_id": "t1"})
+        act = self._activity(
+            self.user2,
+            ActivityType.MENTION,
+            surface_type=5,
+            meta={"displayId": "PRG-1", "projectId": "p1", "taskId": "t1"},
+            channel=False,
+        )
+        self._run([act]).assert_not_called()
+
+    def test_muted_thread_suppresses_a_reply_to_the_root(self):
+        self._sub(self.user2)
+        self._mute({"target_type": "thread", "target_id": "root-1"})
+        act = self._activity(
+            self.user2, ActivityType.THREAD_REPLY, thread_root_id="root-1", parent_id="root-1"
+        )
+        self._run([act]).assert_not_called()
+
+    def test_muted_thread_suppresses_a_nested_reply(self):
+        """A reply to a reply. The parent is NOT the thread root.
+
+        The mute button stores the thread ROOT, and the native v3 send path
+        deliberately walks to the root (`_resolve_thread_root`), so matching
+        on the immediate parent would let every deep reply through — which is
+        the bug the client still has, since its activity intents carry
+        `message.parentId`.
+        """
+        self._sub(self.user2)
+        self._mute({"target_type": "thread", "target_id": "root-1"})
+        act = self._activity(
+            self.user2, ActivityType.THREAD_REPLY, thread_root_id="root-1", parent_id="reply-7"
+        )
+        self._run([act]).assert_not_called()
+
+    def test_thread_mute_falls_back_to_parent_when_root_is_unset(self):
+        """The legacy mirror path stores `thread_root = parent`; older rows
+        may have only a parent. Matching must still find them."""
+        self._sub(self.user2)
+        self._mute({"target_type": "thread", "target_id": "root-1"})
+        act = self._activity(self.user2, ActivityType.THREAD_REPLY, parent_id="root-1")
+        self._run([act]).assert_not_called()
+
+    def test_note_mute_needs_its_note_type(self):
+        """The refusal-to-guess case, and the reason it matters.
+
+        Personal, task and chat notes are three tables with three
+        independent primary keys, so `note 42` names up to three different
+        notes. An entry with no `note_type` — every entry written before the
+        field existed — must therefore mute NOTHING rather than silence two
+        notes the user never touched. Failing open is a visible annoyance;
+        failing closed is invisible.
+        """
+        self._sub(self.user2)
+        self._mute({"target_type": "note", "target_id": "42"})
+        self._run([self._note_mention(6)]).assert_called_once()
+
+    def test_note_mute_with_matching_note_type_suppresses(self):
+        self._sub(self.user2)
+        self._mute({"target_type": "note", "target_id": "42", "note_type": 1})
+        self._run([self._note_mention(6)]).assert_not_called()
+
+    def test_note_mute_does_not_leak_across_note_types(self):
+        """Muting personal note 42 must not silence task note 42."""
+        self._sub(self.user2)
+        self._mute({"target_type": "note", "target_id": "42", "note_type": 1})
+        # surface 7 == task note == note_type 2
+        self._run([self._note_mention(7)]).assert_called_once()
+
+    def test_category_scoped_mute_only_covers_that_category(self):
+        self._sub(self.user2)
+        self._mute({"target_type": "task", "target_id": "12", "categories": ["thread_replies"]})
+        # The activity is a `mention_task`, which the scope excludes.
+        self._run([self._task_mention()]).assert_called_once()
+
+    def test_category_scoped_mute_matches_its_own_category(self):
+        self._sub(self.user2)
+        self._mute({"target_type": "task", "target_id": "12", "categories": ["mention_task"]})
+        self._run([self._task_mention()]).assert_not_called()
+
+    def test_chat_target_entries_are_left_to_muted_chats(self):
+        """`target_type: "chat"` is not honored here on purpose.
+
+        No UI writes one, `muted_chats` already covers chats, and the client
+        additionally requires a `chat_type` on both sides that the serializer
+        does not mandate — so honoring these naively would mute where the
+        client does not.
+        """
+        self._sub(self.user2)
+        self._mute({"target_type": "chat", "target_id": "chan-uuid"})
+        self._run([self._activity(self.user2)]).assert_called_once()
+
+    def test_unknown_and_malformed_entries_are_ignored(self):
+        """A hand-rolled API client can store junk. It must not throw: the
+        dispatch loop swallows per-activity exceptions, so a crash here would
+        silently drop the push instead of failing loudly."""
+        self._sub(self.user2)
+        self._mute(
+            "not-a-dict",
+            {},
+            {"target_type": "task"},
+            {"target_type": "task", "target_id": ""},
+            {"target_type": "project", "target_id": "3"},
+            {"target_type": "note", "target_id": "42", "note_type": True},
+        )
+        self._run([self._task_mention()]).assert_called_once()
+
+    def test_zero_ids_are_not_treated_as_real(self):
+        """The socket emitter writes `meta["threadId"] = 0` when a chat note
+        has no parent thread. The client coerces that away with `||`; a
+        server comparing it literally would mute on the sentinel."""
+        self._sub(self.user2)
+        self._mute({"target_type": "thread", "target_id": "0"})
+        act = self._activity(
+            self.user2,
+            ActivityType.MENTION,
+            surface_type=8,  # SURFACE_CHAT_NOTE
+            meta={"noteId": 5, "threadId": 0},
+            channel=False,
+        )
+        self._run([act]).assert_called_once()
 
     def test_open_laptop_does_not_silence_the_phone(self):
         """The bug this per-device split exists to fix.

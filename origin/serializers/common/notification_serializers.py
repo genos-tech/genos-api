@@ -100,6 +100,7 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
             target_type = entry.get("target_type")
             target_id = entry.get("target_id")
             chat_type = entry.get("chat_type")
+            note_type = entry.get("note_type")
             categories = entry.get("categories")
             label = entry.get("label")
 
@@ -117,6 +118,18 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
             ):
                 raise serializers.ValidationError(
                     "muted_targets[].chat_type must be an integer when provided."
+                )
+            # Which of the three note tables `target_id` belongs to (1
+            # personal / 2 task / 3 chat). Required for a `note` entry to
+            # mute anything server-side — the three tables have independent
+            # primary keys, so a bare note id is ambiguous. Optional in the
+            # shape so entries stored before this field existed still
+            # validate; see `webpush_gating._NOTE_TYPE_BY_SURFACE`.
+            if note_type is not None and (
+                not isinstance(note_type, int) or isinstance(note_type, bool)
+            ):
+                raise serializers.ValidationError(
+                    "muted_targets[].note_type must be an integer when provided."
                 )
             if categories is not None:
                 if not isinstance(categories, list) or not all(
@@ -137,6 +150,8 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
             item = {"target_type": target_type, "target_id": target_id}
             if chat_type is not None:
                 item["chat_type"] = chat_type
+            if note_type is not None:
+                item["note_type"] = note_type
             if categories:
                 item["categories"] = list(categories)
             if label:

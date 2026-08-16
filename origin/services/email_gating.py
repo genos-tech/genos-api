@@ -19,10 +19,11 @@ fallback: email's defaults differ from the other channels', so inheriting
 an unprefixed value would silently flip categories the user only meant to
 change in-app.
 
-Known gap inherited from push (see `webpush_gating`'s docstring):
-`muted_targets` is not consulted by either channel yet — a muted thread
-still emails. `muted_chats` IS honored, by the enqueue path for the
-`chats` category (mirroring where push checks it).
+Mute is NOT decided here. It is channel-independent, so both away-channels
+share one predicate in `webpush_gating` — `is_activity_muted` on the
+activity paths, `is_chat_muted` on the plain-message ones — called from
+`email_enqueue` at the same points push calls them. Read those for what
+`muted_chats` / `muted_targets` do and do not cover.
 """
 
 from origin.models.common.notification_models import NotificationPreference
