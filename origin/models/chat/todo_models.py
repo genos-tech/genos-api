@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 
 from origin.models.common.team_models import TeamMaster
@@ -161,4 +163,57 @@ class ToDoItem(models.Model):
         indexes = [
             models.Index(fields=["group", "sort_order"], name="todo_item_group_order_idx"),
             models.Index(fields=["parent_item"], name="todo_item_parent_idx"),
+        ]
+
+
+class ToDoItemReminder(models.Model):
+    """"Remind me about this to-do at 3pm" — see `services/todo_reminders`.
+
+    The to-do counterpart of `MessageReminder`, and deliberately the same
+    shape: `remind_at` is an absolute instant the BROWSER computed (the
+    server never resolves "tomorrow morning" — it knows the user's timezone
+    only as a best-effort capture that can be missing), `fired_at` doubles
+    as the delivery claim so overlapping cron ticks cannot nudge twice, and
+    a cancel is a stamp rather than a delete so what was asked for survives.
+
+    No `user` column, unlike `MessageReminder`: a to-do already has exactly
+    one owner, reached as `item.group.user`, and that is how the whole to-do
+    feature spells ownership (`ToDoItem` carries no `user` FK either). A
+    second copy here would be a second source of truth for no gain — which
+    is also why `uniq_pending_todo_reminder` needs only the item: nobody but
+    the owner can hold a reminder on it.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    item = models.ForeignKey(
+        ToDoItem,
+        on_delete=models.CASCADE,
+        related_name="reminders",
+    )
+    remind_at = models.DateTimeField()
+    # Null = still pending. Set when delivered, and the UPDATE that sets it
+    # is the lock that makes delivery exactly-once.
+    fired_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            # One pending reminder per to-do: "remind me in 1 hour" after
+            # "remind me tomorrow" is a change of mind, not a second nudge.
+            models.UniqueConstraint(
+                fields=["item"],
+                condition=models.Q(fired_at__isnull=True, cancelled_at__isnull=True),
+                name="uniq_pending_todo_reminder",
+            )
+        ]
+        indexes = [
+            # The tick's only query. Partial, so the scan never walks the
+            # fired/cancelled history that accumulates behind it.
+            models.Index(
+                fields=["remind_at"],
+                condition=models.Q(fired_at__isnull=True, cancelled_at__isnull=True),
+                name="todo_reminder_due_idx",
+            ),
         ]

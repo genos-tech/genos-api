@@ -25,13 +25,25 @@ row: that feed is what other people did to you.
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
 
 from django.db import transaction
 from django.utils import timezone
 
 from origin.models.chat.unified_models import ChannelKind, Flag, MessageReminder
 from origin.models.common.inbox_models import InboxItems
+
+# Re-exported rather than defined here: the acceptance window and the
+# dead-cron canary are shared with `todo_reminders` (see
+# `reminder_window`), and every existing caller of these names imports
+# them from this module.
+from origin.services.reminder_window import (  # noqa: F401
+    MAX_HORIZON,
+    OVERDUE_WARN_AFTER,
+    PAST_TOLERANCE,
+    ReminderWindowError,
+    validate_remind_at,
+)
+from origin.services.reminder_window import warn_if_overdue as _warn_if_overdue
 from origin.services.webpush_dispatch import schedule_push_for_reminder
 
 logger = logging.getLogger(__name__)
@@ -41,44 +53,10 @@ logger = logging.getLogger(__name__)
 # waiting on an answer.
 ITEM_TYPE_MESSAGE_REMINDER = 9
 
-# Furthest ahead a reminder may be set. Generous for "remind me about this
-# message" while keeping the due index from accumulating rows nobody will
-# live to see.
-MAX_HORIZON = timedelta(days=365)
-
-# How far in the past an incoming `remind_at` may be. A client clock a few
-# seconds behind the server's shouldn't turn "in 20 minutes" into a 400,
-# and anything inside the window fires on the next tick anyway.
-PAST_TOLERANCE = timedelta(minutes=2)
-
 # Message preview carried on the inbox card and the push body. Matches
 # `webpush_dispatch._PREVIEW_MAX` so a reminder reads like every other
 # notification about a message.
 PREVIEW_MAX = 140
-
-# How far past its time a still-pending reminder has to be before it means
-# something is wrong rather than "the tick is a few seconds behind".
-# Matches `message_reminder_tick.LATE_MINUTES`.
-OVERDUE_WARN_AFTER = timedelta(minutes=10)
-
-
-class ReminderWindowError(ValueError):
-    """`remind_at` is in the past or beyond `MAX_HORIZON`."""
-
-
-def validate_remind_at(remind_at, *, now=None):
-    """Return `remind_at` if it is a usable future instant, else raise.
-
-    Kept out of the view so the tick's own tests can reuse the bounds.
-    """
-    now = now or timezone.now()
-    if remind_at is None:
-        raise ReminderWindowError("remindAt is required.")
-    if remind_at < now - PAST_TOLERANCE:
-        raise ReminderWindowError("remindAt must be in the future.")
-    if remind_at > now + MAX_HORIZON:
-        raise ReminderWindowError("remindAt must be within a year.")
-    return remind_at
 
 
 def set_reminder(*, user, message, remind_at):
@@ -138,31 +116,12 @@ def pending_for_user(user):
 
 
 def warn_if_overdue(reminders, *, now=None) -> int:
-    """Log a warning when reminders are piling up past their time. Returns
-    how late the oldest one is, in seconds.
+    """The dead-cron canary over this user's pending message reminders.
 
-    The tick reports its own lateness — but a tick that is not running
-    reports nothing, and neither does anything else: the reminder simply
-    never arrives, and the inbox stays empty because the inbox item is the
-    tick's work too. That silence is how a missing `reminder-tick` service
-    survived a production release. The client's boot fetch reads exactly the
-    rows that would be overdue, so it costs nothing to notice here.
-
-    `reminders` must be ordered by `remind_at` (as `pending_for_user`
-    returns them), oldest first.
+    See `reminder_window.warn_if_overdue` — the whole rationale lives
+    there, since a to-do reminder can go undelivered just as silently.
     """
-    if not reminders:
-        return 0
-    now = now or timezone.now()
-    late = int((now - reminders[0].remind_at).total_seconds())
-    if late > OVERDUE_WARN_AFTER.total_seconds():
-        logger.warning(
-            "[reminders] %s pending reminder(s), oldest %s minutes past its time — "
-            "is the message_reminder_tick cron running?",
-            len(reminders),
-            late // 60,
-        )
-    return late
+    return _warn_if_overdue(reminders, label="reminders", now=now, log=logger)
 
 
 def _truncate(text: str) -> str:

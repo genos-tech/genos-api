@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 from django.db import transaction
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
+from django.utils import dateparse, timezone
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -12,9 +12,11 @@ from origin.search_engine.purge import purge_todo_item
 from origin.serializers.chat.todo_serializers import (
     ToDoCategorySerializer,
     ToDoGroupSerializer,
+    ToDoItemReminderSerializer,
     ToDoItemSerializer,
     ToDoScheduleSerializer,
 )
+from origin.services import todo_reminders
 from origin.services.user_time import user_today
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data
@@ -38,6 +40,19 @@ def _parse_date(value, default=None):
 def _recompute_group_completion(group_id):
     has_open = ToDoItem.objects.filter(group_id=group_id, is_completed=False).exists()
     ToDoGroup.objects.filter(group_id=group_id).update(is_completed=not has_open)
+
+
+def _get_owned_item(request, item_id):
+    """The to-do, or None when it isn't the caller's.
+
+    A to-do carries no `user` column — ownership is its group's — so every
+    per-item endpoint has to make this walk. Module-level rather than a
+    method because the reminder views need the same check.
+    """
+    item = get_object_or_404(ToDoItem, item_id=item_id)
+    if item.group.user_id != request.user.id:
+        return None
+    return item
 
 
 def _get_or_create_group(team_id, user_id, local_date):
@@ -162,14 +177,8 @@ class ToDoItemListView(AuthenticatedAPIView):
 class ToDoItemDetailView(AuthenticatedAPIView):
     """PATCH / DELETE /api/v2/todo/items/<item_id>/."""
 
-    def _get_owned_item(self, request, item_id):
-        item = get_object_or_404(ToDoItem, item_id=item_id)
-        if item.group.user_id != request.user.id:
-            return None
-        return item
-
     def patch(self, request, item_id):
-        item = self._get_owned_item(request, item_id)
+        item = _get_owned_item(request, item_id)
         if item is None:
             return Response({"error": "forbidden"}, status=status.HTTP_403_FORBIDDEN)
 
@@ -184,6 +193,13 @@ class ToDoItemDetailView(AuthenticatedAPIView):
                 new_completed = bool(request.data.get("is_completed"))
                 if new_completed and not item.is_completed:
                     item.ts_completed_at = timezone.now()
+                    # Finishing the to-do retires any pending reminder: a
+                    # nudge about something the user has already dealt with
+                    # is the noise that gets notifications switched off.
+                    # Re-opening it does NOT restore the reminder — the time
+                    # that was asked for has most likely passed, and
+                    # resurrecting it would fire immediately.
+                    todo_reminders.cancel_pending(item=item)
                 elif not new_completed:
                     item.ts_completed_at = None
                 item.is_completed = new_completed
@@ -221,11 +237,14 @@ class ToDoItemDetailView(AuthenticatedAPIView):
         return Response(ToDoItemSerializer(item).data, status=status.HTTP_200_OK)
 
     def delete(self, request, item_id):
-        item = self._get_owned_item(request, item_id)
+        item = _get_owned_item(request, item_id)
         if item is None:
             return Response({"error": "forbidden"}, status=status.HTTP_403_FORBIDDEN)
         group_id = item.group_id
         with transaction.atomic():
+            # Any pending reminder goes with it through the FK cascade —
+            # `ToDoItemReminder.item` is CASCADE, and a subitem's reminders
+            # cascade twice (parent → child → reminder).
             item.delete()
             _recompute_group_completion(group_id)
         # Best-effort: drop the item's chunk from OpenSearch — chunkers
@@ -233,6 +252,91 @@ class ToDoItemDetailView(AuthenticatedAPIView):
         # fails.
         purge_todo_item(item_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ToDoItemReminderView(AuthenticatedAPIView):
+    """POST   /api/v2/todo/items/<item_id>/reminder/   remind me at T
+    DELETE /api/v2/todo/items/<item_id>/reminder/   cancel
+
+    POST body: `{"remindAt": "<ISO-8601 instant>"}` — camelCase, unlike the
+    rest of the to-do surface, because this is the same body the message
+    reminder endpoint takes and the client sends it from shared code.
+
+    `remindAt` is an absolute instant computed by the CLIENT, presets
+    included ("tomorrow 9am" is 9am wherever the user is, and the browser is
+    the only party that reliably knows that). The server's job is to refuse
+    instants it cannot honour: the past, and beyond a year.
+    """
+
+    def post(self, request, item_id):
+        item = _get_owned_item(request, item_id)
+        if item is None:
+            return Response({"error": "forbidden"}, status=status.HTTP_403_FORBIDDEN)
+        # A reminder about something already ticked off would be retired
+        # unfired anyway (`_retire_if_moot`), so refuse it here rather than
+        # accept a promise we know we will not keep. The UI doesn't offer
+        # the option on a completed row — this is for anything else.
+        if item.is_completed:
+            return Response(
+                {"error": "This to-do is already completed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        raw = (request.data or {}).get("remindAt")
+        remind_at = dateparse.parse_datetime(raw) if isinstance(raw, str) else None
+        if remind_at is None:
+            return Response(
+                {"error": "remindAt must be an ISO-8601 datetime."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if timezone.is_naive(remind_at):
+            # A naive instant is ambiguous, and guessing costs the user the
+            # one thing this feature sells: arriving at the right moment.
+            return Response(
+                {"error": "remindAt must carry a UTC offset."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            todo_reminders.validate_remind_at(remind_at)
+        except todo_reminders.ReminderWindowError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        reminder = todo_reminders.set_reminder(item=item, remind_at=remind_at)
+        return Response(
+            {"reminder": ToDoItemReminderSerializer(reminder).data},
+            status=status.HTTP_201_CREATED,
+        )
+
+    def delete(self, request, item_id):
+        # Idempotent — cancelling a reminder that isn't there is not an
+        # error, and the client drops its own copy optimistically.
+        item = _get_owned_item(request, item_id)
+        if item is None:
+            return Response({"error": "forbidden"}, status=status.HTTP_403_FORBIDDEN)
+        todo_reminders.cancel_pending(item=item)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ToDoItemReminderListView(AuthenticatedAPIView):
+    """GET /api/v2/todo/reminders/
+
+    The requesting user's pending to-do reminders, soonest first. Read at
+    boot so a row can say "reminder set for …" — nothing in the to-do
+    payload implies it, and a reminder you can't see is one you set twice.
+    """
+
+    def get(self, request):
+        pending = list(todo_reminders.pending_for_user(request.user))
+        # Nothing else can tell us the dispatcher is dead: an unfired
+        # reminder produces no push, no inbox item and no log line. See
+        # `reminder_window.warn_if_overdue`.
+        todo_reminders.warn_if_overdue(pending)
+        return Response(
+            {
+                "reminders": ToDoItemReminderSerializer(pending, many=True).data,
+                "server_time": timezone.now().isoformat(),
+            }
+        )
 
 
 class ToDoCategoryListView(AuthenticatedAPIView):
