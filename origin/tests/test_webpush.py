@@ -363,6 +363,53 @@ class DispatchTests(BaseAPITestCase):
         presence.mark_visible(self.user2.id)
         self._run([self._activity(self.user2)]).assert_not_called()
 
+    def test_muted_chat_suppresses(self):
+        """Muting a chat has to cover what happens INSIDE it.
+
+        The plain-message path checked this; this one didn't, so muting a
+        busy channel silenced its messages but not the mentions, reactions
+        and thread replies in it — someone @mentions you in a chat you
+        muted and your phone still lights up. The client already drops
+        these locally, which is why the gap only showed on a hidden tab:
+        there, the push IS the notification.
+        """
+        self._sub(self.user2)
+        NotificationPreference.objects.create(
+            user=self.user2, muted_chats=[{"chat_type": 1, "chat_id": "chan-uuid"}]
+        )
+        self._run([self._activity(self.user2)]).assert_not_called()
+
+    def test_muting_another_chat_does_not_suppress(self):
+        self._sub(self.user2)
+        NotificationPreference.objects.create(
+            user=self.user2, muted_chats=[{"chat_type": 1, "chat_id": "other-uuid"}]
+        )
+        self._run([self._activity(self.user2)]).assert_called_once()
+
+    def test_mute_lookup_survives_a_channelless_activity(self):
+        """A task/note/project activity has no channel to mute by.
+
+        Reaching for one must not throw — the dispatch loop swallows
+        exceptions per activity, so a mistake here would silently drop the
+        push rather than fail loudly.
+        """
+        self._sub(self.user2)
+        NotificationPreference.objects.create(
+            user=self.user2, muted_chats=[{"chat_type": 1, "chat_id": "chan-uuid"}]
+        )
+        send = self._run(
+            [
+                self._activity(
+                    self.user2,
+                    ActivityType.MENTION,
+                    surface_type=5,  # SURFACE_TASK_BODY
+                    meta={"displayId": "PRG-12", "projectId": 3, "taskId": 12},
+                    channel=False,
+                )
+            ]
+        )
+        send.assert_called_once()
+
     def test_open_laptop_does_not_silence_the_phone(self):
         """The bug this per-device split exists to fix.
 

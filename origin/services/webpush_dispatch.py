@@ -298,6 +298,24 @@ def dispatch_push_for_activities(activities) -> None:
             spec = _push_spec(act)
             if spec is None:
                 continue
+            # Per-chat mute, same as the plain-message path applies. Without
+            # this, muting a busy channel silenced its messages but NOT the
+            # mentions, reactions and thread replies inside it — so a muted
+            # chat still put an OS card on your phone the moment someone
+            # @mentioned you. The client already drops these (the manager
+            # returns `ignored-muted`), which is exactly why the gap only
+            # showed up on a hidden tab, where the push is the whole
+            # notification.
+            #
+            # Read through `channel` rather than `channel_id` to match how
+            # `_push_spec` gets at it: the channel is nullable (surface-typed
+            # task/note/project activities have none — those are muted
+            # per-object via `muted_targets`, which the server does not read
+            # yet), and `channel_id` is an ORM-only attribute that the
+            # SimpleNamespace activities in the tests don't carry.
+            channel = getattr(act, "channel", None)
+            if channel is not None and is_chat_muted(act.recipient_id, channel.id):
+                continue
             _queue_push(
                 recipient_id=act.recipient_id,
                 category=spec["category"],
