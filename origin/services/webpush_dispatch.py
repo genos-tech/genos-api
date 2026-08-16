@@ -395,8 +395,16 @@ def schedule_push_for_inbox_item(item, *, title: str | None = None) -> None:
     transaction.on_commit(_run)
 
 
-def schedule_push_for_reminder(*, recipient_id, title, body, url, tag, actor=None) -> None:
-    """Deliver a due message reminder ("remind me in 3 hours") as push.
+def schedule_push_for_reminder(
+    *, recipient_id, title, body, url, tag, actor=None, category="message_reminder"
+) -> None:
+    """Deliver a due reminder ("remind me in 3 hours") as push.
+
+    `category` selects which reminder the user is being nudged about —
+    `message_reminder` or `todo_reminder`. Both are the same KIND of
+    delivery (that is why they share this function); they are separate
+    categories only so the settings panel can silence one without the
+    other.
 
     Two deliberate departures from every other surface here:
 
@@ -420,7 +428,7 @@ def schedule_push_for_reminder(*, recipient_id, title, body, url, tag, actor=Non
         try:
             _queue_push(
                 recipient_id=rid,
-                category="message_reminder",
+                category=category,
                 title=title,
                 body=body,
                 url=url,

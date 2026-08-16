@@ -4,6 +4,7 @@ from origin.models.chat.todo_models import (
     ToDoCategory,
     ToDoGroup,
     ToDoItem,
+    ToDoItemReminder,
     ToDoSchedule,
 )
 
@@ -47,6 +48,25 @@ class ToDoItemSerializer(serializers.ModelSerializer):
             "tsUpdatedAt",
             "tsCompletedAt",
         ]
+
+
+class ToDoItemReminderSerializer(serializers.ModelSerializer):
+    """A pending to-do reminder as the client sees it.
+
+    Mirrors `MessageReminderSerializer` field for field (with `itemId` in
+    place of `messageId`) so one client-side type covers both. `fired_at`
+    and `cancelled_at` are deliberately absent: the client only ever reads
+    pending rows, and a fired reminder it still knew about would keep
+    promising a nudge that has already been delivered.
+    """
+
+    itemId = serializers.IntegerField(source="item_id", read_only=True)
+    remindAt = serializers.DateTimeField(source="remind_at", read_only=True)
+    tsCreated = serializers.DateTimeField(source="ts_created_at", read_only=True)
+
+    class Meta:
+        model = ToDoItemReminder
+        fields = ["id", "itemId", "remindAt", "tsCreated"]
 
 
 class ToDoScheduleSerializer(serializers.ModelSerializer):

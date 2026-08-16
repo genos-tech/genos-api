@@ -47,6 +47,11 @@ _PUSH_DEFAULTS = {
     # why it is also the only one delivered to a device you are currently
     # looking at — see `schedule_push_for_reminder`.
     "message_reminder": True,
+    # The same promise made about a line on your to-do list ("remind me
+    # about this to-do at 3pm"). Its own category rather than riding
+    # `message_reminder`, so someone who wants nudges about messages but
+    # not about their list has a way to say so.
+    "todo_reminder": True,
 }
 
 # Fine category -> the coarse-group boolean column that hard-gates it
@@ -74,6 +79,7 @@ _COARSE_FIELD = {
     # the column avoids a migration for a sixth master switch.
     "agent_run_done": "enable_inbox",
     "message_reminder": "enable_inbox",
+    "todo_reminder": "enable_inbox",
 }
 
 

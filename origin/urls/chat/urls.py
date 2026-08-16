@@ -16,6 +16,14 @@ urlpatterns = [
     path(
         "api/v2/todo/items/<int:item_id>/", ToDoItemDetailView.as_view(), name="todo_item_detail"
     ),
+    # "Remind me about this to-do." Sits under the item it belongs to; the
+    # list route is the client's boot read for every pending one.
+    path(
+        "api/v2/todo/items/<int:item_id>/reminder/",
+        ToDoItemReminderView.as_view(),
+        name="todo_item_reminder",
+    ),
+    path("api/v2/todo/reminders/", ToDoItemReminderListView.as_view(), name="todo_reminders"),
     path("api/v2/todo/categories/", ToDoCategoryListView.as_view(), name="todo_categories"),
     path(
         "api/v2/todo/categories/<int:category_id>/",
