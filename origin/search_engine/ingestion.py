@@ -2,16 +2,30 @@
 
 Walks `EntityChunks` produced by each chunker, and for every entity:
 
-  1. Hashes the chunk text.
+  1. Hashes the chunk text, and separately fingerprints its metadata
+     (the status / priority / assignee / milestone / sprint overlays,
+     the ACL list, `updated_at` — everything but `search_text`).
   2. Compares against the `RagChunk` tracking table to split chunks
-     into `new` / `changed` / `unchanged` and identifies stale chunk
-     ids that exist in the table but no longer in the regeneration.
+     into `new` / `changed` / `metadata_only` / `unchanged` and
+     identifies stale chunk ids that exist in the table but no longer
+     in the regeneration.
   3. Embeds only new + changed chunks (skipping unchanged saves
      OpenAI cost and time).
-  4. Bulk-indexes the new + changed docs into OpenSearch.
+  4. Bulk-indexes the new + changed docs into OpenSearch, and applies
+     `metadata_only` chunks as partial doc updates that leave the
+     stored embedding — and so the embedding bill — untouched.
   5. Deletes stale chunks from OpenSearch.
   6. Mirrors all of that into `RagChunk` (upsert / delete) so the
      next run can repeat steps 1-2.
+
+Why step 4 has two lanes: the metadata a chunk carries is NOT part of
+the text it was embedded from, so a status flip (Open → Closed), a
+reassignment, or an ACL change produces a byte-identical
+`search_text`. Hashing only the text classified those edits as
+"unchanged" and never wrote them, leaving OpenSearch to serve stale
+overlays forever — visible as a Spotlight status chip that disagreed
+with the task and that neither a page refresh nor a full reindex could
+correct.
 
 This is the entry point both the `opensearch_reindex` management
 command and (later) any Kafka-style indexer worker should call.
@@ -19,7 +33,9 @@ command and (later) any Kafka-style indexer worker should call.
 
 from __future__ import annotations
 
+import json
 import logging
+from dataclasses import asdict
 from datetime import datetime
 from typing import Iterable, Optional
 
@@ -59,6 +75,8 @@ class IngestionStats:
         self.chunks_total = 0
         self.chunks_new = 0
         self.chunks_changed = 0
+        # Text identical, metadata not: refreshed in place, never re-embedded.
+        self.chunks_metadata_only = 0
         self.chunks_unchanged = 0
         self.chunks_deleted = 0
         self.errors: list[str] = []
@@ -69,6 +87,7 @@ class IngestionStats:
             "chunks_total": self.chunks_total,
             "chunks_new": self.chunks_new,
             "chunks_changed": self.chunks_changed,
+            "chunks_metadata_only": self.chunks_metadata_only,
             "chunks_unchanged": self.chunks_unchanged,
             "chunks_deleted": self.chunks_deleted,
             "errors": self.errors,
@@ -231,12 +250,15 @@ def _ingest_entity(entity: EntityChunks, stats: IngestionStats, *, dry_run: bool
 
     model = get_active_embedding_model_name()
 
-    # Compute hashes.
+    # Compute hashes. Text and metadata are fingerprinted separately so
+    # the two can be acted on independently — see `_meta_fingerprint`.
     incoming: dict[str, Chunk] = {}
     incoming_hashes: dict[str, str] = {}
+    incoming_meta_hashes: dict[str, str] = {}
     for c in entity.chunks:
         incoming[c.chunk_id] = c
         incoming_hashes[c.chunk_id] = hash_text(c.search_text or "")
+        incoming_meta_hashes[c.chunk_id] = _meta_fingerprint(c)
 
     # Look up existing tracking rows for this entity.
     existing_rows = {
@@ -248,6 +270,7 @@ def _ingest_entity(entity: EntityChunks, stats: IngestionStats, *, dry_run: bool
 
     new_ids: list[str] = []
     changed_ids: list[str] = []
+    meta_only_ids: list[str] = []
     unchanged_ids: list[str] = []
 
     for cid, c in incoming.items():
@@ -256,6 +279,12 @@ def _ingest_entity(entity: EntityChunks, stats: IngestionStats, *, dry_run: bool
             new_ids.append(cid)
         elif row.text_hash != incoming_hashes[cid] or row.embedding_model != model:
             changed_ids.append(cid)
+        elif row.meta_hash != incoming_meta_hashes[cid]:
+            # Same text, different overlay — refresh the doc, keep the
+            # vector. This ordering matters: the text/model check above
+            # already covers a re-embed, so reaching here guarantees the
+            # stored embedding is still valid for this chunk.
+            meta_only_ids.append(cid)
         else:
             unchanged_ids.append(cid)
 
@@ -263,6 +292,7 @@ def _ingest_entity(entity: EntityChunks, stats: IngestionStats, *, dry_run: bool
     stats.chunks_total += len(incoming)
     stats.chunks_new += len(new_ids)
     stats.chunks_changed += len(changed_ids)
+    stats.chunks_metadata_only += len(meta_only_ids)
     stats.chunks_unchanged += len(unchanged_ids)
 
     if dry_run:
@@ -291,6 +321,12 @@ def _ingest_entity(entity: EntityChunks, stats: IngestionStats, *, dry_run: bool
             [_to_os_doc(incoming[cid], embeddings_by_id[cid], model) for cid in to_embed_ids]
         )
 
+    # Refresh metadata-only chunks in place. Separate bulk call from the
+    # one above because these are `update` ops, not full `index` ops —
+    # that is what preserves the existing embedding.
+    if meta_only_ids:
+        _bulk_index([_to_os_metadata_update(incoming[cid]) for cid in meta_only_ids])
+
     # Stale = previously tracked under this entity but not in current set.
     keep_ids = set(incoming.keys())
     _delete_stale(entity.entity_type, entity.entity_id, keep_chunk_ids=keep_ids, stats=stats)
@@ -301,9 +337,67 @@ def _ingest_entity(entity: EntityChunks, stats: IngestionStats, *, dry_run: bool
         entity_id=entity.entity_id,
         chunks=incoming,
         hashes=incoming_hashes,
+        meta_hashes=incoming_meta_hashes,
         model=model,
-        affected_ids=set(to_embed_ids),
+        affected_ids=set(to_embed_ids) | set(meta_only_ids),
     )
+
+
+def _meta_fingerprint(chunk: Chunk) -> str:
+    """Hash of everything the chunk carries EXCEPT `search_text`.
+
+    Complement of `text_hash`, so between them the two cover the whole
+    document: the overlays (`task_status`, `task_priority`,
+    `task_assignee_id`, `task_milestone_id`, `task_sprint_id`,
+    `note_owner_id`, ...), `acl_user_ids`, `title`, `related_entity_ids`
+    and `updated_at`.
+
+    Deliberately a whole-doc-minus-text hash rather than an enumerated
+    field list: a chunker that starts emitting a new overlay is then
+    covered automatically, whereas a hand-maintained list silently
+    re-introduces this bug for whatever field someone forgets to add.
+
+    `updated_at` being included means any touched entity gets one cheap
+    doc update per pass. That is wanted, not incidental — the search
+    layer re-ranks on document freshness and returns `updated_at` to the
+    client, both of which were reading a stale value for the same reason
+    the status chip was.
+    """
+    doc = chunk.to_dict()
+    doc.pop("search_text", None)
+    return hash_text(json.dumps(doc, sort_keys=True, ensure_ascii=False, default=str))
+
+
+# Doc fields a metadata-only update must leave alone. The embedding pair
+# is the entire point of this path — the stored vector stays valid
+# because the text that produced it is unchanged — and `search_text` is
+# by definition identical here (its hash is what routed the chunk down
+# this path) as well as being the largest field in the document.
+_META_UPDATE_SKIP_FIELDS = frozenset({"embedding", "embedding_model", "search_text"})
+
+
+def _to_os_metadata_update(chunk: Chunk) -> dict:
+    """Bulk action that refreshes a chunk's metadata in place.
+
+    A partial `update` rather than the full `index` op `_to_os_doc`
+    builds, so the existing embedding survives untouched: a status flip
+    costs one cheap doc update and zero embedding calls.
+
+    Nulls are written EXPLICITLY — built from `asdict`, not
+    `Chunk.to_dict()`, which strips them. A partial update leaves keys
+    it doesn't mention alone, so dropping a `None` would make a CLEARED
+    field (task unassigned, milestone detached, ACL member removed) keep
+    its old value forever, which is the very failure this path exists to
+    fix.
+    """
+    doc = {k: v for k, v in asdict(chunk).items() if k not in _META_UPDATE_SKIP_FIELDS}
+    doc["index_schema_version"] = INDEX_SCHEMA_VERSION
+    return {
+        "_op_type": "update",
+        "_index": get_index_alias(),
+        "_id": chunk.chunk_id,
+        "doc": doc,
+    }
 
 
 def _to_os_doc(chunk: Chunk, embedding: list[float], model: str) -> dict:
@@ -398,15 +492,18 @@ def _upsert_tracking(
     entity_id: str,
     chunks: dict[str, Chunk],
     hashes: dict[str, str],
+    meta_hashes: dict[str, str],
     model: str,
     affected_ids: set[str],
 ) -> None:
     """Insert or update RagChunk rows for the chunks we just indexed.
 
-    `affected_ids` are the new+changed ids (got re-embedded); we
-    update their hash + indexed_at. Unchanged rows just get their
-    indexed_at refreshed implicitly via the next reindex; we leave
-    them alone here to avoid pointless writes.
+    `affected_ids` are the ids we actually wrote to OpenSearch this pass
+    — new + changed (re-embedded) plus metadata-only (refreshed in
+    place). Both lanes must land here: skipping the metadata-only ones
+    would leave `meta_hash` stale, so every subsequent pass would
+    re-detect the same diff and re-issue the same update forever.
+    Unchanged rows are left alone to avoid pointless writes.
     """
     for cid in affected_ids:
         c = chunks[cid]
@@ -418,6 +515,7 @@ def _upsert_tracking(
                 "chunk_type": c.chunk_type,
                 "team_id": c.team_id,
                 "text_hash": hashes[cid],
+                "meta_hash": meta_hashes[cid],
                 "embedding_model": model,
                 "index_schema_version": INDEX_SCHEMA_VERSION,
                 "source_version": None,

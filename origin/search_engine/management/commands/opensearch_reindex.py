@@ -17,6 +17,20 @@ The command is idempotent: running it twice in a row when nothing has
 changed produces zero embedding calls and zero OpenSearch writes (it
 still scans Postgres + the RagChunk table).
 
+Two lanes of write, reported separately as `chunks_changed` and
+`chunks_metadata_only`. Only the former re-embeds. A chunk whose text
+is untouched but whose metadata moved (status, priority, assignee,
+milestone/sprint link, ACL, `updated_at`) is refreshed with a partial
+doc update that keeps the stored vector, so correcting drifted metadata
+across the whole corpus costs bulk updates and no embedding spend.
+
+That makes a one-off full run the repair tool for metadata that went
+stale before this lane existed — those chunks have an empty
+`RagChunk.meta_hash`, so the first pass over each rewrites its
+overlays:
+
+    python manage.py opensearch_reindex        # heals; re-embeds nothing
+
 Schema versions: when the live index was built under a different
 `INDEX_SCHEMA_VERSION` than the code expects, the command prints a
 warning. The fix is to recreate the index:
