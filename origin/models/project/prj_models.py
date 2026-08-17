@@ -348,12 +348,12 @@ class ProjectLabelAssignment(models.Model):
 class ProjectSavedTaskFilter(models.Model):
     """A named, project-shared task filter selection ("Saved Filters").
 
-    The filter bar above the task table / sprint board narrows on six
-    dimensions (status, tags, priority, effort, milestones, members).
-    Users routinely want several *different* combinations depending on
-    what they're checking — "my blocked work", "this sprint's review
-    queue", "unassigned P1s" — and re-picking each one by hand every time
-    is the whole problem this solves. Saving one under a name makes it a
+    The filter bar above the task table / sprint board narrows on seven
+    dimensions (status, tags, priority, effort, sprints, milestones,
+    members). Users routinely want several *different* combinations
+    depending on what they're checking — "my blocked work", "this sprint's
+    review queue", "unassigned P1s" — and re-picking each one by hand every
+    time is the whole problem this solves. Saving one under a name makes it a
     one-click recall, and because rows are project-scoped rather than
     per-user, a filter one member sets up is immediately available to
     every other member of that project.
@@ -363,7 +363,7 @@ class ProjectSavedTaskFilter(models.Model):
     display hint, never an authorization gate.
 
     `filters` stores IDENTITY ONLY — the labels and ids the client picked
-    (`{status, tags, priorities, effortLevels, milestoneKeys,
+    (`{status, tags, priorities, effortLevels, sprintKeys, milestoneKeys,
     memberKeys}`), matching the frontend's `StoredTaskFilters`. It must
     never hold the client's `FilterProps` objects: those carry
     `filterModel` predicates and palette colors, so persisting them would
@@ -374,11 +374,16 @@ class ProjectSavedTaskFilter(models.Model):
     project tag, milestone since removed, member who left) is simply
     dropped by the existing prune effects.
 
-    `status` may be absent from the blob. A filter saved from the sprint
-    board carries no status, because the board hides that dimension and
-    pins it to "All" — recording its pinned value would silently widen a
-    table view to include Closed/Deleted rows. Absent means "this filter
-    asserts nothing about status".
+    ANY dimension may be absent from the blob, and absence means "this
+    filter asserts nothing about it" — the client falls that dimension back
+    to "All" when it applies. That is what lets a dimension be added
+    without a migration or a backfill: rows written before `sprintKeys`
+    existed simply don't carry it, and keep applying exactly as they did.
+
+    `status` is absent for a second, deliberate reason. A filter saved from
+    the sprint board carries no status, because the board hides that
+    dimension and pins it to "All" — recording its pinned value would
+    silently widen a table view to include Closed/Deleted rows.
 
     Applying is a pure client-side selection change: nothing here is
     referenced by a task, so editing or deleting a saved filter never

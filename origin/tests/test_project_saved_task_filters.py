@@ -12,9 +12,15 @@ The load-bearing bits specific to this feature:
     instead of in localStorage.
   * The `filters` blob is IDENTITY ONLY, and the server strips keys it
     doesn't recognize so a client can't park unrelated state in it.
-  * `status` is optional. A filter saved from the sprint board omits it
-    (that surface hides the dimension), and the omission must survive the
-    round trip rather than being backfilled with a pinned "All".
+  * EVERY dimension is optional, and an omission must survive the round
+    trip rather than being backfilled. Two cases matter: a filter saved
+    from the sprint board omits `status` (that surface hides the
+    dimension, and recording its pinned "All" would widen a table view),
+    and a filter saved before a dimension existed omits it entirely.
+  * The flip side of that recognized-keys list: a dimension the client
+    sends but the server's tuple omits is dropped on write with no error
+    anywhere, so it round-trips as empty. Each dimension therefore needs
+    its own round-trip assertion.
   * "Save over the same name" is a PUT — a same-name POST is a clean 400,
     not a 500 from the DB constraint.
 """
@@ -31,19 +37,33 @@ from origin.models.project.prj_models import (
 )
 from origin.tests.test_base import BaseAPITestCase
 
-# A full six-dimension selection, exactly as the frontend's
+# A full seven-dimension selection, exactly as the frontend's
 # `StoredTaskFilters` serializes it.
 FILTERS = {
     "status": ["Open", "WIP"],
     "tags": ["All"],
     "priorities": ["High"],
     "effortLevels": ["All"],
+    "sprintKeys": [7],
     "milestoneKeys": [12, "none"],
     "memberKeys": ["__none__"],
 }
 # What the sprint board saves: no `status` key at all.
 BOARD_FILTERS = {
     "tags": ["Frontend"],
+    "priorities": ["All"],
+    "effortLevels": ["All"],
+    "sprintKeys": ["all"],
+    "milestoneKeys": ["all"],
+    "memberKeys": ["__all__"],
+}
+# A filter written before the sprint dimension shipped. Rows like this are
+# in the table already, so the round trip has to leave them alone rather
+# than backfill a key — the client falls the missing dimension back to
+# "All" when it applies.
+LEGACY_FILTERS = {
+    "status": ["Open"],
+    "tags": ["All"],
     "priorities": ["All"],
     "effortLevels": ["All"],
     "milestoneKeys": ["all"],
@@ -195,6 +215,28 @@ class FiltersBlobTests(SavedTaskFilterTestBase):
         )
         self.assertEqual(created.status_code, status.HTTP_201_CREATED)
         self.assertEqual(created.data["filters"], FILTERS)
+
+    def test_sprint_keys_survive_the_round_trip(self):
+        # The failure this guards is silent in both directions: a dimension
+        # the client sends but `SAVED_TASK_FILTER_KEYS` omits is dropped on
+        # write with no error, so the user saves a Sprint selection, gets a
+        # 201, and it comes back empty. Asserted on the READ path (not just
+        # the create response) because that's where the client reads it.
+        self.create_filter(filters=FILTERS)
+        stored = self.list_filters().data[0]["filters"]
+        self.assertEqual(stored["sprintKeys"], [7])
+        # Mixed numeric ids and the string sentinel, like milestoneKeys.
+        self.create_filter(name="Two sprints", filters={**FILTERS, "sprintKeys": [7, "none"]})
+        by_name = {row["filterName"]: row["filters"] for row in self.list_filters().data}
+        self.assertEqual(by_name["Two sprints"]["sprintKeys"], [7, "none"])
+
+    def test_filter_saved_before_the_sprint_dimension_is_left_alone(self):
+        # No backfill, no injected key — absence is meaningful, and the
+        # client resolves a missing dimension to "All".
+        created = self.create_filter(filters=LEGACY_FILTERS)
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        self.assertNotIn("sprintKeys", created.data["filters"])
+        self.assertEqual(self.list_filters().data[0]["filters"], LEGACY_FILTERS)
 
     def test_non_list_dimensions_are_dropped(self):
         created = self.create_filter(

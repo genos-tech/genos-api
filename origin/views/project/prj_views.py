@@ -1139,21 +1139,31 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-# The six dimensions of the task filter bar, as the frontend's
+# The dimensions of the task filter bar, as the frontend's
 # `StoredTaskFilters` names them. Used to strip a saved-filter blob down
 # to keys we recognize: the client is the source of truth for what a
 # label MEANS (it rehydrates against its own predefined lists), but the
 # server still refuses to store arbitrary keys, so a future client can't
 # quietly park unrelated state in here.
 #
-# `status` is optional — see the ProjectSavedTaskFilter docstring: a
-# filter saved from the sprint board omits it because that surface hides
-# the dimension.
+# Every key here is OPTIONAL, and this list is the only place a new
+# dimension has to be added — a blob is stored as whatever subset of these
+# it carries, so an older client's filter (missing a newer dimension) is
+# stored and returned unchanged, and the client falls that dimension back
+# to "All" when it applies it. The converse is the failure this list
+# causes when it falls behind the frontend: a dimension the client sends
+# but this tuple omits is silently dropped on write, so the selection
+# round-trips as empty with no error anywhere.
+#
+# `status` is optional for a second, deliberate reason — see the
+# ProjectSavedTaskFilter docstring: a filter saved from the sprint board
+# omits it because that surface hides the dimension.
 SAVED_TASK_FILTER_KEYS = (
     "status",
     "tags",
     "priorities",
     "effortLevels",
+    "sprintKeys",
     "milestoneKeys",
     "memberKeys",
 )
