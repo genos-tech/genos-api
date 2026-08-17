@@ -40,6 +40,7 @@ from opensearchpy.exceptions import NotFoundError
 from origin.search_engine.embeddings import embed_one
 from origin.search_engine.llm.choice import active_effort_profile
 from origin.search_engine.llm.spend import spend_purpose
+from origin.search_engine.milestone_mirrors import resolve_milestone_mirrors
 from origin.search_engine.opensearch_client import get_client, get_index_alias
 from origin.search_engine.quota import (
     get_agent_history_retention_days,
@@ -451,6 +452,19 @@ def search(
 
     # --- Sort, apply relevance threshold, truncate to limit. ---
     grouped.sort(key=lambda x: x["score"], reverse=True)
+
+    # --- Milestone backing-task mirror (always on) ---
+    # A milestone is a MilestoneMaster row PLUS a backing TaskMaster row
+    # with `is_milestone=True`, and `task_chunker` indexes that backing
+    # row as an ordinary `task`. So a milestone could surface with the
+    # "Task" subtitle and assignment icon instead of "Milestone" and the
+    # flag. Resolved here, before the threshold and the `[:limit]` cut,
+    # so dropping a mirror frees a slot for a real result. Runs ahead of
+    # the title-based collapse below because `MilestoneMaster.task_id`
+    # is an exact link — that should win over a title heuristic — and
+    # unconditionally, because this is an internal artifact leaking into
+    # the UI rather than a ranking-quality experiment.
+    grouped = resolve_milestone_mirrors(grouped)
 
     # --- Mirror-entity collapse (quality round 2, flag-gated) ---
     # The workspace mints several entities that MIRROR one another with
@@ -1729,6 +1743,11 @@ def _graph_expand(
         e["matched_terms"] = list(dict.fromkeys((e.get("matched_terms") or []) + provenance))
         e["graph_related"] = True
 
-    grouped = grouped + neighbours
+    # Injected neighbours are raw `task` rows, so a milestone's backing
+    # task can arrive here as a "Task" even though the pass in `search`
+    # already ran. Re-resolve over the merged set: a mirror whose
+    # milestone is now present (including one this expansion just
+    # relabeled) is dropped, and a sole backing task is relabeled.
+    grouped = resolve_milestone_mirrors(grouped + neighbours)
     grouped.sort(key=lambda e: float(e.get("score") or 0.0), reverse=True)
     return grouped
