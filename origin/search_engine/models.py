@@ -9,6 +9,8 @@ class RagChunk(models.Model):
 
     One row per OpenSearch document. Lets the indexer detect:
       - changed chunks (text_hash differs → re-embed + upsert)
+      - metadata-only changes (text_hash matches but meta_hash differs
+        → in-place doc update, NO re-embed)
       - stale chunks (chunk_id exists here but not in current
         regeneration of its parent entity → delete from OpenSearch)
       - re-embed needs after model upgrades (embedding_model differs)
@@ -21,6 +23,20 @@ class RagChunk(models.Model):
     team_id = models.UUIDField(db_index=True)
 
     text_hash = models.CharField(max_length=64)
+    # Fingerprint of every doc field EXCEPT `search_text` — the status /
+    # priority / assignee / milestone / sprint overlays, the ACL list and
+    # `updated_at`. Kept separate from `text_hash` on purpose: a change
+    # here must refresh the stored document but must NOT re-embed, since
+    # the text the vector was built from is untouched.
+    #
+    # Without this column the indexer classified a status-only edit as
+    # "unchanged" and never wrote it, so OpenSearch served a stale
+    # `task_status` indefinitely (a Closed task kept rendering its old
+    # "WIP" chip in Spotlight, surviving a page refresh AND a full
+    # reindex). Empty on rows written before the column existed, which
+    # makes the first pass over each of them a self-healing metadata
+    # refresh.
+    meta_hash = models.CharField(max_length=64, blank=True, default="")
     source_version = models.BigIntegerField(blank=True, null=True)
     embedding_model = models.CharField(max_length=64)
     index_schema_version = models.CharField(max_length=16, default="v1")
