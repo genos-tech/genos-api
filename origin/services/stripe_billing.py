@@ -447,6 +447,8 @@ def create_checkout_session(user: CustomUser, plan: str, currency: str | None = 
         # Stripe docs; if account setup is incomplete Stripe returns
         # a clear error at session-create time, surfaced as a 503.
         "automatic_tax": {"enabled": settings.STRIPE.get("AUTOMATIC_TAX", False)},
+        # Allow users to enter a Stripe Promotion Code
+        "allow_promotion_codes": True,
     }
     # "I agree to the terms" checkbox on the Stripe-hosted page. The
     # linked terms URL comes from the ACCOUNT (dashboard: Settings →
@@ -768,7 +770,9 @@ def _portal_flow_data(stripe, customer_id: str, flow: str, plan: str | None) -> 
             # personal subscription but the SEAT COUNT for a team one,
             # and a confirm flow that omits it would resize the team as
             # a side effect of changing plan.
-            "items": [{"id": item["id"], "price": price_id, "quantity": item.get("quantity") or 1}],
+            "items": [
+                {"id": item["id"], "price": price_id, "quantity": item.get("quantity") or 1}
+            ],
         },
     }
 
