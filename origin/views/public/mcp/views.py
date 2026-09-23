@@ -150,7 +150,15 @@ class McpView(PublicApiView):
 
         if method == "tools/list":
             listed = [tools.describe(t) for t in tools.visible_tools(scope)]
-            return self._ok(request_id, {"tools": listed}, modern=modern)
+            # The one cacheable result we serve, so the one that carries
+            # cache hints. See `protocol.CACHE_HINTS_NO_STORE` for why the
+            # answer is "don't store this".
+            return self._ok(
+                request_id,
+                {"tools": listed},
+                modern=modern,
+                cache_hints=protocol.CACHE_HINTS_NO_STORE,
+            )
 
         if method == "tools/call":
             return self._ok(
@@ -161,8 +169,19 @@ class McpView(PublicApiView):
 
         raise protocol.method_not_found(str(method), modern=modern)
 
-    def _ok(self, request_id: Any, payload: dict[str, Any], *, modern: bool) -> Response:
-        return Response(protocol.envelope(request_id, protocol.result(payload, modern=modern)))
+    def _ok(
+        self,
+        request_id: Any,
+        payload: dict[str, Any],
+        *,
+        modern: bool,
+        cache_hints: dict[str, Any] | None = None,
+    ) -> Response:
+        return Response(
+            protocol.envelope(
+                request_id, protocol.result(payload, modern=modern, cache_hints=cache_hints)
+            )
+        )
 
     def _discover(self) -> dict[str, Any]:
         return {

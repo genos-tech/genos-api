@@ -108,7 +108,26 @@ def requested_version(body: dict[str, Any]) -> str | None:
     return meta.get(_META_VERSION)
 
 
-def result(payload: dict[str, Any], *, modern: bool) -> dict[str, Any]:
+# The cache hints a modern *cacheable* result must carry. `2026-07-28`
+# added them to `tools/list` (and the other list-shaped results we don't
+# implement), and clients validate them as a pair: Claude Code 2.1.236
+# rejects a modern `tools/list` that omits either one, with
+# "expected number, received undefined" on `ttlMs`.
+#
+# `ttlMs: 0` means revalidate every time, which is what we actually want
+# and not merely the timid choice. The visible tool set is a function of
+# the key's scope *and* of `AGENT_DISABLED_TOOLS`, which is a kill
+# switch — a cached list would keep offering a tool after it was pulled.
+# `private` for the same reason: the list a write key sees is not the
+# list a read key sees, so a shared cache entry would be wrong for
+# whoever asked second. Raise the TTL only if the tool set stops
+# depending on the caller.
+CACHE_HINTS_NO_STORE = {"ttlMs": 0, "cacheScope": "private"}
+
+
+def result(
+    payload: dict[str, Any], *, modern: bool, cache_hints: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Build a result body for the era that asked.
 
     `resultType` arrived with the modern revision. Sending it to a legacy
@@ -116,10 +135,19 @@ def result(payload: dict[str, Any], *, modern: bool) -> dict[str, Any]:
     schema violation — so every result is built here rather than at the
     call sites, where the distinction would be remembered four times and
     forgotten once.
+
+    `cache_hints` rides along for the same reason, and is **opt-in per
+    call site** rather than added to every modern result: the hints are
+    only in the schema for the results the spec calls cacheable, so
+    stamping them onto `ping` or `server/discover` would be inventing
+    fields the client never asked for. Legacy knows nothing of either.
     """
-    if modern:
-        return {"resultType": "complete", **payload}
-    return payload
+    if not modern:
+        return payload
+    built = {"resultType": "complete", **payload}
+    if cache_hints:
+        built.update(cache_hints)
+    return built
 
 
 def envelope(request_id: Any, payload: dict[str, Any]) -> dict[str, Any]:
