@@ -175,12 +175,39 @@ class ToDoItemListView(AuthenticatedAPIView):
 
 
 class ToDoItemDetailView(AuthenticatedAPIView):
-    """PATCH / DELETE /api/v2/todo/items/<item_id>/."""
+    """PATCH / DELETE /api/v2/todo/items/<item_id>/.
+
+    `local_date` re-homes the to-do into another day — "move this to
+    tomorrow", for the leftovers of a day you didn't finish. It's the one
+    field here that changes which GROUP the row belongs to rather than the
+    row's own content, so it's handled apart from the others below.
+    """
 
     def patch(self, request, item_id):
         item = _get_owned_item(request, item_id)
         if item is None:
             return Response({"error": "forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
+        # Resolved before the transaction so a bad date is a 400 that changed
+        # nothing, not a rollback of half-applied sibling fields.
+        move_to = None
+        if "local_date" in request.data:
+            # A subitem's day is its parent's: `parent_item` is looked up
+            # scoped to the group on create, so re-homing a child alone would
+            # put it in a group its parent isn't in — a subitem orphaned from
+            # the row it's a step of. Moving the parent takes its children
+            # along (below), which is the operation the user actually wants.
+            if item.parent_item_id is not None:
+                return Response(
+                    {"error": "Subitems move with their parent — move the parent instead."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            move_to = _parse_date(request.data.get("local_date"))
+            if move_to is None:
+                return Response(
+                    {"error": "local_date must be an ISO date (YYYY-MM-DD)."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         with transaction.atomic():
             if "title" in request.data:
@@ -225,15 +252,45 @@ class ToDoItemDetailView(AuthenticatedAPIView):
                             status=status.HTTP_400_BAD_REQUEST,
                         )
                     item.category = category
+            # Re-home into the target day, creating that group on demand
+            # exactly as item creation does. `old_group_id` is kept because
+            # emptying a group can flip its completion flag: a day whose only
+            # open to-do just left is now a completed day.
+            old_group_id = item.group_id
+            if move_to is not None and move_to != item.group.local_date:
+                item.group = _get_or_create_group(item.group.team_id, request.user.id, move_to)
             item.save()
             # Propagate tag change to children of a top-level item.
             if "category_id" in request.data and item.parent_item_id is None:
                 ToDoItem.objects.filter(parent_item_id=item.item_id).update(
                     category_id=item.category_id
                 )
+            # Children follow the parent, keeping the whole to-do in one day.
+            moved_child_ids = []
+            if item.group_id != old_group_id:
+                children = ToDoItem.objects.filter(parent_item_id=item.item_id)
+                moved_child_ids = list(children.values_list("item_id", flat=True))
+                # `ts_updated_at` is set explicitly: `auto_now` only fires on
+                # `save()`, and the incremental chunker selects on it. Without
+                # this the children's purged chunks (below) would stay gone
+                # until the next full reindex — the subitems would vanish from
+                # search while their parent reappeared under the new date.
+                children.update(group_id=item.group_id, ts_updated_at=timezone.now())
+                _recompute_group_completion(old_group_id)
             _recompute_group_completion(item.group_id)
 
         item.refresh_from_db()
+        # The search entity id embeds the group's date
+        # (`todo:<local_date>:item:<id>`), so a moved row's old chunk is now
+        # indexed under a date the to-do is no longer on — it would keep
+        # answering searches with the wrong day. Drop it and let the chunker
+        # re-index under the new date; `purge_todo_item` matches on the stable
+        # `:item:<id>` suffix, so it clears whichever date was there. Children
+        # are indexed as their own entities, so each one needs the same purge.
+        if item.group_id != old_group_id:
+            purge_todo_item(item.item_id)
+            for child_id in moved_child_ids:
+                purge_todo_item(child_id)
         return Response(ToDoItemSerializer(item).data, status=status.HTTP_200_OK)
 
     def delete(self, request, item_id):
