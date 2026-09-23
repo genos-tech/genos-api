@@ -194,6 +194,53 @@ class TestTheRealClientHandshake(McpBase):
         res = self._rpc("initialize", {"protocolVersion": LEGACY}, rid=0)
         self.assertNotIn("Mcp-Session-Id", res.headers)
 
+    def test_discover_first_then_tools_list(self):
+        """Claude Code 2.1.236, captured the same way as 2.1.201 above.
+
+        The newer client leads with `server/discover` at `2026-07-28`
+        instead of `initialize`, which moves the whole connection onto the
+        modern era — the "fall-forward insurance" in this package's
+        docstring turned out to be the live path within one minor version.
+        Both transcripts are kept: the legacy one is still what an older
+        client sends, and nothing here lets one era's fix break the other.
+        """
+        self._key()
+
+        discover = self.client.post(
+            self._url(),
+            {
+                "jsonrpc": "2.0",
+                "id": "server-discover-probe-1",
+                "method": "server/discover",
+                "params": {
+                    "_meta": {
+                        _META_VERSION: MODERN,
+                        "io.modelcontextprotocol/clientInfo": {
+                            "name": "claude-code",
+                            "version": "2.1.236",
+                        },
+                        "io.modelcontextprotocol/clientCapabilities": {
+                            "roots": {"listChanged": True},
+                            "elicitation": {},
+                        },
+                    }
+                },
+            },
+            format="json",
+            HTTP_MCP_PROTOCOL_VERSION=MODERN,
+        )
+        result = self._result(discover)
+        self.assertEqual(result["resultType"], "complete")
+        self.assertIn(MODERN, result["supportedVersions"])
+
+        # Having discovered a modern server, the client sends no
+        # `initialize` at all and goes straight here. This is the call
+        # that 2.1.236 rejected before the cache hints were added.
+        listed = self._result(self._rpc("tools/list", era=MODERN))
+        self.assertTrue(listed["tools"])
+        self.assertIsInstance(listed["ttlMs"], int)
+        self.assertIn(listed["cacheScope"], ("public", "private"))
+
 
 class TestProtocolEras(McpBase):
     def test_a_modern_request_is_answered_modern(self):
@@ -204,6 +251,70 @@ class TestProtocolEras(McpBase):
     def test_a_legacy_request_is_answered_legacy(self):
         self._key()
         self.assertNotIn("resultType", self._result(self._rpc("tools/list", era=LEGACY)))
+
+    def test_a_modern_tools_list_carries_both_cache_hints(self):
+        """`2026-07-28` made `tools/list` a *cacheable* result, and clients
+        validate the hints as a required pair, not as an optional extra.
+
+        This is not a hypothetical reading of the schema. Claude Code
+        2.1.236 opens with `server/discover` instead of `initialize`, so
+        it settles on the modern era against us where 2.1.201 settled on
+        legacy — and then refused our `tools/list` outright:
+
+            Invalid result for tools/list:
+              path ["ttlMs"]: expected number, received undefined
+              path ["cacheScope"]: expected one of "public"|"private"
+
+        The connection still showed as "Connected", with zero tools. So
+        assert the fields exist *and* their values: `ttlMs` must be a real
+        number (`None` reads as absent to the client), and `cacheScope`
+        one of the two the enum allows.
+        """
+        self._key()
+        result = self._result(self._rpc("tools/list", era=MODERN))
+        self.assertIsInstance(result["ttlMs"], int)
+        self.assertGreaterEqual(result["ttlMs"], 0)
+        self.assertIn(result["cacheScope"], ("public", "private"))
+
+    def test_the_tool_list_is_never_cached_across_callers(self):
+        """`ttlMs: 0` and `private` are load-bearing, not placeholders.
+
+        What `tools/list` returns depends on the key's scope and on
+        `AGENT_DISABLED_TOOLS`. A stored entry would either hand a read
+        key the write tools or keep offering a tool the kill switch has
+        withdrawn — so this pins the no-store answer against a
+        well-meaning "give it a 5-minute TTL" change.
+        """
+        self._key()
+        result = self._result(self._rpc("tools/list", era=MODERN))
+        self.assertEqual(result["ttlMs"], 0)
+        self.assertEqual(result["cacheScope"], "private")
+
+    def test_a_legacy_tools_list_carries_no_cache_hints(self):
+        """The hints arrived with the modern revision. A legacy client
+        validates against a schema that has no such fields."""
+        self._key()
+        result = self._result(self._rpc("tools/list", era=LEGACY))
+        self.assertNotIn("ttlMs", result)
+        self.assertNotIn("cacheScope", result)
+
+    def test_cache_hints_are_only_on_the_cacheable_result(self):
+        """Not every modern result is cacheable, and stamping the hints
+        everywhere would invent fields for results whose schema has none.
+        `ping` is the smallest such result; `tools/call` is the one that
+        matters, since a tool's output is a side-effecting answer that
+        must never be replayed from a cache."""
+        self._key()
+        for method, params in (
+            ("ping", None),
+            ("server/discover", None),
+            ("tools/call", {"name": "get_current_user", "arguments": {}}),
+        ):
+            with self.subTest(method=method):
+                result = self._result(self._rpc(method, params, era=MODERN))
+                self.assertEqual(result["resultType"], "complete")
+                self.assertNotIn("ttlMs", result)
+                self.assertNotIn("cacheScope", result)
 
     def test_an_unknown_version_is_refused_with_what_we_do_support(self):
         self._key()
