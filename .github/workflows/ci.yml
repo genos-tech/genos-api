@@ -118,12 +118,25 @@ jobs:
           pipenv run coverage run manage.py test origin.tests --settings=apis.settings_test
           pipenv run coverage xml
           pipenv run coverage report
+      # Coverage is a report, not a gate: this job's verdict is the test run
+      # above. `continue-on-error` keeps an upload failure from turning a
+      # green test run red — the account-wide artifact storage quota is a
+      # shared resource, so a build in ANOTHER repo can exhaust it and fail
+      # this step for reasons that have nothing to do with this commit. That
+      # is not a signal worth blocking a merge on (and it did block one).
+      #
+      # `retention-days` is the other half: these were uploaded with the
+      # 90-day default and never pruned, so every run's ~80KB report was
+      # still counted against the quota months later. Coverage is read, if
+      # at all, while its PR is open, so a week is plenty.
       - uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true
         with:
           name: django-coverage
           path: coverage.xml
           if-no-files-found: ignore
+          retention-days: 7
 
   backend-django-lint:
     name: backend-django-lint (report-only)
