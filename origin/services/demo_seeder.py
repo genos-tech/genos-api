@@ -50,7 +50,7 @@ from origin.models.chat.unified_models import (
 )
 from origin.models.common.notification_models import NotificationPreference
 from origin.models.common.team_models import TeamMaster, TeamMembers
-from origin.models.common.user_models import CustomUser
+from origin.models.common.user_models import TIER_SET_BY_OPERATOR, CustomUser
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
@@ -59,7 +59,7 @@ from origin.models.project.prj_models import ProjectMaster, ProjectMembers, Proj
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.sprint_models import Sprint, SprintConfig
 from origin.models.task.task_models import TaskComments, TaskDependency, TaskMaster
-from origin.search_engine.models import RagChunk
+from origin.search_engine.models import AgentRun, AgentSession, RagChunk
 from origin.services.activity_suppression import suppress_task_activity
 
 # BlockNote body builders live in `demo_blocks` so the per-language
@@ -2258,11 +2258,31 @@ def create_demo_environment(demo_user: CustomUser, *, short: str | None = None) 
         bots = _create_bot_users(short)
 
         # 2. Team
+        # `plan="pro"` is load-bearing for the demo in three separate
+        # ways, not just a generosity setting:
+        #   1. `agent_tool_level` becomes "organize", which is what
+        #      DECLARES the approval-gated write tools to the model. At
+        #      "read" (free) `disabled_tools_for_level` hides every
+        #      write tool, so the visitor cannot even see that Genos can
+        #      act — the demo's whole payoff is unreachable.
+        #   2. `message_retention_days` becomes None (unlimited). On
+        #      free it is 180 days, and BOTH the search filter and the
+        #      REST read path drop chat older than that — which would
+        #      silently swallow the backdated history below.
+        #   3. `agent_memory` becomes "team", which un-hides the
+        #      conversation / spotlight_answer recall lanes.
+        # `resolve_effective_tier` takes the max over the user's own
+        # tier and their teams' plans, so the team plan alone suffices.
+        # `plan_set_by=operator` because a hand-set plan is not Stripe's
+        # to take away (see the field comment in team_models.py) — and
+        # this team self-destructs on logout anyway.
         team = TeamMaster.objects.create(
             team_name=f"Demo Team {short}",
             team_email=f"demo-team-{short}@genos.app",
             owner=demo_user,
             is_demo=True,
+            plan="pro",
+            plan_set_by=TIER_SET_BY_OPERATOR,
         )
 
         # 3. Team members (demo user + bots)
@@ -3433,6 +3453,22 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
         ProjectTags.objects.filter(team=team_id).delete()
         ProjectMembers.objects.filter(team=team_id).delete()
         ProjectMaster.objects.filter(team=team_id).delete()
+
+        # Agent history (Spotlight asks). `AgentSession.team_id` /
+        # `AgentRun.team_id` are bare CharFields with no FK, so nothing
+        # here cascades from the team or the user — without this pass
+        # every demo visitor who asks a single question leaks rows that
+        # outlive their team.
+        #
+        # ORDER MATTERS: runs first, then sessions. `AgentRun.session`
+        # is on_delete=SET_NULL (search_engine/models.py), so deleting
+        # the sessions first would NULL the link and ORPHAN the runs —
+        # along with their steps and LLM-call telemetry — instead of
+        # removing them. AgentStep / AgentLlmCall / AgentRunJudgement /
+        # AgentRunFeedback all CASCADE from AgentRun, so deleting runs
+        # sweeps them.
+        AgentRun.objects.filter(team_id=str(team_id)).delete()
+        AgentSession.objects.filter(team_id=str(team_id)).delete()
 
         # Common
         TeamMembers.objects.filter(team=team_id).delete()
