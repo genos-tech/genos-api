@@ -25,6 +25,7 @@ from rest_framework_simplejwt.utils import get_md5_hash_password
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from origin.services.demo_seeder import (
+    DEMO_LANGUAGES,
     create_demo_environment,
     delete_demo_environment,
     kick_off_demo_reindex,
@@ -305,6 +306,42 @@ class DemoSignInThrottle(AnonRateThrottle):
     scope = "demo_signin"
 
 
+def _demo_language(request: Request) -> str:
+    """Which content table to seed for this demo visitor.
+
+    Fallback chain, most to least explicit:
+      1. an explicit `lang` in the request body (what the LP's 日本語/EN
+         toggle will send once the frontend passes it through);
+      2. the browser's `Accept-Language` — so a Japanese browser lands in
+         a Japanese workspace even before the LP is wired up;
+      3. English, which is also what anything unrecognised degrades to.
+
+    Never raises and never 400s. The endpoint is unauthenticated and its
+    whole job is a frictionless first impression, so a malformed locale
+    has to cost the visitor the right language at worst — not the demo.
+    `request.data` itself can throw on an unparseable body, hence the
+    broad guard.
+    """
+    try:
+        requested = request.data.get("lang") if hasattr(request.data, "get") else None
+    except Exception:  # malformed / non-JSON body
+        requested = None
+
+    if isinstance(requested, str) and requested.strip().lower() in DEMO_LANGUAGES:
+        return requested.strip().lower()
+
+    # `Accept-Language: ja,en-US;q=0.9` → first tag whose primary subtag
+    # we have a table for. Prefix-matched on purpose: `ja-JP` is Japanese.
+    header = request.META.get("HTTP_ACCEPT_LANGUAGE") or ""
+    for chunk in header.split(","):
+        tag = chunk.split(";")[0].strip().lower()
+        primary = tag.split("-")[0]
+        if primary in DEMO_LANGUAGES:
+            return primary
+
+    return "en"
+
+
 class DemoSignInView(APIView):
     """Provision a one-click demo user, team, and seeded sample data.
 
@@ -312,6 +349,11 @@ class DemoSignInView(APIView):
     frontend can re-use its existing post-signin handler, plus adds
     `team_id` / `team_name` / `is_demo` so the client can skip the
     team-picker (`/jointeam`) and land directly in `/workspace`.
+
+    Accepts an optional `{"lang": "ja" | "en"}` choosing which content
+    table seeds the workspace — the LP that links here ships a 日本語/EN
+    toggle, so a visitor reading the Japanese LP should land in a
+    Japanese workspace. See `_demo_language` for the fallback chain.
     """
 
     permission_classes = [permissions.AllowAny]
@@ -321,6 +363,7 @@ class DemoSignInView(APIView):
         short = uuid.uuid4().hex[:8]
         email = f"demo+{short}@genos.app"
         username = f"Demo User {short}"
+        lang = _demo_language(request)
 
         try:
             with transaction.atomic():
@@ -331,7 +374,7 @@ class DemoSignInView(APIView):
                     is_demo=True,
                     is_email_verified=True,
                 )
-                team_info = create_demo_environment(user)
+                team_info = create_demo_environment(user, lang=lang)
         except Exception as exc:
             logger.exception("Demo signin failed: %s", exc)
             return Response(
@@ -364,6 +407,11 @@ class DemoSignInView(APIView):
             "team_id": team_info["team_id"],
             "team_name": team_info["team_name"],
             "is_demo": True,
+            # Echoed so the client knows which language it actually got —
+            # the request is a preference, not a guarantee (an unknown
+            # code degrades to "en"), and the UI should follow the
+            # workspace rather than its own toggle if they disagree.
+            "lang": lang,
         }
         response = JsonResponse(response_data, status=201)
         _set_refresh_cookie(response, str(refresh))
