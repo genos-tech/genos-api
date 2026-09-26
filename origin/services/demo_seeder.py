@@ -58,6 +58,12 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.sprint_models import Sprint, SprintConfig
+
+# Not written directly by the seeder — `task_signals` fans out a row per
+# watched field change, so seeding a task produces activity rows stamped
+# "now". The backdating pass realigns them with their task so the
+# TaskActivityFeed doesn't contradict the task's own creation date.
+from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskComments, TaskDependency, TaskMaster
 from origin.search_engine.models import AgentRun, AgentSession, RagChunk
 from origin.services.activity_suppression import suppress_task_activity
@@ -2231,6 +2237,467 @@ CHAT_NOTE_GM_KICKOFF_RECAP_BODY = _body(
 
 
 # ---------------------------------------------------------------------------
+# Backdating — make the workspace look months old without hiding it from
+# the search index.
+# ---------------------------------------------------------------------------
+#
+# The demo's whole job is to show what Genos looks like after a team has
+# used it for a while: a visitor who sees every row stamped "8 seconds
+# ago" is looking at an empty product with sample text in it. So display
+# timestamps get pushed into the past.
+#
+# The one rule that makes this safe: DISPLAY timestamps move, INDEX
+# timestamps do not.
+#
+#   ts_sent_at / ts_created_at  → read by the UI and the agent's
+#       fetch_chat_thread. Backdate freely; this is what makes the
+#       history look real.
+#   ts_updated_at               → read by the search pipeline. Every one
+#       of the 11 chunkers filters its incremental window on it
+#       (`ts_updated_at__gte=since`) and `_apply_freshness` decays
+#       relevance by `exp(-age_days/90)` against it.
+#
+# Backdating `ts_updated_at` would break the demo twice: the reindex
+# kicked off right after signin (`--since-minutes 5`) would skip the
+# rows, and anything that did get indexed would be score-decayed into
+# irrelevance. A visitor's first question would be answered with "I
+# couldn't find anything" — the worst possible first impression.
+#
+# So every field below is a display field, and `ts_updated_at` is never
+# named. Because `auto_now_add` / `auto_now` ignore values passed to
+# `create()`, backdating has to be a post-create `.update()` sweep:
+# `.update()` bypasses `pre_save` (so `auto_now` does not re-fire) and
+# writes only the columns named.
+#
+# Note ONE deliberate omission: notes. `PersonalNoteMaster` and friends
+# display `ts_updated_at` (personal_note_views.py orders and serialises
+# it) — the same field the note chunker windows on. There is no
+# display/index split to exploit, so backdating a note would trade
+# searchability for a cosmetic "edited 3 months ago" label. Notes read as
+# recently-edited instead, which is honest for a living document anyway.
+
+
+def _backdate(model, pks, **fields) -> None:
+    """One batched `.update()` of DISPLAY timestamps on `pks`.
+
+    Never pass `ts_updated_at` — see the module comment above. Silently
+    no-ops on an empty pk list so callers don't need to guard.
+    """
+    if not pks:
+        return
+    assert "ts_updated_at" not in fields, (
+        "ts_updated_at is the search index's incremental-window and "
+        "freshness-decay field — backdating it hides demo content from "
+        "Spotlight. Backdate a display field instead."
+    )
+    model.objects.filter(pk__in=list(pks)).update(**fields)
+
+
+def _backdate_each(model, pk_to_value: dict, field: str) -> None:
+    """Per-row backdate: one `.update()` per distinct value.
+
+    `_backdate` sets one timestamp on many rows; this sets a different
+    timestamp on each row, which is what a conversation needs (messages
+    must march forward, not share an instant). Groups by value so N rows
+    with M distinct timestamps cost M queries, not N.
+    """
+    by_value: dict = {}
+    for pk, value in pk_to_value.items():
+        by_value.setdefault(value, []).append(pk)
+    for value, pks in by_value.items():
+        model.objects.filter(pk__in=pks).update(**{field: value})
+
+
+# How far back the workspace's history reaches. 12 weeks reads as "this
+# team has been at it for a quarter" while staying inside every retention
+# window that could hide it (the tightest relevant one was free tier's
+# 180-day chat cutoff, which the pro plan lifts entirely).
+_HISTORY_DAYS = 84
+
+
+def _timeline(count: int, *, oldest_days_ago: int, newest_days_ago: int, now):
+    """`count` ascending datetimes spread from oldest → newest.
+
+    Used to lay a conversation out along a plausible calendar. Strictly
+    increasing, so thread replies always follow their parent and the
+    chat's visible order matches its `seq` order.
+
+    Deterministic — no `random`. The eval fixture reseeds the same
+    `short` slug expecting reproducible content, and a random timeline
+    would make every reseed a different dataset. The jitter below is a
+    fixed function of the row index: enough to break up the "every
+    message exactly 6.2 hours apart" machine-regularity, while landing
+    the same way every run.
+    """
+    if count <= 0:
+        return []
+    span_days = max(oldest_days_ago - newest_days_ago, 1)
+    out = []
+    for i in range(count):
+        # Even spread across the span, then nudged by a per-index offset.
+        frac = i / max(count - 1, 1)
+        days_ago = oldest_days_ago - frac * span_days
+        ts = now - timedelta(days=days_ago)
+        # Deterministic jitter: minutes from a cheap hash of the index.
+        # Also pulls timestamps toward working hours so the history reads
+        # like a team's week rather than a cron job's.
+        jitter_minutes = ((i * 37) % 47) * 7
+        ts = ts.replace(hour=9 + (i * 3) % 9, minute=0, second=0, microsecond=0)
+        ts = ts + timedelta(minutes=jitter_minutes)
+        out.append(ts)
+    # Guarantee monotonicity even after the hour-of-day rewrite above
+    # (which can invert two adjacent same-day rows).
+    for i in range(1, len(out)):
+        if out[i] <= out[i - 1]:
+            out[i] = out[i - 1] + timedelta(minutes=17)
+    # Never let jitter push a timestamp into the future.
+    return [min(ts, now - timedelta(minutes=1)) for ts in out]
+
+
+# Per-channel history spans, as (oldest_days_ago, newest_days_ago).
+#
+# These are what turn "a pile of messages" into a chronology. The DM with
+# Bob is the oldest because it holds the framer-motion decision and its
+# rationale — the thing the visitor is meant to ask about and the agent is
+# meant to explain from weeks-old context. The GM and PM channels trail
+# forward to the present so the workspace also looks CURRENTLY active;
+# a history that stops three weeks ago reads as abandoned, which is its
+# own kind of bad first impression.
+_DM_SPANS = {
+    0: (74, 2),  # Alice (PM) — spans the whole quarter, still live
+    1: (_HISTORY_DAYS, 4),  # Bob (Eng) — oldest; carries the decision
+    2: (58, 1),  # Carol (Design) — joined the redesign later
+}
+_GM_SPAN = (78, 1)
+_SELF_DM_SPAN = (21, 0)
+_PM_SPAN = (70, 3)
+
+
+def _backdate_channel_messages(channel, span, now) -> None:
+    """Lay one channel's messages out along `span`, in `seq` order.
+
+    Ordering by `seq` is not a stylistic choice — it is the invariant
+    that keeps four separate consumers honest, because the seeder
+    assigns `seq` in narrative (blueprint) order:
+
+      * the sidebar resolves each channel's preview message by MAX(seq)
+        but the client then sorts channels by that message's `tsSent`
+        (channel_views.py:364-379), so a non-monotonic assignment would
+        put a channel in a sidebar slot its preview text contradicts;
+      * the agent's `fetch_chat_thread` and `thread_summary` read threads
+        by `seq` while the REST/UI paths read by `ts_sent_at` — diverge
+        and the AI narrates the conversation in a different order than
+        the visitor sees;
+      * `chat_chunker` builds each chunk's context window from the
+        PRECEDING messages by `seq`, so divergence would caption a chunk
+        with conversation that chronologically follows it;
+      * read cursors advance forward-only on `seq` precisely because
+        "ts could regress with clock skew or backdated edits"
+        (read_cursor_views.py:180) — seq is the load-bearing axis and
+        unread badges are unaffected by anything here.
+
+    TOP-LEVEL messages take the whole span; thread replies are then hung
+    just after their own parent. The naive version walked `seq` across
+    every row including replies, which looked correct and was subtly
+    wrong: replies take seq AFTER all top-level messages, so they
+    absorbed the recent end of the span and the channel's LAST top-level
+    message — the one the sidebar shows as the preview, since it filters
+    `is_thread_reply=False` — ended up over a month old. Every channel
+    read as abandoned in the chat list while the history itself looked
+    fine. Replies clustering near their parent is also just what real
+    threads do: an afternoon's back-and-forth, not one reply per week.
+
+    This is safe precisely because every consumer above groups before it
+    orders (main timeline vs per-thread entity), so a reply is only ever
+    compared against other replies in the same thread — which is exactly
+    the scope `_assert_seq_monotonic` enforces.
+    """
+    top_pks = list(
+        Message.objects.filter(channel=channel, is_thread_reply=False)
+        .order_by("seq")
+        .values_list("pk", flat=True)
+    )
+    oldest, newest = span
+    stamps = _timeline(len(top_pks), oldest_days_ago=oldest, newest_days_ago=newest, now=now)
+    parent_ts = dict(zip(top_pks, stamps))
+    _backdate_each(Message, parent_ts, "ts_sent_at")
+
+    # Thread replies: a conversation in the hours after the parent.
+    reply_ts: dict = {}
+    for root_pk, root_sent in parent_ts.items():
+        reply_pks = list(
+            Message.objects.filter(channel=channel, thread_root_id=root_pk, is_thread_reply=True)
+            .order_by("seq")
+            .values_list("pk", flat=True)
+        )
+        # Accumulate strictly positive gaps so each reply is later than
+        # the one before it by construction. Computing an absolute offset
+        # per index instead (and clamping it to `now`) is what an earlier
+        # version did, and the modulo term made it non-monotonic —
+        # `_assert_seq_monotonic` caught the inversion.
+        ts = root_sent
+        for i, pk in enumerate(reply_pks):
+            ts = ts + timedelta(minutes=41 + (i * 29) % 79)
+            reply_ts[pk] = ts
+        # If the walk overshot `now` (a thread hanging off a parent dated
+        # today), compress it back into the window before the clamp can
+        # flatten two rows onto the same instant.
+        overshoot = reply_ts.get(reply_pks[-1]) if reply_pks else None
+        if overshoot is not None and overshoot >= now:
+            span = now - timedelta(minutes=1) - root_sent
+            step = span / (len(reply_pks) + 1)
+            for i, pk in enumerate(reply_pks, start=1):
+                reply_ts[pk] = root_sent + step * i
+    _backdate_each(Message, reply_ts, "ts_sent_at")
+
+
+def _backdate_history(team, demo_user, bots, seeded_projects, now) -> None:
+    """Push the workspace's DISPLAY timestamps into the past.
+
+    Called at the end of `create_demo_environment`, inside the same
+    transaction, once every row exists — it reads back what was created
+    rather than threading offsets through a dozen creation functions, so
+    the blueprint tables stay pure content with no timeline bookkeeping
+    mixed in.
+
+    Never touches `ts_updated_at` on anything (see the module comment
+    above); `_backdate`'s assertion enforces that mechanically.
+    """
+    # ---- Chat ----------------------------------------------------------
+    # DM channels carry no title, so they are located by their membership
+    # rather than by name: the bot the DM is with (peer DMs), or the demo
+    # user paired with themselves (the self-DM scratch chat).
+    for bot_index, span in _DM_SPANS.items():
+        if bot_index >= len(bots):
+            continue
+        channel = (
+            Channel.objects.filter(team=team, kind=ChannelKind.DM, members__user=bots[bot_index])
+            .distinct()
+            .first()
+        )
+        if channel:
+            _backdate_channel_messages(channel, span, now)
+
+    self_id = str(demo_user.id)
+    self_dm = Channel.objects.filter(
+        team=team,
+        kind=ChannelKind.DM,
+        direct_pair__user_lo=self_id,
+        direct_pair__user_hi=self_id,
+    ).first()
+    if self_dm:
+        _backdate_channel_messages(self_dm, _SELF_DM_SPAN, now)
+
+    for channel in Channel.objects.filter(team=team, kind=ChannelKind.GM):
+        _backdate_channel_messages(channel, _GM_SPAN, now)
+
+    # ---- Projects, milestones, tasks, comments -------------------------
+    project_pks = [s["project"].pk for s in seeded_projects]
+    # Projects were created first in the story, so they predate their
+    # content — one day before the oldest PM message.
+    _backdate(
+        ProjectMaster,
+        project_pks,
+        ts_created_at=now - timedelta(days=_PM_SPAN[0] + 1),
+    )
+
+    for seeded in seeded_projects:
+        project = seeded["project"]
+        _backdate_project_tasks(project, now)
+        pm_channel = Channel.objects.filter(project=project, kind=ChannelKind.PM).first()
+        if pm_channel:
+            # The PM channel's own creation predates its first card.
+            _backdate(
+                Channel,
+                [pm_channel.pk],
+                ts_created_at=now - timedelta(days=_PM_SPAN[0] + 1),
+            )
+            _backdate_pm_channel(pm_channel, now)
+
+
+def _backdate_project_tasks(project, now) -> None:
+    """Backdate one project's tasks, milestones and comments.
+
+    Task creation order IS story order — the blueprints open each
+    milestone with its backing task, then list the work under it, and
+    they already put the finished work (the closed audit, the closed
+    interview scheduling) near the front. So `task_id` ascending is the
+    chronology, exactly as `seq` is for chat, and no content needs a
+    hand-written date.
+
+    An earlier version sorted by status instead ("closed work is old,
+    open work is recent"), which reads better in the abstract but
+    contradicts the PM channel: a task's card takes the task's own
+    timestamp and cards are seq-ordered by task creation, so grouping by
+    status made display order disagree with `seq`. `_assert_seq_monotonic`
+    caught it. Creation order satisfies both, and the blueprint ordering
+    means it costs nothing in realism.
+    """
+    task_pks = list(
+        TaskMaster.objects.filter(project=project).order_by("task_id").values_list("pk", flat=True)
+    )
+    if not task_pks:
+        return
+    stamps = _timeline(
+        len(task_pks), oldest_days_ago=_PM_SPAN[0], newest_days_ago=_PM_SPAN[1], now=now
+    )
+    _backdate_each(TaskMaster, dict(zip(task_pks, stamps)), "ts_created_at")
+
+    # Milestones frame the work, so they predate the tasks under them.
+    ms_pks = list(
+        MilestoneMaster.objects.filter(project=project)
+        .order_by("milestone_id")
+        .values_list("pk", flat=True)
+    )
+    if ms_pks:
+        stamps = _timeline(
+            len(ms_pks), oldest_days_ago=_PM_SPAN[0] + 1, newest_days_ago=50, now=now
+        )
+        _backdate_each(MilestoneMaster, dict(zip(ms_pks, stamps)), "ts_created_at")
+
+    # The audit feed the frontend renders (TaskActivityFeed) — created by
+    # the post_save signals during seeding, so every row says "now".
+    # Not indexed by any chunker, so this is pure display.
+    for pk, created in TaskMaster.objects.filter(project=project).values_list(
+        "pk", "ts_created_at"
+    ):
+        TaskActivity.objects.filter(task_id=pk).update(ts_created_at=created)
+
+    # Comments: spread between their task's creation and now, so a
+    # comment can never predate the task it is on.
+    for task_pk, created in TaskMaster.objects.filter(project=project).values_list(
+        "pk", "ts_created_at"
+    ):
+        comment_pks = list(
+            TaskComments.objects.filter(task_id=task_pk)
+            .order_by("comment_id")
+            .values_list("pk", flat=True)
+        )
+        if not comment_pks:
+            continue
+        age = max((now - created).days, 1)
+        stamps = _timeline(
+            len(comment_pks),
+            oldest_days_ago=max(age - 1, 1),
+            newest_days_ago=max(age // 4, 1),
+            now=now,
+        )
+        _backdate_each(TaskComments, dict(zip(comment_pks, stamps)), "ts_sent_at")
+
+
+def _backdate_pm_channel(pm_channel, now) -> None:
+    """Align the PM channel's messages with the rows they mirror.
+
+    A PM channel is not free-form chat: it is one task-card header per
+    task, plus every task comment mirrored as a thread reply under its
+    card. Both halves already have a true timestamp elsewhere, so this
+    copies rather than invents — a card takes its task's `ts_created_at`,
+    a mirrored reply takes its comment's `ts_sent_at`. Inventing a
+    separate timeline here would let a card and its own task disagree
+    about when the task was filed, which is exactly the kind of internal
+    contradiction a curious visitor notices.
+
+    The mirrors are addressable because their ids are deterministic:
+    `task_comment_message_uuid(task_id, comment_id)` (unified_writer.py:65).
+
+    ONE SUBTLETY, and it is the reason this function can't just copy
+    blindly. `seq` allocation in a PM channel is "all N cards first, then
+    every mirrored comment" — so seq order is NOT chronological here even
+    before backdating, and copying source timestamps makes the divergence
+    explicit (a reply on card 1 gets a lower ts than card 9, but a higher
+    seq). `chat_chunker` splits this channel into one entity per thread
+    plus a main timeline of non-rooting cards, and it orders WITHIN each
+    of those groups, so the comparison that matters is card-vs-card and
+    reply-vs-reply-in-the-same-thread — both of which stay monotonic
+    here, because cards inherit task creation order and replies inherit
+    `comment_id` order. The cross-group inversion is invisible to every
+    consumer, and `_assert_seq_monotonic` pins exactly that scope.
+    """
+    from origin.services.unified_writer import task_comment_message_uuid
+
+    # Task-card headers: same instant as the task they represent.
+    card_stamps = {}
+    for msg_pk, task_created in Message.objects.filter(
+        channel=pm_channel, is_thread_reply=False, task__isnull=False
+    ).values_list("pk", "task__ts_created_at"):
+        if task_created:
+            card_stamps[msg_pk] = task_created
+    _backdate_each(Message, card_stamps, "ts_sent_at")
+
+    # Mirrored comments: same instant as the comment.
+    mirror_stamps = {}
+    for task_id, comment_id, sent in TaskComments.objects.filter(
+        task__project=pm_channel.project
+    ).values_list("task_id", "comment_id", "ts_sent_at"):
+        mirror_stamps[task_comment_message_uuid(task_id, comment_id)] = sent
+    # Only rows that actually exist in this channel (the mirror write is
+    # best-effort and returns None on failure).
+    live = set(
+        Message.objects.filter(channel=pm_channel, pk__in=list(mirror_stamps)).values_list(
+            "pk", flat=True
+        )
+    )
+    _backdate_each(Message, {k: v for k, v in mirror_stamps.items() if k in live}, "ts_sent_at")
+
+    # A mirrored reply must never predate the card it hangs under: the
+    # card is the task, and a comment cannot precede its own task. The
+    # comment timeline is derived from the task's creation date so this
+    # holds by construction — assert it rather than trusting it, since a
+    # future edit to either span would break it silently.
+    for root_id, root_sent in Message.objects.filter(
+        channel=pm_channel, is_thread_reply=False
+    ).values_list("pk", "ts_sent_at"):
+        earliest = (
+            Message.objects.filter(channel=pm_channel, thread_root_id=root_id)
+            .order_by("ts_sent_at")
+            .values_list("ts_sent_at", flat=True)
+            .first()
+        )
+        assert earliest is None or root_sent is None or earliest >= root_sent, (
+            f"PM thread reply predates its task card ({earliest} < {root_sent}) — "
+            "a comment cannot be older than the task it is on."
+        )
+
+
+def _assert_seq_monotonic(team) -> None:
+    """Fail loudly if any channel's `ts_sent_at` disagrees with its `seq`.
+
+    `seq` is the load-bearing ordering axis for four consumers that do
+    NOT read `ts_sent_at` (the sidebar's preview resolution, the agent's
+    `fetch_chat_thread` / `thread_summary`, `chat_chunker`'s context
+    window, and read-cursor advance). Backdating only touches
+    `ts_sent_at`, so a mistake here does not raise — it quietly makes the
+    AI narrate a conversation in a different order than the visitor reads
+    it. That is the kind of bug that ships.
+
+    Scope matches how the consumers actually group messages: the
+    non-thread timeline, and each thread's replies. PM channels are
+    exempt from the cross-group comparison for the reason documented in
+    `_backdate_pm_channel`.
+    """
+    for channel in Channel.objects.filter(team=team):
+        rows = list(
+            Message.objects.filter(channel=channel)
+            .order_by("seq")
+            .values_list("seq", "ts_sent_at", "is_thread_reply", "thread_root_id")
+        )
+        groups: dict = {}
+        for seq, sent, is_reply, root in rows:
+            key = ("thread", root) if is_reply else ("main", None)
+            groups.setdefault(key, []).append((seq, sent))
+        for key, entries in groups.items():
+            prev_seq, prev_sent = None, None
+            for seq, sent in entries:
+                if prev_sent is not None and sent is not None:
+                    assert sent >= prev_sent, (
+                        f"channel {channel.id} group {key}: ts_sent_at regresses "
+                        f"at seq {prev_seq}→{seq} ({prev_sent} → {sent}). seq order "
+                        "and display order must agree; see _backdate_channel_messages."
+                    )
+                prev_seq, prev_sent = seq, sent
+
+
+# ---------------------------------------------------------------------------
 # Seeder entry point
 # ---------------------------------------------------------------------------
 
@@ -2329,6 +2796,20 @@ def create_demo_environment(demo_user: CustomUser, *, short: str | None = None) 
 
         # 16. Todos (demo user only — todos are personal-scoped)
         _create_todos(team, demo_user)
+
+        # 17. Push DISPLAY timestamps into the past so the workspace reads
+        #     as three months of real use instead of "created 8 seconds
+        #     ago". Runs last, inside the same transaction, because it
+        #     reads back every row it rewrites — that keeps the blueprint
+        #     tables pure content with no timeline bookkeeping in them.
+        #     NEVER touches `ts_updated_at`; see the module comment above
+        #     `_backdate`.
+        now = timezone.now()
+        _backdate_history(team, demo_user, bots, seeded_projects, now)
+        # Cheap (one query per channel) and catches the one class of bug
+        # backdating can introduce silently — display order disagreeing
+        # with `seq`, which four consumers depend on.
+        _assert_seq_monotonic(team)
 
     return {
         "team_id": str(team.team_id),
@@ -2491,7 +2972,10 @@ def _create_project_from_blueprint(team, demo_user, all_members, bots, short, bl
         ]
     )
 
-    sprint = _create_sprint(team, project)
+    # Two closed sprints behind the active one: the project reads as
+    # "three sprints into a quarter", which is the cadence the 12 weeks
+    # of backdated history implies.
+    sprint = _create_sprint(team, project, prior_sprints=2)
     milestone, backing_task = _create_milestone_with_backing_task(
         team, project, sprint, demo_user, bots, blueprint["milestone"]
     )
@@ -2594,22 +3078,57 @@ def _seed_task_dependencies(team, demo_user, tasks: List[TaskMaster]) -> None:
         )
 
 
-def _create_sprint(team, project) -> Sprint:
+def _create_sprint(team, project, *, prior_sprints: int = 0) -> Sprint:
+    """Create the project's sprint cadence and return the ACTIVE sprint.
+
+    `prior_sprints` (demo only) prepends N already-completed sprints
+    before the active one, so the project shows visible cadence instead
+    of looking like it started today. The default 0 reproduces the
+    original single-sprint behaviour byte-for-byte — `starter_seeder`
+    calls this for real customer workspaces, where a brand-new project
+    genuinely has no history to show.
+
+    Sprint dates are plain `DateField`s (no `auto_now`), so unlike every
+    other timestamp in the demo these can just be passed to `create()`
+    and need no backdating pass.
+    """
     today = date.today()
+    duration = 14
+    # With history, the active sprint is mid-flight (started 5 days ago)
+    # rather than starting today — a sprint that begins the instant you
+    # sign in is the same "created 8 seconds ago" tell the backdating
+    # exists to remove. Without history, keep the original anchor.
+    active_start = today - timedelta(days=5) if prior_sprints else today
     SprintConfig.objects.create(
         team=team,
         project=project,
-        duration_days=14,
-        anchor_date=today,
+        duration_days=duration,
+        anchor_date=active_start,
         auto_roll=False,
     )
+    # Completed sprints, oldest first, each ending the day before the
+    # next one starts. `sequence_number` is unique per project and must
+    # stay monotonic with `start_date`.
+    for i in range(prior_sprints):
+        back = prior_sprints - i
+        start = active_start - timedelta(days=duration * back)
+        Sprint.objects.create(
+            team=team,
+            project=project,
+            name=f"Sprint {i + 1}",
+            sequence_number=i + 1,
+            start_date=start,
+            end_date=start + timedelta(days=duration - 1),
+            status="completed",
+            is_auto_generated=False,
+        )
     return Sprint.objects.create(
         team=team,
         project=project,
-        name="Sprint 1",
-        sequence_number=1,
-        start_date=today,
-        end_date=today + timedelta(days=13),
+        name=f"Sprint {prior_sprints + 1}",
+        sequence_number=prior_sprints + 1,
+        start_date=active_start,
+        end_date=active_start + timedelta(days=duration - 1),
         status="active",
         is_auto_generated=False,
     )
