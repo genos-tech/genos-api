@@ -90,6 +90,7 @@ def _purge_search_engine_rows(user_id: str) -> None:
     the agent stack, which account deletion has no other reason to load.
     """
     from origin.search_engine.models import (
+        AgentRun,
         AgentRunFeedback,
         AgentSession,
         AiCreditEntry,
@@ -97,9 +98,26 @@ def _purge_search_engine_rows(user_id: str) -> None:
         AiSpendEvent,
     )
 
+    # `AgentRun` MUST be swept explicitly, and it must come before
+    # `AgentSession`. `AgentRun.session` is `on_delete=SET_NULL`
+    # (search_engine/models.py), so deleting the session does NOT cascade
+    # to its runs — it NULLs their `session_id` and leaves them alive.
+    # That matters more here than anywhere else: `AgentRun.query` holds
+    # the user's question as raw text and `final_answer_text` the answer,
+    # so a missed sweep leaves the most directly personal content in this
+    # whole module behind. `AgentStep` / `AgentLlmCall` /
+    # `AgentRunJudgement` CASCADE from the RUN (not from the session), so
+    # they survive an orphaned run too, and only the run delete sweeps
+    # them.
+    #
+    # `AgentRunFeedback` also cascades from `AgentRun`, so its entry below
+    # looks redundant — it is not. It carries its own `user_id`, which is
+    # the *rater*, who need not be the run's owner, so filtering it
+    # directly erases ratings this person left on anyone's run.
     for model in (
         AgentRunFeedback,
-        AgentSession,  # AgentRun / AgentStep / AgentLlmCall cascade from it
+        AgentRun,
+        AgentSession,
         AiCreditEntry,
         AiRequestCost,
         AiSpendEvent,
@@ -110,6 +128,11 @@ def _purge_search_engine_rows(user_id: str) -> None:
     # has no user column, so it cannot be swept per-user here. The
     # deleted personal notes are handled by the existing deleted-data
     # purge, which reconciles chunks against their vanished parents.
+    # The same holds for the `conversation` / `spotlight_answer` chunks
+    # built off the runs deleted above: `purge.py::_resolve_agent_runs`
+    # reports a chunk as dead once its `AgentRun` row is gone, so the
+    # answer text those chunks carry is collected by the next sweep
+    # rather than needing a pass here.
 
 
 def _delete_personal_data(user) -> None:

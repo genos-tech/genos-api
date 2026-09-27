@@ -3,8 +3,10 @@
 The properties that matter: the PERSON becomes unidentifiable and every
 session dies; the WORKSPACE stays consistent (no orphaned rows, no
 ghost memberships, teammates' content keeps its attribution); a team
-that still has other members cannot be left ownerless; and the endpoint
-cannot be fired by accident or by a leaked token acting on someone else.
+that still has other members cannot be left ownerless; the AI/search
+rows keyed by a bare `user_id` string are swept (nothing cascades to
+them — see `AgentHistoryErasureTests`); and the endpoint cannot be fired
+by accident or by a leaked token acting on someone else.
 """
 
 from django.urls import reverse
@@ -17,6 +19,12 @@ from origin.models.common.user_models import CustomUser
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.models import (
+    AgentRun,
+    AgentRunFeedback,
+    AgentSession,
+    AgentStep,
+)
 from origin.services.account_deletion import (
     DELETED_USERNAME,
     OwnershipTransferRequired,
@@ -171,3 +179,105 @@ class ErasureTests(BaseAPITestCase):
         # re-checked from the DB on every request.
         resp = self.client.get(reverse("language_preference"))
         self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class AgentHistoryErasureTests(BaseAPITestCase):
+    """The agent tables hold the user's own words, so erasure must reach them.
+
+    `AgentRun.query` is the question as typed and `final_answer_text` the
+    answer built from it. Neither table has an FK to `CustomUser` (both
+    key the owner with a bare `CharField`), so nothing about anonymizing
+    the user row cascades here — only the explicit sweep in
+    `_purge_search_engine_rows` removes them.
+    """
+
+    def _seed_agent_history(self, user, *, query):
+        team_id, user_id = str(self.team.team_id), str(user.id)
+        session = AgentSession.objects.create(team_id=team_id, user_id=user_id)
+        run = AgentRun.objects.create(
+            team_id=team_id,
+            user_id=user_id,
+            query=query,
+            status="done",
+            final_answer_text="because of the perf budget",
+            session=session,
+        )
+        step = AgentStep.objects.create(
+            run=run,
+            step_index=0,
+            tool_name="search_knowledge_base",
+            result_json={"matches": []},
+        )
+        return session, run, step
+
+    def test_agent_history_is_purged(self):
+        session, run, step = self._seed_agent_history(self.user2, query="MY PRIVATE QUESTION")
+
+        delete_account(self.user2)
+
+        self.assertFalse(AgentRun.objects.filter(pk=run.pk).exists())
+        self.assertFalse(AgentSession.objects.filter(pk=session.pk).exists())
+        # AgentStep cascades from AgentRun, so only the run sweep reaches it.
+        self.assertFalse(AgentStep.objects.filter(pk=step.pk).exists())
+
+    def test_runs_are_deleted_not_orphaned(self):
+        """Guards against relying on a session cascade that does not exist.
+
+        `AgentRun.session` is SET_NULL, so if the explicit `AgentRun`
+        sweep is dropped on the theory that deleting the session takes
+        the runs with it, the run survives with `session_id = NULL` —
+        still carrying the user's question. The NULL-session assertion is
+        the specific one: it fails on a merely-detached run, which a bare
+        "does it still exist" check on a different filter could miss.
+        """
+        self._seed_agent_history(self.user2, query="MY PRIVATE QUESTION")
+        user_id = str(self.user2.id)
+
+        delete_account(self.user2)
+
+        self.assertEqual(AgentRun.objects.filter(user_id=user_id).count(), 0)
+        self.assertEqual(
+            AgentRun.objects.filter(user_id=user_id, session__isnull=True).count(), 0
+        )
+        # And the raw question text is gone from the table entirely.
+        self.assertFalse(AgentRun.objects.filter(query="MY PRIVATE QUESTION").exists())
+
+    def test_another_users_agent_history_is_untouched(self):
+        """Erasure is scoped to the person, not to their team.
+
+        `self.user` is a teammate in the same team, so a sweep keyed on
+        `team_id` instead of `user_id` would take their history too.
+        """
+        mine, my_run, _ = self._seed_agent_history(self.user2, query="mine")
+        theirs, their_run, their_step = self._seed_agent_history(self.user, query="theirs")
+
+        delete_account(self.user2)
+
+        self.assertFalse(AgentRun.objects.filter(pk=my_run.pk).exists())
+        self.assertTrue(AgentRun.objects.filter(pk=their_run.pk).exists())
+        self.assertTrue(AgentSession.objects.filter(pk=theirs.pk).exists())
+        self.assertTrue(AgentStep.objects.filter(pk=their_step.pk).exists())
+        self.assertIsNotNone(mine)
+
+    def test_feedback_left_on_someone_elses_run_is_erased(self):
+        """`AgentRunFeedback.user_id` is the RATER, not the run's owner.
+
+        One row per (run, user) by unique constraint, so the deleted
+        person's 👎 on a teammate's answer is their own content and has to
+        go — while the teammate's run stays. This is why the feedback
+        entry in the sweep is not made redundant by its CASCADE from
+        `AgentRun`.
+        """
+        _theirs, their_run, _ = self._seed_agent_history(self.user, query="theirs")
+        feedback = AgentRunFeedback.objects.create(
+            run=their_run,
+            team_id=str(self.team.team_id),
+            user_id=str(self.user2.id),
+            rating=AgentRunFeedback.RATING_DOWN,
+            comment="not useful",
+        )
+
+        delete_account(self.user2)
+
+        self.assertFalse(AgentRunFeedback.objects.filter(pk=feedback.pk).exists())
+        self.assertTrue(AgentRun.objects.filter(pk=their_run.pk).exists())
