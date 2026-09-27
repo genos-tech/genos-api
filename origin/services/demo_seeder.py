@@ -39,6 +39,11 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
+from origin.middleware.current_user import (
+    clear_current_user,
+    get_current_user,
+    set_current_user,
+)
 from origin.models.chat.activity_models import ActivityFact
 from origin.models.chat.mention_models import MentionFact
 from origin.models.chat.reaction_models import ReactionFact
@@ -58,11 +63,6 @@ from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
-from origin.middleware.current_user import (
-    clear_current_user,
-    get_current_user,
-    set_current_user,
-)
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.sprint_models import Sprint, SprintConfig
 
@@ -74,7 +74,6 @@ from origin.models.task.task_activity_models import TaskActivity, TaskActivityAc
 from origin.models.task.task_models import TaskComments, TaskDependency, TaskMaster
 from origin.search_engine.models import AgentRun, AgentSession, RagChunk
 from origin.services.activity_suppression import suppress_task_activity
-from origin.services.task_blocking import CLOSED_STATUSES
 
 # BlockNote body builders live in `demo_blocks` so the per-language
 # content modules can share them without importing this module (which
@@ -93,6 +92,7 @@ from origin.services.demo_blocks import (  # noqa: F401  (re-exported)
     _section,
     _text_body,
 )
+from origin.services.task_blocking import CLOSED_STATUSES
 
 # Bot peers. `first`/`last` stay ASCII in EVERY language: the eval
 # suites look these up by exact `attendee__username` match (~90 refs to
