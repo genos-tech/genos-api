@@ -26,11 +26,27 @@ none of them raises on its own:
     a one-character mistake. `test_default_language_is_english` states
     the dependency out loud, next to the reason.
 
+  * **English logic hides in the seeder.** The failure mode with no
+    natural home: `demo_seeder.py` is in NEITHER content table, so
+    anything English hardcoded there is invisible to
+    `assert_content_parity`. And a ratio assertion like
+    `test_ja_seeds_japanese` cannot see it either — a handful of English
+    rows in a 300-string corpus still scores far above the 0.6 floor.
+    It bit twice: six self-DM messages (fixed by moving them into the
+    tables), then `_DEPENDENCY_EDGES` matching tasks by English title
+    substring, which cost the JA workspace 9 of its 10 dependency edges
+    and every one of its Blocked tasks.
+    `test_dependency_graph_is_identical_in_both_languages` asserts the
+    two languages agree, which is the only formulation that catches this
+    class — the rows exist in both, so only a comparison finds it.
+
 The bot NAMES are the deliberate exception to all of this: they stay
 ASCII in both tables (~90 exact-match `attendee__username` lookups in
 `cases.yaml`, plus emails built from `first.lower()`), so
 `test_bot_names_stay_ascii_in_every_language` guards the thing a
-well-meaning translation pass would most plausibly break.
+well-meaning translation pass would most plausibly break. Sprint names
+are the other: both tables spell them "Sprint {n}" on purpose, because
+the JA workspace's own prose cites `Sprint 1` by name.
 """
 
 from django.contrib.auth import get_user_model
@@ -40,7 +56,7 @@ from django.test import TestCase
 from origin.models.chat.todo_models import ToDoItem
 from origin.models.chat.unified_models import Message
 from origin.models.note.personal_note_models import PersonalNoteMaster
-from origin.models.task.task_models import TaskMaster
+from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.services.demo_seeder import (
     BOT_PROFILES,
     DEMO_LANGUAGES,
@@ -205,6 +221,66 @@ class DemoLanguageSeedingTests(TestCase):
         """A bad locale must degrade to English, not 500 the signin."""
         _user, team_id = self._seed("fr", slug="bilfr")
         self.assertTrue(self._corpus(team_id), "unknown lang seeded an empty workspace")
+
+    def test_dependency_graph_is_identical_in_both_languages(self):
+        """The graph must not depend on which table seeded the workspace.
+
+        It did. `_DEPENDENCY_EDGES` matched tasks by English title
+        substring, so a Japanese workspace resolved 1 of 10 edges and the
+        other 9 vanished without a word — `get_or_create` was simply never
+        reached. What went with them:
+
+          * **every Blocked task.** `Blocked` is DERIVED from open blocker
+            edges by `sync_blocked_status`, so 0 edges means 0 Blocked —
+            a whole status column missing from the board.
+          * **the 2-hop chain** (spike → Hero → accessibility audit) the
+            GraphRAG eval cases measure.
+          * **the premise of the organize demo.** Billing & Plans Revamp
+            exists so its priorities CONTRADICT its dependency order, and
+            `update_tasks_bulk` fixes them. With no dependencies there is
+            no order to contradict, so the demo's climax had nothing to do.
+
+        Asserted as EN/JA equality rather than against a literal count, so
+        the check keeps working as the blueprints grow — a new edge has to
+        appear in both languages or neither.
+        """
+        graphs = {}
+        blocked = {}
+        for lang in ("en", "ja"):
+            _user, team_id = self._seed(lang, slug=f"bildep{lang}")
+            tasks = {
+                t.task_id: t for t in TaskMaster.objects.filter(team=team_id)
+            }
+            # Compare SHAPE, not titles — the titles are translated, which
+            # is the entire reason the bug existed. A task's identity here
+            # is its position in creation order, which both tables share.
+            order = {tid: i for i, tid in enumerate(sorted(tasks))}
+            graphs[lang] = sorted(
+                (order[d.blocker_task_id], order[d.blocked_task_id])
+                for d in TaskDependency.objects.filter(team_id=team_id)
+            )
+            blocked[lang] = sorted(
+                order[t.task_id] for t in tasks.values() if (t.status or "") == "Blocked"
+            )
+
+        self.assertEqual(
+            graphs["ja"],
+            graphs["en"],
+            "the JA and EN dependency graphs differ — an edge resolved in one "
+            "language and not the other (are the blueprint `key`s in sync?)",
+        )
+        self.assertEqual(
+            blocked["ja"],
+            blocked["en"],
+            "Blocked tasks differ between languages; since Blocked is derived "
+            "from dependency edges, this means edges went missing",
+        )
+        # Guard against the degenerate pass: if BOTH languages seeded zero
+        # edges the equality above holds and says nothing.
+        self.assertGreaterEqual(
+            len(graphs["en"]), 5, "expected a real dependency graph in the EN demo"
+        )
+        self.assertTrue(blocked["en"], "no Blocked tasks at all — check _DEPENDENCY_EDGES")
 
 
 class DemoSignInLanguageTests(TestCase):

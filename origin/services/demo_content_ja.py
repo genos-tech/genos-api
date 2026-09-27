@@ -174,6 +174,7 @@ PROJECT_BLUEPRINTS = [
         # the indicated task, not the backing.
         "tasks": [
             {
+                "key": "spike_framer_motion",
                 "title": "スパイク調査: リニューアルでの framer-motion と native CSS アニメーションの比較",
                 "status": "Closed",
                 "priority": "Low",
@@ -268,6 +269,7 @@ PROJECT_BLUEPRINTS = [
             },
 
             {
+                "key": "migrate_marketing_pages",
                 "title": "マーケティングページを design system v3 へ移行",
                 "status": "Open",
                 "priority": "High",
@@ -326,6 +328,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "audit_marketing_pages",
                 "title": "既存マーケティングページの棚卸し",
                 "status": "Closed",
                 "priority": "Normal",
@@ -380,6 +383,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "build_hero_featuregrid",
                 "title": "design system v3 で Hero + FeatureGrid を実装",
                 "status": "WIP",
                 "priority": "High",
@@ -432,6 +436,7 @@ PROJECT_BLUEPRINTS = [
             },
 
             {
+                "key": "responsive_navigation",
                 "title": "レスポンシブナビゲーションとモバイルドロワーを実装",
                 "status": "WIP",
                 "priority": "High",
@@ -480,6 +485,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "plausible_analytics",
                 "title": "Plausible のアナリティクスと名前付きイベントを設定",
                 "status": "Open",
                 "priority": "Normal",
@@ -538,6 +544,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "accessibility_audit",
                 "title": "アクセシビリティ監査と改修対応",
                 "status": "Pending",
                 "priority": "Normal",
@@ -593,6 +600,7 @@ PROJECT_BLUEPRINTS = [
             },
 
             {
+                "key": "slow_homepage_load",
                 "title": "モバイル Safari でのホームページ読み込み遅延を調査",
                 "status": "WIP",
                 "priority": "Normal",
@@ -743,6 +751,7 @@ PROJECT_BLUEPRINTS = [
         },
         "tasks": [
             {
+                "key": "synthesize_interviews",
                 "title": "顧客インタビュー 12 件をテーマに分析まとめ",
                 "status": "WIP",
                 "priority": "High",
@@ -797,6 +806,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "schedule_interviews",
                 "title": "残り 5 件のインタビューを日程調整",
                 "status": "Closed",
                 "priority": "Normal",
@@ -833,6 +843,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "code_recordings",
                 "title": "録音をテーマ別にコーディング（Dovetail）",
                 "status": "WIP",
                 "priority": "High",
@@ -867,6 +878,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "competitor_analysis",
                 "title": "競合分析: Notion / Slack / Linear",
                 "status": "Open",
                 "priority": "Normal",
@@ -916,6 +928,7 @@ PROJECT_BLUEPRINTS = [
             },
 
             {
+                "key": "roadmap_proposal",
                 "title": "ロードマップ提案 v1 — Q3 の投資テーマ上位 5 件",
                 "status": "Open",
                 "priority": "High",
@@ -964,6 +977,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "onboarding_funnel",
                 "title": "オンボーディングファネルの分解分析",
                 "status": "Pending",
                 "priority": "Normal",
@@ -1009,6 +1023,7 @@ PROJECT_BLUEPRINTS = [
             },
 
             {
+                "key": "q3_okrs",
                 "title": "Q3 OKRs のドラフトを定義",
                 "status": "Open",
                 "priority": "High",
@@ -1040,6 +1055,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "stakeholder_map",
                 "title": "社内ステークホルダーマップを更新",
                 "status": "Open",
                 "priority": "Low",
@@ -1158,6 +1174,7 @@ PROJECT_BLUEPRINTS = [
                 },
                 "tasks": [
                     {
+                        "key": "billing_entitlements_matrix",
                         "title": "請求プランとエンタイトルメントのマトリクスを定義",
                         "status": "Open",
                         "priority": "Low",
@@ -1181,6 +1198,7 @@ PROJECT_BLUEPRINTS = [
                         ],
                     },
                     {
+                        "key": "payment_provider_sandbox",
                         "title": "支払いプロバイダのサンドボックスを組み込む",
                         "status": "WIP",
                         "priority": "Critical",
@@ -1204,6 +1222,7 @@ PROJECT_BLUEPRINTS = [
                         ],
                     },
                     {
+                        "key": "upgrade_downgrade_flow",
                         "title": "サブスクリプションのアップグレード・ダウングレードフローを実装",
                         "status": "Open",
                         "priority": "Minimal",
@@ -1222,6 +1241,7 @@ PROJECT_BLUEPRINTS = [
                         "comments": [],
                     },
                     {
+                        "key": "usage_metering",
                         "title": "プラン上限のための使用量計測パイプライン",
                         "status": "Open",
                         "priority": "Normal",
@@ -1240,6 +1260,7 @@ PROJECT_BLUEPRINTS = [
                         "comments": [],
                     },
                     {
+                        "key": "billing_admin_dashboard",
                         "title": "サポート向けの請求管理ダッシュボード",
                         "status": "Open",
                         "priority": "High",
@@ -1258,6 +1279,7 @@ PROJECT_BLUEPRINTS = [
                         "comments": [],
                     },
                     {
+                        "key": "invoice_pdf_templates",
                         "title": "請求書 PDF と領収メールのテンプレート",
                         "status": "Open",
                         "priority": "Critical",
