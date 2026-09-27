@@ -386,6 +386,31 @@ def _content(lang: str):
     return module
 
 
+def _same_task_lists(same, where: str, en_tasks, ja_tasks) -> None:
+    """Assert one blueprint task list matches its translation structurally.
+
+    Split out of `assert_content_parity` so extra-milestone task lists get
+    the identical treatment — they were previously unchecked, and they hold
+    5 of the 10 dependency edges.
+    """
+    same(f"{where} task count", len(en_tasks), len(ja_tasks))
+    for ti, (et, jt) in enumerate(zip(en_tasks, ja_tasks)):
+        at = f"{where}.task[{ti}]"
+        same(f"{at} keys", sorted(et), sorted(jt))
+        # Positional wiring, DB-facing values, and the dependency key must
+        # match exactly. `key` is the identifier `_DEPENDENCY_EDGES` resolves
+        # against, so a mismatch silently drops an edge in ONE language —
+        # which is the bug that made this check necessary.
+        for field in ("key", "parent_idx", "is_milestone_child", "status", "priority", "assignee"):
+            if field in et or field in jt:
+                same(f"{at}.{field}", et.get(field), jt.get(field))
+        same(f"{at} comments", len(et.get("comments", [])), len(jt.get("comments", [])))
+        assert et["status"] in _TASK_STATUS_COLOR, f"{at}: bad status {et['status']!r}"
+        assert jt["status"] in _TASK_STATUS_COLOR, f"{at}: bad JA status {jt['status']!r}"
+        assert et["priority"] in _TASK_PRIORITY_COLOR, f"{at}: bad priority"
+        assert jt["priority"] in _TASK_PRIORITY_COLOR, f"{at}: bad JA priority"
+
+
 def assert_content_parity() -> None:
     """Fail loudly if the two content tables have drifted apart.
 
@@ -398,7 +423,12 @@ def assert_content_parity() -> None:
     Checks, in the order they'd bite:
       * every `_CONTENT_KEYS` name is defined in both modules;
       * `PROJECT_BLUEPRINTS` has the same project count, and each
-        project the same task count, tag count and comment counts;
+        project the same task count, tag count and comment counts —
+        including each extra milestone's own task list;
+      * every task's `key` matches, so `_DEPENDENCY_EDGES` resolves
+        identically in both languages;
+      * every task spec declares a `key`, and keys are unique per project
+        (a duplicate silently shadows an edge endpoint);
       * `status` / `priority` are DB enum values, never translated;
       * chat blueprints have the same message and reply counts, and the
         same `parent_index` / `bot_index` wiring.
@@ -425,18 +455,43 @@ def assert_content_parity() -> None:
             len(ep.get("pm_messages", [])),
             len(jp.get("pm_messages", [])),
         )
-        for ti, (et, jt) in enumerate(zip(ep["tasks"], jp["tasks"])):
-            where = f"project[{pi}].task[{ti}]"
-            same(f"{where} keys", sorted(et), sorted(jt))
-            # Positional wiring and DB-facing values must match exactly.
-            for field in ("parent_idx", "is_milestone_child", "status", "priority", "assignee"):
-                if field in et or field in jt:
-                    same(f"{where}.{field}", et.get(field), jt.get(field))
-            same(f"{where} comments", len(et.get("comments", [])), len(jt.get("comments", [])))
-            assert et["status"] in _TASK_STATUS_COLOR, f"{where}: bad status {et['status']!r}"
-            assert jt["status"] in _TASK_STATUS_COLOR, f"{where}: bad JA status {jt['status']!r}"
-            assert et["priority"] in _TASK_PRIORITY_COLOR, f"{where}: bad priority"
-            assert jt["priority"] in _TASK_PRIORITY_COLOR, f"{where}: bad JA priority"
+        _same_task_lists(same, f"project[{pi}]", ep["tasks"], jp["tasks"])
+        # Extra milestones carry their own task lists, and the messiest of
+        # them (Billing & Plans Revamp) owns 5 of the 10 dependency edges —
+        # so its keys need checking just as much as the main list's.
+        en_extra = ep.get("extra_milestones") or []
+        ja_extra = jp.get("extra_milestones") or []
+        same(f"project[{pi}] extra_milestone count", len(en_extra), len(ja_extra))
+        for mi, (em, jm) in enumerate(zip(en_extra, ja_extra)):
+            _same_task_lists(same, f"project[{pi}].extra[{mi}]", em["tasks"], jm["tasks"])
+
+        # Every task must DECLARE a key, and keys must be unique within the
+        # project — `_seed_task_dependencies` builds a dict, so a duplicate
+        # silently shadows whichever task came first, and a missing key makes
+        # any edge naming it a no-op. Both failures are invisible at seed
+        # time; they show up as an absent Blocked column.
+        for mod_label, blueprint in (("en", ep), ("ja", jp)):
+            specs = list(blueprint["tasks"])
+            for extra in blueprint.get("extra_milestones") or []:
+                specs += extra["tasks"]
+            keys = [s.get("key") for s in specs]
+            missing = [s["title"] for s in specs if not s.get("key")]
+            assert not missing, f"project[{pi}] ({mod_label}): tasks missing a key: {missing}"
+            dupes = sorted({k for k in keys if keys.count(k) > 1})
+            assert not dupes, f"project[{pi}] ({mod_label}): duplicate task keys: {dupes}"
+
+    # Every edge endpoint must name a task that exists, or the edge is a
+    # silent no-op. Checked against the EN table; keys are asserted equal
+    # above, so that covers both.
+    all_keys = set()
+    for bp in en.PROJECT_BLUEPRINTS:
+        all_keys.update(t["key"] for t in bp["tasks"])
+        for extra in bp.get("extra_milestones") or []:
+            all_keys.update(t["key"] for t in extra["tasks"])
+    unknown = sorted(
+        {k for edge in _DEPENDENCY_EDGES for k in edge if k not in all_keys}
+    )
+    assert not unknown, f"_DEPENDENCY_EDGES names unknown task keys: {unknown}"
 
     same("DM_BLUEPRINTS length", len(en.DM_BLUEPRINTS), len(ja.DM_BLUEPRINTS))
     for di, (ed, jd) in enumerate(zip(en.DM_BLUEPRINTS, ja.DM_BLUEPRINTS)):
@@ -1306,7 +1361,13 @@ def _create_project_from_blueprint(
     # Seed a few realistic blocker→blocked edges so the relationship graph
     # has data: powers `get_task_blockers` / `list_task_dependencies` and is
     # the substrate the GraphRAG eval cases (Q2.4) measure against.
-    _seed_task_dependencies(team, demo_user, all_project_tasks)
+    # Keyed by the blueprint's language-neutral `"key"` — see
+    # `_DEPENDENCY_EDGES` for why titles cannot be used.
+    _seed_task_dependencies(
+        team,
+        demo_user,
+        {t._blueprint_key: t for t in all_project_tasks if getattr(t, "_blueprint_key", None)},
+    )
 
     return {
         "project": project,
@@ -1317,47 +1378,63 @@ def _create_project_from_blueprint(
     }
 
 
-# Realistic within-project dependencies, matched by title substring so they
-# survive blueprint edits. Each pair is (blocker_substring, blocked_substring)
-# meaning "blocker blocks blocked". Pairs whose endpoints aren't both in the
-# given project's task list are skipped — so the same list is safe to apply to
-# every project.
+# Realistic within-project dependencies. Each pair is
+# (blocker_key, blocked_key) meaning "blocker blocks blocked", naming tasks by
+# their blueprint `"key"` — the language-neutral identifier every task spec
+# carries. Pairs whose endpoints aren't both in the given project's task list
+# are skipped, so the same list is safe to apply to every project.
+#
+# Keys rather than title substrings, because titles are TRANSLATED. Matching
+# "Migrate marketing pages" against a task titled
+# "マーケティングページを design system v3 へ移行" finds nothing, and the miss is
+# silent — `get_or_create` is simply never reached. That cost the Japanese
+# workspace 9 of its 10 edges, and with them every one of its 7 Blocked tasks
+# (`Blocked` is DERIVED from open blocker edges by `sync_blocked_status`, so
+# no edges means no Blocked column at all), the 2-hop chain the GraphRAG evals
+# measure, and the premise of the organize demo — whose whole point is that
+# Billing's priorities contradict its dependency order. With no dependencies
+# there is no order to contradict, so the demo's climax had nothing to fix.
+#
+# Nothing detected it: the edges live here rather than in either content
+# table, so `assert_content_parity` cannot see them, and a "mostly Japanese"
+# ratio assertion says nothing about a dependency graph that simply isn't
+# there. Keys make the match language-independent by construction.
 _DEPENDENCY_EDGES = [
     # Website Redesign: the spike decision and the design-system migration both
     # gate the Hero build.
-    ("framer-motion", "Hero + FeatureGrid"),
-    ("Migrate marketing pages", "Hero + FeatureGrid"),
+    ("spike_framer_motion", "build_hero_featuregrid"),
+    ("migrate_marketing_pages", "build_hero_featuregrid"),
     # …and the Hero build gates the accessibility audit, giving the graph a
     # 2-hop chain (framer-motion → Hero → Accessibility audit) — the A1
     # multi-hop eval target (graph_native_2hop_* in retrieval_cases.yaml).
-    ("Hero + FeatureGrid", "Accessibility audit"),
+    ("build_hero_featuregrid", "accessibility_audit"),
     # Q2 Roadmap: interview synthesis and competitor analysis feed the proposal.
-    ("Synthesize 12 customer interviews", "Roadmap proposal"),
-    ("Competitor analysis", "Roadmap proposal"),
+    ("synthesize_interviews", "roadmap_proposal"),
+    ("competitor_analysis", "roadmap_proposal"),
     # Billing & Plans Revamp (the messy organize-demo milestone): the
     # entitlements matrix gates integration + metering, which gate the
     # customer-facing flow and the support dashboard. The blueprint's
     # priorities/due dates deliberately CONTRADICT this order — that
     # contradiction is what the update_tasks_bulk organize flow fixes.
-    ("plans and entitlements matrix", "payment provider sandbox"),
-    ("plans and entitlements matrix", "Usage metering"),
-    ("payment provider sandbox", "upgrade and downgrade flow"),
-    ("Usage metering", "Billing admin dashboard"),
-    ("upgrade and downgrade flow", "Billing admin dashboard"),
+    ("billing_entitlements_matrix", "payment_provider_sandbox"),
+    ("billing_entitlements_matrix", "usage_metering"),
+    ("payment_provider_sandbox", "upgrade_downgrade_flow"),
+    ("usage_metering", "billing_admin_dashboard"),
+    ("upgrade_downgrade_flow", "billing_admin_dashboard"),
 ]
 
 
-def _seed_task_dependencies(team, demo_user, tasks: List[TaskMaster]) -> None:
-    def _find(substr: str):
-        s = substr.lower()
-        for t in tasks:
-            if s in (t.title or "").lower():
-                return t
-        return None
+def _seed_task_dependencies(team, demo_user, tasks_by_key: dict) -> None:
+    """Seed the blocker→blocked edges whose both endpoints are in this
+    project, keyed by blueprint `"key"` rather than by title.
 
-    for blocker_sub, blocked_sub in _DEPENDENCY_EDGES:
-        blocker = _find(blocker_sub)
-        blocked = _find(blocked_sub)
+    `tasks_by_key` maps blueprint key → TaskMaster for one project's tasks.
+    A key that isn't present belongs to another project and is skipped —
+    which is how one shared edge list serves every project.
+    """
+    for blocker_key, blocked_key in _DEPENDENCY_EDGES:
+        blocker = tasks_by_key.get(blocker_key)
+        blocked = tasks_by_key.get(blocked_key)
         if not blocker or not blocked or blocker.task_id == blocked.task_id:
             continue
         TaskDependency.objects.get_or_create(
@@ -1507,6 +1584,12 @@ def _create_blueprint_tasks(
     Tasks are created via `.save()` rather than `bulk_create` so the
     post_save signal that sets `root_task_id` fires, and so the audit
     `TaskActivity` rows get populated for the demo's activity feed.
+
+    Returns the created tasks in blueprint order. A spec's optional
+    language-neutral `"key"` is copied onto the returned instance as
+    `_blueprint_key` so the caller can wire dependencies by key without a
+    second pass over the blueprint; specs without one (`starter_seeder`'s
+    blueprints) simply carry None.
     """
     today = date.today()
     created: List[TaskMaster] = []
@@ -1541,6 +1624,9 @@ def _create_blueprint_tasks(
             mentioned_user_ids=[],
             parent_task_id=parent_task_id,
         )
+        # Transient, never persisted: `TaskMaster` has no key column and
+        # should not — the key identifies a blueprint ENTRY, not a task.
+        task._blueprint_key = spec.get("key")
         created.append(task)
 
         comment_rows = []

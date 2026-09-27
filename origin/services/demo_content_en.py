@@ -175,6 +175,7 @@ PROJECT_BLUEPRINTS = [
         # the indicated task, not the backing.
         "tasks": [
             {
+                "key": "spike_framer_motion",
                 "title": "Spike: framer-motion vs native CSS animations for the redesign",
                 "status": "Closed",
                 "priority": "Low",
@@ -274,6 +275,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "migrate_marketing_pages",
                 "title": "Migrate marketing pages to design system v3",
                 "status": "Open",
                 "priority": "High",
@@ -342,6 +344,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "audit_marketing_pages",
                 "title": "Audit existing marketing pages",
                 "status": "Closed",
                 "priority": "Normal",
@@ -399,6 +402,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "build_hero_featuregrid",
                 "title": "Build Hero + FeatureGrid in design system v3",
                 "status": "WIP",
                 "priority": "High",
@@ -455,6 +459,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "responsive_navigation",
                 "title": "Implement responsive navigation with mobile drawer",
                 "status": "WIP",
                 "priority": "High",
@@ -508,6 +513,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "plausible_analytics",
                 "title": "Set up Plausible analytics with named events",
                 "status": "Open",
                 "priority": "Normal",
@@ -581,6 +587,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "accessibility_audit",
                 "title": "Accessibility audit and remediation pass",
                 "status": "Pending",
                 "priority": "Normal",
@@ -641,6 +648,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "slow_homepage_load",
                 "title": "Investigate slow homepage load on mobile Safari",
                 "status": "WIP",
                 "priority": "Normal",
@@ -795,6 +803,7 @@ PROJECT_BLUEPRINTS = [
         },
         "tasks": [
             {
+                "key": "synthesize_interviews",
                 "title": "Synthesize 12 customer interviews into themes",
                 "status": "WIP",
                 "priority": "High",
@@ -855,6 +864,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "schedule_interviews",
                 "title": "Schedule remaining 5 interviews",
                 "status": "Closed",
                 "priority": "Normal",
@@ -892,6 +902,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "code_recordings",
                 "title": "Code recordings into themes (Dovetail)",
                 "status": "WIP",
                 "priority": "High",
@@ -928,6 +939,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "competitor_analysis",
                 "title": "Competitor analysis: Notion, Slack, Linear",
                 "status": "Open",
                 "priority": "Normal",
@@ -981,6 +993,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "roadmap_proposal",
                 "title": "Roadmap proposal v1 — top 5 bets for Q3",
                 "status": "Open",
                 "priority": "High",
@@ -1034,6 +1047,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "onboarding_funnel",
                 "title": "Onboarding funnel teardown",
                 "status": "Pending",
                 "priority": "Normal",
@@ -1082,6 +1096,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "q3_okrs",
                 "title": "Define Q3 OKRs draft",
                 "status": "Open",
                 "priority": "High",
@@ -1114,6 +1129,7 @@ PROJECT_BLUEPRINTS = [
                 ],
             },
             {
+                "key": "stakeholder_map",
                 "title": "Update internal stakeholder map",
                 "status": "Open",
                 "priority": "Low",
@@ -1239,6 +1255,7 @@ PROJECT_BLUEPRINTS = [
                 },
                 "tasks": [
                     {
+                        "key": "billing_entitlements_matrix",
                         "title": "Define billing plans and entitlements matrix",
                         "status": "Open",
                         "priority": "Low",
@@ -1265,6 +1282,7 @@ PROJECT_BLUEPRINTS = [
                         ],
                     },
                     {
+                        "key": "payment_provider_sandbox",
                         "title": "Integrate payment provider sandbox",
                         "status": "WIP",
                         "priority": "Critical",
@@ -1290,6 +1308,7 @@ PROJECT_BLUEPRINTS = [
                         ],
                     },
                     {
+                        "key": "upgrade_downgrade_flow",
                         "title": "Build subscription upgrade and downgrade flow",
                         "status": "Open",
                         "priority": "Minimal",
@@ -1310,6 +1329,7 @@ PROJECT_BLUEPRINTS = [
                         "comments": [],
                     },
                     {
+                        "key": "usage_metering",
                         "title": "Usage metering pipeline for plan limits",
                         "status": "Open",
                         "priority": "Normal",
@@ -1330,6 +1350,7 @@ PROJECT_BLUEPRINTS = [
                         "comments": [],
                     },
                     {
+                        "key": "billing_admin_dashboard",
                         "title": "Billing admin dashboard for support",
                         "status": "Open",
                         "priority": "High",
@@ -1350,6 +1371,7 @@ PROJECT_BLUEPRINTS = [
                         "comments": [],
                     },
                     {
+                        "key": "invoice_pdf_templates",
                         "title": "Invoice PDF and receipt email templates",
                         "status": "Open",
                         "priority": "Critical",
