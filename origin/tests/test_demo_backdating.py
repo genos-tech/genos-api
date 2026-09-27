@@ -179,3 +179,338 @@ class DemoBackdatingTests(TestCase):
                 sent, root_sent, f"reply {pk} predates its parent {root_id}"
             )
         self.assertGreater(checked, 0, "no thread replies seeded — test proves nothing")
+
+    # -- task decision history -------------------------------------------
+    #
+    # `_replay_task_history` re-saves fields on already-created tasks so
+    # `task_signals` emits real `TaskActivity` rows. Its correctness claim
+    # is narrow and load-bearing: the audit trail gains history while the
+    # tasks' FINAL state is untouched, because `task_chunker` indexes
+    # `task_status` / `task_priority` and ~40 eval cases read them.
+
+    def test_task_history_ends_in_the_blueprint_state(self):
+        """The replay must leave every task in the state the blueprint
+        declares. If a restore step were dropped, tasks would silently
+        end in a mid-history state — changing the search index and the
+        eval fixture with no error anywhere."""
+        from origin.services.demo_seeder import _content
+
+        declared: dict = {}
+        for blueprint in _content("en").PROJECT_BLUEPRINTS:
+            specs = list(blueprint["tasks"])
+            for extra in blueprint.get("extra_milestones", []):
+                specs += list(extra["tasks"])
+            for spec in specs:
+                declared[spec["title"]] = (spec["status"], spec["priority"])
+
+        # `Blocked` is DERIVED from open blocker edges by
+        # `sync_blocked_status`, so those tasks legitimately differ from
+        # their declared status — the blueprint value is advisory there.
+        checked = 0
+        for task in TaskMaster.objects.filter(team=self.team_id):
+            if task.title not in declared or task.status == "Blocked":
+                continue
+            want_status, want_priority = declared[task.title]
+            checked += 1
+            self.assertEqual(
+                (task.status, task.priority),
+                (want_status, want_priority),
+                f"{task.title!r} ended at ({task.status}, {task.priority}) but the "
+                f"blueprint declares ({want_status}, {want_priority}) — a history "
+                "replay left the task in a mid-history state",
+            )
+        # 25 tasks, 7 of them Blocked-by-derivation and 3 milestone
+        # backing rows whose titles aren't in the task specs → 15 here.
+        self.assertGreaterEqual(checked, 15, "too few tasks checked — test proves little")
+
+    def test_tasks_have_real_activity_history(self):
+        """Without the replay every task's feed is a single 'created
+        this' row, which is the "workspace made 8 seconds ago" tell on
+        the one surface that renders a timeline."""
+        from origin.models.task.task_activity_models import TaskActivity
+
+        rows = TaskActivity.objects.filter(team=self.team_id)
+        changes = rows.exclude(action_type="created")
+        self.assertGreaterEqual(
+            changes.count(),
+            30,
+            "too few task CHANGES seeded — every task reads as born in its "
+            "final state, so its activity feed has no history to show",
+        )
+        # Spread across kinds: status-only history reads as a state
+        # machine, not as a team making different sorts of decisions.
+        kinds = set(changes.values_list("action_type", flat=True))
+        for expected in ("status_changed", "priority_changed", "assignee_changed"):
+            self.assertIn(expected, kinds, f"no {expected} rows in the demo's history")
+        # EVERY row needs an actor, `created` rows included. `_record`
+        # resolves it from a thread-local the seeder does not run through,
+        # so each writing site has to opt in via `_acting_as`: task and
+        # milestone creation, the dependency sweep (whose `sync_blocked_status`
+        # flip is a real recorded change), and the replay itself. A single
+        # site missed renders "Someone" on that whole class of row, sitting
+        # next to named ones — which reads as a bug, not as the system.
+        anonymous = rows.filter(actor=None)
+        self.assertEqual(
+            anonymous.count(),
+            0,
+            "activity rows with no actor render 'Someone' in the feed: "
+            f"{sorted(set(anonymous.values_list('action_type', flat=True)))}",
+        )
+
+    def test_activity_rows_spread_over_the_tasks_lifetime(self):
+        """All of a task's changes landing on one instant is the exact
+        artifact backdating exists to remove — and it was the original
+        behaviour here (every row took the task's creation date)."""
+        from origin.models.task.task_activity_models import TaskActivity
+
+        multi = 0
+        for task in TaskMaster.objects.filter(team=self.team_id):
+            stamps = list(
+                TaskActivity.objects.filter(task=task)
+                .order_by("activity_id")
+                .values_list("ts_created_at", flat=True)
+            )
+            if len(stamps) < 3:
+                continue
+            multi += 1
+            self.assertEqual(
+                stamps,
+                sorted(stamps),
+                f"{task.title!r}: activity rows are not in chronological order, so "
+                "the old→new values chain backwards in the feed",
+            )
+            self.assertGreater(
+                (stamps[-1] - stamps[0]).days,
+                1,
+                f"{task.title!r}: all {len(stamps)} changes happened within a day",
+            )
+            # A change can never predate the task it is on.
+            self.assertGreaterEqual(stamps[0], task.ts_created_at - timedelta(minutes=1))
+        self.assertGreater(multi, 5, "too few multi-change tasks — test proves little")
+
+    def test_no_field_history_returns_to_where_it_started(self):
+        """A chain that ends on the value it began with renders as
+        `High → Low → High`: a seeder looping, not a team deciding.
+
+        This is the defect the whole rewind exists to prevent, and it is
+        STRUCTURALLY the default. A task is inserted in its final state,
+        so a replay that starts there and restores there cannot help
+        ending where it began — every chain round-tripped before
+        `_replay_task_history` learned to rewind first. Nothing errors and
+        no count changes; only reading a rendered feed shows it.
+        """
+        from origin.models.task.task_activity_models import TaskActivity
+
+        checked = 0
+        for task in TaskMaster.objects.filter(team=self.team_id):
+            rows = (
+                TaskActivity.objects.filter(task=task)
+                .exclude(action_type="created")
+                .order_by("activity_id")
+                .values_list("field_name", "old_value", "new_value")
+            )
+            chains: dict = {}
+            for field, old, new in rows:
+                chains.setdefault(field, []).append((old, new))
+            for field, chain in chains.items():
+                checked += 1
+                self.assertNotEqual(
+                    chain[0][0],
+                    chain[-1][1],
+                    f"{task.title!r}: {field} history starts and ends at "
+                    f"{chain[0][0]!r} — {len(chain)} rows that undo themselves",
+                )
+        self.assertGreater(checked, 20, "too few field chains — test proves little")
+
+    def test_nothing_happens_to_a_task_after_it_closes(self):
+        """Closing is the last thing that happens to a task.
+
+        Two separate mechanisms conspire against this and neither raises.
+        A single `.save()` of several fields emits one row per field in
+        `_TRACKED_TASK_FIELDS` order, which puts `status` before
+        `priority` — so a restore that closed the task rendered "closed
+        this" and then "changed priority". And the backdating spread was
+        status-blind, dating changes on a task closed in July to last
+        week. Both read as a task still being triaged after it shipped.
+        """
+        from origin.models.task.task_activity_models import TaskActivity
+        from origin.services.task_blocking import CLOSED_STATUSES
+
+        checked = 0
+        for task in TaskMaster.objects.filter(team=self.team_id, status__in=CLOSED_STATUSES):
+            rows = list(
+                TaskActivity.objects.filter(task=task)
+                .order_by("activity_id")
+                .values_list("action_type", "field_name", "new_value", "ts_created_at")
+            )
+            closes = [
+                i
+                for i, (_a, field, new, _ts) in enumerate(rows)
+                if field == "status" and new in CLOSED_STATUSES
+            ]
+            if not closes:
+                continue
+            checked += 1
+            after = rows[closes[-1] + 1 :]
+            self.assertEqual(
+                after,
+                [],
+                f"{task.title!r} closed, then {len(after)} more things happened to "
+                f"it: {[r[0] for r in after]}",
+            )
+            # …and the close itself has to sit back in the task's own
+            # lifetime, not days ago on work that shipped months back.
+            age_at_close = (timezone.now() - rows[closes[-1]][3]).days
+            self.assertGreater(
+                age_at_close,
+                6,
+                f"{task.title!r} is Closed but was closed only {age_at_close}d ago",
+            )
+        self.assertGreater(checked, 1, "too few closed tasks with history — proves little")
+
+    def test_changes_are_not_all_the_visitors_own_doing(self):
+        """A workspace where every change was made by the visitor shows a
+        person working alone, not a team deciding together.
+
+        This is the failure the seeder's rule 4 raises on, and it is easy
+        to write by accident: the step that supplies a column's BIRTH value
+        emits no row (the rewind applies it silently), so naming Alice in
+        that step puts her nowhere in the feed. Three tasks shipped that
+        way — each naming a bot, each rendering as the demo user — and no
+        count noticed, because the rows were all present and all correctly
+        attributed to *somebody*.
+        """
+        from origin.models.task.task_activity_models import TaskActivity
+
+        changes = TaskActivity.objects.filter(team=self.team_id).exclude(action_type="created")
+        actors = set(changes.values_list("actor__username", flat=True))
+        self.assertGreaterEqual(
+            len(actors),
+            3,
+            f"only {sorted(actors)} appear in the whole workspace's change history",
+        )
+        # Per task, the assertion has to be the defect itself rather than a
+        # budget for it. Counting visitor-only feeds and allowing "a few"
+        # cannot work: three tasks are legitimately visitor-only (their
+        # history names nobody else), so any threshold loose enough to
+        # permit those is also loose enough to permit one real failure —
+        # which is exactly what it did when I first wrote it this way.
+        #
+        # So: a task whose blueprint NAMES a teammate must SHOW one.
+        from origin.services.demo_seeder import _TASK_HISTORY, _content
+
+        titles_by_key = {}
+        for blueprint in _content("en").PROJECT_BLUEPRINTS:
+            specs = list(blueprint["tasks"])
+            for extra in blueprint.get("extra_milestones", []):
+                specs += list(extra["tasks"])
+            for spec in specs:
+                if spec.get("key"):
+                    titles_by_key[spec["key"]] = spec["title"]
+
+        names_by_key: dict = {}
+        for key, actor, _field, _value in _TASK_HISTORY:
+            names_by_key.setdefault(key, set()).add(actor)
+
+        checked = 0
+        for key, named in names_by_key.items():
+            if not named - {"demo"} or key not in titles_by_key:
+                continue
+            task = TaskMaster.objects.filter(
+                team=self.team_id, title=titles_by_key[key]
+            ).first()
+            if task is None:
+                continue
+            shown = set(
+                TaskActivity.objects.filter(task=task)
+                .exclude(action_type="created")
+                .values_list("actor__username", flat=True)
+            )
+            checked += 1
+            self.assertTrue(
+                shown - {self.user.username},
+                f"{titles_by_key[key]!r}: history names {sorted(named - {'demo'})} but "
+                f"every row it emitted is the visitor's ({sorted(shown)}) — the steps "
+                "naming those teammates supplied birth values, which the rewind "
+                "applies silently",
+            )
+        self.assertGreater(checked, 10, "too few tasks name a teammate — proves little")
+
+    def test_the_board_was_not_all_touched_on_the_same_day(self):
+        """Per-task spread is not enough — the BOARD has to look staggered.
+
+        Each task's own changes were already spread across its lifetime,
+        and the aggregate still read as a batch job: every open task's
+        newest change landed on the same day, because the window stopped a
+        fixed 2 days short of `now` for all of them. A visitor scanning the
+        task list saw fourteen feeds that all ended "yesterday". Hence the
+        recency ladder, and hence this test — the defect is only visible
+        across tasks, so no per-task assertion can see it.
+        """
+        from origin.models.task.task_activity_models import TaskActivity
+
+        newest_ages = []
+        for task in TaskMaster.objects.filter(team=self.team_id):
+            latest = (
+                TaskActivity.objects.filter(task=task)
+                .exclude(action_type="created")
+                .order_by("-ts_created_at")
+                .values_list("ts_created_at", flat=True)
+                .first()
+            )
+            if latest is not None:
+                newest_ages.append((timezone.now() - latest).days)
+        self.assertGreater(len(newest_ages), 10, "too few tasks with changes — proves little")
+        # Counting DISTINCT days is the wrong measure, and I got it wrong
+        # once: the closed tasks are spread by a different rule (the
+        # first-third window), so they alone supply four or five distinct
+        # values while every open task still piles onto "yesterday". The
+        # defect is a MODE — one day holding most of the board — so the
+        # assertion has to be about the size of the largest cluster.
+        from collections import Counter
+
+        biggest_day, count = Counter(newest_ages).most_common(1)[0]
+        self.assertLessEqual(
+            count,
+            len(newest_ages) // 2,
+            f"{count} of {len(newest_ages)} tasks were last touched {biggest_day}d ago "
+            f"(all ages: {sorted(newest_ages)}) — the board reads as one batch job, "
+            "however well each individual feed is spread",
+        )
+
+    def test_created_row_agrees_with_the_history_that_follows_it(self):
+        """`task_record_changes` stamps the task's status into the CREATED
+        row's payload at insert time — which is its FINAL status, because
+        that is the state the seeder inserts. After the rewind the first
+        visible change starts from the task's birth state instead, so the
+        untouched payload would name a status the feed then "changes from"
+        something else. `_patch_created_status` realigns it.
+        """
+        from origin.models.task.task_activity_models import TaskActivity
+
+        checked = 0
+        for task in TaskMaster.objects.filter(team=self.team_id):
+            rows = list(
+                TaskActivity.objects.filter(task=task)
+                .order_by("activity_id")
+                .values_list("action_type", "field_name", "old_value", "new_value")
+            )
+            if not rows or rows[0][0] != "created":
+                continue
+            payload = rows[0][3]
+            if not isinstance(payload, dict):
+                continue
+            first_status = next(
+                (old for _a, field, old, _new in rows[1:] if field == "status"), None
+            )
+            if first_status is None:
+                continue
+            checked += 1
+            self.assertEqual(
+                payload.get("status"),
+                first_status,
+                f"{task.title!r}: created as {payload.get('status')!r} but its first "
+                f"status change reads 'from {first_status!r}' — the feed contradicts "
+                "its own first row",
+            )
+        self.assertGreater(checked, 3, "too few tasks with status history — proves little")

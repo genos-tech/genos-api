@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import date, timedelta
 from importlib import import_module
 from typing import List
@@ -38,6 +39,11 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
+from origin.middleware.current_user import (
+    clear_current_user,
+    get_current_user,
+    set_current_user,
+)
 from origin.models.chat.activity_models import ActivityFact
 from origin.models.chat.mention_models import MentionFact
 from origin.models.chat.reaction_models import ReactionFact
@@ -64,7 +70,7 @@ from origin.models.task.sprint_models import Sprint, SprintConfig
 # watched field change, so seeding a task produces activity rows stamped
 # "now". The backdating pass realigns them with their task so the
 # TaskActivityFeed doesn't contradict the task's own creation date.
-from origin.models.task.task_activity_models import TaskActivity
+from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskComments, TaskDependency, TaskMaster
 from origin.search_engine.models import AgentRun, AgentSession, RagChunk
 from origin.services.activity_suppression import suppress_task_activity
@@ -86,6 +92,7 @@ from origin.services.demo_blocks import (  # noqa: F401  (re-exported)
     _section,
     _text_body,
 )
+from origin.services.task_blocking import CLOSED_STATUSES
 
 # Bot peers. `first`/`last` stay ASCII in EVERY language: the eval
 # suites look these up by exact `attendee__username` match (~90 refs to
@@ -642,6 +649,22 @@ def _timeline(count: int, *, oldest_days_ago: int, newest_days_ago: int, now):
     return [min(ts, now - timedelta(minutes=1)) for ts in out]
 
 
+# How recently each OPEN task was last touched, cycled by task order.
+#
+# A single "stop 2 days short of now" rule is right per task and wrong
+# across the board: it stamps every open task's newest change on the same
+# day, so a visitor scanning the task list sees fourteen feeds that all end
+# "yesterday". Per-task spread looked correct and the aggregate still read
+# as a batch job — the tell this whole pass exists to remove.
+#
+# Cycling a few depths instead gives the board a front (touched this week)
+# and a back (quiet for a fortnight), which is what a real team's board
+# looks like. Deterministic, like every other stamp here: indexed by task
+# order, not randomised, so a reseed reproduces the same dataset. Capped
+# below the task's own age at the call site, so a 2-day-old task cannot be
+# handed a 16-day-old change.
+_RECENCY_LADDER = (1, 4, 2, 9, 3, 16, 6, 11)
+
 # Per-channel history spans, as (oldest_days_ago, newest_days_ago).
 #
 # These are what turn "a pile of messages" into a chronology. The DM with
@@ -846,10 +869,49 @@ def _backdate_project_tasks(project, now) -> None:
     # The audit feed the frontend renders (TaskActivityFeed) — created by
     # the post_save signals during seeding, so every row says "now".
     # Not indexed by any chunker, so this is pure display.
-    for pk, created in TaskMaster.objects.filter(project=project).values_list(
-        "pk", "ts_created_at"
+    #
+    # The FIRST row of a task is its `created` event and belongs exactly on
+    # the task's creation date; the rest are the decisions replayed by
+    # `_replay_task_history` and have to spread FORWARD from there, or a
+    # task that was re-prioritised three times shows three changes at the
+    # same instant three months ago — which reads as a seeding artifact,
+    # the precise impression this pass exists to remove. Ordering by
+    # `activity_id` preserves replay order, so old→new values still chain
+    # (Low → Normal → High reads in that order, never shuffled).
+    for index, (pk, created, status) in enumerate(
+        TaskMaster.objects.filter(project=project)
+        .order_by("task_id")
+        .values_list("pk", "ts_created_at", "status")
     ):
-        TaskActivity.objects.filter(task_id=pk).update(ts_created_at=created)
+        act_pks = list(
+            TaskActivity.objects.filter(task_id=pk)
+            .order_by("activity_id")
+            .values_list("pk", flat=True)
+        )
+        if not act_pks:
+            continue
+        created_age = max((now - created).days, 0)
+        # Changes land between the task's creation and now, stopping short
+        # of the present so the newest change isn't stamped "just now" on
+        # a workspace the visitor has never touched.
+        #
+        # CLOSED tasks stop earlier, for the same reason their comments do
+        # (see the comment pass below): nobody re-prioritises a task that
+        # shipped two months ago, so a `priority` change dated last week on
+        # a task closed in July is a seeding tell. Same first-third window
+        # as the comments, so a closed task's changes and its discussion
+        # wrap up together instead of drifting apart.
+        if (status or "") in CLOSED_STATUSES:
+            newest_days_ago = max(created_age - max(created_age // 3, 1), 7)
+        else:
+            newest_days_ago = _RECENCY_LADDER[index % len(_RECENCY_LADDER)]
+        stamps = [created] + _timeline(
+            len(act_pks) - 1,
+            oldest_days_ago=max(created_age - 1, 1),
+            newest_days_ago=min(newest_days_ago, max(created_age - 1, 1)),
+            now=now,
+        )
+        _backdate_each(TaskActivity, dict(zip(act_pks, stamps)), "ts_created_at")
 
     # Comments: spread between their task's creation and now, so a
     # comment can never predate the task it is on.
@@ -873,7 +935,7 @@ def _backdate_project_tasks(project, now) -> None:
         if not comment_pks:
             continue
         age = max((now - created).days, 1)
-        if (status or "") in ("Closed", "Deleted"):
+        if (status or "") in CLOSED_STATUSES:
             # Wrap up in the first third of the task's life, and never
             # closer than a week to the present.
             newest = max(age - max(age // 3, 1), 7)
@@ -1098,6 +1160,30 @@ def create_demo_environment(
             )
             seeded_projects.append(seeded)
 
+        # `_TASK_HISTORY` names tasks by blueprint key, and a key matching
+        # no task in THIS project is skipped rather than raising — that skip
+        # is what lets one shared list serve every project (same contract as
+        # `_DEPENDENCY_EDGES`). The cost is that a mistyped key degrades
+        # silently to a quieter activity feed, which no row count would
+        # flag. So check the thing that actually goes wrong: a key that
+        # resolved in *no* project at all.
+        #
+        # Checked here rather than by counting applied steps, because the
+        # step count is a property of the data (a step whose value already
+        # holds is a no-op, and the rewind below makes each column's first
+        # step silent) — a count floor would need re-tuning on every
+        # mechanism change and would say nothing about which key broke.
+        seeded_keys: set = set()
+        for seeded in seeded_projects:
+            seeded_keys |= seeded["history_keys"]
+        orphans = sorted({step[0] for step in _TASK_HISTORY} - seeded_keys)
+        if orphans:
+            raise RuntimeError(
+                f"_TASK_HISTORY names task keys that exist in no blueprint: {orphans} "
+                "— they were silently skipped, leaving those tasks with an empty "
+                "activity feed. Fix the key or drop the steps."
+            )
+
         # 11. DMs + thread messages
         _create_dms(team, demo_user, bots, content)
 
@@ -1320,20 +1406,31 @@ def _create_project_from_blueprint(
     sprint = _create_sprint(
         team, project, prior_sprints=2, name_template=content.SPRINT_NAME
     )
-    milestone, backing_task = _create_milestone_with_backing_task(
-        team, project, sprint, demo_user, bots, blueprint["milestone"]
-    )
-
-    tasks = _create_blueprint_tasks(
-        team,
-        project,
-        sprint,
-        milestone,
-        backing_task,
-        demo_user,
-        bots,
-        blueprint["tasks"],
-    )
+    # Everything below writes `TaskActivity` rows through the post_save
+    # signals, and the audit row's actor comes from the thread-local, NOT
+    # from the `reporter` column each task is given. Without this every
+    # `created` row renders "Someone filed this" while the replayed changes
+    # right beneath it name real people — and the anonymous half reads as a
+    # bug rather than as system behaviour.
+    #
+    # Set here, at the demo call site, rather than inside the helpers:
+    # `_create_blueprint_tasks` and `_create_milestone_with_backing_task`
+    # are cross-imported by `starter_seeder`, which seeds real customer
+    # workspaces and must keep whatever actor its own request supplies.
+    with _acting_as(demo_user):
+        milestone, backing_task = _create_milestone_with_backing_task(
+            team, project, sprint, demo_user, bots, blueprint["milestone"]
+        )
+        tasks = _create_blueprint_tasks(
+            team,
+            project,
+            sprint,
+            milestone,
+            backing_task,
+            demo_user,
+            bots,
+            blueprint["tasks"],
+        )
 
     # Optional additional milestones (same spec shape as the main one,
     # each with its own task list). Used for the deliberately messy
@@ -1342,19 +1439,20 @@ def _create_project_from_blueprint(
     extra_milestones = []
     all_project_tasks: List[TaskMaster] = list(tasks)
     for extra in blueprint.get("extra_milestones", []):
-        extra_ms, extra_backing = _create_milestone_with_backing_task(
-            team, project, sprint, demo_user, bots, extra["milestone"]
-        )
-        extra_tasks = _create_blueprint_tasks(
-            team,
-            project,
-            sprint,
-            extra_ms,
-            extra_backing,
-            demo_user,
-            bots,
-            extra["tasks"],
-        )
+        with _acting_as(demo_user):
+            extra_ms, extra_backing = _create_milestone_with_backing_task(
+                team, project, sprint, demo_user, bots, extra["milestone"]
+            )
+            extra_tasks = _create_blueprint_tasks(
+                team,
+                project,
+                sprint,
+                extra_ms,
+                extra_backing,
+                demo_user,
+                bots,
+                extra["tasks"],
+            )
         extra_milestones.append({"backing_task": extra_backing, "tasks": extra_tasks})
         all_project_tasks += [extra_backing, *extra_tasks]
 
@@ -1363,11 +1461,24 @@ def _create_project_from_blueprint(
     # the substrate the GraphRAG eval cases (Q2.4) measure against.
     # Keyed by the blueprint's language-neutral `"key"` — see
     # `_DEPENDENCY_EDGES` for why titles cannot be used.
-    _seed_task_dependencies(
-        team,
-        demo_user,
-        {t._blueprint_key: t for t in all_project_tasks if getattr(t, "_blueprint_key", None)},
-    )
+    tasks_by_key = {
+        t._blueprint_key: t for t in all_project_tasks if getattr(t, "_blueprint_key", None)
+    }
+    # Attributed, because adding a blocker edge makes `sync_blocked_status`
+    # flip the blocked task to `Blocked`, which the signals record as a real
+    # status change. Unattributed it renders "Someone marked this Blocked"
+    # on seven tasks — and those rows sit right next to named ones, so the
+    # anonymous half reads as a bug rather than as system behaviour.
+    with _acting_as(demo_user):
+        _seed_task_dependencies(team, demo_user, tasks_by_key)
+
+    # Replay the decisions made ABOUT these tasks, so each one's activity
+    # feed shows a history instead of a single "created this". Must run
+    # AFTER the dependency edges above: `sync_blocked_status` derives
+    # `Blocked` from open blocker edges, and a status replay crossing the
+    # blocking boundary re-runs that derivation — with the edges already
+    # in place it settles on the same answer the edges imply.
+    history_keys = _replay_task_history(tasks_by_key, demo_user, bots, _TASK_HISTORY)
 
     return {
         "project": project,
@@ -1375,6 +1486,7 @@ def _create_project_from_blueprint(
         "tasks": tasks,
         "backing_task": backing_task,
         "extra_milestones": extra_milestones,
+        "history_keys": history_keys,
     }
 
 
@@ -1442,6 +1554,405 @@ def _seed_task_dependencies(team, demo_user, tasks_by_key: dict) -> None:
             blocked_task=blocked,
             defaults={"team": team, "created_by": demo_user},
         )
+
+
+# Task history: the decisions a team makes ABOUT a task, not just its
+# final state.
+#
+# Without this every seeded task is born in the state it ends in, so its
+# TaskActivityFeed reads "created this" and nothing else — 25 `created`
+# rows and 7 incidental `status_changed` across a whole workspace. A real
+# product team re-prioritises, parks work, pulls in dates and reassigns,
+# and that record is most of what makes a three-month workspace look
+# three months old. A task that was always High and always Open has no
+# story; one that went Normal → High when a customer escalated, then
+# Pending when the dependency slipped, does.
+#
+# Why REPLAY saves instead of writing TaskActivity rows directly: the
+# rows are emitted by `task_signals` from a pre/post-save diff, so
+# replaying the change produces exactly the shape the real app produces —
+# correct `field_name`, correct old→new pair, correct actor — and cannot
+# drift from the frontend's render contract (`TaskActivityFeed` keys its
+# chip colours and relation labels off `field_name`). Hand-written rows
+# would be a second, silently-diverging implementation of that contract.
+#
+# Each step is (task_key, actor_key, field, value) and describes the state
+# the task PASSED THROUGH, in order. The final state is the blueprint's,
+# not the list's: `_replay_task_history` walks these values and then
+# restores whatever the blueprint declared, so the search index — which
+# stores only the final `task_status` / `task_priority` (task_chunker.py)
+# — is unchanged by construction. No chunker indexes TaskActivity at all,
+# so this whole surface is display-only and carries no retrieval risk.
+#
+# Three authoring rules, each learned from a bad first draft:
+#
+#  1. **Never name the blueprint's own final value in a step.** The
+#     restore step supplies it. Writing it explicitly produces a visible
+#     `High → Low → High` round-trip in the feed, which reads as a seeder
+#     looping rather than a team deciding.
+#  2. **Never set `status` on a task whose final status is `Blocked`.**
+#     `Blocked` is DERIVED from open blocker edges by `sync_blocked_status`
+#     (see `_DEPENDENCY_EDGES`), so a status replay on one of those seven
+#     tasks fights the derivation and lands wherever the last writer won.
+#     Change their priority or assignee instead.
+#  3. **Keep step counts under the task's age in days.** `_backdate_history`
+#     spreads a task's activity between its creation and now; six changes
+#     on a two-day-old task compress into one afternoon.
+_TASK_HISTORY = [
+    # --- Website Redesign -------------------------------------------------
+    # The framer-motion spike is the workspace's SPINE: it is the decision
+    # the DM, the GM and the decision note all cite, and the one a visitor
+    # is most likely to open. So it gets the fullest history — filed as a
+    # side investigation, escalated when the bundle number landed, then
+    # closed. Ends Closed/Low: low because once it was decided the spike
+    # itself stopped mattering, which is exactly what the feed should show.
+    ("spike_framer_motion", "bot2", "priority", "Normal"),
+    ("spike_framer_motion", "bot1", "status", "WIP"),
+    ("spike_framer_motion", "bot2", "priority", "High"),
+    # The audit that fed the migration. Closed, so its changes wrap up in
+    # the first third of its life alongside its comments.
+    ("audit_marketing_pages", "demo", "priority", "Low"),
+    ("audit_marketing_pages", "demo", "status", "WIP"),
+    # Hero + FeatureGrid is Blocked-derived (rule 2) — priority only. It was
+    # the first thing scheduled after the spike settled, then had to wait.
+    ("build_hero_featuregrid", "bot2", "priority", "Normal"),
+    # The accessibility pass is also Blocked-derived. Dan picked it up from
+    # Carol once it became a remediation job rather than a review.
+    ("accessibility_audit", "bot2", "assignee", "bot2"),
+    # The launch blocker that started life as routine cleanup. Filed Low by
+    # Bob; escalated once the trace showed it was the design-system cutover.
+    # Only 2 days old, so it gets ONE change (rule 3).
+    ("slow_homepage_load", "bot1", "priority", "Low"),
+    # Plausible analytics: scope grew when marketing asked for named events,
+    # then settled back once it was split out. Ends Normal per blueprint.
+    ("plausible_analytics", "bot1", "priority", "Low"),
+    ("plausible_analytics", "bot0", "priority", "High"),
+    # The nav work was Carol's while it was a drawer prototype, then became
+    # engineering's. Ends WIP/bot1 per blueprint.
+    ("responsive_navigation", "bot2", "assignee", "bot2"),
+    ("responsive_navigation", "bot2", "status", "Open"),
+    # Marketing-page migration: pulled its date in when the launch firmed up.
+    ("migrate_marketing_pages", "demo", "due_offset", 21),
+    ("migrate_marketing_pages", "bot1", "priority", "Normal"),
+    # --- Q2 Roadmap -------------------------------------------------------
+    # Competitor analysis was started, then de-prioritised when the
+    # interviews took over — the "let's park this" case. Ends Open/Normal.
+    ("competitor_analysis", "demo", "priority", "High"),
+    ("competitor_analysis", "demo", "status", "WIP"),
+    ("competitor_analysis", "bot0", "priority", "Low"),
+    ("competitor_analysis", "demo", "status", "Open"),
+    # Q3 OKRs: Alice drafted it and pushed the date out as the quarter
+    # slipped; it came back to the visitor escalated, with the date pulled in.
+    ("q3_okrs", "demo", "due_offset", 30),
+    ("q3_okrs", "bot0", "priority", "Normal"),
+    ("q3_okrs", "bot0", "assignee", "bot0"),
+    ("q3_okrs", "bot0", "due_offset", 40),
+    ("q3_okrs", "demo", "priority", "High"),
+    # Onboarding funnel: escalated, then parked pending the synthesis —
+    # which is exactly what its `Pending` status means. Ends Pending/Normal.
+    ("onboarding_funnel", "demo", "priority", "High"),
+    ("onboarding_funnel", "bot3", "status", "WIP"),
+    ("onboarding_funnel", "demo", "priority", "Critical"),
+    ("onboarding_funnel", "bot3", "status", "Pending"),
+    # Stakeholder map quietly dropped down the list. Nobody's fault.
+    ("stakeholder_map", "demo", "priority", "Normal"),
+    ("stakeholder_map", "bot0", "status", "WIP"),
+    # Interview synthesis: the date moved twice as recruiting slipped.
+    ("synthesize_interviews", "bot0", "due_offset", 3),
+    ("synthesize_interviews", "demo", "priority", "Normal"),
+    ("synthesize_interviews", "bot0", "due_offset", 12),
+    # The two milestone children under Q2 Discovery Sprint. Neither is
+    # blocked-derived, so both can take status. Recruiting ran long and the
+    # scheduling task was escalated before it closed; the coding job grew
+    # once it became synthesis rather than transcription.
+    #
+    # Note the actor ORDER matters here, not just the set. A history with
+    # one step per column supplies every column's birth value and so emits
+    # no replay rows at all — only the closing restore, which is attributed
+    # to the LAST step's actor. Put the person who should own the visible
+    # change last, or the whole feed reads as the demo user's own doing.
+    ("schedule_interviews", "demo", "priority", "Low"),
+    ("schedule_interviews", "bot0", "status", "WIP"),
+    ("code_recordings", "demo", "status", "Open"),
+    ("code_recordings", "bot0", "priority", "Normal"),
+    # --- Billing & Plans Revamp (the messy organize-demo milestone) -------
+    # This milestone is DELIBERATELY inconsistent — the organize demo's
+    # premise is that priorities contradict dependency order. The history
+    # shows that mess ACCUMULATING (each change locally reasonable) rather
+    # than arriving fully formed, which is what makes the AI's later
+    # "these priorities disagree with your dependencies" land.
+    #
+    # Four of the six are Blocked-derived, so priority/assignee only
+    # (rule 2): upgrade_downgrade_flow, payment_provider_sandbox,
+    # usage_metering, billing_admin_dashboard.
+    ("upgrade_downgrade_flow", "bot1", "priority", "Low"),
+    ("upgrade_downgrade_flow", "bot0", "priority", "Critical"),
+    ("payment_provider_sandbox", "demo", "priority", "Normal"),
+    ("payment_provider_sandbox", "demo", "assignee", "bot0"),
+    ("payment_provider_sandbox", "bot1", "priority", "High"),
+    ("usage_metering", "bot1", "priority", "High"),
+    ("billing_admin_dashboard", "demo", "priority", "Low"),
+    # These two are NOT blocked, so status is fair game.
+    ("billing_entitlements_matrix", "bot0", "priority", "Normal"),
+    ("billing_entitlements_matrix", "bot1", "status", "WIP"),
+    ("invoice_pdf_templates", "bot0", "priority", "Normal"),
+]
+
+# Fields a history step may touch, mapped to the TaskMaster column. A
+# step naming anything else is a blueprint bug and raises (see below) —
+# silently ignoring it would mean the feed just quietly lacks the row.
+_HISTORY_FIELDS = {
+    "status": "status",
+    "priority": "priority",
+    "assignee": "assignee_id",
+    "due_offset": "due_date",
+}
+
+# Tasks whose final status is derived, not declared — see rule 2 above.
+_DERIVED_STATUS_KEYS = frozenset(blocked for _, blocked in _DEPENDENCY_EDGES)
+
+
+
+def _replay_task_history(tasks_by_key: dict, demo_user, bots, history) -> set:
+    """Replay per-task decisions so the audit feed has real history.
+
+    Each task is first rewound (silently) to the earliest state its history
+    names, then each subsequent step re-saves one field with a specific
+    actor, which makes `task_signals` emit the matching `TaskActivity` row.
+    The task is finally landed back on its blueprint state, so **only the
+    audit trail changes** — every task still ends in the
+    status/priority/assignee the blueprint declares, which is what the
+    search index and every eval case actually read.
+
+    Returns the set of blueprint keys whose history was applied, so the
+    caller can tell a key that matched no project at all (a typo) from one
+    that matched a different project (normal — the same list is applied
+    per-project).
+
+    Raises on a blueprint that violates the authoring rules above rather
+    than seeding a feed that reads wrong. Each of these was a real defect
+    in the first draft, and every one of them is invisible in aggregate
+    counts — only reading the rendered feed finds them, so they are
+    asserted here instead.
+    """
+    applied = 0
+    # Group by task so each task is restored exactly once, after all of
+    # its steps — restoring between steps would double every row.
+    steps_by_task: dict = {}
+    for task_key, actor_key, field, value in history:
+        if task_key not in tasks_by_key:
+            # Belongs to another project's blueprint; the same list is
+            # applied per-project, same contract as `_DEPENDENCY_EDGES`.
+            continue
+        if field not in _HISTORY_FIELDS:
+            raise ValueError(
+                f"_TASK_HISTORY step for {task_key!r} names unknown field {field!r}; "
+                f"expected one of {sorted(_HISTORY_FIELDS)}"
+            )
+        # Rule 2: a status replay on a task whose status is DERIVED from
+        # dependency edges fights `sync_blocked_status` and lands
+        # nondeterministically — the loser is whichever wrote last.
+        if field == "status" and task_key in _DERIVED_STATUS_KEYS:
+            raise ValueError(
+                f"_TASK_HISTORY sets status on {task_key!r}, whose status is derived "
+                "from its blocker edges by sync_blocked_status. Change priority or "
+                "assignee instead, or remove the dependency edge."
+            )
+        steps_by_task.setdefault(task_key, []).append((actor_key, field, value))
+
+    for task_key, steps in steps_by_task.items():
+        task = tasks_by_key[task_key]
+        # Reload the whole row before touching it. `sync_blocked_status`
+        # wrote `status` via a queryset `.update()` during dependency
+        # seeding, which leaves the in-memory instance stale — and a stale
+        # instance does not merely restore a wrong value, it makes the
+        # signal INVENT one: `pre_save` snapshots the DB row while
+        # `post_save` diffs the instance, so any tracked field that drifted
+        # yields a phantom `Blocked → Open` row on the next save of an
+        # unrelated field. That row claims a change the DB never made.
+        #
+        # Refreshing only the columns this task's history touches is not
+        # enough — the diff covers every field in `_TRACKED_TASK_FIELDS`,
+        # so the reload has to be as wide as the diff.
+        task.refresh_from_db()
+        touched = {field for _, field, _ in steps}
+        final = {_HISTORY_FIELDS[f]: getattr(task, _HISTORY_FIELDS[f]) for f in touched}
+
+        # Resolve every step to a concrete column value up front, so the
+        # birth state below can be read off the same list the replay walks.
+        resolved_steps = []
+        for actor_key, field, value in steps:
+            column = _HISTORY_FIELDS[field]
+            if field == "assignee":
+                resolved = _resolve_user(value, demo_user, bots)
+                new_value = resolved.id if resolved else None
+            elif field == "due_offset":
+                new_value = date.today() + timedelta(days=int(value))
+            else:
+                new_value = value
+            resolved_steps.append((actor_key, column, new_value))
+
+        # The BIRTH state: the first value each touched column passes
+        # through. Applied with a queryset `.update()` so `task_signals`
+        # emits nothing — the task has to *look* born here, and its
+        # `created` row is already written.
+        #
+        # This rewind is what keeps the feed from round-tripping. The task
+        # is inserted in its FINAL state, so a replay that starts there and
+        # restores there cannot help ending where it began: every chain
+        # rendered `High → Low → High`, which reads as a seeder looping
+        # rather than a team deciding. Rewinding first makes the visible
+        # chain strictly forward — birth → … → blueprint.
+        #
+        # Safe against `sync_blocked_status` because rule 2 above forbids
+        # `status` steps on derived-status tasks, so `status` is never in
+        # `birth` for one of those seven. `.update()` also names only these
+        # columns, so `ts_updated_at` is untouched and the row stays
+        # indexable (the invariant `test_index_timestamps_stay_fresh` pins).
+        birth: dict = {}
+        for _, column, new_value in resolved_steps:
+            birth.setdefault(column, new_value)
+
+        # Rule 1, generalised: a chain that starts where it ends IS the
+        # round-trip, whatever its length. Checked per column against the
+        # birth value rather than against every step, because an
+        # intermediate value equal to the final one is fine — a task that
+        # goes High → Low → High → Normal reads as a real argument.
+        for column, value in birth.items():
+            if final.get(column) == value:
+                raise ValueError(
+                    f"_TASK_HISTORY starts {task_key!r}'s {column!r} history at "
+                    f"{value!r}, which is also the blueprint's final value — the "
+                    "chain would return to where it began and render as a "
+                    "round-trip. Make the first step a state the task has since left."
+                )
+
+        TaskMaster.objects.filter(pk=task.pk).update(**birth)
+        for column, value in birth.items():
+            setattr(task, column, value)
+        if "status" in birth:
+            _patch_created_status(task, birth["status"])
+
+        # Visible replay: every step except the one that supplied its
+        # column's birth value, which is already in place and would emit
+        # nothing (the signal diffs).
+        born: set = set()
+        actors_seen: set = set()
+        for actor_key, column, new_value in resolved_steps:
+            if column not in born:
+                born.add(column)
+                continue
+            if getattr(task, column) == new_value:
+                # A no-op save emits no activity row, so skip it rather
+                # than counting a step that did nothing.
+                continue
+            actor = _resolve_user(actor_key, demo_user, bots)
+            setattr(task, column, new_value)
+            _save_as(task, actor, update_fields=[column])
+            applied += 1
+            actors_seen.add(actor.id if actor else None)
+
+        # Land on the blueprint end state. Attributed to the same actor
+        # who made the last change, which reads naturally in the feed.
+        last_actor = _resolve_user(steps[-1][0], demo_user, bots)
+        restore = {c: v for c, v in final.items() if getattr(task, c) != v}
+        if restore:
+            # A restore that CLOSES the task is written in its own save,
+            # after the others. One save emits one row per changed field in
+            # `_TRACKED_TASK_FIELDS` order, which puts `status` before
+            # `priority` — so a closing restore rendered "closed this" and
+            # then "changed priority", i.e. a task still being triaged
+            # after it shipped. Closing is the last thing that happens to a
+            # task, and the feed has to say so.
+            closing = (
+                {"status": restore.pop("status")}
+                if restore.get("status") in CLOSED_STATUSES
+                else {}
+            )
+            for group in (restore, closing):
+                if not group:
+                    continue
+                for column, value in group.items():
+                    setattr(task, column, value)
+                _save_as(task, last_actor, update_fields=list(group))
+                applied += len(group)
+                actors_seen.add(last_actor.id if last_actor else None)
+
+        # Rule 4: the feed must show somebody other than the visitor.
+        #
+        # Every step's actor is wishful until the replay runs, because the
+        # step that supplies a column's BIRTH value emits no row — it is
+        # applied by the silent rewind. So a task whose history names one
+        # step per column emits only the closing restore, attributed to the
+        # LAST step's actor, and the named bots in the earlier steps never
+        # appear at all. That reads as the demo visitor having quietly done
+        # everything themselves, which is the opposite of the collaboration
+        # the workspace exists to show — and it is invisible to every count,
+        # since the rows are all present and correctly attributed to
+        # *someone*. Checked against rows actually written, not intent.
+        if actors_seen and actors_seen == {demo_user.id}:
+            named = {actor for actor, _f, _v in steps}
+            if named - {"demo"}:
+                raise ValueError(
+                    f"_TASK_HISTORY names {sorted(named - {'demo'})} on {task_key!r} but "
+                    "every row it emitted is the demo user's: the steps naming those "
+                    "actors supplied birth values, which the rewind applies silently. "
+                    "Reorder so a bot's step is last, or add a second step on one of "
+                    "its columns."
+                )
+
+    return set(steps_by_task)
+
+
+def _patch_created_status(task, status: str) -> None:
+    """Keep the `created` row's payload consistent with the rewind.
+
+    `task_record_changes` stamps `{"title", "status", "is_milestone"}` into
+    the CREATED row at insert time, so it names the task's FINAL status —
+    which contradicts a feed whose first visible change starts from the
+    birth state. `status` is the only key of the three that any history
+    step touches, so correcting it is complete.
+    """
+    row = (
+        TaskActivity.objects.filter(task=task, action_type=TaskActivityActionType.CREATED)
+        .order_by("activity_id")
+        .first()
+    )
+    if row is None or not isinstance(row.new_value, dict):
+        return
+    payload = dict(row.new_value)
+    if payload.get("status") == status:
+        return
+    payload["status"] = status
+    TaskActivity.objects.filter(pk=row.pk).update(new_value=payload)
+
+
+@contextmanager
+def _acting_as(actor):
+    """Attribute audit rows written in this block to `actor`.
+
+    `task_signals._record` reads the actor from the thread-local set by
+    `CurrentUserMiddleware`, which the seeder never runs through — so
+    without this every seeded activity row has `actor=None` and the feed
+    renders "Someone" against each change. Restores the previous value
+    rather than clearing, so nesting is safe and a caller that WAS inside
+    a request keeps its actor.
+    """
+    previous = get_current_user()
+    set_current_user(actor)
+    try:
+        yield
+    finally:
+        if previous is not None:
+            set_current_user(previous)
+        else:
+            clear_current_user()
+
+
+def _save_as(task, actor, *, update_fields):
+    """`task.save()` attributed to `actor` in the audit trail."""
+    with _acting_as(actor):
+        task.save(update_fields=update_fields)
 
 
 def _create_sprint(

@@ -766,6 +766,53 @@ PROJECT_BLUEPRINTS = [
                 "bot1",
                 "Sounds good. I'll keep the About migration small enough to ship Friday so we have something to review.",
             ),
+            # --- Decision: de-scope under time pressure. The interesting
+            # shape is that the team changes the ACCEPTANCE CONDITION
+            # rather than the date — "ship 3 of 4 pages" is a different
+            # answer from "ship late", and the reasoning is recorded.
+            (
+                "bot1",
+                "Reality check on Sprint 2: the Pricing page has a comparison table that isn't in the design system yet. Building that component properly is 3-4 days on its own.",
+            ),
+            (
+                "demo",
+                "Then we're not shipping four pages. What's the least bad option — hold the soft launch, or launch with three?",
+            ),
+            (
+                "bot0",
+                "Marketing can work with three as long as Pricing isn't one of the missing ones. That's the page the press pitch links to.",
+            ),
+            (
+                "bot1",
+                "Pricing is exactly the one at risk. Swapping: I'll ship Pricing with a simplified table — no feature-comparison matrix, just the three plan cards — and we file the matrix separately.",
+            ),
+            (
+                "demo",
+                "Do that. Soft launch keeps its date, Pricing ships with the simplified table, and the comparison matrix becomes its own task in Sprint 3. Changing the acceptance criteria on the migration task to say three pages plus simplified Pricing.",
+            ),
+            (
+                "bot3",
+                "Flagging for the audit: a simplified table still needs a proper header association or screen readers read it as a grid of numbers. I'd rather that not be the thing we discover at launch.",
+            ),
+            (
+                "bot1",
+                "Noted — I'll mark up the headers as part of the simplified version rather than leaving it for the remediation pass.",
+            ),
+            # --- Decision: explicitly PEND work, with the condition that
+            # would un-pend it. "Blocked" and "we chose to stop" look the
+            # same on a board but are different decisions.
+            (
+                "bot2",
+                "Separate question: do you still want the photo variant of the hero? I've had it parked for two weeks and it'll go stale if the brand shoot gets rescheduled again.",
+            ),
+            (
+                "demo",
+                "Park it properly rather than carrying it. We go with the gradient variant for launch. If the brand shoot lands before Sprint 3 closes we revisit; otherwise it's a post-launch change.",
+            ),
+            (
+                "bot2",
+                "Works for me. I'd rather have that written down than keep it half-alive in Figma.",
+            ),
         ],
         "pm_thread": {
             "parent_index": 4,  # demo's "Targeting end of Sprint 2..." message
@@ -1191,6 +1238,53 @@ PROJECT_BLUEPRINTS = [
                 "Working backward from leadership review: proposal needs to land in 3 weeks. Tight but doable if synthesis stays on track.",
             ),
             ("bot0", "Yep. Will flag immediately if any interview slips and pushes the timeline."),
+            # --- Decision: a priority REVERSAL, argued and then reversed
+            # again on new evidence. This is the shape the demo was
+            # missing — not "we decided X" but "we decided X, then Y
+            # changed our mind, and here is what Y was".
+            (
+                "bot0",
+                "Two interviews slipped to next week — both enterprise accounts. I can either wait and have complete coverage, or synthesise 10 of 12 now and treat the enterprise segment as a gap.",
+            ),
+            (
+                "demo",
+                "What do the 10 we have skew toward?",
+            ),
+            (
+                "bot0",
+                "Small teams, 8 of 10 under 20 seats. Which is a problem, because the Q3 bets we're most likely to fund are the ones enterprise would push back on.",
+            ),
+            (
+                "demo",
+                "Then waiting is worth a week. Moving the synthesis date out and pulling the competitor teardown forward to fill the gap — I'd rather the proposal be late and right than on time and skewed toward small teams.",
+            ),
+            (
+                "bot3",
+                "If the teardown moves up I'll lose the onboarding funnel work this sprint. It's already gated on the Plausible events, so it was going to be tight anyway.",
+            ),
+            (
+                "demo",
+                "Accepted — funnel teardown slips to Sprint 3. That's a real cost and I want it recorded rather than quietly rescheduled.",
+            ),
+            # --- Decision: adding a CONDITION to an existing decision,
+            # rather than reversing it. The Q3 bets stay five; what
+            # changes is what has to be true for one of them to count.
+            (
+                "bot0",
+                "One more on the proposal format: last quarter we listed bets with no cost attached and the review turned into a debate about whether any of them were affordable.",
+            ),
+            (
+                "demo",
+                "Fair. New condition on the proposal: every bet carries a rough engineering cost in weeks and names what we'd stop doing to fund it. Still five bets — but a bet without a trade-off named isn't a bet, it's a wish.",
+            ),
+            (
+                "bot1",
+                "I can give you order-of-magnitude estimates but not much better than that this early. Half a sprint, one sprint, multiple sprints.",
+            ),
+            (
+                "demo",
+                "That's the resolution I want. Precision here would be false anyway.",
+            ),
         ],
         "pm_thread": {
             "parent_index": 2,  # bot0's "notifications and search" message
@@ -1326,7 +1420,32 @@ PROJECT_BLUEPRINTS = [
                                 ],
                             ),
                         ),
-                        "comments": [],
+                        "comments": [
+                            (
+                                "bot0",
+                                "Parking this one until the entitlements matrix is signed off. "
+                                "Building a plan-switch flow before we've agreed what the plans "
+                                "actually include means building it twice.",
+                            ),
+                            (
+                                "bot2",
+                                "Fine by me, but let's be explicit about what unblocks it: the "
+                                "matrix AND a decision on whether downgrades are allowed while "
+                                "a workspace is over the target limit. That second one is a "
+                                "product call, not a design one.",
+                            ),
+                            (
+                                "bot0",
+                                "Good catch — adding that as a condition on the milestone rather "
+                                "than leaving it implicit here. Downgrade-while-over-limit is the "
+                                "kind of thing we'd otherwise discover in support tickets.",
+                            ),
+                            (
+                                "demo",
+                                "Agreed on parking it. Keep it at Minimal so it doesn't read as "
+                                "abandoned — it's sequenced, not dropped.",
+                            ),
+                        ],
                     },
                     {
                         "key": "usage_metering",
@@ -1368,7 +1487,32 @@ PROJECT_BLUEPRINTS = [
                                 ],
                             ),
                         ),
-                        "comments": [],
+                        "comments": [
+                            (
+                                "bot1",
+                                "I'd argue this is High for the wrong reason. It's High because "
+                                "support asked loudly, not because launch needs it — we can run "
+                                "the first month off database queries and a runbook.",
+                            ),
+                            (
+                                "demo",
+                                "That's fair, but the runbook is three of us who know the schema. "
+                                "What happens the first week we're all asleep and a customer is "
+                                "charged twice?",
+                            ),
+                            (
+                                "bot1",
+                                "Then the read-only half is the launch blocker and the manual "
+                                "override isn't. Split it: plan + usage + payment events for "
+                                "launch, override after. I'll stop arguing if we cut it that way.",
+                            ),
+                            (
+                                "demo",
+                                "Done — keeping it High with the override explicitly out of scope "
+                                "for v1. Bob, note that on the task so the next person doesn't "
+                                "reinstate it.",
+                            ),
+                        ],
                     },
                     {
                         "key": "invoice_pdf_templates",
@@ -1389,7 +1533,25 @@ PROJECT_BLUEPRINTS = [
                                 ],
                             ),
                         ),
-                        "comments": [],
+                        "comments": [
+                            (
+                                "bot0",
+                                "Why is this Critical? The description literally says cosmetic and "
+                                "can ship any time. Something got mis-set.",
+                            ),
+                            (
+                                "bot3",
+                                "Not mis-set — legal came back and said we can't take money "
+                                "without issuing a compliant invoice, which makes it a launch "
+                                "blocker regardless of how cosmetic it looks.",
+                            ),
+                            (
+                                "bot0",
+                                "Then the description is the thing that's wrong, not the priority. "
+                                "Leaving Critical and rewriting the summary — a task whose body "
+                                "contradicts its priority is how this stuff gets re-litigated.",
+                            ),
+                        ],
                     },
                 ],
             },
@@ -1407,7 +1569,7 @@ DM_BLUEPRINTS = [
     {
         "bot_index": 0,  # Alice (PM)
         "messages": [
-            ("demo", "Haha, joined"),
+            ("demo", "Morning — finally got set up in here."),
             ("bot", "Hey — welcome to the demo workspace. Want a quick tour of what's set up?"),
             ("demo", "Sure, what should I look at first?"),
             (
@@ -1430,6 +1592,31 @@ DM_BLUEPRINTS = [
                 "Synthesis. Coding is at 4 of 12, target is end of Sprint 1. Once that's done I can draft inside a week.",
             ),
             ("demo", "Cool — ping me if anything slips, I can help unblock."),
+            (
+                "bot",
+                "One more thing while I have you — we never agreed how the two projects share a sprint boundary. Redesign is shipping weekly, roadmap work is research that doesn't fit a week.",
+            ),
+            ("demo", "What would you rather have?"),
+            (
+                "bot",
+                "Keep the sprint cadence for the redesign and let roadmap work run on its own milestone dates. Forcing research into sprints just produces fake carryover every Friday.",
+            ),
+            (
+                "demo",
+                "Agreed — sprint discipline where it earns something, milestone dates everywhere else.",
+            ),
+            (
+                "bot",
+                "Then I'll stop moving unfinished discovery tickets between sprints. They'll sit against the Q2 Discovery Sprint milestone until the synthesis is actually done.",
+            ),
+            (
+                "demo",
+                "Good. Last thing: who signs off on the roadmap proposal once it's drafted?",
+            ),
+            (
+                "bot",
+                "You and me for scope, Bob for feasibility. I don't want a big review committee — three people who actually have to live with it is enough.",
+            ),
         ],
         "thread": {
             "parent_index": 5,
@@ -1456,7 +1643,7 @@ DM_BLUEPRINTS = [
     {
         "bot_index": 1,  # Bob (Engineer)
         "messages": [
-            ("demo", "Haha, joined"),
+            ("demo", "How's the nav work going?"),
             (
                 "bot",
                 "Heads up — I'm pushing the responsive nav PR today. Drawer animation is in pure CSS so we don't carry framer-motion.",
@@ -1508,7 +1695,7 @@ DM_BLUEPRINTS = [
     {
         "bot_index": 2,  # Carol (Designer)
         "messages": [
-            ("demo", "Haha, joined"),
+            ("demo", "Any update on the hero visual?"),
             (
                 "bot",
                 "Hero illustration is up in Figma — file “Marketing v3 hero”. Two variants: gradient and photo.",
