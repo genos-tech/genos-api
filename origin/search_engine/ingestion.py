@@ -418,6 +418,25 @@ def _to_os_doc(chunk: Chunk, embedding: list[float], model: str) -> dict:
     }
 
 
+def _bulk_error_info(err) -> tuple[Optional[int], Optional[str]]:
+    """Pull (status, error type) out of one `helpers.bulk` error entry.
+
+    Each entry is `{<op>: {"status": ..., "error": {"type": ...}}}`, where
+    `<op>` is the op type OpenSearch echoes back. Written defensively (and
+    without naming the op) because this is an error path: a transport-level
+    failure can hand back a shape that doesn't match, and a crash here
+    would replace a logged warning with a traceback that aborts the run.
+    """
+    if not isinstance(err, dict):
+        return None, None
+    action = next(iter(err.values()), None)
+    if not isinstance(action, dict):
+        return None, None
+    etype = action.get("error")
+    etype = etype.get("type") if isinstance(etype, dict) else None
+    return action.get("status"), etype
+
+
 def _bulk_index(actions: list[dict]) -> None:
     if not actions:
         return
@@ -441,11 +460,44 @@ def _bulk_index(actions: list[dict]) -> None:
         raise_on_exception=False,
         refresh=bool(refresh_per_batch),
     )
-    if errors:
+    # A 409 `version_conflict_engine_exception` is not a failure: it means
+    # another writer updated this exact document between our read and our
+    # write, so the doc already holds a value at least as fresh as ours.
+    # Nothing is lost and there is nothing to retry — re-sending would just
+    # rewrite identical metadata.
+    #
+    # It has to be filtered because concurrency is normal here, not
+    # exceptional: the Railway cron overlaps itself by a minute by design,
+    # `kick_off_demo_reindex` fires a full reindex per demo signin / team
+    # join / starter seed, and `ingest_conversation_run` writes one chunk
+    # per completed ask. Left at ERROR, the `CronCommand` tripwire reds a
+    # run whose work in fact all landed — which trains the operator to
+    # ignore a red reindex, the one signal that must stay trustworthy.
+    #
+    # Same shape and same argument as `purge.py`, which discounts a 404 on
+    # delete ("the doc was already gone — that's the outcome we wanted").
+    # Real errors still log at ERROR and still fail the run.
+    benign, real_errors = [], []
+    for err in errors:
+        status, etype = _bulk_error_info(err)
+        if status == 409 and etype == "version_conflict_engine_exception":
+            benign.append(err)
+        else:
+            real_errors.append(err)
+
+    if benign:
+        # WARNING, so it stays visible (a spike means unexpected write
+        # contention) without failing the run.
+        log.warning(
+            "Bulk index: %d doc(s) already updated by a concurrent writer "
+            "(409, treated as success)",
+            len(benign),
+        )
+    if real_errors:
         # ERROR (not WARNING) so a CronCommand-based reindex fails the run —
         # a bulk that wrote nothing must not leave the cron green.
-        log.error("Bulk index reported %d errors (success=%d)", len(errors), success)
-        for err in errors[:5]:
+        log.error("Bulk index reported %d errors (success=%d)", len(real_errors), success)
+        for err in real_errors[:5]:
             log.warning("  %s", err)
 
 
@@ -479,8 +531,14 @@ def _delete_stale(
         raise_on_exception=False,
         refresh=bool(refresh_per_batch),
     )
-    if del_errors:
-        log.error("Stale-chunk delete reported %d errors", len(del_errors))
+    # A 404 here is the outcome we wanted — the doc is gone, whether we
+    # removed it or a concurrent run got there first. `purge.py` already
+    # discounts exactly this on its own delete path; this one was left at
+    # ERROR, so an overlapping reindex could red the cron for successfully
+    # deleting an already-deleted chunk.
+    real_del_errors = [e for e in del_errors if _bulk_error_info(e)[0] != 404]
+    if real_del_errors:
+        log.error("Stale-chunk delete reported %d errors", len(real_del_errors))
     RagChunk.objects.filter(chunk_id__in=stale_ids).delete()
     stats.chunks_deleted += len(stale_ids)
 
@@ -505,7 +563,43 @@ def _upsert_tracking(
     re-detect the same diff and re-issue the same update forever.
     Unchanged rows are left alone to avoid pointless writes.
     """
-    for cid in affected_ids:
+    # `sorted`, not bare iteration, and it is load-bearing.
+    #
+    # `update_or_create` is not the single statement it looks like: Django
+    # wraps it in `SELECT ... FOR UPDATE` + `UPDATE` (see
+    # `django/db/models/query.py`, "Lock the row so that a concurrent
+    # update is blocked"). The `atomic` on this function is the OUTER
+    # transaction, so Django's inner one degrades to a savepoint and every
+    # row lock taken here is held until this whole loop commits.
+    #
+    # `affected_ids` arrives as a `set`, and `str` hashing is salted per
+    # process (`PYTHONHASHSEED` is unset), so two processes iterate the
+    # same ids in DIFFERENT orders. N held locks acquired in arbitrary
+    # order across concurrent writers is the textbook deadlock, and it is
+    # reachable: the Railway cron runs every 10 minutes with
+    # `--since-minutes 11` (a deliberate overlap), `kick_off_demo_reindex`
+    # fires a whole reindex on a daemon thread after every demo signin /
+    # team join / starter-workspace seed, and `ingest_conversation_run`
+    # re-enters this same function once per completed ask.
+    #
+    # Sorting gives every writer one global order, which is what makes the
+    # cycle impossible. Concurrent runs still overlap — they now queue on a
+    # row instead of one being killed. Postgres reported the cycle as
+    # `DeadlockDetected ... while locking tuple (N,M) in relation
+    # "search_engine_ragchunk"`, surfacing as `Failed to ingest entity
+    # <type>/<id>` against an entity with nothing wrong with it, which is
+    # why this cost real time to diagnose.
+    #
+    # This one line is the whole fix, confirmed by reverting it alone
+    # against the dev DB (1448 chunks, `meta_hash` cleared, two concurrent
+    # full reindexes): with it, 0 deadlocks; without it, 119-134 deadlock
+    # lines and a failed run in 3 of 3 rounds. The `IN`-list order of the
+    # *delete* paths was measured NOT to matter and deliberately left
+    # alone — `EXPLAIN` shows a single bitmap/seq scan (so Postgres locks
+    # in physical order, not list order) and those statements run in
+    # autocommit, releasing at statement end. Only a held lock can join a
+    # cycle, which is why this loop is the one place ordering is needed.
+    for cid in sorted(affected_ids):
         c = chunks[cid]
         RagChunk.objects.update_or_create(
             chunk_id=cid,
