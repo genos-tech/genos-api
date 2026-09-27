@@ -22,9 +22,10 @@ clearer order because it never transiently orphans anything. It is not
 load-bearing here though: both sweeps filter on the same `team_id`, so
 either order removes both sets of rows.)
 
-(`account_deletion.py::_purge_search_engine_rows` deletes AgentSession
-with a comment claiming the runs cascade from it. They do not — that path
-looks to have this exact latent orphan bug. Out of scope here, flagged.)
+(`account_deletion.py::_purge_search_engine_rows` had this exact bug —
+it deleted AgentSession under a comment claiming the runs cascaded from
+it, leaving the deleted account's raw question text behind. Fixed, and
+pinned by `AgentHistoryErasureTests` in `test_account_deletion.py`.)
 """
 
 from django.contrib.auth import get_user_model
