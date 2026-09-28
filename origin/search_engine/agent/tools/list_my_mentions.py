@@ -65,15 +65,34 @@ def _parse_since(raw: Any) -> datetime | None:
     ("2026-08-01", taken as the start of that day). Raises `ToolError` on
     a non-empty but unparseable value so the model sees the mistake rather
     than silently getting an unfiltered list.
+
+    Both Django parsers raise `ValueError` — not just return None — on a
+    well-formed but impossible date like "2026-02-30", so the calls are
+    wrapped: an escaping ValueError reaches `_run_tool_guarded`, which
+    tags it "crash" and hands the model `"Internal error in tool
+    'list_my_mentions'."` plus an ERROR-level traceback. That is the one
+    thing this function exists to prevent — the model can self-correct
+    from "must be ISO 8601", but not from an internal error. Every sibling
+    parser (`get_my_schedule._parse_iso`, `create_todo_item._parse_date`,
+    `create_task_plan._parse_date`) already converts ValueError this way.
+
+    Note `parse_datetime` accepts a bare date on its own in Django 5.x, so
+    the `parse_date` fallback is reached only by forms it rejects — chiefly
+    the non-zero-padded "2026-9-28", which the model does emit.
     """
     if raw in (None, ""):
         return None
     text = str(raw).strip()
-    dt = parse_datetime(text)
-    if dt is None:
-        d = parse_date(text)
-        if d is not None:
-            dt = datetime.combine(d, time.min)
+    try:
+        dt = parse_datetime(text)
+        if dt is None:
+            d = parse_date(text)
+            if d is not None:
+                dt = datetime.combine(d, time.min)
+    except ValueError as e:
+        raise ToolError(
+            f"`since` must be an ISO 8601 datetime or date (got {raw!r}): {e}."
+        ) from e
     if dt is None:
         raise ToolError(f"`since` must be an ISO 8601 datetime or date (got {raw!r}).")
     if timezone.is_naive(dt):

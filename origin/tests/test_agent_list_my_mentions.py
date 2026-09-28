@@ -20,7 +20,7 @@ This suite pins the contract:
     error and never a fabricated "nobody mentioned you".
 """
 
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
@@ -239,12 +239,45 @@ class ListMyMentionsTests(BaseAPITestCase):
         self.assertIsNotNone(out["since"])
 
     def test_since_accepts_a_bare_date(self):
-        now = timezone.now()
-        self._mention(self._msg(text="recent"), at=now - timedelta(hours=1))
-        # A date-only value must parse (start of that day), not raise.
-        today = now.date().isoformat()
-        out = LIST_MY_MENTIONS.run({"since": today}, self.ctx)
+        # A date-only value must parse as the START of that day, not raise.
+        #
+        # Seeded relative to midnight, not to `now`: this previously seeded
+        # the mention "1 hour ago", which lands on *yesterday* whenever the
+        # suite runs in the first hour after midnight — and a start-of-today
+        # filter then excludes it correctly, so the test failed against
+        # working code (TIME_ZONE is UTC, so CI hitting 00:0x UTC was
+        # enough). Anchoring to the boundary makes it clock-independent and
+        # pins where the boundary actually falls, rather than only proving
+        # the value parsed at all.
+        tz = timezone.get_current_timezone()
+        today = timezone.localtime(timezone.now(), tz).date()
+        midnight = timezone.make_aware(datetime.combine(today, time.min), tz)
+        self._mention(self._msg(text="just after midnight"), at=midnight)
+        self._mention(self._msg(text="late yesterday"), at=midnight - timedelta(minutes=1))
+
+        out = LIST_MY_MENTIONS.run({"since": today.isoformat()}, self.ctx)
+
+        # Inclusive on the start of the day, exclusive of the moment before.
         self.assertEqual(len(out["mentions"]), 1)
+        self.assertIn("just after midnight", out["mentions"][0]["text"])
+
+    def test_since_accepts_an_unpadded_date(self):
+        # The `parse_date` fallback branch's only real caller. `parse_datetime`
+        # handles a zero-padded bare date by itself, so "2026-9-28" — a form
+        # the model does emit — is what actually exercises the fallback.
+        # Without a case here, that branch is reachable in production but
+        # unreached by the suite: a mutation to it survives silently.
+        tz = timezone.get_current_timezone()
+        today = timezone.localtime(timezone.now(), tz).date()
+        midnight = timezone.make_aware(datetime.combine(today, time.min), tz)
+        self._mention(self._msg(text="inside the window"), at=midnight)
+        self._mention(self._msg(text="before the window"), at=midnight - timedelta(minutes=1))
+
+        unpadded = f"{today.year}-{today.month}-{today.day}"
+        out = LIST_MY_MENTIONS.run({"since": unpadded}, self.ctx)
+
+        self.assertEqual(len(out["mentions"]), 1)
+        self.assertIn("inside the window", out["mentions"][0]["text"])
 
     # --- bad args ------------------------------------------------------
 
@@ -255,3 +288,20 @@ class ListMyMentionsTests(BaseAPITestCase):
     def test_bad_since_raises_toolerror(self):
         with self.assertRaisesMessage(ToolError, "ISO 8601"):
             LIST_MY_MENTIONS.run({"since": "not-a-date"}, self.ctx)
+
+    def test_impossible_but_wellformed_date_raises_toolerror_not_valueerror(self):
+        """A calendar-invalid date must be a ToolError, never a crash.
+
+        Django's `parse_date`/`parse_datetime` RAISE ValueError (rather than
+        returning None) when a value is shaped like a date but cannot exist.
+        An escaping ValueError is caught by `_run_tool_guarded` as a "crash",
+        so the model receives "Internal error in tool 'list_my_mentions'."
+        and logs an ERROR traceback — where a ToolError message tells it
+        exactly what to fix and it retries. Asserting ToolError specifically
+        (not just "raises") is the point: `assertRaises(Exception)` would
+        have passed against the bug.
+        """
+        for bad in ("2026-02-30", "2026-13-01", "2026-02-30T09:00:00"):
+            with self.subTest(since=bad):
+                with self.assertRaisesMessage(ToolError, "ISO 8601"):
+                    LIST_MY_MENTIONS.run({"since": bad}, self.ctx)
