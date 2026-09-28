@@ -24,11 +24,29 @@ class TaskActivityActionType(models.TextChoices):
     REPORTER = "reporter_changed", "Reporter changed"
     DUE_DATE = "due_date_changed", "Due date changed"
     DESCRIPTION = "description_edited", "Description edited"
+    # ⚠️ Also never emitted: "tags" is absent from both
+    # `_TRACKED_TASK_FIELDS` and `_FIELD_TO_ACTION` in `task_signals.py`,
+    # so tag edits leave no audit row at all. Read today only by two
+    # defensive render arms in the frontend feed. A "tag churn" metric
+    # built on this would silently report zero, exactly as the close
+    # metrics did — wire up an emitter first.
     TAGS = "tags_changed", "Tags changed"
     PARENT = "parent_changed", "Parent changed"
     MILESTONE_LINK = "milestone_changed", "Milestone changed"
     SPRINT_LINK = "sprint_changed", "Sprint changed"
+    # ⚠️ CLOSED is NOT emitted by anything. A close arrives through the
+    # generic field-diff loop in `task_signals.py` as
+    # STATUS + new_value='Closed'; no code path writes 'closed' (and a
+    # dev DB scan found zero such rows). Anything counting closes must
+    # match on the status transition — see
+    # `origin/search_engine/agent/tools/task_closes.py`, which three
+    # analytics tools got wrong by filtering on this value. Kept rather
+    # than deleted because `TaskVelocityView` and the frontend feed both
+    # carry defensive arms for it, and an old row could in principle
+    # exist in an environment this scan didn't cover.
     CLOSED = "closed", "Closed"
+    # REOPENED *is* emitted, but only for an is_deleted restore — a
+    # Closed→Open status change is a plain STATUS row.
     REOPENED = "reopened", "Reopened"
     DELETED = "deleted", "Deleted"
     ATTACHMENT_ADDED = "attachment_added", "Attachment added"
@@ -101,7 +119,7 @@ class TaskActivity(models.Model):
     # `field_name` lets the frontend group/filter by attribute (e.g.
     # show only "status" changes); kept distinct from `action_type` so
     # we can have multiple action types touching the same field (e.g.
-    # CLOSED vs STATUS for status).
+    # DELETED vs STATUS, both of which concern a task's closed-ness).
     field_name = models.CharField(max_length=64, blank=True, null=True)
     old_value = models.JSONField(blank=True, null=True)
     new_value = models.JSONField(blank=True, null=True)

@@ -1,8 +1,11 @@
 """`get_top_task_closers` tool — rank users by tasks closed.
 
-Returns the top N users by count of TaskActivity rows of action_type
-'closed' in the past N days. Use to answer "who is closing the most
-tasks?" or recognise high-throughput contributors during retros.
+Returns the top N users by count of task closes in the past N days. Use
+to answer "who is closing the most tasks?" or recognise high-throughput
+contributors during retros.
+
+A close is a `status_changed` row landing on a closed status, not an
+`action_type='closed'` row — see `task_closes.py` for why.
 
 ACL contract:
   * Tenant guard: scoped to ctx.team_id via `task__team_id`.
@@ -24,8 +27,9 @@ from django.db.models import Count
 from django.utils import timezone
 
 from origin.models.project.prj_models import ProjectMembers
-from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
+from origin.models.task.task_activity_models import TaskActivity
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.task_closes import CLOSE_Q
 
 _MAX_DAYS = 365
 _MAX_LIMIT = 50
@@ -77,8 +81,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     since = timezone.now() - timedelta(days=days)
     rows = (
         TaskActivity.objects.filter(
+            CLOSE_Q,
             ts_created_at__gte=since,
-            action_type=TaskActivityActionType.CLOSED.value,
             task__team_id=ctx.team_id,
             task__project_id__in=scoped_project_ids,
             task__is_deleted=False,
