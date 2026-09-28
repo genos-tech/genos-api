@@ -8,6 +8,7 @@ never lose the team the user just created.
 
 from unittest import mock
 
+from django.utils import timezone
 from rest_framework import status
 
 from origin.models.chat.todo_models import ToDoItem
@@ -142,6 +143,49 @@ class StarterWorkspaceTests(BaseAPITestCase):
         self.assertFalse(team.is_demo)
         self.assertFalse(self.user.is_demo)
         self.assertEqual(CustomUser.objects.count(), users_before)
+
+    def test_starter_gets_one_active_sprint_and_no_demo_cadence(self):
+        """`_create_sprint` is shared with the demo seeder, which grew a
+        `prior_sprints` cadence (5 completed sprints + 1 active) so its
+        backdated history has somewhere to live. That keyword defaults to
+        0 for exactly this caller: a brand-new customer project has no
+        history, and inventing completed sprints it never ran would be
+        fabricated data in a real workspace.
+
+        Nothing else pins this. The starter path calls `_create_sprint`
+        positionally with no keywords, so a change to the *default* — or
+        to the demo's call site made by editing the signature instead —
+        would silently ship phantom sprints to paying customers, and
+        every demo test would still pass.
+        """
+        from origin.models.task.sprint_models import Sprint, SprintConfig
+
+        team = self._create_team(with_starter=True)
+        for project in ProjectMaster.objects.filter(team=team):
+            # Only the COUNT and STATUS are asserted. The name is not this
+            # test's business: the starter path renames the sprint from its
+            # blueprint's `sprint_name` right after creating it, so the
+            # Japanese starter project legitimately reads "スプリント1" —
+            # pinning "Sprint 1" here made the test fail on correct code.
+            sprints = list(
+                Sprint.objects.filter(project=project)
+                .order_by("sequence_number")
+                .values_list("sequence_number", "status")
+            )
+            self.assertEqual(
+                sprints,
+                [(1, "active")],
+                f"{project.project_name!r} got {sprints} — a real customer workspace "
+                "must start with exactly one active sprint, not the demo's cadence",
+            )
+            # The active sprint starts TODAY here (there is no history to
+            # sit behind it), unlike the demo's mid-flight anchor.
+            sprint = Sprint.objects.get(project=project)
+            self.assertEqual(sprint.start_date, timezone.localdate())
+            self.assertEqual(
+                SprintConfig.objects.get(project=project).anchor_date,
+                timezone.localdate(),
+            )
 
     def test_demo_deletion_paths_cannot_reach_a_starter_workspace(self):
         # The demo environment self-destructs on logout; the starter
