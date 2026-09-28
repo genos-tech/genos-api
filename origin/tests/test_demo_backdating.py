@@ -32,6 +32,8 @@ from django.test import TestCase
 from django.utils import timezone
 
 from origin.models.chat.unified_models import Channel, Message
+from origin.models.project.prj_models import ProjectMaster
+from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.services.demo_seeder import _backdate, create_demo_environment
 
@@ -514,3 +516,275 @@ class DemoBackdatingTests(TestCase):
                 "its own first row",
             )
         self.assertGreater(checked, 3, "too few tasks with status history — proves little")
+
+    # -- sprint cadence ---------------------------------------------------
+    #
+    # Sprints are the one surface where backdating is not enough, because
+    # `sprint` is assigned at task-CREATE time — before any date exists —
+    # and `_create_sprint` can only return the active sprint. So every
+    # task was born into the last sprint, and `_assign_tasks_to_sprints`
+    # re-homes them by date afterwards. Both halves of that arrangement
+    # (the cadence being long enough, and the re-homing leaving no audit
+    # trail) fail silently and are pinned separately below.
+
+    def test_every_sprint_holds_work(self):
+        """A sprint board whose earlier sprints are empty shells is worse
+        than one sprint: it shows a team that set up a cadence and never
+        used it. This was the visible symptom — all 25 tasks sat in the
+        newest sprint while the prior ones rendered 0 tasks apiece."""
+        sprints = list(Sprint.objects.filter(team=self.team_id))
+        # Deliberately a weak floor: this test's subject is EMPTINESS, and
+        # the count only has to be large enough that "all non-empty" means
+        # something. The cadence LENGTH is pinned with no tolerance by
+        # `test_the_sprint_cadence_reaches_the_oldest_task` — putting a
+        # tight count here too would duplicate that and make both fail for
+        # one cause.
+        self.assertGreaterEqual(len(sprints), 4, "too few sprints for emptiness to matter")
+        empty = [
+            s.name
+            for s in sprints
+            if not TaskMaster.objects.filter(sprint_id=s.pk).exists()
+        ]
+        self.assertEqual(
+            empty,
+            [],
+            f"{len(empty)} of {len(sprints)} sprints hold no tasks ({empty}) — the "
+            "sprint board advertises a cadence the workspace never ran",
+        )
+
+    def test_no_task_is_left_without_a_sprint(self):
+        """The re-homing sweep must account for every task. A task that
+        matched no window would silently drop off the sprint board — the
+        `.update()` is keyed on the buckets built, so a task missing from
+        them keeps whatever it was born with (or nothing)."""
+        orphans = list(
+            TaskMaster.objects.filter(team=self.team_id, sprint_id=None).values_list(
+                "title", flat=True
+            )
+        )
+        self.assertEqual(orphans, [], f"tasks with no sprint: {orphans}")
+
+    def test_each_task_sits_in_a_sprint_whose_window_contains_it(self):
+        """The defect that actually contradicted itself on screen: a task
+        created 8.8 weeks ago filed under a sprint whose window *starts*
+        next week. `get_sprint_summary` reports the dates verbatim, so the
+        AI would narrate it too.
+
+        The clamp for pre-cadence tasks is a legitimate exception, so it is
+        allowed — but counted, because if it ever becomes the common case
+        the cadence has silently stopped reaching the history (see
+        `test_the_sprint_cadence_reaches_the_oldest_task`).
+        """
+        clamped = 0
+        checked = 0
+        for project in ProjectMaster.objects.filter(team=self.team_id):
+            sprints = {
+                s.pk: s
+                for s in Sprint.objects.filter(project=project).order_by("sequence_number")
+            }
+            if not sprints:
+                continue
+            cadence_start = min(s.start_date for s in sprints.values())
+            for task in TaskMaster.objects.filter(project=project):
+                sprint = sprints.get(task.sprint_id)
+                if sprint is None:
+                    continue
+                checked += 1
+                created = timezone.localdate(task.ts_created_at)
+                if sprint.start_date <= created <= sprint.end_date:
+                    continue
+                # Only the documented exception may fail containment.
+                clamped += 1
+                self.assertLess(
+                    created,
+                    cadence_start,
+                    f"{task.title!r} was created {created} but is filed in "
+                    f"{sprint.name} ({sprint.start_date}..{sprint.end_date}) — a "
+                    "sprint that does not contain it and is not the pre-cadence clamp",
+                )
+        self.assertGreater(checked, 20, "too few tasks with sprints — proves little")
+        self.assertLessEqual(
+            clamped,
+            checked // 4,
+            f"{clamped} of {checked} tasks predate the whole sprint cadence and were "
+            "clamped into sprint 1 — the cadence no longer spans the history it is "
+            "supposed to describe",
+        )
+
+    def test_closed_work_shipped_inside_a_real_sprint(self):
+        """Closed tasks are the ones a visitor inspects to see "what did
+        this team finish", and `get_sprint_summary` on a completed sprint
+        is the natural way to ask. At `prior_sprints=2` all three closed
+        tasks fell outside every window, so the only work that visibly
+        shipped had no sprint it could have shipped in."""
+        from origin.services.task_blocking import CLOSED_STATUSES
+
+        checked = 0
+        for task in TaskMaster.objects.filter(
+            team=self.team_id, status__in=CLOSED_STATUSES
+        ):
+            sprint = Sprint.objects.filter(pk=task.sprint_id).first()
+            self.assertIsNotNone(sprint, f"closed task {task.title!r} has no sprint")
+            created = timezone.localdate(task.ts_created_at)
+            checked += 1
+            self.assertTrue(
+                sprint.start_date <= created <= sprint.end_date,
+                f"{task.title!r} is {task.status} and dated {created}, but its sprint "
+                f"{sprint.name} runs {sprint.start_date}..{sprint.end_date}",
+            )
+        self.assertGreater(checked, 1, "too few closed tasks — proves little")
+
+    def test_the_sprint_cadence_reaches_the_oldest_task(self):
+        """`prior_sprints` is the MINIMUM that spans the history, not a
+        round number — measured, it has 5 days of slack at 14d sprints.
+
+        This is the test that fails if someone widens the backdating spans
+        (`_PM_SPAN`, `_HISTORY_DAYS`) without extending the cadence to
+        match. That coupling is invisible: the two live ~600 lines apart,
+        nothing references both, and the failure it produces is a silent
+        clamp rather than an error.
+        """
+        for project in ProjectMaster.objects.filter(team=self.team_id):
+            sprints = Sprint.objects.filter(project=project)
+            cadence_start = sprints.aggregate(Min("start_date"))["start_date__min"]
+            cadence_end = sprints.aggregate(Max("end_date"))["end_date__max"]
+            if cadence_start is None:
+                continue
+            stamps = TaskMaster.objects.filter(project=project).aggregate(
+                Min("ts_created_at"), Max("ts_created_at")
+            )
+            oldest = timezone.localdate(stamps["ts_created_at__min"])
+            newest = timezone.localdate(stamps["ts_created_at__max"])
+            self.assertLessEqual(
+                cadence_start,
+                oldest,
+                f"{project.project_name}: the oldest task is dated {oldest} but the "
+                f"sprint cadence only reaches back to {cadence_start} — raise "
+                "`prior_sprints` in `_create_project_from_blueprint` to match the "
+                "backdating spans",
+            )
+            self.assertGreaterEqual(
+                cadence_end,
+                newest,
+                f"{project.project_name}: the newest task is dated {newest}, past the "
+                f"active sprint's end {cadence_end}",
+            )
+
+    def test_the_sprint_reshuffle_leaves_no_audit_trail(self):
+        """`sprint_id` is a TRACKED field, so re-homing tasks with
+        `.save()` would emit a `sprint_changed` row per task — 25 rows all
+        stamped `now`, in a workspace whose every other row is months old,
+        each claiming the team moved that task between sprints today. The
+        sweep uses `.update()` precisely to bypass the signal.
+
+        The contrast matters: this asserts the *absence* of one kind of row
+        while the others are present, so it cannot pass by the history
+        replay having silently stopped working.
+        """
+        from origin.models.task.task_activity_models import TaskActivity
+
+        rows = TaskActivity.objects.filter(team=self.team_id)
+        moved = list(
+            rows.filter(action_type="sprint_changed").values_list(
+                "task__title", "new_value"
+            )
+        )
+        self.assertEqual(
+            moved,
+            [],
+            f"{len(moved)} `sprint_changed` rows stamped today ({moved[:3]}) — the "
+            "seeding reshuffle used .save() and leaked into the activity feed",
+        )
+        # The feed is otherwise populated, so the emptiness above is the
+        # signal being bypassed and not the replay having died.
+        self.assertGreater(
+            rows.exclude(action_type="created").count(),
+            30,
+            "no task history at all — this test's real assertion proves nothing",
+        )
+
+
+class SprintClampFallbackTests(TestCase):
+    """The pre-cadence clamp, which the seeded workspace never exercises.
+
+    `_assign_tasks_to_sprints` falls back to sprint 1 for any task older
+    than the whole cadence. With the current spans that branch is dead
+    code — measured, zero tasks take it — so it would ship untested, and
+    the tests above would stay green however wrong it is.
+
+    That is not hypothetical caution: earlier in this work a mutation to a
+    date-parsing fallback survived the entire suite for exactly this
+    reason (the branch was unreachable for the inputs tested), and
+    chasing *why* it survived turned up a real bug. So the branch gets
+    exercised deliberately, by narrowing the cadence until tasks fall
+    outside it.
+
+    Separate class because it mutates the fixture (deletes sprints), which
+    `setUpTestData`'s class-scoped rows cannot safely absorb.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="demo_clamp_user",
+            email="demo_clamp@example.com",
+            password="x",
+            is_demo=True,
+        )
+        self.env = create_demo_environment(self.user, short="clamp")
+        self.project = (
+            ProjectMaster.objects.filter(team=self.env["team_id"]).order_by("project_id").first()
+        )
+
+    def test_tasks_older_than_the_cadence_clamp_to_the_first_sprint(self):
+        from origin.services.demo_seeder import _assign_tasks_to_sprints
+
+        # Keep only the two newest sprints, so most tasks now predate the
+        # cadence start.
+        keep = list(
+            Sprint.objects.filter(project=self.project)
+            .order_by("-sequence_number")[:2]
+            .values_list("pk", flat=True)
+        )
+        Sprint.objects.filter(project=self.project).exclude(pk__in=keep).delete()
+        sprints = list(
+            Sprint.objects.filter(project=self.project)
+            .order_by("sequence_number")
+            .values_list("pk", "start_date")
+        )
+        first_pk, cadence_start = sprints[0]
+
+        # The FK is SET_NULL, so blank the assignments first: otherwise a
+        # clamp that silently skipped a task would still read correct,
+        # because the task kept its previous (right) answer.
+        TaskMaster.objects.filter(project=self.project).update(sprint_id=None)
+
+        _assign_tasks_to_sprints(self.project)
+
+        rows = list(
+            TaskMaster.objects.filter(project=self.project).values_list(
+                "task_id", "ts_created_at", "sprint_id"
+            )
+        )
+        pre_cadence = [
+            (task_id, sprint_id)
+            for task_id, created, sprint_id in rows
+            if timezone.localdate(created) < cadence_start
+        ]
+        self.assertGreater(
+            len(pre_cadence),
+            0,
+            "narrowing the cadence produced no pre-cadence task — the branch "
+            "this test exists to exercise was never reached",
+        )
+        self.assertEqual(
+            [sprint_id for _t, sprint_id in pre_cadence],
+            [first_pk] * len(pre_cadence),
+            "a task older than the whole cadence did not clamp to sprint 1",
+        )
+        # And nothing may be left sprintless — a NULL here is the silent
+        # failure the clamp exists to prevent.
+        self.assertEqual(
+            [t for t, _c, s in rows if s is None],
+            [],
+            "the sweep left tasks with no sprint at all",
+        )

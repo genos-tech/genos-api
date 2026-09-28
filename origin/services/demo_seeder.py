@@ -681,6 +681,13 @@ _DM_SPANS = {
 }
 _GM_SPAN = (78, 1)
 _SELF_DM_SPAN = (21, 0)
+# ⚠️ `_PM_SPAN[0]` also dates the TASKS (`_backdate_project_tasks`), so it is
+# coupled to the sprint cadence: `prior_sprints` in
+# `_create_project_from_blueprint` must reach at least this far back, or the
+# oldest tasks predate every sprint window and get clamped into sprint 1.
+# At 14-day sprints the current 5 prior sprints cover 75 days against this 70
+# — only 5 days of slack, so widening this span means raising that count.
+# Pinned by `test_the_sprint_cadence_reaches_the_oldest_task`.
 _PM_SPAN = (70, 3)
 
 
@@ -826,6 +833,69 @@ def _backdate_history(team, demo_user, bots, seeded_projects, now) -> None:
             _backdate_pm_channel(pm_channel, now)
 
 
+def _assign_tasks_to_sprints(project) -> None:
+    """Re-home each task into the sprint whose window contains its date.
+
+    Runs after the task backdating in the same pass, because a task's
+    sprint is only decidable once it has a date. `_create_sprint` happens
+    at project-build time and can only hand out the active sprint, so
+    without this every task lands in the last sprint: the earlier ones
+    render as empty shells, and a task created nine weeks ago is filed
+    under a sprint that starts next week.
+
+    Tasks older than the whole cadence clamp to the first sprint rather
+    than going sprintless — a demo board with unassigned tasks reads as
+    incomplete seeding, and "this predates our sprint process" is the
+    honest reading of the oldest work anyway. With today's spans nothing
+    takes that branch (the cadence out-reaches the oldest task by 5 days);
+    it exists so shortening the cadence degrades instead of orphaning.
+
+    Uses `.update()`, not `.save()`, and that is the load-bearing detail:
+    `sprint_id` is in `_TRACKED_TASK_FIELDS`, so a save would emit a
+    `sprint_changed` audit row per task stamped `now`, in a workspace
+    whose entire premise is that its history is months old. The sprint a
+    task was *born* in is the only assignment the story wants; this
+    reshuffle is a seeding artifact and must leave no trace in the feed.
+    """
+    sprints = list(
+        Sprint.objects.filter(project=project)
+        .order_by("sequence_number")
+        .values_list("pk", "start_date", "end_date")
+    )
+    if not sprints:
+        return
+
+    first_pk, cadence_start, _ = sprints[0]
+    by_sprint: dict[object, list[object]] = {}
+    for task_pk, created in TaskMaster.objects.filter(project=project).values_list(
+        "pk", "ts_created_at"
+    ):
+        # `localdate`, not `.date()`. The window bounds are plain
+        # DateFields built from `date.today()`, which follows TIME_ZONE
+        # because Django's `Settings.__init__` does `os.environ["TZ"] =
+        # TIME_ZONE; time.tzset()` — so the bounds are LOCAL dates while
+        # `ts_created_at` is an aware UTC datetime whose `.date()` is its
+        # UTC date. Under `TIME_ZONE="Asia/Tokyo"` those disagree for every
+        # instant from 15:00 UTC on (measured), landing a task one sprint
+        # off. Today's UTC setting hides it; the same off-by-one-day class
+        # as the `since` midnight bug.
+        created_date = timezone.localdate(created)
+        target = next(
+            (pk for pk, start, end in sprints if start <= created_date <= end),
+            None,
+        )
+        if target is None:
+            # Older than the cadence → first sprint. Newer than the last
+            # window can't happen (tasks are backdated, never post-dated),
+            # but fall to the active sprint if it ever does.
+            target = first_pk if created_date < cadence_start else sprints[-1][0]
+        by_sprint.setdefault(target, []).append(task_pk)
+
+    # One UPDATE per sprint, not per task.
+    for sprint_pk, task_pks in by_sprint.items():
+        TaskMaster.objects.filter(pk__in=task_pks).update(sprint_id=sprint_pk)
+
+
 def _backdate_project_tasks(project, now) -> None:
     """Backdate one project's tasks, milestones and comments.
 
@@ -853,6 +923,15 @@ def _backdate_project_tasks(project, now) -> None:
         len(task_pks), oldest_days_ago=_PM_SPAN[0], newest_days_ago=_PM_SPAN[1], now=now
     )
     _backdate_each(TaskMaster, dict(zip(task_pks, stamps)), "ts_created_at")
+
+    # Now that the tasks have real dates, put each one in the sprint whose
+    # window actually contains it. `_create_sprint` runs before this pass,
+    # so at creation time every task was handed the ACTIVE sprint — which
+    # left the prior sprints as empty shells and, worse, dated a task into
+    # a sprint that had not started yet (a task filed nine weeks ago sitting
+    # in a sprint whose window opens next week is a self-contradiction on
+    # the sprint board, and `get_sprint_summary` reports it verbatim).
+    _assign_tasks_to_sprints(project)
 
     # Milestones frame the work, so they predate the tasks under them.
     ms_pks = list(
@@ -1400,11 +1479,16 @@ def _create_project_from_blueprint(
         ]
     )
 
-    # Two closed sprints behind the active one: the project reads as
-    # "three sprints into a quarter", which is the cadence the 12 weeks
-    # of backdated history implies.
+    # Five closed sprints behind the active one. The count is not a taste
+    # call: at 14 days each, 5 prior sprints reach back 75 days, and the
+    # oldest task is backdated to `_PM_SPAN[0]` (70) days ago. Fewer
+    # sprints and the earliest tasks predate the whole cadence — measured
+    # at `prior_sprints=2` (today's value), 14 of 25 tasks fell outside
+    # every sprint window, including all three CLOSED ones, so the work
+    # that visibly shipped had no sprint it could have shipped in.
+    # `_assign_tasks_to_sprints` then re-homes each task by date.
     sprint = _create_sprint(
-        team, project, prior_sprints=2, name_template=content.SPRINT_NAME
+        team, project, prior_sprints=5, name_template=content.SPRINT_NAME
     )
     # Everything below writes `TaskActivity` rows through the post_save
     # signals, and the audit row's actor comes from the thread-local, NOT
