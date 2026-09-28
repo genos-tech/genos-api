@@ -2,8 +2,11 @@
 
 The "me" counterpart to `get_task_throughput_stats` (workspace-wide
 counts) and `get_top_task_closers` (leaderboard). Aggregates
-`TaskActivity` rows where the caller is the actor and the action_type
-is `created` or `closed`. Optionally bucketed by day or week.
+`TaskActivity` rows where the caller is the actor and the row is either a
+creation or a close. Optionally bucketed by day or week.
+
+A close is a `status_changed` row landing on a closed status, not an
+`action_type='closed'` row — see `task_closes.py` for why.
 
 Why sourced from `TaskActivity` and not `TaskMaster.ts_created_at`:
 reopens are common — a task closed today, reopened tomorrow, closed
@@ -29,8 +32,9 @@ from django.db.models.functions import TruncDay, TruncWeek
 from django.utils import timezone
 
 from origin.models.project.prj_models import ProjectMembers
-from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
+from origin.models.task.task_activity_models import TaskActivity
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.task_closes import CLOSE_Q, CREATED_Q, THROUGHPUT_Q
 
 _MAX_DAYS = 365
 _DEFAULT_DAYS = 7
@@ -62,20 +66,17 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     since = timezone.now() - timedelta(days=days)
     base_qs = TaskActivity.objects.filter(
+        THROUGHPUT_Q,
         ts_created_at__gte=since,
         actor_id=ctx.user_id,
         task__team_id=ctx.team_id,
         task__project_id__in=member_project_ids,
         task__is_deleted=False,
         task__is_init_task=False,
-        action_type__in=[
-            TaskActivityActionType.CREATED.value,
-            TaskActivityActionType.CLOSED.value,
-        ],
     )
 
-    created_expr = Count(Case(When(action_type=TaskActivityActionType.CREATED.value, then=1)))
-    closed_expr = Count(Case(When(action_type=TaskActivityActionType.CLOSED.value, then=1)))
+    created_expr = Count(Case(When(CREATED_Q, then=1)))
+    closed_expr = Count(Case(When(CLOSE_Q, then=1)))
 
     agg = base_qs.aggregate(created=created_expr, closed=closed_expr)
     created_total = agg.get("created") or 0
@@ -113,7 +114,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # Recently-closed list — the actual tasks the user has shipped, so
     # the agent can name them ("you closed WRD-3 yesterday").
     recent_closed_rows = (
-        base_qs.filter(action_type=TaskActivityActionType.CLOSED.value)
+        base_qs.filter(CLOSE_Q)
         .select_related("task", "task__project")
         .order_by("-ts_created_at")[:_RECENTLY_CLOSED_LIMIT]
     )

@@ -1,10 +1,13 @@
 """`get_task_throughput_stats` tool — created vs. closed task counts.
 
 Answers "how many tasks were created/closed in the past N days?" with an
-optional day/week breakdown. Backed by `TaskActivity` rows
-(action_type='created' / 'closed') rather than `TaskMaster.ts_created_at`
-so reopen/close cycles are counted correctly and the closed timeline
-matches what users actually saw in the activity feed.
+optional day/week breakdown. Backed by `TaskActivity` rows rather than
+`TaskMaster.ts_created_at` so reopen/close cycles are counted correctly
+and the closed timeline matches what users actually saw in the activity
+feed.
+
+A close is a `status_changed` row landing on a closed status, not an
+`action_type='closed'` row — see `task_closes.py` for why.
 
 ACL contract:
   * Tenant guard: scoped to ctx.team_id via `task__team_id`.
@@ -29,8 +32,9 @@ from django.db.models.functions import TruncDay, TruncWeek
 from django.utils import timezone
 
 from origin.models.project.prj_models import ProjectMembers
-from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
+from origin.models.task.task_activity_models import TaskActivity
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.task_closes import CLOSE_Q, CREATED_Q, THROUGHPUT_Q
 
 _MAX_DAYS = 365
 _VALID_BUCKETS = {"day", "week"}
@@ -83,19 +87,16 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     #     orphan rows on TaskActivity.team/.project can't slip past. ---
     since = timezone.now() - timedelta(days=days)
     qs = TaskActivity.objects.filter(
+        THROUGHPUT_Q,
         ts_created_at__gte=since,
         task__team_id=ctx.team_id,
         task__project_id__in=scoped_project_ids,
         task__is_deleted=False,
         task__is_init_task=False,
-        action_type__in=[
-            TaskActivityActionType.CREATED.value,
-            TaskActivityActionType.CLOSED.value,
-        ],
     )
 
-    created_expr = Count(Case(When(action_type=TaskActivityActionType.CREATED.value, then=1)))
-    closed_expr = Count(Case(When(action_type=TaskActivityActionType.CLOSED.value, then=1)))
+    created_expr = Count(Case(When(CREATED_Q, then=1)))
+    closed_expr = Count(Case(When(CLOSE_Q, then=1)))
 
     if bucket is None:
         agg = qs.aggregate(created=created_expr, closed=closed_expr)
