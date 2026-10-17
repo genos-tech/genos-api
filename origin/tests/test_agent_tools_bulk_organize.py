@@ -18,6 +18,8 @@ enrichment in the controller.
 
 Friendly-argument enrichment (`_friendly_arguments` nested pass):
   * update_tasks_bulk rows gain display_id / title / current snapshot;
+  * a milestone move is labelled on both sides, for update_task too, and
+    `milestone_id: ''` (detach) stays '' so the card can say "removed";
   * create_task_plan assignee UUIDs become usernames;
   * the input dicts the caller passed are not mutated (the persisted
     arguments_json must stay raw for the resume path).
@@ -278,6 +280,7 @@ class FriendlyArgumentEnrichmentTests(OrganizeToolsTestBase):
                 "effort_level": None,
                 "status": "Open",
                 "due_date": "2026-08-01",
+                "milestone_id": None,
             },
         )
         # Proposed values and task_id survive untouched.
@@ -285,6 +288,74 @@ class FriendlyArgumentEnrichmentTests(OrganizeToolsTestBase):
         self.assertEqual(row["task_id"], self.task_b.task_id)
         # The caller's dict was NOT mutated — resume re-runs from raw args.
         self.assertNotIn("current", raw["updates"][0])
+
+    def _milestone(self, title):
+        milestone = MilestoneMaster.objects.create(
+            team=self.team, project=self.project, reporter=self.user, title=title
+        )
+        ensure_backing_task(milestone)
+        return milestone
+
+    def test_bulk_update_rows_label_a_milestone_move_on_both_sides(self):
+        v1, v2 = self._milestone("v1.0"), self._milestone("v2.0")
+        self.task_a.milestone = v1
+        self.task_a.save(update_fields=["milestone"])
+        self.task_b.milestone = v1
+        self.task_b.save(update_fields=["milestone"])
+        task_c = self._task("Docs")
+        raw = {
+            "updates": [
+                {"task_id": self.task_a.task_id, "milestone_id": v2.milestone_id, "rationale": "r"},
+                {"task_id": self.task_b.task_id, "milestone_id": "", "rationale": "r"},
+                {"task_id": task_c.task_id, "milestone_id": str(v1.milestone_id), "rationale": "r"},
+                {"task_id": self.task_a.task_id, "milestone_id": 999999, "rationale": "r"},
+            ]
+        }
+        rows = controller._friendly_arguments(raw, "update_tasks_bulk")["updates"]
+        moves = [(r["current"]["milestone_id"], r["milestone_id"]) for r in rows]
+        self.assertEqual(
+            moves,
+            [
+                ("v1.0", "v2.0"),  # between milestones
+                ("v1.0", ""),  # detach stays '' — the card renders it as removed
+                (None, "v1.0"),  # into one; a string id resolves too
+                ("v1.0", 999999),  # an unknown target stays raw, never blank
+            ],
+        )
+        self.assertEqual(raw["updates"][0]["milestone_id"], v2.milestone_id)  # not mutated
+
+    def test_bulk_update_rows_without_a_move_carry_no_proposed_milestone(self):
+        raw = {"updates": [{"task_id": self.task_a.task_id, "priority": "High", "rationale": "r"}]}
+        row = controller._friendly_arguments(raw, "update_tasks_bulk")["updates"][0]
+        self.assertNotIn("milestone_id", row)
+        self.assertIsNone(row["current"]["milestone_id"])
+
+    def test_update_task_milestone_move_gains_the_current_milestone(self):
+        v1, v2 = self._milestone("v1.0"), self._milestone("v2.0")
+        self.task_a.milestone = v1
+        self.task_a.save(update_fields=["milestone"])
+        raw = {"task_id": self.task_a.task_id, "milestone_id": v2.milestone_id}
+        out = controller._friendly_arguments(raw, "update_task")
+        self.assertEqual(out["task_id"], self.task_a.display_id)
+        self.assertEqual(out["milestone_id"], "v2.0")
+        self.assertEqual(out["current"], {"milestone_id": "v1.0"})
+        self.assertNotIn("current", raw)  # not mutated
+
+        detach = controller._friendly_arguments(
+            {"task_id": self.task_a.task_id, "milestone_id": ""}, "update_task"
+        )
+        self.assertEqual((detach["current"]["milestone_id"], detach["milestone_id"]), ("v1.0", ""))
+
+        into = controller._friendly_arguments(
+            {"task_id": self.task_b.task_id, "milestone_id": v1.milestone_id}, "update_task"
+        )
+        self.assertEqual((into["current"]["milestone_id"], into["milestone_id"]), (None, "v1.0"))
+
+    def test_update_task_without_a_move_gains_no_current(self):
+        out = controller._friendly_arguments(
+            {"task_id": self.task_a.task_id, "priority": "High"}, "update_task"
+        )
+        self.assertNotIn("current", out)
 
     def test_task_plan_assignees_become_usernames(self):
         raw = {

@@ -42,7 +42,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 from uuid import UUID
 
 from django.conf import settings
@@ -400,7 +400,7 @@ _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any], str | None]] = {
 }
 
 
-def _friendly_task_plan_arguments(out: dict[str, Any]) -> None:
+def _friendly_task_plan_arguments(out: dict[str, Any], _args: dict[str, Any]) -> None:
     """In-place nested enrichment for `create_task_plan` arguments.
 
     The flat resolver pass above only touches top-level keys; a plan's
@@ -447,14 +447,18 @@ def _friendly_task_plan_arguments(out: dict[str, Any]) -> None:
         }
 
 
-def _friendly_bulk_update_arguments(out: dict[str, Any]) -> None:
+def _friendly_bulk_update_arguments(out: dict[str, Any], _args: dict[str, Any]) -> None:
     """In-place nested enrichment for `update_tasks_bulk` arguments.
 
     Each update row gains `display_id` / `title` and a `current` snapshot
     of the fields the tool can change (one batched query for the whole
     batch), so the approval card can render a true old→new diff table.
-    The proposed values and `task_id` stay untouched — the persisted
-    `arguments_json` is raw anyway; this only shapes the wire event.
+    A milestone move is labelled on both sides: the proposed
+    `milestone_id` becomes the target's title and `current.milestone_id`
+    holds the present one (None = in no milestone), keyed alike so the
+    card diffs it like any other field. The other proposed values and
+    `task_id` stay untouched — the persisted `arguments_json` is raw
+    anyway; this only shapes the wire event.
     """
     updates = out.get("updates")
     if not isinstance(updates, list) or not updates:
@@ -474,8 +478,9 @@ def _friendly_bulk_update_arguments(out: dict[str, Any]) -> None:
 
     by_id = {
         t.task_id: t
-        for t in TaskMaster.objects.select_related("project").filter(task_id__in=ids)
+        for t in TaskMaster.objects.select_related("project", "milestone").filter(task_id__in=ids)
     }
+    targets = _milestone_titles(row.get("milestone_id") for row in updates if isinstance(row, dict))
     new_updates = []
     for row in updates:
         if isinstance(row, dict):
@@ -493,13 +498,72 @@ def _friendly_bulk_update_arguments(out: dict[str, Any]) -> None:
                         "effort_level": task.effort_level,
                         "status": task.status,
                         "due_date": task.due_date.isoformat() if task.due_date else None,
+                        "milestone_id": _current_milestone_title(task),
                     },
                 }
+            row = _with_milestone_title(row, targets)
         new_updates.append(row)
     out["updates"] = new_updates
 
 
-def _friendly_update_note_arguments(out: dict[str, Any]) -> None:
+def _current_milestone_title(task: Any) -> str | None:
+    return task.milestone.title if task.milestone_id and task.milestone else None
+
+
+def _milestone_titles(raw_ids: Iterable[Any]) -> dict[int, str]:
+    """`milestone_id → title` for every integer id in `raw_ids`, in one query.
+    `''` (detach), None (no move) and junk are skipped."""
+    ids: set[int] = set()
+    for raw in raw_ids:
+        if raw is None or raw == "":
+            continue
+        try:
+            ids.add(int(raw))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return {}
+    from origin.models.task.milestone_models import MilestoneMaster  # noqa: PLC0415
+
+    return dict(
+        MilestoneMaster.objects.filter(milestone_id__in=ids).values_list("milestone_id", "title")
+    )
+
+
+def _with_milestone_title(row: dict[str, Any], titles: dict[int, str]) -> dict[str, Any]:
+    """Label a row's proposed `milestone_id` the way the flat pass labels a
+    top-level one. `''` (detach) stays `''` so the card can show it as
+    removed; an id that doesn't resolve stays raw."""
+    try:
+        title = titles.get(int(row.get("milestone_id")))
+    except (TypeError, ValueError):
+        return row
+    return {**row, "milestone_id": title} if title is not None else row
+
+
+def _friendly_update_task_arguments(out: dict[str, Any], args: dict[str, Any]) -> None:
+    """In-place nested enrichment for `update_task` arguments.
+
+    The flat pass already labels the proposed `milestone_id`; on a
+    milestone move this ADDS `current.milestone_id` (the task's present
+    milestone title, None = in no milestone) so the card can show
+    old → new — the same shape a bulk row's `current` carries. The flat
+    pass has also replaced `task_id` with a display id, so the task is
+    looked up from the raw `args`."""
+    if args.get("milestone_id") is None:
+        return
+    try:
+        tid = int(args.get("task_id"))
+    except (TypeError, ValueError):
+        return
+    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+
+    task = TaskMaster.objects.select_related("milestone").filter(task_id=tid).first()
+    if task is not None:
+        out["current"] = {"milestone_id": _current_milestone_title(task)}
+
+
+def _friendly_update_note_arguments(out: dict[str, Any], _args: dict[str, Any]) -> None:
     """In-place nested enrichment for `update_note` arguments.
 
     ADDS `note_title` (resolved from the note tables) so the approval
@@ -523,8 +587,11 @@ def _friendly_update_note_arguments(out: dict[str, Any]) -> None:
 
 
 # Tool-name → nested enrichment pass, applied after the flat resolvers.
-_FRIENDLY_NESTED_ENRICHERS: dict[str, Callable[[dict[str, Any]], None]] = {
+# Each edits the labelled copy and may read the caller's raw args for an
+# id the flat pass has already replaced with a label.
+_FRIENDLY_NESTED_ENRICHERS: dict[str, Callable[[dict[str, Any], dict[str, Any]], None]] = {
     "create_task_plan": _friendly_task_plan_arguments,
+    "update_task": _friendly_update_task_arguments,
     "update_tasks_bulk": _friendly_bulk_update_arguments,
     "update_note": _friendly_update_note_arguments,
 }
@@ -555,7 +622,7 @@ def _friendly_arguments(args: dict[str, Any], tool_name: str | None = None) -> d
     enricher = _FRIENDLY_NESTED_ENRICHERS.get(tool_name or "")
     if enricher is not None:
         try:
-            enricher(out)
+            enricher(out, args)
         except Exception:  # noqa: BLE001 — labels never break the loop
             log.exception("Nested friendly-arg enrichment failed for %s", tool_name)
     return out
