@@ -25,6 +25,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
+from origin.services.collab_push import push_task_body
 from origin.services.milestone_service import sync_backing_task
 
 # Backing-task columns whose milestone twin has a different name. Every
@@ -233,6 +234,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise
     except Exception as e:  # noqa: BLE001
         raise ToolError(f"Failed to update task: {e}")
+
+    # The editor renders the task's Yjs doc, not `content`; without this
+    # push a task that was ever opened kept its old body on screen, and the
+    # next keystroke saved the old body back (MIP-694). After the save, and
+    # from the re-read row, so a milestone pushes what sync_backing_task
+    # actually stored.
+    if "content" in update_fields:
+        push_task_body(task.task_id, task.content or [])
 
     return {
         "task_id": task_id,
