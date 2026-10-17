@@ -1,8 +1,8 @@
 """`update_task` write tool — Phase 11.
 
 Partial-update one `TaskMaster` row. Any subset of `title`,
-`content_text`, `status`, `priority`, `effort_level`, `due_date`
-may be supplied; omitted fields are left as-is. The model should
+`content_text`, `status`, `priority`, `effort_level`, `due_date`,
+`milestone_id` may be supplied; omitted fields are left as-is. The model should
 fetch the task first (via `fetch_task`) so it can propose changes
 that respect the existing state.
 
@@ -27,6 +27,7 @@ from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.services.collab_push import push_task_body
 from origin.services.milestone_service import sync_backing_task
+from origin.services.task_milestone_move import milestone_move_error, move_task_to_milestone
 
 # Backing-task columns whose milestone twin has a different name. Every
 # other mirrored field shares its name across the two models.
@@ -183,7 +184,24 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 update_fields.append("due_date")
                 changed.append("due_date")
 
-    if not update_fields:
+    # --- milestone_id (move into / between milestones, '' to detach) ---
+    # Validated here, before any write, but applied after the field save:
+    # the move re-reads the row, and writes the hierarchy columns itself.
+    move_milestone = "milestone_id" in args and args["milestone_id"] is not None
+    target_milestone_id: int | None = None
+    if move_milestone:
+        raw_milestone = args["milestone_id"]
+        if raw_milestone != "":
+            try:
+                target_milestone_id = int(raw_milestone)
+            except (TypeError, ValueError):
+                raise ToolError(
+                    f"`milestone_id` must be an integer (got {raw_milestone!r}). Use '' to detach."
+                )
+        if error := milestone_move_error(task, target_milestone_id, ctx.team_id):
+            raise ToolError(error)
+
+    if not update_fields and not move_milestone:
         return {
             "task_id": task_id,
             "changed_fields": [],
@@ -196,7 +214,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             if task.is_milestone
             else None
         )
-        if milestone is not None:
+        if not update_fields:
+            pass  # milestone move only — applied below
+        elif milestone is not None:
             # A milestone is a task with `is_milestone=True`, but its
             # AUTHORITATIVE values live on the MilestoneMaster side table;
             # the backing TaskMaster row is a mirror `sync_backing_task`
@@ -230,6 +250,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             # branch above saves the backing row wholesale, which bumps
             # every auto_now field, so it needs no explicit list.)
             task.save(update_fields=[*update_fields, "ts_updated_at"])
+        # The same bridge + sub-tree cascade the milestone picker runs, so
+        # the task nests under the milestone row exactly as if a user had
+        # moved it (MIP-692).
+        if move_milestone and move_task_to_milestone(task, target_milestone_id):
+            changed.append("milestone" if target_milestone_id is not None else "milestone(cleared)")
     except ToolError:
         raise
     except Exception as e:  # noqa: BLE001
@@ -243,11 +268,18 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if "content" in update_fields:
         push_task_body(task.task_id, task.content or [])
 
+    if not changed:
+        return {
+            "task_id": task_id,
+            "changed_fields": [],
+            "__summary__": f"No changes applied to task {task.display_id}.",
+        }
     return {
         "task_id": task_id,
         "changed_fields": changed,
         "status": task.status,
         "title": task.title,
+        "milestone_id": task.milestone_id,
         "__summary__": f"Updated task {task.display_id}: {', '.join(changed)}",
     }
 
@@ -259,8 +291,10 @@ UPDATE_TASK = Tool(
         "APPROVAL — the user sees your proposed changes and decides "
         "whether to execute. Required: task_id. Optional (omit fields "
         "you don't want to change): title, content_text, status, "
-        "priority, effort_level, due_date. Pass `due_date: ''` to "
-        "clear the due date. Status enum: Open, WIP, Blocked, Pending, Closed, "
+        "priority, effort_level, due_date, milestone_id. Pass `due_date: ''` to "
+        "clear the due date. Pass `milestone_id` (from `list_milestones`, same "
+        "project) to move the task and its sub-tasks into that milestone, or "
+        "`milestone_id: ''` to take it out. Status enum: Open, WIP, Blocked, Pending, Closed, "
         "Deleted. Use `fetch_task` first to see the current state so "
         "you don't propose a no-op."
     ),
@@ -302,6 +336,14 @@ UPDATE_TASK = Tool(
                 "description": (
                     "New ISO 8601 date (e.g. 2026-06-30). Omit to leave "
                     "unchanged. Pass '' to clear."
+                ),
+            },
+            "milestone_id": {
+                "type": "STRING",
+                "description": (
+                    "Milestone id (from list_milestones, same project) to move "
+                    "the task into; its sub-tasks move with it. Omit to leave "
+                    "unchanged. Pass '' to take the task out of its milestone."
                 ),
             },
         },

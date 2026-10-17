@@ -354,11 +354,14 @@ CATALOG: tuple[McpTool, ...] = (
         name="update_task",
         registry_name="update_task",
         description=(
-            "Change a task: status, title, description, priority, effort or "
-            "due date. Set status to 'WIP' when you start and 'Closed' when "
-            "the work is merged. `content_text` replaces the whole description, "
-            "so read the task first and send the full new body rather than a "
-            "fragment. Requires a write-scoped API key."
+            "Change a task: status, title, description, priority, effort, "
+            "due date or milestone. Set status to 'WIP' when you start and "
+            "'Closed' when the work is merged. `content_text` replaces the "
+            "whole description, so read the task first and send the full new "
+            "body rather than a fragment. `milestone_id` (from "
+            "`list_milestones`, same project) files the task and its sub-tasks "
+            "under that milestone; '' takes it out. Requires a write-scoped "
+            "API key."
         ),
         write=True,
         task_ref_args=("task_id",),
@@ -405,8 +408,10 @@ CATALOG: tuple[McpTool, ...] = (
         name="update_tasks_bulk",
         registry_name="update_tasks_bulk",
         description=(
-            "Change priority, due date, status or effort on MANY tasks in one "
-            "call — for reprioritizing or tidying a milestone. Read the "
+            "Change priority, due date, status, effort or milestone on MANY "
+            "tasks in one call — for reprioritizing or tidying a milestone, or "
+            "filing a batch of tasks under one (`milestone_id`, '' to take a "
+            "task out). Read the "
             "current state first (`list_tasks`, and `list_task_dependencies` "
             "so blockers land before what they block), since each entry needs "
             "a one-sentence `rationale` recorded with the change. "

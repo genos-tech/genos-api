@@ -42,8 +42,12 @@ from origin.search_engine.agent.tools.task_enums import (
 )
 from origin.services.milestone_service import sync_backing_task
 from origin.services.task_cache import invalidate_project_tasks_cache
+from origin.services.task_milestone_move import milestone_move_error, move_task_to_milestone
 
 _MAX_BULK_UPDATES = 30
+# `changes` key for a milestone move; not a TaskMaster column, so the
+# field-diff loop never sees it.
+_MILESTONE_KEY = "milestone_id"
 # Fields an update row may change, in apply order.
 _FIELD_SPECS = (
     ("priority", VALID_PRIORITIES),
@@ -133,9 +137,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             if value is None:
                 continue
             if value not in valid:
-                errors.append(
-                    f"{where}: `{field}` must be one of {sorted(valid)} (got {value!r})."
-                )
+                errors.append(f"{where}: `{field}` must be one of {sorted(valid)} (got {value!r}).")
                 continue
             changes[field] = value
 
@@ -152,13 +154,35 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                         f"(got {raw_due!r}). Use '' to clear."
                     )
 
+        # Applied after the field diffs, through the milestone picker's own
+        # bridge + cascade (see `move_task_to_milestone`); kept out of the
+        # field loop because it writes hierarchy columns, not `field`.
+        if "milestone_id" in row and row["milestone_id"] is not None:
+            raw_milestone = row["milestone_id"]
+            target: int | None = None
+            valid = True
+            if raw_milestone != "":
+                try:
+                    target = int(raw_milestone)
+                except (TypeError, ValueError):
+                    valid = False
+                    errors.append(
+                        f"{where}: `milestone_id` must be an integer "
+                        f"(got {raw_milestone!r}). Use '' to detach."
+                    )
+            if valid:
+                if error := milestone_move_error(task, target, ctx.team_id):
+                    errors.append(f"{where}: {error}")
+                else:
+                    changes[_MILESTONE_KEY] = target
+
         rationale = (row.get("rationale") or "").strip()
         if not rationale:
             errors.append(f"{where}: `rationale` is required — say WHY in one sentence.")
         if not changes:
             errors.append(
                 f"{where}: no changes given for task {tid} — provide at least one of "
-                "priority / effort_level / status / due_date."
+                "priority / effort_level / status / due_date / milestone_id."
             )
         planned.append((task, changes, rationale))
 
@@ -189,19 +213,21 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             for task, changes, _rationale in planned:
                 update_fields: list[str] = []
                 changed: list[str] = []
+                move = _MILESTONE_KEY in changes
+                target_milestone_id = changes.pop(_MILESTONE_KEY, None)
                 for field, new_value in changes.items():
                     if getattr(task, field) != new_value:
                         setattr(task, field, new_value)
                         update_fields.append(field)
                         changed.append(
-                            f"{field}(cleared)" if field == "due_date" and new_value is None
+                            f"{field}(cleared)"
+                            if field == "due_date" and new_value is None
                             else field
                         )
-                if not update_fields:
-                    noops.append(task.task_id)
-                    continue
                 milestone = milestone_by_task_id.get(task.task_id)
-                if milestone is not None:
+                if not update_fields:
+                    pass  # at most a milestone move — applied below
+                elif milestone is not None:
                     # Mirror the changed columns onto the milestone (each
                     # shares its name with the backing task here) and let
                     # `sync_backing_task` re-derive the backing row so the
@@ -219,6 +245,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     # the backing row wholesale, bumping every auto_now
                     # field, so the milestone branch needs no explicit list.)
                     task.save(update_fields=[*update_fields, "ts_updated_at"])
+                if move and move_task_to_milestone(task, target_milestone_id):
+                    changed.append(
+                        "milestone" if target_milestone_id is not None else "milestone(cleared)"
+                    )
+                if not changed:
+                    noops.append(task.task_id)
+                    continue
                 updated.append(
                     {
                         "task_id": task.task_id,
@@ -257,9 +290,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 UPDATE_TASKS_BULK = Tool(
     name="update_tasks_bulk",
     description=(
-        "Change priority / due_date / status / effort_level on MANY tasks in "
-        "ONE approval — the tool for 'reprioritize', 'organize', or 'clean "
-        "up' the tasks in a milestone or project. REQUIRES USER APPROVAL — "
+        "Change priority / due_date / status / effort_level / milestone_id on "
+        "MANY tasks in ONE approval — the tool for 'reprioritize', 'organize', "
+        "or 'clean up' the tasks in a milestone or project, or for filing a "
+        "batch of tasks under a milestone. REQUIRES USER APPROVAL — "
         "the user sees every proposed change WITH your per-task rationale "
         "and approves once. ALWAYS read current state first (list_tasks, "
         "and list_task_dependencies for blocker ordering) so every change "
@@ -306,6 +340,15 @@ UPDATE_TASKS_BULK = Tool(
                             "type": "STRING",
                             "enum": EFFORT_ENUM,
                             "description": "New effort estimate. Omit to leave unchanged.",
+                        },
+                        "milestone_id": {
+                            "type": "STRING",
+                            "description": (
+                                "Milestone id (from list_milestones, same project) "
+                                "to move the task into; its sub-tasks move with "
+                                "it. Omit to leave unchanged. Pass '' to take the "
+                                "task out of its milestone."
+                            ),
                         },
                         "rationale": {
                             "type": "STRING",
