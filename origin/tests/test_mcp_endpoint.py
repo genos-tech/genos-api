@@ -18,6 +18,8 @@ no longer inherited.
 
 from __future__ import annotations
 
+import copy
+import json
 import re
 
 from django.conf import settings
@@ -32,12 +34,17 @@ from origin.models.common.api_key_models import (
     hash_key,
 )
 from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.models.note.common_note_models import NotePermissionMaster
+from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine import quota
+from origin.search_engine.agent.tools import REGISTRY
+from origin.search_engine.agent.tools.base import ToolError
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.public.mcp import protocol, tools
+from origin.views.public.mcp.resolve import resolve_note_ref
 
 User = get_user_model()
 
@@ -621,6 +628,431 @@ class TestToolCalls(McpBase):
             self.assertNotIn("add_comment", names)
             res = self._call("add_comment", {"task_id": "WRD-7", "body_text": "x"})
             self.assertEqual(res.data["error"]["code"], -32602)
+
+
+class TestTheCatalogContract(McpBase):
+    """Properties of the published catalog, checked against the registry
+    rather than by hand.
+
+    The catalog is a *rewrite* of the registry — descriptions are
+    reworded, names are renamed, schema properties are overridden — and
+    every one of those is a copy that can go stale when the registry
+    moves underneath it. These tests are the thing that notices.
+    """
+
+    def test_every_published_tool_exists_in_the_registry(self):
+        for tool in tools.CATALOG:
+            self.assertIn(
+                tool.registry_name,
+                REGISTRY,
+                f"{tool.name} maps to a registry tool that no longer exists",
+            )
+
+    def test_no_description_names_a_tool_this_surface_does_not_publish(self):
+        """The failure this prevents is specific: a description that tells
+        the caller to call something, which then 404s. `_rewrite_refs`
+        renames a tool but cannot remove a reference to an absent one, so
+        a registry tool dropped from the catalog leaves dangling text
+        behind — and the leak hides in *parameter* descriptions, not just
+        the top-level one, which is why this reads the whole payload.
+        """
+        published = {t.name for t in tools.CATALOG}
+        for tool in tools.CATALOG:
+            payload = json.dumps(tools.describe(tool))
+            for registry_name in REGISTRY:
+                if not re.search(rf"\b{re.escape(registry_name)}\b", payload):
+                    continue
+                shown = tools._RENAMES.get(registry_name, registry_name)
+                self.assertTrue(
+                    shown in published or registry_name in published,
+                    f"{tool.name} points the caller at `{registry_name}`, "
+                    f"which this surface does not publish",
+                )
+
+    def test_no_description_promises_an_approval_card(self):
+        """Every registry write tool opens with "REQUIRES USER APPROVAL",
+        because in the app it does. On this surface there is no card and
+        no user watching — the key's write scope is the authorization —
+        so a description that promises one is telling the caller its
+        write will pause when it will not."""
+        for tool in tools.CATALOG:
+            payload = json.dumps(tools.describe(tool)).lower()
+            self.assertNotIn(
+                "approval",
+                payload,
+                f"{tool.name} promises an approval step that this surface has not got",
+            )
+
+    def test_every_write_tool_says_it_needs_a_write_key(self):
+        """A read key is not shown these at all, so the caller that reads
+        this text is one working from a cached list — the only one that
+        can act on it."""
+        for tool in tools.CATALOG:
+            if tool.write:
+                self.assertIn("write-scoped", tool.description, tool.name)
+
+    def test_write_flags_match_the_registry(self):
+        """`write` drives both the hiding and the refusal, and it is
+        hand-set per entry. The registry already knows the answer:
+        `requires_approval` is exactly the set of tools that mutate."""
+        for tool in tools.CATALOG:
+            self.assertEqual(
+                tool.write,
+                REGISTRY[tool.registry_name].requires_approval,
+                f"{tool.name}'s write flag disagrees with the registry",
+            )
+
+    def test_every_schema_override_matches_a_real_property(self):
+        """An override keyed on a property the registry does not have is
+        a silent no-op: the schema still publishes the original text, and
+        nothing errors. This caught a real one — `assignee_id` for what
+        the registry calls `assignee_user_id`."""
+        for tool in tools.CATALOG:
+            registry_properties = (
+                REGISTRY[tool.registry_name].parameters_schema.get("properties") or {}
+            )
+            for key in tool.schema_overrides:
+                self.assertIn(
+                    key,
+                    registry_properties,
+                    f"{tool.name} overrides `{key}`, which the registry schema has not got",
+                )
+            for list_arg, item_key in tool.nested_schema_overrides:
+                items = (registry_properties.get(list_arg) or {}).get("items") or {}
+                self.assertIn(
+                    item_key,
+                    items.get("properties") or {},
+                    f"{tool.name} overrides `{list_arg}[].{item_key}`, which the "
+                    f"registry schema has not got",
+                )
+
+    def test_every_declared_ref_arg_is_a_real_property(self):
+        """Same failure mode as the overrides, on the resolution half: a
+        `task_ref_args` naming an argument the tool does not take means
+        references silently arrive unresolved."""
+        for tool in tools.CATALOG:
+            registry_properties = (
+                REGISTRY[tool.registry_name].parameters_schema.get("properties") or {}
+            )
+            for arg in tool.task_ref_args + tool.note_ref_args:
+                self.assertIn(arg, registry_properties, f"{tool.name} resolves absent `{arg}`")
+            for list_arg, _item_key in tool.nested_task_ref_args:
+                self.assertIn(
+                    list_arg, registry_properties, f"{tool.name} resolves absent `{list_arg}`"
+                )
+
+    def test_the_schema_dialect_is_fully_converted(self):
+        """Gemini spells types `"STRING"`; JSON Schema wants `"string"`.
+        A leftover uppercase type is the kind of thing a client rejects
+        wholesale — see the `ttlMs` incident — so check every nesting
+        level, not just the top."""
+
+        def walk(node, path):
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key == "type" and isinstance(value, str):
+                        self.assertEqual(value, value.lower(), f"{path}: uppercase type {value!r}")
+                    walk(value, f"{path}.{key}")
+            elif isinstance(node, list):
+                for i, value in enumerate(node):
+                    walk(value, f"{path}[{i}]")
+
+        for tool in tools.CATALOG:
+            walk(tools.input_schema(tool), tool.name)
+
+    def test_every_published_schema_is_valid_json_schema(self):
+        """Stricter than the dialect check, and for the same reason: a
+        client that rejects a schema does not report a schema problem.
+        `tools/list` fails validation as a whole and the server shows as
+        **"Connected" with zero tools** — the `ttlMs` incident (#347)
+        exactly. A hand-written override is the likely source now that
+        schemas are assembled rather than passed through, so this checks
+        what a validator would: known keywords, real types, and a
+        `required` naming only properties that exist.
+        """
+        valid_keywords = {
+            "type",
+            "properties",
+            "required",
+            "description",
+            "enum",
+            "items",
+            "default",
+            "format",
+        }
+        valid_types = {"string", "number", "integer", "boolean", "object", "array", "null"}
+
+        def check(node, path, name):
+            if not isinstance(node, dict):
+                return
+            declared = node.get("type")
+            if declared is not None:
+                self.assertIn(declared, valid_types, f"{name}{path}: type {declared!r}")
+            properties = node.get("properties") or {}
+            for key in node:
+                self.assertIn(key, valid_keywords, f"{name}{path}: unknown keyword `{key}`")
+            for required in node.get("required") or ():
+                self.assertIn(
+                    required,
+                    properties,
+                    f"{name}{path}: `required` names `{required}`, which is not a property",
+                )
+            enum = node.get("enum")
+            if enum is not None:
+                self.assertTrue(enum and isinstance(enum, list), f"{name}{path}: empty enum")
+            for key, value in properties.items():
+                check(value, f"{path}.{key}", name)
+            if "items" in node:
+                check(node["items"], f"{path}[]", name)
+
+        for tool in tools.CATALOG:
+            schema = tools.input_schema(tool)
+            # MCP requires an object at the root: the arguments map.
+            self.assertEqual(schema.get("type"), "object", tool.name)
+            check(schema, "", tool.name)
+
+    def test_overriding_a_schema_does_not_mutate_the_registry(self):
+        """The registry schema dicts are module state shared with the
+        in-app agent. An override that wrote through would change what
+        Genos's own LLM sees — and the in-app agent would start taking
+        `PRJ-123` where it expects an integer."""
+        before = {
+            name: copy.deepcopy(REGISTRY[name].parameters_schema)
+            for name in {t.registry_name for t in tools.CATALOG}
+        }
+        for tool in tools.CATALOG:
+            tools.input_schema(tool)
+        for name, original in before.items():
+            self.assertEqual(
+                REGISTRY[name].parameters_schema,
+                original,
+                f"building {name}'s MCP schema wrote through to the registry",
+            )
+
+    def test_every_built_write_is_published(self):
+        """The point of this PR, pinned so the catalog cannot quietly
+        drift back to a read-mostly surface. A registry write that is
+        *not* here is a capability the user has in the UI and a connected
+        agent has not — so a new one has to be added here on purpose, or
+        excluded on purpose by naming it below."""
+        deliberately_withheld: set[str] = set()
+        registry_writes = {
+            name for name, tool in REGISTRY.items() if tool.requires_approval
+        } - deliberately_withheld
+        published = {t.registry_name for t in tools.CATALOG}
+        self.assertEqual(
+            registry_writes - published,
+            set(),
+            "a built write tool is not published over MCP",
+        )
+
+
+class TestReferenceResolution(McpBase):
+    """Task and note references as a person types them."""
+
+    def setUp(self):
+        super().setUp()
+        self.note = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="Design notes", body=[]
+        )
+        NotePermissionMaster.objects.create(
+            team=self.team,
+            user=self.user,
+            note_id=self.note.note_id,
+            note_type=1,
+            role_id=1,
+        )
+
+    def test_a_display_id_resolves_inside_a_bulk_update(self):
+        """`task_id` nested in an array is still a reference a person can
+        type. Before this, the top-level resolver never reached it and
+        `PRJ-123` arrived at the tool as a string."""
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self._tool_text(
+            self._call(
+                "update_tasks_bulk",
+                {"updates": [{"task_id": "WRD-7", "priority": "High", "rationale": "blocker"}]},
+            )
+        )
+        self.assertFalse(is_error, text)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.priority, "High")
+
+    def test_a_bad_reference_inside_a_batch_is_a_tool_error(self):
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self._tool_text(
+            self._call(
+                "update_tasks_bulk",
+                {"updates": [{"task_id": "NOPE-1", "priority": "High", "rationale": "x"}]},
+            )
+        )
+        self.assertTrue(is_error)
+        self.assertIn("NOPE-1", text)
+
+    def test_a_note_url_carries_its_own_note_type(self):
+        """The reason notes get a resolver at all: a note id is only
+        unique within its family, so a bare id needs `note_type` beside
+        it — and a pasted URL answers both at once."""
+        self._key(scope=SCOPE_WRITE)
+        url = f"https://app.genosai.dev/workspace/notes/my/{self.note.note_id}"
+        text, is_error = self._tool_text(
+            self._call("update_note", {"note_id": url, "title": "Renamed from a URL"})
+        )
+        self.assertFalse(is_error, text)
+        self.note.refresh_from_db()
+        self.assertEqual(self.note.title, "Renamed from a URL")
+
+    def test_a_bare_note_id_does_not_get_a_guessed_type(self):
+        """A numeric id determines no family. Guessing one would turn "the
+        caller passed the wrong type" into a confident write against the
+        wrong table, so the caller's own argument has to survive."""
+        note_id, note_type = resolve_note_ref(str(self.note.note_id), str(self.team.team_id))
+        self.assertEqual(note_id, self.note.note_id)
+        self.assertIsNone(note_type)
+
+    def test_a_task_note_url_resolves_to_the_note_not_the_task(self):
+        """A task-note URL carries a project id, a task id and a note id.
+        Picking the wrong integer out of it would edit an unrelated
+        note."""
+        url = "https://app.genosai.dev/workspace/notes/task/project/5/task/9/note/12"
+        self.assertEqual(resolve_note_ref(url, str(self.team.team_id)), (12, "task"))
+
+    def test_team_and_shared_note_urls_are_personal_notes(self):
+        """`my`, `team` and `shared` are sidebar buckets over one table —
+        `PersonalNoteMaster` — not three note families. The tools take
+        the family, so all three resolve to `personal`."""
+        for bucket in ("my", "team", "shared"):
+            self.assertEqual(
+                resolve_note_ref(f"/workspace/notes/{bucket}/12", str(self.team.team_id)),
+                (12, "personal"),
+            )
+
+    def test_an_unreadable_note_reference_says_what_is_accepted(self):
+        with self.assertRaises(ToolError) as caught:
+            resolve_note_ref("the design doc", str(self.team.team_id))
+        self.assertIn("note_type", str(caught.exception))
+
+
+class TestTheNewWrites(McpBase):
+    """The writes this PR published, at the seams that are easy to get
+    wrong: scope, ACL, and what the caller gets back."""
+
+    def test_a_note_can_be_created_and_then_read_back(self):
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self._tool_text(
+            self._call(
+                "create_note",
+                {
+                    "note_type": "personal",
+                    "title": "Spec: login redirect",
+                    "content_text": "## Context\n\nThe redirect drops the query string.",
+                },
+            )
+        )
+        self.assertFalse(is_error, text)
+        note = PersonalNoteMaster.objects.filter(owner=self.user).order_by("-note_id").first()
+        self.assertIsNotNone(note)
+        self.assertEqual(note.title, "Spec: login redirect")
+
+        # The role row matters: personal notes grant no implicit access,
+        # so a create that skipped it would 403 its own author.
+        read_text, read_error = self._tool_text(
+            self._call("get_note", {"note_type": "personal", "note_id": note.note_id})
+        )
+        self.assertFalse(read_error, read_text)
+        self.assertIn("query string", read_text)
+
+    def test_markdown_in_a_note_survives_as_structure(self):
+        """`content_text` is markdown and the note stores BlockNote
+        blocks. A heading that arrived as one flat paragraph would make
+        the agent's notes unreadable next to a human's."""
+        self._key(scope=SCOPE_WRITE)
+        self._call(
+            "create_note",
+            {"note_type": "personal", "title": "Structured", "content_text": "# Title\n\n- one"},
+        )
+        note = PersonalNoteMaster.objects.filter(title="Structured").first()
+        kinds = {block.get("type") for block in (note.body or [])}
+        self.assertIn("heading", kinds)
+        self.assertIn("bulletListItem", kinds)
+
+    def test_a_read_key_is_shown_no_write_tool_at_all(self):
+        self._key(scope=SCOPE_READ)
+        names = {t["name"] for t in self._result(self._rpc("tools/list"))["tools"]}
+        for tool in tools.CATALOG:
+            if tool.write:
+                self.assertNotIn(tool.name, names)
+        self.assertIn("list_note_folders", names, "the read tools must still be there")
+
+    def test_a_read_key_is_refused_every_write_it_asks_for_anyway(self):
+        """One refusal per published write, because the check is per tool
+        and a new entry is exactly the thing that forgets it."""
+        self._key(scope=SCOPE_READ)
+        for tool in tools.CATALOG:
+            if not tool.write:
+                continue
+            text, is_error = self._tool_text(self._call(tool.name, {}))
+            self.assertTrue(is_error, f"{tool.name} was not refused a read-only key")
+            self.assertIn("read-only", text, tool.name)
+
+    def test_a_note_in_another_team_cannot_be_edited(self):
+        """The resolver does not check the team — the tool's own tenant
+        guard does. Worth pinning now that a note id can arrive from a
+        pasted URL rather than from a search result the ACL produced."""
+        other_team = TeamMaster.objects.create(team_name="Rivals", owner=self.user2)
+        TeamMembers.objects.create(team=other_team, attendee=self.user2)
+        theirs = PersonalNoteMaster.objects.create(
+            team=other_team, owner=self.user2, title="Theirs", body=[]
+        )
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self._tool_text(
+            self._call(
+                "update_note",
+                {"note_id": theirs.note_id, "note_type": "personal", "title": "Mine now"},
+            )
+        )
+        self.assertTrue(is_error)
+        theirs.refresh_from_db()
+        self.assertEqual(theirs.title, "Theirs")
+
+    def test_a_todo_can_be_created(self):
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self._tool_text(
+            self._call("create_todo_item", {"title": "Reply to the design review"})
+        )
+        self.assertFalse(is_error, text)
+
+    def test_assigning_a_task_by_display_id_and_user_id(self):
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self._tool_text(
+            self._call("assign_task", {"task_id": "WRD-7", "assignee_id": str(self.user.id)})
+        )
+        self.assertFalse(is_error, text)
+        self.task.refresh_from_db()
+        self.assertEqual(str(self.task.assignee_id), str(self.user.id))
+
+    def test_a_plan_creates_a_milestone_and_its_tasks(self):
+        """`create_task_plan` is the only way to wire dependencies
+        between tasks as they are created, which is why it is published
+        rather than left to repeated `create_task` calls."""
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self._tool_text(
+            self._call(
+                "create_task_plan",
+                {
+                    "project_id": self.project.project_id,
+                    "milestone": {"title": "Auth hardening"},
+                    "tasks": [
+                        {"title": "Add rate limiting"},
+                        {"title": "Ship the login fix", "blocked_by_indexes": [0]},
+                    ],
+                },
+            )
+        )
+        self.assertFalse(is_error, text)
+        self.assertTrue(
+            TaskMaster.objects.filter(project=self.project, title="Add rate limiting").exists()
+        )
 
 
 class TestOriginCheck(McpBase):

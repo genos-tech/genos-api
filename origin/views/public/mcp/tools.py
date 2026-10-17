@@ -1,14 +1,22 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 57 agent tools. This exposes 14. That is not a staging
-decision — every tool costs the connected agent context on *every*
-request it makes, and most of the 57 exist to answer questions Genos's
-own assistant gets asked ("who closed the most tasks last sprint"),
-not to help something implement a task. The 14 here are the ones the
-dev loop actually walks: find the task, read it, do the work, report
-back.
+Genos has 57 agent tools. This exposes 27. That is not all of them and
+not a staging accident — every tool costs the connected agent context on
+*every* request it makes, and much of the 57 answers questions Genos's
+own assistant gets asked ("who closed the most tasks last sprint"), not
+questions something working in the workspace has.
 
-Three things have to change on the way through, and each is a real
+What the 27 are chosen to be is **every write Genos has actually built,
+plus the reads needed to drive them**. The earlier cut was 14, read-heavy
+and aimed narrowly at the code loop: find the task, read it, do the work,
+report back. It was sized by a fear that turns out to be misplaced — the
+measured cost of the full catalog is ~6.8k tokens against ~14k for the
+in-app agent's 57, so the ceiling that constrains the in-app prompt
+(`SPOTLIGHT_QUALITY_ASSESSMENT_2026_07.md` F6) has far more headroom
+here. Withholding a *built* write bought no measurable context back and
+cost the connected agent the ability to do what the user can do.
+
+Four things have to change on the way through, and each is a real
 mismatch rather than tidying:
 
 1. **Schema dialect.** `parameters_schema` is written for Gemini's
@@ -22,7 +30,29 @@ mismatch rather than tidying:
    moving every time the in-app prompt is tuned for evals.
 3. **Task references.** Tools take a numeric `task_id`; people type
    `PRJ-123` or paste a URL. Resolved in `resolve.py` before the tool
-   runs.
+   runs — including inside the array `update_tasks_bulk` takes, since a
+   reference a person can type has to work everywhere one is accepted.
+4. **Note references.** A note id collides across the three note tables,
+   so every note tool needs a `note_type` alongside it. A pasted note URL
+   carries both, so one paste answers both arguments (`resolve.py`).
+
+**There is no approval gate on this surface, and that is the one thing to
+understand before adding a write here.** In the app every
+`requires_approval` tool pauses for a card the user confirms; MCP has no
+user watching, so the API key's `write` scope *is* the standing
+authorization, granted once when the key was minted. Nothing here
+consults `requires_approval` — deliberately, since a pause nobody can
+answer is a hang. Two consequences, both load-bearing:
+
+* A published write runs the moment it is called. Prefer writes whose
+  effect is **recoverable** — note and task edits snapshot their prior
+  state (`snapshot_note_version`, `TaskActivity`), so a wrong one can be
+  walked back.
+* **A destructive tool needs a real undo before it belongs here.**
+  `delete_calendar_event` is published because the registry's own
+  description calls it out as destructive and a user asks for it by name;
+  it is the only delete in the registry, and the asymmetry is on purpose
+  rather than an oversight to be "fixed" by adding more.
 
 Scope is enforced here rather than by `HasRequiredScope`, because MCP is
 all-POST: the method-based rule would refuse a read-only key on a pure
@@ -44,7 +74,7 @@ from django.conf import settings
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.tools import REGISTRY
 from origin.search_engine.agent.tools.base import ToolContext, ToolError
-from origin.views.public.mcp.resolve import resolve_task_ref
+from origin.views.public.mcp.resolve import resolve_note_ref, resolve_task_ref
 
 log = logging.getLogger(__name__)
 
@@ -67,9 +97,18 @@ _TASK_REF_SCHEMA = {
     "description": ("The task: its display id (PRJ-123), its Genos URL, or its numeric id."),
 }
 
-
-def _rewrite_refs(text: str) -> str:
-    return _RENAME_RE.sub(lambda m: _RENAMES[m.group(1)], text or "")
+# A note reference. Unlike a task there is no display-id form, so this
+# widens the integer to also accept a pasted URL rather than replacing
+# it — and the URL is worth accepting because it carries the `note_type`
+# the id alone cannot imply.
+_NOTE_REF_SCHEMA = {
+    "type": "string",
+    "description": (
+        "The note: its Genos URL, or its numeric id. Note ids are only "
+        "unique within a note family, so pass `note_type` too — unless you "
+        "paste a URL, which carries both."
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -83,8 +122,23 @@ class McpTool:
     # Argument names whose value is a task reference to resolve before
     # the underlying tool sees it.
     task_ref_args: tuple[str, ...] = ()
+    # Argument names holding a note reference. Resolving one may also
+    # determine `note_type`, so it is resolved as a pair.
+    note_ref_args: tuple[str, ...] = ()
+    # `(list_arg, item_key)` pairs: a task reference nested inside an
+    # array of objects, as `update_tasks_bulk` takes. A reference a
+    # person can type has to work everywhere one is accepted, and a
+    # batch is exactly where hand-typed ids show up.
+    nested_task_ref_args: tuple[tuple[str, str], ...] = ()
     # Applied to the registry schema after dialect conversion.
     schema_overrides: dict[str, Any] = field(default_factory=dict)
+    # Applied to a property nested inside an array item's schema, keyed
+    # `(list_arg, item_key)` — the schema half of `nested_task_ref_args`.
+    nested_schema_overrides: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
+
+
+def _rewrite_refs(text: str) -> str:
+    return _RENAME_RE.sub(lambda m: _RENAMES[m.group(1)], text or "")
 
 
 CATALOG: tuple[McpTool, ...] = (
@@ -137,8 +191,25 @@ CATALOG: tuple[McpTool, ...] = (
         description=(
             "Milestones in a project, with due dates and progress. A "
             "milestone is how a multi-task piece of work is grouped — start "
-            "here when the user names one rather than a single task."
+            "here when the user names one rather than a single task. A "
+            "milestone is also backed by a task, so `update_task` on that "
+            "backing id is how a milestone's own title and dates change."
         ),
+        # The registry description of `assignee_user_id` points at
+        # `list_my_milestones`, which this surface does not publish —
+        # `_rewrite_refs` can only rename a tool, not remove a reference
+        # to an absent one. Overridden rather than renamed: the caller
+        # already has `get_current_user` for "mine".
+        schema_overrides={
+            "assignee_user_id": {
+                "type": "string",
+                "description": (
+                    "Only milestones this user is assigned to. A user UUID — "
+                    "`get_current_user` for the caller's own, or "
+                    "`get_team_members` to resolve a name."
+                ),
+            }
+        },
     ),
     McpTool(
         name="get_milestone_summary",
@@ -195,6 +266,36 @@ CATALOG: tuple[McpTool, ...] = (
             "name into the id that assignee filters take."
         ),
     ),
+    McpTool(
+        name="list_project_members",
+        registry_name="list_project_members",
+        description=(
+            "The members of ONE project, with their user ids — not the whole "
+            "team. Use it before assigning work inside a project, since only "
+            "a member of it can be given a task there."
+        ),
+    ),
+    McpTool(
+        name="list_task_dependencies",
+        registry_name="list_task_dependencies",
+        description=(
+            "Every blocker→blocked edge in one project or one milestone — the "
+            "whole dependency graph in a single call, rather than "
+            "`get_task_blockers` per task. Read this before reordering a "
+            "milestone's work: a blocker generally has to land first."
+        ),
+    ),
+    McpTool(
+        name="list_note_folders",
+        registry_name="list_note_folders",
+        description=(
+            "How the caller's personal notes are filed into sidebar folders, "
+            "with each folder's id and the notes in it. Folders are personal-"
+            "only, and this is the only tool that sees them — `search_workspace` "
+            "does not. Call it to turn a folder NAME into the `folder_id` that "
+            "`create_note` and `update_note` take."
+        ),
+    ),
     # ---- write: needs a write-scoped key ----
     McpTool(
         name="update_task",
@@ -230,6 +331,180 @@ CATALOG: tuple[McpTool, ...] = (
             "Create a task in a project. Use it to split discovered work out "
             "of the task you're on, rather than widening that one. Get the "
             "project id from `list_projects`. Requires a write-scoped API key."
+        ),
+        write=True,
+    ),
+    McpTool(
+        name="assign_task",
+        registry_name="assign_task",
+        description=(
+            "Assign a task to someone, or unassign it by omitting "
+            "`assignee_id`. The assignee must already be on the team or the "
+            "task's project — `list_project_members` or `get_team_members` to "
+            "resolve a name, `get_current_user` for yourself. Requires a "
+            "write-scoped API key."
+        ),
+        write=True,
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
+        name="update_tasks_bulk",
+        registry_name="update_tasks_bulk",
+        description=(
+            "Change priority, due date, status or effort on MANY tasks in one "
+            "call — for reprioritizing or tidying a milestone. Read the "
+            "current state first (`list_tasks`, and `list_task_dependencies` "
+            "so blockers land before what they block), since each entry needs "
+            "a one-sentence `rationale` recorded with the change. "
+            "All-or-nothing: one invalid entry rejects the whole batch. Use "
+            "`update_task` for a single task. Requires a write-scoped API key."
+        ),
+        write=True,
+        nested_task_ref_args=(("updates", "task_id"),),
+        nested_schema_overrides={
+            ("updates", "task_id"): _TASK_REF_SCHEMA,
+            # The registry's text promises "the user reads this in the
+            # approval card" — there is no card on this surface. The
+            # field is still worth requiring: it is recorded with the
+            # change, so it is what someone reading the task's history
+            # later finds instead of an unexplained edit.
+            ("updates", "rationale"): {
+                "type": "string",
+                "description": (
+                    "One sentence: WHY this task is changing. Recorded with "
+                    "the change, so it is what the task's history shows."
+                ),
+            },
+        },
+    ),
+    McpTool(
+        name="create_task_plan",
+        registry_name="create_task_plan",
+        description=(
+            "Create a whole plan in one call: a new milestone with its tasks "
+            "and their dependencies, or a batch of tasks under an existing "
+            "milestone (`existing_milestone_id`) or as sub-tasks of an "
+            "existing task (`parent_task_id`). Use this instead of repeated "
+            "`create_task` calls whenever the work is related — it is the only "
+            "way to wire dependencies between tasks being created, by array "
+            "index (`blocked_by_indexes`). Max 20 tasks. Requires a "
+            "write-scoped API key."
+        ),
+        write=True,
+        task_ref_args=("parent_task_id",),
+        schema_overrides={
+            "parent_task_id": {
+                **_TASK_REF_SCHEMA,
+                "description": (
+                    "Optional: nest every task in this batch under this "
+                    "existing task, as sub-tasks. Its display id (PRJ-123), "
+                    "its Genos URL, or its numeric id."
+                ),
+            }
+        },
+    ),
+    McpTool(
+        name="create_note",
+        registry_name="create_note",
+        description=(
+            "Write a new note — a document, not a task. Use it for a spec, a "
+            "design, a research write-up or a hand-off: anything whose value "
+            "is the prose. Two kinds: 'personal' (private to you, optionally "
+            "filed into a folder via `folder_id` from `list_note_folders`) or "
+            "'task' (shared with a project, needs `project_id`, optionally "
+            "`task_id` to attach it to one task). `content_text` is markdown — "
+            "headings, lists and code fences are preserved. When the work "
+            "wants TASKS rather than a document, use `create_task_plan`. "
+            "Chat-attached notes cannot be created here. Requires a "
+            "write-scoped API key."
+        ),
+        write=True,
+        task_ref_args=("task_id",),
+        schema_overrides={
+            "task_id": {
+                **_TASK_REF_SCHEMA,
+                "description": (
+                    "Optional, and only with note_type='task': attach the note "
+                    "to one task in the project. Its display id (PRJ-123), its "
+                    "Genos URL, or its numeric id."
+                ),
+            }
+        },
+    ),
+    McpTool(
+        name="update_note",
+        registry_name="update_note",
+        description=(
+            "Edit an existing note's title and/or body, or move a personal "
+            "note between folders. `content_text` REPLACES the entire body, so "
+            "read the note with `get_note` first and send the full new text — "
+            "every section you are not changing included — rather than a "
+            "fragment. Every edit is snapshotted into the note's version "
+            "history, so a change can be rolled back in the Genos UI. You must "
+            "be the note's owner, an editor on it, or (for a task note) a "
+            "member of its project. Chat notes cannot be edited here. Requires "
+            "a write-scoped API key."
+        ),
+        write=True,
+        note_ref_args=("note_id",),
+        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+    ),
+    McpTool(
+        name="create_todo_item",
+        registry_name="create_todo_item",
+        description=(
+            "Add a personal to-do for the caller — a private checklist item, "
+            "not project work anyone else can see. Use a task for work that "
+            "belongs to a project. Only `title` is required; `target_date` "
+            "defaults to today. Requires a write-scoped API key."
+        ),
+        write=True,
+    ),
+    McpTool(
+        name="update_todo_item",
+        registry_name="update_todo_item",
+        description=(
+            "Change one of the caller's to-dos: tick it off with "
+            "`is_completed`, edit the title, or replace its notes. "
+            '`notes_text: ""` clears the body; `clear_category: true` removes '
+            "the category. Requires a write-scoped API key."
+        ),
+        write=True,
+    ),
+    McpTool(
+        name="create_calendar_event",
+        registry_name="create_calendar_event",
+        description=(
+            "Put an event on the caller's Google Calendar. Pass "
+            "`YYYY-MM-DD` for an all-day event — `end_iso` is EXCLUSIVE, so a "
+            "single day ends on the next — or a full `YYYY-MM-DDTHH:MM:SS` for "
+            "a timed one. Supply `time_zone` whenever you know it rather than "
+            "letting the server guess. Requires a write-scoped API key."
+        ),
+        write=True,
+    ),
+    McpTool(
+        name="update_calendar_event",
+        registry_name="update_calendar_event",
+        description=(
+            "Change an existing calendar event; omit any field you are "
+            "leaving alone. To move it, send `start_iso` AND `end_iso` "
+            "together — Google rejects a half-updated time. `attendees` "
+            "replaces the whole invitee list, so `[]` clears it. Requires a "
+            "write-scoped API key."
+        ),
+        write=True,
+    ),
+    McpTool(
+        name="delete_calendar_event",
+        registry_name="delete_calendar_event",
+        description=(
+            "Delete a calendar event. **This is not reversible from here** — "
+            "there is no undo on this surface and the event would have to be "
+            "recreated by hand, so only call it when the user has asked for "
+            "that specific event to be cancelled. Deleting an already-deleted "
+            "event succeeds. Requires a write-scoped API key."
         ),
         write=True,
     ),
@@ -271,6 +546,29 @@ def input_schema(tool: McpTool) -> dict[str, Any]:
     if tool.schema_overrides:
         properties = dict(schema.get("properties") or {})
         properties.update(tool.schema_overrides)
+        schema = {**schema, "properties": properties}
+    for (list_arg, item_key), override in tool.nested_schema_overrides.items():
+        # Rebuild the path `properties[list_arg].items.properties[item_key]`
+        # without mutating the registry's own schema dict, which is module
+        # state shared with the in-app agent.
+        properties = dict(schema.get("properties") or {})
+        array_schema = dict(properties.get(list_arg) or {})
+        items = dict(array_schema.get("items") or {})
+        item_properties = dict(items.get("properties") or {})
+        if item_key not in item_properties:
+            # The nesting moved under us. Leave the schema as the registry
+            # wrote it rather than inventing a property: a wrong override
+            # here is how a silent no-op gets shipped.
+            log.warning(
+                "MCP nested schema override %s.%s did not match the registry schema",
+                list_arg,
+                item_key,
+            )
+            continue
+        item_properties[item_key] = override
+        items["properties"] = item_properties
+        array_schema["items"] = items
+        properties[list_arg] = array_schema
         schema = {**schema, "properties": properties}
     return schema
 
@@ -379,6 +677,26 @@ def call(
         for arg in tool.task_ref_args:
             if arg in args and args[arg] is not None:
                 args[arg] = resolve_task_ref(args[arg], ctx.team_id)
+        for arg in tool.note_ref_args:
+            if arg in args and args[arg] is not None:
+                note_id, note_type = resolve_note_ref(args[arg], ctx.team_id)
+                args[arg] = note_id
+                # Only a reference that actually determined the family
+                # overrides what the caller passed. A bare id determines
+                # nothing, and guessing would turn a wrong `note_type`
+                # into a confident write against the wrong table.
+                if note_type is not None:
+                    args["note_type"] = note_type
+        for list_arg, item_key in tool.nested_task_ref_args:
+            entries = args.get(list_arg)
+            if not isinstance(entries, list):
+                continue
+            resolved = []
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get(item_key) is not None:
+                    entry = {**entry, item_key: resolve_task_ref(entry[item_key], ctx.team_id)}
+                resolved.append(entry)
+            args[list_arg] = resolved
         payload = REGISTRY[tool.registry_name].run(args, ctx)
     except ToolError as exc:
         # The tool's own vocabulary — not authorized, not found, invalid
