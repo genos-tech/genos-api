@@ -117,7 +117,11 @@ def relocate_tasks(
         fields["sprint_id"] = None
     if clear_tags:
         fields["tags"] = None
-    TaskMaster.objects.filter(task_id__in=task_ids).update(**fields)
+    from origin.signals.task_signals import update_tasks_recorded
+
+    update_tasks_recorded(
+        TaskMaster.objects.filter(task_id__in=task_ids), cascade="project_move", **fields
+    )
 
     # Re-fetch AFTER the bulk update so each instance carries the new
     # project — `claim_project_task_number` counts within `project_id`.

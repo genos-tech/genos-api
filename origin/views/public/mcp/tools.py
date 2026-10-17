@@ -254,7 +254,9 @@ CATALOG: tuple[McpTool, ...] = (
             "key's name and prefix, so your own writes are recognisable), "
             "`pr_merge` (closed by a merged PR), `dependencies` (an automatic "
             "Blocked/Open flip), `github` (a linked PR or PR comment), or "
-            "`unknown` for older rows. Use it to check "
+            "`unknown` for older rows. An entry with `cascade` was carried "
+            "along by a change to another row (a milestone or project move, a "
+            "milestone delete or sprint change). Use it to check "
             "a write stuck, or to find out who changed a task you are "
             "working on. Description edits are listed without their text."
         ),

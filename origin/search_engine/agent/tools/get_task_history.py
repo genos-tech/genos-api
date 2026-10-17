@@ -35,7 +35,7 @@ _MAX_LIMIT = 100
 
 # Relation-id fields: the raw values are primary keys, so prefer the
 # label the signal stored alongside them in `metadata`.
-_LABELLED_FIELDS = {"parent_task_id", "milestone_id", "sprint_id"}
+_LABELLED_FIELDS = {"parent_task_id", "milestone_id", "sprint_id", "project_id"}
 # Rows whose old/new values are user-authored text. Wrapped so the model
 # treats them as data, never as instructions.
 _FREE_TEXT_ACTIONS = {TaskActivityActionType.TITLE, TaskActivityActionType.CREATED}
@@ -80,6 +80,13 @@ def _value(row: TaskActivity, side: str, usernames: dict[str, str]) -> Any:
             k: wrap_workspace_content(v) if k == "title" and isinstance(v, str) else v
             for k, v in raw.items()
         }
+    # Tag names are typed by users; flatten `[{"tagName": …}]` to the
+    # names, each wrapped like any other user-authored text.
+    if isinstance(raw, list) and row.action_type == TaskActivityActionType.TAGS:
+        return [
+            wrap_workspace_content(str(tag.get("tagName") if isinstance(tag, dict) else tag))
+            for tag in raw
+        ]
     return raw
 
 
@@ -104,6 +111,10 @@ def _entry(row: TaskActivity, usernames: dict[str, str]) -> dict[str, Any]:
         entry["comment_id"] = (row.metadata or {}).get("commentId")
     if row.action_type == TaskActivityActionType.PR_LINKED:
         entry["pr_url"] = (row.metadata or {}).get("pr_url")
+    # Carried along by a change to another row (a milestone move, a
+    # project move, …) rather than edited on this task directly.
+    if cascade := (row.metadata or {}).get("cascade"):
+        entry["cascade"] = cascade
     return entry
 
 
@@ -188,7 +199,9 @@ GET_TASK_HISTORY = Tool(
         "how it arrived (`app`, `agent` for Spotlight, `api_key` with the "
         "key's name, `pr_merge`, `dependencies` for an automatic Blocked "
         "flip, `github` for a linked PR or PR comment, or `unknown` for "
-        "older rows). Use it for 'who changed this', "
+        "older rows). An entry with `cascade` was carried along by a change "
+        "to another row — a milestone or project move, a milestone delete or "
+        "sprint change — not edited on this task. Use it for 'who changed this', "
         "'when did this close', or 'why is this Blocked'. A description edit "
         "is listed without its old/new text."
     ),

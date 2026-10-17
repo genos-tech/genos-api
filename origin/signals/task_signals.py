@@ -20,6 +20,7 @@ Adding a new field to track:
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import Any, Optional
@@ -29,6 +30,7 @@ from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
 from origin.middleware.current_user import get_current_source, get_current_user
+from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
@@ -64,6 +66,9 @@ _TRACKED_TASK_FIELDS = (
     "parent_task_id",
     "milestone_id",
     "sprint_id",
+    "start_date",
+    "tags",
+    "project_id",
 )
 
 
@@ -78,7 +83,26 @@ _FIELD_TO_ACTION = {
     "parent_task_id": TaskActivityActionType.PARENT,
     "milestone_id": TaskActivityActionType.MILESTONE_LINK,
     "sprint_id": TaskActivityActionType.SPRINT_LINK,
+    "start_date": TaskActivityActionType.START_DATE,
+    "tags": TaskActivityActionType.TAGS,
+    "project_id": TaskActivityActionType.PROJECT,
 }
+
+
+def _normalise_tags(value: Any) -> Any:
+    """Tags are a JSON list (of `{"tagName": …}` objects) whose order the
+    UI does not preserve, stored as None or [] interchangeably when
+    empty. Compare — and record — a sorted list with None and []
+    collapsed, so re-saving a task with the same tags writes no row."""
+    if not value:
+        return None
+    if isinstance(value, list):
+        return sorted(value, key=lambda tag: json.dumps(tag, sort_keys=True, default=str))
+    return value
+
+
+def _tracked_value(field: str, value: Any) -> Any:
+    return _normalise_tags(value) if field == "tags" else value
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -132,6 +156,9 @@ def _resolve_relation_label(field: str, value: Any) -> Optional[str]:
         if field == "sprint_id":
             row = Sprint.objects.only("name").filter(pk=value).first()
             return row.name if row else None
+        if field == "project_id":
+            row = ProjectMaster.objects.only("project_name").filter(pk=value).first()
+            return row.project_name if row else None
     except (ValueError, TypeError):
         # `value` was not a valid pk shape — fall through to None so
         # the audit row still gets created with just the id.
@@ -172,7 +199,7 @@ def _metadata_for_change(field: str, old: Any, new: Any) -> Optional[dict]:
             "oldDisplayId": _resolve_task_display_id(old),
             "newDisplayId": _resolve_task_display_id(new),
         }
-    if field in ("milestone_id", "sprint_id"):
+    if field in ("milestone_id", "sprint_id", "project_id"):
         return {
             "oldLabel": _resolve_relation_label(field, old),
             "newLabel": _resolve_relation_label(field, new),
@@ -235,6 +262,67 @@ def _record(
         new_value=_to_jsonable(new_value),
         metadata=_to_jsonable(metadata),
     )
+
+
+def update_tasks_recorded(queryset, *, cascade: str, **fields) -> int:
+    """`queryset.update(**fields)` that still leaves an audit trail.
+
+    A queryset `.update()` fires no `post_save`, so the cascades that use
+    one for speed — a milestone move carrying its subtree, a milestone
+    delete detaching its tasks, a sprint push, a project move's riders —
+    used to leave nothing in a task's history. This snapshots the tracked
+    fields of exactly the rows the update will touch, runs it, and writes
+    one row per changed field per task through `_record`, so each row
+    carries the triggering request's actor and `via` like any other.
+
+    Rows land on every affected task, not one summary on the root: a
+    moved sub-task's own `get_task_history` is where someone asks "who
+    moved this". `metadata.cascade` names the operation so the feed (and
+    an agent) can tell a carried-along change from a direct edit.
+
+    Returns the update's row count, as `.update()` does.
+    """
+    # `milestone=None` and `milestone_id=None` are the same write; the
+    # tracked names are attnames, so map a relation's name onto its column.
+    columns = {TaskMaster._meta.get_field(name).attname for name in fields}
+    tracked = [f for f in _TRACKED_TASK_FIELDS if f in columns]
+    # `_record` would drop the rows anyway under suppression; returning
+    # here also skips the snapshot and re-read, which a bulk teardown
+    # running this per milestone would otherwise pay for nothing.
+    if not tracked or activity_suppressed():
+        return queryset.update(**fields)
+    # Pin the id set first: the update may change the very column the
+    # queryset filters on (`filter(milestone=m).update(milestone=None)`).
+    ids = list(queryset.values_list("pk", flat=True))
+    if not ids:
+        return 0
+    before = {
+        row["pk"]: row
+        for row in TaskMaster.objects.filter(pk__in=ids).values("pk", "is_init_task", *tracked)
+    }
+    count = TaskMaster.objects.filter(pk__in=ids).update(**fields)
+    labels: dict[tuple[str, str], Optional[dict]] = {}
+    for task in TaskMaster.objects.filter(pk__in=ids).select_related("team", "project"):
+        old_row = before.get(task.pk)
+        if old_row is None or old_row["is_init_task"]:
+            continue
+        for field in tracked:
+            old = _tracked_value(field, old_row[field])
+            new = _tracked_value(field, getattr(task, field))
+            if old == new:
+                continue
+            key = (field, json.dumps(_to_jsonable([old, new]), sort_keys=True))
+            if key not in labels:
+                labels[key] = _metadata_for_change(field, old, new)
+            _record(
+                task=task,
+                action_type=_FIELD_TO_ACTION[field],
+                field_name=field,
+                old_value=old,
+                new_value=new,
+                metadata={**(labels[key] or {}), "cascade": cascade},
+            )
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -347,8 +435,8 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
         )
 
     for field in _TRACKED_TASK_FIELDS:
-        old = original.get(field)
-        new = getattr(instance, field)
+        old = _tracked_value(field, original.get(field))
+        new = _tracked_value(field, getattr(instance, field))
         if old == new:
             continue
         action = _FIELD_TO_ACTION.get(field)
