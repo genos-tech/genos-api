@@ -22,6 +22,8 @@ from django.db import transaction
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
+from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
 from origin.services.task_comment_fanout import fan_out_task_comment
 
 _PARA_PROPS = {
@@ -41,21 +43,25 @@ def _paragraph(text: str) -> dict[str, Any]:
     }
 
 
-def _wrap_blocknote(text: str) -> list[dict[str, Any]]:
-    """Emit the exact BlockNote shape the chat preview expects.
+def _wrap_blocknote(text: str, ctx: ToolContext) -> list[dict[str, Any]]:
+    """Parse the comment's markdown into BlockNote blocks, the same way
+    `update_task` and `update_note` do. Splitting it into one plain
+    paragraph per line stored `#`, `**`, `` ` `` and `|` as literal text,
+    so an agent-written comment showed raw markdown in the thread.
 
-    Real user-typed comments persist as: one paragraph block per text
-    line, followed by a trailing blank paragraph (BlockNote's editor
-    sentinel). `BnChatPreview` renders comments via
+    A trailing blank paragraph (BlockNote's editor sentinel) is still
+    appended. `BnChatPreview` renders comments via
     `initialContent: content.slice(0, -1)`, so a single-block body
-    becomes an empty array and BlockNote throws "initialContent must
-    be a non-empty array of blocks". We must emit the trailing blank
-    block.
+    would become an empty array and BlockNote would throw
+    "initialContent must be a non-empty array of blocks".
     """
     if not text:
         return []
-    lines = text.split("\n")
-    return [_paragraph(line) for line in lines] + [_paragraph("")]
+    blocks = markdown_to_blocks(
+        text,
+        entity_link_resolver=lambda token: resolve_note_entity_link(token, team_id=ctx.team_id),
+    )
+    return blocks + [_paragraph("")]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -98,7 +104,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 task=task,
                 sender_id=ctx.user_id,
                 comment_id=next_id,
-                comment_body=_wrap_blocknote(body_text),
+                comment_body=_wrap_blocknote(body_text, ctx),
             )
     except Exception as e:  # noqa: BLE001
         raise ToolError(f"Failed to add comment: {e}")
@@ -121,7 +127,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 ADD_COMMENT = Tool(
     name="add_comment",
     description=(
-        "Add a plain-text comment to an existing task. REQUIRES USER "
+        "Add a comment to an existing task. REQUIRES USER "
         "APPROVAL — the user sees your proposed comment text before it's "
         "posted. Required: task_id, body_text. Use this when the user "
         "asks you to leave a note, post a comment, or reply on a task. "
@@ -138,8 +144,9 @@ ADD_COMMENT = Tool(
             "body_text": {
                 "type": "STRING",
                 "description": (
-                    "Plain-text comment body. Keep it concise; mentions "
-                    "(@user) and rich formatting are not supported by this "
+                    "Comment body in markdown (headings, lists, **bold**, "
+                    "*italic*, `code`, fenced code blocks, tables, links). "
+                    "Keep it concise; @mentions are not supported by this "
                     "tool — users add those through the UI."
                 ),
             },
