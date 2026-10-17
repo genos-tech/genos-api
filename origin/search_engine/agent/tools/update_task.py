@@ -16,7 +16,6 @@ and decides whether to execute.
 
 from __future__ import annotations
 
-import uuid
 from datetime import date
 from typing import Any
 
@@ -24,7 +23,7 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
-from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
+from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.services.collab_push import push_task_body
 from origin.services.milestone_service import sync_backing_task
 
@@ -37,47 +36,6 @@ _VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"}
 # a value outside the set still saves but renders without chip colour.
 _VALID_PRIORITIES = {"Minimal", "Low", "Normal", "High", "Critical"}
 _VALID_EFFORTS = {"Minimal", "Low", "Moderate", "High", "Extensive"}
-
-
-_PARA_PROPS = {
-    "textColor": "default",
-    "textAlignment": "left",
-    "backgroundColor": "default",
-}
-
-
-def _paragraph(text: str) -> dict[str, Any]:
-    return {
-        "id": str(uuid.uuid4()),
-        "type": "paragraph",
-        "props": dict(_PARA_PROPS),
-        "content": ([{"text": text, "type": "text", "styles": {}}] if text else []),
-        "children": [],
-    }
-
-
-def _wrap_blocknote(text: str) -> list[dict[str, Any]]:
-    """Parse the written body as markdown into BlockNote blocks.
-
-    Previously this split on newlines and emitted one flat paragraph per
-    line, so a status update written with a heading and a checklist
-    round-tripped into the editor as literal `##` and `- [ ]` characters
-    in prose. `markdown_to_blocks` is the same parser `create_note` uses,
-    so a body written here renders exactly like one written there.
-
-    The two touches it doesn't apply are kept, because this tool's output
-    has to be indistinguishable from a user-typed body: a stable `id` on
-    every block, and the trailing blank paragraph the editor always
-    carries as its final line.
-    """
-    if not text:
-        return []
-    blocks = markdown_to_blocks(text)
-    if not blocks:
-        return []
-    for block in blocks:
-        block.setdefault("id", str(uuid.uuid4()))
-    return blocks + [_paragraph("")]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -121,7 +79,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     # --- content_text → BlockNote shape ---
     if "content_text" in args and args["content_text"] is not None:
-        new_content = _wrap_blocknote((args.get("content_text") or "").strip())
+        new_content = task_body_blocks(args.get("content_text") or "")
         if new_content != task.content:
             task.content = new_content
             update_fields.append("content")

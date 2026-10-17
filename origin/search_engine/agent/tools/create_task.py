@@ -17,26 +17,31 @@ pause/resume protocol introduced in Phase 7:
      called; the model sees a `{"error": "user_rejected"}` response
      and explains to the user.
 
-`content_text` is wrapped into the minimal BlockNote document shape
-that the rest of the app already produces — a single paragraph block.
-The text-extraction layer (`text_extraction.extract_text`) reads this
-shape natively when the new task gets indexed by the chunker.
+`content_text` is markdown, parsed by the same `task_body_blocks` that
+`update_task` and `create_task_plan` use, so a body renders the same
+whichever tool wrote it.
+
+`milestone_id` files the new task under an existing milestone exactly as
+`create_task_plan`'s `existing_milestone_id` does: nested under the
+milestone's backing task, in the milestone's sprint.
 """
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 from origin.models.project.prj_models import ProjectMaster
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.quota import (
     TASK_CREATE_KEY,
     check_remaining_monthly,
     increment_usage,
 )
+from origin.services.milestone_service import ensure_backing_task
 
 _DEFAULT_STATUS = "Open"
 # Canonical enum lives on the frontend in `taskMeta.ts`. Keep this in
@@ -46,34 +51,26 @@ _VALID_PRIORITIES = {"Minimal", "Low", "Normal", "High", "Critical"}
 _VALID_EFFORTS = {"Minimal", "Low", "Moderate", "High", "Extensive"}
 
 
-_PARA_PROPS = {
-    "textColor": "default",
-    "textAlignment": "left",
-    "backgroundColor": "default",
-}
-
-
-def _paragraph(text: str) -> dict[str, Any]:
-    return {
-        "id": str(uuid.uuid4()),
-        "type": "paragraph",
-        "props": dict(_PARA_PROPS),
-        "content": ([{"text": text, "type": "text", "styles": {}}] if text else []),
-        "children": [],
-    }
-
-
-def _wrap_blocknote(text: str) -> list[dict[str, Any]]:
-    """Wrap plain text into the same BlockNote shape a user-typed task
-    body produces. One paragraph per line + a trailing blank sentinel,
-    each block carrying `id` / `props` / `children` / inline `styles`
-    so the saved row is byte-equivalent to a user-typed one.
-    `extract_text(...)` still walks this for the chunker on reindex.
-    """
-    if not text:
-        return []
-    lines = text.split("\n")
-    return [_paragraph(line) for line in lines] + [_paragraph("")]
+def _resolve_milestone(raw_id: Any, project_id: int, ctx: ToolContext) -> MilestoneMaster:
+    """The milestone a new task is filed under; same checks as
+    `create_task_plan`'s `existing_milestone_id`."""
+    try:
+        milestone_id = int(raw_id)
+    except (TypeError, ValueError):
+        raise ToolError(f"`milestone_id` must be an integer (got {raw_id!r}).")
+    try:
+        milestone = MilestoneMaster.objects.select_related("task").get(
+            milestone_id=milestone_id, is_deleted=False
+        )
+    except MilestoneMaster.DoesNotExist:
+        raise ToolError(f"Milestone {milestone_id} not found.")
+    if str(getattr(milestone, "team_id", "") or "") != ctx.team_id:
+        raise ToolError("Not authorized: milestone belongs to a different team.")
+    if milestone.project_id != project_id:
+        raise ToolError(
+            f"Milestone {milestone_id} belongs to project {milestone.project_id}, not {project_id}."
+        )
+    return milestone
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -107,7 +104,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if ctx.user_id not in allowed:
         raise ToolError(f"Not authorized to create tasks in project {project_id}.")
 
-    content_text = (args.get("content_text") or "").strip()
+    milestone = None
+    if args.get("milestone_id") is not None:
+        milestone = _resolve_milestone(args["milestone_id"], project_id, ctx)
+
+    content_text = args.get("content_text") or ""
     priority = args.get("priority")
     if priority is not None and priority not in _VALID_PRIORITIES:
         raise ToolError(
@@ -127,7 +128,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "reporter_id": ctx.user_id,
         "title": title,
         "status": _DEFAULT_STATUS,
-        "content": _wrap_blocknote(content_text),
+        "content": task_body_blocks(content_text),
     }
     if priority:
         create_kwargs["priority"] = priority
@@ -147,18 +148,32 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         )
 
     try:
+        if milestone is not None:
+            # A task "in" a milestone hangs off its backing task row (the
+            # table nests it there) and takes the milestone's sprint. The
+            # root_task_id signal then derives the root from that parent.
+            # Same linkage `create_task_plan` and the UI's POST produce.
+            backing = ensure_backing_task(milestone)
+            create_kwargs["milestone"] = milestone
+            create_kwargs["parent_task_id"] = backing.task_id
+            create_kwargs["sprint_id"] = milestone.sprint_id
         task = TaskMaster.objects.create(**create_kwargs)
     except Exception as e:  # noqa: BLE001 — surface as ToolError for the model
         raise ToolError(f"Failed to create task: {e}")
 
     increment_usage(ctx.user_id, TASK_CREATE_KEY)
 
+    summary = f"Created task {task.display_id}: {task.title}"
+    if milestone is not None:
+        summary += f' in milestone "{milestone.title}"'
     return {
         "task_id": task.task_id,
+        "display_id": task.display_id,
         "project_id": project_id,
+        "milestone_id": milestone.milestone_id if milestone is not None else None,
         "title": task.title,
         "status": task.status,
-        "__summary__": f"Created task {task.display_id}: {task.title}",
+        "__summary__": summary,
     }
 
 
@@ -169,7 +184,8 @@ CREATE_TASK = Tool(
         "user will see your proposed arguments and decide whether to "
         "execute. Use this when the user explicitly asks you to create / "
         "add / file a task. Required: title, project_id. Optional: "
-        "content_text (plain text body), priority, effort_level, due_date "
+        "content_text (markdown body), milestone_id (file it under an "
+        "existing milestone), priority, effort_level, due_date "
         "(ISO 8601, e.g. 2026-06-30). Status is always created as 'Open' "
         "— users change it via the UI."
     ),
@@ -190,7 +206,19 @@ CREATE_TASK = Tool(
             },
             "content_text": {
                 "type": "STRING",
-                "description": ("Optional task body / description in plain text."),
+                "description": (
+                    "Optional task body / description as markdown: headings, "
+                    "lists, check lists, code fences, tables and inline "
+                    "formatting render natively."
+                ),
+            },
+            "milestone_id": {
+                "type": "INTEGER",
+                "description": (
+                    "Optional: file the task under this existing milestone "
+                    "(numeric milestone id from `list_milestones`). It must be "
+                    "in the same project."
+                ),
             },
             "priority": {
                 "type": "STRING",

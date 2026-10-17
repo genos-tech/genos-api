@@ -383,7 +383,11 @@ CATALOG: tuple[McpTool, ...] = (
         description=(
             "Create a task in a project. Use it to split discovered work out "
             "of the task you're on, rather than widening that one. Get the "
-            "project id from `list_projects`. Requires a write-scoped API key."
+            "project id from `list_projects`. `content_text` is markdown — "
+            "headings, check lists, code fences and tables are preserved — "
+            "and `milestone_id` (from `list_milestones`) files the task under "
+            "an existing milestone in the same project. Requires a "
+            "write-scoped API key."
         ),
         write=True,
     ),

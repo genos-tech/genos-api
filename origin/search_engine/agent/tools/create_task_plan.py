@@ -44,7 +44,7 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
-from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
+from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.task_enums import (
     EFFORT_ENUM,
     PRIORITY_ENUM,
@@ -326,8 +326,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     project,
                     reporter_id=ctx.user_id,
                     title=milestone_spec["title"].strip(),
-                    description_blocks=markdown_to_blocks(
-                        (milestone_spec.get("description_markdown") or "").strip()
+                    description_blocks=task_body_blocks(
+                        milestone_spec.get("description_markdown") or ""
                     ),
                     priority=milestone_spec.get("priority") or None,
                     effort_level=milestone_spec.get("effort_level") or None,
@@ -370,7 +370,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                         reporter_id=ctx.user_id,
                         assignee_id=str(spec["assignee_id"]) if spec.get("assignee_id") else None,
                         title=spec["title"].strip(),
-                        content=markdown_to_blocks((spec.get("content_markdown") or "").strip()),
+                        content=task_body_blocks(spec.get("content_markdown") or ""),
                         status="Open",
                         priority=spec.get("priority") or None,
                         effort_level=spec.get("effort_level") or None,
