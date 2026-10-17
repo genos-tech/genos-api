@@ -1,14 +1,16 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 57 agent tools. This exposes 31. That is not all of them and
+Genos has 57 agent tools. This exposes 36. That is not all of them and
 not a staging accident — every tool costs the connected agent context on
 *every* request it makes, and much of the 57 answers questions Genos's
 own assistant gets asked ("who closed the most tasks last sprint"), not
 questions something working in the workspace has.
 
-What the 31 are chosen to be is **every write Genos has actually built,
-plus the reads needed to drive them**. The earlier cut was 14, read-heavy
-and aimed narrowly at the code loop: find the task, read it, do the work,
+What the 36 are chosen to be is **every write Genos has actually built,
+plus the reads needed to drive them**, plus the five GitHub PR reads that
+let an agent see what became of the PR it opened (MIP-689). The earlier
+cut was 14, read-heavy and aimed narrowly at the code loop: find the
+task, read it, do the work,
 report back. It was sized by a fear that turns out to be misplaced — the
 measured cost of the full catalog is ~7.5k tokens against ~14k for the
 in-app agent's 57, so the ceiling that constrains the in-app prompt
@@ -95,6 +97,7 @@ _RENAMES = {
     "get_my_focus_tasks": "list_my_tasks",
     "search_knowledge_base": "search_workspace",
     "fetch_note": "get_note",
+    "fetch_pr": "get_pr",
 }
 _RENAME_RE = re.compile(r"\b(" + "|".join(map(re.escape, _RENAMES)) + r")\b")
 
@@ -347,6 +350,67 @@ CATALOG: tuple[McpTool, ...] = (
             "non-primary calendar — every calendar tool defaults to the "
             "primary one, so skip this unless the user names a specific "
             "calendar."
+        ),
+    ),
+    # ---- GitHub pull requests ----
+    #
+    # The other half of the task → branch → PR loop: an agent that opened
+    # a PR can see what happened to it. Every one takes a PR URL, which
+    # is usually in hand already from a task comment. They run with the
+    # key owner's own GitHub OAuth token, so the agent sees exactly the
+    # repos that person can, and nothing when they haven't connected one.
+    # A failure to reach GitHub is a tool error, never an empty list:
+    # "no reviews" is a claim about the PR (`_github_errors.py`).
+    McpTool(
+        name="get_pr",
+        registry_name="fetch_pr",
+        description=(
+            "Read one GitHub pull request by URL: its state (open, draft, "
+            "merged or closed), when it merged, branches, diff size, and the "
+            "start of its description. Use it to check what happened to a PR "
+            "linked from a task, e.g. whether it merged before you close the "
+            "task. Runs as the API key's owner, through the GitHub account "
+            "they connected under Integrations in Genos; a repo they can't "
+            "see returns not-found."
+        ),
+    ),
+    McpTool(
+        name="list_pr_reviews",
+        registry_name="list_pr_reviews",
+        description=(
+            "The formal reviews on a GitHub pull request, given its URL, "
+            "newest first: who reviewed, the verdict (APPROVED, "
+            "CHANGES_REQUESTED, COMMENTED, DISMISSED) and the review summary. "
+            "Call it to find out whether your PR was approved or needs "
+            "changes. Line-level feedback is in `list_pr_comments`."
+        ),
+    ),
+    McpTool(
+        name="list_pr_comments",
+        registry_name="list_pr_comments",
+        description=(
+            "Every comment on a GitHub pull request, given its URL, newest "
+            "first: the conversation and the inline review comments, with "
+            "`file_path` and `line` for the inline ones. This is where the "
+            "concrete review feedback to act on lives."
+        ),
+    ),
+    McpTool(
+        name="list_pr_files",
+        registry_name="list_pr_files",
+        description=(
+            "The files a GitHub pull request changes, given its URL, each "
+            "with its status (added, modified, removed, renamed) and line "
+            "counts. No patch content."
+        ),
+    ),
+    McpTool(
+        name="list_pr_commits",
+        registry_name="list_pr_commits",
+        description=(
+            "The commits on a GitHub pull request, given its URL, in order: "
+            "short sha, author, first line of the message, date. Use it to "
+            "see whether a fix you pushed has landed on the PR."
         ),
     ),
     # ---- write: needs a write-scoped key ----
