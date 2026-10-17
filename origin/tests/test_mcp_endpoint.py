@@ -21,7 +21,9 @@ from __future__ import annotations
 import copy
 import json
 import re
+from unittest.mock import MagicMock, patch
 
+import requests
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.test import override_settings
@@ -35,6 +37,7 @@ from origin.models.common.api_key_models import (
     hash_key,
 )
 from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.models.common.user_models import ConnectedAccount
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
@@ -684,6 +687,68 @@ class TestToolCalls(McpBase):
             self.assertNotIn("add_comment", names)
             res = self._call("add_comment", {"task_id": "WRD-7", "body_text": "x"})
             self.assertEqual(res.data["error"]["code"], -32602)
+
+
+class TestPullRequestTools(McpBase):
+    """MIP-689: the five GitHub PR reads, so an agent can see what became
+    of the PR it opened. GitHub itself is mocked at `_github_get`."""
+
+    PR_TOOLS = {"get_pr", "list_pr_reviews", "list_pr_comments", "list_pr_files", "list_pr_commits"}
+    PR_URL = "https://github.com/genos-tech/genos-api/pull/364"
+
+    def setUp(self):
+        super().setUp()
+        ConnectedAccount.objects.create(
+            user=self.user,
+            provider="github",
+            provider_user_id="999",
+            scopes=["repo"],
+            access_token_encrypted="placeholder",
+        )
+
+    def test_a_read_key_sees_all_five(self):
+        self._key(scope=SCOPE_READ)
+        names = {t["name"] for t in self._result(self._rpc("tools/list"))["tools"]}
+        self.assertLessEqual(self.PR_TOOLS, names)
+
+    def test_every_pr_tool_says_it_takes_a_pr_url(self):
+        """The agent is usually holding a URL out of a task comment, not
+        an owner/repo/number triple; the description has to say a URL is
+        what goes in."""
+        for tool in tools.CATALOG:
+            if tool.name in self.PR_TOOLS:
+                self.assertIn("URL", tool.description, tool.name)
+                self.assertEqual(tools.input_schema(tool)["required"], ["pr_url"], tool.name)
+
+    def test_a_merged_pr_reads_as_merged(self):
+        self._key(scope=SCOPE_READ)
+        ok = MagicMock(spec=requests.Response, ok=True, status_code=200)
+        ok.json.return_value = {"number": 364, "state": "closed", "merged": True}
+        with patch("origin.search_engine.agent.tools.fetch_pr._github_get", return_value=ok):
+            text, is_error = self._tool_text(self._call("get_pr", {"pr_url": self.PR_URL}))
+        self.assertFalse(is_error, text)
+        self.assertIn('"state": "merged"', text)
+
+    def test_github_unreachable_is_a_tool_error_not_a_bug_report(self):
+        """Before MIP-689 this escaped `tools.call` and came back as
+        INTERNAL_ERROR, "a bug in Genos, not in your request" — wrong on
+        both counts, and not something the model could relay."""
+        self._key(scope=SCOPE_READ)
+        with patch(
+            "origin.search_engine.agent.tools.list_pr_reviews._github_get",
+            side_effect=requests.ConnectionError("down"),
+        ):
+            text, is_error = self._tool_text(self._call("list_pr_reviews", {"pr_url": self.PR_URL}))
+        self.assertTrue(is_error)
+        self.assertIn("Couldn't reach GitHub", text)
+        self.assertNotIn('"reviews"', text, "an outage must not read as an empty review list")
+
+    def test_no_github_connection_says_where_to_connect(self):
+        ConnectedAccount.objects.filter(user=self.user).delete()
+        self._key(scope=SCOPE_READ)
+        text, is_error = self._tool_text(self._call("list_pr_comments", {"pr_url": self.PR_URL}))
+        self.assertTrue(is_error)
+        self.assertIn("GitHub is not connected", text)
 
 
 class TestTheCatalogContract(McpBase):

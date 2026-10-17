@@ -314,3 +314,53 @@ class TestListPrCommits(_PrToolsBase):
         self.assertNotIn("Longer body", c["message_first_line"])
         # Committer date wins over author date.
         self.assertEqual(c["committed_at"], "2026-05-01T10:05:00Z")
+
+
+class TestGithubFailuresAreToolErrors(_PrToolsBase):
+    """A dead grant or an unreachable GitHub used to escape as a raw
+    exception, which MCP reports as "a bug in Genos". Each one has to be
+    a `ToolError` the model can relay, from every one of the five tools,
+    and none may pass for an empty result."""
+
+    TOOLS = (
+        ("fetch_pr", FETCH_PR),
+        ("list_pr_comments", LIST_PR_COMMENTS),
+        ("list_pr_files", LIST_PR_FILES),
+        ("list_pr_reviews", LIST_PR_REVIEWS),
+        ("list_pr_commits", LIST_PR_COMMITS),
+    )
+
+    def _assert_each_tool_says(self, exc, *fragments):
+        for module, tool in self.TOOLS:
+            with (
+                self.subTest(tool=tool.name),
+                patch(f"origin.search_engine.agent.tools.{module}._github_get", side_effect=exc),
+            ):
+                with self.assertRaises(ToolError) as cm:
+                    tool.run({"pr_url": PR_URL}, self.ctx)
+                for fragment in fragments:
+                    self.assertIn(fragment, str(cm.exception))
+
+    def test_a_dead_grant_says_reconnect(self):
+        from origin.services.oauth.tokens import ReauthRequired
+
+        self._assert_each_tool_says(ReauthRequired(self.account), "Reconnect GitHub")
+
+    def test_github_unreachable_says_so(self):
+        self._assert_each_tool_says(
+            requests.Timeout("read timed out"), "Couldn't reach GitHub", "Timeout"
+        )
+
+    def test_a_non_json_body_is_a_tool_error_too(self):
+        """GitHub answering 200 with an HTML error page makes `.json()`
+        raise a `requests` JSON error — the guard covers the whole run,
+        not just the call."""
+        bad = _ok_response(None)
+        bad.json.side_effect = requests.exceptions.JSONDecodeError("Expecting value", "", 0)
+        for module, tool in self.TOOLS:
+            with (
+                self.subTest(tool=tool.name),
+                patch(f"origin.search_engine.agent.tools.{module}._github_get", return_value=bad),
+            ):
+                with self.assertRaises(ToolError):
+                    tool.run({"pr_url": PR_URL}, self.ctx)

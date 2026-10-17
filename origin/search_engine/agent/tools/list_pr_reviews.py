@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from origin.models.common.user_models import CustomUser
+from origin.search_engine.agent.tools._github_errors import github_errors_as_tool_errors
 from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
@@ -44,6 +45,11 @@ def _slim(review: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    with github_errors_as_tool_errors():
+        return _run_unguarded(args, ctx)
+
+
+def _run_unguarded(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     pr_url = args.get("pr_url")
     if not isinstance(pr_url, str) or not pr_url:
         raise ToolError("pr_url is required (full GitHub PR URL).")
