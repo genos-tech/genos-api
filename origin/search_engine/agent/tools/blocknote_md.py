@@ -32,6 +32,7 @@ The output is consumed by two places, both of which this shape satisfies:
 from __future__ import annotations
 
 import re
+import uuid
 from typing import Any, Callable
 
 # Maps a citation token ("task:12") to (href, fallback_label), or None
@@ -138,9 +139,7 @@ def _tokenize_formatting(text: str) -> list[dict[str, Any]]:
 # Bare citation token in prose — `[task:12]` — that is NOT the label of
 # a markdown link (no following paren). Same vocabulary as the frontend's
 # CITATION_PATTERN.
-_BARE_TOKEN_RE = re.compile(
-    r"\[((?:chat|task|note|project|todo|milestone):[^\]\s]+)\](?!\()"
-)
+_BARE_TOKEN_RE = re.compile(r"\[((?:chat|task|note|project|todo|milestone):[^\]\s]+)\](?!\()")
 
 
 def _link_node(href: str, label: str) -> dict[str, Any]:
@@ -482,3 +481,25 @@ def markdown_to_blocks(
         blocks.append(_block("paragraph", " ".join(buf), resolver=resolver))
 
     return blocks
+
+
+def task_body_blocks(markdown: str) -> list[dict[str, Any]]:
+    """A task body written by a tool, shaped like one the editor saved.
+
+    Every tool that writes `TaskMaster.content` goes through this, so the
+    same text produces the same document whichever tool wrote it.
+    `create_task` used to keep its own copy that split on newlines, which
+    stored `###` and `- ` as literal text (MIP-691) while `update_task`
+    parsed the same input as markdown.
+
+    On top of `markdown_to_blocks` it adds the two things a user-typed body
+    always has: a stable `id` on every top-level block, and the trailing
+    blank paragraph the editor keeps as its last line. Empty input stays
+    `[]` (a title-only task).
+    """
+    blocks = markdown_to_blocks((markdown or "").strip())
+    if not blocks:
+        return []
+    for block in blocks:
+        block.setdefault("id", str(uuid.uuid4()))
+    return blocks + [{"id": str(uuid.uuid4()), **_block("paragraph", "")}]
