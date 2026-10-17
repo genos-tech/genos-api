@@ -25,6 +25,7 @@ import re
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.test import override_settings
+from django.utils import timezone
 
 from origin.models.common.api_key_models import (
     SCOPE_READ,
@@ -466,11 +467,54 @@ class TestAuthorization(McpBase):
         self._key(team=self.team)
         self.assertEqual(self._rpc("tools/list", url=self._url(team=False)).status_code, 200)
 
-    def test_a_team_you_are_not_in_is_not_found(self):
+    def _assert_not_a_member(self, res, team_id):
+        self.assertEqual(res.status_code, 403, res.data)
+        message = res.data["error"]["message"]
+        self.assertIn("isn't a member", message)
+        self.assertIn(str(team_id), message, "the refusal should echo the team it means")
+        self.assertNotIn("not found", message.lower())
+        self.assertNotIn("revoked API key", message)
+
+    def test_a_team_you_are_not_in_says_so(self):
         other_team = TeamMaster.objects.create(team_name="Someone Else", owner=self.user2)
         self._key()
         res = self._rpc("tools/list", url=f"{MCP}?team_id={other_team.team_id}")
-        self.assertIn(res.status_code, (400, 404))
+        self._assert_not_a_member(res, other_team.team_id)
+
+    def test_a_team_that_does_not_exist_reads_the_same_as_one_you_are_not_in(self):
+        """The message mustn't turn `?team_id=` into a probe for which
+        teams exist: a made-up id and someone else's real team get the
+        identical refusal."""
+        real = TeamMaster.objects.create(team_name="Someone Else", owner=self.user2)
+        made_up = "00000000-0000-4000-8000-000000000000"
+        self._key()
+        a = self._rpc("tools/list", url=f"{MCP}?team_id={real.team_id}")
+        b = self._rpc("tools/list", url=f"{MCP}?team_id={made_up}")
+        self.assertEqual(a.status_code, b.status_code)
+        self.assertEqual(
+            a.data["error"]["message"].replace(str(real.team_id), "<id>"),
+            b.data["error"]["message"].replace(made_up, "<id>"),
+        )
+
+    def test_a_malformed_team_id_still_gets_the_shape_hint(self):
+        """`?team_id=abc` *is* a typo, so it keeps the message that shows
+        what a team id looks like."""
+        self._key()
+        res = self._rpc("tools/list", url=f"{MCP}?team_id=abc")
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("?team_id=<uuid>", res.data["error"]["message"])
+
+    def test_a_personal_token_stops_working_once_its_owner_leaves(self):
+        """The case MIP-686 was filed for: the URL was right yesterday and
+        is still right; the membership is what went."""
+        other_team = TeamMaster.objects.create(team_name="Contractors", owner=self.user2)
+        membership = TeamMembers.objects.create(team=other_team, attendee=self.user)
+        self._key()
+        url = f"{MCP}?team_id={other_team.team_id}"
+        self.assertEqual(self._rpc("tools/list", url=url).status_code, 200)
+
+        membership.delete()
+        self._assert_not_a_member(self._rpc("tools/list", url=url), other_team.team_id)
 
     def test_a_team_key_stops_working_once_its_owner_leaves(self):
         """`resolve_team` trusts a team-bound key's own team, so the
@@ -482,7 +526,19 @@ class TestAuthorization(McpBase):
         self.assertEqual(self._rpc("tools/list", url=self._url(team=False)).status_code, 200)
 
         membership.delete()
-        self.assertEqual(self._rpc("tools/list", url=self._url(team=False)).status_code, 404)
+        self._assert_not_a_member(
+            self._rpc("tools/list", url=self._url(team=False)), other_team.team_id
+        )
+
+    def test_a_revoked_key_still_gets_the_undifferentiated_refusal(self):
+        """Key states stay indistinguishable — the new membership message
+        must not leak into them."""
+        self._key()
+        ApiKey.objects.filter(user=self.user).update(revoked_at=timezone.now())
+        res = self._rpc("tools/list")
+        self.assertIn(res.status_code, (401, 403))
+        self.assertIn("Invalid or revoked API key", json.dumps(res.data))
+        self.assertNotIn("isn't a member", json.dumps(res.data))
 
 
 class TestToolCalls(McpBase):
