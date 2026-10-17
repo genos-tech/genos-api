@@ -8,7 +8,6 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 from django.db.models import Case, F, IntegerField, Max, Q, Value, When
-from django.utils import timezone
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
@@ -30,6 +29,12 @@ from origin.services.task_cache import (
 )
 from origin.services.task_collaborators import sync_task_collaborators
 from origin.services.task_comment_fanout import fan_out_task_comment
+from origin.services.task_milestone_move import (
+    bridge_milestone_to_parent as _bridge_milestone_to_parent,
+)
+from origin.services.task_milestone_move import (
+    cascade_tree_position_to_subtasks as _cascade_tree_position_to_subtasks,
+)
 from origin.services.task_project_move import (
     collect_descendant_task_ids as _collect_descendant_task_ids,
 )
@@ -56,87 +61,6 @@ from origin.views.utils.scope_guards import (
 from origin.views.utils.upload_limits import check_upload_size
 
 from .common_color import EFFORT_LEVEL_COLOR_MAP, PRIORITY_COLOR_MAP, status_color
-
-
-def _bridge_milestone_to_parent(task, requested_milestone_id, parent_task_id):
-    """Keep `parent_task_id` / `root_task_id` in sync with a milestone change.
-
-    Mirrors the bridge logic in `TaskMasterView.post` so PUT updates
-    behave the same way as creation. The contract (see
-    `MilestoneMaster.task` doc) is that tasks "living in a milestone"
-    have `parent_task_id == milestone.task_id` so the project task
-    table nests them as sub-tasks of the milestone row.
-
-    `requested_milestone_id` is the value pulled from `request.data`:
-        - a milestone id  -> SET / CHANGE the link
-        - `None`          -> CLEAR the link (caller must distinguish
-                             "key absent" from "key present + null"
-                             before invoking this helper)
-
-    Writes are scoped via `save(update_fields=[...])` so the broader
-    `serializer.save()` upstream can run independently without us
-    stepping on its updates.
-    """
-    from origin.models.task.milestone_models import MilestoneMaster
-
-    if requested_milestone_id is not None:
-        try:
-            m = MilestoneMaster.objects.select_related("task").get(
-                milestone_id=requested_milestone_id, is_deleted=False
-            )
-        except MilestoneMaster.DoesNotExist:
-            return
-        # Don't let a task become its own parent (defensive: would only
-        # happen if a milestone's backing task hit this endpoint, which
-        # shouldn't be possible via the picker but might via direct
-        # API calls).
-        if m.task_id is None or m.task_id == task.task_id:
-            return
-        task.milestone_id = requested_milestone_id
-        # Set parent task id to the requested parent task id if it exists, otherwise set it to the milestone's backing task id
-        task.parent_task_id = parent_task_id if parent_task_id else m.task_id
-        # Root task id is always the milestone's backing task id
-        task.root_task_id = m.task_id
-        # The frontend doesn't expose a direct sprint picker on tasks
-        # — sprint is always inherited from the task's milestone. Sync
-        # it here so a task moved into / between milestones lands in
-        # the right sprint bucket without the client having to send
-        # `sprint` explicitly.
-        task.sprint_id = m.sprint_id
-        task.save(
-            update_fields=[
-                "milestone_id",
-                "parent_task_id",
-                "root_task_id",
-                "sprint_id",
-                "ts_updated_at",
-            ]
-        )
-    else:
-        if task.milestone_id is None:
-            return
-        # Only break the parent link when the current parent IS the old
-        # milestone's backing task. A genuine sub-task chain that
-        # happened to share a milestone (e.g. Milestone -> Task A ->
-        # Sub-task B; user clears milestone on B) must keep its A->B
-        # parent edge intact.
-        try:
-            old_m = MilestoneMaster.objects.get(milestone_id=task.milestone_id)
-            cleared_parent = old_m.task_id is not None and task.parent_task_id == old_m.task_id
-        except MilestoneMaster.DoesNotExist:
-            cleared_parent = False
-        task.milestone_id = None
-        # Mirror the milestone clear on the sprint so a row that used
-        # to inherit a sprint via its milestone doesn't keep the now-
-        # orphaned chip lingering on the table. Tasks without a
-        # milestone are unscheduled by definition in the current UX.
-        task.sprint_id = None
-        update_fields = ["milestone_id", "sprint_id", "ts_updated_at"]
-        if cleared_parent:
-            task.parent_task_id = None
-            task.root_task_id = task.task_id
-            update_fields += ["parent_task_id", "root_task_id"]
-        task.save(update_fields=update_fields)
 
 
 def _cascade_project_to_subtasks(root_task_id, project_id, team_id):
@@ -187,45 +111,6 @@ def _is_nested_task(task) -> bool:
     if task.parent_task_id is None or task.is_milestone:
         return False
     return TaskMaster.objects.filter(task_id=task.parent_task_id).exists()
-
-
-def _cascade_tree_position_to_subtasks(task, depth_limit=10):
-    """Push a task's settled position in the hierarchy onto everything
-    below it.
-
-    A task's place in the tree is denormalized across three columns, and
-    a move has to carry all of them:
-
-      * `milestone_id` / `sprint_id` — `milestone_views.py` aggregations
-        and the sprint board filter on these, so a descendant left
-        behind silently under-counts in the milestone it actually
-        belongs to and over-counts in the one it left.
-      * `root_task_id` — every "rooted-at-chain-top" surface (task
-        diagram, sub-task drawer, the diagram shortcut) anchors on it.
-        A descendant still pointing at the old chain opens a tree it is
-        no longer part of: the diagram for such a sub-task showed
-        neither its parent nor its milestone, because it BFS'd down from
-        a root the sub-task had left.
-
-    `parent_task_id` is deliberately NOT touched: the edges *inside* the
-    moved sub-tree don't change when its top moves, and rewriting them
-    would flatten the chain.
-
-    `ts_updated_at` is bumped by hand because a queryset `.update()`
-    skips `auto_now` (and `post_save`). Without it the clients that sync
-    tasks incrementally (`getProjectTasks?since=`) never learn the
-    descendants moved, and keep showing them under the old milestone
-    until something forces a full reload.
-    """
-    collected = _collect_descendant_task_ids(task.task_id, depth_limit=depth_limit)
-    if not collected:
-        return
-    TaskMaster.objects.filter(task_id__in=collected).update(
-        milestone_id=task.milestone_id,
-        sprint_id=task.sprint_id,
-        root_task_id=task.root_task_id,
-        ts_updated_at=timezone.now(),
-    )
 
 
 def _normalize_task_id(value):
