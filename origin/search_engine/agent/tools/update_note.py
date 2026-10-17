@@ -35,6 +35,7 @@ from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
 from origin.search_engine.chunkers.base import NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
+from origin.services.collab_push import push_note_body
 from origin.views.utils.note_role import ROLE_EDITOR, get_effective_role
 from origin.views.utils.note_version import snapshot_note_version
 
@@ -52,15 +53,11 @@ def _wrap_blocknote(text: str, ctx: ToolContext) -> list[dict[str, Any]]:
     see `blocknote_md` / `entity_links`."""
     return markdown_to_blocks(
         text,
-        entity_link_resolver=lambda token: resolve_note_entity_link(
-            token, team_id=ctx.team_id
-        ),
+        entity_link_resolver=lambda token: resolve_note_entity_link(token, team_id=ctx.team_id),
     )
 
 
-def _has_write_permission(
-    *, owner_id, note_id: int, note_type_code: int, ctx: ToolContext
-) -> bool:
+def _has_write_permission(*, owner_id, note_id: int, note_type_code: int, ctx: ToolContext) -> bool:
     """True if ctx.user_id may edit the note.
 
     Check 1: owner — always has write permission (covers legacy personal
@@ -99,9 +96,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if has_folder and note_type != "personal":
         raise ToolError("`folder_id` is only valid for personal notes.")
     if not has_title and not has_body and not has_folder:
-        raise ToolError(
-            "At least one of `title`, `content_text`, or `folder_id` must be provided."
-        )
+        raise ToolError("At least one of `title`, `content_text`, or `folder_id` must be provided.")
 
     note_type_code = _NOTE_TYPE_CODE[note_type]
 
@@ -329,6 +324,14 @@ def _apply_changes(
             )
         except Exception:  # noqa: BLE001
             log.exception("update_note: version snapshot failed for note %s", note_id)
+
+    # The editor renders the note's Yjs doc, not `body`, and seeds from
+    # `body` only while that doc is empty; without this push a note that
+    # was ever opened kept its old body on screen, and the next keystroke
+    # saved the old body back (MIP-697). An MCP write has no browser
+    # behind it to do this client-side.
+    if "body" in update_fields:
+        push_note_body(note_type, note_id, note.body or [])
 
     result = {
         "note_id": note_id,
