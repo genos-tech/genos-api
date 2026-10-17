@@ -135,3 +135,42 @@ class AgentCommentFanoutTests(BaseAPITestCase):
             result = self._tool_comment()
         self.assertEqual(result["comment_id"], 1)
         self.assertTrue(TaskComments.objects.filter(task=self.task, comment_id=1).exists())
+
+
+class AgentCommentMarkdownTests(AgentCommentFanoutTests):
+    """MIP-696: `add_comment` split the body into one plain paragraph per
+    line, so an agent's markdown landed as literal `#`, `**`, `` ` `` and
+    `|` in the comment thread. It must parse markdown like `update_task`.
+    Subclassing reuses the project/task setup; the fan-out tests above
+    re-run here unchanged, which is harmless."""
+
+    def _body(self, text):
+        self._tool_comment(text)
+        return TaskComments.objects.get(task=self.task, comment_id=1).comment_body
+
+    def test_markdown_becomes_structured_blocks(self):
+        body = self._body(
+            "## Result\n\nRan `make test` — **all green**.\n\n"
+            "| check | state |\n| --- | --- |\n| lint | pass |\n\n```bash\nmake test\n```"
+        )
+        self.assertEqual(
+            [b["type"] for b in body],
+            ["heading", "paragraph", "table", "codeBlock", "paragraph"],
+        )
+        styles = [c.get("styles") for c in body[1]["content"]]
+        self.assertIn({"code": True}, styles)
+        self.assertIn({"bold": True}, styles)
+        flat = "".join(c.get("text", "") for c in body[1]["content"])
+        self.assertNotIn("**", flat)
+
+    def test_trailing_sentinel_paragraph_is_kept(self):
+        # BnChatPreview renders content.slice(0, -1): a lone block would
+        # become [] and BlockNote throws on empty initialContent.
+        body = self._body("one line")
+        self.assertEqual(len(body), 2)
+        self.assertEqual((body[-1]["type"], body[-1]["content"]), ("paragraph", []))
+
+    def test_citation_link_resolves_to_in_app_route(self):
+        body = self._body(f"see [the task](task:{self.task.task_id})")
+        [link] = [c for c in body[0]["content"] if c["type"] == "link"]
+        self.assertTrue(link["href"].startswith("/workspace/tasks/"), link["href"])
