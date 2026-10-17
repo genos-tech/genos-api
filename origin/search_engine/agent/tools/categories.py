@@ -6,8 +6,8 @@ the registry, every value must be a known category. Forgetting to
 categorize a new tool fails CI with the missing name spelled out —
 the same mechanism that keeps `WRITE_PREFIXES` honest.
 
-Why a central map rather than a field on each `Tool(...)`: the 57
-definitions live in 57 files, and the consumers of the grouping (the
+Why a central map rather than a field on each `Tool(...)`: the 58
+definitions live in 58 files, and the consumers of the grouping (the
 peripheral-family subsetting in `controller._tool_family`, the
 registry-generated prompt sections in `prompts.py`, and any future
 per-category telemetry slice) all want the whole taxonomy at once.
@@ -65,6 +65,7 @@ TOOL_CATEGORY: dict[str, str] = {
     "list_tasks": "tasks_read",
     "list_task_dependencies": "tasks_read",
     "get_task_blockers": "tasks_read",
+    "get_task_history": "tasks_read",
     "get_stale_tasks": "tasks_read",
     "get_task_throughput_stats": "tasks_read",
     # --- tasks_write ---

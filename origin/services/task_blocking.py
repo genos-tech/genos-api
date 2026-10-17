@@ -128,6 +128,7 @@ def sync_blocked_status(blocked_task_ids: Iterable[int]) -> int:
                 milestone.status = new_status
                 milestone.save(update_fields=["status", "ts_updated_at"])
                 task.status = new_status
+                task._derived_blocked_sync = True  # tags the activity row
                 task.save(update_fields=["status", "ts_updated_at"])
                 changed += 1
             else:
@@ -135,6 +136,7 @@ def sync_blocked_status(blocked_task_ids: Iterable[int]) -> int:
                 if new_status is None:
                     continue
                 task.status = new_status
+                task._derived_blocked_sync = True  # tags the activity row
                 task.save(update_fields=["status", "ts_updated_at"])
                 changed += 1
         except Exception:  # noqa: BLE001 — see docstring

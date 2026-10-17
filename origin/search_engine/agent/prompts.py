@@ -1,6 +1,6 @@
 """System prompt for the agent loop.
 
-The registry holds 57 tools (the generated directory below never lets
+The registry holds 58 tools (the generated directory below never lets
 that count drift again). Rather than enumerate every tool here, the
 prompt gives the model:
   1. A "TOOL SELECTION CHEAT-SHEET" that maps common user phrasings
@@ -65,6 +65,8 @@ here fits):
   - one milestone            → get_milestone_summary
   - one sprint               → get_sprint_summary
   - one task's dependencies  → get_task_blockers
+  - who changed a task / when it closed / why it's Blocked
+                             → get_task_history
 
   Cross-workspace rollups (no specific entity named):
   - "across my projects" / "in my workspace" / "Open vs WIP vs Closed

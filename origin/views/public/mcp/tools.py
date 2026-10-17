@@ -1,19 +1,21 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 57 agent tools. This exposes 36. That is not all of them and
+Genos has 58 agent tools. This exposes 37. That is not all of them and
 not a staging accident — every tool costs the connected agent context on
-*every* request it makes, and much of the 57 answers questions Genos's
+*every* request it makes, and much of the 58 answers questions Genos's
 own assistant gets asked ("who closed the most tasks last sprint"), not
 questions something working in the workspace has.
 
-What the 36 are chosen to be is **every write Genos has actually built,
+What the 37 are chosen to be is **every write Genos has actually built,
 plus the reads needed to drive them**, plus the five GitHub PR reads that
-let an agent see what became of the PR it opened (MIP-689). The earlier
-cut was 14, read-heavy and aimed narrowly at the code loop: find the
-task, read it, do the work,
-report back. It was sized by a fear that turns out to be misplaced — the
-measured cost of the full catalog is ~7.5k tokens against ~14k for the
-in-app agent's 57, so the ceiling that constrains the in-app prompt
+let an agent see what became of the PR it opened (MIP-689), plus
+`get_task_history` — on a surface with no approval gate and no undo, the
+read that lets an agent check its write stuck and who else touched the
+task (MIP-690). The earlier cut was 14, read-heavy and aimed narrowly
+at the code loop: find the task, read it, do the work, report back. It
+was sized by a fear that turns out to be misplaced — the measured cost
+of the full catalog is ~7.5k tokens against ~14k for the in-app
+agent's 57, so the ceiling that constrains the in-app prompt
 (`SPOTLIGHT_QUALITY_ASSESSMENT_2026_07.md` F6) has far more headroom
 here. Withholding a *built* write bought no measurable context back and
 cost the connected agent the ability to do what the user can do.
@@ -238,6 +240,23 @@ CATALOG: tuple[McpTool, ...] = (
             "What a task is waiting on — its unfinished dependencies. Check "
             "before starting work, since a blocked task usually means "
             "finishing something else first."
+        ),
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
+        name="get_task_history",
+        registry_name="get_task_history",
+        description=(
+            "One task's change history, newest first: what changed, old and "
+            "new value, who, when, and `via` — how it arrived: `app` (the "
+            "Genos UI), `agent` (Genos's own assistant), `api_key` (with the "
+            "key's name and prefix, so your own writes are recognisable), "
+            "`pr_merge` (closed by a merged PR), `dependencies` (an automatic "
+            "Blocked/Open flip), `github` (a linked PR or PR comment), or "
+            "`unknown` for older rows. Use it to check "
+            "a write stuck, or to find out who changed a task you are "
+            "working on. Description edits are listed without their text."
         ),
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},

@@ -56,6 +56,7 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from apis.llm_catalog import EFFORTS
+from origin.middleware.current_user import clear_current_user, set_current_user
 from origin.search_engine import metered, spend_recorder
 from origin.search_engine.agent.controller import (
     COST_CEILING_MESSAGE,
@@ -1550,6 +1551,7 @@ class AgentAskView(AuthenticatedAPIView):
             quota_keys=[LLM_ASK_KEY, chosen.model],
             fallback_note=fallback_note,
             spend_kwargs=spend_kwargs,
+            acting_user=request.user,
         )
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
@@ -1710,6 +1712,7 @@ class AgentDecideView(AuthenticatedAPIView):
             append_to_existing_answer=True,
             session_id=run.session_id,
             spend_kwargs=spend_kwargs,
+            acting_user=request.user,
         )
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
@@ -1821,6 +1824,7 @@ def _stream_ndjson(
     quota_keys: list[str] | None = None,
     fallback_note: dict | None = None,
     spend_kwargs: dict | None = None,
+    acting_user=None,
 ) -> Iterator[bytes]:
     """Bridge a controller callback into chunked NDJSON.
 
@@ -1854,6 +1858,12 @@ def _stream_ndjson(
     set when the client disconnects; the controller checks it between
     loop steps and stops. See the CANCELLATION note on the yield loop
     below for why this is the only way to stop the spend.
+
+    `acting_user` is bound on the worker thread as the actor of every
+    write the agent makes (`TaskActivity.actor`, `via: agent`). The
+    request's own thread-local can't be relied on: a new thread never
+    sees it, and by the time Django iterates this generator the
+    middleware has already cleared it.
     """
     import queue  # noqa: PLC0415
 
@@ -1875,12 +1885,15 @@ def _stream_ndjson(
 
     def worker():
         nonlocal pause_descriptor
+        if acting_user is not None:
+            set_current_user(acting_user, via={"kind": "agent"})
         try:
             pause_descriptor = worker_target(emit, cancel_event)
         except Exception as e:  # noqa: BLE001
             log.exception("Agent worker crashed")
             event_q.put({"type": "error", "message": f"Agent crashed: {e}"})
         finally:
+            clear_current_user()
             event_q.put(None)
 
     threading.Thread(target=worker, daemon=True).start()
