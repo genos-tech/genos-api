@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from origin.models.task.task_delivery_models import TaskDelivery
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import (
@@ -24,6 +25,7 @@ from origin.search_engine.agent.tools.base import (
 )
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
 from origin.search_engine.text_extraction import extract_text
+from origin.services.task_delivery import delivery_as_dict
 
 _COMMENTS_CAP = 20
 
@@ -87,6 +89,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             }
         )
 
+    # The branches and PRs delivering the task (MIP-687), oldest first —
+    # the order the work happened in.
+    deliveries = [
+        delivery_as_dict(d, wrap_workspace_content)
+        for d in TaskDelivery.objects.filter(task=task).order_by("delivery_id")
+    ]
+
     return {
         "task_id": task_id,
         "display_id": task.display_id,
@@ -101,6 +110,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "content_text": wrap_workspace_content(content_text),
         "content_markdown": wrap_workspace_content(content_markdown),
         "comments": comments,
+        "deliveries": deliveries,
         "__summary__": (
             f"Loaded task {task.display_id}" + (f" + {len(comments)} comments" if comments else "")
         ),
@@ -111,10 +121,11 @@ FETCH_TASK = Tool(
     name="fetch_task",
     description=(
         "Load the full content of one task: title, description text, "
-        "status, priority, assignee/reporter, and the most recent "
-        "comments. Use after `search_knowledge_base` if the snippet "
-        "isn't enough and you need to read the task body or its "
-        "discussion. ACL is enforced — only tasks the user can access "
+        "status, priority, assignee/reporter, the most recent "
+        "comments, and `deliveries` — the GitHub branches and PRs "
+        "linked to it, with each PR's state. Use after "
+        "`search_knowledge_base` if the snippet isn't enough and you "
+        "need to read the task body or its discussion. ACL is enforced — only tasks the user can access "
         "are returned."
     ),
     parameters_schema={

@@ -41,6 +41,7 @@ general "which milestones is Alice on?" case.
 """
 
 from origin.search_engine.agent.tools.add_comment import ADD_COMMENT
+from origin.search_engine.agent.tools.add_task_delivery import ADD_TASK_DELIVERY
 from origin.search_engine.agent.tools.assign_task import ASSIGN_TASK
 from origin.search_engine.agent.tools.base import REGISTRY, Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.create_calendar_event import CREATE_CALENDAR_EVENT
@@ -53,6 +54,7 @@ from origin.search_engine.agent.tools.fetch_chat_thread import FETCH_CHAT_THREAD
 from origin.search_engine.agent.tools.fetch_note import FETCH_NOTE
 from origin.search_engine.agent.tools.fetch_pr import FETCH_PR
 from origin.search_engine.agent.tools.fetch_task import FETCH_TASK
+from origin.search_engine.agent.tools.find_task_by_delivery import FIND_TASK_BY_DELIVERY
 from origin.search_engine.agent.tools.get_current_user import GET_CURRENT_USER
 from origin.search_engine.agent.tools.get_milestone_assignee_counts import (
     GET_MILESTONE_ASSIGNEE_COUNTS,
@@ -162,6 +164,8 @@ for _t in (
     GET_TASK_HISTORY,
     # --- Read tools (BAU Wave 1) — whole-scope dependency graph ---
     LIST_TASK_DEPENDENCIES,
+    # --- Read tools (MIP-687) — branch / PR → task ---
+    FIND_TASK_BY_DELIVERY,
     # --- Read tools (Phase 16) — GitHub PR introspection ---
     FETCH_PR,
     LIST_PR_COMMENTS,
@@ -190,12 +194,15 @@ for _t in (
     # --- Todo write tools (requires_approval) ---
     CREATE_TODO_ITEM,
     UPDATE_TODO_ITEM,
+    # --- Write tools (MIP-687) — record a task's branch / PR ---
+    ADD_TASK_DELIVERY,
 ):
     REGISTRY[_t.name] = _t
 
 
 __all__ = [
     "ADD_COMMENT",
+    "ADD_TASK_DELIVERY",
     "ASSIGN_TASK",
     "CREATE_CALENDAR_EVENT",
     "CREATE_NOTE",
@@ -208,6 +215,7 @@ __all__ = [
     "LIST_NOTE_FOLDERS",
     "FETCH_PR",
     "FETCH_TASK",
+    "FIND_TASK_BY_DELIVERY",
     "GET_CURRENT_USER",
     "GET_MILESTONE_ASSIGNEE_COUNTS",
     "GET_MILESTONE_SUMMARY",

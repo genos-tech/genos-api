@@ -1,17 +1,19 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 58 agent tools. This exposes 37. That is not all of them and
+Genos has 60 agent tools. This exposes 39. That is not all of them and
 not a staging accident — every tool costs the connected agent context on
-*every* request it makes, and much of the 58 answers questions Genos's
+*every* request it makes, and much of the 60 answers questions Genos's
 own assistant gets asked ("who closed the most tasks last sprint"), not
 questions something working in the workspace has.
 
-What the 37 are chosen to be is **every write Genos has actually built,
+What the 39 are chosen to be is **every write Genos has actually built,
 plus the reads needed to drive them**, plus the five GitHub PR reads that
 let an agent see what became of the PR it opened (MIP-689), plus
 `get_task_history` — on a surface with no approval gate and no undo, the
 read that lets an agent check its write stuck and who else touched the
-task (MIP-690). The earlier cut was 14, read-heavy and aimed narrowly
+task (MIP-690) — plus the branch/PR → task lookup and its write, which
+record which PR delivers which task so that join is no longer only a
+comment (MIP-687). The earlier cut was 14, read-heavy and aimed narrowly
 at the code loop: find the task, read it, do the work, report back. It
 was sized by a fear that turns out to be misplaced — the measured cost
 of the full catalog is ~7.5k tokens against ~14k for the in-app
@@ -177,7 +179,10 @@ CATALOG: tuple[McpTool, ...] = (
             "The caller's own tasks, most worth attention first (overdue and "
             "in-progress before the rest). Use this for 'what am I working "
             "on', 'my queue', or when the user asks you to pick up work "
-            "without naming a task."
+            "without naming a task. `delivery` filters by GitHub PR: "
+            "'open_pr' is what is in flight, 'merged_pr' is merged but the "
+            "task is still not Closed (usually ready to close — check with "
+            "`get_pr` first), 'no_pr' has no PR recorded."
         ),
     ),
     McpTool(
@@ -260,6 +265,19 @@ CATALOG: tuple[McpTool, ...] = (
         ),
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
+        name="find_task_by_delivery",
+        registry_name="find_task_by_delivery",
+        description=(
+            "Which task a GitHub branch or PR is for. Pass `branch` (and "
+            "`repo`, owner/name, if the name is used in several repos) or "
+            "`pr_url`. Recorded links are checked first, then a display id "
+            "in the branch name (feature/PRJ-42-x → PRJ-42). An empty "
+            "`matches` means the branch is not linked to any task — nothing "
+            "is guessed from titles. Call it when you resume work on a branch, "
+            "to confirm the task before writing to it."
+        ),
     ),
     McpTool(
         name="search_workspace",
@@ -457,6 +475,23 @@ CATALOG: tuple[McpTool, ...] = (
             "Post a comment on a task. This is how you report back — the PR "
             "link, what you changed, anything you had to decide. The comment "
             "appears in the task's thread and notifies the assignee. "
+            "Requires a write-scoped API key."
+        ),
+        write=True,
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
+        name="add_task_delivery",
+        registry_name="add_task_delivery",
+        description=(
+            "Record on a task which GitHub branch and/or PR is delivering it, "
+            "so `find_task_by_delivery`, `get_task` and `list_my_tasks` can "
+            "see it. A PR on a branch named after the task (PRJ-42, "
+            "feature/PRJ-42-x) is linked automatically once the repo's "
+            "webhook is registered, so this is for a branch that doesn't "
+            "name the task, or a branch with no PR yet. Pass `pr_url`, or "
+            "`branch` + `repo` (owner/name). Repeating it is harmless. "
             "Requires a write-scoped API key."
         ),
         write=True,

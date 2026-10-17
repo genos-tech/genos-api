@@ -50,7 +50,7 @@ Every new-tool PR ships with:
   `spotlight/SPOTLIGHT_EVALS_CI.md` §6.1).
 
 - [ ] **Description says *when*, not just what** — the model chooses among
-  all 57 registered tools by description alone (count enforced honest by
+  all 60 registered tools by description alone (count enforced honest by
   the generated TOOL DIRECTORY in `prompts.py`) (see the `Tool.description` docstring in
   [`base.py`](base.py)).
 
