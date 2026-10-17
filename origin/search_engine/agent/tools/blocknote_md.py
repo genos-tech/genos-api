@@ -1,16 +1,19 @@
-"""Markdown → BlockNote block conversion for agent-written note bodies.
+"""Markdown → BlockNote block conversion for agent-written bodies.
 
-The agent's answers are markdown (headings, bullets, numbered lists,
-**bold**, *italic*). When it saves one into a note, the body must be
-BlockNote-shaped JSON so the note editor renders that structure natively
-instead of showing one wall of plain text with literal `##`/`**` control
-characters.
+The agent writes markdown. When it saves that into a note or a task
+body, the body must be BlockNote-shaped JSON so the editor renders the
+structure natively instead of showing one wall of plain text with
+literal `##`/`**`/`|` control characters.
 
-This is the backend counterpart of the frontend
-`features/agentQA/markdownToBlocks.ts` — deliberately the same small
-vocabulary and the same block/inline shapes, so a note the agent writes
-is indistinguishable from one saved through the UI's "save answer as
-note" flow. Citation tokens (`[prose](type:id)` and bare `[type:id]`)
+Vocabulary: headings, bullet / numbered / check lists (nested by
+indentation), quotes, fenced code blocks, pipe tables, dividers, and
+inline **bold**, *italic*, ~~strike~~, `code` and links. Block and
+inline shapes are the ones BlockNote 0.49's own `tryParseMarkdownToBlocks`
+produces for the same input (the frontend's note import uses that
+parser), so a body the agent writes is indistinguishable from one a user
+imported or typed. `blocknote_render.blocks_to_markdown` is the inverse.
+
+Citation tokens (`[prose](type:id)` and bare `[type:id]`)
 are resolved into in-app `/workspace/...` links when the caller supplies
 an `entity_link_resolver` (see `entity_links.resolve_note_entity_link`;
 create_note / update_note pass one bound to the caller's team); without
@@ -18,12 +21,12 @@ a resolver, or on a miss, the target degrades to its visible prose
 (never a dead link).
 
 The output is consumed by two places, both of which this shape satisfies:
-  * the BlockNote editor (paragraph/heading/bulletListItem/
-    numberedListItem with the standard props), and
+  * the BlockNote editor (default block types with the standard props;
+    the task/note schemas keep every default block), and
   * the reindex chunker (`text_extraction.extract_sections`), which walks
-    `content`/`children` of every block type and splits on `heading`
-    blocks — so structured output actually *improves* search precision
-    (heading-bounded sections) over the old one-paragraph blob.
+    `content`/`children` of every block type — table cells included —
+    and splits on `heading` blocks, so structured output actually
+    *improves* search precision (heading-bounded sections).
 """
 
 from __future__ import annotations
@@ -51,14 +54,59 @@ _FORMAT_RE = re.compile(
     r"|__(.+?)__"  # __bold__
     r"|(?<![A-Za-z0-9])\*([^*\s][^*]*?)\*(?![A-Za-z0-9])"  # *italic*
     r"|(?<![A-Za-z0-9])_([^_\s][^_]*?)_(?![A-Za-z0-9])"  # _italic_
+    r"|~~(.+?)~~"  # ~~strike~~
 )
+# Code spans are cut out before any other inline rule runs: their text is
+# literal, so `` `**x**` `` or `` `[a](b)` `` must not become bold or a link.
+_CODE_SPAN_RE = re.compile(r"(`+)(.+?)\1")
 
 # Accept 1–6 `#` (markdown allows h1–h6) but cap the rendered level at 3,
 # which is what BlockNote's default theme supports — a `#### Sub` heading
 # renders as level 3 rather than leaking literal `####` into a paragraph.
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
-_BULLET_RE = re.compile(r"^[-*•]\s+(.*)$")
-_NUMBERED_RE = re.compile(r"^\d+\.\s+(.*)$")
+# Checklist before bullet: `- [ ] x` is also a valid bullet.
+_CHECK_RE = re.compile(r"^[-*+]\s+\[([ xX])\]\s+(.*)$")
+_BULLET_RE = re.compile(r"^[-*+•]\s+(.*)$")
+_NUMBERED_RE = re.compile(r"^\d+[.)]\s+(.*)$")
+_QUOTE_RE = re.compile(r"^>\s?(.*)$")
+_FENCE_RE = re.compile(r"^(`{3,}|~{3,})\s*([^`\s]*)")
+_DIVIDER_RE = re.compile(r"^(?:-\s*){3,}$|^(?:\*\s*){3,}$|^(?:_\s*){3,}$")
+_TABLE_SEPARATOR_RE = re.compile(r"^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$")
+
+# Fence info strings → the language ids the editor's syntax-highlighted
+# code block (`@blocknote/code-block`'s `supportedLanguages`) knows. Its
+# editor-side ``` shortcut resolves aliases the same way
+# (`getLanguageId`), so `py` lands as `python` either way. Anything not
+# listed is kept as written — the editor shows it unhighlighted.
+_LANGUAGE_ALIASES = {
+    "": "text",
+    "txt": "text",
+    "plain": "text",
+    "plaintext": "text",
+    "c++": "cpp",
+    "gql": "graphql",
+    "js": "javascript",
+    "ts": "typescript",
+    "py": "python",
+    "sh": "shellscript",
+    "bash": "shellscript",
+    "shell": "shellscript",
+    "zsh": "shellscript",
+    "yml": "yaml",
+    "md": "markdown",
+    "rb": "ruby",
+    "rs": "rust",
+    "kt": "kotlin",
+    "cs": "csharp",
+    "c#": "csharp",
+    "hs": "haskell",
+    "objc": "objective-c",
+    "tex": "latex",
+}
+
+# A nested list item is indented at least this far past its parent's
+# marker column (CommonMark accepts 2 for `-`, and 2–4 is what models emit).
+_MIN_NEST_INDENT = 2
 
 
 def _text_node(text: str, styles: dict[str, bool] | None = None) -> dict[str, Any]:
@@ -66,7 +114,8 @@ def _text_node(text: str, styles: dict[str, bool] | None = None) -> dict[str, An
 
 
 def _tokenize_formatting(text: str) -> list[dict[str, Any]]:
-    """Split a link-free run into text nodes carrying bold/italic styles."""
+    """Split a code- and link-free run into text nodes carrying
+    bold/italic/strike styles."""
     if not text:
         return []
     out: list[dict[str, Any]] = []
@@ -76,6 +125,8 @@ def _tokenize_formatting(text: str) -> list[dict[str, Any]]:
             out.append(_text_node(text[cursor : m.start()]))
         if m.group(1) is not None or m.group(2) is not None:
             out.append(_text_node(m.group(1) or m.group(2) or "", {"bold": True}))
+        elif m.group(5) is not None:
+            out.append(_text_node(m.group(5), {"strike": True}))
         else:
             out.append(_text_node(m.group(3) or m.group(4) or "", {"italic": True}))
         cursor = m.end()
@@ -120,10 +171,31 @@ def _tokenize_prose(text: str, resolver: EntityLinkResolver | None) -> list[dict
     return out
 
 
-def _tokenize_inline(
-    text: str, resolver: EntityLinkResolver | None = None
-) -> list[dict[str, Any]]:
-    """Inline content for one line: markdown links become BlockNote link
+def _tokenize_inline(text: str, resolver: EntityLinkResolver | None = None) -> list[dict[str, Any]]:
+    """Inline content for one line. Code spans are cut out first, since
+    their text is literal; everything between them goes through link,
+    citation and emphasis tokenising."""
+    if not text:
+        return []
+    out: list[dict[str, Any]] = []
+    cursor = 0
+    for m in _CODE_SPAN_RE.finditer(text):
+        if m.start() > cursor:
+            out.extend(_tokenize_links(text[cursor : m.start()], resolver))
+        # CommonMark strips one space each side so `` `` `x` `` `` can
+        # hold a backtick; ordinary spans are unaffected.
+        code = m.group(2)
+        if len(code) > 2 and code.startswith(" ") and code.endswith(" "):
+            code = code[1:-1]
+        out.append(_text_node(code, {"code": True}))
+        cursor = m.end()
+    if cursor < len(text):
+        out.extend(_tokenize_links(text[cursor:], resolver))
+    return out
+
+
+def _tokenize_links(text: str, resolver: EntityLinkResolver | None) -> list[dict[str, Any]]:
+    """A code-free run: markdown links become BlockNote link
     nodes — real URLs always, and `[prose](task:5)`-style citation
     targets when an entity-link resolver is supplied (create_note /
     update_note pass one bound to the caller's team, so saved notes
@@ -159,10 +231,13 @@ def _block(
     *,
     level: int | None = None,
     resolver: EntityLinkResolver | None = None,
+    extra_props: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     props = dict(_BASE_PROPS)
     if level is not None:
         props["level"] = level
+    if extra_props:
+        props.update(extra_props)
     return {
         "type": block_type,
         "props": props,
@@ -171,71 +246,239 @@ def _block(
     }
 
 
+def _indent_of(line: str) -> int:
+    """Leading-whitespace width, a tab counting as four columns."""
+    width = 0
+    for ch in line:
+        if ch == " ":
+            width += 1
+        elif ch == "\t":
+            width += 4
+        else:
+            break
+    return width
+
+
+def _split_row(line: str) -> list[str]:
+    """Cells of one pipe-table row. `\\|` is a literal pipe, not a
+    boundary; the optional outer pipes are dropped."""
+    row = line.strip()
+    if row.startswith("|"):
+        row = row[1:]
+    if row.endswith("|") and not row.endswith("\\|"):
+        row = row[:-1]
+    cells = re.split(r"(?<!\\)\|", row)
+    return [cell.strip().replace("\\|", "|") for cell in cells]
+
+
+def _is_table_start(lines: list[str], i: int) -> bool:
+    """A header row followed by a `| --- |` separator. Requiring the
+    separator keeps prose that merely contains a pipe a paragraph."""
+    if i + 1 >= len(lines):
+        return False
+    header = lines[i].strip()
+    sep = lines[i + 1].strip()
+    if "|" not in header or "|" not in sep or not _TABLE_SEPARATOR_RE.match(sep):
+        return False
+    return len(_split_row(header)) == len(_split_row(sep))
+
+
+def _table_block(rows: list[list[str]], resolver: EntityLinkResolver | None) -> dict[str, Any]:
+    """BlockNote 0.49 table: row 0 is the header (`headerRows: 1`), and
+    every row is padded/truncated to the header's width, which is how
+    BlockNote's own parser treats a ragged GFM table."""
+    width = len(rows[0])
+    cell_props = {**_BASE_PROPS, "colspan": 1, "rowspan": 1}
+    return {
+        "type": "table",
+        "props": {"textColor": "default"},
+        "content": {
+            "type": "tableContent",
+            "columnWidths": [None] * width,
+            "headerRows": 1,
+            "rows": [
+                {
+                    "cells": [
+                        {
+                            "type": "tableCell",
+                            "props": dict(cell_props),
+                            "content": _tokenize_inline(cell, resolver),
+                        }
+                        for cell in (row + [""] * width)[:width]
+                    ]
+                }
+                for row in rows
+            ],
+        },
+        "children": [],
+    }
+
+
+def _code_block(language: str, source: str) -> dict[str, Any]:
+    lang = language.strip().lower()
+    return {
+        "type": "codeBlock",
+        "props": {"language": _LANGUAGE_ALIASES.get(lang, lang)},
+        # Literal: no inline parsing inside code.
+        "content": [_text_node(source)] if source else [],
+        "children": [],
+    }
+
+
+def _divider_block() -> dict[str, Any]:
+    return {"type": "divider", "props": {}, "children": []}
+
+
+def _list_item(stripped: str) -> tuple[str, str, dict[str, Any]] | None:
+    """(block_type, text, extra_props) when the line is a list item."""
+    check = _CHECK_RE.match(stripped)
+    if check:
+        return "checkListItem", check.group(2), {"checked": check.group(1) != " "}
+    bullet = _BULLET_RE.match(stripped)
+    if bullet:
+        return "bulletListItem", bullet.group(1), {}
+    numbered = _NUMBERED_RE.match(stripped)
+    if numbered:
+        return "numberedListItem", numbered.group(1), {}
+    return None
+
+
+def _starts_block(stripped: str, lines: list[str], i: int) -> bool:
+    """Would this line open a non-paragraph block? (Ends a paragraph.)"""
+    return bool(
+        _HEADING_RE.match(stripped)
+        or _FENCE_RE.match(stripped)
+        or _QUOTE_RE.match(stripped)
+        or _DIVIDER_RE.match(stripped)
+        or _list_item(stripped)
+        or _is_table_start(lines, i)
+    )
+
+
 def markdown_to_blocks(
     markdown: str, *, entity_link_resolver: EntityLinkResolver | None = None
 ) -> list[dict[str, Any]]:
     """Parse the agent's markdown into BlockNote `PartialBlock`-shaped dicts.
 
-    Handles headings (# / ## / ###), bullet lists (-, *, •), numbered
-    lists (1. …), paragraphs, and inline **bold** / *italic* / markdown
-    links. Anything unrecognised degrades to a plain paragraph rather than
-    being dropped.
+    Handles headings (# … ######, capped at level 3), bullet / numbered /
+    check lists nested by indentation, `>` quotes, fenced code blocks,
+    pipe tables, `---` dividers and paragraphs, with inline **bold**,
+    *italic*, ~~strike~~, `code` and markdown links. Anything
+    unrecognised degrades to a plain paragraph rather than being dropped.
 
     Returns `[]` for empty input (a deliberately title-only note), matching
     the previous `_wrap_blocknote` contract.
     """
-    text = (markdown or "").strip()
-    if not text:
+    text = (markdown or "").strip("\n")
+    if not text.strip():
         return []
 
-    blocks: list[dict[str, Any]] = []
+    resolver = entity_link_resolver
     lines = text.split("\n")
+    blocks: list[dict[str, Any]] = []
+    # Open list items as (marker_indent, block): a deeper-indented item
+    # becomes a child of the nearest shallower one.
+    list_stack: list[tuple[int, dict[str, Any]]] = []
     i = 0
     n = len(lines)
     while i < n:
-        stripped = lines[i].strip()
+        raw = lines[i]
+        stripped = raw.strip()
 
-        # Blank line — block boundary.
+        # Blank line — block boundary (but a list may continue after it).
         if not stripped:
             i += 1
+            continue
+
+        # Fenced code block: everything up to the matching fence is
+        # literal, including lines that look like headings or lists. An
+        # unclosed fence runs to the end, as in CommonMark.
+        fence = _FENCE_RE.match(stripped)
+        if fence:
+            marker = fence.group(1)
+            body: list[str] = []
+            fence_indent = _indent_of(raw)
+            i += 1
+            while i < n:
+                closing = lines[i].strip()
+                if closing.startswith(marker[0] * len(marker)) and not closing.strip(marker[0]):
+                    i += 1
+                    break
+                line = lines[i]
+                # Drop the fence's own indentation from each line, so a
+                # fence nested under a list item isn't shifted right.
+                body.append(line[min(fence_indent, _indent_of(line)) :])
+                i += 1
+            list_stack.clear()
+            blocks.append(_code_block(fence.group(2), "\n".join(body)))
             continue
 
         heading = _HEADING_RE.match(stripped)
         if heading:
             level = min(len(heading.group(1)), 3)
-            blocks.append(_block("heading", heading.group(2), level=level, resolver=entity_link_resolver))
+            list_stack.clear()
+            blocks.append(_block("heading", heading.group(2), level=level, resolver=resolver))
             i += 1
             continue
 
-        if _BULLET_RE.match(stripped):
-            while i < n:
-                mm = _BULLET_RE.match(lines[i].strip())
-                if not mm:
-                    break
-                blocks.append(_block("bulletListItem", mm.group(1), resolver=entity_link_resolver))
-                i += 1
+        # Divider before lists: `- - -` and `* * *` are rules, not bullets.
+        if _DIVIDER_RE.match(stripped):
+            list_stack.clear()
+            blocks.append(_divider_block())
+            i += 1
             continue
 
-        if _NUMBERED_RE.match(stripped):
-            while i < n:
-                mm = _NUMBERED_RE.match(lines[i].strip())
-                if not mm:
-                    break
-                blocks.append(_block("numberedListItem", mm.group(1), resolver=entity_link_resolver))
+        if _is_table_start(lines, i):
+            rows = [_split_row(lines[i])]
+            i += 2  # header + separator
+            while i < n and lines[i].strip() and "|" in lines[i]:
+                rows.append(_split_row(lines[i]))
                 i += 1
+            list_stack.clear()
+            blocks.append(_table_block(rows, resolver))
+            continue
+
+        quote = _QUOTE_RE.match(stripped)
+        if quote:
+            # Consecutive `>` lines are one quote; lines join with a
+            # space, like BlockNote's parser.
+            buf = [quote.group(1).strip()]
+            i += 1
+            while i < n:
+                more = _QUOTE_RE.match(lines[i].strip())
+                if not more:
+                    break
+                buf.append(more.group(1).strip())
+                i += 1
+            list_stack.clear()
+            blocks.append(_block("quote", " ".join(p for p in buf if p), resolver=resolver))
+            continue
+
+        item = _list_item(stripped)
+        if item:
+            block_type, item_text, extra = item
+            indent = _indent_of(raw)
+            block = _block(block_type, item_text, resolver=resolver, extra_props=extra)
+            while list_stack and indent < list_stack[-1][0] + _MIN_NEST_INDENT:
+                list_stack.pop()
+            if list_stack:
+                list_stack[-1][1]["children"].append(block)
+            else:
+                blocks.append(block)
+            list_stack.append((indent, block))
+            i += 1
             continue
 
         # Paragraph: gather until a blank line or a block-starting line.
-        buf = [stripped]
+        list_stack.clear()
+        buf = [stripped.rstrip("\\")]
         i += 1
         while i < n:
             nxt = lines[i].strip()
-            if not nxt:
-                break
-            if _HEADING_RE.match(nxt) or _BULLET_RE.match(nxt) or _NUMBERED_RE.match(nxt):
+            if not nxt or _starts_block(nxt, lines, i):
                 break
             buf.append(nxt.rstrip("\\"))
             i += 1
-        blocks.append(_block("paragraph", " ".join(buf), resolver=entity_link_resolver))
+        blocks.append(_block("paragraph", " ".join(buf), resolver=resolver))
 
     return blocks

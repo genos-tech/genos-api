@@ -5,6 +5,7 @@ body converter used when saving an answer into a note.
 from django.test import SimpleTestCase
 
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
+from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
 from origin.search_engine.text_extraction import extract_sections, extract_text
 
 
@@ -108,6 +109,91 @@ class TestMarkdownToBlocks(SimpleTestCase):
         self.assertGreaterEqual(types.count("heading"), 2)
         self.assertIn("bulletListItem", types)
         self.assertIn("numberedListItem", types)
+
+    def test_inline_code_strike_and_literal_code_span(self):
+        [para] = markdown_to_blocks("run `make test`, ~~old~~, and `**not bold** [a](https://b.c)`")
+        styles = [(c.get("text"), c.get("styles")) for c in para["content"]]
+        self.assertIn(("make test", {"code": True}), styles)
+        self.assertIn(("old", {"strike": True}), styles)
+        # Code-span text is literal: no bold, no link node out of it.
+        self.assertIn(("**not bold** [a](https://b.c)", {"code": True}), styles)
+        self.assertNotIn("link", [c["type"] for c in para["content"]])
+
+    def test_fenced_code_block_is_literal_with_canonical_language(self):
+        blocks = markdown_to_blocks(
+            "```py\n# not a heading\n- not a bullet\n```\n\n```\nplain\n```"
+        )
+        self.assertEqual([b["type"] for b in blocks], ["codeBlock", "codeBlock"])
+        # Aliases resolve to the editor's language ids, like its ``` shortcut.
+        self.assertEqual([b["props"]["language"] for b in blocks], ["python", "text"])
+        self.assertEqual(
+            blocks[0]["content"],
+            [{"type": "text", "text": "# not a heading\n- not a bullet", "styles": {}}],
+        )
+
+    def test_pipe_table_becomes_table_block(self):
+        [table] = markdown_to_blocks(
+            "| Want | Tool |\n| :--- | ---: |\n| Milestone | `create_task_plan` ✅ |\n| x \\| y |"
+        )
+        self.assertEqual(table["type"], "table")
+        content = table["content"]
+        self.assertEqual((content["type"], content["headerRows"]), ("tableContent", 1))
+        rows = [[cell["content"] for cell in row["cells"]] for row in content["rows"]]
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(all(len(r) == 2 for r in rows))  # ragged row padded
+        self.assertEqual(
+            rows[1][1][0], {"type": "text", "text": "create_task_plan", "styles": {"code": True}}
+        )
+        self.assertEqual(rows[2][0][0]["text"], "x | y")  # escaped pipe is a literal
+        self.assertEqual(rows[2][1], [])
+
+    def test_table_right_under_a_paragraph_line_still_parses(self):
+        # Models often skip the blank line between an intro and the table.
+        blocks = markdown_to_blocks("Comparison:\n| a | b |\n| --- | --- |\n| 1 | 2 |")
+        self.assertEqual([b["type"] for b in blocks], ["paragraph", "table"])
+
+    def test_prose_with_a_pipe_is_not_a_table(self):
+        [para] = markdown_to_blocks("a | b, with no separator row")
+        self.assertEqual(para["type"], "paragraph")
+
+    def test_quote_checklist_divider_and_nesting(self):
+        blocks = markdown_to_blocks(
+            "> one\n> two\n\n- [ ] todo\n- [x] done\n- parent\n  - child\n    1. grandchild\n\n---"
+        )
+        self.assertEqual(
+            [b["type"] for b in blocks],
+            ["quote", "checkListItem", "checkListItem", "bulletListItem", "divider"],
+        )
+        self.assertEqual(blocks[0]["content"][0]["text"], "one two")
+        self.assertEqual([b["props"]["checked"] for b in blocks[1:3]], [False, True])
+        [child] = blocks[3]["children"]
+        self.assertEqual(child["type"], "bulletListItem")
+        self.assertEqual(child["children"][0]["type"], "numberedListItem")
+
+    def test_rich_body_round_trips_through_the_renderer(self):
+        # content_markdown is rendered from the stored blocks, so a body
+        # re-saved from it must not drift — including a code span that
+        # itself holds a backtick.
+        md = (
+            "## Plan\n\nUse `` `tick` `` and **bold**.\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n"
+            "```python\nx = 1\n```\n\n> note\n\n- [x] done\n  - nested\n\n---\n\nend"
+        )
+        once = blocks_to_markdown(markdown_to_blocks(md))
+        self.assertIn("`` `tick` ``", once)
+        self.assertEqual(blocks_to_markdown(markdown_to_blocks(once)), once)
+        self.assertEqual(
+            [b["type"] for b in markdown_to_blocks(once)],
+            [b["type"] for b in markdown_to_blocks(md)],
+        )
+
+    def test_chunker_indexes_table_cells(self):
+        blocks = markdown_to_blocks(
+            "## Tools\n\n| Want | Tool |\n| --- | --- |\n| Milestone | create_task_plan |"
+        )
+        self.assertIn("create_task_plan", extract_text(blocks))
+        self.assertEqual(
+            extract_sections(blocks), [("Tools", "Want Tool Milestone create_task_plan")]
+        )
 
     def test_chunker_reads_all_sections(self):
         # The saved body must round-trip through the reindex chunker:

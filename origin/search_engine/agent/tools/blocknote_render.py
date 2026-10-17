@@ -32,6 +32,7 @@ paths where a body that renders badly beats a request that 500s.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # The body-shape zoo (bare list / {"content": …} / {"blocks": …} / a
@@ -59,7 +60,13 @@ def _styled(text: str, styles: dict[str, Any]) -> str:
     if not text:
         return ""
     if styles.get("code"):
-        return f"`{text}`"
+        # The fence must be longer than any backtick run inside, and
+        # padded when the text starts/ends with one (CommonMark), or a
+        # span holding a backtick re-parses as a different span.
+        longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+        fence = "`" * (longest + 1)
+        pad = " " if text.startswith("`") or text.endswith("`") else ""
+        return f"{fence}{pad}{text}{pad}{fence}"
     # Order matters only for readability; bold outside italic is the
     # conventional nesting and round-trips through _FORMAT_RE.
     if styles.get("strike"):
@@ -208,6 +215,9 @@ def _render_leaf(block: dict[str, Any], depth: int) -> str:
     if btype in _MEDIA_TYPES:
         media = _render_media(block, btype)
         return f"{indent}{media}" if media else ""
+
+    if btype == "divider":
+        return f"{indent}---"
 
     # paragraph and anything unrecognised: render whatever inline content
     # it has. Never drop the block.
