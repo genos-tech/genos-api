@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from typing import Any
 from urllib.parse import urlparse
 
@@ -205,6 +206,9 @@ class McpView(PublicApiView):
         """
         team = self.resolve_team(request)
         if team is None:
+            named = self._named_team_id(request)
+            if named:
+                raise self._not_a_member(named)
             raise JsonRpcError(
                 protocol.INVALID_PARAMS,
                 "No team for this request. A personal access token must name "
@@ -216,11 +220,7 @@ class McpView(PublicApiView):
         user_id = str(request.user.id)
         team_id = str(team.team_id)
         if not participates_in_team(team_id, user_id):
-            raise JsonRpcError(
-                protocol.INVALID_PARAMS,
-                "Team not found.",
-                http_status=404,
-            )
+            raise self._not_a_member(team_id)
 
         # MCP is a Pro-and-up capability. Checked HERE because this is
         # the one place both `tools/list` and `tools/call` pass through,
@@ -244,6 +244,43 @@ class McpView(PublicApiView):
 
         scope = getattr(request.auth, "scope", SCOPE_READ)
         return ToolContext(team_id=team_id, user_id=user_id), scope
+
+    @staticmethod
+    def _named_team_id(request) -> str | None:
+        """The team the caller *asked for*, whether or not it resolved —
+        the key's own team, else `?team_id=`. Lets a refusal tell "you
+        named no team" apart from "you named one you aren't in". A value
+        that isn't a UUID counts as naming nothing: that one *is* a typo,
+        and the no-team message is the one that shows the right shape."""
+        key = request.auth
+        if getattr(key, "team_id", None):
+            return str(key.team_id)
+        try:
+            return str(uuid.UUID(str(request.query_params.get("team_id"))))
+        except (ValueError, AttributeError, TypeError):
+            return None
+
+    @staticmethod
+    def _not_a_member(team_id: str) -> JsonRpcError:
+        """The refusal for a valid key whose owner isn't on the team.
+
+        This used to say "Team not found.", which sent people hunting for
+        a typo in a `team_id` that was correct. Saying "you aren't a
+        member" leaks nothing: it reads the same whether or not the team
+        exists, and it only echoes the id the caller supplied. Key states
+        (unknown, revoked, expired) are a different refusal, made earlier
+        in `api_key_auth`, and deliberately stay undifferentiated.
+
+        403, not 404: a modern-era client reads a 404 carrying a JSON-RPC
+        body as "this server lacks the method".
+        """
+        return JsonRpcError(
+            protocol.INVALID_REQUEST,
+            f"This API key is valid, but its owner isn't a member of team "
+            f"{team_id}, or was removed from it. Ask an admin of that team "
+            "to add you back, or point ?team_id= at a team you belong to.",
+            http_status=403,
+        )
 
     def _call_tool(self, params: dict[str, Any], ctx: ToolContext, scope: str) -> dict[str, Any]:
         name = params.get("name")
