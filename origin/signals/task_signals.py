@@ -28,7 +28,7 @@ from django.db import transaction
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
-from origin.middleware.current_user import get_current_user
+from origin.middleware.current_user import get_current_source, get_current_user
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
@@ -218,6 +218,12 @@ def _record(
         return
     if task is None or task.pk is None:
         return
+    metadata = dict(metadata or {})
+    # How the write arrived (app / api_key + which key / agent), so a
+    # task's history can tell an unattended API write from a UI edit by
+    # the same person. Absent when unknown (webhooks, commands).
+    if "via" not in metadata and (via := get_current_source()) is not None:
+        metadata["via"] = via
     TaskActivity.objects.create(
         team=task.team,
         project=task.project,
@@ -227,7 +233,7 @@ def _record(
         field_name=field_name,
         old_value=_to_jsonable(old_value),
         new_value=_to_jsonable(new_value),
-        metadata=_to_jsonable(metadata or {}),
+        metadata=_to_jsonable(metadata),
     )
 
 
@@ -361,6 +367,11 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
                     "closedByPrMerge": True,
                     "prUrl": pr_close.get("prUrl"),
                 }
+            # Dependency-derived Open↔Blocked flip (`sync_blocked_status`):
+            # recorded under whoever's request triggered it, so mark it or
+            # it reads as that person setting the status by hand.
+            if getattr(instance, "_derived_blocked_sync", False):
+                metadata = {**(metadata or {}), "derivedFromDependencies": True}
         _record(
             task=instance,
             action_type=action,

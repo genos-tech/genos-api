@@ -42,19 +42,52 @@ def get_current_user():
     return user
 
 
-def set_current_user(user):
-    """Manually set the current user. Pair with `clear_current_user()`
-    in a try/finally; useful for SocketIO handlers that touch the ORM
-    outside of an HTTP request."""
+def get_current_source():
+    """Return how the active thread's writes reached Genos, as a dict for
+    `TaskActivity.metadata["via"]`, or None when unknown (a webhook, a
+    management command, the derived-status sync outside a request).
+
+      * `{"kind": "agent"}`   — the in-app Spotlight agent, acting for the
+        user after they approved the write (`set_current_user(..., via=)`);
+      * `{"kind": "api_key", "key_id", "key_name", "key_prefix"}` — a
+        public-API or MCP call. DRF puts the `ApiKey` on `request.auth`
+        (and mirrors it onto the Django request we hold), read lazily for
+        the same reason `request.user` is;
+      * `{"kind": "app"}`     — a signed-in session/JWT request.
+    """
+    explicit = getattr(_state, "via", None)
+    if explicit is not None:
+        return explicit
+    if get_current_user() is None:
+        return None
+    from origin.models.common.api_key_models import ApiKey  # noqa: PLC0415
+
+    key = getattr(getattr(_state, "request", None), "auth", None)
+    if isinstance(key, ApiKey):
+        return {
+            "kind": "api_key",
+            "key_id": str(key.id),
+            "key_name": key.name,
+            "key_prefix": key.prefix,
+        }
+    return {"kind": "app"}
+
+
+def set_current_user(user, via=None):
+    """Manually set the current user (and, optionally, the `via` source
+    `get_current_source` reports). Pair with `clear_current_user()` in a
+    try/finally; useful for SocketIO handlers that touch the ORM outside
+    of an HTTP request, and for the agent's worker thread — a thread
+    started from a request does NOT see that request's thread-local."""
     _state.user = user
+    _state.via = via
 
 
 def clear_current_user():
-    """Drop both the explicit user and cached request from this thread."""
-    if hasattr(_state, "user"):
-        delattr(_state, "user")
-    if hasattr(_state, "request"):
-        delattr(_state, "request")
+    """Drop the explicit user/source and cached request from this thread."""
+    for attr in ("user", "via", "request"):
+        if hasattr(_state, attr):
+            delattr(_state, attr)
 
 
 class CurrentUserMiddleware:

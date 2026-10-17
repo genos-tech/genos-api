@@ -70,6 +70,7 @@ from origin.search_engine.agent.tools.get_project_summary import GET_PROJECT_SUM
 from origin.search_engine.agent.tools.get_sprint_summary import GET_SPRINT_SUMMARY
 from origin.search_engine.agent.tools.get_stale_tasks import GET_STALE_TASKS
 from origin.search_engine.agent.tools.get_task_blockers import GET_TASK_BLOCKERS
+from origin.search_engine.agent.tools.get_task_history import GET_TASK_HISTORY
 from origin.search_engine.agent.tools.get_task_throughput_stats import (
     GET_TASK_THROUGHPUT_STATS,
 )
@@ -158,6 +159,7 @@ for _t in (
     LIST_SPRINTS,
     GET_SPRINT_SUMMARY,
     GET_TASK_BLOCKERS,
+    GET_TASK_HISTORY,
     # --- Read tools (BAU Wave 1) — whole-scope dependency graph ---
     LIST_TASK_DEPENDENCIES,
     # --- Read tools (Phase 16) — GitHub PR introspection ---
@@ -219,6 +221,7 @@ __all__ = [
     "GET_SPRINT_SUMMARY",
     "GET_STALE_TASKS",
     "GET_TASK_BLOCKERS",
+    "GET_TASK_HISTORY",
     "GET_TASK_THROUGHPUT_STATS",
     "GET_TEAM_MEMBERS",
     "GET_TEAM_TASK_SUMMARY",

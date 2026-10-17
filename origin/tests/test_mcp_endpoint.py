@@ -460,6 +460,39 @@ class TestAuthorization(McpBase):
             "an MCP write landed in the activity feed without its author",
         )
 
+    def test_a_write_names_the_key_it_came_through(self):
+        """The owner alone can't tell an unattended agent write from the
+        same person's UI edit (MIP-690). The key is read off
+        `request.auth` lazily, like the actor — DRF sets it on its own
+        Request and mirrors it onto the Django one the middleware holds,
+        which is the assumption this pins."""
+        raw = self._key(scope=SCOPE_WRITE)
+        self._call("update_task", {"task_id": self.task.task_id, "status": "WIP"})
+
+        key = ApiKey.objects.get(prefix=raw[:11])
+        activity = TaskActivity.objects.filter(task=self.task).order_by("-activity_id").first()
+        self.assertEqual(
+            activity.metadata.get("via"),
+            {
+                "kind": "api_key",
+                "key_id": str(key.id),
+                "key_name": "mcp",
+                "key_prefix": key.prefix,
+            },
+        )
+
+    def test_a_read_key_may_read_task_history_and_sees_its_own_write(self):
+        self._key(scope=SCOPE_WRITE)
+        self._call("update_task", {"task_id": self.task.task_id, "status": "WIP"})
+
+        self._key(scope=SCOPE_READ)
+        result = self._result(self._call("get_task_history", {"task_id": self.task.display_id}))
+        self.assertFalse(result.get("isError"), result["content"][0]["text"])
+        latest = result["structuredContent"]["history"][0]
+        self.assertEqual(latest["new_value"], "WIP")
+        self.assertEqual(latest["via"]["kind"], "api_key")
+        self.assertEqual(latest["actor"]["username"], self.user.username)
+
     def test_a_personal_token_must_name_a_team(self):
         self._key()
         res = self._rpc("tools/list", url=self._url(team=False))
