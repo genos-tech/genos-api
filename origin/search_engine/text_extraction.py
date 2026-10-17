@@ -115,7 +115,20 @@ def _walk_blocks(blocks):
 
 def _walk_block(block):
     parts = []
-    for inline in block.get("content", []) or []:
+    content = block.get("content", []) or []
+    if isinstance(content, dict):
+        # A table's content is `{"type": "tableContent", "rows": [{"cells":
+        # [...]}]}`, not an inline array. Each cell is a `tableCell` dict
+        # with its own inline `content` (older BlockNote stored the bare
+        # inline array), so index every cell's text in reading order.
+        content = [
+            inline
+            for row in content.get("rows") or []
+            if isinstance(row, dict)
+            for cell in row.get("cells") or []
+            for inline in ((cell.get("content") or []) if isinstance(cell, dict) else (cell or []))
+        ]
+    for inline in content:
         parts.extend(_walk_inline(inline))
     # Recurse into nested children (e.g., list items with sub-lists).
     for child in block.get("children", []) or []:
