@@ -206,7 +206,13 @@ def initialize_result(params: dict[str, Any]) -> dict[str, Any]:
             "fall back to `content_text`, which is the same body flattened. A "
             "task can be named by its display id (e.g. PRJ-123), its URL, or its "
             "numeric id. Start from `list_my_tasks` when the user says 'my tasks' "
-            "or names no task at all."
+            "or names no task at all. "
+            "Writes take effect immediately — there is no confirmation step on "
+            "this connection and no undo, so read the current state before "
+            "changing it, and prefer one batched call (`update_tasks_bulk`, "
+            "`create_task_plan`) over many single ones. Note ids are only unique "
+            "within a note family, so a note always needs its `note_type` as "
+            "well — `search_workspace` returns both."
         ),
     }
 
