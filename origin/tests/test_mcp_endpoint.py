@@ -846,6 +846,64 @@ class TestTheCatalogContract(McpBase):
             "a built write tool is not published over MCP",
         )
 
+    def test_every_published_write_can_be_driven(self):
+        """A published write whose id comes from nowhere is unreachable.
+
+        `delete_calendar_event`, `update_calendar_event` and
+        `update_todo_item` all shipped published while the tools
+        returning their ids stayed withheld, so the only way to call
+        them was to invent an opaque Google Calendar id. Publishing a
+        write and making it *usable* are separate properties, and only
+        the first one had a test.
+
+        An id argument is matched by name against what the published
+        reads return, which is deliberately coarse: it cannot prove a
+        read returns a usable value, only that *some* published tool
+        plausibly produces one. That is enough to catch the whole class
+        of mistake made here — a write published with no producer at
+        all — without pinning each tool's response shape."""
+        # `task_id` and `note_id` are resolved from a reference a person
+        # can type (see `resolve.py`), so they need no producer tool.
+        resolved_by_reference = {"task_id", "note_id"}
+        producers = {
+            "event_id": "list_calendar_events",
+            "calendar_id": "list_calendars",
+            "item_id": ("list_uncompleted_todos", "list_today_todos"),
+            "project_id": "list_projects",
+            "milestone_id": "list_milestones",
+            "assignee_id": "get_team_members",
+            "folder_id": "list_note_folders",
+        }
+        published = {t.name for t in tools.CATALOG}
+        undrivable = []
+        for tool in tools.CATALOG:
+            if not tool.write:
+                continue
+            schema = tools.describe(tool)["inputSchema"]
+            for argument in schema.get("required") or ():
+                if argument in resolved_by_reference:
+                    continue
+                if not argument.endswith("_id"):
+                    continue
+                expected = producers.get(argument)
+                self.assertIsNotNone(
+                    expected,
+                    f"{tool.name} requires `{argument}`, which no entry in "
+                    "`producers` claims a source for — add the mapping (and "
+                    "publish the producing read if it is not published)",
+                )
+                candidates = (expected,) if isinstance(expected, str) else expected
+                if not any(name in published for name in candidates):
+                    undrivable.append(
+                        f"{tool.name} needs `{argument}` from "
+                        f"{' or '.join(candidates)}, none of which is published"
+                    )
+        self.assertEqual(
+            undrivable,
+            [],
+            "a published write cannot be driven by any published read: " + "; ".join(undrivable),
+        )
+
 
 class TestReferenceResolution(McpBase):
     """Task and note references as a person types them."""

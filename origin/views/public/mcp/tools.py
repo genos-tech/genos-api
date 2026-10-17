@@ -1,20 +1,28 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 57 agent tools. This exposes 27. That is not all of them and
+Genos has 57 agent tools. This exposes 31. That is not all of them and
 not a staging accident — every tool costs the connected agent context on
 *every* request it makes, and much of the 57 answers questions Genos's
 own assistant gets asked ("who closed the most tasks last sprint"), not
 questions something working in the workspace has.
 
-What the 27 are chosen to be is **every write Genos has actually built,
+What the 31 are chosen to be is **every write Genos has actually built,
 plus the reads needed to drive them**. The earlier cut was 14, read-heavy
 and aimed narrowly at the code loop: find the task, read it, do the work,
 report back. It was sized by a fear that turns out to be misplaced — the
-measured cost of the full catalog is ~6.8k tokens against ~14k for the
+measured cost of the full catalog is ~7.5k tokens against ~14k for the
 in-app agent's 57, so the ceiling that constrains the in-app prompt
 (`SPOTLIGHT_QUALITY_ASSESSMENT_2026_07.md` F6) has far more headroom
 here. Withholding a *built* write bought no measurable context back and
 cost the connected agent the ability to do what the user can do.
+
+The second half of that sentence is load-bearing and was got wrong once:
+the calendar and todo writes shipped without the reads that return the
+`event_id` and `item_id` they require, leaving three published writes
+callable only by inventing an opaque id — `delete_calendar_event`, the
+one destructive tool here, among them. `test_every_published_write_can_be_driven`
+now fails if a write's required id has no published producer, because
+"published" and "usable" turned out to be different properties.
 
 Four things have to change on the way through, and each is a real
 mismatch rather than tidying:
@@ -296,6 +304,51 @@ CATALOG: tuple[McpTool, ...] = (
             "`create_note` and `update_note` take."
         ),
     ),
+    McpTool(
+        name="list_uncompleted_todos",
+        registry_name="list_uncompleted_todos",
+        description=(
+            "The caller's still-open to-dos, newest first, with the `item_id` "
+            "that `update_todo_item` takes. This is how a to-do is found: "
+            "`search_workspace` can surface one but does not return its id. "
+            "Scans back `date_range_days` (default 14), so widen it for an "
+            "older item."
+        ),
+    ),
+    McpTool(
+        name="list_today_todos",
+        registry_name="list_today_todos",
+        description=(
+            "The caller's to-dos for today, with their `item_id`s. Narrower "
+            "than `list_uncompleted_todos` and it includes items already "
+            "ticked off, so prefer it for 'what is left today' and that one "
+            "for anything older."
+        ),
+    ),
+    McpTool(
+        name="list_calendar_events",
+        registry_name="list_calendar_events",
+        description=(
+            "The caller's Google Calendar events in a date range, with the "
+            "`event_id` that `update_calendar_event` and "
+            "`delete_calendar_event` take. Call this first: those tools need "
+            "an id that only comes from here, and for a delete it is the only "
+            "way to confirm you have the right event. Recurring events are "
+            "expanded into individual instances, so cancelling one occurrence "
+            "means deleting that instance's own id. Needs Google connected "
+            "under Integrations."
+        ),
+    ),
+    McpTool(
+        name="list_calendars",
+        registry_name="list_calendars",
+        description=(
+            "The caller's Google Calendars and their ids. Only needed for a "
+            "non-primary calendar — every calendar tool defaults to the "
+            "primary one, so skip this unless the user names a specific "
+            "calendar."
+        ),
+    ),
     # ---- write: needs a write-scoped key ----
     McpTool(
         name="update_task",
@@ -466,7 +519,8 @@ CATALOG: tuple[McpTool, ...] = (
         registry_name="update_todo_item",
         description=(
             "Change one of the caller's to-dos: tick it off with "
-            "`is_completed`, edit the title, or replace its notes. "
+            "`is_completed`, edit the title, or replace its notes. Get "
+            "`item_id` from `list_uncompleted_todos` or `list_today_todos`. "
             '`notes_text: ""` clears the body; `clear_category: true` removes '
             "the category. Requires a write-scoped API key."
         ),
@@ -489,10 +543,10 @@ CATALOG: tuple[McpTool, ...] = (
         registry_name="update_calendar_event",
         description=(
             "Change an existing calendar event; omit any field you are "
-            "leaving alone. To move it, send `start_iso` AND `end_iso` "
-            "together — Google rejects a half-updated time. `attendees` "
-            "replaces the whole invitee list, so `[]` clears it. Requires a "
-            "write-scoped API key."
+            "leaving alone. Get `event_id` from `list_calendar_events`. To "
+            "move it, send `start_iso` AND `end_iso` together — Google "
+            "rejects a half-updated time. `attendees` replaces the whole "
+            "invitee list, so `[]` clears it. Requires a write-scoped API key."
         ),
         write=True,
     ),
@@ -503,8 +557,11 @@ CATALOG: tuple[McpTool, ...] = (
             "Delete a calendar event. **This is not reversible from here** — "
             "there is no undo on this surface and the event would have to be "
             "recreated by hand, so only call it when the user has asked for "
-            "that specific event to be cancelled. Deleting an already-deleted "
-            "event succeeds. Requires a write-scoped API key."
+            "that specific event to be cancelled. Get `event_id` from "
+            "`list_calendar_events` and check the summary and time you got "
+            "back really are the event meant: an id is not something to "
+            "construct or guess. Deleting an already-deleted event succeeds. "
+            "Requires a write-scoped API key."
         ),
         write=True,
     ),
