@@ -1,10 +1,13 @@
-"""`update_task` must push a rewritten body into the task's Yjs doc (MIP-694).
+"""`update_task` / `update_note` must push a rewritten body into the
+editor's Yjs doc (MIP-694 for tasks, MIP-697 for notes).
 
 The editor renders the collab doc `task-body:<id>`, not `TaskMaster.content`,
 and seeds from `content` only while that doc is empty. So an agent / MCP body
 rewrite of a task that had ever been opened never reached the screen, and the
 next keystroke autosaved the old body back. The tool now posts the new blocks
 to genos-collab after commit; these tests pin when it does and what it sends.
+Notes have the same two stores (`body` and `my-note:` / `task-note:`), and an
+MCP `update_note` has no browser behind it to bridge them client-side.
 """
 
 from unittest import mock
@@ -15,10 +18,13 @@ from django.conf import settings
 from django.db import transaction
 from django.test import override_settings
 
+from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools import ToolContext
+from origin.search_engine.agent.tools.update_note import UPDATE_NOTE
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
 from origin.services import collab_push
 from origin.services.milestone_service import ensure_backing_task
@@ -166,3 +172,89 @@ class UpdateTaskCollabPushTests(BaseAPITestCase):
         self.assertEqual(payload["documentName"], f"task-body:{backing.task_id}")
         self.assertEqual(payload["blocks"], backing.content)
         self.assertEqual(payload["blocks"][0]["type"], "heading")
+
+
+@override_settings(COLLAB_INTERNAL_URL=COLLAB)
+class UpdateNoteCollabPushTests(BaseAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Website Redesign",
+            code="WRD",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user)
+        self.ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id))
+        self.personal = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="mine", body=[]
+        )
+        self.task_note = TaskNoteMaster.objects.create(
+            team=self.team, project=self.project, owner=self.user, title="shared", body=[]
+        )
+        patcher = mock.patch.object(collab_push.requests, "post")
+        self.post = patcher.start()
+        self.post.return_value = mock.Mock(status_code=200, text='{"ok":true}')
+        self.addCleanup(patcher.stop)
+
+    def _update(self, note, note_type, **args):
+        with self.captureOnCommitCallbacks(execute=True):
+            return UPDATE_NOTE.run(
+                {"note_id": note.note_id, "note_type": note_type, **args}, self.ctx
+            )
+
+    def test_each_note_type_pushes_into_its_editor_document(self):
+        for note, note_type, prefix in (
+            (self.personal, "personal", "my-note"),
+            (self.task_note, "task", "task-note"),
+        ):
+            with self.subTest(note_type):
+                self.post.reset_mock()
+                self._update(note, note_type, content_text="## Plan\n\n- [ ] ship it")
+
+                self.post.assert_called_once()
+                self.assertEqual(
+                    self.post.call_args.args[0], f"{COLLAB}/internal/documents/replace-blocks"
+                )
+                payload = self.post.call_args.kwargs["json"]
+                self.assertEqual(payload["documentName"], f"{prefix}:{note.note_id}")
+                note.refresh_from_db()
+                # Exactly what was saved, so the doc and the row agree.
+                self.assertEqual(payload["blocks"], note.body)
+                self.assertEqual(
+                    [b["type"] for b in payload["blocks"]], ["heading", "checkListItem"]
+                )
+
+    def test_clearing_the_body_pushes_an_empty_list(self):
+        PersonalNoteMaster.objects.filter(pk=self.personal.pk).update(body=[{"type": "paragraph"}])
+        self._update(self.personal, "personal", content_text="")
+        self.assertEqual(self.post.call_args.kwargs["json"]["blocks"], [])
+
+    def test_title_only_and_unchanged_body_do_not_push(self):
+        self._update(self.personal, "personal", content_text="same")
+        self.post.reset_mock()
+        self._update(self.personal, "personal", title="Renamed")
+        self._update(self.personal, "personal", content_text="same")
+        self.post.assert_not_called()
+
+    def test_refused_write_does_not_push(self):
+        other = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user2, title="theirs", body=[]
+        )
+        with self.assertRaises(Exception):
+            self._update(other, "personal", content_text="not mine")
+        self.post.assert_not_called()
+
+    def test_collab_outage_does_not_fail_the_write(self):
+        self.post.side_effect = requests.ConnectionError("collab down")
+        with self.assertLogs("origin.services.collab_push", level="WARNING"):
+            result = self._update(self.task_note, "task", content_text="saved anyway")
+        self.assertEqual(result["changed_fields"], ["body"])
+        self.task_note.refresh_from_db()
+        self.assertEqual(self.task_note.body[0]["content"][0]["text"], "saved anyway")
+
+    @override_settings(COLLAB_INTERNAL_URL="")
+    def test_unconfigured_collab_is_a_no_op(self):
+        self._update(self.personal, "personal", content_text="no collab here")
+        self.post.assert_not_called()

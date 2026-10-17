@@ -1906,8 +1906,9 @@ GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 BACKEND_BASE_URL = os.environ.get("BACKEND_BASE_URL", "http://localhost:8890")
 
 # genos-collab's base URL, http(s) (NOT the browser's ws:// VITE_COLLAB_URL).
-# `update_task` posts a rewritten task body here so the editor's Yjs doc
-# picks it up (origin/services/collab_push.py, MIP-694). Empty = no push:
-# the body is still saved, but a task already opened in the editor keeps
-# showing its old body until someone edits it.
+# `update_task` / `update_note` post a rewritten task or note body here so
+# the editor's Yjs doc picks it up (origin/services/collab_push.py, MIP-694,
+# MIP-697). Empty = no push: the body is still saved, but a task or note
+# already opened in the editor keeps showing its old body until someone
+# edits it.
 COLLAB_INTERNAL_URL = os.environ.get("COLLAB_INTERNAL_URL", "").rstrip("/")
