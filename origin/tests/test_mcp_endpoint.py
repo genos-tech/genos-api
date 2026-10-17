@@ -760,6 +760,57 @@ class TestTheCatalogContract(McpBase):
         for tool in tools.CATALOG:
             walk(tools.input_schema(tool), tool.name)
 
+    def test_every_published_schema_is_valid_json_schema(self):
+        """Stricter than the dialect check, and for the same reason: a
+        client that rejects a schema does not report a schema problem.
+        `tools/list` fails validation as a whole and the server shows as
+        **"Connected" with zero tools** — the `ttlMs` incident (#347)
+        exactly. A hand-written override is the likely source now that
+        schemas are assembled rather than passed through, so this checks
+        what a validator would: known keywords, real types, and a
+        `required` naming only properties that exist.
+        """
+        valid_keywords = {
+            "type",
+            "properties",
+            "required",
+            "description",
+            "enum",
+            "items",
+            "default",
+            "format",
+        }
+        valid_types = {"string", "number", "integer", "boolean", "object", "array", "null"}
+
+        def check(node, path, name):
+            if not isinstance(node, dict):
+                return
+            declared = node.get("type")
+            if declared is not None:
+                self.assertIn(declared, valid_types, f"{name}{path}: type {declared!r}")
+            properties = node.get("properties") or {}
+            for key in node:
+                self.assertIn(key, valid_keywords, f"{name}{path}: unknown keyword `{key}`")
+            for required in node.get("required") or ():
+                self.assertIn(
+                    required,
+                    properties,
+                    f"{name}{path}: `required` names `{required}`, which is not a property",
+                )
+            enum = node.get("enum")
+            if enum is not None:
+                self.assertTrue(enum and isinstance(enum, list), f"{name}{path}: empty enum")
+            for key, value in properties.items():
+                check(value, f"{path}.{key}", name)
+            if "items" in node:
+                check(node["items"], f"{path}[]", name)
+
+        for tool in tools.CATALOG:
+            schema = tools.input_schema(tool)
+            # MCP requires an object at the root: the arguments map.
+            self.assertEqual(schema.get("type"), "object", tool.name)
+            check(schema, "", tool.name)
+
     def test_overriding_a_schema_does_not_mutate_the_registry(self):
         """The registry schema dicts are module state shared with the
         in-app agent. An override that wrote through would change what
