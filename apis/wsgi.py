@@ -27,4 +27,5 @@ validate_web_config(
     allowed_hosts=settings.ALLOWED_HOSTS,
     cors_allowed_origins=settings.CORS_ALLOWED_ORIGINS,
     field_encryption_key=settings.OAUTH_TOKEN_ENCRYPTION_KEY,
+    search_engine=settings.SEARCH_ENGINE,
 )
