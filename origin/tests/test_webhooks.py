@@ -45,13 +45,13 @@ class TestSsrfGuard(BaseAPITestCase):
     def _public(self):
         # Pin resolution so the suite never depends on real DNS.
         return patch(
-            "origin.services.webhook_delivery.socket.getaddrinfo",
+            "origin.services.outbound_url.socket.getaddrinfo",
             return_value=[(2, 1, 6, "", ("93.184.216.34", 443))],
         )
 
     def _resolves_to(self, ip):
         return patch(
-            "origin.services.webhook_delivery.socket.getaddrinfo",
+            "origin.services.outbound_url.socket.getaddrinfo",
             return_value=[(2, 1, 6, "", (ip, 443))],
         )
 
@@ -81,11 +81,19 @@ class TestSsrfGuard(BaseAPITestCase):
             with self.assertRaises(WebhookUrlError):
                 validate_webhook_url("https://metadata.example/hook")
 
+    def test_ranges_the_old_check_let_through_are_refused(self):
+        """Not `is_private`, so the original list passed them (MIP-717):
+        shared / CGNAT space, and deprecated IPv6 site-local."""
+        for ip in ("100.64.0.1", "100.127.255.254", "fec0::1"):
+            with self.subTest(ip=ip), self._resolves_to(ip):
+                with self.assertRaises(WebhookUrlError):
+                    validate_webhook_url("https://internal.example/hook")
+
     def test_a_host_with_any_private_record_is_refused(self):
         """ALL resolved addresses must be public — a mixed record would
         otherwise pass and then be sent to the private one."""
         with patch(
-            "origin.services.webhook_delivery.socket.getaddrinfo",
+            "origin.services.outbound_url.socket.getaddrinfo",
             return_value=[
                 (2, 1, 6, "", ("93.184.216.34", 443)),
                 (2, 1, 6, "", ("10.0.0.5", 443)),
@@ -98,7 +106,7 @@ class TestSsrfGuard(BaseAPITestCase):
         import socket as real_socket
 
         with patch(
-            "origin.services.webhook_delivery.socket.getaddrinfo",
+            "origin.services.outbound_url.socket.getaddrinfo",
             side_effect=real_socket.gaierror(),
         ):
             with self.assertRaises(WebhookUrlError):
@@ -136,7 +144,7 @@ class TestBackoff(BaseAPITestCase):
 class WebhookApiBase(BaseAPITestCase):
     def _public_dns(self):
         return patch(
-            "origin.services.webhook_delivery.socket.getaddrinfo",
+            "origin.services.outbound_url.socket.getaddrinfo",
             return_value=[(2, 1, 6, "", ("93.184.216.34", 443))],
         )
 
@@ -183,7 +191,7 @@ class TestWebhookManagement(WebhookApiBase):
     def test_a_private_url_is_refused_by_the_endpoint(self):
         self.authenticate(self.user)
         with patch(
-            "origin.services.webhook_delivery.socket.getaddrinfo",
+            "origin.services.outbound_url.socket.getaddrinfo",
             return_value=[(2, 1, 6, "", ("127.0.0.1", 443))],
         ):
             res = self.client.post(

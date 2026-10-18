@@ -37,14 +37,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import ipaddress
 import json
-import socket
 from datetime import timedelta
 from urllib.parse import urlparse
 
 import requests
 from django.utils import timezone
+
+from origin.services.outbound_url import is_public_host
 
 SIGNATURE_HEADER = "X-Genos-Signature"
 TIMESTAMP_HEADER = "X-Genos-Timestamp"
@@ -66,31 +66,11 @@ class WebhookUrlError(ValueError):
 def _is_public_address(host: str) -> bool:
     """Does every address this host resolves to sit on the public net?
 
-    ALL of them, not any: a hostname with both a public and a private A
-    record would otherwise pass validation and be sent to the private
-    one, depending on resolver order.
+    The check lives in `outbound_url` now, shared with the link-title
+    fetch. This module's own list passed 100.64.0.0/10 (shared / CGNAT
+    space) and site-local `fec0::/10` as public (MIP-717).
     """
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except socket.gaierror:
-        return False
-    if not infos:
-        return False
-    for info in infos:
-        try:
-            ip = ipaddress.ip_address(info[4][0])
-        except ValueError:
-            return False
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local  # 169.254.0.0/16 — cloud metadata lives here
-            or ip.is_reserved
-            or ip.is_multicast
-            or ip.is_unspecified
-        ):
-            return False
-    return True
+    return is_public_host(host)
 
 
 def validate_webhook_url(url: str) -> str:
