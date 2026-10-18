@@ -2157,6 +2157,25 @@ def _own_comment(request, task_id, comment_id):
     return comment
 
 
+def _comment_broadcast_context(task_id) -> dict:
+    """The task's own project, for the socket layer's live broadcast.
+
+    genos-sockets used to broadcast a comment or reaction to
+    `prj-{project_id}` with the `project_id` the CLIENT sent, which nothing
+    tied to the task Django had just checked access to: a member of any
+    project could push a fabricated comment event into another project's
+    room. Returning the project from here makes the room a server fact.
+    """
+    task = TaskMaster.objects.filter(task_id=task_id).select_related("project").first()
+    project = task.project if task is not None else None
+    return {
+        "projectId": project.project_id if project is not None else None,
+        "projectName": project.project_name if project is not None else "",
+        "isPrivate": bool(project.is_private) if project is not None else False,
+        "displayId": task.display_id if task is not None else None,
+    }
+
+
 class TaskCommentsView(AuthenticatedAPIView):
     def post(self, request):
         task_id = request.data.get("task_id")
@@ -2209,18 +2228,15 @@ class TaskCommentsView(AuthenticatedAPIView):
             # ProjectMembers, so it never appears in their lists and is
             # reachable only from that one notification. Report it so the
             # commenter can add them properly.
-            comment_project_id = (
-                TaskMaster.objects.filter(task_id=task_id)
-                .values_list("project_id", flat=True)
-                .first()
-            )
+            context = _comment_broadcast_context(task_id)
             return Response(
                 {
                     **serializer.data,
+                    **context,
                     "_v3_activities": activities_wire,
                     "nonMemberMentions": non_member_mentions(
                         comment_mentioned_ids,
-                        project_id=comment_project_id,
+                        project_id=context["projectId"],
                         exclude_user_ids=[request.user.id],
                     ),
                 },
@@ -2256,7 +2272,10 @@ class TaskCommentsView(AuthenticatedAPIView):
         serializer = TaskCommentsSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(
+                {**serializer.data, **_comment_broadcast_context(task_id)},
+                status=status.HTTP_200_OK,
+            )
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -2326,6 +2345,7 @@ class TaskCommentsView(AuthenticatedAPIView):
         live_count = TaskComments.objects.filter(task=task_id, is_deleted=False).count()
         return Response(
             {
+                **_comment_broadcast_context(task_id),
                 "taskId": int(task_id),
                 "commentId": int(comment_id),
                 "taskCommentCount": live_count,
@@ -2419,6 +2439,31 @@ class TaskCommentsView(AuthenticatedAPIView):
             return Response("task_id is not found", status=status.HTTP_400_BAD_REQUEST)
 
 
+def _reaction_broadcast_context(task_id, comment_id, reactor) -> dict:
+    """`_comment_broadcast_context`, plus the comment being reacted to.
+
+    The socket layer's reaction activity names the comment's author (the
+    one person whose feed keeps it) and quotes its first line. Both used to
+    come from the client, so a reaction could put any text in front of any
+    member, credited to a comment they never wrote. `commentSenderId` is
+    None and `commentBody` empty when there is no live comment by that id.
+
+    The reactor's name rides along for the same reason: the socket layer
+    otherwise reads it off its connect URL, which nothing verifies.
+    """
+    comment = (
+        TaskComments.objects.filter(task=task_id, comment_id=comment_id, is_deleted=False)
+        .only("sender_id", "comment_body")
+        .first()
+    )
+    return {
+        **_comment_broadcast_context(task_id),
+        "commentSenderId": str(comment.sender_id) if comment and comment.sender_id else None,
+        "commentBody": comment.comment_body if comment is not None else [],
+        "senderName": reactor.username,
+    }
+
+
 class TaskCommentReactionView(AuthenticatedAPIView):
     def post(self, request):
         if not can_access_task(request.data.get("task_id"), request.user.id):
@@ -2471,7 +2516,13 @@ class TaskCommentReactionView(AuthenticatedAPIView):
                     schedule_push_for_activities(acts)
             except Exception as exc:  # never break the saved reaction
                 logger.warning("task-comment reaction v3 fan-out failed: %s", exc)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(
+                {
+                    **serializer.data,
+                    **_reaction_broadcast_context(data["task"], data["comment_id"], request.user),
+                },
+                status=status.HTTP_201_CREATED,
+            )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request):
@@ -2504,10 +2555,22 @@ class TaskCommentReactionView(AuthenticatedAPIView):
                 comment_id=comment_id,
                 reaction_emoji=reaction_emoji,
             )
+            reaction_id = reaction.reaction_id
             reaction.delete()
+            # 200 with a body, not 204: the socket layer is this route's
+            # only caller, and it broadcasts the removal from this answer.
+            # `requests` can't parse an empty 204, so the handler saw an
+            # error on every removal and nobody else's view updated.
             return Response(
-                {"message": "Reaction deleted successfully."},
-                status=status.HTTP_204_NO_CONTENT,
+                {
+                    "message": "Reaction deleted successfully.",
+                    "reaction_id": reaction_id,
+                    "comment_id": comment_id,
+                    "task": int(task_id),
+                    "sender": str(request.user.id),
+                    **_reaction_broadcast_context(task_id, comment_id, request.user),
+                },
+                status=status.HTTP_200_OK,
             )
         except TaskCommentReactionFact.DoesNotExist:
             return Response(
