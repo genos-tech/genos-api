@@ -29,6 +29,9 @@ milestone's backing task, in the milestone's sprint.
 as `assign_task`: an active member of this team, or someone on the
 target project (a guest collaborator holds only the latter). Omitted
 means unassigned — there is no implicit "assign to the caller" default.
+
+`tags` takes tag names from the project's catalogue (`list_project_tags`);
+an unknown name is refused, never created — see `task_tags`.
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
+from origin.search_engine.agent.tools.task_tags import resolve_tags
 from origin.search_engine.quota import (
     TASK_CREATE_KEY,
     check_remaining_monthly,
@@ -140,6 +144,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if raw_assignee_id and raw_assignee_id != "null":
         assignee = _resolve_assignee(raw_assignee_id, allowed, ctx)
 
+    tags = resolve_tags(args["tags"], project_id) if args.get("tags") is not None else []
+
     content_text = args.get("content_text") or ""
     priority = args.get("priority")
     if priority is not None and priority not in _VALID_PRIORITIES:
@@ -167,6 +173,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     }
     if assignee is not None:
         create_kwargs["assignee_id"] = assignee.id
+    if tags:
+        create_kwargs["tags"] = tags
     if priority:
         create_kwargs["priority"] = priority
     if effort_level:
@@ -216,6 +224,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "milestone_id": milestone.milestone_id if milestone is not None else None,
         "assignee_id": str(assignee.id) if assignee is not None else None,
         "assignee_username": assignee_username,
+        "tags": [tag["tagName"] for tag in tags],
         "title": task.title,
         "status": task.status,
         "__summary__": summary,
@@ -230,11 +239,12 @@ CREATE_TASK = Tool(
         "execute. Use this when the user explicitly asks you to create / "
         "add / file a task. Required: title, project_id. Optional: "
         "content_text (markdown body), milestone_id (file it under an "
-        "existing milestone), assignee_id, priority, effort_level, due_date "
+        "existing milestone), assignee_id, tags, priority, effort_level, due_date "
         "(ISO 8601, e.g. 2026-06-30). Status is always created as 'Open' "
         "— users change it via the UI. Leave assignee_id out unless the "
         "user names an assignee; use get_current_user when they say "
-        "'assign it to me'."
+        "'assign it to me'. For tags, call list_project_tags and pick only "
+        "tags that genuinely describe the task — leave tags out if none fits."
     ),
     parameters_schema={
         "type": "OBJECT",
@@ -273,6 +283,15 @@ CREATE_TASK = Tool(
                     "Optional assignee user UUID: get_current_user for yourself, "
                     "get_team_members / list_project_members for someone else. "
                     "Omit for unassigned."
+                ),
+            },
+            "tags": {
+                "type": "ARRAY",
+                "items": {"type": "STRING"},
+                "description": (
+                    "Optional tag names from list_project_tags (this project's "
+                    "catalogue). An unknown name is refused — tags can't be "
+                    "created here. Omit when no tag fits."
                 ),
             },
             "priority": {

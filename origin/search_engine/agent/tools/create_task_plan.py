@@ -53,6 +53,7 @@ from origin.search_engine.agent.tools.task_enums import (
     VALID_EFFORTS,
     VALID_PRIORITIES,
 )
+from origin.search_engine.agent.tools.task_tags import resolve_tags
 from origin.search_engine.quota import (
     TASK_CREATE_KEY,
     check_remaining_monthly,
@@ -221,6 +222,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 assignee_ids.add(str(uid))
 
     edges_by_node: dict[int, list[int]] = {i: [] for i in range(len(tasks))}
+    # Each task's stored tags, resolved against the project's catalogue
+    # (MIP-707). An unknown name is a validation error like any other.
+    tags_by_index: dict[int, list[dict[str, str]]] = {}
     for i, spec in enumerate(tasks):
         where = f"tasks[{i}]"
         if not isinstance(spec, dict):
@@ -234,6 +238,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         _parse_date(spec.get("due_date"), f"{where}.due_date", errors)
         if spec.get("assignee_id"):
             assignee_ids.add(str(spec["assignee_id"]))
+        if spec.get("tags") is not None:
+            try:
+                tags_by_index[i] = resolve_tags(spec["tags"], project_id, where=f"{where}.tags")
+            except ToolError as e:
+                errors.append(str(e))
 
         parent_index = spec.get("parent_index")
         if parent_index is not None:
@@ -359,7 +368,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 sprint_id = milestone.sprint_id if milestone is not None else None
 
             created: list[TaskMaster] = []
-            for spec in tasks:
+            for i, spec in enumerate(tasks):
                 parent_index = spec.get("parent_index")
                 if parent_index is not None:
                     parent = created[int(parent_index)]
@@ -386,6 +395,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                         start_date=spec.get("start_date") or None,
                         due_date=spec.get("due_date") or None,
                         parent_task_id=parent_task_id,
+                        tags=tags_by_index.get(i) or None,
                     )
                 )
 
@@ -451,6 +461,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "display_id": t.display_id,
             "title": t.title,
             "parent_task_id": t.parent_task_id,
+            "tags": [tag["tagName"] for tag in tags_by_index.get(i) or []],
         }
         for i, t in enumerate(created)
     ]
@@ -521,6 +532,15 @@ _TASK_ITEM_SCHEMA: dict[str, Any] = {
             "description": (
                 "Optional assignee user UUID from get_team_members / "
                 "list_project_members. Omit for unassigned."
+            ),
+        },
+        "tags": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+            "description": (
+                "Optional tag names from list_project_tags (the project's "
+                "catalogue) — only tags that genuinely describe this task. "
+                "An unknown name fails the plan. Omit when none fits."
             ),
         },
         "parent_index": {

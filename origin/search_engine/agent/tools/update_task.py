@@ -2,7 +2,7 @@
 
 Partial-update one `TaskMaster` row. Any subset of `title`,
 `content_text`, `status`, `priority`, `effort_level`, `due_date`,
-`milestone_id` may be supplied; omitted fields are left as-is. The model should
+`milestone_id`, `tags` may be supplied; omitted fields are left as-is. The model should
 fetch the task first (via `fetch_task`) so it can propose changes
 that respect the existing state.
 
@@ -26,6 +26,7 @@ from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
+from origin.search_engine.agent.tools.task_tags import resolve_tags, tag_names
 from origin.services.collab_push import push_task_body
 from origin.services.milestone_service import sync_backing_task
 from origin.services.task_milestone_move import milestone_move_error, move_task_to_milestone
@@ -147,6 +148,16 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 update_fields.append("due_date")
                 changed.append("due_date")
 
+    # --- tags (names from the project's catalogue; [] clears) ---
+    # Compared as name sets: the UI keeps no tag order, and the history
+    # signal ignores a reorder too. The save records `tags_changed`.
+    if "tags" in args and args["tags"] is not None:
+        new_tags = resolve_tags(args["tags"], task.project_id)
+        if set(tag_names(new_tags)) != set(tag_names(task.tags)):
+            task.tags = new_tags or None
+            update_fields.append("tags")
+            changed.append("tags" if new_tags else "tags(cleared)")
+
     # --- milestone_id (move into / between milestones, '' to detach) ---
     # Validated here, before any write, but applied after the field save:
     # the move re-reads the row, and writes the hierarchy columns itself.
@@ -257,11 +268,13 @@ UPDATE_TASK = Tool(
         "APPROVAL — the user sees your proposed changes and decides "
         "whether to execute. Required: task_id. Optional (omit fields "
         "you don't want to change): title, content_text, status, "
-        "priority, effort_level, due_date, milestone_id. Pass `due_date: ''` to "
+        "priority, effort_level, due_date, milestone_id, tags. Pass `due_date: ''` to "
         "clear the due date. Pass `milestone_id` (from `list_milestones`, same "
         "project) to move the task and its sub-tasks into that milestone, or "
         "`milestone_id: ''` to take it out. Status enum: Open, WIP, Blocked, Pending, Closed, "
-        "Deleted. Use `fetch_task` first to see the current state so "
+        "Deleted. `tags` REPLACES the task's tags with names from "
+        "list_project_tags (pass [] to clear); an unknown name is refused. "
+        "Use `fetch_task` first to see the current state so "
         "you don't propose a no-op."
     ),
     parameters_schema={
@@ -310,6 +323,15 @@ UPDATE_TASK = Tool(
                     "Milestone id (from list_milestones, same project) to move "
                     "the task into; its sub-tasks move with it. Omit to leave "
                     "unchanged. Pass '' to take the task out of its milestone."
+                ),
+            },
+            "tags": {
+                "type": "ARRAY",
+                "items": {"type": "STRING"},
+                "description": (
+                    "The task's full new set of tag names, from list_project_tags. "
+                    "Replaces the current tags — include any you are keeping. "
+                    "Pass [] to clear. Omit to leave unchanged."
                 ),
             },
         },

@@ -34,6 +34,7 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.task_tags import tag_names
 from origin.services.user_time import today_for_user_id
 
 _MAX_LIMIT = 50
@@ -191,6 +192,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "effort_level": t.effort_level,
                 "due_date": t.due_date.isoformat() if t.due_date else None,
                 "assignee_id": str(t.assignee_id) if t.assignee_id else None,
+                "tags": tag_names(t.tags),
                 "project_id": t.project_id,
                 "project_name": t.project.project_name if t.project else None,
             }
