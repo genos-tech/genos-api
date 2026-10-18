@@ -512,8 +512,10 @@ CATALOG: tuple[McpTool, ...] = (
             "project id from `list_projects`. `content_text` is markdown — "
             "headings, check lists, code fences and tables are preserved — "
             "and `milestone_id` (from `list_milestones`) files the task under "
-            "an existing milestone in the same project. Requires a "
-            "write-scoped API key."
+            "an existing milestone in the same project. `assignee_id` "
+            "assigns it in the same call, on the same terms as `assign_task` "
+            "— `get_current_user` for yourself; omit it to leave the task "
+            "unassigned. Requires a write-scoped API key."
         ),
         write=True,
     ),
