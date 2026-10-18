@@ -41,6 +41,7 @@ from __future__ import annotations
 import re
 import uuid
 from bisect import bisect_left
+from collections import Counter, defaultdict
 from typing import Any, Callable
 
 # Maps a citation token ("task:12") to (href, fallback_label), or None
@@ -57,18 +58,13 @@ _BASE_PROPS = {
     "backgroundColor": "default",
 }
 
-# Inline markers. Bold is matched before italic so `**x**` isn't eaten by
-# the single-`*` italic rule. Underscore italic/bold use word-boundary
-# guards so `snake_case_name` isn't mangled into italics. Mirrors the
-# frontend regex vocabulary.
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-_FORMAT_RE = re.compile(
-    r"\*\*(.+?)\*\*"  # **bold**
-    r"|__(.+?)__"  # __bold__
-    r"|(?<![A-Za-z0-9])\*([^*\s][^*]*?)\*(?![A-Za-z0-9])"  # *italic*
-    r"|(?<![A-Za-z0-9])_([^_\s][^_]*?)_(?![A-Za-z0-9])"  # _italic_
-    r"|~~(.+?)~~"  # ~~strike~~
-)
+# Emphasis delimiter runs, paired by `_format_spans`. A run's (single,
+# double) style; `~` only pairs as `~~`.
+_DELIM_RUN_RE = re.compile(r"\*+|_+|~+")
+_MARKER_CLUSTER_RE = re.compile(r"[*_~]+")
+_DELIM_STYLES = {"*": ("italic", "bold"), "_": ("italic", "bold"), "~": (None, "strike")}
+_STYLE_ORDER = ("bold", "italic", "strike")
 # Code spans are cut out before any other inline rule runs: their text is
 # literal, so `` `**x**` `` or `` `[a](b)` `` must not become bold or a link.
 _CODE_SPAN_RE = re.compile(r"(`+)(.+?)\1")
@@ -126,20 +122,119 @@ def _text_node(text: str, styles: dict[str, bool] | None = None) -> dict[str, An
     return {"type": "text", "text": text, "styles": styles or {}}
 
 
+class _Delim:
+    """One run of `*`, `_` or `~~`; `lo`..`hi` are its characters not yet
+    used as markers."""
+
+    __slots__ = ("char", "seq", "lo", "hi", "length", "can_open", "can_close")
+
+    def __init__(self, char: str, seq: int, lo: int, hi: int, can_open: bool, can_close: bool):
+        self.char, self.seq, self.lo, self.hi = char, seq, lo, hi
+        self.length, self.can_open, self.can_close = hi - lo, can_open, can_close
+
+
+def _ascii_alnum(char: str) -> bool:
+    return char.isascii() and char.isalnum()
+
+
+def _delims(text: str) -> list[_Delim]:
+    """The delimiter runs that can open and/or close emphasis. A run
+    opens when followed by non-space and closes when preceded by one —
+    CommonMark's flanking rule without its punctuation clauses. Those
+    refuse `**注意:**本文`, the shape Japanese bodies take, and markers
+    stacked against each other (`**~~x~~**y`), which is what
+    `blocks_to_markdown` writes where a style ends mid-word. `_` never
+    opens or closes inside a word, so `snake_case_name` stays literal;
+    `*` may (`**a*b***` is bold `a` then bold-italic `b`), as on GitHub.
+
+    Flanking is judged from the text around the whole cluster of
+    markers, so in ` ~~**x` the `**` opens and can't close on the `~`
+    before it — that would steal an enclosing `*`'s match."""
+    out: list[_Delim] = []
+    clusters = {m.start(): m.end() for m in _MARKER_CLUSTER_RE.finditer(text)}
+    cluster = (0, 0)
+    for m in _DELIM_RUN_RE.finditer(text):
+        char, lo, hi = m.group()[0], m.start(), m.end()
+        if lo in clusters:
+            cluster = (lo, clusters[lo])
+        if char == "~" and hi - lo != 2:
+            continue
+        before = text[cluster[0] - 1] if cluster[0] else " "
+        after = text[cluster[1]] if cluster[1] < len(text) else " "
+        can_open, can_close = not after.isspace(), not before.isspace()
+        if char == "_":
+            can_open = can_open and not _ascii_alnum(before)
+            can_close = can_close and not _ascii_alnum(after)
+        if can_open or can_close:
+            out.append(_Delim(char, len(out), lo, hi, can_open, can_close))
+    return out
+
+
 def _format_spans(text: str) -> list[tuple[int, int, dict[str, bool]]]:
     """`(start, end, styles)` for each run of `text` once the
-    bold/italic/strike markers are dropped; unmarked runs carry `{}`."""
+    bold/italic/strike markers are dropped; unmarked runs carry `{}`.
+
+    Markers pair by CommonMark's delimiter-stack algorithm ("process
+    emphasis"), so emphasis nests — `**bold *it* more**`, `***x***`,
+    `~~**x**~~` — which a regex alternation can't express (MIP-705). It
+    is iterative and visits each delimiter a bounded number of times, so
+    a line of thousands of `*` costs linear time, not recursion depth.
+    """
+    matches: list[tuple[int, int, str]] = []  # styled ranges, markers excluded
+    markers: list[tuple[int, int]] = []
+    openers: list[_Delim] = []
+    # CommonMark's `openers_bottom`: where a failed search for this kind
+    # of closer stopped, so the next one doesn't rescan the same openers.
+    bottom: dict[tuple[str, bool, int], int] = {}
+    for closer in _delims(text):
+        while closer.can_close and closer.lo < closer.hi:
+            key = (closer.char, closer.can_open, closer.length % 3)
+            j = len(openers) - 1
+            while j >= 0 and openers[j].seq > bottom.get(key, -1):
+                opener = openers[j]
+                # The "rule of 3": `*a**b*` must not pair `*` with `**`.
+                odd = (opener.can_close or closer.can_open) and (
+                    (opener.length + closer.length) % 3 == 0
+                    and (opener.length % 3 or closer.length % 3)
+                )
+                if opener.char == closer.char and not odd:
+                    break
+                j -= 1
+            else:
+                bottom[key] = closer.seq - 1
+                break
+            opener = openers[j]
+            use = 2 if opener.hi - opener.lo >= 2 and closer.hi - closer.lo >= 2 else 1
+            markers += [(opener.hi - use, opener.hi), (closer.lo, closer.lo + use)]
+            matches.append((opener.hi, closer.lo, _DELIM_STYLES[closer.char][use - 1]))
+            opener.hi -= use
+            closer.lo += use
+            # Delimiters between the pair can no longer match anything.
+            del openers[j + 1 :]
+            if opener.lo == opener.hi:
+                openers.pop()
+        if closer.can_open and closer.lo < closer.hi:
+            openers.append(closer)
+
+    if not matches:
+        return [(0, len(text), {})] if text else []
+    marker_starts = {lo for lo, _ in markers}
+    delta: dict[int, Counter] = defaultdict(Counter)
+    for lo, hi, style in matches:
+        delta[lo][style] += 1
+        delta[hi][style] -= 1
+    cuts = sorted({0, len(text), *delta, *(p for span in markers for p in span)})
+    level: Counter = Counter()
     spans: list[tuple[int, int, dict[str, bool]]] = []
-    cursor = 0
-    for m in _FORMAT_RE.finditer(text):
-        if m.start() > cursor:
-            spans.append((cursor, m.start(), {}))
-        group = next(g for g in range(1, 6) if m.group(g) is not None)
-        style = "bold" if group in (1, 2) else "strike" if group == 5 else "italic"
-        spans.append((m.start(group), m.end(group), {style: True}))
-        cursor = m.end()
-    if cursor < len(text):
-        spans.append((cursor, len(text), {}))
+    for start, end in zip(cuts, cuts[1:]):
+        level.update(delta.get(start, {}))
+        if start in marker_starts:
+            continue
+        styles = {s: True for s in _STYLE_ORDER if level[s] > 0}
+        if spans and spans[-1][1] == start and spans[-1][2] == styles:
+            spans[-1] = (spans[-1][0], end, styles)
+        else:
+            spans.append((start, end, styles))
     return spans
 
 

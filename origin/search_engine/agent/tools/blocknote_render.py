@@ -54,15 +54,52 @@ _INDENT = "  "
 # Emphasis styles, in wrapping order (innermost first). Bold outside
 # italic is the conventional nesting.
 _EMPHASIS = (("strike", "~~"), ("italic", "*"), ("bold", "**"))
+_MARKER = dict(_EMPHASIS)
+# Which style opens first when two span the same runs.
+_OUTERMOST_FIRST = tuple(style for style, _ in reversed(_EMPHASIS))
 
 
-def _wrap(text: str, emphasis: frozenset[str]) -> str:
-    if not text:
-        return ""
-    for style, marker in _EMPHASIS:
-        if style in emphasis:
-            text = f"{marker}{text}{marker}"
-    return text
+def _wrap(text: str, style: str) -> str:
+    """`text` in `style`'s markers, its edge whitespace kept outside:
+    `** x**` doesn't parse as bold, `**x**` after a space does."""
+    core = text.strip()
+    if not core:
+        return text
+    lead = text[: len(text) - len(text.lstrip())]
+    trail = text[len(text.rstrip()) :]
+    return f"{lead}{_MARKER[style]}{core}{_MARKER[style]}{trail}"
+
+
+def _nest(runs: list[tuple[str, frozenset[str]]]) -> str:
+    """Rendered runs, each with its emphasis, as properly nested markers.
+
+    At each run still missing a style, open the one that carries furthest
+    and recurse into what it covers without it: bold `a `, bold-italic
+    `b`, bold ` c` render `**a *b* c**`. Wrapping each style-set group on
+    its own gives `**a *****b***** c**`, which no parser reads back
+    (MIP-705). Depth is bounded by the three styles.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(runs):
+        text, emphasis = runs[i]
+        if not emphasis:
+            out.append(text)
+            i += 1
+            continue
+        best, best_end = "", i
+        for style in _OUTERMOST_FIRST:
+            if style not in emphasis:
+                continue
+            end = i + 1
+            while end < len(runs) and style in runs[end][1]:
+                end += 1
+            if end > best_end:
+                best, best_end = style, end
+        inner = [(t, e - {best}) for t, e in runs[i:best_end]]
+        out.append(_wrap(_nest(inner), best))
+        i = best_end
+    return "".join(out)
 
 
 def _emphasis_of(node: dict[str, Any], strip: frozenset[str]) -> frozenset[str]:
@@ -104,8 +141,8 @@ def _styled(text: str, styles: dict[str, Any]) -> str:
 def _inline(nodes: Any, strip: frozenset[str] = frozenset()) -> str:
     """Render one block's inline `content` array to markdown.
 
-    Neighbouring runs with the same emphasis are wrapped once, as a
-    group: per-run wrapping turns bold code followed by bold text into
+    Neighbouring runs sharing a style are wrapped in it once (`_nest`):
+    per-run wrapping turns bold code followed by bold text into
     ``**`x`**** y**``, whose middle `****` re-parses as literal
     asterisks — and agents edit bodies by re-saving this rendering.
     """
@@ -113,9 +150,7 @@ def _inline(nodes: Any, strip: frozenset[str] = frozenset()) -> str:
         return nodes
     if not isinstance(nodes, list):
         return ""
-    out: list[str] = []
-    group: list[str] = []
-    group_emphasis: frozenset[str] = frozenset()
+    runs: list[tuple[str, frozenset[str]]] = []
     for node in nodes:
         if not isinstance(node, dict):
             continue
@@ -123,12 +158,8 @@ def _inline(nodes: Any, strip: frozenset[str] = frozenset()) -> str:
         rendered = _inline_node(node, strip | emphasis)
         if not rendered:
             continue  # an empty run must not split a group into `**a****b**`
-        if emphasis != group_emphasis:
-            out.append(_wrap("".join(group), group_emphasis))
-            group, group_emphasis = [], emphasis
-        group.append(rendered)
-    out.append(_wrap("".join(group), group_emphasis))
-    return "".join(out)
+        runs.append((rendered, emphasis))
+    return _nest(runs)
 
 
 def _inline_node(node: dict[str, Any], strip: frozenset[str]) -> str:

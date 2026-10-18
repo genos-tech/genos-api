@@ -286,3 +286,31 @@ class RoundTripTests(SimpleTestCase):
         self.assertIn("**bold**", rendered)
         self.assertIn("*italic*", rendered)
         self.assertIn("[link](https://x.com)", rendered)
+
+    def _styled_runs(self, blocks):
+        return [(c["text"], sorted(c["styles"])) for c in blocks[0]["content"]]
+
+    def test_mixed_emphasis_round_trips(self):
+        """MIP-705: each style-set group was wrapped on its own, so bold
+        with italic inside rendered as `**a *****b***** c**`."""
+        cases = [
+            ([("a ", "bold"), ("b", "bold italic"), (" c", "bold")], "**a *b* c**"),
+            ([("x", "bold italic")], "***x***"),
+            ([("x", "bold strike")], "**~~x~~**"),
+            ([("a ", "italic"), ("b", "bold italic strike"), (" c", "italic")], "*a **~~b~~** c*"),
+            ([("a", "bold"), ("b", "bold italic")], "**a*b***"),
+            # The style that carries further opens first, bold or not.
+            ([("a", "bold italic"), (" b", "italic")], "***a** b*"),
+            # Edge whitespace goes outside the markers: `** x**` isn't bold.
+            ([("a", ""), (" b ", "bold"), ("c", "")], "a **b** c"),
+        ]
+        for runs, expected in cases:
+            content = [_text(t, dict.fromkeys(s.split(), True)) for t, s in runs]
+            with self.subTest(expected=expected):
+                rendered = blocks_to_markdown([_block("paragraph", content=content)])
+                self.assertEqual(rendered, expected)
+                back = self._styled_runs(markdown_to_blocks(rendered))
+                want = [(t, sorted(s.split())) for t, s in runs]
+                if expected == "a **b** c":
+                    want = [("a ", []), ("b", ["bold"]), (" c", [])]
+                self.assertEqual(back, want)
