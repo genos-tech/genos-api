@@ -509,8 +509,10 @@ CATALOG: tuple[McpTool, ...] = (
             "feature/PRJ-42-x) is linked automatically once the repo's "
             "webhook is registered, so this is for a branch that doesn't "
             "name the task, or a branch with no PR yet. Pass `pr_url`, or "
-            "`branch` + `repo` (owner/name). Repeating it is harmless. "
-            "Requires a write-scoped API key."
+            "`branch` + `repo` (owner/name). Repeating it is harmless. It also "
+            "installs the repo's webhook with your GitHub connection; "
+            "`webhook_warning` in the result means it couldn't, so pass that "
+            "on to the user. Requires a write-scoped API key."
         ),
         write=True,
         task_ref_args=("task_id",),
