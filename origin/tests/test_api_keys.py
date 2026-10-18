@@ -244,6 +244,60 @@ class TestApiKeyManagement(ApiKeyBase):
                 )
                 self.assertAlmostEqual(self._expiry_days(res), days, delta=0.01)
 
+    # ── destructive tools are a separate opt-in (MIP-723) ─────────────
+
+    def test_a_key_is_not_opted_into_destructive_tools_by_default(self):
+        self.authenticate(self.user)
+        for extra in ({}, {"allow_destructive": None}, {"allow_destructive": False}):
+            with self.subTest(body=extra):
+                res = self.client.post(
+                    KEYS_URL, {"name": "k", "scope": SCOPE_WRITE, **extra}, format="json"
+                )
+                self.assertEqual(res.status_code, 201, res.data)
+                self.assertIs(res.data["allowDestructive"], False)
+                self.assertFalse(ApiKey.objects.get(id=res.data["id"]).allow_destructive)
+
+    def test_a_write_key_may_opt_into_destructive_tools(self):
+        self.authenticate(self.user)
+        res = self.client.post(
+            KEYS_URL,
+            {"name": "k", "scope": SCOPE_WRITE, "allow_destructive": True},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertIs(res.data["allowDestructive"], True)
+        self.assertTrue(ApiKey.objects.get(id=res.data["id"]).allow_destructive)
+        listed = self.client.get(KEYS_URL).data["api_keys"]
+        self.assertIs(listed[0]["allowDestructive"], True)
+
+    def test_a_read_key_may_not_opt_into_destructive_tools(self):
+        """It could never use the grant, and a stored grant is one that
+        wakes up if scope ever becomes editable."""
+        self.authenticate(self.user)
+        for scope in (SCOPE_READ, None):
+            with self.subTest(scope=scope):
+                body = {"name": "k", "allow_destructive": True}
+                if scope:
+                    body["scope"] = scope
+                res = self.client.post(KEYS_URL, body, format="json")
+                self.assertEqual(res.status_code, 400)
+                self.assertIn("write", res.data["error"])
+        self.assertFalse(ApiKey.objects.filter(user=self.user).exists())
+
+    def test_only_a_json_boolean_opts_in(self):
+        """`"false"` is truthy. A string that reads as no and grants
+        deletes is refused, not coerced."""
+        self.authenticate(self.user)
+        for bad in ("true", "false", 1, 0, "yes", [True]):
+            with self.subTest(value=bad):
+                res = self.client.post(
+                    KEYS_URL,
+                    {"name": "k", "scope": SCOPE_WRITE, "allow_destructive": bad},
+                    format="json",
+                )
+                self.assertEqual(res.status_code, 400)
+        self.assertFalse(ApiKey.objects.filter(user=self.user).exists())
+
     def test_listing_shows_only_your_own_keys(self):
         self._create_key(user=self.user2, name="theirs")
         self._create_key(user=self.user, name="mine")

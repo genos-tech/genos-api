@@ -52,6 +52,7 @@ from django.utils import timezone
 from origin.search_engine.agent import tool_cache
 from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
 from origin.search_engine.agent.citation_resolver import resolve_unresolved_citations
+from origin.search_engine.agent.egress import EgressRefused, check_web_query
 from origin.search_engine.agent.languages import language_directive
 from origin.search_engine.agent.prompts import (
     AGENT_CRITIQUE_RETRIEVAL_DIRECTIVE,
@@ -1875,7 +1876,13 @@ def resume_agent(
 # --------------------------------------------------------------------------- #
 
 
-def _run_tool_guarded(tool: Any, call_name: str, call_args: dict[str, Any], ctx: ToolContext) -> tuple[str, Any]:
+def _run_tool_guarded(
+    tool: Any,
+    call_name: str,
+    call_args: dict[str, Any],
+    ctx: ToolContext,
+    transcript: list[AgentMessage],
+) -> tuple[str, Any]:
     """Execute one read-only tool, never raising.
 
     Returns a tagged outcome consumed by the loop's apply phase:
@@ -1884,8 +1891,16 @@ def _run_tool_guarded(tool: Any, call_name: str, call_args: dict[str, Any], ctx:
     ToolError's message is user-facing (ACL denials, bad args), a crash
     gets the generic internal-error string + a server-side traceback.
     Shared by the serial path and the E1 parallel executor, so error
-    semantics can't diverge between them.
+    semantics can't diverge between them — which is also why the
+    `search_web` egress check lives here: `transcript` is what the model
+    has seen, and a query lifting from it never leaves (MIP-723).
     """
+    try:
+        if call_name == "search_web":
+            check_web_query(str(call_args.get("query") or ""), transcript)
+    except EgressRefused as e:
+        log.warning("search_web query refused by the egress check (user %s)", ctx.user_id)
+        return ("tool_error", str(e))
     try:
         return ("ok", tool.run(call_args, ctx))
     except ToolError as e:
@@ -1896,7 +1911,7 @@ def _run_tool_guarded(tool: Any, call_name: str, call_args: dict[str, Any], ctx:
 
 
 def _execute_batch_parallel(
-    calls: list[FunctionCall], ctx: ToolContext
+    calls: list[FunctionCall], ctx: ToolContext, transcript: list[AgentMessage]
 ) -> list[tuple[tuple[str, Any], int]]:
     """E1 — run a batch of read-only tool calls concurrently.
 
@@ -1922,7 +1937,9 @@ def _execute_batch_parallel(
     def _task(call: FunctionCall) -> tuple[tuple[str, Any], int]:
         started = time.monotonic()
         try:
-            outcome = _run_tool_guarded(REGISTRY.get(call.name), call.name, dict(call.args), ctx)
+            outcome = _run_tool_guarded(
+                REGISTRY.get(call.name), call.name, dict(call.args), ctx, transcript
+            )
             return outcome, int((time.monotonic() - started) * 1000)
         finally:
             try:
@@ -2609,7 +2626,9 @@ def _drive_loop(
                 )
             starts_pre_emitted = True
             miss_calls = [accumulated_function_calls[i] for i in miss_indices]
-            for i, (outcome, dur_ms) in zip(miss_indices, _execute_batch_parallel(miss_calls, ctx)):
+            for i, (outcome, dur_ms) in zip(
+                miss_indices, _execute_batch_parallel(miss_calls, ctx, messages)
+            ):
                 precomputed[i] = outcome
                 tool_durations[i] = dur_ms
 
@@ -2701,7 +2720,7 @@ def _drive_loop(
                 kind, payload = precomputed[call_idx]
             else:
                 _tool_started = time.monotonic()
-                kind, payload = _run_tool_guarded(tool, call_name, call_args, ctx)
+                kind, payload = _run_tool_guarded(tool, call_name, call_args, ctx, messages)
                 tool_durations[call_idx] = int((time.monotonic() - _tool_started) * 1000)
             from_cache = call_idx in cached_indices
 

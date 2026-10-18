@@ -25,6 +25,7 @@ from origin.models.common.api_key_models import (
     DISPLAY_PREFIX_LEN,
     SCOPE_CHOICES,
     SCOPE_READ,
+    SCOPE_WRITE,
     ApiKey,
     generate_key,
     hash_key,
@@ -49,6 +50,7 @@ def _serialize(key: ApiKey) -> dict:
         "name": key.name,
         "prefix": key.prefix,
         "scope": key.scope,
+        "allowDestructive": key.allow_destructive,
         "teamId": str(key.team_id) if key.team_id else None,
         "lastUsedAt": key.last_used_at,
         "expiresAt": key.expires_at,
@@ -81,6 +83,26 @@ class ApiKeyListCreateView(AuthenticatedAPIView):
         if scope not in dict(SCOPE_CHOICES):
             return Response(
                 {"error": f"scope must be one of {sorted(dict(SCOPE_CHOICES))}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Strictly a JSON boolean: `"false"` is truthy, and a string that
+        # reads as no while granting deletes is the one mistake this flag
+        # can't afford. Meaningless without write scope, so refused there
+        # rather than stored as a grant that would wake up on its own if
+        # scope ever became editable. Omitted or `null` is the default, off,
+        # as with `expires_in_days` below.
+        allow_destructive = request.data.get("allow_destructive")
+        if allow_destructive is None:
+            allow_destructive = False
+        if not isinstance(allow_destructive, bool):
+            return Response(
+                {"error": "allow_destructive must be true or false."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if allow_destructive and scope != SCOPE_WRITE:
+            return Response(
+                {"error": "allow_destructive needs a write-scoped key."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -136,6 +158,7 @@ class ApiKeyListCreateView(AuthenticatedAPIView):
             key_hash=hash_key(raw),
             prefix=raw[:DISPLAY_PREFIX_LEN],
             scope=scope,
+            allow_destructive=allow_destructive,
             expires_at=expires_at,
             created_by=request.user,
         )
