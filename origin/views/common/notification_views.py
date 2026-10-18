@@ -12,6 +12,7 @@ from origin.serializers.common.notification_serializers import (
 from origin.services import presence
 from origin.services.external_grants import presence_team_ids_for_user
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.roster_fields import shown_location
 
 
 class NotificationPreferenceView(AuthenticatedAPIView):
@@ -138,6 +139,47 @@ class PresenceAudienceView(AuthenticatedAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
         return Response(
-            {"teamIds": sorted(presence_team_ids_for_user(request.user.id))},
+            {
+                "teamIds": sorted(presence_team_ids_for_user(request.user.id)),
+                "profile": presence_profile(request.user),
+            },
             status=status.HTTP_200_OK,
         )
+
+
+def presence_profile(user) -> dict:
+    """Who a heartbeat says it is, as the server knows them.
+
+    The socket layer used to rebroadcast whatever `user` object the client
+    put on its beat, into every room above. Two things were wrong with that.
+    The beat named its own `userId`, `userName` and avatar, so a member could
+    overwrite a colleague's row in everyone's roster, or relabel themselves
+    as that colleague. And it carried the client's whole `myself`, phone
+    number and email included, plus a location the user had opted out of
+    sharing, into rooms on the far side of a cross-team share. The socket
+    layer now sends this instead, and takes only presence state from the
+    beat (see genos-sockets `heartbeat_handlers.py`).
+
+    Narrow enough for the widest audience above. A guest is in their host
+    team's room through the team shell `GetMyTeamsView` gives them, so the
+    same card reaches colleagues and outsiders alike: no phone number,
+    because that is a teammates-only field (`_without_phone`), and no email.
+    Neither belongs on a presence ping, and both reach every reader through
+    the roster, which is already narrowed per reader.
+
+    Location follows `location_shared` exactly as a roster row read by
+    somebody else does. `timezone` is left out: the client pins it from the
+    roster row, because a beat never carried it.
+    """
+    return {
+        "userId": str(user.id),
+        "userName": user.username,
+        "avatarImgPath": user.profile_image_file_name or "",
+        "role": user.role or "",
+        "baseCountry": user.base_country or "",
+        "currentLocation": shown_location(
+            user.current_location, user.location_shared, is_self=False
+        ),
+        "aboutMe": user.about_me or "",
+        "tsJoined": user.ts_created_at,
+    }

@@ -411,7 +411,7 @@ class ReactionAccessTests(TaskEndpointAccessBase):
     def test_you_can_remove_your_own_reaction(self):
         reaction = self._existing_reaction(self.user2)
         self.authenticate(self.user2)
-        self.assertEqual(self._unreact(self.user2.id).status_code, 204)
+        self.assertEqual(self._unreact(self.user2.id).status_code, 200)
         self.assertFalse(TaskCommentReactionFact.objects.filter(pk=reaction.pk).exists())
 
     def test_a_reactor_taken_off_the_project_can_no_longer_unreact(self):
