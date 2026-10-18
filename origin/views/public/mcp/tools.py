@@ -297,7 +297,9 @@ CATALOG: tuple[McpTool, ...] = (
         registry_name="fetch_note",
         description=(
             "Read a note's full body. Notes hold specs, designs and "
-            "decisions — follow one when a task description points at it."
+            "decisions — follow one when a task description points at it. "
+            "`body_markdown` keeps the note's headings, lists and @/# chips; "
+            "`body_text` is the same body flattened."
         ),
     ),
     McpTool(
@@ -621,9 +623,9 @@ CATALOG: tuple[McpTool, ...] = (
         description=(
             "Edit an existing note's title and/or body, or move a personal "
             "note between folders. `content_text` REPLACES the entire body, so "
-            "read the note with `get_note` first and send the full new text — "
-            "every section you are not changing included — rather than a "
-            "fragment. Every edit is snapshotted into the note's version "
+            "read the note with `get_note` first and edit its `body_markdown` "
+            "— every section you are not changing included — rather than "
+            "sending a fragment. Every edit is snapshotted into the note's version "
             "history, so a change can be rolled back in the Genos UI. You must "
             "be the note's owner, an editor on it, or (for a task note) a "
             "member of its project. Chat notes cannot be edited here. Requires "

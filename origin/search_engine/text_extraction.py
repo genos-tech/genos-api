@@ -137,6 +137,42 @@ def _walk_block(block):
     return parts
 
 
+# The editor's `@` / `#` chips (genos-frontend `Mention.tsx`,
+# `HashMention.tsx`): trigger and the props their label is read from.
+# `mention` stays in `_walk_inline`'s own branch, which predates these.
+_CHIP_LABEL_PROPS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "mentionGroup": ("@", ("groupName",)),
+    "hashTask": ("#", ()),  # `<displayId> · <title>`, see chip_label
+    "hashProject": ("#", ("projectName",)),
+    "hashNote": ("#", ("title",)),
+    "hashChat": ("#", ("chatName",)),
+}
+
+
+def chip_label(inline: Any) -> str:
+    """The text an `@` / `#` chip shows, trigger included: `@Ken`,
+    `#MIP-708 · Chips`. `""` for anything that isn't a chip."""
+    if not isinstance(inline, dict):
+        return ""
+    t = inline.get("type")
+    props = inline.get("props") or {}
+    if not isinstance(props, dict):
+        return ""
+    if t == "mention":
+        prefix, label_props = "@", ("userName", "name")
+    elif t in _CHIP_LABEL_PROPS:
+        prefix, label_props = _CHIP_LABEL_PROPS[t]
+    else:
+        return ""
+    if t == "hashTask":
+        id_text = str(props.get("displayId") or props.get("taskId") or "")
+        title = str(props.get("title") or "")
+        label = f"{id_text} · {title}" if id_text and title else id_text or title
+    else:
+        label = next((str(props[p]) for p in label_props if props.get(p)), "")
+    return f"{prefix}{label}" if label else ""
+
+
 def _walk_inline(inline):
     if not isinstance(inline, dict):
         return []
@@ -158,6 +194,12 @@ def _walk_inline(inline):
         # Links embed their own content array.
         nested = inline.get("content") or []
         return _join_inline(nested)
+    if t in _CHIP_LABEL_PROPS:
+        # `@group` / `#` reference chips (`mentionGroup`, `hashTask`, …)
+        # carry no text run; index the label the chip shows, so a body
+        # that says "see #MIP-708 · Chips" is found by "MIP-708".
+        label = chip_label(inline)
+        return [label] if label else []
     # Unknown inline type — try to recover any "text" field.
     text = inline.get("text")
     return [str(text)] if text else []

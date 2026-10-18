@@ -39,7 +39,7 @@ from typing import Any
 # plain string from older writers) is normalised in exactly one place.
 # Importing it keeps that single source of truth rather than growing a
 # second copy here that drifts the first time a writer invents a shape.
-from origin.search_engine.text_extraction import _top_level_blocks, extract_text
+from origin.search_engine.text_extraction import _top_level_blocks, chip_label, extract_text
 
 # Blocks that form a tight run — consecutive items are one markdown list,
 # not separate paragraphs.
@@ -141,17 +141,65 @@ def _inline_node(node: dict[str, Any], strip: frozenset[str]) -> str:
         label = _inline(node.get("content"), strip) or str(node.get("href") or "")
         href = str(node.get("href") or "")
         return f"[{label}]({href})" if href else label
-    if ntype == "mention":
-        props = node.get("props") or {}
-        name = props.get("userName") or props.get("name")
-        return f"@{name}" if name else ""
     if ntype == "customEmoji":
         name = (node.get("props") or {}).get("name")
         return f":{name}:" if name else ""
+    if ntype in _CHIP_TOKENS:
+        return _chip(node)
     # Unknown inline type — recover any text it carries rather than
     # dropping the run (mirrors _walk_inline's fallback).
     text = node.get("text")
     return str(text) if text else ""
+
+
+def _note_token(props: dict[str, Any]) -> str | None:
+    # Note families share no id space, so the token names the family. A
+    # chat-note chip has no token `entity_chips` resolves; it renders as
+    # its label alone.
+    kind = props.get("noteKind")
+    if kind == "task":
+        return "note:task:{noteId}"
+    if kind in ("my", "shared", "team"):
+        return "note:personal:{noteId}"
+    return None
+
+
+# Chip node type → token template, or a function of props returning one:
+# what `blocknote_md` + `entity_chips` read back into the same chip.
+_CHIP_TOKENS: dict[str, Any] = {
+    "mention": "user:{userId}",
+    "mentionGroup": "group:{groupId}",
+    "hashTask": "task:{taskId}",
+    "hashProject": "project:{projectId}",
+    "hashNote": _note_token,
+    "hashChat": "chat:gm:{chatId}",
+}
+
+
+def _chip(node: dict[str, Any]) -> str:
+    """A chip as `[@Ken](user:<uuid>)` / `[#MIP-708 · Chips](task:1577)`:
+    readable as markdown, and re-parsed into the same chip when the body
+    is saved back (MIP-708). Rendering only the label, as this used to
+    for mentions (and nothing at all for `#` chips), made every
+    read-modify-write of a body silently strip them."""
+    label = chip_label(node)
+    if not label:
+        return ""
+    props = node.get("props") or {}
+    template = _CHIP_TOKENS[node["type"]]
+    template = template(props) if callable(template) else template
+    try:
+        token = template.format(**{k: str(v) for k, v in props.items()}) if template else ""
+    except (KeyError, IndexError, ValueError):
+        token = ""
+    # An empty id (`task:`) or a stray bracket would not survive the
+    # round trip; the label alone is the honest rendering then.
+    if not token or token.endswith(":") or re.search(r"[\s()\[\]]", token):
+        return label
+    # `]` would close the label early, and `[`…`]` inside it would re-parse
+    # as a link of its own.
+    safe = label.replace("[", "(").replace("]", ")")
+    return f"[{safe}]({token})"
 
 
 def _plain(nodes: Any) -> str:

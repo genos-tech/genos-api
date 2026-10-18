@@ -446,10 +446,11 @@ class NoteBodyEntityLinkTests(NoteWriteToolTestBase):
         )
         note = TaskNoteMaster.objects.get(note_id=res["note_id"])
         href = f"/workspace/tasks/project/{self.project.project_id}/task/{task.task_id}"
-        self.assertEqual(
-            _links_in(note.body),
-            [(href, "the Safari task"), (href, task.display_id)],
-        )
+        # Prose keeps its link; the bare token becomes the editor's own
+        # `#` chip, which shows the task's live title (MIP-708).
+        self.assertEqual(_links_in(note.body), [(href, "the Safari task")])
+        chips = [n for b in note.body for n in b["content"] if n.get("type") == "hashTask"]
+        self.assertEqual([c["props"]["taskId"] for c in chips], [str(task.task_id)])
 
     def test_update_note_body_resolves_links_too(self):
         task = self._task()

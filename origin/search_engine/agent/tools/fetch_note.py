@@ -29,6 +29,7 @@ from origin.search_engine.agent.tools.base import (
     ToolError,
     wrap_workspace_content,
 )
+from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.search_engine.text_extraction import extract_text
 
@@ -38,9 +39,7 @@ _VALID_TYPES = {"personal", "task", "chat"}
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     note_type = (args.get("note_type") or "").lower().strip()
     if note_type not in _VALID_TYPES:
-        raise ToolError(
-            f"Unknown note_type {note_type!r}; expected one of " f"{sorted(_VALID_TYPES)}."
-        )
+        raise ToolError(f"Unknown note_type {note_type!r}; expected one of {sorted(_VALID_TYPES)}.")
 
     raw_note_id = args.get("note_id")
     try:
@@ -165,11 +164,18 @@ def _shape_note(
     parent_context: dict[str, Any],
 ) -> dict[str, Any]:
     body_text = extract_text(body)
+    # The body as markdown — headings, lists, code fences, and `@`/`#`
+    # chips as `[@Ken](user:<uuid>)` links. `update_note` replaces the
+    # whole body, so this is what an edit must start from; re-sending the
+    # flattened `body_text` stripped every chip and all formatting. Kept
+    # ALONGSIDE `body_text`, as `fetch_task` keeps `content_text`.
+    body_markdown = blocks_to_markdown(body)
     return {
         "note_id": note_id,
         "note_type": note_type,
         "title": title or "",
         "body_text": wrap_workspace_content(body_text),
+        "body_markdown": wrap_workspace_content(body_markdown),
         "parent_note_id": (str(parent_note_id) if parent_note_id else None),
         "parent_context": {k: v for k, v in parent_context.items() if v is not None},
         "ts_created": ts_created_at.isoformat() if ts_created_at else None,
@@ -187,6 +193,8 @@ FETCH_NOTE = Tool(
         "types: personal (private), task (attached to a task), and chat "
         "(attached to a chat or thread). Use after `search_knowledge_base` "
         "when you need to read the entire note body, not just the snippet. "
+        "`body_markdown` is the body with its formatting and @/# chips "
+        "intact — start an `update_note` edit from it, not `body_text`. "
         "ACL is enforced — only notes the user can access."
     ),
     parameters_schema={

@@ -33,6 +33,8 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.search_engine.agent.acl import owns_personal_folder
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
+from origin.search_engine.agent.tools.body_mentions import notify_note_mentions
+from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
 from origin.search_engine.chunkers.base import NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
 from origin.services.collab_push import push_note_body
@@ -50,10 +52,12 @@ def _wrap_blocknote(text: str, ctx: ToolContext) -> list[dict[str, Any]]:
     updated note keeps headings / lists / emphasis instead of collapsing
     to one flat paragraph. Citation tokens (`[prose](task:12)`, bare
     `[task:12]`) become working in-app links, resolved team-scoped —
-    see `blocknote_md` / `entity_links`."""
+    see `blocknote_md` / `entity_links`. `@` and `#` tokens become the
+    editor's chips (`entity_chips`, MIP-708)."""
     return markdown_to_blocks(
         text,
         entity_link_resolver=lambda token: resolve_note_entity_link(token, team_id=ctx.team_id),
+        entity_chip_resolver=chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id),
     )
 
 
@@ -332,6 +336,9 @@ def _apply_changes(
     # behind it to do this client-side.
     if "body" in update_fields:
         push_note_body(note_type, note_id, note.body or [])
+        # `@` chips ping their people, diffed against the stored set
+        # (MIP-708) — the hop the editor's `note_mention` socket makes.
+        notify_note_mentions(note, note_type=note_type_code, actor_id=ctx.user_id)
 
     result = {
         "note_id": note_id,
@@ -380,8 +387,10 @@ UPDATE_NOTE = Tool(
                     "New body text. This REPLACES the whole body — pass the "
                     "FULL new body (everything the note should contain), "
                     "reproducing every section you are not changing, never "
-                    "just the edited part. Omit to leave the body unchanged. "
-                    "Pass '' to clear the body."
+                    "just the edited part. Start from the note's "
+                    "`body_markdown`, which keeps its formatting and chips. "
+                    "Omit to leave the body unchanged. "
+                    "Pass '' to clear the body." + CHIP_SYNTAX_HINT
                 ),
             },
             "folder_id": {

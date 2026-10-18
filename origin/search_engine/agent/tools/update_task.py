@@ -24,6 +24,8 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
+from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
+from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
 from origin.services.collab_push import push_task_body
 from origin.services.milestone_service import sync_backing_task
 from origin.services.task_milestone_move import milestone_move_error, move_task_to_milestone
@@ -80,7 +82,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     # --- content_text → BlockNote shape ---
     if "content_text" in args and args["content_text"] is not None:
-        new_content = task_body_blocks(args.get("content_text") or "")
+        new_content = task_body_blocks(
+            args.get("content_text") or "",
+            entity_chip_resolver=chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id),
+        )
         if new_content != task.content:
             task.content = new_content
             update_fields.append("content")
@@ -225,6 +230,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # actually stored.
     if "content" in update_fields:
         push_task_body(task.task_id, task.content or [])
+        # `@` chips ping their people, diffed against the stored set so
+        # a re-save of the same body pings no one twice (MIP-708).
+        notify_task_body_mentions(task, actor_id=ctx.user_id)
 
     if not changed:
         return {
@@ -270,8 +278,8 @@ UPDATE_TASK = Tool(
             "content_text": {
                 "type": "STRING",
                 "description": (
-                    "Replace the task body with this plain text. Omit to leave "
-                    "unchanged. Pass '' to clear the body."
+                    "Replace the task body with this markdown. Omit to leave "
+                    "unchanged. Pass '' to clear the body." + CHIP_SYNTAX_HINT
                 ),
             },
             "status": {
