@@ -210,6 +210,10 @@ def ensure_repo_webhook(user, owner: str, repo: str) -> Optional[GithubWebhookRe
     return None
 
 
+def _events_synced_cache_key(owner: str, repo: str) -> str:
+    return f"gh:hook_events_synced:{owner.lower()}:{repo.lower()}:v{_HOOK_EVENTS_VERSION}"
+
+
 def _sync_existing_hook_events_if_needed(user, owner: str, repo: str, hook_id: int) -> None:
     """Best-effort: PATCH the existing webhook's events list to match our
     current `_HOOK_EVENTS`.
@@ -226,7 +230,7 @@ def _sync_existing_hook_events_if_needed(user, owner: str, repo: str, hook_id: i
     save. Never raises — silent best-effort, just like
     `ensure_repo_webhook` itself.
     """
-    cache_key = f"gh:hook_events_synced:{owner.lower()}:{repo.lower()}:v{_HOOK_EVENTS_VERSION}"
+    cache_key = _events_synced_cache_key(owner, repo)
     if cache.get(cache_key):
         return
 
@@ -303,7 +307,13 @@ def _adopt_existing_hook(
     user, owner: str, repo: str, headers: dict, payload_url: str
 ) -> Optional[GithubWebhookRegistration]:
     """When the create API returned 422, scan the repo's hooks for one
-    that already points at our payload URL and store its id locally."""
+    that already points at our payload URL and store its id locally.
+
+    A hook made by hand in GitHub's settings page rarely subscribes to
+    exactly `_HOOK_EVENTS` (missing `issue_comment`, extra `push`), so an
+    adopted hook whose events differ is PATCHed into line straight away
+    rather than waiting for the next `ensure_repo_webhook` call (MIP-709).
+    """
     try:
         resp = requests.get(
             f"{GITHUB_API_BASE}/repos/{owner}/{repo}/hooks",
@@ -322,13 +332,19 @@ def _adopt_existing_hook(
             except (ValueError, TypeError):
                 continue
             try:
-                return GithubWebhookRegistration.objects.create(
+                registration = GithubWebhookRegistration.objects.create(
                     owner=owner, repo=repo, hook_id=hook_id, registered_by=user
                 )
             except IntegrityError:
                 return GithubWebhookRegistration.objects.filter(
                     owner__iexact=owner, repo__iexact=repo
                 ).first()
+            if set(hook.get("events") or []) != set(_HOOK_EVENTS):
+                # A "synced" flag left from an earlier registration of
+                # this repo would make the sync a no-op.
+                cache.delete(_events_synced_cache_key(owner, repo))
+                _sync_existing_hook_events_if_needed(user, owner, repo, hook_id)
+            return registration
     return None
 
 

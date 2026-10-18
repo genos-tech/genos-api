@@ -18,6 +18,7 @@ from origin.models.common.user_models import (
     GithubWebhookRegistration,
 )
 from origin.services.github_webhooks import (
+    _events_synced_cache_key,
     ensure_repo_webhook,
     ensure_webhooks_for_links,
     parse_pr_url,
@@ -223,13 +224,15 @@ class TestEnsureRepoWebhook(TestCase):
 
     # ── 422 / adopt-existing-hook path ────────────────────────────
 
+    @patch("origin.services.github_webhooks.requests.patch")
     @patch("origin.services.github_webhooks.requests.get")
     @patch("origin.services.github_webhooks.requests.post")
     @patch("origin.services.github_webhooks.get_valid_access_token", return_value="ghp_xx")
-    def test_422_adopts_existing_hook_pointing_at_us(self, _token, mock_post, mock_get):
+    def test_422_adopts_existing_hook_pointing_at_us(self, _token, mock_post, mock_get, mock_patch):
         # GitHub says "you already have a hook on this repo" — we list
         # the hooks, find ours by URL, and store its id.
         mock_post.return_value = self._mock_post(422)
+        mock_patch.return_value = self._mock_post(200)
         list_resp = MagicMock(spec=requests.Response)
         list_resp.ok = True
         list_resp.json.return_value = [
@@ -257,6 +260,55 @@ class TestEnsureRepoWebhook(TestCase):
         mock_get.return_value = list_resp
         result = ensure_repo_webhook(self.user, "acme", "rocket")
         self.assertIsNone(result)
+
+    def _adopt(self, events, mock_post, mock_get):
+        mock_post.return_value = self._mock_post(422)
+        mock_get.return_value = self._mock_post(
+            200,
+            [
+                {
+                    "id": 333,
+                    "events": events,
+                    "config": {"url": "https://api.example.com/api/v2/github/webhook/"},
+                }
+            ],
+        )
+        return ensure_repo_webhook(self.user, "acme", "rocket")
+
+    @patch("origin.services.github_webhooks.requests.patch")
+    @patch("origin.services.github_webhooks.requests.get")
+    @patch("origin.services.github_webhooks.requests.post")
+    @patch("origin.services.github_webhooks.get_valid_access_token", return_value="ghp_xx")
+    def test_adopted_hand_made_hook_has_its_events_fixed(
+        self, _token, mock_post, mock_get, mock_patch
+    ):
+        """MIP-709: a hook added in GitHub's settings page drifted —
+        `push` it doesn't need, no `issue_comment`. Adopting it brings its
+        events in line at once, even past a stale "synced" flag left by an
+        earlier registration of the same repo."""
+        cache.set(_events_synced_cache_key("acme", "rocket"), "1")
+        mock_patch.return_value = self._mock_post(200)
+        result = self._adopt(["push", "pull_request"], mock_post, mock_get)
+        self.assertEqual(result.hook_id, 333)
+        mock_patch.assert_called_once()
+        self.assertIn("/repos/acme/rocket/hooks/333", mock_patch.call_args.args[0])
+        self.assertEqual(
+            sorted(mock_patch.call_args.kwargs["json"]["events"]),
+            ["issue_comment", "pull_request", "pull_request_review_comment"],
+        )
+
+    @patch("origin.services.github_webhooks.requests.patch")
+    @patch("origin.services.github_webhooks.requests.get")
+    @patch("origin.services.github_webhooks.requests.post")
+    @patch("origin.services.github_webhooks.get_valid_access_token", return_value="ghp_xx")
+    def test_adopted_hook_already_in_line_is_not_patched(
+        self, _token, mock_post, mock_get, mock_patch
+    ):
+        result = self._adopt(
+            ["pull_request_review_comment", "pull_request", "issue_comment"], mock_post, mock_get
+        )
+        self.assertEqual(result.hook_id, 333)
+        mock_patch.assert_not_called()
 
 
 @override_settings(

@@ -18,6 +18,14 @@ GitHub so the link is right the moment it exists. Without a connection,
 or with GitHub unreachable, the link is still recorded, as state
 `unknown`, and the webhook corrects it on the PR's next event. A link
 that could not be checked is still worth having; a guessed state is not.
+
+Webhook (MIP-709): the state only stays right if the repo's webhook
+delivers, and until now only a PR link saved through the task UI
+installed it. Every recorded link now calls `ensure_repo_webhook` with
+the writer's GitHub connection — a no-op past the first time for a repo
+we already know. Failing to install it never fails the link; the result
+says so instead, because a link that silently stays `unknown` forever is
+worse than one that tells you why.
 """
 
 from __future__ import annotations
@@ -37,7 +45,7 @@ from origin.search_engine.agent.tools.base import (
     ToolError,
     wrap_workspace_content,
 )
-from origin.services.github_webhooks import parse_pr_url_full
+from origin.services.github_webhooks import ensure_repo_webhook, parse_pr_url_full
 from origin.services.oauth.tokens import ReauthRequired
 from origin.services.task_delivery import (
     clean_branch,
@@ -68,6 +76,19 @@ def _github_pr(user_id: str, owner: str, repo: str, number: int) -> dict | None:
     except (ReauthRequired, requests.RequestException) as exc:
         logger.info("add_task_delivery: couldn't read %s/%s#%s: %s", owner, repo, number, exc)
         return None
+
+
+def _ensure_webhook(user_id: str, owner: str, repo: str) -> bool:
+    """Install (or adopt) our webhook on the repo. True when it is in
+    place. Never raises: the link is recorded either way."""
+    user = CustomUser.objects.filter(id=user_id).first()
+    if user is None:
+        return False
+    try:
+        return ensure_repo_webhook(user, owner, repo) is not None
+    except Exception:
+        logger.exception("add_task_delivery: ensure_repo_webhook crashed on %s/%s", owner, repo)
+        return False
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -165,19 +186,31 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         created_by_id=ctx.user_id,
     )
 
+    webhook_registered = _ensure_webhook(ctx.user_id, owner, repo)
+
     what = row.pr_url or f"{row.repo_owner}/{row.repo_name} branch {row.branch}"
     verb = {"created": "Linked", "updated": "Updated the link to", "unchanged": "Already linked:"}
     summary = f"{verb[outcome]} {what} on {task.display_id}"
     if row.state == TaskDeliveryState.UNKNOWN:
         summary += " (PR state unknown until GitHub reports it)"
-    return {
+    out = {
         "task_id": task.task_id,
         "display_id": task.display_id,
         "outcome": outcome,
         "state_checked_on_github": checked,
+        "webhook_registered": webhook_registered,
         "delivery": delivery_as_dict(row, wrap_workspace_content),
-        "__summary__": summary,
     }
+    if not webhook_registered:
+        out["webhook_warning"] = (
+            f"Couldn't install the Genos webhook on {owner}/{repo}, so this link's "
+            "PR state won't update and PRs on branches named after a task won't "
+            "link themselves until it is. A repo admin can fix it by connecting "
+            "GitHub in Genos and recording any PR or branch of the repo."
+        )
+        summary += f"; couldn't install the Genos webhook on {owner}/{repo}"
+    out["__summary__"] = summary
+    return out
 
 
 ADD_TASK_DELIVERY = Tool(
