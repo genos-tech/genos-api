@@ -601,6 +601,109 @@ class BackfillTests(DeliveryBase):
         self.assertEqual({r.team_id for r in rows.values()}, {self.team.team_id})
 
 
+# ── The task page's read (MIP-701) ─────────────────────────────────────
+
+
+class DeliveryListViewTests(DeliveryBase):
+    URL = "/api/v2/task/deliveries/"
+
+    def _get(self, task=None, team=None, user=None):
+        self.authenticate(user or self.user)
+        return self.client.get(
+            self.URL,
+            {
+                "team_id": str((team or self.team).team_id),
+                "task_id": (task or self.task).task_id,
+            },
+        )
+
+    def test_it_lists_the_rows_oldest_first_in_the_tool_shape(self):
+        self._link(self.task, number=9, state=TaskDeliveryState.MERGED, branch="HK-42-fix")
+        record_delivery(
+            task=self.task,
+            owner="genos-tech",
+            repo="genos-frontend",
+            branch="HK-42-ui",
+            source=TaskDeliverySource.MANUAL,
+        )
+        res = self._get()
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            [(d["repo"], d["branch"], d["pr_url"], d["state"]) for d in res.data],
+            [
+                (
+                    "genos-tech/genos-api",
+                    "HK-42-fix",
+                    "https://github.com/genos-tech/genos-api/pull/9",
+                    "merged",
+                ),
+                ("genos-tech/genos-frontend", "HK-42-ui", None, "branch"),
+            ],
+        )
+        self.assertEqual(
+            set(res.data[0]),
+            {
+                "delivery_id",
+                "repo",
+                "branch",
+                "pr_url",
+                "pr_number",
+                "pr_title",
+                "state",
+                "merged_at",
+                "source",
+            },
+        )
+
+    def test_the_pr_title_is_not_wrapped_for_the_ui(self):
+        record_delivery(
+            task=self.task,
+            owner="genos-tech",
+            repo="genos-api",
+            pr_number=7,
+            pr_title="Fix the thing",
+            state=TaskDeliveryState.OPEN,
+            source=TaskDeliverySource.WEBHOOK,
+        )
+        self.assertEqual(self._get().data[0]["pr_title"], "Fix the thing")
+
+    def test_another_tasks_rows_are_not_listed(self):
+        self._link(self._task(43), number=3)
+        self.assertEqual(self._get().data, [])
+
+    def test_a_row_stamped_with_another_team_is_not_listed(self):
+        row = self._link(self.task, number=3)
+        other = TeamMaster.objects.create(team_name="O", team_email="o@x.com", owner=self.user)
+        TaskDelivery.objects.filter(pk=row.pk).update(team=other)
+        self.assertEqual(self._get().data, [])
+
+    def test_a_teammate_off_the_project_gets_a_404(self):
+        self._link(self.task, number=3)
+        res = self._get(user=self.user2)
+        self.assertEqual(res.status_code, 404)
+        self.assertNotIn("pr_url", str(res.data))
+
+    def test_an_outsider_naming_their_own_team_gets_a_404(self):
+        self._link(self.task, number=3)
+        outsider = User.objects.create_user(username="dout", email="dout@x.com", password="pw")
+        team = TeamMaster.objects.create(team_name="D", team_email="dout@x.com", owner=outsider)
+        TeamMembers.objects.create(team=team, attendee=outsider)
+        self.assertEqual(self._get(team=team, user=outsider).status_code, 404)
+
+    def test_bad_params_are_400(self):
+        self.authenticate(self.user)
+        self.assertEqual(self.client.get(self.URL, {"team_id": "x"}).status_code, 400)
+        res = self.client.get(self.URL, {"team_id": str(self.team.team_id), "task_id": "HK-42"})
+        self.assertEqual(res.status_code, 400)
+
+    def test_it_needs_a_session(self):
+        self.unauthenticate()
+        res = self.client.get(
+            self.URL, {"team_id": str(self.team.team_id), "task_id": self.task.task_id}
+        )
+        self.assertIn(res.status_code, (401, 403))
+
+
 # ── Over MCP ───────────────────────────────────────────────────────────
 
 

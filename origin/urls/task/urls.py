@@ -16,6 +16,7 @@ from origin.views.task.task_activity_views import (
     TaskActivityListView,
     TaskVelocityView,
 )
+from origin.views.task.task_delivery_views import TaskDeliveryListView
 from origin.views.task.task_views import *
 
 urlpatterns = [
@@ -44,6 +45,11 @@ urlpatterns = [
     ),
     path("api/v2/task/comment/", TaskCommentsView.as_view(), name="add_task_comment"),
     path("api/v2/task/activity/", TaskActivityListView.as_view(), name="task_activity_list"),
+    path(
+        "api/v2/task/deliveries/",
+        TaskDeliveryListView.as_view(),
+        name="task_delivery_list",
+    ),
     path(
         "api/v2/task/burndown/",
         MilestoneBurndownView.as_view(),
