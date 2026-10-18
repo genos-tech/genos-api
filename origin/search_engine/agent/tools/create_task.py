@@ -24,12 +24,18 @@ whichever tool wrote it.
 `milestone_id` files the new task under an existing milestone exactly as
 `create_task_plan`'s `existing_milestone_id` does: nested under the
 milestone's backing task, in the milestone's sprint.
+
+`assignee_id` assigns the task at creation, accepted on the same terms
+as `assign_task`: an active member of this team, or someone on the
+target project (a guest collaborator holds only the latter). Omitted
+means unassigned — there is no implicit "assign to the caller" default.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
@@ -44,6 +50,7 @@ from origin.search_engine.quota import (
     increment_usage,
 )
 from origin.services.milestone_service import ensure_backing_task
+from origin.views.utils.scope_guards import is_team_member
 
 _DEFAULT_STATUS = "Open"
 # Canonical enum lives on the frontend in `taskMeta.ts`. Keep this in
@@ -73,6 +80,24 @@ def _resolve_milestone(raw_id: Any, project_id: int, ctx: ToolContext) -> Milest
             f"Milestone {milestone_id} belongs to project {milestone.project_id}, not {project_id}."
         )
     return milestone
+
+
+def _resolve_assignee(raw_id: Any, project_acl: set[str], ctx: ToolContext) -> CustomUser:
+    """The new task's assignee; same guard as `assign_task`. Both sets are
+    scoped to this team, so a UUID from another tenant is refused."""
+    if not (str(raw_id) in project_acl or is_team_member(ctx.team_id, raw_id)):
+        raise ToolError(
+            f"User {raw_id!r} is not an active member of this team, and is not "
+            "on this project. Use get_team_members or list_project_members to "
+            "find valid user ids, or get_current_user for yourself."
+        )
+    try:
+        assignee = CustomUser.objects.get(id=raw_id)
+    except (CustomUser.DoesNotExist, Exception):
+        raise ToolError(f"User {raw_id!r} not found.")
+    if assignee.is_deleted:
+        raise ToolError(f"User {raw_id!r} account has been deleted.")
+    return assignee
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -110,6 +135,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if args.get("milestone_id") is not None:
         milestone = _resolve_milestone(args["milestone_id"], project_id, ctx)
 
+    assignee = None
+    raw_assignee_id = args.get("assignee_id")
+    if raw_assignee_id and raw_assignee_id != "null":
+        assignee = _resolve_assignee(raw_assignee_id, allowed, ctx)
+
     content_text = args.get("content_text") or ""
     priority = args.get("priority")
     if priority is not None and priority not in _VALID_PRIORITIES:
@@ -135,6 +165,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             entity_chip_resolver=chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id),
         ),
     }
+    if assignee is not None:
+        create_kwargs["assignee_id"] = assignee.id
     if priority:
         create_kwargs["priority"] = priority
     if effort_level:
@@ -173,11 +205,17 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     summary = f"Created task {task.display_id}: {task.title}"
     if milestone is not None:
         summary += f' in milestone "{milestone.title}"'
+    assignee_username = None
+    if assignee is not None:
+        assignee_username = assignee.username or str(assignee.id)
+        summary += f", assigned to {assignee_username}"
     return {
         "task_id": task.task_id,
         "display_id": task.display_id,
         "project_id": project_id,
         "milestone_id": milestone.milestone_id if milestone is not None else None,
+        "assignee_id": str(assignee.id) if assignee is not None else None,
+        "assignee_username": assignee_username,
         "title": task.title,
         "status": task.status,
         "__summary__": summary,
@@ -192,9 +230,11 @@ CREATE_TASK = Tool(
         "execute. Use this when the user explicitly asks you to create / "
         "add / file a task. Required: title, project_id. Optional: "
         "content_text (markdown body), milestone_id (file it under an "
-        "existing milestone), priority, effort_level, due_date "
+        "existing milestone), assignee_id, priority, effort_level, due_date "
         "(ISO 8601, e.g. 2026-06-30). Status is always created as 'Open' "
-        "— users change it via the UI."
+        "— users change it via the UI. Leave assignee_id out unless the "
+        "user names an assignee; use get_current_user when they say "
+        "'assign it to me'."
     ),
     parameters_schema={
         "type": "OBJECT",
@@ -225,6 +265,14 @@ CREATE_TASK = Tool(
                     "Optional: file the task under this existing milestone "
                     "(numeric milestone id from `list_milestones`). It must be "
                     "in the same project."
+                ),
+            },
+            "assignee_id": {
+                "type": "STRING",
+                "description": (
+                    "Optional assignee user UUID: get_current_user for yourself, "
+                    "get_team_members / list_project_members for someone else. "
+                    "Omit for unassigned."
                 ),
             },
             "priority": {
