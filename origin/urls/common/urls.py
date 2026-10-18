@@ -1,6 +1,11 @@
 from django.urls import include, path
 
-from origin.views.common.api_key_views import ApiKeyDetailView, ApiKeyListCreateView
+from origin.views.common.api_key_views import (
+    ApiKeyDetailView,
+    ApiKeyListCreateView,
+    TeamApiKeyDetailView,
+    TeamApiKeyListView,
+)
 from origin.views.common.auth_views import *
 from origin.views.common.billing_views import (
     BillingCheckoutView,
@@ -373,6 +378,12 @@ urlpatterns = [
     ),
     path("api/v2/api-keys/", ApiKeyListCreateView.as_view(), name="api_keys"),
     path("api/v2/api-keys/<uuid:key_id>/", ApiKeyDetailView.as_view(), name="api_key_detail"),
+    path("api/v2/team/api-keys/", TeamApiKeyListView.as_view(), name="team_api_keys"),
+    path(
+        "api/v2/team/api-keys/<uuid:key_id>/",
+        TeamApiKeyDetailView.as_view(),
+        name="team_api_key_detail",
+    ),
     path("api/v2/team/create/", TeamMasterView.as_view(), name="join_team"),
     path("api/v2/team/profile/", TeamMasterView.as_view(), name="team_profile"),
     path("api/v2/team/exist/", CheckTeamExistsView.as_view(), name="exist_team"),

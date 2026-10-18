@@ -322,13 +322,16 @@ WEBPUSH_MEDIA_BASE_URL = os.environ.get("WEBPUSH_MEDIA_BASE_URL", "")
 GIPHY_API_KEY = os.environ.get("GIPHY_API_KEY", "")
 
 REST_FRAMEWORK = {
-    # Order matters, but not for correctness: the API-key class returns
-    # None unless the header actually says `ApiKey`, so the two never
-    # compete for the same credential. JWT stays first because it is the
-    # overwhelmingly common case and short-circuits sooner.
+    # JWT only. `ApiKeyAuthentication` used to sit here too, which made a
+    # `gnos_` key a full session on every v2/v3 endpoint — a read-only
+    # key could export or delete the account and write anywhere its
+    # owner could, with its scope and team binding ignored, because those
+    # are enforced by the public views' permission classes and nothing
+    # else (MIP-718). The public API names the key authenticator itself
+    # (`v1_views.PublicApiView`), so a key now works there and nowhere
+    # else; `test_api_keys.TestKeysAreConfinedToThePublicApi` pins it.
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
-        "origin.views.common.api_key_auth.ApiKeyAuthentication",
     ),
     # DRF's own default is AllowAny, so a view that forgot to say
     # otherwise was public. Every view today names its permissions

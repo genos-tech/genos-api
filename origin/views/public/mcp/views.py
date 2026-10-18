@@ -33,8 +33,9 @@ log = logging.getLogger(__name__)
 class McpView(PublicApiView):
     """MCP over Streamable HTTP, stateless.
 
-    Inherits `PublicApiView` for `resolve_team` and the per-key throttle,
-    but **replaces its permission set**, and that is the one surprising
+    Inherits `PublicApiView` for its authenticators (the only place a key
+    authenticates), `resolve_team` and the per-key throttle, but
+    **replaces its permission set**, and that is the one surprising
     thing in this file:
 
     `HasRequiredScope` decides read-vs-write from the HTTP method. Every
@@ -198,11 +199,12 @@ class McpView(PublicApiView):
         """Establish the server-trusted `(team, user)` every tool assumes.
 
         Every tool docstring calls `ctx.team_id` "server-trusted", which
-        is only true if something checks it. `resolve_team` already
-        refuses a team a personal token's owner doesn't belong to; the
-        membership gate is then re-run for *both* kinds of key, because a
-        team-bound key keeps naming its team after its owner has been
-        removed from it.
+        is only true if something checks it. `resolve_team` refuses a team
+        the key's owner isn't a member of, for both kinds of key (a team
+        key since MIP-718). The gate below is the looser one —
+        `participates_in_team` also admits guests and cross-team
+        participants — so for MCP it is now redundant; it stays as the
+        line that holds if `resolve_team` ever widens.
         """
         team = self.resolve_team(request)
         if team is None:

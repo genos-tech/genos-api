@@ -213,6 +213,105 @@ class TestTeamBinding(PublicApiBase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual({p["name"] for p in res.data["projects"]}, {"Public Project"})
 
+    # ── a team key lasts only as long as the membership (MIP-718) ─────
+
+    def _leave(self, user, team):
+        """A bare row flip, NOT `remove_team_member`: that also revokes the
+        key now, and these tests are about the per-request re-check that
+        has to hold without it (a key minted before the cascade existed,
+        or a membership ended by some path that skips it)."""
+        TeamMembers.objects.filter(team=team, attendee=user).update(is_deleted=True)
+
+    def test_a_team_key_stops_working_once_its_owner_leaves(self):
+        """`resolve_team` returned a team key's team unconditionally, so
+        a departed member kept full REST access for the key's lifetime.
+        MCP re-checked; REST never did."""
+        self._key(user=self.user2, team=self.team)
+        self.assertEqual(self.client.get(PROJECTS).status_code, 200)
+        self._leave(self.user2, self.team)
+        self.assertEqual(self.client.get(PROJECTS).status_code, 400)
+        self.assertEqual(self.client.get(TASKS).status_code, 400)
+        res = self.client.post(
+            TASKS,
+            {"project_id": self.other_project.project_id, "title": "after leaving"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(TaskMaster.objects.filter(title="after leaving").exists())
+
+    def test_a_departed_members_team_key_cannot_open_a_task_by_id(self):
+        """`/tasks/<id>/` never resolves a team, so the membership check
+        has to reach it separately — and `can_access_task` alone still
+        says yes, because a project row outlives a bare membership flip."""
+        self._key(user=self.user2, team=self.team)
+        url = f"{TASKS}{self.other_task.task_id}/"
+        self.assertEqual(self.client.get(url).status_code, 200)
+        self._leave(self.user2, self.team)
+        self.assertEqual(self.client.get(url).status_code, 404)
+        res = self.client.patch(url, {"title": "rewritten"}, format="json")
+        self.assertEqual(res.status_code, 404)
+        self.other_task.refresh_from_db()
+        self.assertEqual(self.other_task.title, "Hidden")
+
+    def _second_team(self):
+        """A second team `self.user` belongs to, with a project and task
+        of theirs in it — what a team key bound to `self.team` must not
+        reach, though the person behind it can."""
+        other_team = TeamMaster.objects.create(
+            team_name="Second", team_email="second@example.com", owner=self.user2
+        )
+        TeamMembers.objects.create(team=other_team, attendee=self.user)
+        project = ProjectMaster.objects.create(
+            team=other_team, project_name="Second Project", owner=self.user
+        )
+        ProjectMembers.objects.create(team=other_team, project=project, attendee=self.user)
+        task = TaskMaster.objects.create(
+            team=other_team, project=project, title="Elsewhere", status="Open", reporter=self.user
+        )
+        return other_team, project, task
+
+    def test_a_team_key_cannot_open_its_owners_task_in_another_team(self):
+        _, _, task = self._second_team()
+        self._key(team=self.team)
+        url = f"{TASKS}{task.task_id}/"
+        self.assertEqual(self.client.get(url).status_code, 404)
+        self.assertEqual(self.client.patch(url, {"title": "x"}, format="json").status_code, 404)
+        task.refresh_from_db()
+        self.assertEqual(task.title, "Elsewhere")
+
+    def test_a_personal_token_still_spans_its_owners_teams(self):
+        """The control for the test above: the narrowing is the binding's,
+        not a new limit on the person."""
+        _, _, task = self._second_team()
+        self._key()
+        self.assertEqual(self.client.get(f"{TASKS}{task.task_id}/").status_code, 200)
+
+    def test_a_team_key_cannot_file_a_task_into_another_teams_project(self):
+        """Project membership was the only check, so a key bound to team A
+        wrote a `team=A` task into the owner's team-B project."""
+        _, project, _ = self._second_team()
+        self._key(team=self.team)
+        res = self.client.post(
+            TASKS, {"project_id": project.project_id, "title": "crossed"}, format="json"
+        )
+        self.assertEqual(res.status_code, 404)
+        self.assertFalse(TaskMaster.objects.filter(title="crossed").exists())
+
+    def test_a_personal_token_cannot_cross_teams_on_create_either(self):
+        _, project, _ = self._second_team()
+        self._key()
+        res = self.client.post(
+            TASKS,
+            {
+                "team_id": str(self.team.team_id),
+                "project_id": project.project_id,
+                "title": "crossed",
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, 404)
+        self.assertFalse(TaskMaster.objects.filter(title="crossed").exists())
+
 
 class TestWriteSurface(PublicApiBase):
     def test_patch_uses_an_allowlist(self):

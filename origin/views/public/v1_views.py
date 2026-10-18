@@ -16,8 +16,18 @@ than reimplementing it. A second implementation is how the two drift.
 
 A **team key** is pinned to its own team — the `team_id` parameter is
 ignored for it, because letting a key name a different team would make
-the binding advisory. A **personal token** must name a team it belongs
-to, since a person can be in several.
+the binding advisory — and works only while its owner is still in that
+team. A **personal token** must name a team it belongs to, since a
+person can be in several.
+
+## Authentication
+
+This is the only place a `gnos_` key authenticates. The key class is
+named here rather than in `DEFAULT_AUTHENTICATION_CLASSES`, because a
+key that also worked on the app's own v2/v3 endpoints was a full
+session there: none of them read the key's scope or team, so a leaked
+read-only key could export the account, delete it and write anywhere
+its owner could (MIP-718).
 
 ## Field names
 
@@ -36,10 +46,12 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
+from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.public.permissions import HasApiKey, HasRequiredScope, PublicApiThrottle
 from origin.views.utils.scope_guards import (
     can_access_task,
@@ -55,6 +67,11 @@ MAX_PAGE = 100
 class PublicApiView(APIView):
     """Shared base: API key required, scope enforced, throttled per key."""
 
+    # The key authenticator, and the only view family that names it — see
+    # "Authentication" above. JWT is kept beside it so a signed-in session
+    # still reaches `HasApiKey` and hears "This endpoint requires an API
+    # key." (403), rather than a bare 401 that reads like a broken token.
+    authentication_classes = [JWTAuthentication, ApiKeyAuthentication]
     permission_classes = [HasApiKey, HasRequiredScope]
     throttle_classes = [PublicApiThrottle]
 
@@ -66,6 +83,17 @@ class PublicApiView(APIView):
         """
         key = request.auth
         if key.team_id:
+            # The key names its team, but its owner still has to be IN
+            # it. A key outlives the membership that justified it, and
+            # this returned the team unconditionally, so someone who left
+            # kept reading and writing that team's tasks over REST for as
+            # long as the key lived. MCP re-checked in `_context`; REST
+            # never did. Same strict rule as the personal-token branch
+            # below — a team key is minted by a manager, so a guest or a
+            # cross-team participant holding one is a membership that
+            # ended, not a reason to let them in.
+            if not is_team_member(key.team_id, request.user.id):
+                return None
             return TeamMaster.objects.filter(team_id=key.team_id, is_deleted=False).first()
         team_id = request.query_params.get("team_id") or (
             request.data.get("team_id") if hasattr(request.data, "get") else None
@@ -84,6 +112,23 @@ class PublicApiView(APIView):
         if not is_team_member(team_id, request.user.id):
             return None
         return TeamMaster.objects.filter(team_id=team_id, is_deleted=False).first()
+
+    def key_reaches_team(self, request, team_id) -> bool:
+        """May this key touch an object that lives in `team_id`?
+
+        For the routes that name an object rather than a team, so never
+        pass through `resolve_team`. A personal token: yes — it spans its
+        owner's teams, and the caller's own ACL check is what narrows it.
+        A team key: only its own team, and only while `resolve_team`
+        still admits it — otherwise `GET /tasks/<id>/` read, and PATCH
+        rewrote, the owner's tasks in every OTHER team too.
+        """
+        key = request.auth
+        if not key.team_id:
+            return True
+        if team_id is None or str(team_id) != str(key.team_id):
+            return False
+        return self.resolve_team(request) is not None
 
 
 def _team_required():
@@ -255,7 +300,14 @@ class TaskListCreateView(PublicApiView):
                 {"error": "project_id must be an integer."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if not is_project_member(raw_project, request.user.id):
+        # The project must also live in the team this request resolved
+        # to. Membership alone let a key bound to team A file a task into
+        # its owner's project in team B — written with `team=A` over a
+        # team-B project, a row neither team's views agree on.
+        in_team = ProjectMaster.objects.filter(
+            project_id=raw_project, team_id=team.team_id, is_deleted=False
+        ).exists()
+        if not in_team or not is_project_member(raw_project, request.user.id):
             # 404 rather than 403: project ids are sequential integers.
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -275,18 +327,25 @@ class TaskListCreateView(PublicApiView):
 
 
 class TaskDetailView(PublicApiView):
-    def get(self, request, task_id: int):
+    def _task(self, request, task_id: int):
+        """The task, or `None` for every reason it can't be had — one 404
+        for "no such task", "not yours" and "outside this key's team", so
+        the id space doesn't say which."""
         if not can_access_task(task_id, request.user.id):
-            return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
+            return None
         task = TaskMaster.objects.filter(task_id=task_id, is_deleted=False).first()
+        if task is None or not self.key_reaches_team(request, task.team_id):
+            return None
+        return task
+
+    def get(self, request, task_id: int):
+        task = self._task(request, task_id)
         if task is None:
             return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(_serialize_task(task), status=status.HTTP_200_OK)
 
     def patch(self, request, task_id: int):
-        if not can_access_task(task_id, request.user.id):
-            return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
-        task = TaskMaster.objects.filter(task_id=task_id, is_deleted=False).first()
+        task = self._task(request, task_id)
         if task is None:
             return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
 

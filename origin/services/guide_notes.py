@@ -1999,8 +1999,9 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                 "Making a key",
                 [
                     "Settings → Developer, then create a key. You give it a "
-                    "name, choose whether it may only read or also write, and "
-                    "optionally an expiry anywhere from 1 day to 10 years. "
+                    "name and choose whether it may only read or also write. "
+                    "Every key expires — after 90 days unless you pick another "
+                    "length, up to one year — and then you make a new one. "
                     "Keys begin with gnos_ so they're recognisable in a log.",
                     (
                         _B,
@@ -3475,7 +3476,7 @@ JAPANESE_GUIDE_NOTES: list[tuple[str, list]] = [
             (
                 "APIキーを作成する",
                 [
-                    "「設定」→「開発者」の順に選択し、キーを作成します。キーに名前を付け、読み取り専用にするか書き込みも可能にするかを選択し、必要に応じて有効期限を1日から10年の間で設定します。キー名は「gnos_」で始まるため、ログ上で識別しやすくなっています。",
+                    "「設定」→「開発者」の順に選択し、キーを作成します。キーに名前を付け、読み取り専用にするか書き込みも可能にするかを選択し、有効期限を設定します（既定は90日、最長1年。期限が切れたら新しいキーを作成します）。キー名は「gnos_」で始まるため、ログ上で識別しやすくなっています。",
                     (
                         _B,
                         "キーはその瞬間に一度だけ表示されます。それを保存する場所にそのままコピーしてください。一度表示されたキーを再度読み取ることはできず、削除して新しいキーを作成するしかありません。",

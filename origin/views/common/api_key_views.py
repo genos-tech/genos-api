@@ -1,12 +1,17 @@
-"""Managing your own API keys.
+"""Managing API keys — your own, and your team's.
 
-    GET    /api/v2/api-keys/            list (never the key itself)
-    POST   /api/v2/api-keys/            create — the ONLY time the key is shown
-    DELETE /api/v2/api-keys/<id>/       revoke
+    GET    /api/v2/api-keys/                         list (never the key itself)
+    POST   /api/v2/api-keys/                         create — the ONLY time the key is shown
+    DELETE /api/v2/api-keys/<id>/                    revoke
+    GET    /api/v2/team/api-keys/?team_id=<uuid>     every live team key (owner only)
+    DELETE /api/v2/team/api-keys/<id>/?team_id=<uuid>  revoke a member's team key (owner only)
 
 Authenticated with a JWT, deliberately not with an API key: a leaked key
 must not be able to mint further keys or revoke the ones that would let
-you notice. Key management is a session-only surface.
+you notice. Key management is a session-only surface. (Since MIP-718 a
+key authenticates nowhere outside `/api/public/v1/` anyway; the explicit
+`authentication_classes` here stay so that remains true if the default
+ever widens again.)
 """
 
 import uuid
@@ -29,10 +34,13 @@ from origin.services.member_roles import can_manage, resolve_team_role
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import is_team_member
 
-# A key that never expires is the common case for a bot, so `null` stays
-# legal — but an unbounded default would make "forever" the accident
-# rather than the choice.
-_MAX_EXPIRY_DAYS = 3650
+# Every key expires (MIP-718). A key used to default to never expiring,
+# with an optional cap of ten years, so the keys that leak — the ones
+# pasted into a CI config and forgotten — were the ones that never
+# stopped working. An integrator who still needs one after a year mints
+# a replacement, which is also the moment they find out who holds it.
+_DEFAULT_EXPIRY_DAYS = 90
+_MAX_EXPIRY_DAYS = 365
 
 
 def _serialize(key: ApiKey) -> dict:
@@ -98,10 +106,15 @@ class ApiKeyListCreateView(AuthenticatedAPIView):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
-        expires_at = None
+        # Omitted (or `null`) means the default, never "no expiry" — that
+        # option is gone. `bool` is refused before `int()`, which would
+        # otherwise read `true` as a one-day key.
         raw_days = request.data.get("expires_in_days")
+        days = _DEFAULT_EXPIRY_DAYS
         if raw_days is not None:
             try:
+                if isinstance(raw_days, bool):
+                    raise TypeError
                 days = int(raw_days)
             except (TypeError, ValueError):
                 return Response(
@@ -113,7 +126,7 @@ class ApiKeyListCreateView(AuthenticatedAPIView):
                     {"error": f"expires_in_days must be between 1 and {_MAX_EXPIRY_DAYS}."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            expires_at = timezone.now() + timezone.timedelta(days=days)
+        expires_at = timezone.now() + timezone.timedelta(days=days)
 
         raw = generate_key()
         key = ApiKey.objects.create(
@@ -141,6 +154,86 @@ class ApiKeyDetailView(AuthenticatedAPIView):
         # Scoped to the caller's own keys: 404 rather than 403 so the id
         # space isn't a probe for which keys exist.
         key = ApiKey.objects.filter(id=key_id, user=request.user).first()
+        if key is None:
+            return Response({"error": "API key not found."}, status=status.HTTP_404_NOT_FOUND)
+        key.revoke()
+        return Response({"id": str(key.id), "revokedAt": key.revoked_at}, status=status.HTTP_200_OK)
+
+
+def _owned_team(request):
+    """The team named by `?team_id=`, iff the caller OWNS it; else `None`.
+
+    Owner, not owner-or-editor, although editors may mint team keys: an
+    editor revoking another editor's integration is a dispute between
+    peers, and this is the place it would happen with no one above them
+    to appeal to. The owner is the one person accountable for what acts
+    on the team's behalf, so the oversight is theirs. One `None` for "no
+    such team", "not a member" and "not the owner" — a member asking about
+    a team's keys learns nothing either way.
+    """
+    raw = request.query_params.get("team_id")
+    try:
+        team_id = str(uuid.UUID(str(raw)))
+    except (ValueError, AttributeError, TypeError):
+        return None
+    team = TeamMaster.objects.filter(team_id=team_id, is_deleted=False).first()
+    if team is None or team.owner_id is None or str(team.owner_id) != str(request.user.id):
+        return None
+    return team
+
+
+def _team_not_found():
+    return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
+class TeamApiKeyListView(AuthenticatedAPIView):
+    """Every live key bound to the team, whoever minted it.
+
+    The owner otherwise had no way to see them: `ApiKeyListCreateView`
+    lists the caller's own keys only, so a team key an editor minted —
+    which acts on the team for up to a year — was invisible to the person
+    answerable for it. Expired keys are left out alongside revoked ones:
+    they authenticate nothing, and listing them would bury the ones that
+    do.
+    """
+
+    authentication_classes = [JWTAuthentication]
+
+    def get(self, request):
+        team = _owned_team(request)
+        if team is None:
+            return _team_not_found()
+        keys = (
+            ApiKey.objects.filter(team=team, revoked_at__isnull=True)
+            .exclude(expires_at__lte=timezone.now())
+            .select_related("user")
+        )
+        return Response(
+            {
+                "api_keys": [
+                    {
+                        **_serialize(k),
+                        "userId": str(k.user_id),
+                        "userName": k.user.username,
+                        "userEmail": k.user.email,
+                    }
+                    for k in keys
+                ]
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class TeamApiKeyDetailView(AuthenticatedAPIView):
+    authentication_classes = [JWTAuthentication]
+
+    def delete(self, request, key_id):
+        team = _owned_team(request)
+        if team is None:
+            return _team_not_found()
+        # Bound to THIS team. A personal token, or another team's key, is
+        # not the owner's to revoke — same 404 as a key that doesn't exist.
+        key = ApiKey.objects.filter(id=key_id, team=team).first()
         if key is None:
             return Response({"error": "API key not found."}, status=status.HTTP_404_NOT_FOUND)
         key.revoke()
