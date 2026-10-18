@@ -1,0 +1,14 @@
+# Reviewed gitleaks findings (MIP-720). One fingerprint per line, with the
+# reason it's safe on the line above: gitleaks doesn't strip a trailing
+# comment, so `fp  # why` would stop matching. Only add a fingerprint after
+# checking the value is a test fixture or was revoked.
+
+# Fernet key generated for the fail-closed config test; never used outside it.
+ca0dba6a8789535dab14df50079823b968d3c897:origin/tests/test_fail_closed_config.py:generic-api-key:42
+# OAUTH_TOKEN_ENCRYPTION_KEY in the test settings module; tests only.
+976422bd600eadb261ff9cb3a8abc7a7630bf2c8:apis/settings_test.py:generic-api-key:49
+# Password for a user the test creates in its own throwaway database.
+294fe2a1acf6d369c3788b1f82e8414531eafe2e:origin/tests/test_refresh_cookie_persistence.py:generic-api-key:46
+# Webhook signing secrets the GitHub webhook tests sign their own payloads with.
+be983ba52e1e4f406a15dba5107309f4018a0b92:origin/tests/test_github_pr_comment_webhook.py:generic-api-key:40
+7952a1f4c8e1b19f535a4828a731bd1390a0fd8a:origin/tests/test_github_webhook.py:generic-api-key:17
