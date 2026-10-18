@@ -33,6 +33,10 @@ class TaskActivityActionType(models.TextChoices):
     MILESTONE_LINK = "milestone_changed", "Milestone changed"
     SPRINT_LINK = "sprint_changed", "Sprint changed"
     PROJECT = "project_changed", "Project changed"
+    # One row per changed custom field (MIP-703), `field_name`
+    # "custom_field"; the field's id, name and type and the resolved
+    # old/new labels are in metadata. Rows exist from that release on.
+    CUSTOM_FIELD = "custom_field_changed", "Custom field changed"
     # ⚠️ CLOSED is NOT emitted by anything. A close arrives through the
     # generic field-diff loop in `task_signals.py` as
     # STATUS + new_value='Closed'; no code path writes 'closed' (and a

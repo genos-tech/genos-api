@@ -16,6 +16,10 @@ Adding a new field to track:
 2. Append the field name to `_TRACKED_TASK_FIELDS` (and add a
    normaliser to `_NORMALISERS` if it needs a value transform).
 3. Map it in `_FIELD_TO_ACTION` so the diff can pick the right enum.
+
+`custom_field_values` is the one tracked column outside that table: it is
+a map of many fields, so it gets one CUSTOM_FIELD row per changed field
+(`_custom_field_changes`) instead of one row holding the whole map.
 """
 
 from __future__ import annotations
@@ -30,7 +34,8 @@ from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
 from origin.middleware.current_user import get_current_source, get_current_user
-from origin.models.project.prj_models import ProjectMaster
+from origin.models.common.user_models import CustomUser
+from origin.models.project.prj_models import ProjectCustomField, ProjectMaster
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
@@ -207,6 +212,106 @@ def _metadata_for_change(field: str, old: Any, new: Any) -> Optional[dict]:
     return None
 
 
+def _custom_field_value(value: Any) -> Any:
+    """One custom-field value, normalised for comparison: an absent key,
+    None, "" and [] all mean "no value" (the sanitiser drops them, older
+    writers kept them), and a tag selection is a set of option ids
+    whose order the picker does not preserve."""
+    if value in (None, "", []):
+        return None
+    if isinstance(value, list):
+        return sorted({str(item) for item in value})
+    return value
+
+
+def _custom_field_label(field: ProjectCustomField, value: Any, usernames: dict) -> Any:
+    """What a reader needs to see for a value: option labels for a tag
+    field (an option deleted since keeps its id, so the row still says
+    something), the username for a member field, else the value as is."""
+    if value is None:
+        return None
+    if field.field_type == "tag":
+        labels = {
+            str(opt.get("id")): opt.get("label")
+            for opt in (field.options or [])
+            if isinstance(opt, dict)
+        }
+        option_ids = value if isinstance(value, list) else [value]
+        return [labels.get(str(option_id)) or str(option_id) for option_id in option_ids]
+    if field.field_type == "member":
+        return usernames.get(str(value), value)
+    return value
+
+
+def _custom_field_changes(task: TaskMaster, old_map: Any, new_map: Any) -> list[dict]:
+    """`_record` kwargs for each custom field whose value differs between
+    two `custom_field_values` maps — one row per field, not one per map.
+
+    Only fields defined on the task's own project are recorded. A key
+    whose field was deleted (left on tasks on purpose) or belongs to
+    another project is invisible to every reader, so a row for it would
+    be noise, and naming it would mean reading another project's field.
+    The field's name, type and the resolved values are snapshotted into
+    metadata: a field can be renamed or deleted after the row is written.
+    """
+    old_map = old_map if isinstance(old_map, dict) else {}
+    new_map = new_map if isinstance(new_map, dict) else {}
+    changed = {
+        key: (old, new)
+        for key in set(old_map) | set(new_map)
+        if (old := _custom_field_value(old_map.get(key)))
+        != (new := _custom_field_value(new_map.get(key)))
+    }
+    if not changed or task.project_id is None:
+        return []
+    field_ids = [int(key) for key in changed if str(key).isdigit()]
+    fields = {
+        str(field.field_id): field
+        for field in ProjectCustomField.objects.filter(
+            project_id=task.project_id, field_id__in=field_ids
+        )
+    }
+    member_ids = {
+        str(value)
+        for key, values in changed.items()
+        if key in fields and fields[key].field_type == "member"
+        for value in values
+        if value is not None
+    }
+    usernames = (
+        {
+            str(uid): name
+            for uid, name in CustomUser.objects.filter(id__in=member_ids).values_list(
+                "id", "username"
+            )
+        }
+        if member_ids
+        else {}
+    )
+    rows = []
+    for key in sorted(changed, key=lambda k: (fields[k].sort_order, k) if k in fields else (0, k)):
+        field = fields.get(key)
+        if field is None:
+            continue
+        old, new = changed[key]
+        rows.append(
+            {
+                "action_type": TaskActivityActionType.CUSTOM_FIELD,
+                "field_name": "custom_field",
+                "old_value": old,
+                "new_value": new,
+                "metadata": {
+                    "fieldId": field.field_id,
+                    "fieldName": field.field_name,
+                    "fieldType": field.field_type,
+                    "oldLabel": _custom_field_label(field, old, usernames),
+                    "newLabel": _custom_field_label(field, new, usernames),
+                },
+            }
+        )
+    return rows
+
+
 def _resolve_actor() -> Optional[Any]:
     """Return the user FK suitable for `TaskActivity.actor` or None.
 
@@ -286,10 +391,13 @@ def update_tasks_recorded(queryset, *, cascade: str, **fields) -> int:
     # tracked names are attnames, so map a relation's name onto its column.
     columns = {TaskMaster._meta.get_field(name).attname for name in fields}
     tracked = [f for f in _TRACKED_TASK_FIELDS if f in columns]
+    # No cascade writes this column today (a project move leaves custom
+    # values where they are), but one that did would otherwise be silent.
+    track_custom = "custom_field_values" in columns
     # `_record` would drop the rows anyway under suppression; returning
     # here also skips the snapshot and re-read, which a bulk teardown
     # running this per milestone would otherwise pay for nothing.
-    if not tracked or activity_suppressed():
+    if not (tracked or track_custom) or activity_suppressed():
         return queryset.update(**fields)
     # Pin the id set first: the update may change the very column the
     # queryset filters on (`filter(milestone=m).update(milestone=None)`).
@@ -298,7 +406,9 @@ def update_tasks_recorded(queryset, *, cascade: str, **fields) -> int:
         return 0
     before = {
         row["pk"]: row
-        for row in TaskMaster.objects.filter(pk__in=ids).values("pk", "is_init_task", *tracked)
+        for row in TaskMaster.objects.filter(pk__in=ids).values(
+            "pk", "is_init_task", *tracked, *(["custom_field_values"] if track_custom else [])
+        )
     }
     count = TaskMaster.objects.filter(pk__in=ids).update(**fields)
     labels: dict[tuple[str, str], Optional[dict]] = {}
@@ -322,6 +432,13 @@ def update_tasks_recorded(queryset, *, cascade: str, **fields) -> int:
                 new_value=new,
                 metadata={**(labels[key] or {}), "cascade": cascade},
             )
+        if track_custom:
+            for change in _custom_field_changes(
+                task, old_row["custom_field_values"], task.custom_field_values
+            ):
+                _record(
+                    task=task, **{**change, "metadata": {**change["metadata"], "cascade": cascade}}
+                )
     return count
 
 
@@ -347,6 +464,7 @@ def task_capture_original(sender, instance: TaskMaster, **kwargs):
     snapshot = {field: getattr(previous, field) for field in _TRACKED_TASK_FIELDS}
     snapshot["is_deleted"] = previous.is_deleted
     snapshot["content"] = previous.content
+    snapshot["custom_field_values"] = previous.custom_field_values
     # Captured so post_save can recognise the init→real "finalize" save
     # (the moment CreateTaskForm's draft becomes a real task) and treat
     # it as a single creation event instead of a diff of every field.
@@ -468,6 +586,11 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
             new_value=new,
             metadata=metadata,
         )
+
+    for change in _custom_field_changes(
+        instance, original.get("custom_field_values"), instance.custom_field_values
+    ):
+        _record(task=instance, **change)
 
     # ONE webhook per save, after the whole diff — a subscriber wants
     # "this task changed", not one delivery per column. Emitted here
