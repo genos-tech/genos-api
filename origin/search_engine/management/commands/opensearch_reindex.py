@@ -31,6 +31,14 @@ overlays:
 
     python manage.py opensearch_reindex        # heals; re-embeds nothing
 
+Membership changes: chunk ACLs are copied from project and channel
+membership, which an incremental pass can't see change. `acl_dirty`
+queues each project or channel whose members changed; an incremental
+pass also re-emits everything in those scopes (a metadata-only update,
+so no re-embedding) and then clears the marks it consumed. A pass with
+errors, a dry run, or an `--entity-types` subset that skips an
+ACL-bearing type keeps them for the next pass.
+
 Schema versions: when the live index was built under a different
 `INDEX_SCHEMA_VERSION` than the code expects, the command prints a
 warning. The fix is to recreate the index:
@@ -46,6 +54,7 @@ from django.core.management.base import CommandError
 from opensearchpy.exceptions import NotFoundError
 
 from origin.management.cron_command import CronCommand
+from origin.search_engine import acl_dirty
 from origin.search_engine.index_config import INDEX_SCHEMA_VERSION
 from origin.search_engine.ingestion import ingest_all
 from origin.search_engine.opensearch_client import get_client, get_index_alias
@@ -157,11 +166,19 @@ class Command(CronCommand):
         if dry_run:
             self.stdout.write("(dry-run: no embeddings, no writes)")
 
+        # Claimed before the chunkers run, so a mark written mid-pass is
+        # left for the next one. A full pass re-reads every ACL anyway,
+        # but still claims, so it can clear the queue.
+        dirty = acl_dirty.claim()
         stats = ingest_all(
             since=since,
             entity_types=options.get("entity_types"),
             dry_run=dry_run,
+            dirty=dirty,
         )
+        acl_marks_released = 0
+        if _may_release(dirty, stats, options):
+            acl_marks_released = acl_dirty.release(dirty)
 
         # Deleted entities never re-enter the chunkers, so ingestion alone
         # can't clean them up — the sweep is the delete path's backstop.
@@ -172,7 +189,10 @@ class Command(CronCommand):
             sweep_stats = sweep_orphans(dry_run=dry_run)
 
         self.stdout.write(self.style.SUCCESS("Reindex complete."))
-        payload = {"ingestion": stats.as_dict()}
+        payload = {
+            "ingestion": stats.as_dict(),
+            "acl_marks": {"claimed": len(dirty.rows), "released": acl_marks_released},
+        }
         if sweep_stats is not None:
             payload["orphan_sweep"] = sweep_stats
         self.stdout.write(json.dumps(payload, indent=2))
@@ -216,3 +236,19 @@ class Command(CronCommand):
                 )
         except (NotFoundError, Exception):  # noqa: BLE001 — never block reindex on a probe failure
             return
+
+
+# Every entity type whose ACL comes from project or channel membership.
+# Todos, conversations and spotlight answers are owner-scoped.
+_ACL_ENTITY_TYPES = frozenset(
+    {"chat", "task", "milestone", "note", "thread_summary", "note_summary"}
+)
+
+
+def _may_release(dirty, stats, options) -> bool:
+    """Whether this pass refreshed every claimed scope. Anything less
+    keeps the marks: a missed refresh leaves a removed member's hits."""
+    if not dirty.rows or options.get("dry_run") or stats.errors:
+        return False
+    entity_types = options.get("entity_types")
+    return not entity_types or _ACL_ENTITY_TYPES <= set(entity_types)

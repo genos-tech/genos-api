@@ -25,8 +25,11 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Iterator, Optional
 
+from django.db.models import Q
+
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
+from origin.search_engine.acl_dirty import DirtyScopes
 from origin.search_engine.chunkers.base import (
     Chunk,
     EntityChunks,
@@ -36,11 +39,20 @@ from origin.search_engine.chunkers.base import (
 from origin.search_engine.text_extraction import extract_text
 
 
-def iter_milestone_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
-    """Yield one EntityChunks (single chunk) per milestone."""
+def iter_milestone_chunks(
+    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+) -> Iterator[EntityChunks]:
+    """Yield one EntityChunks (single chunk) per milestone.
+
+    With `since`, also every milestone in a project whose membership
+    changed (`dirty`): the project members are its ACL.
+    """
     qs = MilestoneMaster.objects.filter(is_deleted=False).select_related("team", "project")
     if since is not None:
-        qs = qs.filter(ts_updated_at__gte=since)
+        window = Q(ts_updated_at__gte=since)
+        if dirty and dirty.project_ids:
+            window |= Q(project_id__in=dirty.project_ids)
+        qs = qs.filter(window)
     milestones = list(qs)
     if not milestones:
         return

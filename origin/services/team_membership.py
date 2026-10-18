@@ -77,10 +77,16 @@ def drop_in_team_access(team_id, attendee_id) -> None:
     # Every channel of the team at once — GM, PM, DM, note chats. Soft,
     # because that is this table's convention, and the re-entry paths all
     # un-delete in place (`ChannelMembersView.post`, the DM reopen in
-    # `channel_views`, the PM backfill receiver).
-    ChannelMember.objects.filter(
+    # `channel_views`, the PM backfill receiver). A queryset update fires
+    # no receiver, so the search ACL refresh is queued here by hand (the
+    # project rows above queue theirs through `post_delete`).
+    from origin.search_engine.acl_dirty import mark_channels_dirty
+
+    left = ChannelMember.objects.filter(
         channel__team_id=team_id, user_id=attendee_id, is_deleted=False
-    ).update(is_deleted=True)
+    )
+    mark_channels_dirty(left.values_list("channel_id", flat=True))
+    left.update(is_deleted=True)
 
     # Keyed on the `team` column rather than the folder's, because that is
     # the column the read path resolves through (`load_my_folder_grants`

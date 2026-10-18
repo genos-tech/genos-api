@@ -50,6 +50,45 @@ class RagChunk(models.Model):
         ]
 
 
+class SearchAclDirty(models.Model):
+    """A project or channel whose membership changed since the last pass.
+
+    Every chunk's `acl_user_ids` is copied from a membership table at
+    index time, but the incremental reindexer only revisits an entity
+    when the entity itself changed. A membership change touches neither:
+    `ProjectMembers` is hard-deleted, and the `ChannelMember` soft
+    deletes run as queryset updates that leave its timestamp alone. So
+    someone removed from a project kept finding its tasks, notes and
+    chat in search — indefinitely, because the reindexer never runs a
+    full pass on its own.
+
+    A row here makes the next incremental pass re-chunk everything that
+    takes its ACL from the scope. The text is unchanged, so ingestion
+    sends a metadata-only update and nothing is re-embedded. The pass
+    deletes the rows it read only once it finishes without errors, so a
+    failed pass retries them (`acl_dirty.release` explains which rows).
+
+    Written by the receivers in `search_engine/acl_dirty.py` and, for the
+    queryset updates no receiver sees, by `mark_channels_dirty` at each
+    call site.
+    """
+
+    PROJECT = "project"
+    CHANNEL = "channel"
+
+    scope_kind = models.CharField(max_length=16)
+    # A project id or a channel UUID, as text: one column for both kinds.
+    scope_id = models.CharField(max_length=64)
+    ts_marked_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["scope_kind", "scope_id"], name="uniq_search_acl_dirty"
+            ),
+        ]
+
+
 class AgentSession(models.Model):
     """Groups a sequence of /ask/ calls into one conversation.
 

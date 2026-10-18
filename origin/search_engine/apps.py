@@ -17,3 +17,7 @@ class SearchEngineConfig(AppConfig):
         from origin.search_engine import spend_recorder  # noqa: PLC0415
 
         spend_recorder.install()
+
+        # Registers the membership receivers that queue search ACL
+        # refreshes. Imported for its side effect, like `origin.signals`.
+        from origin.search_engine import acl_dirty  # noqa: F401, PLC0415

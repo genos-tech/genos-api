@@ -43,6 +43,7 @@ from django.conf import settings
 from django.db import transaction
 from opensearchpy import helpers as os_helpers
 
+from origin.search_engine.acl_dirty import DirtyScopes
 from origin.search_engine.chunkers.base import Chunk, EntityChunks
 from origin.search_engine.chunkers.chat_chunker import iter_all_chat_chunks
 from origin.search_engine.chunkers.conversation_chunker import (
@@ -98,6 +99,7 @@ def ingest_all(
     since: Optional[datetime] = None,
     entity_types: Optional[list[str]] = None,
     dry_run: bool = False,
+    dirty: Optional[DirtyScopes] = None,
 ) -> IngestionStats:
     """Run a full or incremental ingestion across chats/tasks/notes.
 
@@ -110,6 +112,9 @@ def ingest_all(
             writes. The chunkers still run and stats are populated, so
             you can verify which chunks *would* be touched without
             consuming OpenAI quota or mutating state.
+        dirty: Projects and channels whose membership changed (see
+            `acl_dirty`). With `since`, their entities are re-emitted
+            too, so the chunk ACLs follow the membership.
     """
     stats = IngestionStats()
     entity_types = entity_types or [
@@ -130,7 +135,9 @@ def ingest_all(
     # is reserved for MISSING binds, not known infra work). Re-entrant:
     # a caller that already bound a request keeps its own attribution.
     with spend.spend_context(surface="index"), spend.spend_purpose("index"):
-        return _ingest_all_bound(stats, since=since, entity_types=entity_types, dry_run=dry_run)
+        return _ingest_all_bound(
+            stats, since=since, entity_types=entity_types, dry_run=dry_run, dirty=dirty
+        )
 
 
 def _ingest_all_bound(
@@ -139,25 +146,26 @@ def _ingest_all_bound(
     since: Optional[datetime],
     entity_types: list[str],
     dry_run: bool,
+    dirty: Optional[DirtyScopes] = None,
 ) -> IngestionStats:
     if "chat" in entity_types:
         log.info("Ingesting chats (since=%s, dry_run=%s)...", since, dry_run)
-        _ingest_stream(iter_all_chat_chunks(since=since), stats, dry_run=dry_run)
+        _ingest_stream(iter_all_chat_chunks(since=since, dirty=dirty), stats, dry_run=dry_run)
     if "task" in entity_types:
         log.info("Ingesting tasks (since=%s, dry_run=%s)...", since, dry_run)
-        _ingest_stream(iter_task_chunks(since=since), stats, dry_run=dry_run)
+        _ingest_stream(iter_task_chunks(since=since, dirty=dirty), stats, dry_run=dry_run)
     if "milestone" in entity_types:
         log.info("Ingesting milestones (since=%s, dry_run=%s)...", since, dry_run)
-        _ingest_stream(iter_milestone_chunks(since=since), stats, dry_run=dry_run)
+        _ingest_stream(iter_milestone_chunks(since=since, dirty=dirty), stats, dry_run=dry_run)
     if "note" in entity_types:
         log.info("Ingesting notes (since=%s, dry_run=%s)...", since, dry_run)
-        _ingest_stream(iter_all_note_chunks(since=since), stats, dry_run=dry_run)
+        _ingest_stream(iter_all_note_chunks(since=since, dirty=dirty), stats, dry_run=dry_run)
     if "thread_summary" in entity_types:
         log.info("Ingesting thread summaries (since=%s, dry_run=%s)...", since, dry_run)
-        _ingest_stream(iter_thread_summary_chunks(since=since), stats, dry_run=dry_run)
+        _ingest_stream(iter_thread_summary_chunks(since=since, dirty=dirty), stats, dry_run=dry_run)
     if "note_summary" in entity_types:
         log.info("Ingesting note summaries (since=%s, dry_run=%s)...", since, dry_run)
-        _ingest_stream(iter_note_summary_chunks(since=since), stats, dry_run=dry_run)
+        _ingest_stream(iter_note_summary_chunks(since=since, dirty=dirty), stats, dry_run=dry_run)
     if "todo" in entity_types:
         log.info("Ingesting todos (since=%s, dry_run=%s)...", since, dry_run)
         _ingest_stream(iter_todo_chunks(since=since), stats, dry_run=dry_run)

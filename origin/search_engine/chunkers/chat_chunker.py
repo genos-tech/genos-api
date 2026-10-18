@@ -44,6 +44,7 @@ from django.conf import settings
 from origin.models.chat.unified_models import Channel, ChannelMember, Message
 from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMembers
+from origin.search_engine.acl_dirty import DirtyScopes
 from origin.search_engine.chunkers.base import (
     CHAT_TYPE_DM,
     CHAT_TYPE_GM,
@@ -60,27 +61,37 @@ from origin.search_engine.models import ThreadSummary
 from origin.search_engine.text_extraction import extract_text
 
 
-def iter_dm_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
-    yield from _iter_kind_chunks(CHAT_TYPE_DM, "dm", since)
+def iter_dm_chunks(
+    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+) -> Iterator[EntityChunks]:
+    yield from _iter_kind_chunks(CHAT_TYPE_DM, "dm", since, dirty)
 
 
-def iter_gm_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
-    yield from _iter_kind_chunks(CHAT_TYPE_GM, "gm", since)
+def iter_gm_chunks(
+    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+) -> Iterator[EntityChunks]:
+    yield from _iter_kind_chunks(CHAT_TYPE_GM, "gm", since, dirty)
 
 
-def iter_mdm_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
-    yield from _iter_kind_chunks(CHAT_TYPE_MDM, "mdm", since)
+def iter_mdm_chunks(
+    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+) -> Iterator[EntityChunks]:
+    yield from _iter_kind_chunks(CHAT_TYPE_MDM, "mdm", since, dirty)
 
 
-def iter_pm_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
-    yield from _iter_kind_chunks(CHAT_TYPE_PM, "pm", since)
+def iter_pm_chunks(
+    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+) -> Iterator[EntityChunks]:
+    yield from _iter_kind_chunks(CHAT_TYPE_PM, "pm", since, dirty)
 
 
-def iter_all_chat_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
-    yield from iter_dm_chunks(since)
-    yield from iter_gm_chunks(since)
-    yield from iter_mdm_chunks(since)
-    yield from iter_pm_chunks(since)
+def iter_all_chat_chunks(
+    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+) -> Iterator[EntityChunks]:
+    yield from iter_dm_chunks(since, dirty)
+    yield from iter_gm_chunks(since, dirty)
+    yield from iter_mdm_chunks(since, dirty)
+    yield from iter_pm_chunks(since, dirty)
 
 
 # --------------------------------------------------------------------------- #
@@ -89,13 +100,14 @@ def iter_all_chat_chunks(since: Optional[datetime] = None) -> Iterator[EntityChu
 
 
 def _iter_kind_chunks(
-    kind_code: int, label: str, since: Optional[datetime]
+    kind_code: int, label: str, since: Optional[datetime], dirty: Optional[DirtyScopes] = None
 ) -> Iterator[EntityChunks]:
     """Yield one EntityChunks per (channel, thread) for a single chat kind.
 
     With `since`, only channels with a message updated at/after `since`
     are re-emitted (the whole channel re-chunks; ingestion dedupes the
-    unchanged chunks by hash)."""
+    unchanged chunks by hash), plus every channel whose readers changed
+    (`dirty`)."""
     channels = Channel.objects.filter(kind=kind_code, is_deleted=False).select_related(
         "project", "team"
     )
@@ -106,6 +118,12 @@ def _iter_kind_chunks(
                 "channel_id", flat=True
             )
         )
+        if dirty and dirty.acl_channel_ids:
+            dirty_channel_ids |= set(
+                Channel.objects.filter(kind=kind_code, id__in=dirty.acl_channel_ids).values_list(
+                    "id", flat=True
+                )
+            )
         channels = channels.filter(id__in=dirty_channel_ids)
 
     channel_list = list(channels)
@@ -176,7 +194,11 @@ def _iter_kind_chunks(
         # retrieval-time ACL filter ever treats an empty `terms` list as
         # match-any, could leak the chunk to everyone). Skip the channel —
         # same defensive stance as thread_summary_chunker / note_summary_chunker.
+        # Skipping leaves what is already indexed, under its old ACL, so a
+        # channel whose last reader just left is tombstoned instead.
         if not acl_user_ids:
+            if dirty and str(channel.id) in dirty.acl_channel_ids:
+                yield from _tombstone_channel(label, channel, msgs)
             continue
 
         yield from _emit_channel_chunks(
@@ -188,6 +210,20 @@ def _iter_kind_chunks(
             project_id=project_id,
             sender_names=sender_names,
             summarized=summarized,
+        )
+
+
+def _tombstone_channel(label: str, channel: Channel, msgs: list[Message]) -> Iterator[EntityChunks]:
+    """Empty entities for a channel's main timeline and every thread, so
+    ingestion deletes their chunks. The same entity ids
+    `_emit_channel_chunks` would have written."""
+    channel_uuid = str(channel.id)
+    yield EntityChunks(entity_type="chat", entity_id=chat_entity_id(label, channel_uuid), chunks=[])
+    for root_id in {m.thread_root_id for m in msgs if m.is_thread_reply and m.thread_root_id}:
+        yield EntityChunks(
+            entity_type="chat",
+            entity_id=chat_entity_id(label, channel_uuid, str(root_id)),
+            chunks=[],
         )
 
 
