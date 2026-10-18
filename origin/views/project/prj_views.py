@@ -334,6 +334,10 @@ class ProjectMasterView(AuthenticatedAPIView):
 
         try:
             target_project = ProjectMaster.objects.get(team=team_id, project_id=project_id)
+            # Someone outside the project gets the same 404 as a missing
+            # one; the owner-only message below would confirm it exists.
+            if not is_project_member(target_project.project_id, request_user_id):
+                raise ProjectMaster.DoesNotExist
             if target_project.owner and str(request_user_id) == str(target_project.owner.id):
                 with transaction.atomic():
                     # Every project gets a PM channel from the
@@ -382,7 +386,11 @@ class CheckProjectExistsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Check if a Project exists
+        # A yes/no on any team's project names is an oracle on another
+        # tenant's plans, so only the team's own members may ask.
+        if res := require_team_member_or_response(request.user, team_id):
+            return res
+
         exists = ProjectMaster.objects.filter(Q(team=team_id, project_name=project_name)).exists()
 
         return Response({"project_exists": exists}, status=status.HTTP_200_OK)

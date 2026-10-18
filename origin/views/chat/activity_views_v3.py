@@ -33,6 +33,7 @@ from rest_framework.response import Response
 from origin.models.chat.unified_models import Activity
 from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.scope_guards import is_team_member
 
 _DEFAULT_SINCE_DAYS = 30
 _MAX_ROWS = 200
@@ -232,12 +233,10 @@ class ActivitySurfaceView(AuthenticatedAPIView):
         # they're creating activities in — otherwise an authenticated user
         # could fabricate sidebar entries for any member of any team whose
         # id they know. (Recipient ids are separately validated against
-        # team membership inside the producer.)
-        from origin.models.common.team_models import TeamMembers
-
-        if not TeamMembers.objects.filter(
-            team_id=team_id, attendee=request.user, is_deleted=False
-        ).exists():
+        # team membership inside the producer.) `is_team_member`, not a
+        # bare TeamMembers query, so a team owner without a member row
+        # isn't refused in their own team.
+        if not is_team_member(team_id, request.user.id):
             return Response(
                 {"error": "Not a member of this team."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -299,11 +298,7 @@ class ActivityCommentSurfaceView(AuthenticatedAPIView):
         # must belong to the team, so an authenticated user can't fabricate
         # activities in a team they're not in. (Recipients are separately
         # validated against team membership inside the producer.)
-        from origin.models.common.team_models import TeamMembers
-
-        if not TeamMembers.objects.filter(
-            team_id=team_id, attendee=request.user, is_deleted=False
-        ).exists():
+        if not is_team_member(team_id, request.user.id):
             return Response(
                 {"error": "Not a member of this team."},
                 status=status.HTTP_403_FORBIDDEN,

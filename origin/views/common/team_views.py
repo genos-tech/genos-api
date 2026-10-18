@@ -14,6 +14,7 @@ from django.utils import timezone
 from rest_framework import permissions, status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
 from origin.models.common.inbox_models import InboxItems
@@ -699,12 +700,23 @@ class InviteTeamMembersView(AuthenticatedAPIView):
         return Response({"results": results}, status=status.HTTP_200_OK)
 
 
+class InvitePreviewThrottle(AnonRateThrottle):
+    """The token is 32 random bytes, so this isn't about guessing one —
+    it caps what an anonymous caller can make the endpoint do (a hash
+    and up to three queries per request). A visitor opening their invite
+    link calls it once or twice."""
+
+    rate = "30/min"
+    scope = "invite_preview"
+
+
 class InvitePreviewView(APIView):
     """Public: describe an invite token so the frontend can route the
     visitor (sign up vs sign in vs accept). Reveals nothing about
     invalid/expired tokens beyond the status."""
 
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [InvitePreviewThrottle]
 
     def get(self, request):
         token = request.query_params.get("token") or ""
@@ -1018,27 +1030,6 @@ class GetMyTeamsView(AuthenticatedAPIView):
 
         cache.set(cache_key, my_teams, timeout=60)
         return Response(my_teams, status=status.HTTP_200_OK)
-
-
-class GetAllTeamsView(AuthenticatedAPIView):
-    def get(self, request):
-        _teams = TeamMaster.objects.values_list("team_id", "team_name", "team_email", "is_deleted")
-        teams = []
-        for (
-            team_id,
-            team_name,
-            team_email,
-            is_deleted,
-        ) in _teams:
-            if is_deleted == False:
-                teams.append(
-                    {
-                        "teamId": team_id,
-                        "teamName": team_name,
-                        "teamEmail": team_email,
-                    }
-                )
-        return Response(teams, status=status.HTTP_200_OK)
 
 
 def _without_phone(rows) -> list:
