@@ -7,6 +7,7 @@ from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.recent_note_models import NoteRecentMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.note_role import readable_note_ids, readable_note_ref
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 # Maximum number of recent-note rows kept per (user, team). Older rows are
@@ -42,6 +43,13 @@ class RecordNoteOpenView(AuthenticatedAPIView):
 
         if res := validate_request_user(str(request_user_id), str(data["user"])):
             return res
+
+        # Opening a note is what this records, so it has to be one the
+        # caller can open: the recents list shows its title.
+        ref = readable_note_ref(request_user_id, data["note_id"], data["note_type"])
+        if ref is None:
+            return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
+        data["note_id"], data["note_type"] = ref
 
         # `get_or_create` + an explicit `save()` on the existing branch is
         # used (instead of `update_or_create(defaults={})`) so we never
@@ -109,9 +117,15 @@ class AllRecentNotesMetaView(AuthenticatedAPIView):
         # open-timestamp to each metadata row after we fan out per type.
         opened_at_by_key = {(r["note_type"], r["note_id"]): r["ts_opened_at"] for r in recents}
 
-        personal_note_ids = [r["note_id"] for r in recents if r["note_type"] == 1]
-        task_note_ids = [r["note_id"] for r in recents if r["note_type"] == 2]
-        chat_note_ids = [r["note_id"] for r in recents if r["note_type"] == 3]
+        # Only notes the user can still open; access may have gone since.
+        personal_note_ids, task_note_ids, chat_note_ids = (
+            readable_note_ids(
+                request_user_id,
+                note_type,
+                [r["note_id"] for r in recents if r["note_type"] == note_type],
+            )
+            for note_type in (1, 2, 3)
+        )
 
         result = {
             "personalNotes": [],

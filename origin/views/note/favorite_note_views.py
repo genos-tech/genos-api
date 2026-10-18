@@ -9,6 +9,7 @@ from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.serializers.note.note_serializers import NoteFavoriteMasterSerializer
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.note_role import readable_note_ids, readable_note_ref
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 
@@ -34,10 +35,16 @@ class AllFavoriteNotesMetaView(AuthenticatedAPIView):
             team=data["team_id"], user=data["user_id"]
         ).values("note_id", "note_type", "ts_created_at")
 
-        # Separate by note type
-        personal_note_ids = [f["note_id"] for f in favorites if f["note_type"] == 1]
-        task_note_ids = [f["note_id"] for f in favorites if f["note_type"] == 2]
-        chat_note_ids = [f["note_id"] for f in favorites if f["note_type"] == 3]
+        # Separate by note type, keeping only notes the user can still
+        # open: a favorite outlives the access it was made with.
+        personal_note_ids, task_note_ids, chat_note_ids = (
+            readable_note_ids(
+                request_user_id,
+                note_type,
+                [f["note_id"] for f in favorites if f["note_type"] == note_type],
+            )
+            for note_type in (1, 2, 3)
+        )
 
         result = {
             "personalNotes": [],
@@ -170,6 +177,13 @@ class NoteFavoriteView(AuthenticatedAPIView):
 
         if res := validate_request_user(str(request_user_id), str(data["user"])):
             return res
+
+        # The sidebar shows a favorite's title, so only a note the caller
+        # can open may be stored as one.
+        ref = readable_note_ref(request_user_id, data["note_id"], data["note_type"])
+        if ref is None:
+            return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
+        data["note_id"], data["note_type"] = ref
 
         # Check if already favorited
         existing = NoteFavoriteMaster.objects.filter(
