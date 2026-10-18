@@ -19,7 +19,7 @@ from origin.models.chat.unified_models import (
     Message,
 )
 from origin.models.common.mention_group_models import MentionGroupMaster, MentionGroupMembers
-from origin.models.project.prj_models import ProjectMaster
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.services.v3_activity import create_thread_reply_activity
 from origin.tests.test_base import BaseAPITestCase
@@ -109,6 +109,8 @@ class TaskCommentReactionV3Tests(BaseAPITestCase):
             owner=self.user,
             project_system_user=self.user,
         )
+        # user2 wrote the comment, so they are on the task's project.
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
         self.task = TaskMaster.objects.create(
             team=self.team, project=self.project, title="T", status="Open"
         )
