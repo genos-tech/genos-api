@@ -47,6 +47,7 @@ from django.utils import timezone
 
 from origin.models.chat.personal_tag_models import PersonalChannelTag
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup
+from origin.models.common.api_key_models import ApiKey
 from origin.models.common.notification_models import NotificationPreference, PushSubscription
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import ConnectedAccount
@@ -194,6 +195,15 @@ def delete_account(user) -> dict:
         # lists, mention pickers and capacity maths.
         TeamMembers.objects.filter(attendee=user, is_deleted=False).update(
             is_deleted=True, ts_updated_at=timezone.now()
+        )
+
+        # Every key, not just team-bound ones: the person is gone, so
+        # nothing may act as them. `is_active=False` below already makes
+        # the authenticator refuse them; revoking records it on the key
+        # itself, so a team owner's key list shows it as revoked instead
+        # of live (`TeamApiKeyListView`).
+        ApiKey.objects.filter(user=user, revoked_at__isnull=True).update(
+            revoked_at=timezone.now(), ts_updated_at=timezone.now()
         )
 
         _delete_personal_data(user)

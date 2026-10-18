@@ -90,6 +90,28 @@ def drop_in_team_access(team_id, attendee_id) -> None:
         via_group_type="external_grant"
     ).delete()
 
+    revoke_team_api_keys(team_id, attendee_id)
+
+
+def revoke_team_api_keys(team_id, user_id) -> int:
+    """Revoke every live key `user_id` holds that is bound to `team_id`.
+
+    A team key acts on the team's behalf, so it was justified by the
+    membership, and it should end with it. The public API re-checks
+    membership per request too (`PublicApiView.resolve_team`), so a
+    lapsed key is refused either way — this is what makes the departure
+    show in the key list, as revoked, rather than leaving a live-looking
+    key that would quietly start working again on a re-invite. Personal
+    tokens are left alone: they span every team the person is in, and
+    leaving one team is no reason to break their scripts for the rest.
+    Returns how many were revoked.
+    """
+    from origin.models.common.api_key_models import ApiKey
+
+    return ApiKey.objects.filter(team_id=team_id, user_id=user_id, revoked_at__isnull=True).update(
+        revoked_at=timezone.now(), ts_updated_at=timezone.now()
+    )
+
 
 def remove_team_member(team_id, attendee_id) -> int:
     """Soft-delete a membership row and strip the access it underwrote.
