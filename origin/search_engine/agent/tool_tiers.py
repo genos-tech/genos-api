@@ -51,7 +51,9 @@ SINGLE_WRITE_TOOLS = frozenset(
 # `test_agent_tool_tiers` asserts every `requires_approval` tool sits
 # in exactly one of {SINGLE_WRITE_TOOLS, COMPOSITE_WRITE_TOOLS}, so a
 # new write tool cannot merge unclassified.
-COMPOSITE_WRITE_TOOLS = frozenset({"create_task_plan", "update_tasks_bulk"})
+COMPOSITE_WRITE_TOOLS = frozenset(
+    {"create_task_plan", "update_tasks_bulk", "update_task_dependencies"}
+)
 
 
 def disabled_tools_for_level(level: str) -> set[str]:

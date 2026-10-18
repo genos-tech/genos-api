@@ -586,6 +586,57 @@ def _friendly_update_note_arguments(out: dict[str, Any], _args: dict[str, Any]) 
         out["note_title"] = title
 
 
+def _friendly_dependency_arguments(out: dict[str, Any], _args: dict[str, Any]) -> None:
+    """In-place nested enrichment for `update_task_dependencies` arguments.
+
+    Each `add` / `remove` edge names two raw task ids below the top level,
+    where the flat pass can't reach; label both ends "PRJ-12 Title" (one
+    batched query for the whole call) so the approval card says which
+    tasks get linked. An id that doesn't resolve stays raw."""
+    edges = [
+        row
+        for key in ("add", "remove")
+        if isinstance(out.get(key), list)
+        for row in out[key]
+        if isinstance(row, dict)
+    ]
+    ids: set[int] = set()
+    for row in edges:
+        for end in ("blocker_task_id", "blocked_task_id"):
+            try:
+                ids.add(int(row.get(end)))
+            except (TypeError, ValueError):
+                continue
+    if not ids:
+        return
+
+    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+
+    labels = {
+        t.task_id: f"{t.display_id} {t.title}".strip()
+        for t in TaskMaster.objects.select_related("project").filter(task_id__in=ids)
+    }
+
+    def _label(raw: Any) -> Any:
+        try:
+            return labels.get(int(raw), raw)
+        except (TypeError, ValueError):
+            return raw
+
+    for key in ("add", "remove"):
+        if isinstance(out.get(key), list):
+            out[key] = [
+                {
+                    **row,
+                    "blocker_task_id": _label(row.get("blocker_task_id")),
+                    "blocked_task_id": _label(row.get("blocked_task_id")),
+                }
+                if isinstance(row, dict)
+                else row
+                for row in out[key]
+            ]
+
+
 # Tool-name → nested enrichment pass, applied after the flat resolvers.
 # Each edits the labelled copy and may read the caller's raw args for an
 # id the flat pass has already replaced with a label.
@@ -593,6 +644,7 @@ _FRIENDLY_NESTED_ENRICHERS: dict[str, Callable[[dict[str, Any], dict[str, Any]],
     "create_task_plan": _friendly_task_plan_arguments,
     "update_task": _friendly_update_task_arguments,
     "update_tasks_bulk": _friendly_bulk_update_arguments,
+    "update_task_dependencies": _friendly_dependency_arguments,
     "update_note": _friendly_update_note_arguments,
 }
 
@@ -1009,6 +1061,24 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
             for row in (result.get("updated") or [])[:10]
             if row.get("task_id")
         ]
+
+    if call_name == "update_task_dependencies":
+        # Both ends of every touched edge, once each, so "linked X → Y"
+        # cites resolve. No project_id in the result — the downstream
+        # display-id hydration backfills it like assign_task's.
+        seen: dict[Any, dict[str, Any]] = {}
+        for key in ("added", "removed"):
+            for edge in result.get(key) or []:
+                for end in ("blocker", "blocked"):
+                    tid = edge.get(f"{end}_task_id")
+                    if tid and tid not in seen:
+                        seen[tid] = _task_source(
+                            tid,
+                            edge.get(f"{end}_title"),
+                            None,
+                            display_id=edge.get(f"{end}_display_id"),
+                        )
+        return list(seen.values())[:10]
 
     if call_name in ("create_task", "update_task", "assign_task", "add_comment"):
         # Single-task write tools → chip the operated task, so every

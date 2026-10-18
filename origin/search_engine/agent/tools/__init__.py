@@ -109,6 +109,7 @@ from origin.search_engine.agent.tools.search_past_conversations import (
 from origin.search_engine.agent.tools.update_calendar_event import UPDATE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.update_note import UPDATE_NOTE
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
+from origin.search_engine.agent.tools.update_task_dependencies import UPDATE_TASK_DEPENDENCIES
 from origin.search_engine.agent.tools.update_tasks_bulk import UPDATE_TASKS_BULK
 from origin.search_engine.agent.tools.update_todo_item import UPDATE_TODO_ITEM
 from origin.search_engine.agent.tools.web_search import SEARCH_WEB
@@ -199,6 +200,8 @@ for _t in (
     UPDATE_TODO_ITEM,
     # --- Write tools (MIP-687) — record a task's branch / PR ---
     ADD_TASK_DELIVERY,
+    # --- Write tools (MIP-730) — link / unlink existing tasks ---
+    UPDATE_TASK_DEPENDENCIES,
 ):
     REGISTRY[_t.name] = _t
 
@@ -263,6 +266,7 @@ __all__ = [
     "UPDATE_NOTE",
     "UPDATE_TASK",
     "UPDATE_TASKS_BULK",
+    "UPDATE_TASK_DEPENDENCIES",
     "UPDATE_TODO_ITEM",
     "SEARCH_WEB",
 ]
