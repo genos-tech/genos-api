@@ -456,6 +456,7 @@ def validate_web_config(
     allowed_hosts: list[str],
     cors_allowed_origins: list[str],
     field_encryption_key: str,
+    search_engine: dict,
 ) -> None:
     """What the HTTP server additionally needs before it takes traffic.
 
@@ -476,6 +477,11 @@ def validate_web_config(
       secrets at rest. Missing, the first OAuth login or webhook delivery
       fails at runtime; a malformed one fails the same way. Checked here,
       by building the real Fernet, so it fails at deploy instead.
+    - OpenSearch: TLS and credentials (`build_client_kwargs`). The client
+      refuses on first use anyway, but the boot CMD runs `opensearch_setup
+      || echo`, so without this the server would start and fail every
+      search instead of failing the deploy. The crons hit the client's own
+      check when they first connect.
     """
     if debug:
         return
@@ -515,6 +521,9 @@ def validate_web_config(
             "OAUTH_TOKEN_ENCRYPTION_KEY is not a valid Fernet key (32 url-safe "
             "base64-encoded bytes)."
         ) from None
+    from origin.search_engine.opensearch_client import build_client_kwargs
+
+    build_client_kwargs(search_engine, debug=debug)
 
 
 AUTH_USER_MODEL = "origin.CustomUser"
@@ -608,6 +617,15 @@ SEARCH_ENGINE = {
     "OPENSEARCH_HOST": os.environ.get("OPENSEARCH_HOST", "opensearch"),
     "OPENSEARCH_PORT": int(os.environ.get("OPENSEARCH_PORT", "9200")),
     "OPENSEARCH_USE_SSL": os.environ.get("OPENSEARCH_USE_SSL", "false").lower() == "true",
+    # Basic auth as the node's one user (genos-platform docker/opensearch).
+    # With DEBUG off, `get_client` refuses to connect without TLS and both of
+    # these. The local compose node runs with security off and needs none.
+    "OPENSEARCH_USERNAME": os.environ.get("OPENSEARCH_USERNAME", ""),
+    "OPENSEARCH_PASSWORD": os.environ.get("OPENSEARCH_PASSWORD", ""),
+    # Base64 of the PEM CA that signed the node's certificate (the node's own
+    # OPENSEARCH_TLS_CA). When set, it is the ONLY CA trusted for OpenSearch;
+    # when unset, the system CAs are. The hostname is checked either way.
+    "OPENSEARCH_CA_CERT": os.environ.get("OPENSEARCH_CA_CERT", ""),
     # Physical index name. Increment the suffix when changing the
     # mapping or embedding model and reindexing.
     "OPENSEARCH_INDEX": os.environ.get("OPENSEARCH_INDEX", "knowledge_chunks_v1"),

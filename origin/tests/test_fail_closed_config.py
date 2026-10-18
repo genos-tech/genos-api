@@ -41,6 +41,17 @@ _REPO = Path(__file__).resolve().parents[2]
 # the test settings leaking in.
 _KEY = "Xl0rQ9nZb3pW1yV7kT5mR8sJ2hF4dC6aE0gB9uN3iLo="
 
+# The production shape of SEARCH_ENGINE (MIP-721): TLS and a login. The CA is
+# left to the system store here; test_opensearch_client covers a pinned CA.
+_SEARCH = {
+    "OPENSEARCH_HOST": "opensearch.railway.internal",
+    "OPENSEARCH_PORT": 9200,
+    "OPENSEARCH_USE_SSL": True,
+    "OPENSEARCH_USERNAME": "genos_app",
+    "OPENSEARCH_PASSWORD": "test-only-not-a-real-password",
+    "OPENSEARCH_CA_CERT": "",
+}
+
 
 def _web(**overrides):
     kwargs = {
@@ -48,6 +59,7 @@ def _web(**overrides):
         "allowed_hosts": ["api.genosai.dev", "healthcheck.railway.app"],
         "cors_allowed_origins": ["https://app.genosai.dev"],
         "field_encryption_key": _KEY,
+        "search_engine": _SEARCH,
     }
     kwargs.update(overrides)
     validate_web_config(**kwargs)
@@ -112,7 +124,18 @@ class TestValidateWebConfig(SimpleTestCase):
         _web()
 
     def test_debug_skips_every_check(self):
-        _web(debug=True, allowed_hosts=[], cors_allowed_origins=[], field_encryption_key="")
+        _web(
+            debug=True,
+            allowed_hosts=[],
+            cors_allowed_origins=[],
+            field_encryption_key="",
+            search_engine={
+                **_SEARCH,
+                "OPENSEARCH_USE_SSL": False,
+                "OPENSEARCH_USERNAME": "",
+                "OPENSEARCH_PASSWORD": "",
+            },
+        )
 
     def test_refuses_unset_or_localhost_hosts(self):
         # settings.py always appends Railway's healthcheck host, so "only that
@@ -169,6 +192,20 @@ class TestValidateWebConfig(SimpleTestCase):
             ):
                 _web(field_encryption_key=key)
 
+    def test_refuses_opensearch_without_tls_or_a_login(self):
+        # The web server's boot CMD runs `opensearch_setup || echo`, so this
+        # is the check that stops a deploy, not the client's first use.
+        for unset, needed in (
+            ("OPENSEARCH_USE_SSL", "OPENSEARCH_USE_SSL=true"),
+            ("OPENSEARCH_USERNAME", "OPENSEARCH_USERNAME"),
+            ("OPENSEARCH_PASSWORD", "OPENSEARCH_PASSWORD"),
+        ):
+            with (
+                self.subTest(unset=unset),
+                self.assertRaisesMessage(ImproperlyConfigured, needed),
+            ):
+                _web(search_engine={**_SEARCH, unset: False if unset.endswith("SSL") else ""})
+
 
 class TestWebEntrypointsRunTheCheck(SimpleTestCase):
     """gunicorn imports apis.wsgi, so the check must run on that import."""
@@ -191,8 +228,23 @@ class TestWebEntrypointsRunTheCheck(SimpleTestCase):
                     ALLOWED_HOSTS="api.genosai.dev",
                     CORS_ALLOWED_ORIGINS="https://app.genosai.dev",
                     OAUTH_TOKEN_ENCRYPTION_KEY=_KEY,
+                    OPENSEARCH_USE_SSL="true",
+                    OPENSEARCH_USERNAME="genos_app",
+                    OPENSEARCH_PASSWORD="test-only-not-a-real-password",
                 )
                 self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_wsgi_and_asgi_refuse_plaintext_opensearch(self):
+        for module in ("apis.wsgi", "apis.asgi"):
+            with self.subTest(module=module):
+                proc = self._boot(
+                    module,
+                    ALLOWED_HOSTS="api.genosai.dev",
+                    CORS_ALLOWED_ORIGINS="https://app.genosai.dev",
+                    OAUTH_TOKEN_ENCRYPTION_KEY=_KEY,
+                )
+                self.assertNotEqual(proc.returncode, 0)
+                self.assertIn("ImproperlyConfigured: OpenSearch needs", proc.stderr)
 
     def test_manage_py_does_not_run_it(self):
         # The crons: same settings, no browser-facing variables.
