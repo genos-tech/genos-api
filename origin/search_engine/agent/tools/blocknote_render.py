@@ -51,14 +51,45 @@ _MEDIA_TYPES = frozenset({"image", "video", "audio", "file"})
 _INDENT = "  "
 
 
-def _styled(text: str, styles: dict[str, Any]) -> str:
-    """Wrap a text run in its markdown markers.
+# Emphasis styles, in wrapping order (innermost first). Bold outside
+# italic is the conventional nesting.
+_EMPHASIS = (("strike", "~~"), ("italic", "*"), ("bold", "**"))
 
-    `code` is applied innermost and alone — ``**`x`**`` renders, but
-    `` `**x**` `` would show literal asterisks inside the code span.
-    """
+
+def _wrap(text: str, emphasis: frozenset[str]) -> str:
     if not text:
         return ""
+    for style, marker in _EMPHASIS:
+        if style in emphasis:
+            text = f"{marker}{text}{marker}"
+    return text
+
+
+def _emphasis_of(node: dict[str, Any], strip: frozenset[str]) -> frozenset[str]:
+    """The emphasis a node carries beyond `strip` (the styles an
+    enclosing run already wraps). A link carries what every run of its
+    label shares, so `**see [docs](u)**` wraps the link once."""
+    ntype = node.get("type")
+    if ntype == "text":
+        styles = node.get("styles")
+        if not isinstance(styles, dict):
+            return frozenset()
+        return frozenset(s for s, _ in _EMPHASIS if styles.get(s)) - strip
+    if ntype == "link":
+        runs = node.get("content")
+        if not isinstance(runs, list) or not runs:
+            return frozenset()
+        shared = [_emphasis_of(r, strip) if isinstance(r, dict) else frozenset() for r in runs]
+        return frozenset.intersection(*shared)
+    return frozenset()
+
+
+def _styled(text: str, styles: dict[str, Any]) -> str:
+    """One text run, in a code span if it is code. Emphasis is wrapped
+    by `_inline`, outside the span — ``**`x`**`` renders (and
+    `markdown_to_blocks` reads it back as bold code), but `` `**x**` ``
+    would show literal asterisks inside it.
+    """
     if styles.get("code"):
         # The fence must be longer than any backtick run inside, and
         # padded when the text starts/ends with one (CommonMark), or a
@@ -67,53 +98,60 @@ def _styled(text: str, styles: dict[str, Any]) -> str:
         fence = "`" * (longest + 1)
         pad = " " if text.startswith("`") or text.endswith("`") else ""
         return f"{fence}{pad}{text}{pad}{fence}"
-    # Order matters only for readability; bold outside italic is the
-    # conventional nesting and round-trips through _FORMAT_RE.
-    if styles.get("strike"):
-        text = f"~~{text}~~"
-    if styles.get("italic"):
-        text = f"*{text}*"
-    if styles.get("bold"):
-        text = f"**{text}**"
     return text
 
 
-def _inline(nodes: Any) -> str:
-    """Render one block's inline `content` array to markdown."""
+def _inline(nodes: Any, strip: frozenset[str] = frozenset()) -> str:
+    """Render one block's inline `content` array to markdown.
+
+    Neighbouring runs with the same emphasis are wrapped once, as a
+    group: per-run wrapping turns bold code followed by bold text into
+    ``**`x`**** y**``, whose middle `****` re-parses as literal
+    asterisks — and agents edit bodies by re-saving this rendering.
+    """
     if isinstance(nodes, str):
         return nodes
     if not isinstance(nodes, list):
         return ""
     out: list[str] = []
+    group: list[str] = []
+    group_emphasis: frozenset[str] = frozenset()
     for node in nodes:
         if not isinstance(node, dict):
             continue
-        ntype = node.get("type")
-        if ntype == "text":
-            styles = node.get("styles")
-            out.append(
-                _styled(str(node.get("text") or ""), styles if isinstance(styles, dict) else {})
-            )
-        elif ntype == "link":
-            label = _inline(node.get("content")) or str(node.get("href") or "")
-            href = str(node.get("href") or "")
-            out.append(f"[{label}]({href})" if href else label)
-        elif ntype == "mention":
-            props = node.get("props") or {}
-            name = props.get("userName") or props.get("name")
-            if name:
-                out.append(f"@{name}")
-        elif ntype == "customEmoji":
-            name = (node.get("props") or {}).get("name")
-            if name:
-                out.append(f":{name}:")
-        else:
-            # Unknown inline type — recover any text it carries rather
-            # than dropping the run (mirrors _walk_inline's fallback).
-            text = node.get("text")
-            if text:
-                out.append(str(text))
+        emphasis = _emphasis_of(node, strip)
+        rendered = _inline_node(node, strip | emphasis)
+        if not rendered:
+            continue  # an empty run must not split a group into `**a****b**`
+        if emphasis != group_emphasis:
+            out.append(_wrap("".join(group), group_emphasis))
+            group, group_emphasis = [], emphasis
+        group.append(rendered)
+    out.append(_wrap("".join(group), group_emphasis))
     return "".join(out)
+
+
+def _inline_node(node: dict[str, Any], strip: frozenset[str]) -> str:
+    ntype = node.get("type")
+    if ntype == "text":
+        styles = node.get("styles")
+        text = str(node.get("text") or "")
+        return _styled(text, styles) if text and isinstance(styles, dict) else text
+    if ntype == "link":
+        label = _inline(node.get("content"), strip) or str(node.get("href") or "")
+        href = str(node.get("href") or "")
+        return f"[{label}]({href})" if href else label
+    if ntype == "mention":
+        props = node.get("props") or {}
+        name = props.get("userName") or props.get("name")
+        return f"@{name}" if name else ""
+    if ntype == "customEmoji":
+        name = (node.get("props") or {}).get("name")
+        return f":{name}:" if name else ""
+    # Unknown inline type — recover any text it carries rather than
+    # dropping the run (mirrors _walk_inline's fallback).
+    text = node.get("text")
+    return str(text) if text else ""
 
 
 def _plain(nodes: Any) -> str:

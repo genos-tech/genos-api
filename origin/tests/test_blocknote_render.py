@@ -131,10 +131,48 @@ class BlockRenderingTests(SimpleTestCase):
             "see [the docs](https://example.com) — **bold** and *italic* and `code`",
         )
 
-    def test_code_style_is_not_double_wrapped(self):
-        """`**`x`**` renders wrong — code wins and is applied alone."""
-        body = [_block("paragraph", content=[_text("x", {"code": True, "bold": True})])]
-        self.assertEqual(blocks_to_markdown(body), "`x`")
+    def test_emphasis_wraps_outside_the_code_span(self):
+        """Markers go outside the fence — inside it they'd be literal."""
+        body = [
+            _block(
+                "paragraph",
+                content=[
+                    _text("x", {"code": True, "bold": True}),
+                    _text(" "),
+                    _text("y", {"code": True, "italic": True, "strike": True}),
+                ],
+            )
+        ]
+        self.assertEqual(blocks_to_markdown(body), "**`x`** *~~`y`~~*")
+
+    def test_neighbouring_runs_with_the_same_emphasis_wrap_once(self):
+        """Per-run wrapping gives ``**`x`**** y**`` — its `****` re-parses
+        as literal asterisks when an agent re-saves the body."""
+        bold = {"bold": True}
+        body = [
+            _block(
+                "paragraph",
+                content=[
+                    _text("x", {"code": True, "bold": True}),
+                    _text(""),  # the editor leaves empty runs behind
+                    _text(" see ", bold),
+                    {"type": "link", "href": "https://a.b", "content": [_text("docs", bold)]},
+                    _text(" now", bold),
+                    _text(" and "),
+                    # A link whose label is only partly bold keeps its
+                    # markers inside the label.
+                    {
+                        "type": "link",
+                        "href": "https://c.d",
+                        "content": [_text("half", bold), _text(" plain")],
+                    },
+                ],
+            )
+        ]
+        self.assertEqual(
+            blocks_to_markdown(body),
+            "**`x` see [docs](https://a.b) now** and [**half** plain](https://c.d)",
+        )
 
     def test_mentions_and_custom_emoji_match_the_flattener(self):
         body = [

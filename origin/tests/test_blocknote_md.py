@@ -17,6 +17,11 @@ def _fake_resolver(token):
         "project:3": ("/workspace/tasks/project/3", "Website Redesign"),
     }.get(token)
 
+
+def _text(text, styles=None):
+    return {"type": "text", "text": text, "styles": styles or {}}
+
+
 _ANSWER = """**What is pglogical?**
 
 pglogical is a *logical* replication extension for PostgreSQL.
@@ -119,6 +124,78 @@ class TestMarkdownToBlocks(SimpleTestCase):
         self.assertIn(("**not bold** [a](https://b.c)", {"code": True}), styles)
         self.assertNotIn("link", [c["type"] for c in para["content"]])
 
+    def test_emphasis_wrapping_a_code_span_styles_it(self):
+        """`- **`x` decision:**` is how models label a list item; the
+        markers must pair across the code span, not leak as `**`."""
+        [item] = markdown_to_blocks("- **`isAutoLinked` decision:** keep it")
+        self.assertEqual(
+            [(c["text"], c["styles"]) for c in item["content"]],
+            [
+                ("isAutoLinked", {"code": True, "bold": True}),
+                (" decision:", {"bold": True}),
+                (" keep it", {}),
+            ],
+        )
+        for md, style in (("*`a` b*", "italic"), ("~~`a` b~~", "strike"), ("__`a` b__", "bold")):
+            [para] = markdown_to_blocks(md)
+            self.assertEqual(
+                [(c["text"], c["styles"]) for c in para["content"]],
+                [("a", {"code": True, style: True}), (" b", {style: True})],
+                md,
+            )
+
+    def test_emphasis_wrapping_a_link_styles_its_label(self):
+        [para] = markdown_to_blocks("**see [docs](https://x.com) now** then")
+        self.assertEqual(
+            [(c["type"], c.get("text"), c.get("styles")) for c in para["content"]],
+            [
+                ("text", "see ", {"bold": True}),
+                ("link", None, None),
+                ("text", " now", {"bold": True}),
+                ("text", " then", {}),
+            ],
+        )
+        self.assertEqual(para["content"][1]["content"], [_text("docs", {"bold": True})])
+
+    def test_emphasis_wrapping_resolved_and_unresolved_citations(self):
+        [para] = markdown_to_blocks(
+            "**[task:7] and [gone](task:999) and [the site](project:3)**",
+            entity_link_resolver=_fake_resolver,
+        )
+        content = para["content"]
+        self.assertEqual(
+            [(c["type"], c.get("text"), c.get("styles")) for c in content],
+            [
+                ("link", None, None),
+                # The unresolved citation's prose joins the bold run.
+                ("text", " and gone and ", {"bold": True}),
+                ("link", None, None),
+            ],
+        )
+        self.assertEqual(content[0]["content"], [_text("WRD-7", {"bold": True})])
+        self.assertEqual(content[2]["content"], [_text("the site", {"bold": True})])
+
+    def test_emphasis_inside_a_link_label(self):
+        [para] = markdown_to_blocks("[**bold** label](https://x.com)")
+        self.assertEqual(
+            para["content"][0]["content"],
+            [_text("bold", {"bold": True}), _text(" label")],
+        )
+
+    def test_atoms_leave_unpaired_markers_and_placeholder_char_literal(self):
+        """An unclosed `**` stays literal, and a literal U+FFFC (the
+        atom placeholder) in the text is not mistaken for an atom."""
+        [para] = markdown_to_blocks("**open `x` here and ￼ [a](https://x.com)")
+        self.assertEqual(
+            [(c["type"], c.get("text"), c.get("styles")) for c in para["content"]],
+            [
+                ("text", "**open ", {}),
+                ("text", "x", {"code": True}),
+                ("text", " here and ￼ ", {}),
+                ("link", None, None),
+            ],
+        )
+
     def test_fenced_code_block_is_literal_with_canonical_language(self):
         blocks = markdown_to_blocks(
             "```py\n# not a heading\n- not a bullet\n```\n\n```\nplain\n```"
@@ -185,6 +262,20 @@ class TestMarkdownToBlocks(SimpleTestCase):
             [b["type"] for b in markdown_to_blocks(once)],
             [b["type"] for b in markdown_to_blocks(md)],
         )
+
+    def test_emphasis_around_atoms_survives_a_read_modify_write(self):
+        """An agent edits a body via get_task's content_markdown, so
+        emphasis on code and links must render back to markers the
+        parser pairs again — never to literal `**`."""
+        md = (
+            "- **`isAutoLinked` decision:** keep\n"
+            "- **see [docs](https://x.com) now** and *`a` b* and ~~`c`~~"
+        )
+        blocks = markdown_to_blocks(md)
+        once = blocks_to_markdown(blocks)
+        self.assertEqual(markdown_to_blocks(once), blocks)
+        texts = [c.get("text", "") for b in blocks for c in b["content"]]
+        self.assertFalse([t for t in texts if "*" in t or "~" in t], texts)
 
     def test_chunker_indexes_table_cells(self):
         blocks = markdown_to_blocks(
