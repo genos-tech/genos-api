@@ -2,6 +2,8 @@
 body converter used when saving an answer into a note.
 """
 
+import time
+
 from django.test import SimpleTestCase
 
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
@@ -62,6 +64,66 @@ class TestMarkdownToBlocks(SimpleTestCase):
         styles = [(c["text"], c["styles"]) for c in para["content"]]
         self.assertIn(("bold", {"bold": True}), styles)
         self.assertIn(("italic", {"italic": True}), styles)
+
+    def _runs(self, line):
+        [para] = markdown_to_blocks(line)
+        return [(c["text"], sorted(c["styles"])) for c in para["content"]]
+
+    def test_emphasis_nests(self):
+        """MIP-705: a regex alternation can't nest, so `*it*` inside bold
+        came back as literal asterisks."""
+        self.assertEqual(
+            self._runs("**bold *it* more**"),
+            [("bold ", ["bold"]), ("it", ["bold", "italic"]), (" more", ["bold"])],
+        )
+        self.assertEqual(self._runs("***x***"), [("x", ["bold", "italic"])])
+        self.assertEqual(self._runs("~~**x**~~"), [("x", ["bold", "strike"])])
+        self.assertEqual(self._runs("**a *b***"), [("a ", ["bold"]), ("b", ["bold", "italic"])])
+        self.assertEqual(
+            self._runs("*a ~~**x** y~~*"),
+            [("a ", ["italic"]), ("x", ["bold", "italic", "strike"]), (" y", ["italic", "strike"])],
+        )
+        # The `**` in ` ~~**c` only opens: closing on the `~` before it
+        # would steal the enclosing `*`.
+        self.assertEqual(
+            self._runs("***a** b ~~**c** d~~*"),
+            [
+                ("a", ["bold", "italic"]),
+                (" b ", ["italic"]),
+                ("c", ["bold", "italic", "strike"]),
+                (" d", ["italic", "strike"]),
+            ],
+        )
+
+    def test_emphasis_edge_cases_stay_put(self):
+        self.assertEqual(self._runs("snake_case_name"), [("snake_case_name", [])])
+        self.assertEqual(self._runs("**unclosed and *open"), [("**unclosed and *open", [])])
+        self.assertEqual(self._runs("a ** b"), [("a ** b", [])])
+        # The closer sits between punctuation and a letter, which plain
+        # CommonMark refuses — Japanese bodies are written this way.
+        self.assertEqual(self._runs("**注意:**本文"), [("注意:", ["bold"]), ("本文", [])])
+        # Rule of 3: the inner `**` can't pair with a single `*`.
+        self.assertEqual(self._runs("*a**b*"), [("a**b", ["italic"])])
+        # Pairs never cross: the `_` inside the italic can't reach out.
+        self.assertEqual(self._runs("**a _b* c_"), [("*", []), ("a _b", ["italic"]), (" c_", [])])
+
+    def test_a_line_of_markers_is_linear_not_recursive(self):
+        # (A line of nothing but `*` is a divider, hence the leading `x `.)
+        lines = (
+            "x " + "*" * 50_000,
+            "*a " * 20_000,
+            "**" * 20_000 + "x",
+            "x " + "_" * 50_000,
+            # Closers with no opener of their kind: each would rescan
+            # every `_` below it without CommonMark's openers_bottom —
+            # 0.03s with it, ~18s without.
+            "_a " * 20_000 + "a* " * 20_000,
+        )
+        started = time.monotonic()
+        for line in lines:
+            text = "".join(t for t, _ in self._runs(line))
+            self.assertTrue(text == line.strip(), line[:20])  # no 60k-char diff
+        self.assertLess(time.monotonic() - started, 3)
 
     def test_url_link_becomes_link_node_but_citation_degrades_to_prose(self):
         [para] = markdown_to_blocks("see [docs](https://x.com) and [that task](task:5)")
