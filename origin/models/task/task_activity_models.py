@@ -23,17 +23,16 @@ class TaskActivityActionType(models.TextChoices):
     ASSIGNEE = "assignee_changed", "Assignee changed"
     REPORTER = "reporter_changed", "Reporter changed"
     DUE_DATE = "due_date_changed", "Due date changed"
+    START_DATE = "start_date_changed", "Start date changed"
     DESCRIPTION = "description_edited", "Description edited"
-    # ⚠️ Also never emitted: "tags" is absent from both
-    # `_TRACKED_TASK_FIELDS` and `_FIELD_TO_ACTION` in `task_signals.py`,
-    # so tag edits leave no audit row at all. Read today only by two
-    # defensive render arms in the frontend feed. A "tag churn" metric
-    # built on this would silently report zero, exactly as the close
-    # metrics did — wire up an emitter first.
+    # Emitted since MIP-700; before that nothing wrote it, so rows only
+    # exist from that release on — a "tag churn" metric reads zero for
+    # anything earlier.
     TAGS = "tags_changed", "Tags changed"
     PARENT = "parent_changed", "Parent changed"
     MILESTONE_LINK = "milestone_changed", "Milestone changed"
     SPRINT_LINK = "sprint_changed", "Sprint changed"
+    PROJECT = "project_changed", "Project changed"
     # ⚠️ CLOSED is NOT emitted by anything. A close arrives through the
     # generic field-diff loop in `task_signals.py` as
     # STATUS + new_value='Closed'; no code path writes 'closed' (and a

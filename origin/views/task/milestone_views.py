@@ -22,6 +22,7 @@ from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_collaborators import sync_task_collaborators
 from origin.services.task_project_move import milestone_subtree_task_ids, relocate_tasks
 from origin.services.thread_link import find_thread_link_conflict
+from origin.signals.task_signals import update_tasks_recorded
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import resolve_group_members
 from origin.views.utils.request_validators import validate_request_data
@@ -482,9 +483,13 @@ class MilestoneView(AuthenticatedAPIView):
             # this catches the rest. Scoped to the sprint-changed path
             # so a no-op patch (e.g. status flip) doesn't churn rows.
             if sprint_changed:
-                TaskMaster.objects.filter(milestone=milestone).exclude(
-                    sprint_id=milestone.sprint_id
-                ).update(sprint_id=milestone.sprint_id)
+                update_tasks_recorded(
+                    TaskMaster.objects.filter(milestone=milestone).exclude(
+                        sprint_id=milestone.sprint_id
+                    ),
+                    cascade="milestone_sprint",
+                    sprint_id=milestone.sprint_id,
+                )
 
             if "assignee_ids" in request.data:
                 self._sync_assignees(milestone, request.data.get("assignee_ids") or [])
@@ -577,9 +582,17 @@ class MilestoneView(AuthenticatedAPIView):
         # Detach child tasks so they remain visible in the project view
         # rather than disappearing alongside the milestone. Children
         # tracked via parent_task_id are also unparented.
-        TaskMaster.objects.filter(milestone=milestone).update(milestone=None)
+        update_tasks_recorded(
+            TaskMaster.objects.filter(milestone=milestone),
+            cascade="milestone_delete",
+            milestone=None,
+        )
         if milestone.task_id is not None:
-            TaskMaster.objects.filter(parent_task_id=milestone.task_id).update(parent_task_id=None)
+            update_tasks_recorded(
+                TaskMaster.objects.filter(parent_task_id=milestone.task_id),
+                cascade="milestone_delete",
+                parent_task_id=None,
+            )
         # Backing task got soft-deleted + every child detached → next
         # project-tasks read needs a fresh DB pull.
         invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)

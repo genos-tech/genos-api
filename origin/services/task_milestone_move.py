@@ -122,10 +122,14 @@ def cascade_tree_position_to_subtasks(task, depth_limit=10):
     descendants moved, and keep showing them under the old milestone
     until something forces a full reload.
     """
+    from origin.signals.task_signals import update_tasks_recorded
+
     collected = collect_descendant_task_ids(task.task_id, depth_limit=depth_limit)
     if not collected:
         return
-    TaskMaster.objects.filter(task_id__in=collected).update(
+    update_tasks_recorded(
+        TaskMaster.objects.filter(task_id__in=collected),
+        cascade="milestone_move",
         milestone_id=task.milestone_id,
         sprint_id=task.sprint_id,
         root_task_id=task.root_task_id,
