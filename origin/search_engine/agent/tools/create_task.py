@@ -36,6 +36,8 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
+from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
+from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
 from origin.search_engine.quota import (
     TASK_CREATE_KEY,
     check_remaining_monthly,
@@ -128,7 +130,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "reporter_id": ctx.user_id,
         "title": title,
         "status": _DEFAULT_STATUS,
-        "content": task_body_blocks(content_text),
+        "content": task_body_blocks(
+            content_text,
+            entity_chip_resolver=chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id),
+        ),
     }
     if priority:
         create_kwargs["priority"] = priority
@@ -162,6 +167,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"Failed to create task: {e}")
 
     increment_usage(ctx.user_id, TASK_CREATE_KEY)
+    # An `@` chip in the body pings the person, as a typed one does.
+    notify_task_body_mentions(task, actor_id=ctx.user_id)
 
     summary = f"Created task {task.display_id}: {task.title}"
     if milestone is not None:
@@ -209,7 +216,7 @@ CREATE_TASK = Tool(
                 "description": (
                     "Optional task body / description as markdown: headings, "
                     "lists, check lists, code fences, tables and inline "
-                    "formatting render natively."
+                    "formatting render natively." + CHIP_SYNTAX_HINT
                 ),
             },
             "milestone_id": {

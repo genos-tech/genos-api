@@ -23,6 +23,7 @@ from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
+from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
 from origin.services.task_comment_fanout import fan_out_task_comment
 
@@ -60,6 +61,9 @@ def _wrap_blocknote(text: str, ctx: ToolContext) -> list[dict[str, Any]]:
     blocks = markdown_to_blocks(
         text,
         entity_link_resolver=lambda token: resolve_note_entity_link(token, team_id=ctx.team_id),
+        # A `mention` chip here also notifies: the comment fan-out reads
+        # mention nodes off the saved body (MIP-708).
+        entity_chip_resolver=chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id),
     )
     return blocks + [_paragraph("")]
 
@@ -146,8 +150,7 @@ ADD_COMMENT = Tool(
                 "description": (
                     "Comment body in markdown (headings, lists, **bold**, "
                     "*italic*, `code`, fenced code blocks, tables, links). "
-                    "Keep it concise; @mentions are not supported by this "
-                    "tool — users add those through the UI."
+                    "Keep it concise." + CHIP_SYNTAX_HINT
                 ),
             },
         },

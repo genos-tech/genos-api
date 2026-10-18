@@ -33,6 +33,8 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import owns_personal_folder, task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
+from origin.search_engine.agent.tools.body_mentions import notify_note_mentions
+from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
 from origin.search_engine.quota import (
     NOTE_CREATE_KEY,
@@ -71,10 +73,12 @@ def _wrap_blocknote(text: str, ctx: ToolContext) -> list[dict[str, Any]]:
     (headings / lists / bold / italic) so the saved note keeps its
     formatting instead of being one flat paragraph. Citation tokens
     (`[prose](task:12)`, bare `[task:12]`) become working in-app links,
-    resolved team-scoped — see `blocknote_md` / `entity_links`."""
+    resolved team-scoped — see `blocknote_md` / `entity_links`. `@` and
+    `#` tokens become the editor's chips (`entity_chips`, MIP-708)."""
     return markdown_to_blocks(
         text,
         entity_link_resolver=lambda token: resolve_note_entity_link(token, team_id=ctx.team_id),
+        entity_chip_resolver=chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id),
     )
 
 
@@ -163,6 +167,7 @@ def _create_personal(*, title: str, body, folder_id, ctx: ToolContext) -> dict[s
             _snapshot_v1(note=note, note_type_code=NOTE_TYPE_PERSONAL, ctx=ctx)
     except Exception as e:  # noqa: BLE001
         raise ToolError(f"Failed to create personal note: {e}")
+    notify_note_mentions(note, note_type=NOTE_TYPE_PERSONAL, actor_id=ctx.user_id)
     return {
         "note_id": note.note_id,
         "note_type": "personal",
@@ -244,6 +249,7 @@ def _create_task_note(
             _snapshot_v1(note=note, note_type_code=NOTE_TYPE_TASK, ctx=ctx)
     except Exception as e:  # noqa: BLE001
         raise ToolError(f"Failed to create task note: {e}")
+    notify_note_mentions(note, note_type=NOTE_TYPE_TASK, actor_id=ctx.user_id)
 
     return {
         "note_id": note.note_id,
@@ -303,7 +309,7 @@ CREATE_NOTE = Tool(
                     "verbatim — every section, in full. Do NOT summarize, "
                     "abbreviate, or drop later sections; the note should "
                     "contain the whole thing, not a recap. Omit only for a "
-                    "deliberately title-only note."
+                    "deliberately title-only note." + CHIP_SYNTAX_HINT
                 ),
             },
             "project_id": {

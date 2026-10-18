@@ -20,6 +20,13 @@ create_note / update_note pass one bound to the caller's team); without
 a resolver, or on a miss, the target degrades to its visible prose
 (never a dead link).
 
+`@` mentions and `#` references (MIP-708) become the editor's own inline
+chips (`mention`, `hashTask`, …) when the caller supplies an
+`entity_chip_resolver` (`entity_chips.chip_resolver`): a bare `[task:12]`
+or `[user:<uuid>]`, a link labelled `@…`/`#…` (`[@Ken](user:<uuid>)`), or
+a bare `#PRJ-123`. `blocknote_render` writes chips back in the link form,
+so a body read and re-saved keeps them.
+
 The output is consumed by two places, both of which this shape satisfies:
   * the BlockNote editor (default block types with the standard props;
     the task/note schemas keep every default block), and
@@ -39,6 +46,10 @@ from typing import Any, Callable
 # Maps a citation token ("task:12") to (href, fallback_label), or None
 # when it can't be resolved (unknown id, foreign team, unsupported type).
 EntityLinkResolver = Callable[[str], "tuple[str, str] | None"]
+# Maps a chip token ("task:12", "user:<uuid>", "display:MIP-7") to the
+# inline `mention` / `hash*` node the editor renders as a clickable chip,
+# or None to fall back to the link resolver / prose. See `entity_chips`.
+EntityChipResolver = Callable[[str], "dict[str, Any] | None"]
 
 _BASE_PROPS = {
     "textColor": "default",
@@ -143,6 +154,17 @@ def _tokenize_formatting(text: str) -> list[dict[str, Any]]:
 # CITATION_PATTERN.
 _BARE_TOKEN_RE = re.compile(r"\[((?:chat|task|note|project|todo|milestone):[^\]\s]+)\](?!\()")
 
+# Chip forms (MIP-708), all explicit, because a name is never guessed:
+#   - a bare `[task:12]` / `[user:<uuid>]` / `[group:4]` token;
+#   - a link whose label starts with `@` or `#`: `[@Ken](user:<uuid>)`,
+#     `[#MIP-708 · Chips](task:1577)`. The label is the model's; the chip
+#     shows the entity's own name, from the DB. A citation link with any
+#     other label (`[the plan](task:12)`) stays a link, as before;
+#   - a bare `#PRJ-123` display id, which is what people type. Not inside
+#     a word (`a#B-1`) and not a heading (headings are cut off by then).
+_BARE_CHIP_RE = re.compile(r"\[((?:user|group|chat|task|note|project|milestone):[^\]\s]+)\](?!\()")
+_DISPLAY_ID_RE = re.compile(r"(?<![\w#/&])#([A-Za-z][A-Za-z0-9_]*-\d+)\b")
+
 # Stands in for an atom (code span, link) in the line handed to the
 # emphasis pass, so `**`x` y**` and `**see [docs](u)**` still pair their
 # markers across it. Atoms are found again by offset, never by this
@@ -164,10 +186,16 @@ def _with_styles(node: dict[str, Any], styles: dict[str, bool]) -> dict[str, Any
         return node
     if node["type"] == "link":
         return {**node, "content": [_with_styles(c, styles) for c in node["content"]]}
+    if node["type"] != "text":
+        return node  # a chip (`content: "none"`) carries no styles
     return {**node, "styles": {**node["styles"], **styles}}
 
 
-def _tokenize_inline(text: str, resolver: EntityLinkResolver | None = None) -> list[dict[str, Any]]:
+def _tokenize_inline(
+    text: str,
+    resolver: EntityLinkResolver | None = None,
+    chips: EntityChipResolver | None = None,
+) -> list[dict[str, Any]]:
     """Inline content for one line. Code spans are cut out first, since
     their text is literal, then links and citation tokens; each becomes
     an atom, and emphasis is matched over the whole line with the atoms
@@ -177,7 +205,7 @@ def _tokenize_inline(text: str, resolver: EntityLinkResolver | None = None) -> l
     parts: _Parts = []
     cursor = 0
     for m in _CODE_SPAN_RE.finditer(text):
-        _collect_links(text[cursor : m.start()], resolver, parts)
+        _collect_links(text[cursor : m.start()], resolver, chips, parts)
         # CommonMark strips one space each side so `` `` `x` `` `` can
         # hold a backtick; ordinary spans are unaffected.
         code = m.group(2)
@@ -185,7 +213,7 @@ def _tokenize_inline(text: str, resolver: EntityLinkResolver | None = None) -> l
             code = code[1:-1]
         parts.append([_text_node(code, {"code": True})])
         cursor = m.end()
-    _collect_links(text[cursor:], resolver, parts)
+    _collect_links(text[cursor:], resolver, chips, parts)
 
     line: list[str] = []
     atoms: dict[int, list[dict[str, Any]]] = {}
@@ -214,18 +242,28 @@ def _tokenize_inline(text: str, resolver: EntityLinkResolver | None = None) -> l
     return out
 
 
-def _collect_links(text: str, resolver: EntityLinkResolver | None, parts: _Parts) -> None:
+def _collect_links(
+    text: str,
+    resolver: EntityLinkResolver | None,
+    chips: EntityChipResolver | None,
+    parts: _Parts,
+) -> None:
     """A code-free run: markdown links become BlockNote link
     nodes — real URLs always, and `[prose](task:5)`-style citation
     targets when an entity-link resolver is supplied (create_note /
     update_note pass one bound to the caller's team, so saved notes
     carry working in-app links). An unresolvable citation target
-    degrades to its prose so the note never carries a dead link."""
+    degrades to its prose so the note never carries a dead link.
+    A target labelled `@…` or `#…` becomes a chip when the chip
+    resolver knows it."""
     cursor = 0
     for m in _LINK_RE.finditer(text):
-        _collect_citation_tokens(text[cursor : m.start()], resolver, parts)
+        _collect_citation_tokens(text[cursor : m.start()], resolver, chips, parts)
         label, href = m.group(1), m.group(2)
-        if href.startswith(("http://", "https://", "mailto:")):
+        chip = chips(href) if chips and label.lstrip().startswith(("@", "#")) else None
+        if chip:
+            parts.append([chip])
+        elif href.startswith(("http://", "https://", "mailto:")):
             parts.append([_link_node(href, _tokenize_formatting(label))])
         else:
             resolved = resolver(href) if resolver else None
@@ -236,25 +274,46 @@ def _collect_links(text: str, resolver: EntityLinkResolver | None, parts: _Parts
                 # Non-URL target we can't resolve — keep the prose.
                 parts.append(label)
         cursor = m.end()
-    _collect_citation_tokens(text[cursor:], resolver, parts)
+    _collect_citation_tokens(text[cursor:], resolver, chips, parts)
 
 
-def _collect_citation_tokens(text: str, resolver: EntityLinkResolver | None, parts: _Parts) -> None:
-    """A link-free run: resolve bare `[type:id]` citation tokens into
-    links when a resolver is supplied (label = the entity's
-    display_id/name/title), otherwise/on a miss keep the literal text."""
-    if resolver is None:
+def _collect_citation_tokens(
+    text: str,
+    resolver: EntityLinkResolver | None,
+    chips: EntityChipResolver | None,
+    parts: _Parts,
+) -> None:
+    """A link-free run: bare `[type:id]` tokens and `#PRJ-123` display
+    ids become chips when the chip resolver knows them; otherwise a bare
+    token becomes a link when a link resolver is supplied (label = the
+    entity's display_id/name/title). On a miss the literal text stays."""
+    if resolver is None and chips is None:
         parts.append(text)
         return
-    cursor = 0
-    for m in _BARE_TOKEN_RE.finditer(text):
+    found: list[tuple[int, int, list[dict[str, Any]]]] = []
+    for m in _BARE_CHIP_RE.finditer(text) if chips else ():
+        chip = chips(m.group(1))
+        if chip:
+            found.append((m.start(), m.end(), [chip]))
+    for m in _DISPLAY_ID_RE.finditer(text) if chips else ():
+        chip = chips(f"display:{m.group(1)}")
+        if chip:
+            found.append((m.start(), m.end(), [chip]))
+    taken = [(s, e) for s, e, _ in found]
+    for m in _BARE_TOKEN_RE.finditer(text) if resolver else ():
+        if any(s <= m.start() < e for s, e in taken):
+            continue
         resolved = resolver(m.group(1))
-        if not resolved:
-            continue  # leave the literal token inside the surrounding run
-        parts.append(text[cursor : m.start()])
-        # The entity's own name — literal, never emphasis-parsed.
-        parts.append([_link_node(resolved[0], [_text_node(resolved[1])])])
-        cursor = m.end()
+        if resolved:
+            # The entity's own name — literal, never emphasis-parsed.
+            found.append((m.start(), m.end(), [_link_node(resolved[0], [_text_node(resolved[1])])]))
+    cursor = 0
+    for start, end, nodes in sorted(found, key=lambda f: f[0]):
+        if start < cursor:
+            continue  # a `#X-1` inside a token already taken
+        parts.append(text[cursor:start])
+        parts.append(nodes)
+        cursor = end
     parts.append(text[cursor:])
 
 
@@ -264,6 +323,7 @@ def _block(
     *,
     level: int | None = None,
     resolver: EntityLinkResolver | None = None,
+    chips: EntityChipResolver | None = None,
     extra_props: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     props = dict(_BASE_PROPS)
@@ -274,7 +334,7 @@ def _block(
     return {
         "type": block_type,
         "props": props,
-        "content": _tokenize_inline(text, resolver),
+        "content": _tokenize_inline(text, resolver, chips),
         "children": [],
     }
 
@@ -316,7 +376,11 @@ def _is_table_start(lines: list[str], i: int) -> bool:
     return len(_split_row(header)) == len(_split_row(sep))
 
 
-def _table_block(rows: list[list[str]], resolver: EntityLinkResolver | None) -> dict[str, Any]:
+def _table_block(
+    rows: list[list[str]],
+    resolver: EntityLinkResolver | None,
+    chips: EntityChipResolver | None,
+) -> dict[str, Any]:
     """BlockNote 0.49 table: row 0 is the header (`headerRows: 1`), and
     every row is padded/truncated to the header's width, which is how
     BlockNote's own parser treats a ragged GFM table."""
@@ -335,7 +399,7 @@ def _table_block(rows: list[list[str]], resolver: EntityLinkResolver | None) -> 
                         {
                             "type": "tableCell",
                             "props": dict(cell_props),
-                            "content": _tokenize_inline(cell, resolver),
+                            "content": _tokenize_inline(cell, resolver, chips),
                         }
                         for cell in (row + [""] * width)[:width]
                     ]
@@ -389,7 +453,10 @@ def _starts_block(stripped: str, lines: list[str], i: int) -> bool:
 
 
 def markdown_to_blocks(
-    markdown: str, *, entity_link_resolver: EntityLinkResolver | None = None
+    markdown: str,
+    *,
+    entity_link_resolver: EntityLinkResolver | None = None,
+    entity_chip_resolver: EntityChipResolver | None = None,
 ) -> list[dict[str, Any]]:
     """Parse the agent's markdown into BlockNote `PartialBlock`-shaped dicts.
 
@@ -407,6 +474,7 @@ def markdown_to_blocks(
         return []
 
     resolver = entity_link_resolver
+    chips = entity_chip_resolver
     lines = text.split("\n")
     blocks: list[dict[str, Any]] = []
     # Open list items as (marker_indent, block): a deeper-indented item
@@ -450,7 +518,9 @@ def markdown_to_blocks(
         if heading:
             level = min(len(heading.group(1)), 3)
             list_stack.clear()
-            blocks.append(_block("heading", heading.group(2), level=level, resolver=resolver))
+            blocks.append(
+                _block("heading", heading.group(2), level=level, resolver=resolver, chips=chips)
+            )
             i += 1
             continue
 
@@ -468,7 +538,7 @@ def markdown_to_blocks(
                 rows.append(_split_row(lines[i]))
                 i += 1
             list_stack.clear()
-            blocks.append(_table_block(rows, resolver))
+            blocks.append(_table_block(rows, resolver, chips))
             continue
 
         quote = _QUOTE_RE.match(stripped)
@@ -484,14 +554,16 @@ def markdown_to_blocks(
                 buf.append(more.group(1).strip())
                 i += 1
             list_stack.clear()
-            blocks.append(_block("quote", " ".join(p for p in buf if p), resolver=resolver))
+            blocks.append(
+                _block("quote", " ".join(p for p in buf if p), resolver=resolver, chips=chips)
+            )
             continue
 
         item = _list_item(stripped)
         if item:
             block_type, item_text, extra = item
             indent = _indent_of(raw)
-            block = _block(block_type, item_text, resolver=resolver, extra_props=extra)
+            block = _block(block_type, item_text, resolver=resolver, chips=chips, extra_props=extra)
             while list_stack and indent < list_stack[-1][0] + _MIN_NEST_INDENT:
                 list_stack.pop()
             if list_stack:
@@ -512,12 +584,14 @@ def markdown_to_blocks(
                 break
             buf.append(nxt.rstrip("\\"))
             i += 1
-        blocks.append(_block("paragraph", " ".join(buf), resolver=resolver))
+        blocks.append(_block("paragraph", " ".join(buf), resolver=resolver, chips=chips))
 
     return blocks
 
 
-def task_body_blocks(markdown: str) -> list[dict[str, Any]]:
+def task_body_blocks(
+    markdown: str, *, entity_chip_resolver: EntityChipResolver | None = None
+) -> list[dict[str, Any]]:
     """A task body written by a tool, shaped like one the editor saved.
 
     Every tool that writes `TaskMaster.content` goes through this, so the
@@ -530,8 +604,12 @@ def task_body_blocks(markdown: str) -> list[dict[str, Any]]:
     always has: a stable `id` on every top-level block, and the trailing
     blank paragraph the editor keeps as its last line. Empty input stays
     `[]` (a title-only task).
+
+    `entity_chip_resolver` turns `@`/`#` tokens into chips (MIP-708). Task
+    bodies get no link resolver: a token the chip resolver misses stays
+    literal, so a body only ever links to what its writer could read.
     """
-    blocks = markdown_to_blocks((markdown or "").strip())
+    blocks = markdown_to_blocks((markdown or "").strip(), entity_chip_resolver=entity_chip_resolver)
     if not blocks:
         return []
     for block in blocks:

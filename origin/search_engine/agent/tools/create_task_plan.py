@@ -45,6 +45,8 @@ from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
+from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
+from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
 from origin.search_engine.agent.tools.task_enums import (
     EFFORT_ENUM,
     PRIORITY_ENUM,
@@ -317,6 +319,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "plan, or split the plan into a smaller one."
         )
 
+    # One resolver for the whole plan, so a task named in every body is
+    # read once (MIP-708).
+    chips = chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id)
+
     # ---- execute: all-or-nothing ----
     try:
         with transaction.atomic():
@@ -327,7 +333,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     reporter_id=ctx.user_id,
                     title=milestone_spec["title"].strip(),
                     description_blocks=task_body_blocks(
-                        milestone_spec.get("description_markdown") or ""
+                        milestone_spec.get("description_markdown") or "",
+                        entity_chip_resolver=chips,
                     ),
                     priority=milestone_spec.get("priority") or None,
                     effort_level=milestone_spec.get("effort_level") or None,
@@ -370,7 +377,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                         reporter_id=ctx.user_id,
                         assignee_id=str(spec["assignee_id"]) if spec.get("assignee_id") else None,
                         title=spec["title"].strip(),
-                        content=task_body_blocks(spec.get("content_markdown") or ""),
+                        content=task_body_blocks(
+                            spec.get("content_markdown") or "", entity_chip_resolver=chips
+                        ),
                         status="Open",
                         priority=spec.get("priority") or None,
                         effort_level=spec.get("effort_level") or None,
@@ -414,6 +423,17 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # The backing task (and every plan task) is a new row in the project
     # task table — drop the cached listing after commit.
     invalidate_project_tasks_cache(ctx.team_id, project_id)
+
+    # `@` chips in the bodies ping their people (MIP-708). A new
+    # milestone's description lives on its backing task.
+    if milestone_spec is not None and milestone is not None and milestone.task_id:
+        backing = (
+            TaskMaster.objects.select_related("project").filter(task_id=milestone.task_id).first()
+        )
+        if backing is not None:
+            notify_task_body_mentions(backing, actor_id=ctx.user_id)
+    for task in created:
+        notify_task_body_mentions(task, actor_id=ctx.user_id)
 
     milestone_out = None
     if milestone is not None:
@@ -481,7 +501,7 @@ _TASK_ITEM_SCHEMA: dict[str, Any] = {
                 "'### ✅ Acceptance criteria' (bulleted). For bug-type tasks "
                 "use '### 🐞 Summary', '### 🔁 Steps to reproduce', "
                 "'### 🎯 Expected behavior', '### 💥 Actual behavior'. "
-                "Keep it under ~150 words."
+                "Keep it under ~150 words." + CHIP_SYNTAX_HINT
             ),
         },
         "priority": {
