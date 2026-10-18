@@ -11,6 +11,10 @@ unauthenticated) and the dependency-derived Open↔Blocked flip.
 A description edit is recorded without a diff (the body lives on the task
 itself), so it reads "description edited" with no old/new values.
 
+A custom-field change is one entry per field: `field` is the field's name
+as it was when the change was made, and the values are resolved — option
+labels for a tag field, the username for a member field.
+
 ACL contract: same gate as `fetch_task` — tenant guard on
 `ctx.team_id`, then `task_acl_user_ids` (project member, assignee or
 reporter).
@@ -62,9 +66,25 @@ def _via(row: TaskActivity) -> dict[str, Any]:
     return {"kind": "unknown"}
 
 
+def _custom_field_value(row: TaskActivity, side: str) -> Any:
+    """The resolved value the signal snapshotted. Every custom value is
+    user-authored — free text, a date typed in, option labels, a
+    username — so each string is wrapped."""
+    meta = row.metadata or {}
+    raw = row.old_value if side == "old" else row.new_value
+    label = meta.get(f"{side}Label", raw)
+    if label is None:
+        return None
+    if isinstance(label, list):
+        return [wrap_workspace_content(str(item)) for item in label]
+    return wrap_workspace_content(str(label))
+
+
 def _value(row: TaskActivity, side: str, usernames: dict[str, str]) -> Any:
     meta = row.metadata or {}
     raw = row.old_value if side == "old" else row.new_value
+    if row.action_type == TaskActivityActionType.CUSTOM_FIELD:
+        return _custom_field_value(row, side)
     if row.field_name in _LABELLED_FIELDS and raw is not None:
         if display_id := meta.get(f"{side}DisplayId"):
             return display_id
@@ -90,12 +110,20 @@ def _value(row: TaskActivity, side: str, usernames: dict[str, str]) -> Any:
     return raw
 
 
+def _field(row: TaskActivity) -> Any:
+    if row.action_type == TaskActivityActionType.CUSTOM_FIELD:
+        # A project's own field name — typed by a user, so wrapped.
+        name = (row.metadata or {}).get("fieldName")
+        return wrap_workspace_content(str(name)) if name else row.field_name
+    return row.field_name
+
+
 def _entry(row: TaskActivity, usernames: dict[str, str]) -> dict[str, Any]:
     actor = row.actor
     entry: dict[str, Any] = {
         "at": row.ts_created_at.isoformat() if row.ts_created_at else None,
         "action": row.action_type,
-        "field": row.field_name,
+        "field": _field(row),
         "old_value": _value(row, "old", usernames),
         "new_value": _value(row, "new", usernames),
         "actor": (
@@ -203,7 +231,8 @@ GET_TASK_HISTORY = Tool(
         "to another row — a milestone or project move, a milestone delete or "
         "sprint change — not edited on this task. Use it for 'who changed this', "
         "'when did this close', or 'why is this Blocked'. A description edit "
-        "is listed without its old/new text."
+        "is listed without its old/new text. A custom-field change "
+        "(`custom_field_changed`) names the field in `field`, one entry per field."
     ),
     parameters_schema={
         "type": "OBJECT",

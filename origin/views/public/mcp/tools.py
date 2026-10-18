@@ -263,7 +263,8 @@ CATALOG: tuple[McpTool, ...] = (
             "along by a change to another row (a milestone or project move, a "
             "milestone delete or sprint change). Use it to check "
             "a write stuck, or to find out who changed a task you are "
-            "working on. Description edits are listed without their text."
+            "working on. Description edits are listed without their text. "
+            "A custom-field change names the field in `field`, one entry per field."
         ),
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
