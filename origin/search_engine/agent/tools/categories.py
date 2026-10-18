@@ -81,6 +81,7 @@ TOOL_CATEGORY: dict[str, str] = {
     "list_projects": "projects",
     "get_project_summary": "projects",
     "get_project_activity_ranking": "projects",
+    "list_project_tags": "projects",
     # --- milestones ---
     "list_milestones": "milestones",
     "get_milestone_summary": "milestones",

@@ -181,6 +181,8 @@ here fits):
     list_projects first). NOT get_team_members — that's the whole team.
   - list_channel_members — "who is in this group chat / project chat?"
     (ONE channel's roster, by channel_id UUID).
+  - list_project_tags — ONE project's tag catalogue; read it before
+    setting `tags` on a task write, and only use tags that fit.
 
 WRITE tools (require user approval before they run — model proposes
 args, user sees them, user confirms):

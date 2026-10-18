@@ -24,6 +24,7 @@ from origin.search_engine.agent.tools.base import (
     wrap_workspace_content,
 )
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
+from origin.search_engine.agent.tools.task_tags import tag_names
 from origin.search_engine.text_extraction import extract_text
 from origin.services.task_delivery import delivery_as_dict
 
@@ -107,6 +108,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "project_id": str(task.project_id) if task.project_id else None,
         "assignee_id": str(task.assignee_id) if task.assignee_id else None,
         "reporter_id": str(task.reporter_id) if task.reporter_id else None,
+        "tags": tag_names(task.tags),
         "content_text": wrap_workspace_content(content_text),
         "content_markdown": wrap_workspace_content(content_markdown),
         "comments": comments,
@@ -121,7 +123,7 @@ FETCH_TASK = Tool(
     name="fetch_task",
     description=(
         "Load the full content of one task: title, description text, "
-        "status, priority, assignee/reporter, the most recent "
+        "status, priority, assignee/reporter, tag names, the most recent "
         "comments, and `deliveries` — the GitHub branches and PRs "
         "linked to it, with each PR's state. Use after "
         "`search_knowledge_base` if the snippet isn't enough and you "

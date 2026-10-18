@@ -95,6 +95,7 @@ from origin.search_engine.agent.tools.list_pr_commits import LIST_PR_COMMITS
 from origin.search_engine.agent.tools.list_pr_files import LIST_PR_FILES
 from origin.search_engine.agent.tools.list_pr_reviews import LIST_PR_REVIEWS
 from origin.search_engine.agent.tools.list_project_members import LIST_PROJECT_MEMBERS
+from origin.search_engine.agent.tools.list_project_tags import LIST_PROJECT_TAGS
 from origin.search_engine.agent.tools.list_projects import LIST_PROJECTS
 from origin.search_engine.agent.tools.list_sprints import LIST_SPRINTS
 from origin.search_engine.agent.tools.list_task_dependencies import LIST_TASK_DEPENDENCIES
@@ -134,6 +135,8 @@ for _t in (
     # --- Read tools — membership rosters (A1-ext) ---
     LIST_PROJECT_MEMBERS,
     LIST_CHANNEL_MEMBERS,
+    # --- Read tools (MIP-707) — a project's tag catalogue ---
+    LIST_PROJECT_TAGS,
     # --- Write tools (Phase 11) ---
     CREATE_TASK,
     UPDATE_TASK,

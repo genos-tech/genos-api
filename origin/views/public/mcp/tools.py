@@ -163,7 +163,7 @@ CATALOG: tuple[McpTool, ...] = (
         registry_name="fetch_task",
         description=(
             "Read one task in full: title, status, priority, assignee, dates, "
-            "its description, and its comments. Prefer `content_markdown` for "
+            "tags, its description, and its comments. Prefer `content_markdown` for "
             "the description when it is present — it keeps headings, checklists "
             "and code fences — and fall back to `content_text`, the same body "
             "flattened. This is the first call when the user names a task to "
@@ -191,7 +191,8 @@ CATALOG: tuple[McpTool, ...] = (
         description=(
             "List tasks with filters — by project, milestone, status, "
             "priority, assignee, or overdue. Use this to survey a milestone "
-            "before starting, or to find a task whose id you don't have."
+            "before starting, or to find a task whose id you don't have. Each "
+            "row carries its tag names."
         ),
     ),
     McpTool(
@@ -326,6 +327,17 @@ CATALOG: tuple[McpTool, ...] = (
             "The members of ONE project, with their user ids — not the whole "
             "team. Use it before assigning work inside a project, since only "
             "a member of it can be given a task there."
+        ),
+    ),
+    McpTool(
+        name="list_project_tags",
+        registry_name="list_project_tags",
+        description=(
+            "The tags defined on ONE project — the only tags its tasks can "
+            "carry. Read it before setting `tags` on `create_task`, "
+            "`create_task_plan` or `update_task`, and pick only tags that "
+            "genuinely describe the task; if none fits, leave it untagged. "
+            "Tags can't be created through this connection."
         ),
     ),
     McpTool(
@@ -466,8 +478,9 @@ CATALOG: tuple[McpTool, ...] = (
             "whole description, so read the task first and send the full new "
             "body rather than a fragment. `milestone_id` (from "
             "`list_milestones`, same project) files the task and its sub-tasks "
-            "under that milestone; '' takes it out. Requires a write-scoped "
-            "API key."
+            "under that milestone; '' takes it out. `tags` replaces the task's "
+            "tags with names from `list_project_tags` ([] clears). Requires a "
+            "write-scoped API key."
         ),
         write=True,
         task_ref_args=("task_id",),
@@ -515,7 +528,9 @@ CATALOG: tuple[McpTool, ...] = (
             "an existing milestone in the same project. `assignee_id` "
             "assigns it in the same call, on the same terms as `assign_task` "
             "— `get_current_user` for yourself; omit it to leave the task "
-            "unassigned. Requires a write-scoped API key."
+            "unassigned. `tags` takes names from `list_project_tags` — only "
+            "tags that fit the task; leave it out if none does. Requires a "
+            "write-scoped API key."
         ),
         write=True,
     ),
