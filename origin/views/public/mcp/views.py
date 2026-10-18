@@ -149,9 +149,13 @@ class McpView(PublicApiView):
 
         # Everything past here needs to know who is asking and about what.
         ctx, scope = self._context(request)
+        allow_destructive = self._allows_destructive(request)
 
         if method == "tools/list":
-            listed = [tools.describe(t) for t in tools.visible_tools(scope)]
+            listed = [
+                tools.describe(t)
+                for t in tools.visible_tools(scope, allow_destructive=allow_destructive)
+            ]
             # The one cacheable result we serve, so the one that carries
             # cache hints. See `protocol.CACHE_HINTS_NO_STORE` for why the
             # answer is "don't store this".
@@ -165,7 +169,7 @@ class McpView(PublicApiView):
         if method == "tools/call":
             return self._ok(
                 request_id,
-                self._call_tool(params, ctx, scope),
+                self._call_tool(params, ctx, scope, allow_destructive),
                 modern=modern,
             )
 
@@ -248,6 +252,15 @@ class McpView(PublicApiView):
         return ToolContext(team_id=team_id, user_id=user_id), scope
 
     @staticmethod
+    def _allows_destructive(request) -> bool:
+        """The key's owner opted it into destructive tools (MIP-723).
+
+        Read off the key, never inferred from scope: a write key minted
+        before the opt-in existed edits tasks but deletes nothing.
+        """
+        return getattr(request.auth, "allow_destructive", False) is True
+
+    @staticmethod
     def _named_team_id(request) -> str | None:
         """The team the caller *asked for*, whether or not it resolved —
         the key's own team, else `?team_id=`. Lets a refusal tell "you
@@ -284,7 +297,9 @@ class McpView(PublicApiView):
             http_status=403,
         )
 
-    def _call_tool(self, params: dict[str, Any], ctx: ToolContext, scope: str) -> dict[str, Any]:
+    def _call_tool(
+        self, params: dict[str, Any], ctx: ToolContext, scope: str, allow_destructive: bool
+    ) -> dict[str, Any]:
         name = params.get("name")
         arguments = params.get("arguments") or {}
         if not isinstance(arguments, dict):
@@ -293,7 +308,9 @@ class McpView(PublicApiView):
             )
 
         def unknown(tool_name: str) -> Exception:
-            available = ", ".join(t.name for t in tools.visible_tools(scope))
+            available = ", ".join(
+                t.name for t in tools.visible_tools(scope, allow_destructive=allow_destructive)
+            )
             return JsonRpcError(
                 protocol.INVALID_PARAMS,
                 f"Unknown tool: {tool_name}. Available: {available}.",
@@ -310,7 +327,14 @@ class McpView(PublicApiView):
         # with no author.
         with metered_request(surface="mcp", user_id=ctx.user_id, team_id=ctx.team_id):
             try:
-                return tools.call(name, arguments, ctx, scope, on_unknown_tool=unknown)
+                return tools.call(
+                    name,
+                    arguments,
+                    ctx,
+                    scope,
+                    allow_destructive=allow_destructive,
+                    on_unknown_tool=unknown,
+                )
             except JsonRpcError:
                 raise
             except Exception:  # noqa: BLE001 — an unexpected bug is ours, not the caller's

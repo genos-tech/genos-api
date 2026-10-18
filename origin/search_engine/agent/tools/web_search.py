@@ -5,8 +5,14 @@ covers the team's private chats, tasks, and notes; `search_web` covers
 everything else — documentation, best practices, external references.
 
 Design:
-  * Read-only (requires_approval=False). Web queries leak no private data
-    and write nothing, so they run inline like the other read tools.
+  * Read-only (requires_approval=False). It writes nothing, so it runs
+    inline like the other read tools — but its query DOES leave the
+    building, and retrieved workspace text can steer the model into
+    putting private data in it. The controller checks every query
+    against what this run retrieved before the call goes out
+    (`agent/egress.py`, MIP-723).
+  * Results are internet-authored text, so each one is fenced with
+    `wrap_web_content`; the prompt treats that fence as data.
   * Token budget: each result's `content` is trimmed to _MAX_CONTENT_CHARS.
     Tavily already returns extracted clean text (no raw HTML), so the LLM
     gets dense, readable snippets without further post-processing.
@@ -29,7 +35,12 @@ from typing import Any
 from django.conf import settings
 
 from origin.search_engine import credit_ledger
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import (
+    Tool,
+    ToolContext,
+    ToolError,
+    wrap_web_content,
+)
 from origin.search_engine.llm import spend
 from origin.search_engine.quota import (
     WEB_SEARCH_KEY,
@@ -152,9 +163,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
 
     items = [
         {
-            "title": r.get("title") or "",
+            "title": wrap_web_content(r.get("title") or ""),
             "url": r.get("url") or "",
-            "content": (r.get("content") or "")[:_MAX_CONTENT_CHARS],
+            "content": wrap_web_content((r.get("content") or "")[:_MAX_CONTENT_CHARS]),
         }
         for r in (resp.get("results") or [])
     ]
@@ -187,7 +198,10 @@ SEARCH_WEB = Tool(
                 "description": (
                     "Concise, specific search query. Prefer technical terms "
                     "over vague phrases — e.g. 'Django zero-downtime migration "
-                    "large table' rather than 'how to migrate'."
+                    "large table' rather than 'how to migrate'. The query is "
+                    "sent to a third-party search provider: write it from the "
+                    "user's question in general terms, and never put names, "
+                    "ids, URLs or text copied from workspace results in it."
                 ),
             },
             "limit": {

@@ -87,6 +87,13 @@ class ApiKey(models.Model):
     key_hash = models.CharField(max_length=64, unique=True, db_index=True)
     prefix = models.CharField(max_length=32)
     scope = models.CharField(max_length=16, choices=SCOPE_CHOICES, default=SCOPE_READ)
+    # Write scope is not enough for a tool that destroys something with
+    # no undo (`delete_calendar_event` on MCP): the key's owner has to have
+    # said yes to that too, when they minted it (MIP-723). Off by default,
+    # so a planted instruction an outside agent reads can't drive a delete
+    # through a key that was only ever meant to edit tasks. Set at
+    # creation and never changed — a key's powers are what its owner saw.
+    allow_destructive = models.BooleanField(default=False)
     # Coarse: updated at most once an hour (see the auth class). A write
     # per request would double the cost of every API call to power a
     # field nobody reads to the minute.

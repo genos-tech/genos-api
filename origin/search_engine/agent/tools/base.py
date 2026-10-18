@@ -107,3 +107,16 @@ def wrap_workspace_content(text: str) -> str:
     if not text:
         return text
     return f"<workspace_content>\n{text}\n</workspace_content>"
+
+
+def wrap_web_content(text: str) -> str:
+    """`wrap_workspace_content` for text a web search fetched.
+
+    A separate tag, not the workspace one, because the two are not equally
+    trusted: anyone on the internet can write a page `search_web` returns,
+    so the prompt rule for this tag also forbids acting on links or images
+    it names (MIP-723).
+    """
+    if not text:
+        return text
+    return f"<web_content>\n{text}\n</web_content>"
