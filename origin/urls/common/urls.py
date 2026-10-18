@@ -75,7 +75,7 @@ from origin.views.common.team_emoji_views import TeamEmojiView
 from origin.views.common.team_views import *
 from origin.views.common.user_views import *
 from origin.views.common.webhook_views import WebhookDetailView, WebhookListCreateView
-from origin.views.utils.extract_page_title_view import get_page_title
+from origin.views.utils.extract_page_title_view import PageTitleView
 
 user_list = UserViewSet.as_view({"post": "create"})
 
@@ -510,5 +510,5 @@ urlpatterns = [
         GrantNoteAccessFromInboxView.as_view(),
         name="grant_note_access_from_inbox",
     ),
-    path("api/v2/getPageTitle/", get_page_title, name="get_page_title"),
+    path("api/v2/getPageTitle/", PageTitleView.as_view(), name="get_page_title"),
 ]
