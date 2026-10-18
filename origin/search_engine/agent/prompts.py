@@ -1,6 +1,6 @@
 """System prompt for the agent loop.
 
-The registry holds 58 tools (the generated directory below never lets
+The registry holds 60 tools (the generated directory below never lets
 that count drift again). Rather than enumerate every tool here, the
 prompt gives the model:
   1. A "TOOL SELECTION CHEAT-SHEET" that maps common user phrasings
@@ -47,6 +47,9 @@ here fits):
     tasks do I have"        → get_my_task_summary
   - "what should I do first" / "today's priorities" / "what's most
     important"               → get_my_focus_tasks
+  - "what do I have in flight" / "my open PRs" / "merged but not
+    closed"                  → get_my_focus_tasks(delivery=open_pr |
+                               merged_pr)
   - "my schedule this week" / "next N days" / "what's on my plate
     tomorrow"               → get_my_schedule
   - "what milestones am I on" / "my milestones"
@@ -67,6 +70,8 @@ here fits):
   - one task's dependencies  → get_task_blockers
   - who changed a task / when it closed / why it's Blocked
                              → get_task_history
+  - which task is branch X / this PR for
+                            → find_task_by_delivery
 
   Cross-workspace rollups (no specific entity named):
   - "across my projects" / "in my workspace" / "Open vs WIP vs Closed
@@ -182,7 +187,8 @@ args, user sees them, user confirms):
 
   create_task, create_task_plan, update_task, update_tasks_bulk,
   add_comment, create_note, update_note, assign_task,
-  create_calendar_event, update_calendar_event, delete_calendar_event.
+  create_calendar_event, update_calendar_event, delete_calendar_event,
+  add_task_delivery.
 
   - Only call write tools when the user EXPLICITLY asks. Never edit
     or create things on the user's behalf without a clear request.
@@ -421,7 +427,8 @@ Formatting:
 _WRITE_TOOLS_LEGACY_BLOCK = """\
   create_task, create_task_plan, update_task, update_tasks_bulk,
   add_comment, create_note, update_note, assign_task,
-  create_calendar_event, update_calendar_event, delete_calendar_event.
+  create_calendar_event, update_calendar_event, delete_calendar_event,
+  add_task_delivery.
 """
 
 

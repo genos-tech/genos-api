@@ -33,6 +33,7 @@ from origin.models.task.task_activity_models import TaskActivity, TaskActivityAc
 from origin.models.task.task_models import TaskMaster
 from origin.services.github_webhooks import parse_pr_url, parse_pr_url_full
 from origin.services.oauth.tokens import get_valid_access_token
+from origin.services.task_delivery import sync_pull_request
 from origin.views.utils.scope_guards import can_access_task, team_ids_for_user
 
 logger = logging.getLogger(__name__)
@@ -557,6 +558,51 @@ def _record_pr_link_activity(head_ref: str, pr_url: str, number, title: str, tea
     return created
 
 
+# `pull_request` actions that change something a `TaskDelivery` row
+# records: whether the PR exists, its state, its title. `synchronize`
+# (every push) is left out — it changes none of them, and each delivery
+# sync scans the tenant's tasks for a display id.
+_DELIVERY_ACTIONS = frozenset({"opened", "reopened", "closed", "edited"})
+
+
+def _tasks_for_branch(head_ref: str, team_ids: list) -> list:
+    """Tasks in `team_ids` whose display id `head_ref` carries — the
+    branch-naming auto-link rule, as `_record_pr_link_activity` applies it."""
+    if not head_ref or not team_ids:
+        return []
+    candidates = TaskMaster.objects.select_related("project").filter(
+        team_id__in=team_ids,
+        is_deleted=False,
+        project__code__isnull=False,
+        project_task_number__isnull=False,
+    )
+    return [
+        task
+        for task in candidates
+        if not task.display_id.startswith("#")
+        and _branch_match_re(task.display_id).search(head_ref)
+    ]
+
+
+def _sync_task_deliveries(owner: str, repo: str, pr: dict, team_ids: list) -> dict | None:
+    """Record / update `TaskDelivery` rows for one `pull_request` event
+    (MIP-687). Never lets a failure here cost the auto-close or the link
+    activity that follow it: those are the older contract, and GitHub
+    would retry the whole delivery on a 500."""
+    try:
+        head_ref = ((pr.get("head") or {}).get("ref")) or ""
+        return sync_pull_request(
+            owner=owner,
+            repo=repo,
+            pr=pr,
+            matched_tasks=_tasks_for_branch(head_ref, team_ids),
+            team_ids=team_ids,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("GitHub webhook: task delivery sync failed for %s/%s", owner, repo)
+        return None
+
+
 @method_decorator(csrf_exempt, name="dispatch")
 class GithubWebhookView(APIView):
     """Receive GitHub repo webhooks (`pull_request` events).
@@ -623,6 +669,10 @@ class GithubWebhookView(APIView):
                 _invalidate_pr_caches(owner_inv, repo_inv, number_inv, head_ref or None)
                 team_ids = _repo_team_ids(owner_inv, repo_inv)
 
+            deliveries = None
+            if ref is not None and action in _DELIVERY_ACTIONS:
+                deliveries = _sync_task_deliveries(owner_inv, repo_inv, pr, team_ids)
+
             # MVP: only the merge transition fires. Other action types
             # (opened, ready_for_review, closed-unmerged, etc.) are
             # acknowledged but not acted on.
@@ -634,7 +684,10 @@ class GithubWebhookView(APIView):
                     head_ref,
                     updated,
                 )
-                return Response({"detail": "ok", "updated": updated}, status=status.HTTP_200_OK)
+                return Response(
+                    {"detail": "ok", "updated": updated, "deliveries": deliveries},
+                    status=status.HTTP_200_OK,
+                )
 
             # Record a link activity when a PR is opened (or reopened) on a
             # branch whose name carries a task's display id. Idempotent, so
@@ -650,8 +703,15 @@ class GithubWebhookView(APIView):
                     head_ref,
                     linked,
                 )
-                return Response({"detail": "ok", "linked": linked}, status=status.HTTP_200_OK)
+                return Response(
+                    {"detail": "ok", "linked": linked, "deliveries": deliveries},
+                    status=status.HTTP_200_OK,
+                )
 
+            if deliveries is not None:
+                return Response(
+                    {"detail": "ok", "deliveries": deliveries}, status=status.HTTP_200_OK
+                )
             return Response({"detail": "noop"}, status=status.HTTP_200_OK)
 
         # Comment events — record on the auto-linked task's activity feed.

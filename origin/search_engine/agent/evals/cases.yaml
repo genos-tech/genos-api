@@ -721,6 +721,34 @@
     expected_tools: ["get_task_blockers"]
 
 # ============================================================ #
+# R2. Branch / PR ↔ task delivery links (MIP-687)             #
+# ============================================================ #
+# The fixture seeds no delivery rows, and its project codes are derived,
+# so neither case can name a real link. What they pin is the routing:
+# a branch question goes to the reverse lookup (not a title search that
+# would guess), and "in flight" goes to the focus list's delivery filter.
+# Metric-only until validated with `agent_eval --case <id>`, per the
+# note above section P.
+
+- id: delivery_branch_to_task
+  fixture: true
+  query: "Which task is the branch feat/mcp-publish-built-writes for?"
+  expect:
+    tool_calls_at_least: 1
+    no_errors: true
+    expected_tools: ["find_task_by_delivery"]
+    forbidden_tools: ["search_web"]
+
+- id: delivery_in_flight
+  fixture: true
+  query: "Which of my tasks have a pull request open right now?"
+  expect:
+    tool_calls_at_least: 1
+    no_errors: true
+    expected_tools: ["get_my_focus_tasks"]
+    forbidden_tools: ["add_task_delivery"]
+
+# ============================================================ #
 # S. Fact-level completeness (Q2.2 / plan-then-execute target) #
 # ============================================================ #
 # Harder than the `compound_*` cases above: each asserts only the SUBJECTS

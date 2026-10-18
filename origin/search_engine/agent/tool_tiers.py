@@ -38,6 +38,7 @@ SINGLE_WRITE_TOOLS = frozenset(
         "update_note",
         "add_comment",
         "assign_task",
+        "add_task_delivery",
         "create_todo_item",
         "update_todo_item",
         "create_calendar_event",
