@@ -11,6 +11,20 @@ import os
 
 from django.core.asgi import get_asgi_application
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'apis.settings')
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "apis.settings")
 
 application = get_asgi_application()
+
+
+# The web server's own boot check (MIP-719): browser-facing settings the
+# crons don't set, so it can't live in settings.py. See its docstring.
+from django.conf import settings  # noqa: E402
+
+from apis.settings import validate_web_config  # noqa: E402
+
+validate_web_config(
+    debug=settings.DEBUG,
+    allowed_hosts=settings.ALLOWED_HOSTS,
+    cors_allowed_origins=settings.CORS_ALLOWED_ORIGINS,
+    field_encryption_key=settings.OAUTH_TOKEN_ENCRYPTION_KEY,
+)

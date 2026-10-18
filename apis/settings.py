@@ -29,16 +29,13 @@ SECRET_KEY = os.environ.get(
     "django-insecure-1=c=z%cqhlgi$@+w8x3ees)q*q!hosc2lvv^=_dpln(%wipz08",
 )
 
-# Default to True so local dev (where the env var isn't set) gets
-# Django's normal development behavior: relaxed cookie attrs, open
-# CORS, served `/media/`, full tracebacks. Production must
-# *explicitly* opt out by setting `DJANGO_DEBUG=false` (the Railway
-# config already does — see docs/RAILWAY_DEPLOY.md).
-#
-# This matches Django's own `django-admin startproject` default and
-# is what every dependent setting below assumes when it derives from
-# DEBUG (AUTH_COOKIE_SECURE, CORS_ALLOW_ALL_ORIGINS, etc.).
-DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() == "true"
+# Off unless asked for (MIP-719). DEBUG turns on open credentialed CORS,
+# drops Secure cookies and HSTS, and skips the boot checks below, so a
+# deploy that lost this variable used to come up wide open and signing
+# JWTs with a key that is in this file. Now it comes up locked down and
+# the checks refuse to start it on missing secrets. Local dev opts in:
+# the docker-compose stack sets `DJANGO_DEBUG=true`.
+DEBUG = os.environ.get("DJANGO_DEBUG", "false").lower() == "true"
 
 ALLOWED_HOSTS = [
     h.strip() for h in os.environ.get("ALLOWED_HOSTS", "localhost").split(",") if h.strip()
@@ -333,6 +330,13 @@ REST_FRAMEWORK = {
         "rest_framework_simplejwt.authentication.JWTAuthentication",
         "origin.views.common.api_key_auth.ApiKeyAuthentication",
     ),
+    # DRF's own default is AllowAny, so a view that forgot to say
+    # otherwise was public. Every view today names its permissions
+    # (`AuthenticatedAPIView`, or an explicit `AllowAny` on the sign-in,
+    # webhook and health views), so this changes none of them; it decides
+    # what the NEXT forgotten one gets. `test_fail_closed_config` pins the
+    # public set, so making a view public is a reviewed diff.
+    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     # Per-KEY rate limit for the public API. Env-overridable because the
     # right number depends on who is integrating, and finding that out
     # should not need a deploy. Scoped throttles only fire on views that
@@ -392,17 +396,24 @@ SIMPLE_JWT = {
 }
 
 
-def _validate_prod_secrets(*, debug: bool, secret_key: str, jwt_signing_key: str) -> None:
-    """Refuse to boot a production process on the known dev-fallback
-    signing keys.
+def _validate_prod_secrets(
+    *, debug: bool, secret_key: str, jwt_signing_key: str, database_url: str | None
+) -> None:
+    """Refuse to boot a production process on the known dev fallbacks.
 
-    Both fallbacks above exist so local dev works with no env file, but
+    Runs in EVERY process — web, crons, `manage.py` — so it only asks for
+    what every one of them needs. The web server's extra requirements are
+    in `validate_web_config`.
+
+    The key fallbacks above exist so local dev works with no env file, but
     they are PUBLIC values (this file is on GitHub). If env drift ever
     dropped DJANGO_SECRET_KEY or JWT_SECRET_KEY in prod, the app would
     silently sign sessions / password-reset state / every JWT with a
     key an attacker can read — i.e. anyone could mint a valid token for
-    any user. Failing the deploy loudly (the healthcheck gate catches
-    it before traffic shifts) is strictly better than that.
+    any user. Without DATABASE_URL the process would try the hardcoded
+    dev database (postgres/postgres). Failing the deploy loudly (the
+    healthcheck gate catches it before traffic shifts) is strictly better
+    than either.
 
     Extracted as a function so tests can exercise it without re-importing
     the settings module.
@@ -421,11 +432,87 @@ def _validate_prod_secrets(*, debug: bool, secret_key: str, jwt_signing_key: str
             "JWT_SECRET_KEY is unset (or the public dev fallback) with "
             "DJANGO_DEBUG=false. Set a real secret before deploying."
         )
+    if not database_url:
+        raise ImproperlyConfigured(
+            "DATABASE_URL is unset with DJANGO_DEBUG=false, so the process "
+            "would use the hardcoded dev database. Set DATABASE_URL."
+        )
 
 
 _validate_prod_secrets(
-    debug=DEBUG, secret_key=SECRET_KEY, jwt_signing_key=SIMPLE_JWT["SIGNING_KEY"]
+    debug=DEBUG,
+    secret_key=SECRET_KEY,
+    jwt_signing_key=SIMPLE_JWT["SIGNING_KEY"],
+    database_url=DATABASE_URL,
 )
+
+
+def validate_web_config(
+    *,
+    debug: bool,
+    allowed_hosts: list[str],
+    cors_allowed_origins: list[str],
+    field_encryption_key: str,
+) -> None:
+    """What the HTTP server additionally needs before it takes traffic.
+
+    Called from `apis/wsgi.py` and `apis/asgi.py`, not from this module: the
+    Railway crons load these settings too and set none of the browser-facing
+    variables (they run `manage.py`, never wsgi), so checking these here
+    would stop every cron. A web deploy that fails this never passes
+    Railway's healthcheck, so the previous deployment keeps serving.
+
+    - ALLOWED_HOSTS: unset falls back to `localhost`, so every real request
+      would 400 — loud, but only after traffic has shifted. `*` disables
+      Host-header validation for the public server; the crons' `*` is fine
+      because they serve nothing.
+    - CORS_ALLOWED_ORIGINS: unset falls back to the localhost list, so the
+      production frontend is refused on every call. A `*` entry is refused
+      too: with credentials allowed that is any site acting as the user.
+    - OAUTH_TOKEN_ENCRYPTION_KEY: encrypts OAuth tokens and webhook signing
+      secrets at rest. Missing, the first OAuth login or webhook delivery
+      fails at runtime; a malformed one fails the same way. Checked here,
+      by building the real Fernet, so it fails at deploy instead.
+    """
+    if debug:
+        return
+    from django.core.exceptions import ImproperlyConfigured
+
+    hosts = [h for h in allowed_hosts if h != "healthcheck.railway.app"]
+    if not hosts or hosts == ["localhost"]:
+        raise ImproperlyConfigured(
+            "ALLOWED_HOSTS is unset (or only localhost) with DJANGO_DEBUG=false. "
+            "Set it to the API's public host."
+        )
+    if "*" in hosts:
+        raise ImproperlyConfigured(
+            "ALLOWED_HOSTS contains '*' on the web server. List the API's public host."
+        )
+    local = {"http://localhost:3000", "http://localhost:8890"}
+    if not cors_allowed_origins or set(cors_allowed_origins) <= local:
+        raise ImproperlyConfigured(
+            "CORS_ALLOWED_ORIGINS is unset (or only the localhost defaults) with "
+            "DJANGO_DEBUG=false. Set it to the frontend's exact origin."
+        )
+    if any("*" in o for o in cors_allowed_origins):
+        raise ImproperlyConfigured(
+            "CORS_ALLOWED_ORIGINS contains a wildcard. List the exact origins."
+        )
+    if not field_encryption_key:
+        raise ImproperlyConfigured(
+            "OAUTH_TOKEN_ENCRYPTION_KEY is unset with DJANGO_DEBUG=false. "
+            "OAuth tokens and webhook secrets cannot be encrypted without it."
+        )
+    from cryptography.fernet import Fernet
+
+    try:
+        Fernet(field_encryption_key.encode())
+    except (ValueError, TypeError):
+        raise ImproperlyConfigured(
+            "OAUTH_TOKEN_ENCRYPTION_KEY is not a valid Fernet key (32 url-safe "
+            "base64-encoded bytes)."
+        ) from None
+
 
 AUTH_USER_MODEL = "origin.CustomUser"
 

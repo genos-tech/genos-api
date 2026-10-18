@@ -28,12 +28,16 @@ _LOCMEM_CACHE = {
 }
 
 
+_DB = "postgres://u:p@db:5432/origin"
+
+
 class TestProdSecretGuard(BaseAPITestCase):
     def test_debug_mode_accepts_fallbacks(self):
         _validate_prod_secrets(
             debug=True,
             secret_key="django-insecure-whatever",
             jwt_signing_key="your_secret_key",
+            database_url=_DB,
         )
 
     def test_prod_rejects_django_fallback(self):
@@ -42,6 +46,7 @@ class TestProdSecretGuard(BaseAPITestCase):
                 debug=False,
                 secret_key="django-insecure-whatever",
                 jwt_signing_key="real-jwt-key",
+                database_url=_DB,
             )
 
     def test_prod_rejects_jwt_fallback(self):
@@ -50,19 +55,34 @@ class TestProdSecretGuard(BaseAPITestCase):
                 debug=False,
                 secret_key="a-real-50-char-secret",
                 jwt_signing_key="your_secret_key",
+                database_url=_DB,
             )
 
     def test_prod_rejects_empty_keys(self):
         with self.assertRaises(ImproperlyConfigured):
-            _validate_prod_secrets(debug=False, secret_key="", jwt_signing_key="k")
+            _validate_prod_secrets(
+                debug=False, secret_key="", jwt_signing_key="k", database_url=_DB
+            )
         with self.assertRaises(ImproperlyConfigured):
-            _validate_prod_secrets(debug=False, secret_key="k", jwt_signing_key="")
+            _validate_prod_secrets(
+                debug=False, secret_key="k", jwt_signing_key="", database_url=_DB
+            )
+
+    def test_prod_rejects_a_missing_database_url(self):
+        """Unset, settings fall back to the hardcoded dev database
+        (postgres/postgres) — MIP-719."""
+        for url in (None, ""):
+            with self.subTest(url=url), self.assertRaises(ImproperlyConfigured):
+                _validate_prod_secrets(
+                    debug=False, secret_key="k", jwt_signing_key="k", database_url=url
+                )
 
     def test_prod_accepts_real_keys(self):
         _validate_prod_secrets(
             debug=False,
             secret_key="a-real-50-char-secret",
             jwt_signing_key="a-real-jwt-key",
+            database_url=_DB,
         )
 
 
