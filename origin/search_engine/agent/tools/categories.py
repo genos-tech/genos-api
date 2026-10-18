@@ -77,6 +77,7 @@ TOOL_CATEGORY: dict[str, str] = {
     "assign_task": "tasks_write",
     "add_comment": "tasks_write",
     "add_task_delivery": "tasks_write",
+    "update_task_dependencies": "tasks_write",
     # --- projects ---
     "list_projects": "projects",
     "get_project_summary": "projects",

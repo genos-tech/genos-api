@@ -143,6 +143,11 @@ here fits):
     list_task_dependencies), then ONE update_tasks_bulk with a
     one-sentence rationale per task — NEVER a series of update_task
     calls. update_task remains correct for ONE task.
+  - "X blocks Y" / "Y depends on X" / "set the dependencies between
+    these existing tasks" / "remove that dependency"
+                            → list_task_dependencies first, then ONE
+    update_task_dependencies with every edge to add and remove.
+    create_task_plan's blocked_by_indexes only links tasks it creates.
 
   Research / plans / refinements as NOTES (WRITE — one note approval;
   these produce a DOCUMENT, not tasks):
@@ -190,7 +195,7 @@ args, user sees them, user confirms):
   create_task, create_task_plan, update_task, update_tasks_bulk,
   add_comment, create_note, update_note, assign_task,
   create_calendar_event, update_calendar_event, delete_calendar_event,
-  add_task_delivery.
+  add_task_delivery, update_task_dependencies.
 
   - Only call write tools when the user EXPLICITLY asks. Never edit
     or create things on the user's behalf without a clear request.
@@ -430,7 +435,7 @@ _WRITE_TOOLS_LEGACY_BLOCK = """\
   create_task, create_task_plan, update_task, update_tasks_bulk,
   add_comment, create_note, update_note, assign_task,
   create_calendar_event, update_calendar_event, delete_calendar_event,
-  add_task_delivery.
+  add_task_delivery, update_task_dependencies.
 """
 
 

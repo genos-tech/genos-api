@@ -519,6 +519,35 @@ CATALOG: tuple[McpTool, ...] = (
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
     ),
     McpTool(
+        name="update_task_dependencies",
+        registry_name="update_task_dependencies",
+        description=(
+            "Add or remove blocker→blocked dependencies between tasks that "
+            "already exist — 'X blocks Y', 'Y depends on X' — in one call. "
+            "Each edge is `{blocker_task_id, blocked_task_id}`; `add` and "
+            "`remove` each take a list. Read the graph first with "
+            "`list_task_dependencies`. To flip an edge, remove it and add the "
+            "reverse in the same call. Cross-project is fine; both tasks must "
+            "be ones you can see. All-or-nothing: a self-dependency, a "
+            "duplicate or an edge that would close a cycle rejects the whole "
+            "call. A task with an unfinished blocker turns Blocked on its "
+            "own. Requires a write-scoped API key."
+        ),
+        write=True,
+        nested_task_ref_args=(
+            ("add", "blocker_task_id"),
+            ("add", "blocked_task_id"),
+            ("remove", "blocker_task_id"),
+            ("remove", "blocked_task_id"),
+        ),
+        nested_schema_overrides={
+            ("add", "blocker_task_id"): _TASK_REF_SCHEMA,
+            ("add", "blocked_task_id"): _TASK_REF_SCHEMA,
+            ("remove", "blocker_task_id"): _TASK_REF_SCHEMA,
+            ("remove", "blocked_task_id"): _TASK_REF_SCHEMA,
+        },
+    ),
+    McpTool(
         name="create_task",
         registry_name="create_task",
         description=(
