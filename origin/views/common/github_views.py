@@ -30,10 +30,11 @@ from rest_framework.views import APIView
 
 from origin.models.common.user_models import ConnectedAccount, GithubWebhookRegistration
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
+from origin.models.task.task_delivery_models import TaskDelivery, TaskDeliveryState
 from origin.models.task.task_models import TaskMaster
 from origin.services.github_webhooks import parse_pr_url, parse_pr_url_full
 from origin.services.oauth.tokens import get_valid_access_token
-from origin.services.task_delivery import sync_pull_request
+from origin.services.task_delivery import canonical_pr_url, sync_pull_request
 from origin.views.utils.scope_guards import can_access_task, team_ids_for_user
 
 logger = logging.getLogger(__name__)
@@ -312,6 +313,31 @@ def _repo_team_ids(owner: str, repo: str) -> list:
     return team_ids_for_user(registered_by)
 
 
+def _other_open_prs(task, pr_url: str) -> list[str]:
+    """PRs other than `pr_url` still open on `task` (drafts included).
+
+    A task delivered by several PRs (api + frontend + docs) is done when
+    the last one merges, not the first (MIP-710). Only OPEN holds the
+    close: a PR closed unmerged was abandoned, a branch with no PR is
+    not a review anyone waits on, and UNKNOWN is a row nobody could read
+    — holding on either would pin the task open with nothing left to
+    merge. `pr_url` is excluded by value, not by state, so the PR that
+    just merged never holds itself even when the delivery sync failed
+    and its row still says open.
+    """
+    canonical = ""
+    ref = parse_pr_url_full(pr_url)
+    if ref is not None:
+        canonical = canonical_pr_url(*ref)
+    return list(
+        TaskDelivery.objects.filter(task=task, state=TaskDeliveryState.OPEN)
+        .exclude(pr_url=canonical)
+        .exclude(pr_url__isnull=True)
+        .order_by("pr_url")
+        .values_list("pr_url", flat=True)
+    )
+
+
 def _close_tasks_for_merged_pr(head_ref: str, team_ids: list, pr_url: str = "") -> int:
     """Auto-close tasks referenced by a merged PR's head branch name.
 
@@ -320,6 +346,12 @@ def _close_tasks_for_merged_pr(head_ref: str, team_ids: list, pr_url: str = "") 
     head branch name contains that ID with the same word-boundary regex
     used for branch auto-linking. Tasks that match AND whose assignee
     has opted in via `auto_close_on_pr_merge` get bumped to DONE_STATUS.
+
+    A task linked to the PR by a recorded delivery (`add_task_delivery`
+    on a branch that names no task) is a match too. Otherwise, with the
+    hold below, a task whose last PR is on such a branch would never
+    close at all. Either way, a task with another PR still open is left
+    as it is; the last of them to merge closes it (`_other_open_prs`).
 
     `pr_url` is stashed on each task before the save so the
     `task_record_changes` signal can tag the resulting status-change
@@ -338,6 +370,15 @@ def _close_tasks_for_merged_pr(head_ref: str, team_ids: list, pr_url: str = "") 
     """
     if not head_ref or not team_ids:
         return 0
+    linked_ids: set = set()
+    ref = parse_pr_url_full(pr_url)
+    if ref is not None:
+        # Same tenant boundary as the branch match below.
+        linked_ids = set(
+            TaskDelivery.objects.filter(
+                team_id__in=team_ids, pr_url=canonical_pr_url(*ref)
+            ).values_list("task_id", flat=True)
+        )
     # Pre-filter to tasks that *could* have a display ID matched.
     # `select_related("project", "assignee")` keeps the per-row lookup
     # cheap; for a workspace with thousands of tasks this iterates in
@@ -362,16 +403,27 @@ def _close_tasks_for_merged_pr(head_ref: str, team_ids: list, pr_url: str = "") 
     # branch name's content, so this loop is fast in practice (most
     # tasks fail the regex check immediately).
     for task in candidates:
-        display_id = task.display_id
-        if not display_id or display_id.startswith("#"):
-            continue
-        if not _branch_match_re(display_id).search(head_ref):
-            continue
+        if task.task_id not in linked_ids:
+            display_id = task.display_id
+            if not display_id or display_id.startswith("#"):
+                continue
+            if not _branch_match_re(display_id).search(head_ref):
+                continue
         # Per-user opt-in. Assignee's preference wins; reporter's
         # preference is intentionally ignored (the assignee owns the
         # task's "done" decision).
         assignee = task.assignee
         if assignee is None or not getattr(assignee, "auto_close_on_pr_merge", False):
+            continue
+        still_open = _other_open_prs(task, pr_url)
+        if still_open:
+            logger.info(
+                "GitHub webhook: %s merged but task %s still has %d open PR(s) %s; not closing",
+                pr_url,
+                task.display_id,
+                len(still_open),
+                still_open,
+            )
             continue
         task.status = DONE_STATUS
         # Tag the upcoming status-change audit row as a PR-merge close so

@@ -267,6 +267,125 @@ class WebhookDeliveryTests(DeliveryBase):
         self.task.refresh_from_db()
         self.assertEqual(self.task.status, "Closed")
 
+    # ── Auto-close waits for every PR (MIP-710) ──────────────────────
+
+    def _opt_in(self):
+        self.user.auto_close_on_pr_merge = True
+        self.user.save(update_fields=["auto_close_on_pr_merge"])
+
+    def _merge(self, **kw):
+        kw.setdefault("merged_at", "2026-10-18T09:30:00Z")
+        return self._post(_pr_event("closed", state="closed", merged=True, **kw))
+
+    def _status(self, task=None):
+        task = task or self.task
+        task.refresh_from_db()
+        return task.status
+
+    def test_a_merge_waits_for_the_tasks_other_open_prs(self):
+        """api + frontend PRs both named HK-42: the first merge must not
+        close the task, the last one must."""
+        self._opt_in()
+        self._post(_pr_event("opened"))
+        self._post(_pr_event("opened", number=43, ref="HK-42-frontend"))
+        res = self._merge()
+        self.assertEqual(res.data["updated"], 0)
+        self.assertEqual(self._status(), "Open")
+        res = self._merge(number=43, ref="HK-42-frontend")
+        self.assertEqual(res.data["updated"], 1)
+        self.assertEqual(self._status(), "Closed")
+        # The close is attributed to the PR that finished it.
+        row = TaskActivity.objects.get(task=self.task, action_type="status_changed")
+        self.assertEqual(row.metadata.get("prUrl"), "https://github.com/owner/repo/pull/43")
+
+    def test_a_draft_holds_the_close_too(self):
+        self._opt_in()
+        self._link(self.task, number=9, state=TaskDeliveryState.OPEN)  # a draft is OPEN
+        self._merge()
+        self.assertEqual(self._status(), "Open")
+
+    def test_the_last_pr_on_an_unnamed_branch_closes_the_task(self):
+        """The named PR merges first and is held; the other was linked by
+        hand on a branch no display id names. Its merge must still close
+        the task, or the hold would leave it open forever."""
+        self._opt_in()
+        record_delivery(
+            task=self.task,
+            owner="owner",
+            repo="repo",
+            pr_number=50,
+            state=TaskDeliveryState.OPEN,
+            source=TaskDeliverySource.MANUAL,
+        )
+        self._merge()
+        self.assertEqual(self._status(), "Open")
+        res = self._merge(number=50, ref="feat/mcp-publish-built-writes")
+        self.assertEqual(res.data["updated"], 1)
+        self.assertEqual(self._status(), "Closed")
+
+    def test_a_linked_task_in_another_tenant_is_not_closed(self):
+        stranger = User.objects.create_user(
+            username="s", email="s@x.com", password="pw", auto_close_on_pr_merge=True
+        )
+        other_team = TeamMaster.objects.create(
+            team_name="Other", team_email="o@x.com", owner=stranger
+        )
+        other_task = self._task(
+            7,
+            project=self._project(other_team, "Other", "ZZ", owner=stranger),
+            team=other_team,
+            assignee=stranger,
+        )
+        TaskDelivery.objects.create(
+            team=other_team,
+            task=other_task,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_url="https://github.com/owner/repo/pull/50",
+            pr_number=50,
+            state="open",
+            source="manual",
+        )
+        self._merge(number=50, ref="feat/unnamed")
+        self.assertEqual(self._status(other_task), "Open")
+
+    def test_finished_and_unreadable_prs_do_not_hold_the_close(self):
+        """Closed-unmerged was abandoned, a branch-only link has no PR to
+        wait on, and UNKNOWN was never read: none may pin a task open."""
+        self._opt_in()
+        self._link(self.task, number=8, state=TaskDeliveryState.CLOSED)
+        self._link(self.task, number=9, state=TaskDeliveryState.UNKNOWN)
+        self._link(self.task, number=10, state=TaskDeliveryState.MERGED)
+        record_delivery(
+            task=self.task,
+            owner="genos-tech",
+            repo="genos-api",
+            branch="HK-42-spike",
+            source=TaskDeliverySource.MANUAL,
+        )
+        res = self._merge()
+        self.assertEqual(res.data["updated"], 1)
+        self.assertEqual(self._status(), "Closed")
+
+    def test_the_merged_pr_never_holds_itself(self):
+        """The delivery sync failed, so this PR's own row still says open:
+        it is the one that just merged, and must not hold the close."""
+        self._opt_in()
+        self._post(_pr_event("opened"))
+        with mock.patch(
+            "origin.views.common.github_views.sync_pull_request", side_effect=RuntimeError("x")
+        ):
+            res = self._merge(owner="Owner", repo="Repo")
+        self.assertEqual(TaskDelivery.objects.get(task=self.task).state, "open")
+        self.assertEqual(res.data["updated"], 1)
+        self.assertEqual(self._status(), "Closed")
+
+    def test_another_tasks_open_pr_does_not_hold_this_one(self):
+        self._opt_in()
+        self._link(self._task(5), number=9, state=TaskDeliveryState.OPEN)
+        self._merge()
+        self.assertEqual(self._status(), "Closed")
+
     def test_the_pr_linked_activity_is_still_written(self):
         self._post(_pr_event("opened"))
         self.assertTrue(
