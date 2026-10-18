@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from origin.models.chat.unified_models import ChannelMember
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
-from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMembers
 
@@ -109,6 +109,84 @@ def get_effective_role(user_id, note_type, note_id, team_id=None):
         return get_folder_role(user_id, folder_id)
 
     return None
+
+
+def readable_note_ref(user_id, note_id, note_type):
+    """`(note_id, note_type)` as ints if the user can read that note, else None.
+
+    Missing, unreadable and malformed all come back None, so a caller that
+    answers 404 for all three says nothing about which one it was. The
+    ints matter: `get_effective_role` compares `note_type` to int
+    constants, and a JSON body may well send "2".
+    """
+    try:
+        note_id, note_type = int(note_id), int(note_type)
+    except (TypeError, ValueError):
+        return None
+    if not note_exists(note_type, note_id):
+        return None
+    if get_effective_role(user_id, note_type, note_id) is None:
+        return None
+    return note_id, note_type
+
+
+def readable_note_ids(user_id, note_type, note_ids) -> set:
+    """The subset of `note_ids` (all of one `note_type`) this user can read.
+
+    The same answer `get_effective_role` gives one note at a time, in a
+    fixed number of queries, for lists that name many notes at once.
+    """
+    note_ids = {int(n) for n in note_ids}
+    if not note_ids or user_id is None:
+        return set()
+
+    readable = set(
+        NotePermissionMaster.objects.filter(
+            user=user_id, note_type=note_type, note_id__in=note_ids
+        ).values_list("note_id", flat=True)
+    )
+    rest = note_ids - readable
+    if not rest:
+        return readable
+
+    if note_type == NOTE_TYPE_TASK:
+        member_of = ProjectMembers.objects.filter(attendee=user_id).values("project_id")
+        readable |= set(
+            TaskNoteMaster.objects.filter(note_id__in=rest, project__in=member_of).values_list(
+                "note_id", flat=True
+            )
+        )
+    elif note_type == NOTE_TYPE_CHAT:
+        member_of = ChannelMember.objects.filter(user=user_id, is_deleted=False).values(
+            "channel_id"
+        )
+        readable |= set(
+            ChatNoteMaster.objects.filter(note_id__in=rest, channel__in=member_of).values_list(
+                "note_id", flat=True
+            )
+        )
+    elif note_type == NOTE_TYPE_PERSONAL:
+        # Local import, as in `get_effective_role`.
+        from origin.views.utils.note_folder_role import (  # noqa: PLC0415
+            SCOPE_TEAM,
+            readable_team_folder_roles,
+        )
+
+        filed = dict(
+            PersonalNoteMaster.objects.filter(
+                note_id__in=rest, folder_id__isnull=False
+            ).values_list("note_id", "folder_id")
+        )
+        # One folder index per team, not one per note.
+        teams = PersonalNoteFolder.objects.filter(
+            folder_id__in=set(filed.values()), scope=SCOPE_TEAM
+        ).values_list("team_id", flat=True)
+        reachable = set()
+        for team_id in set(teams):
+            reachable |= set(readable_team_folder_roles(user_id, team_id))
+        readable |= {note_id for note_id, folder_id in filed.items() if folder_id in reachable}
+
+    return readable
 
 
 def note_exists(note_type, note_id):
