@@ -34,15 +34,25 @@ messaging and editor collaboration live in the sibling
 
 | Variable                | Required | Notes                                                              |
 | ----------------------- | -------- | ------------------------------------------------------------------ |
-| `DATABASE_URL`          | **Yes**  | Postgres URL. Without it, settings fall back to an unreachable host. |
+| `DJANGO_DEBUG`          | dev      | Off unless exactly `true`. Local dev sets it; production leaves it unset or `false`. |
+| `DATABASE_URL`          | **Yes**  | Postgres URL. With DEBUG off the process refuses to start without it. |
 | `DJANGO_SETTINGS_MODULE`| —        | `apis.settings` (prod, default) or `apis.settings_test` (tests).   |
 | `DJANGO_SECRET_KEY`     | prod     | Django secret key.                                                 |
 | `JWT_SECRET_KEY`        | prod     | Shared with genos-sockets / genos-collab for token verification.   |
+| `ALLOWED_HOSTS`         | web      | The API's public host. Not `*`, not just `localhost`.              |
+| `CORS_ALLOWED_ORIGINS`  | web      | The frontend's exact origin(s). No wildcards.                      |
+| `OAUTH_TOKEN_ENCRYPTION_KEY` | web | Fernet key for OAuth tokens and webhook secrets at rest.          |
 | `REDIS_URL`             | —        | Cache backend.                                                     |
 | `OPENSEARCH_HOST` / `OPENSEARCH_PORT` / `OPENSEARCH_INDEX` | — | Search engine. |
 | `EMBEDDING_PROVIDER`    | —        | `openai` / `vertex` — selects the embedding backend.               |
 | `LLM_PROVIDER`          | —        | `claude` / `gemini` / `openai` for the agent + judge.              |
 | `OPENAI_API_KEY`, `GEMINI_*` / `CLAUDE_API_KEY`, `TAVILY_API_KEY` | — | Provider creds (see `docs/` and the compose env in genos-platform). |
+
+With `DJANGO_DEBUG` off, every process (web and crons) refuses to start
+without real `DJANGO_SECRET_KEY`, `JWT_SECRET_KEY` and `DATABASE_URL`, and the
+web server (`apis/wsgi.py`) also refuses to start without the three **web**
+rows. The crons share the settings but never load wsgi, so they don't need
+those.
 
 For the full local set, see the `backend` service env in
 `genos-platform/docker/docker-compose.yml`.
@@ -58,7 +68,7 @@ pipenv sync                       # install locked deps
 pipenv run pip install -r requirements-dev.txt   # test tooling
 
 export DATABASE_URL=postgres://postgres:postgres@localhost:5432/origin
-export DJANGO_SECRET_KEY=dev-only JWT_SECRET_KEY=dev-only
+export DJANGO_DEBUG=true DJANGO_SECRET_KEY=dev-only JWT_SECRET_KEY=dev-only
 
 pipenv run python manage.py migrate
 pipenv run python manage.py opensearch_setup      # create index + alias
