@@ -5,6 +5,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 logger = logging.getLogger(__name__)
 from django.db.models import Case, F, IntegerField, Max, Q, Value, When
@@ -232,6 +233,94 @@ def _reparent_task(task, parent_task_id):
     )
 
 
+def _no_task():
+    """The answer for a task the caller cannot reach.
+
+    Identical to a missing task's, so walking the id space (a
+    `BigAutoField`) tells nobody which tasks exist.
+    """
+    return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
+def _may_name_person(project, user_id) -> bool:
+    """May this person be put on a task in `project`?
+
+    Its members, plus its team's members: the same rule the agent's
+    `create_task` applies to an assignee, so a teammate can be assigned
+    before they are added to the project. Not anyone else, because the
+    assignee and the reporter are both grants (`can_access_task` lets them
+    open the task) and both surface the task in that person's lists.
+    """
+    return is_project_member(project.project_id, user_id) or is_team_member(
+        project.team_id, user_id
+    )
+
+
+def _people_allowed_on(project, raw_ids):
+    """`raw_ids` with everyone who may not be on a task in `project` left
+    out. `None` stays `None`, which `sync_task_collaborators` reads as
+    "leave the set alone"."""
+    if raw_ids is None:
+        return None
+    return [raw for raw in raw_ids if raw and _may_name_person(project, raw)]
+
+
+def _refuse_unreachable_task_links(request, project):
+    """A 400 if the create payload names anything the caller cannot use.
+
+    The people on the task have to be people who could be put on it, the
+    milestone and sprint have to be the project's own, and the parent and
+    root it hangs from have to be tasks the caller can open. Otherwise a
+    create could graft a task onto another tenant's milestone or tree, or
+    name a stranger as the reporter, which is the person the task says
+    wrote it.
+
+    The parent is held to reach, not to the project: a parent edge that
+    crosses projects is legitimate (a move leaves one behind, and the
+    diagram files a sub-task under its own project whatever the node's).
+    """
+    for key in ("assignee", "reporter"):
+        person = request.data.get(key)
+        if person in (None, "") or str(person) == str(request.user.id):
+            continue
+        if not _may_name_person(project, person):
+            return Response(
+                {"error": f"`{key}` is not a member of this project or its team."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    from origin.models.task.milestone_models import MilestoneMaster
+    from origin.models.task.sprint_models import Sprint
+
+    for key, model, pk in (
+        ("milestone", MilestoneMaster, "milestone_id"),
+        ("sprint", Sprint, "sprint_id"),
+    ):
+        raw = request.data.get(key)
+        if raw in (None, "", "null"):
+            continue
+        try:
+            found = model.objects.filter(**{pk: raw, "project_id": project.project_id}).exists()
+        except (DjangoValidationError, TypeError, ValueError):
+            found = False
+        if not found:
+            return Response(
+                {"error": f"`{key}` is not in this project."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    for key in ("parent_task_id", "root_task_id"):
+        raw = request.data.get(key)
+        if raw in (None, "", "null"):
+            continue
+        if not can_access_task(_normalize_task_id(raw), request.user.id):
+            return Response(
+                {"error": f"`{key}` is not a task you can open."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    return None
+
+
 class TaskMasterView(AuthenticatedAPIView):
     def post(self, request):
         # Tier quota: monthly task-creation cap. Charged to the
@@ -239,6 +328,20 @@ class TaskMasterView(AuthenticatedAPIView):
         # create-form bootstrap row (`is_init_task`) is a real create
         # and charges a unit — deleting it later doesn't refund.
         if res := check_monthly_creation_quota(request.user.id, TASK_CREATE_KEY, "task_create"):
+            return res
+
+        # The project decides who can open the task, so the caller has to
+        # be on it. `align_team_to_object` already moves `team` onto the
+        # project's own team, but only for a caller who reaches the
+        # project; anyone else kept the team they named, and the row was
+        # filed into a stranger's project all the same.
+        project = None
+        if is_project_member(request.data.get("project"), request.user.id):
+            project = ProjectMaster.objects.filter(project_id=request.data["project"]).first()
+        if project is None:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if res := _refuse_unreachable_task_links(request, project):
             return res
 
         # Two-way bridge between `milestone` and `parent_task_id`:
@@ -315,8 +418,11 @@ class TaskMasterView(AuthenticatedAPIView):
         # required field is client error, not server error).
         try:
             data = {
-                "team": request.data["team"],
-                "project": request.data["project"],
+                # The project's team, whatever the payload said: a task
+                # filed under one team's project and another team's id is
+                # invisible to the project's own task list.
+                "team": project.team_id,
+                "project": project.project_id,
                 "chat_type": request.data.get("chat_type", None),
                 "chat_id": request.data.get("chat_id", None),
                 "thread_id": request.data.get("thread_id", None),
@@ -400,7 +506,10 @@ class TaskMasterView(AuthenticatedAPIView):
             serializer.save()
             # Collaborators ride outside the serializer (M2M) — set them
             # once the row exists. Absent key => no collaborators.
-            sync_task_collaborators(serializer.instance, request.data.get("collaborators"))
+            sync_task_collaborators(
+                serializer.instance,
+                _people_allowed_on(project, request.data.get("collaborators")),
+            )
             increment_usage(str(request.user.id), TASK_CREATE_KEY)
             # Drop the project-tasks cache so the next sidebar fetch
             # sees the new row. `data["team"]` / `data["project"]` are
@@ -1914,6 +2023,9 @@ class TaskAttachmentsView(AuthenticatedAPIView):
         attached_type = request.POST.get("attached_type")
         attached_file = request.FILES.get("attached_file")
 
+        if not can_access_task(task, request.user.id):
+            return _no_task()
+
         # Tier quota: per-file upload size.
         if attached_file is not None and (res := check_upload_size(request.user, attached_file)):
             return res
@@ -1969,9 +2081,20 @@ class TaskAttachmentsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        task = int(raw_task_id)
-        attachments = TaskMaster.objects.filter(task=task, is_init_task=False)
-        serializer = TaskMasterSerializer(attachments, many=True)
+        try:
+            task = int(raw_task_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "task_id must be an integer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not can_access_task(task, request.user.id):
+            return _no_task()
+        # This filtered `TaskMaster` on a field it does not have, so it
+        # was a FieldError for every caller; nothing in the client reads
+        # it. It lists what it is named for now.
+        attachments = TaskAttachments.objects.filter(task=task).order_by("attachment_id")
+        serializer = TaskAttachmentsSerializer(attachments, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def delete(self, request):
@@ -1983,6 +2106,8 @@ class TaskAttachmentsView(AuthenticatedAPIView):
                 {"error": "Both 'task' and 'attachment_id' are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if not can_access_task(task, request.user.id):
+            return _no_task()
 
         try:
             attachment = TaskAttachments.objects.get(task=task, attachment_id=attachment_id)
@@ -2016,8 +2141,33 @@ class TaskAttachmentsView(AuthenticatedAPIView):
             )
 
 
+def _own_comment(request, task_id, comment_id):
+    """The caller's own comment, or None.
+
+    Someone else's comment is answered exactly like a missing one. The UI
+    only offers edit and delete on your own (`TaskCommentBubble.isSent`),
+    and the API offered both on everyone's.
+    """
+    try:
+        comment = TaskComments.objects.filter(task=task_id, comment_id=comment_id).first()
+    except (DjangoValidationError, TypeError, ValueError):
+        return None
+    if comment is None or str(comment.sender_id) != str(request.user.id):
+        return None
+    return comment
+
+
 class TaskCommentsView(AuthenticatedAPIView):
     def post(self, request):
+        task_id = request.data.get("task_id")
+        if task_id in (None, ""):
+            return Response(
+                {"error": "task_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not can_access_task(task_id, request.user.id):
+            return _no_task()
+
         # NOTE: this count must stay UNFILTERED by `is_deleted`. `comment_id`
         # is a per-task sequence claimed at create time and guarded by the
         # `unique_task_comment` constraint, and deletes are soft (the row
@@ -2025,13 +2175,16 @@ class TaskCommentsView(AuthenticatedAPIView):
         # comment and collide on the constraint — and the v3 mirror's
         # `uuid5(task_id, comment_id)` PK would resolve to the tombstoned
         # message. Deleted rows keep their slot on purpose.
-        comment_count = TaskComments.objects.filter(task=request.data["task_id"]).count()
+        comment_count = TaskComments.objects.filter(task=task_id).count()
 
         data = {
-            "task": request.data["task_id"],
-            "sender": request.data["sender_id"],
+            "task": task_id,
+            # The caller, never the body's `sender_id`: that named the
+            # author, so a member could post as any colleague and the
+            # activity feed and the push said it was them.
+            "sender": request.user.id,
             "comment_id": comment_count + 1,
-            "comment_body": request.data["comment_body"],
+            "comment_body": request.data.get("comment_body"),
         }
 
         serializer = TaskCommentsSerializer(data=data)
@@ -2057,7 +2210,7 @@ class TaskCommentsView(AuthenticatedAPIView):
             # reachable only from that one notification. Report it so the
             # commenter can add them properly.
             comment_project_id = (
-                TaskMaster.objects.filter(task_id=request.data["task_id"])
+                TaskMaster.objects.filter(task_id=task_id)
                 .values_list("project_id", flat=True)
                 .first()
             )
@@ -2087,14 +2240,18 @@ class TaskCommentsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        message = TaskComments.objects.get(task=task_id, comment_id=comment_id)
+        if not can_access_task(task_id, request.user.id):
+            return _no_task()
+        message = _own_comment(request, task_id, comment_id)
+        if message is None:
+            return Response({"error": "Comment not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        update_data = request.data.copy()
-
-        # Remove None values from the update_data
-        for key, val in request.data.items():
-            if val is None:
-                update_data.pop(key)
+        # The body is the only thing an edit changes. The whole request
+        # used to go to a partial serializer, so an edit could also hand
+        # the comment to another author or move it onto another task.
+        update_data = {}
+        if request.data.get("comment_body") is not None:
+            update_data["comment_body"] = request.data["comment_body"]
 
         serializer = TaskCommentsSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
@@ -2130,16 +2287,19 @@ class TaskCommentsView(AuthenticatedAPIView):
             )
 
         try:
-            comment = TaskComments.objects.get(task=task_id, comment_id=comment_id)
-        except TaskComments.DoesNotExist:
-            return Response(
-                {"error": "Comment not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            int(task_id), int(comment_id)
         except (TypeError, ValueError):
             return Response(
                 {"error": "task_id and comment_id must be integers."},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not can_access_task(task_id, request.user.id):
+            return _no_task()
+        comment = _own_comment(request, task_id, comment_id)
+        if comment is None:
+            return Response(
+                {"error": "Comment not found."},
+                status=status.HTTP_404_NOT_FOUND,
             )
 
         if not comment.is_deleted:
@@ -2261,6 +2421,8 @@ class TaskCommentsView(AuthenticatedAPIView):
 
 class TaskCommentReactionView(AuthenticatedAPIView):
     def post(self, request):
+        if not can_access_task(request.data.get("task_id"), request.user.id):
+            return _no_task()
 
         current_max_reaction_id = TaskCommentReactionFact.objects.filter(
             team_id=request.data["team_id"],
@@ -2274,7 +2436,9 @@ class TaskCommentReactionView(AuthenticatedAPIView):
             "comment_id": int(request.data["comment_id"]),
             "reaction_id": current_max_reaction_id + 1 if current_max_reaction_id else 1,
             "reaction_emoji": request.data["reaction_emoji"],
-            "sender": request.data["sender_id"],
+            # The caller, not the body's `sender_id`, for the same reason
+            # as a comment's author: the reaction notifies as them.
+            "sender": request.user.id,
         }
 
         serializer = TaskCommentReactionFactSerializer(data=data)
@@ -2326,11 +2490,16 @@ class TaskCommentReactionView(AuthenticatedAPIView):
             )
 
         comment_id = int(raw_comment_id)
+        if not can_access_task(task_id, request.user.id):
+            return _no_task()
 
         try:
+            # Only ever the caller's own reaction. `sender_id` is still
+            # required, so older clients keep working, but it no longer
+            # names whose reaction to take back.
             reaction = TaskCommentReactionFact.objects.get(
                 team=team_id,
-                sender=sender_id,
+                sender=request.user.id,
                 task_id=int(task_id),
                 comment_id=comment_id,
                 reaction_emoji=reaction_emoji,
@@ -2349,6 +2518,8 @@ class TaskCommentReactionView(AuthenticatedAPIView):
 
 class TaskCommentMentionView(AuthenticatedAPIView):
     def post(self, request):
+        if not can_access_task(request.data.get("task_id"), request.user.id):
+            return _no_task()
         res = []
         try:
             for mentioned_user_id in list(request.data["mentioned_user_ids"]):
@@ -2411,6 +2582,8 @@ class TaskCommentMentionView(AuthenticatedAPIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if not can_access_task(task_id, request.user.id):
+            return _no_task()
 
         try:
             for mentioned_user_id in list(str(mentioned_user_ids).split(",")):
@@ -2447,6 +2620,10 @@ class TaskBodyAttachmentView(AuthenticatedAPIView):
 
         if res := validate_request_user(str(request_user_id), str(data["uploader"])):
             return res
+
+        # The uploader was checked against the caller; the task never was.
+        if not can_access_task(data["task"], request_user_id):
+            return _no_task()
 
         # Tier quota: per-file upload size.
         if res := check_upload_size(request.user, data["body_attachment_url"]):
@@ -2495,6 +2672,25 @@ def _hydrate_dependency_ref(dep, other_task):
     }
 
 
+def _openable_task_q(user_id, prefix):
+    """`can_access_task` as a filter on the task at `prefix`.
+
+    Each edge carries the other end's title, project and assignee, so an
+    edge into a task the caller cannot open is not theirs to see either.
+    The memberships are subqueries rather than a fetched id list, so the
+    filter rides inside the query that reads the edges (the batch list
+    has its query count pinned).
+    """
+    member_of = ProjectMembers.objects.filter(attendee=user_id).values("project_id")
+    owned = ProjectMaster.objects.filter(owner=user_id).values("project_id")
+    return (
+        Q(**{f"{prefix}assignee_id": user_id})
+        | Q(**{f"{prefix}reporter_id": user_id})
+        | Q(**{f"{prefix}project_id__in": member_of})
+        | Q(**{f"{prefix}project_id__in": owned})
+    )
+
+
 class TaskDependencyView(AuthenticatedAPIView):
     """CRUD for task↔task dependency edges.
 
@@ -2527,14 +2723,18 @@ class TaskDependencyView(AuthenticatedAPIView):
         # `blockedBy` = rows where the current task is the blocked one;
         # the "other" endpoint is the blocker.
         # Tombstones (either endpoint soft-deleted) are filtered so the
-        # UI never shows ghosts.
+        # UI never shows ghosts, and so is any edge whose other end the
+        # caller cannot open.
+        user_id = request.user.id
         blocking_rows = (
             TaskDependency.objects.filter(blocker_task_id=task_id)
+            .filter(_openable_task_q(user_id, "blocked_task__"))
             .select_related("blocked_task", "blocked_task__project")
             .exclude(blocked_task__is_deleted=True)
         )
         blocked_by_rows = (
             TaskDependency.objects.filter(blocked_task_id=task_id)
+            .filter(_openable_task_q(user_id, "blocker_task__"))
             .select_related("blocker_task", "blocker_task__project")
             .exclude(blocker_task__is_deleted=True)
         )
@@ -2564,6 +2764,19 @@ class TaskDependencyView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        not_found = Response(
+            {"error": "One or both tasks were not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+        # Both ends: the 201 echoes the blocked task's title, project and
+        # assignee, and the edge then shows on the blocker's side to
+        # everyone who can open that one.
+        if not (
+            can_access_task(blocker_task_id, request.user.id)
+            and can_access_task(blocked_task_id, request.user.id)
+        ):
+            return not_found
+
         try:
             blocker = TaskMaster.objects.select_related("project").get(
                 task_id=blocker_task_id, is_deleted=False
@@ -2572,10 +2785,7 @@ class TaskDependencyView(AuthenticatedAPIView):
                 task_id=blocked_task_id, is_deleted=False
             )
         except TaskMaster.DoesNotExist:
-            return Response(
-                {"error": "One or both tasks were not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            return not_found
 
         if blocker.team_id is None or blocked.team_id is None:
             return Response(
@@ -2624,9 +2834,13 @@ class TaskDependencyView(AuthenticatedAPIView):
                 {"error": "dependency_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        try:
-            dep = TaskDependency.objects.get(pk=dependency_id)
-        except TaskDependency.DoesNotExist:
+        dep = TaskDependency.objects.filter(pk=dependency_id).first()
+        # An edge the caller could not see in either list is not theirs
+        # to remove, so it needs both ends, as creating one does.
+        if dep is None or not (
+            can_access_task(dep.blocker_task_id, request.user.id)
+            and can_access_task(dep.blocked_task_id, request.user.id)
+        ):
             return Response(
                 {"error": "Dependency not found."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -2671,13 +2885,22 @@ class TaskDependencyBatchListView(AuthenticatedAPIView):
         if not task_ids:
             return Response({"dependencies_by_task": by_task}, status=status.HTTP_200_OK)
 
+        # Both ends filtered: the requested ids are as walkable as the
+        # single view's, which refuses a task the caller cannot open, and
+        # this answers up to 500 of them at a time. An id the caller
+        # cannot open keeps its empty lists, same as an unknown one.
+        user_id = request.user.id
         blocking_rows = (
             TaskDependency.objects.filter(blocker_task_id__in=task_ids)
+            .filter(_openable_task_q(user_id, "blocker_task__"))
+            .filter(_openable_task_q(user_id, "blocked_task__"))
             .select_related("blocked_task", "blocked_task__project")
             .exclude(blocked_task__is_deleted=True)
         )
         blocked_by_rows = (
             TaskDependency.objects.filter(blocked_task_id__in=task_ids)
+            .filter(_openable_task_q(user_id, "blocked_task__"))
+            .filter(_openable_task_q(user_id, "blocker_task__"))
             .select_related("blocker_task", "blocker_task__project")
             .exclude(blocker_task__is_deleted=True)
         )

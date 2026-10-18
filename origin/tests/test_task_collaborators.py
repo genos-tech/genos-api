@@ -238,6 +238,8 @@ class CollaboratorNotificationFanoutTests(BaseAPITestCase):
             username="collabuser", email="collab@example.com", password="collabpass123"
         )
         TeamMembers.objects.create(team=self.team, attendee=self.user3)
+        # The commenter has to be able to open the task to comment on it.
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
         # assignee=self.user, collaborator=self.user3, commenter=self.user2.
         self.task = TaskMaster.objects.create(
             team=self.team, project=self.project, title="T", status="Open", assignee=self.user
@@ -308,6 +310,8 @@ class HeaderlessTaskCommentFanoutTests(BaseAPITestCase):
             username="hcollab", email="hcollab@example.com", password="hcollabpass123"
         )
         TeamMembers.objects.create(team=self.team, attendee=self.user3)
+        # The commenter has to be able to open the task to comment on it.
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
         self.task = TaskMaster.objects.create(
             team=self.team, project=self.project, title="T", status="Open", assignee=self.user
         )
@@ -356,6 +360,8 @@ class RealCardPathCommentTests(BaseAPITestCase):
             username="rc3", email="rc3@example.com", password="rc3pass123"
         )
         TeamMembers.objects.create(team=self.team, attendee=self.user3)
+        # The commenter has to be able to open the task to comment on it.
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
         self.task = TaskMaster.objects.create(
             team=self.team, project=self.project, title="RT", status="Open", assignee=self.user
         )
