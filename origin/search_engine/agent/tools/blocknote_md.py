@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from bisect import bisect_left
 from typing import Any, Callable
 
 # Maps a citation token ("task:12") to (href, fallback_label), or None
@@ -114,26 +115,27 @@ def _text_node(text: str, styles: dict[str, bool] | None = None) -> dict[str, An
     return {"type": "text", "text": text, "styles": styles or {}}
 
 
-def _tokenize_formatting(text: str) -> list[dict[str, Any]]:
-    """Split a code- and link-free run into text nodes carrying
-    bold/italic/strike styles."""
-    if not text:
-        return []
-    out: list[dict[str, Any]] = []
+def _format_spans(text: str) -> list[tuple[int, int, dict[str, bool]]]:
+    """`(start, end, styles)` for each run of `text` once the
+    bold/italic/strike markers are dropped; unmarked runs carry `{}`."""
+    spans: list[tuple[int, int, dict[str, bool]]] = []
     cursor = 0
     for m in _FORMAT_RE.finditer(text):
         if m.start() > cursor:
-            out.append(_text_node(text[cursor : m.start()]))
-        if m.group(1) is not None or m.group(2) is not None:
-            out.append(_text_node(m.group(1) or m.group(2) or "", {"bold": True}))
-        elif m.group(5) is not None:
-            out.append(_text_node(m.group(5), {"strike": True}))
-        else:
-            out.append(_text_node(m.group(3) or m.group(4) or "", {"italic": True}))
+            spans.append((cursor, m.start(), {}))
+        group = next(g for g in range(1, 6) if m.group(g) is not None)
+        style = "bold" if group in (1, 2) else "strike" if group == 5 else "italic"
+        spans.append((m.start(group), m.end(group), {style: True}))
         cursor = m.end()
     if cursor < len(text):
-        out.append(_text_node(text[cursor:]))
-    return out
+        spans.append((cursor, len(text), {}))
+    return spans
+
+
+def _tokenize_formatting(text: str) -> list[dict[str, Any]]:
+    """Split a code- and link-free run into text nodes carrying
+    bold/italic/strike styles."""
+    return [_text_node(text[s:e], dict(styles)) for s, e, styles in _format_spans(text)]
 
 
 # Bare citation token in prose — `[task:12]` — that is NOT the label of
@@ -141,87 +143,119 @@ def _tokenize_formatting(text: str) -> list[dict[str, Any]]:
 # CITATION_PATTERN.
 _BARE_TOKEN_RE = re.compile(r"\[((?:chat|task|note|project|todo|milestone):[^\]\s]+)\](?!\()")
 
+# Stands in for an atom (code span, link) in the line handed to the
+# emphasis pass, so `**`x` y**` and `**see [docs](u)**` still pair their
+# markers across it. Atoms are found again by offset, never by this
+# character, so a literal U+FFFC in the text stays text.
+_ATOM = "\ufffc"
 
-def _link_node(href: str, label: str) -> dict[str, Any]:
-    return {"type": "link", "href": href, "content": [_text_node(label)]}
+# One line mid-tokenising: literal text, or an atom's finished nodes.
+_Parts = list["str | list[dict[str, Any]]"]
 
 
-def _tokenize_prose(text: str, resolver: EntityLinkResolver | None) -> list[dict[str, Any]]:
-    """A link-free run: resolve bare `[type:id]` citation tokens into
-    links when a resolver is supplied (label = the entity's
-    display_id/name/title), otherwise/on a miss keep the literal text;
-    everything between runs through bold/italic tokenisation."""
-    if not text:
-        return []
-    if resolver is None:
-        return _tokenize_formatting(text)
-    out: list[dict[str, Any]] = []
-    cursor = 0
-    for m in _BARE_TOKEN_RE.finditer(text):
-        resolved = resolver(m.group(1))
-        if not resolved:
-            continue  # leave the literal token inside the surrounding run
-        if m.start() > cursor:
-            out.extend(_tokenize_formatting(text[cursor : m.start()]))
-        out.append(_link_node(resolved[0], resolved[1]))
-        cursor = m.end()
-    if cursor < len(text):
-        out.extend(_tokenize_formatting(text[cursor:]))
-    return out
+def _link_node(href: str, content: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"type": "link", "href": href, "content": content}
+
+
+def _with_styles(node: dict[str, Any], styles: dict[str, bool]) -> dict[str, Any]:
+    """An atom node under enclosing emphasis: a code run keeps `code` and
+    gains the style; a link passes it to every run of its label."""
+    if not styles:
+        return node
+    if node["type"] == "link":
+        return {**node, "content": [_with_styles(c, styles) for c in node["content"]]}
+    return {**node, "styles": {**node["styles"], **styles}}
 
 
 def _tokenize_inline(text: str, resolver: EntityLinkResolver | None = None) -> list[dict[str, Any]]:
     """Inline content for one line. Code spans are cut out first, since
-    their text is literal; everything between them goes through link,
-    citation and emphasis tokenising."""
+    their text is literal, then links and citation tokens; each becomes
+    an atom, and emphasis is matched over the whole line with the atoms
+    held in place, so a marker pair wrapping one styles it too."""
     if not text:
         return []
-    out: list[dict[str, Any]] = []
+    parts: _Parts = []
     cursor = 0
     for m in _CODE_SPAN_RE.finditer(text):
-        if m.start() > cursor:
-            out.extend(_tokenize_links(text[cursor : m.start()], resolver))
+        _collect_links(text[cursor : m.start()], resolver, parts)
         # CommonMark strips one space each side so `` `` `x` `` `` can
         # hold a backtick; ordinary spans are unaffected.
         code = m.group(2)
         if len(code) > 2 and code.startswith(" ") and code.endswith(" "):
             code = code[1:-1]
-        out.append(_text_node(code, {"code": True}))
+        parts.append([_text_node(code, {"code": True})])
         cursor = m.end()
-    if cursor < len(text):
-        out.extend(_tokenize_links(text[cursor:], resolver))
+    _collect_links(text[cursor:], resolver, parts)
+
+    line: list[str] = []
+    atoms: dict[int, list[dict[str, Any]]] = {}
+    offset = 0
+    for part in parts:
+        if isinstance(part, str):
+            line.append(part)
+            offset += len(part)
+        else:
+            atoms[offset] = part
+            line.append(_ATOM)
+            offset += 1
+    run = "".join(line)
+    atom_offsets = sorted(atoms)
+
+    out: list[dict[str, Any]] = []
+    for start, end, styles in _format_spans(run):
+        cursor = start
+        for pos in atom_offsets[bisect_left(atom_offsets, start) : bisect_left(atom_offsets, end)]:
+            if pos > cursor:
+                out.append(_text_node(run[cursor:pos], dict(styles)))
+            out.extend(_with_styles(node, styles) for node in atoms[pos])
+            cursor = pos + 1
+        if end > cursor:
+            out.append(_text_node(run[cursor:end], dict(styles)))
     return out
 
 
-def _tokenize_links(text: str, resolver: EntityLinkResolver | None) -> list[dict[str, Any]]:
+def _collect_links(text: str, resolver: EntityLinkResolver | None, parts: _Parts) -> None:
     """A code-free run: markdown links become BlockNote link
     nodes — real URLs always, and `[prose](task:5)`-style citation
     targets when an entity-link resolver is supplied (create_note /
     update_note pass one bound to the caller's team, so saved notes
     carry working in-app links). An unresolvable citation target
     degrades to its prose so the note never carries a dead link."""
-    if not text:
-        return []
-    out: list[dict[str, Any]] = []
     cursor = 0
     for m in _LINK_RE.finditer(text):
-        if m.start() > cursor:
-            out.extend(_tokenize_prose(text[cursor : m.start()], resolver))
+        _collect_citation_tokens(text[cursor : m.start()], resolver, parts)
         label, href = m.group(1), m.group(2)
         if href.startswith(("http://", "https://", "mailto:")):
-            out.append(_link_node(href, label))
+            parts.append([_link_node(href, _tokenize_formatting(label))])
         else:
             resolved = resolver(href) if resolver else None
             if resolved:
                 # Citation target → in-app link, keeping the model's prose.
-                out.append(_link_node(resolved[0], label))
+                parts.append([_link_node(resolved[0], _tokenize_formatting(label))])
             else:
                 # Non-URL target we can't resolve — keep the prose.
-                out.extend(_tokenize_formatting(label))
+                parts.append(label)
         cursor = m.end()
-    if cursor < len(text):
-        out.extend(_tokenize_prose(text[cursor:], resolver))
-    return out
+    _collect_citation_tokens(text[cursor:], resolver, parts)
+
+
+def _collect_citation_tokens(text: str, resolver: EntityLinkResolver | None, parts: _Parts) -> None:
+    """A link-free run: resolve bare `[type:id]` citation tokens into
+    links when a resolver is supplied (label = the entity's
+    display_id/name/title), otherwise/on a miss keep the literal text."""
+    if resolver is None:
+        parts.append(text)
+        return
+    cursor = 0
+    for m in _BARE_TOKEN_RE.finditer(text):
+        resolved = resolver(m.group(1))
+        if not resolved:
+            continue  # leave the literal token inside the surrounding run
+        parts.append(text[cursor : m.start()])
+        # The entity's own name — literal, never emphasis-parsed.
+        parts.append([_link_node(resolved[0], [_text_node(resolved[1])])])
+        cursor = m.end()
+    parts.append(text[cursor:])
 
 
 def _block(
