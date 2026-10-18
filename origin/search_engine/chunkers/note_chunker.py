@@ -31,6 +31,7 @@ from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMembers
+from origin.search_engine.acl_dirty import DirtyScopes
 from origin.search_engine.agent.acl import chat_acl_user_ids, team_folder_acl_user_ids
 from origin.search_engine.chunkers.base import (
     CHAT_TYPE_LABEL,
@@ -48,10 +49,14 @@ from origin.search_engine.text_extraction import extract_sections
 # ----------------------------- ChatNote -----------------------------
 
 
-def iter_chat_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
+def iter_chat_note_chunks(
+    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+) -> Iterator[EntityChunks]:
     qs = ChatNoteMaster.objects.select_related("team", "owner")
     if since is not None:
-        qs = qs.filter(ts_updated_at__gte=since)
+        # Plus every note in a channel whose membership changed, and in a
+        # PM channel whose project's did (PM members are project members).
+        qs = qs.filter(Q(ts_updated_at__gte=since) | _dirty_channel_q(dirty))
 
     notes = list(qs)
     if not notes:
@@ -118,6 +123,14 @@ def iter_chat_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityCh
             )
 
 
+def _dirty_channel_q(dirty: Optional[DirtyScopes]) -> Q:
+    """Chat notes whose channel's readers changed; matches nothing when
+    no channel is marked."""
+    if not dirty or not dirty.acl_channel_ids:
+        return Q(pk__in=[])
+    return Q(channel_id__in=dirty.acl_channel_ids)
+
+
 def _resolve_chat_acls(notes: list[ChatNoteMaster]) -> dict:
     """Map `channel_id` (UUID) → list of user_ids allowed in that channel."""
     # Chat notes are keyed on the v3 `Channel` UUID; resolve membership
@@ -138,10 +151,16 @@ def _resolve_chat_acls(notes: list[ChatNoteMaster]) -> dict:
 # ----------------------------- TaskNote -----------------------------
 
 
-def iter_task_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
+def iter_task_note_chunks(
+    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+) -> Iterator[EntityChunks]:
     qs = TaskNoteMaster.objects.select_related("team", "project", "task", "owner")
     if since is not None:
-        qs = qs.filter(ts_updated_at__gte=since)
+        window = Q(ts_updated_at__gte=since)
+        if dirty and dirty.project_ids:
+            # The project members are this note's ACL.
+            window |= Q(project_id__in=dirty.project_ids)
+        qs = qs.filter(window)
     notes = list(qs)
     if not notes:
         return
@@ -376,7 +395,11 @@ def _note_to_section_chunks(
 # ----------------------------- entry point -----------------------------
 
 
-def iter_all_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
-    yield from iter_chat_note_chunks(since)
-    yield from iter_task_note_chunks(since)
+def iter_all_note_chunks(
+    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+) -> Iterator[EntityChunks]:
+    yield from iter_chat_note_chunks(since, dirty)
+    yield from iter_task_note_chunks(since, dirty)
+    # Personal notes take no ACL from a project or channel; their team
+    # folders already re-index through the folder's own timestamp.
     yield from iter_personal_note_chunks(since)

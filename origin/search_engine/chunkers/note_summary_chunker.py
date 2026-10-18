@@ -15,9 +15,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Iterator, Optional
 
+from django.db.models import Q
+
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
+from origin.search_engine.acl_dirty import DirtyScopes
 from origin.search_engine.agent.acl import (
     chat_note_acl_user_ids,
     personal_note_acl_user_ids,
@@ -80,10 +83,43 @@ def _resolve_note_for_summary(summary: NoteSummary):
     return None, set()
 
 
-def iter_note_summary_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
+def _dirty_note_keys(dirty: Optional[DirtyScopes]) -> set[tuple[int, int]]:
+    """(note_type, note_id) of every task note in a marked project and
+    chat note in a marked channel: their summaries' ACLs changed."""
+    if not dirty:
+        return set()
+    keys: set[tuple[int, int]] = set()
+    if dirty.project_ids:
+        keys.update(
+            (NOTE_TYPE_TASK, i)
+            for i in TaskNoteMaster.objects.filter(project_id__in=dirty.project_ids).values_list(
+                "note_id", flat=True
+            )
+        )
+    if dirty.acl_channel_ids:
+        keys.update(
+            (NOTE_TYPE_CHAT, i)
+            for i in ChatNoteMaster.objects.filter(
+                channel_id__in=dirty.acl_channel_ids
+            ).values_list("note_id", flat=True)
+        )
+    return keys
+
+
+def iter_note_summary_chunks(
+    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+) -> Iterator[EntityChunks]:
     qs = NoteSummary.objects.all().order_by("id")
+    # Also read on a full pass: that pass releases the marks too, so it
+    # is the last chance to tombstone.
+    dirty_keys = _dirty_note_keys(dirty)
     if since is not None:
-        qs = qs.filter(ts_updated_at__gte=since)
+        window = Q(ts_updated_at__gte=since)
+        for note_type in (NOTE_TYPE_TASK, NOTE_TYPE_CHAT):
+            note_ids = [i for t, i in dirty_keys if t == note_type]
+            if note_ids:
+                window |= Q(note_type=note_type, note_id__in=note_ids)
+        qs = qs.filter(window)
 
     for summary in qs.iterator():
         if not summary.team_id or not summary.summary_text:
@@ -93,14 +129,19 @@ def iter_note_summary_chunks(since: Optional[datetime] = None) -> Iterator[Entit
         if not note_label:
             continue
 
+        entity_id = f"note_summary:{summary.note_type}:{summary.note_id}"
+
         note, acl_set = _resolve_note_for_summary(summary)
         # Underlying note gone, or ACL empty → not reachable by anyone.
-        # Defensive skip (matches the thread-summary chunker pattern).
+        # Defensive skip (matches the thread-summary chunker pattern). A
+        # note whose last reader just left is tombstoned, so its old copy
+        # goes too.
         if note is None or not acl_set:
+            if note is not None and (summary.note_type, summary.note_id) in dirty_keys:
+                yield EntityChunks(entity_type="note_summary", entity_id=entity_id, chunks=[])
             continue
 
         acl_user_ids = sorted(acl_set)
-        entity_id = f"note_summary:{summary.note_type}:{summary.note_id}"
 
         # Source-of-truth bits used to seed related_entity_ids + the
         # chunk's chat/project breadcrumbs so Spotlight can deep-link

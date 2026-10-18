@@ -14,6 +14,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Iterator, Optional
 
+from django.db.models import Q
+
+from origin.search_engine.acl_dirty import DirtyScopes
 from origin.search_engine.agent.acl import chat_acl_user_ids
 from origin.search_engine.chunkers.base import (
     CHAT_TYPE_LABEL,
@@ -26,10 +29,17 @@ from origin.search_engine.chunkers.base import (
 from origin.search_engine.models import ThreadSummary
 
 
-def iter_thread_summary_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
+def iter_thread_summary_chunks(
+    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+) -> Iterator[EntityChunks]:
     qs = ThreadSummary.objects.all().order_by("id")
+    dirty_chat_ids = dirty.acl_channel_ids if dirty else frozenset()
     if since is not None:
-        qs = qs.filter(ts_updated_at__gte=since)
+        window = Q(ts_updated_at__gte=since)
+        if dirty_chat_ids:
+            # The chat's readers are this summary's ACL.
+            window |= Q(chat_id__in=dirty_chat_ids)
+        qs = qs.filter(window)
 
     for summary in qs.iterator():
         if not summary.team_id or not summary.summary_text:
@@ -39,15 +49,18 @@ def iter_thread_summary_chunks(since: Optional[datetime] = None) -> Iterator[Ent
         if not chat_label:
             continue
 
+        entity_id = f"thread_summary:{summary.chat_type}:{summary.chat_id}:{summary.thread_id}"
+
         acl_user_ids = sorted(chat_acl_user_ids(summary.chat_type, str(summary.chat_id)))
         # An empty ACL would render the chunk unsearchable for everyone.
         # That's actually correct (no members → no readers), but emitting
         # an empty acl_user_ids list lets the indexer's ACL filter accept
-        # *any* user — defensively skip the chunk instead.
+        # *any* user — defensively skip the chunk instead. A chat whose
+        # last reader just left is tombstoned, so its old copy goes too.
         if not acl_user_ids:
+            if str(summary.chat_id) in dirty_chat_ids:
+                yield EntityChunks(entity_type="thread_summary", entity_id=entity_id, chunks=[])
             continue
-
-        entity_id = f"thread_summary:{summary.chat_type}:{summary.chat_id}:{summary.thread_id}"
 
         # The summary text derives from the thread's messages; when every
         # one of them has been soft-deleted the summary must not stay

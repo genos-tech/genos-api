@@ -37,6 +37,7 @@ from typing import Iterator, Optional
 
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskComments, TaskMaster
+from origin.search_engine.acl_dirty import DirtyScopes
 from origin.search_engine.chunkers.base import (
     CHAT_TYPE_LABEL,
     Chunk,
@@ -56,11 +57,14 @@ _LONG_CONTENT_THRESHOLD = 1500
 _TITLE_CHUNK_CONTENT_HEAD = 400
 
 
-def iter_task_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
+def iter_task_chunks(
+    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+) -> Iterator[EntityChunks]:
     """Yield one EntityChunks per task.
 
     With `since`, only tasks whose `ts_updated_at` >= since OR whose
-    comments' `ts_updated_at` >= since are re-emitted.
+    comments' `ts_updated_at` >= since are re-emitted, plus every task
+    in a project whose membership changed (`dirty`).
     """
     task_qs = TaskMaster.objects.filter(is_deleted=False, is_init_task=False)
 
@@ -68,6 +72,10 @@ def iter_task_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]
         dirty_task_ids = set(
             task_qs.filter(ts_updated_at__gte=since).values_list("task_id", flat=True)
         )
+        if dirty and dirty.project_ids:
+            dirty_task_ids |= set(
+                task_qs.filter(project_id__in=dirty.project_ids).values_list("task_id", flat=True)
+            )
         # No `is_deleted` filter here, deliberately: soft-deleting a comment
         # bumps its `ts_updated_at`, and that deletion must mark the task
         # dirty so the re-chunk drops the comment's chunk. (The content
