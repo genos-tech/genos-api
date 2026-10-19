@@ -1,0 +1,29 @@
+# Railway config for the `security-event-prune` cron service.
+#
+# Same Docker image as the `backend-django` service (built from the
+# same Dockerfile), but Railway runs it as a cron job: the container
+# starts on each tick, runs the start command to completion, and
+# exits. No gunicorn, no long-running process.
+#
+# What this does:
+#   Once a day at 03:30 UTC, deletes security audit events (MIP-725)
+#   older than SECURITY_EVENT_RETENTION_DAYS (default 365, floor 90).
+#   Without it the table grows forever; with it, the retention period
+#   the audit log promises is the one actually kept.
+#
+# To dry-run from a Railway shell (no DB changes):
+#   python /app/manage.py prune_security_events --dry-run
+#
+# All env vars from `backend-django` (DATABASE_URL, etc.) must also be
+# set on this service, including SECURITY_EVENT_RETENTION_DAYS if it is
+# overridden there.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Daily, half an hour after the demo cleanup so the two don't contend.
+cronSchedule = "30 3 * * *"
+startCommand = "python /app/manage.py prune_security_events"
+restartPolicyType = "NEVER"

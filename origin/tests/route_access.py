@@ -318,6 +318,8 @@ REGISTRY = {
     "origin.views.common.runtime_config_views.RuntimeConfigView": signed_in(
         "the build's feature flags, the same for every user"
     ),
+    # views.common.security_event_views
+    "origin.views.common.security_event_views.TeamSecurityEventListView": checked("_owned_team"),
     # views.common.team_connection_views
     "origin.views.common.team_connection_views.CrossTeamNoticeView": checked("is_team_member"),
     "origin.views.common.team_connection_views.ExternalShareObjectView": checked("is_team_member"),

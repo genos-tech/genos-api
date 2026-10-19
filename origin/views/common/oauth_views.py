@@ -41,10 +41,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.user_models import MULTI_ACCOUNT_PROVIDERS, ConnectedAccount
 from origin.services import crypto
 from origin.services.oauth.base import FlowIntent, OAuthProvider, ProviderProfile, TokenResponse
 from origin.services.oauth.registry import get_provider, supported_provider_names
+from origin.services.security_events import record_security_event
 
 from .auth_views import _set_refresh_cookie
 
@@ -294,6 +296,9 @@ class OAuthCallbackView(APIView):
             # will work, so the failure page can say more than "not this
             # one".
             if not _can_sign_in_with(existing, provider_email=profile.email):
+                _record_oauth_signin_failed(
+                    provider_name, profile, "not_a_login_account", existing.user
+                )
                 return HttpResponseRedirect(
                     _frontend_failure_url(
                         reason="not_a_login_account",
@@ -309,6 +314,7 @@ class OAuthCallbackView(APIView):
             # tokens SimpleJWT then rejects on first use, i.e. a signed-in
             # session that 401s on everything. Refuse at the door instead.
             if not user.is_active:
+                _record_oauth_signin_failed(provider_name, profile, "account_inactive", user)
                 return HttpResponseRedirect(_frontend_failure_url(reason="account_inactive"))
             # Deliberately NOT storing this round trip's token. A login
             # grant carries openid/email/profile and nothing else, and we
@@ -324,6 +330,7 @@ class OAuthCallbackView(APIView):
             # into instead.
             if profile.email and User.objects.filter(email__iexact=profile.email).exists():
                 other = User.objects.filter(email__iexact=profile.email).first()
+                _record_oauth_signin_failed(provider_name, profile, "email_in_use", other)
                 return HttpResponseRedirect(
                     _frontend_failure_url(
                         reason="email_in_use", primary=other.primary_auth_provider
@@ -359,6 +366,11 @@ class OAuthCallbackView(APIView):
             existing.save()
 
         access_jwt, refresh_jwt = self._issue_jwt(user)
+        record_security_event(
+            SecurityAction.SIGNIN_SUCCEEDED,
+            actor=user,
+            metadata={"method": provider_name},
+        )
         return self._redirect_with_session(
             access_jwt=access_jwt, refresh_jwt=refresh_jwt, next_path=next_path
         )
@@ -415,6 +427,14 @@ class OAuthCallbackView(APIView):
             )
             self._save_tokens(existing, token_response, save=False)
             existing.save()
+            record_security_event(
+                SecurityAction.OAUTH_CONNECTED,
+                actor=user,
+                target_type="connected_account",
+                target_id=existing.pk,
+                target_label=f"{provider_name}: {profile.email or profile.provider_user_id}",
+                metadata={"provider": provider_name, "scopes": existing.scopes},
+            )
         else:
             existing.provider_email = profile.email or existing.provider_email
             existing.scopes = token_response.granted_scopes or existing.scopes
@@ -561,6 +581,16 @@ class IntegrationsDisconnectAccountView(APIView):
         return _disconnect_account(account)
 
 
+def _record_oauth_signin_failed(provider_name: str, profile, reason: str, user) -> None:
+    record_security_event(
+        SecurityAction.SIGNIN_FAILED,
+        actor_label=profile.email or f"{provider_name}:{profile.provider_user_id}",
+        target_type="user" if user is not None else "",
+        target_id=user.pk if user is not None else "",
+        metadata={"method": provider_name, "reason": reason},
+    )
+
+
 def _can_sign_in_with(account: ConnectedAccount, *, provider_email: Optional[str] = None) -> bool:
     """Whether this row may authenticate a LOGIN.
 
@@ -631,5 +661,14 @@ def _disconnect_account(account: ConnectedAccount) -> Response:
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
+    target_id = account.pk
     account.delete()
+    record_security_event(
+        SecurityAction.OAUTH_DISCONNECTED,
+        actor=account.user,
+        target_type="connected_account",
+        target_id=target_id,
+        target_label=f"{account.provider}: {account.provider_email or account.provider_user_id}",
+        metadata={"provider": account.provider},
+    )
     return Response(status=status.HTTP_204_NO_CONTENT)

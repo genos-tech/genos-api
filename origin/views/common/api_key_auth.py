@@ -39,6 +39,7 @@ from django.utils import timezone
 from rest_framework import authentication, exceptions
 
 from origin.models.common.api_key_models import ApiKey, hash_key
+from origin.services import security_events
 
 KEYWORD = "ApiKey"
 
@@ -46,6 +47,13 @@ KEYWORD = "ApiKey"
 # it on every request would double the write cost of the public API to
 # power a field nobody reads to the minute.
 _LAST_USED_RESOLUTION = timedelta(hours=1)
+
+
+def _django(request):
+    """The Django request under DRF's. The audit writer reads `.auth`
+    and `.user`, which on the DRF request would re-enter this very
+    authenticator."""
+    return getattr(request, "_request", request)
 
 
 class ApiKeyAuthentication(authentication.BaseAuthentication):
@@ -68,15 +76,20 @@ class ApiKeyAuthentication(authentication.BaseAuthentication):
 
         key = ApiKey.objects.select_related("user", "team").filter(key_hash=hash_key(raw)).first()
         # One message for "no such key", "revoked" and "expired". Telling
-        # a caller which one leaks whether a key ever existed.
+        # a caller which one leaks whether a key ever existed. The audit
+        # log tells them apart; the caller never sees it.
         if key is None or not key.is_active:
+            reason = "unknown" if key is None else ("revoked" if key.revoked_at else "expired")
+            security_events.note_api_key_rejected(_django(request), key, reason)
             raise exceptions.AuthenticationFailed("Invalid or revoked API key.")
 
         user = key.user
         if user is None or not user.is_active or getattr(user, "is_deleted", False):
+            security_events.note_api_key_rejected(_django(request), key, "account_inactive")
             raise exceptions.AuthenticationFailed("Invalid or revoked API key.")
 
         self._touch(key)
+        security_events.note_api_key_used(_django(request), key)
         # `request.auth` carries the key so views can read `.scope` and
         # `.team` — that is how a write endpoint refuses a read-only key
         # without a second lookup.
