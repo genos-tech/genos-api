@@ -53,10 +53,13 @@ TIMEOUT_SECONDS = 5
 
 
 def _internal_token() -> str:
+    # Its own secret, not the user-token key (MIP-621): collab holds a copy
+    # of whatever signs this, and with the JWT key that copy could mint user
+    # tokens for this API.
     now = datetime.now(timezone.utc)
     return jwt.encode(
         {"aud": INTERNAL_AUDIENCE, "iat": now, "exp": now + TOKEN_TTL},
-        settings.SIMPLE_JWT["SIGNING_KEY"],
+        settings.COLLAB_INTERNAL_SECRET,
         algorithm="HS256",
     )
 
@@ -91,8 +94,15 @@ def _post(document_name: str, blocks: list[dict[str, Any]]) -> None:
 def _push(document_name: str, blocks: list[dict[str, Any]]) -> None:
     """Send `blocks` to `document_name` once the current transaction
     commits (immediately when there is none). A rolled-back write never
-    pushes. No-op when `COLLAB_INTERNAL_URL` is unset."""
+    pushes. No-op when `COLLAB_INTERNAL_URL` is unset, or when
+    `COLLAB_INTERNAL_SECRET` is (production refuses to boot that way, see
+    `_validate_transport`; dev just skips the push)."""
     if not settings.COLLAB_INTERNAL_URL:
+        return
+    if not settings.COLLAB_INTERNAL_SECRET:
+        logger.warning(
+            "collab body push skipped doc=%s: COLLAB_INTERNAL_SECRET is unset", document_name
+        )
         return
     snapshot = list(blocks or [])
     transaction.on_commit(lambda: _post(document_name, snapshot))

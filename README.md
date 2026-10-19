@@ -35,24 +35,26 @@ messaging and editor collaboration live in the sibling
 | Variable                | Required | Notes                                                              |
 | ----------------------- | -------- | ------------------------------------------------------------------ |
 | `DJANGO_DEBUG`          | dev      | Off unless exactly `true`. Local dev sets it; production leaves it unset or `false`. |
-| `DATABASE_URL`          | **Yes**  | Postgres URL. With DEBUG off the process refuses to start without it. |
+| `DATABASE_URL`          | **Yes**  | Postgres URL. With DEBUG off the process refuses to start without it. Outside DEBUG it connects with `sslmode=require` unless the URL names a stricter mode, and refuses `disable` / `allow` / `prefer`; a loopback host is exempt. |
 | `DJANGO_SETTINGS_MODULE`| —        | `apis.settings` (prod, default) or `apis.settings_test` (tests).   |
 | `DJANGO_SECRET_KEY`     | prod     | Django secret key.                                                 |
-| `JWT_SECRET_KEY`        | prod     | Shared with genos-sockets / genos-collab for token verification.   |
+| `JWT_SECRET_KEY`        | prod     | Shared with genos-collab (as `JWT_SECRET`) for token verification. genos-sockets has none: it forwards the token here. |
 | `ALLOWED_HOSTS`         | web      | The API's public host. Not `*`, not just `localhost`.              |
 | `CORS_ALLOWED_ORIGINS`  | web      | The frontend's exact origin(s). No wildcards.                      |
 | `OAUTH_TOKEN_ENCRYPTION_KEY` | web | Fernet key for OAuth tokens and webhook secrets at rest.          |
-| `REDIS_URL`             | —        | Cache backend.                                                     |
+| `REDIS_URL`             | —        | Cache backend. Outside DEBUG, plain `redis://` only to a private host (`*.railway.internal`, a private IP, a compose service name); anything else needs `rediss://`. |
+| `COLLAB_INTERNAL_URL`   | —        | genos-collab's http(s) base URL for the task/note body push. Plain `http://` only to a private host. Empty = no push. |
+| `COLLAB_INTERNAL_SECRET`| with the above | Signs that push. Same value on genos-collab; must differ from `JWT_SECRET_KEY`. |
 | `OPENSEARCH_HOST` / `OPENSEARCH_PORT` / `OPENSEARCH_INDEX` | — | Search engine. |
 | `EMBEDDING_PROVIDER`    | —        | `openai` / `vertex` — selects the embedding backend.               |
 | `LLM_PROVIDER`          | —        | `claude` / `gemini` / `openai` for the agent + judge.              |
 | `OPENAI_API_KEY`, `GEMINI_*` / `CLAUDE_API_KEY`, `TAVILY_API_KEY` | — | Provider creds (see `docs/` and the compose env in genos-platform). |
 
 With `DJANGO_DEBUG` off, every process (web and crons) refuses to start
-without real `DJANGO_SECRET_KEY`, `JWT_SECRET_KEY` and `DATABASE_URL`, and the
-web server (`apis/wsgi.py`) also refuses to start without the three **web**
-rows. The crons share the settings but never load wsgi, so they don't need
-those.
+without real `DJANGO_SECRET_KEY`, `JWT_SECRET_KEY` and `DATABASE_URL`, or on a
+plaintext hop the transport rules above refuse, and the web server
+(`apis/wsgi.py`) also refuses to start without the three **web** rows. The
+crons share the settings but never load wsgi, so they don't need those.
 
 For the full local set, see the `backend` service env in
 `genos-platform/docker/docker-compose.yml`.

@@ -32,9 +32,12 @@ from origin.services.milestone_service import ensure_backing_task
 from .test_base import BaseAPITestCase
 
 COLLAB = "http://collab.internal:8891"
+# Not settings_test's JWT key, so a token that verifies here was signed with
+# this and nothing else.
+COLLAB_SECRET = "test-only-collab-internal-secret"
 
 
-@override_settings(COLLAB_INTERNAL_URL=COLLAB)
+@override_settings(COLLAB_INTERNAL_URL=COLLAB, COLLAB_INTERNAL_SECRET=COLLAB_SECRET)
 class UpdateTaskCollabPushTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()
@@ -83,14 +86,15 @@ class UpdateTaskCollabPushTests(BaseAPITestCase):
             [b["type"] for b in payload["blocks"]], ["heading", "paragraph", "table", "paragraph"]
         )
 
-    def test_token_is_internal_audience_signed_with_shared_secret(self):
+    def test_token_is_internal_audience_signed_with_the_collab_secret(self):
         self._update(content_text="new body")
 
         header = self.post.call_args.kwargs["headers"]["Authorization"]
         self.assertTrue(header.startswith("Bearer "))
+        token = header.removeprefix("Bearer ")
         claims = jwt.decode(
-            header.removeprefix("Bearer "),
-            settings.SIMPLE_JWT["SIGNING_KEY"],
+            token,
+            COLLAB_SECRET,
             algorithms=["HS256"],
             audience=collab_push.INTERNAL_AUDIENCE,
         )
@@ -98,6 +102,15 @@ class UpdateTaskCollabPushTests(BaseAPITestCase):
         self.assertNotIn("user_id", claims)
         self.assertNotIn("token_type", claims)
         self.assertLessEqual(claims["exp"] - claims["iat"], 60)
+        # And not signed with the user-token key (MIP-621), so collab's copy
+        # of its secret can't mint tokens this API accepts.
+        with self.assertRaises(jwt.InvalidSignatureError):
+            jwt.decode(
+                token,
+                settings.SIMPLE_JWT["SIGNING_KEY"],
+                algorithms=["HS256"],
+                audience=collab_push.INTERNAL_AUDIENCE,
+            )
 
     def test_clearing_the_body_pushes_an_empty_list(self):
         TaskMaster.objects.filter(pk=self.task.pk).update(content=[{"type": "paragraph"}])
@@ -152,6 +165,16 @@ class UpdateTaskCollabPushTests(BaseAPITestCase):
         self._update(content_text="no collab here")
         self.post.assert_not_called()
 
+    @override_settings(COLLAB_INTERNAL_SECRET="")
+    def test_no_secret_skips_the_push(self):
+        # Never falls back to signing with another key. Production refuses
+        # to boot this way (`_validate_transport`); dev logs and skips.
+        with self.assertLogs("origin.services.collab_push", level="WARNING") as logs:
+            result = self._update(content_text="saved, not pushed")
+        self.assertIn("COLLAB_INTERNAL_SECRET is unset", logs.output[0])
+        self.post.assert_not_called()
+        self.assertEqual(result["changed_fields"], ["content"])
+
     def test_milestone_body_pushes_what_the_backing_row_stored(self):
         milestone = MilestoneMaster.objects.create(
             team=self.team,
@@ -174,7 +197,7 @@ class UpdateTaskCollabPushTests(BaseAPITestCase):
         self.assertEqual(payload["blocks"][0]["type"], "heading")
 
 
-@override_settings(COLLAB_INTERNAL_URL=COLLAB)
+@override_settings(COLLAB_INTERNAL_URL=COLLAB, COLLAB_INTERNAL_SECRET=COLLAB_SECRET)
 class UpdateNoteCollabPushTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()

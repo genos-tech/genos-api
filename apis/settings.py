@@ -10,11 +10,13 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
+import ipaddress
 import json
 import os
 import sys
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import dj_database_url
 
@@ -48,6 +50,13 @@ ALLOWED_HOSTS = [
 # everywhere else.
 if "healthcheck.railway.app" not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append("healthcheck.railway.app")
+# Railway sets RAILWAY_PRIVATE_DOMAIN (`<service>.railway.internal`) on every
+# service. genos-collab's access checks reach this service there, over the
+# private network rather than the internet (MIP-621), and arrive with that
+# Host. Only services in the same project can resolve it.
+_private_domain = os.environ.get("RAILWAY_PRIVATE_DOMAIN", "").strip()
+if _private_domain and _private_domain not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(_private_domain)
 
 
 # -- Unified messaging dual-write (Track B Phase 1) --------------------------
@@ -160,6 +169,35 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "apis.wsgi.application"
 
+
+def _is_loopback(host: str | None) -> bool:
+    """True for a host whose traffic never leaves this machine. An empty
+    host or a path is a Unix socket."""
+    host = (host or "").strip("[]").lower()
+    if host in ("", "localhost") or host.startswith("/"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_private_host(host: str | None) -> bool:
+    """True for a host reached only over a private network, where a plain
+    `redis://` or `http://` hop doesn't cross the internet (MIP-621):
+    loopback, a private IP, a Railway private domain (`*.railway.internal`,
+    WireGuard-encrypted between services), or a single-label name such as a
+    docker-compose service (`redis`, `collab`), which public DNS can't
+    resolve."""
+    host = (host or "").strip("[]").lower().rstrip(".")
+    if _is_loopback(host) or host.endswith(".railway.internal"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_private
+    except ValueError:
+        return "." not in host
+
+
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
@@ -169,10 +207,18 @@ if DATABASE_URL:
         "default": dj_database_url.parse(
             DATABASE_URL,
             conn_max_age=600,
-            ssl_require=False,
             conn_health_checks=True,
         )
     }
+    # Encrypt the database connection outside dev (MIP-621). A `sslmode`
+    # in the URL is kept as written: `verify-full` with a pinned
+    # `sslrootcert` is stricter than this default, and `_validate_transport`
+    # below refuses anything weaker than `require`. Loopback is left alone:
+    # CI's Postgres service listens on localhost without TLS, and a socket
+    # that never leaves the machine has nothing to encrypt.
+    _db = DATABASES["default"]
+    if not DEBUG and "sslmode" not in _db.get("OPTIONS", {}) and not _is_loopback(_db["HOST"]):
+        _db.setdefault("OPTIONS", {})["sslmode"] = "require"
 else:
     DATABASES = {
         "default": {
@@ -489,6 +535,77 @@ _validate_prod_secrets(
 )
 
 
+# libpq modes that will talk plaintext to a server that offers no TLS.
+_WEAK_SSLMODES = {"disable", "allow", "prefer"}
+
+
+def _validate_transport(
+    *,
+    debug: bool,
+    database: dict,
+    redis_url: str,
+    collab_internal_url: str,
+    collab_internal_secret: str,
+    jwt_signing_key: str,
+) -> None:
+    """Refuse to boot a production process whose internal hops could be
+    read off the wire (MIP-621).
+
+    Every process, like `_validate_prod_secrets`: the crons open the same
+    database and Redis connections as the web server.
+
+    - Postgres: `sslmode` must be `require` or stricter. The DATABASES
+      block above defaults it, so this catches a URL that turned it down.
+      libpq's own default, `prefer`, silently falls back to plaintext.
+      Loopback is exempt (CI's Postgres service).
+    - Redis: a plain `redis://` is allowed only to a private host (see
+      `_is_private_host`). Railway's `${{Redis.REDIS_URL}}` is
+      `redis.railway.internal`; its `REDIS_PUBLIC_URL` is a TCP proxy on
+      the internet, and that one needs `rediss://`.
+    - The api → collab body push: plain `http://` only to a private host,
+      and signed with its own `COLLAB_INTERNAL_SECRET`. Signed with the
+      user-token key, as it used to be, a leak of collab's copy of that key
+      let someone mint user tokens for the api.
+    """
+    if debug:
+        return
+    from django.core.exceptions import ImproperlyConfigured
+
+    sslmode = database.get("OPTIONS", {}).get("sslmode", "prefer")
+    if sslmode in _WEAK_SSLMODES and not _is_loopback(database.get("HOST")):
+        raise ImproperlyConfigured(
+            f"DATABASE_URL has sslmode={sslmode} with DJANGO_DEBUG=false, so the "
+            "database connection can be plaintext. Drop it (the default is "
+            "require) or use require / verify-ca / verify-full."
+        )
+    redis = urlsplit(redis_url)
+    if redis.scheme == "redis" and not _is_private_host(redis.hostname):
+        raise ImproperlyConfigured(
+            f"REDIS_URL is plaintext redis:// to {redis.hostname}, which is not "
+            "on a private network. Use the private URL (${{Redis.REDIS_URL}}) "
+            "or rediss://."
+        )
+    if collab_internal_url:
+        collab = urlsplit(collab_internal_url)
+        if collab.scheme not in ("http", "https"):
+            raise ImproperlyConfigured("COLLAB_INTERNAL_URL must be an http(s) URL.")
+        if collab.scheme == "http" and not _is_private_host(collab.hostname):
+            raise ImproperlyConfigured(
+                f"COLLAB_INTERNAL_URL is plaintext http:// to {collab.hostname}, "
+                "which is not on a private network. Use https:// or the private "
+                "domain."
+            )
+        if not collab_internal_secret:
+            raise ImproperlyConfigured(
+                "COLLAB_INTERNAL_URL is set but COLLAB_INTERNAL_SECRET is not. "
+                "Set the same value on genos-collab."
+            )
+        if collab_internal_secret == jwt_signing_key:
+            raise ImproperlyConfigured(
+                "COLLAB_INTERNAL_SECRET equals JWT_SECRET_KEY. Give the collab push its own secret."
+            )
+
+
 def validate_web_config(
     *,
     debug: bool,
@@ -593,12 +710,14 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 # ALLOWED_HOSTS healthcheck host, see above).
 
 # Browsers pin HTTPS for a year after the first visit — defeats
-# SSL-stripping on later visits. Scoped to this exact host (no
-# subdomain/preload ambitions for an API domain). DEBUG-gated so plain
+# SSL-stripping on later visits. includeSubDomains (MIP-621) extends the pin
+# to every name under this host; genos-frontend sends the same on the apex,
+# which is the header that covers api./app./collab. Not preload: that is a
+# browser-list submission, hard to undo. DEBUG-gated so plain
 # http://localhost dev never caches a pin.
 if not DEBUG:
     SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = False
 
 # Django defaults, pinned explicitly so a version bump can't silently
@@ -2070,3 +2189,16 @@ BACKEND_BASE_URL = os.environ.get("BACKEND_BASE_URL", "http://localhost:8890")
 # already opened in the editor keeps showing its old body until someone
 # edits it.
 COLLAB_INTERNAL_URL = os.environ.get("COLLAB_INTERNAL_URL", "").rstrip("/")
+# Signs that push, and nothing else (MIP-621). genos-collab verifies it under
+# the same name. Required with DEBUG off whenever COLLAB_INTERNAL_URL is set,
+# and must differ from JWT_SECRET_KEY (`_validate_transport`).
+COLLAB_INTERNAL_SECRET = os.environ.get("COLLAB_INTERNAL_SECRET", "")
+
+_validate_transport(
+    debug=DEBUG,
+    database=DATABASES["default"],
+    redis_url=REDIS_URL,
+    collab_internal_url=COLLAB_INTERNAL_URL,
+    collab_internal_secret=COLLAB_INTERNAL_SECRET,
+    jwt_signing_key=SIMPLE_JWT["SIGNING_KEY"],
+)
