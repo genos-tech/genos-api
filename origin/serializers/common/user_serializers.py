@@ -129,11 +129,16 @@ class UserCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         """Override create method to hash password"""
         validated_data.pop("invite_token", None)
+        is_system_user = validated_data.get("is_system_user", False)
         user = user_models.CustomUser.objects.create_user(
             email=validated_data["email"],
             username=validated_data["username"],
-            password=validated_data["password"],
-            is_system_user=validated_data.get("is_system_user", False),
+            # A system user never signs in, so it gets no usable password,
+            # whatever the client sent. The app sends one derived from the
+            # team id and project name, so keeping it made every project's
+            # system user, a team member, a login anyone could compute.
+            password=None if is_system_user else validated_data["password"],
+            is_system_user=is_system_user,
         )
         return user
 

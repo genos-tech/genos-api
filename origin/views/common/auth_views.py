@@ -209,12 +209,23 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
                 status=status.HTTP_201_CREATED,
             )
 
-        # System users + (defensively) non-email providers — return JWT
-        # for immediate use. Mark verified so the sign-in gate doesn't
-        # block their next login.
-        if user.is_system_user and not user.is_email_verified:
-            user.is_email_verified = True
-            user.save(update_fields=["is_email_verified"])
+        # System users carry no credential at all: no usable password (see
+        # `UserCreateSerializer.create`) and no tokens here. The project
+        # flow only reads `user.id`; a token in this response was a
+        # session for a team member, minted for anyone who asked, since
+        # this endpoint is AllowAny.
+        if user.is_system_user:
+            return Response(
+                {
+                    "user": {"username": user.username, "email": user.email, "id": user.id},
+                    "message": "User creation completed",
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        # (Defensively) non-email providers: none reach this endpoint
+        # today, but they have no inbox to verify, so return a JWT for
+        # immediate use.
         refresh = RefreshToken.for_user(user)
         return Response(
             {
@@ -608,8 +619,13 @@ def _password_reset_is_allowed(user) -> bool:
 
     Same principle as `_can_sign_in_with` in the OAuth views: the fact
     that an identity EXISTS never implies it may be used to sign in.
+
+    A system user is refused too. It has an email-provider row but is
+    not a person and never signs in, and a reset is the one way to give
+    it a usable password again. Its address is made up by the client, so
+    nobody can say whose inbox the link would reach.
     """
-    return user.primary_auth_provider == "email"
+    return user.primary_auth_provider == "email" and not user.is_system_user
 
 
 class PasswordResetRequestView(APIView):
