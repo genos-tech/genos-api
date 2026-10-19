@@ -13,7 +13,10 @@ RUN apt-get update \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --upgrade pip pipenv
+# Pinned (MIP-727): an unpinned pipenv meant a new release could change
+# how the lock installs, or break the build, with no change in this repo.
+# Same version as CI and the dev image.
+RUN pip install pipenv==2026.7.1
 
 WORKDIR /app
 

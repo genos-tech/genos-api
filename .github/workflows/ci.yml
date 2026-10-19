@@ -17,6 +17,11 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege (MIP-727): every job reads the repo and nothing more,
+# unless it says otherwise below.
+permissions:
+  contents: read
+
 concurrency:
   group: backend-django-${{ github.ref }}
   cancel-in-progress: true
@@ -31,6 +36,11 @@ jobs:
   changes:
     name: detect relevant changes
     runs-on: ubuntu-latest
+    # Listing the PR's files needs this. Without it the call fails and the
+    # job fails open, so CI would still run, just on docs-only PRs too.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       code: ${{ steps.filter.outputs.code }}
     steps:
@@ -88,23 +98,22 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
-      - run: pip install --upgrade pip pipenv
+      - run: pip install pipenv==2026.7.1
       - name: Cache venv
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .venv
           key: ${{ runner.os }}-py311-pipenv-${{ hashFiles('Pipfile.lock') }}
       - name: Install deps (locked prod deps + test tooling)
+        # django-anymail[resend] is in Pipfile.lock, so `pipenv sync`
+        # installs it. The unpinned install that used to follow is gone:
+        # it fetched whatever PyPI had that day, on every run.
         run: |
           pipenv sync
-          # Belt-and-suspenders: INSTALLED_APPS has "anymail". Once Step 2's
-          # `pipenv lock` bakes django-anymail into Pipfile.lock, `pipenv sync`
-          # covers it and this line becomes a no-op.
-          pipenv run pip install 'django-anymail[resend]'
           pipenv run pip install -r requirements-dev.txt
       - name: Django system check
         run: pipenv run python manage.py check --settings=apis.settings_test
@@ -129,7 +138,7 @@ jobs:
       # 90-day default and never pruned, so every run's ~80KB report was
       # still counted against the quota months later. Coverage is read, if
       # at all, while its PR is open, so a week is plenty.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         continue-on-error: true
         with:
@@ -144,10 +153,33 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
-      # ruff is a standalone binary; no project deps or DB needed.
-      - run: pip install ruff
+      # ruff is a standalone binary; no project deps or DB needed. Pinned,
+      # so a new ruff release can't change what this job reports overnight;
+      # keep it in step with requirements-dev.txt.
+      - run: pip install ruff==0.17.1
       - run: ruff check origin apis
+
+  # Known-vulnerable dependencies (MIP-727). Report-only for now: the lock
+  # has open advisories, and making this required waits on those upgrades.
+  # Audits Pipfile.lock's hashed requirements without installing them, so
+  # it needs no DB and takes seconds.
+  pip-audit:
+    name: pip-audit (report-only)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+      - run: pip install pipenv==2026.7.1 pip-audit==2.10.1
+      - name: Audit the locked production deps
+        run: |
+          pipenv requirements --hash > "$RUNNER_TEMP/requirements.txt"
+          pip-audit -r "$RUNNER_TEMP/requirements.txt" --require-hashes --disable-pip \
+            --progress-spinner off --desc on

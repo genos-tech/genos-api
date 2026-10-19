@@ -1,0 +1,29 @@
+# Dependabot (MIP-727).
+#
+# github-actions: every action in .github/workflows is pinned to a commit
+# SHA with its release as a comment (`@<sha> # v4.4.0`). Dependabot reads
+# that comment and opens a PR that moves both, so pins don't go stale.
+#
+# pip: version-update PRs are switched off (`open-pull-requests-limit: 0`)
+# so the queue isn't flooded by every minor release. Security-update PRs
+# ignore that limit; they come from the repo setting "Dependabot security
+# updates", and read the Pipfile.lock this entry points at.
+#
+# No docker entry: security updates don't cover base images, and version
+# updates would propose a new Python major, which is a deliberate change.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
