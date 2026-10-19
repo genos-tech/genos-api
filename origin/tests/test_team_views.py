@@ -521,10 +521,13 @@ class TestProfileLocationAndAbout(BaseAPITestCase):
         self.assertEqual(self.user.timezone, "Europe/Paris")
 
     def test_timezone_is_not_writable_on_this_endpoint(self):
+        # Refused by name rather than ignored (MIP-742): the editor never
+        # sends it, and its owner is `PATCH /user/preferences/timezone/`.
         self.user.timezone = "Europe/Paris"
         self.user.save(update_fields=["timezone"])
         response = self._put({"timezone": "Asia/Tokyo"})
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["fields"], ["timezone"])
         self.user.refresh_from_db()
         self.assertEqual(self.user.timezone, "Europe/Paris")
 
