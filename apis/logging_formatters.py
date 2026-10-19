@@ -27,6 +27,9 @@ import json
 import logging
 import os
 
+from apis.log_redaction import redact
+from apis.request_id import current_request_id
+
 # Railway lowercases the level and matches it to the closest of
 # debug / info / warn / error. Map explicitly so WARNING -> "warn" (not
 # "warning") and CRITICAL -> "error" land on a canonical bucket rather than
@@ -79,6 +82,16 @@ class RailwayJSONFormatter(logging.Formatter):
             value = os.environ.get(env_var)
             if value:
                 payload[field] = value
+
+        # The request's reference, which its error answer quotes
+        # (apis/request_id.py), so a user's "ref 3f2a…" finds the line.
+        request_id = current_request_id()
+        if request_id:
+            payload["request_id"] = request_id
+
+        # Redacted before encoding, so the patterns see the text rather than
+        # its JSON escapes (MIP-622; apis/log_redaction.py).
+        payload["message"] = redact(message)
 
         # default=str keeps a stray non-serialisable value from ever making a
         # logging call raise; ensure_ascii=False keeps Japanese text readable

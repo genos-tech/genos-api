@@ -112,8 +112,9 @@ def rewrite_query(query: str, *, num_variants: int = 3) -> list[str]:
     variants = _parse_variants(raw)
     if not variants:
         log.warning(
-            "Query rewriter returned unparseable output (%r); using original query only",
-            raw[:200],
+            # Its length only: the variants restate the user's question (MIP-622).
+            "Query rewriter returned unparseable output (%d chars); using original query only",
+            len(raw),
         )
         return [query]
 

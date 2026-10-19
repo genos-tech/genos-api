@@ -267,10 +267,11 @@ def delete_account(user) -> dict:
         user.email_digest_enabled = False
         user.save()
 
+    # The id only: logging `original_email` here kept the address in Railway
+    # after the row forgot it (MIP-622).
     log.warning(
-        "[account] deleted user=%s (was %s) solo_teams=%d",
+        "[account] deleted user=%s solo_teams=%d",
         user_id,
-        original_email,
         len(solo_team_ids),
     )
     return {"user_id": user_id, "solo_teams_closed": len(solo_team_ids)}

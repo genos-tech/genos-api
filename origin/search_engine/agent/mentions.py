@@ -150,6 +150,13 @@ def _identity_key(entry: dict[str, Any]) -> tuple:
     return ("chat", entry["chat_type"], entry["chat_id"])
 
 
+def _describe_entry(entry: Any) -> str:
+    """A malformed entry's type and keys, for the log."""
+    if isinstance(entry, dict):
+        return f"type={entry.get('type')!r} keys={sorted(map(str, entry))}"
+    return type(entry).__name__
+
+
 def parse_mentions(raw: Any) -> list[dict[str, Any]]:
     """Validate and normalise the request's `mentions` array.
 
@@ -170,7 +177,8 @@ def parse_mentions(raw: Any) -> list[dict[str, Any]]:
     for entry in raw:
         normalised = _normalise_entry(entry)
         if normalised is None:
-            log.info("Dropping malformed mention entry: %r", entry)
+            # Its shape, not its label, which is a name or a title (MIP-622).
+            log.info("Dropping malformed mention entry: %s", _describe_entry(entry))
             continue
         key = _identity_key(normalised)
         if key in seen:
@@ -238,7 +246,7 @@ def resolve_mentions(parsed: list[dict[str, Any]], ctx) -> list[ResolvedMention]
         try:
             resolved = _RESOLVERS[entry["type"]](entry, ctx)
         except Exception:  # noqa: BLE001 — a broken mention must never break the ask
-            log.exception("Mention resolution crashed for entry %r; dropping", entry)
+            log.exception("Mention resolution crashed for entry %s; dropping", _identity_key(entry))
             resolved = None
         if resolved is None:
             log.info(

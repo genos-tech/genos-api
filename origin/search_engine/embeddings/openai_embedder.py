@@ -18,6 +18,7 @@ import time
 from django.conf import settings
 from openai import OpenAI
 
+from apis.request_id import describe_exception
 from origin.search_engine.embeddings.base import TaskType
 from origin.search_engine.llm import spend
 
@@ -98,11 +99,12 @@ def _embed_with_retry(client: OpenAI, batch: list[str], model: str, max_retries:
         except Exception as e:  # noqa: BLE001 — rate-limit, transient net, etc.
             if attempt == max_retries - 1:
                 raise
+            # The type only: the error's text is the provider's response body.
             logger.warning(
                 "OpenAI embedding call failed (attempt %d/%d): %s. Retrying in %.1fs.",
                 attempt + 1,
                 max_retries,
-                e,
+                describe_exception(e),
                 delay,
             )
             time.sleep(delay)

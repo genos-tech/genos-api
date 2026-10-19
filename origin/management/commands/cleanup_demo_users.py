@@ -71,7 +71,7 @@ class Command(CronCommand):
         failed = 0
         for user in stale:
             if dry_run:
-                self.stdout.write(f"  [dry-run] would delete {user.id} ({user.email})")
+                self.stdout.write(f"  [dry-run] would delete {user.id}")
                 continue
             try:
                 delete_demo_environment(user)
@@ -80,7 +80,7 @@ class Command(CronCommand):
                 failed += 1
                 # ERROR-level so the CronCommand tripwire fails the run; a
                 # swallowed delete failure used to leave the cron green.
-                log.exception("cleanup_demo_users: failed to delete %s (%s)", user.id, user.email)
+                log.exception("cleanup_demo_users: failed to delete user=%s", user.id)
 
         if dry_run:
             self.stdout.write(self.style.SUCCESS(f"Dry-run complete. {count} would be deleted."))

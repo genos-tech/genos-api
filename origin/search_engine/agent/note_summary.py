@@ -35,6 +35,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
+from apis.request_id import describe_exception
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
@@ -306,7 +307,8 @@ def summarise_note(
                 chunks.append(text)
     except Exception as e:  # noqa: BLE001
         log.exception("Note summarisation LLM call failed")
-        raise NoteSummaryError(f"LLM call failed: {e}") from e
+        # The type and status only; the provider's text stays in the log.
+        raise NoteSummaryError(f"LLM call failed: {describe_exception(e)}") from e
 
     text_out = "".join(chunks).strip()
     if not text_out:

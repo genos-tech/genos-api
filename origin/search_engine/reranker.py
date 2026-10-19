@@ -53,6 +53,7 @@ from typing import Any
 
 from django.conf import settings
 
+from apis.request_id import describe_upstream
 from origin.search_engine.llm import AgentMessage, get_model_client, spend
 from origin.search_engine.llm.choice import get_llm_choice, subprocess_model_override
 from origin.search_engine.llm.spend import spend_purpose
@@ -284,9 +285,10 @@ def _rerank_llm(
 
     indices = _parse_indices(raw, valid_range=len(candidates))
     if indices is None:
+        # Its length only: it restates the query and the documents (MIP-622).
         log.warning(
-            "Reranker returned unparseable output (%r); falling back to " "pre-rerank order",
-            raw[:200],
+            "Reranker returned unparseable output (%d chars); falling back to pre-rerank order",
+            len(raw),
         )
         return candidates[:output_k]
 
@@ -433,9 +435,9 @@ def _rerank_cohere(
 
         if resp.status_code != 200:
             log.warning(
-                "Cohere rerank returned %d: %s; falling back to pre-rerank order",
+                "Cohere rerank returned %d (%s); falling back to pre-rerank order",
                 resp.status_code,
-                resp.text[:200],
+                describe_upstream(resp),
             )
             return candidates[:output_k]
         data = resp.json()
@@ -464,8 +466,9 @@ def _rerank_cohere(
 
     if not indices:
         log.warning(
-            "Cohere rerank returned no usable indices (%r); falling back to pre-rerank order",
-            data,
+            "Cohere rerank returned no usable indices (%d results); falling back to "
+            "pre-rerank order",
+            len(data.get("results") or []) if isinstance(data, dict) else 0,
         )
         return candidates[:output_k]
 

@@ -53,4 +53,4 @@ def handle_tracking_event(sender, event, esp_name, **kwargs):
                     prefs.email_enabled = False
                     prefs.save(update_fields=["email_enabled", "ts_updated_at"])
     except Exception:  # noqa: BLE001 — a handler bug must not 400 the webhook
-        logger.exception("[email] suppression handler failed for %s", address)
+        logger.exception("[email] suppression handler failed for a %s event", event.event_type)

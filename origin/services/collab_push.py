@@ -83,12 +83,7 @@ def _post(document_name: str, blocks: list[dict[str, Any]]) -> None:
         logger.warning("collab body push failed doc=%s: %s", document_name, exc)
         return
     if resp.status_code != 200:
-        logger.warning(
-            "collab body push refused doc=%s status=%s body=%s",
-            document_name,
-            resp.status_code,
-            resp.text[:200],
-        )
+        logger.warning("collab body push refused doc=%s status=%s", document_name, resp.status_code)
 
 
 def _push(document_name: str, blocks: list[dict[str, Any]]) -> None:

@@ -2,6 +2,7 @@ from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 
+from apis.request_id import error_response
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.note.common_note_models import NotePermissionMaster
@@ -101,10 +102,8 @@ class NoteRoleView(AuthenticatedAPIView):
                     defaults={"team": team, "role_id": role_id},
                 )
         except Exception as e:
-            return Response(
-                {"error": "Failed to grant role.", "details": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+            # The cause goes to the log, not to the client (MIP-622).
+            return error_response("note role grant failed", e, message="Failed to grant role.")
 
         return Response(NoteRoleMemberSerializer(permission).data, status=status.HTTP_200_OK)
 

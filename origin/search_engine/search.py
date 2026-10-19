@@ -37,6 +37,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from opensearchpy.exceptions import NotFoundError
 
+from apis.request_id import describe_exception
 from origin.search_engine.embeddings import embed_one
 from origin.search_engine.llm.choice import active_effort_profile
 from origin.search_engine.llm.spend import spend_purpose
@@ -660,8 +661,9 @@ def _multi_variant_fuse(
                     ef_search=ef_search,
                 )
             except Exception as e:  # noqa: BLE001 — degrade to keyword-only for this variant
+                # Not the variant: it is the user's question (MIP-622).
                 log.warning(
-                    "Vector search failed for variant %r, keyword-only: %s", variant[:80], e
+                    "Vector search failed for a variant, keyword-only: %s", describe_exception(e)
                 )
 
         variant_fused = _rrf_fuse(keyword_hits, vector_hits)

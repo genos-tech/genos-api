@@ -336,7 +336,8 @@ def _parse_args(raw: str) -> dict[str, Any]:
     try:
         parsed = json.loads(raw)
     except (TypeError, ValueError):
-        log.warning("OpenAI tool-call arguments were not valid JSON: %r", raw[:200])
+        # Its length only: the arguments carry note and task text (MIP-622).
+        log.warning("OpenAI tool-call arguments were not valid JSON (%d chars)", len(str(raw)))
         return {}
     return parsed if isinstance(parsed, dict) else {}
 

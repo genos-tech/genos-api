@@ -505,8 +505,10 @@ def _bulk_index(actions: list[dict]) -> None:
         # ERROR (not WARNING) so a CronCommand-based reindex fails the run —
         # a bulk that wrote nothing must not leave the cron green.
         log.error("Bulk index reported %d errors (success=%d)", len(real_errors), success)
+        # Status and type only: a transport failure's entry holds the whole
+        # document, chunk text and all (MIP-622).
         for err in real_errors[:5]:
-            log.warning("  %s", err)
+            log.warning("  status=%s type=%s", *_bulk_error_info(err))
 
 
 def _delete_stale(

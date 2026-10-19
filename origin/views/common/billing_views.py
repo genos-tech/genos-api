@@ -17,12 +17,20 @@ from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apis.request_id import error_response
 from origin.models.common.team_models import TeamMaster
 from origin.search_engine import credit_ledger
 from origin.services import stripe_billing
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 logger = logging.getLogger(__name__)
+
+
+def _billing_unavailable(what: str, e: stripe_billing.BillingError):
+    """503 with the BillingError's message, which is ours and shown to the
+    user. Stripe's own text is its cause, and only reaches the log
+    (MIP-622)."""
+    return error_response(what, e, status=503, message=str(e), level=logging.WARNING)
 
 
 class BillingConfigView(AuthenticatedAPIView):
@@ -92,8 +100,7 @@ class BillingCheckoutView(AuthenticatedAPIView):
                 request.user, plan, _requested_currency(request)
             )
         except stripe_billing.BillingError as e:
-            logger.warning("billing checkout failed for %s: %s", request.user.email, e)
-            return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            return _billing_unavailable(f"billing checkout failed for user={request.user.pk}", e)
         return Response({"url": url})
 
 
@@ -170,8 +177,9 @@ class BillingCreditPackCheckoutView(AuthenticatedAPIView):
                 request.user, pack, _requested_currency(request)
             )
         except stripe_billing.BillingError as e:
-            logger.warning("credit pack checkout failed for %s: %s", request.user.email, e)
-            return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            return _billing_unavailable(
+                f"credit pack checkout failed for user={request.user.pk}", e
+            )
         return Response({"url": url})
 
 
@@ -218,8 +226,7 @@ class BillingPortalView(AuthenticatedAPIView):
         try:
             url = stripe_billing.create_portal_session(request.user, flow=flow, plan=plan)
         except stripe_billing.BillingError as e:
-            logger.warning("billing portal failed for %s: %s", request.user.email, e)
-            return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            return _billing_unavailable(f"billing portal failed for user={request.user.pk}", e)
         return Response({"url": url})
 
 
@@ -330,8 +337,9 @@ class BillingSubscriptionView(AuthenticatedAPIView):
         try:
             overview = stripe_billing.subscription_overview(request.user)
         except stripe_billing.BillingError as e:
-            logger.warning("billing subscription lookup failed for %s: %s", request.user.email, e)
-            return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            return _billing_unavailable(
+                f"billing subscription lookup failed for user={request.user.pk}", e
+            )
         return Response({"subscription": overview})
 
 
@@ -365,9 +373,8 @@ class BillingRefreshView(AuthenticatedAPIView):
             ):
                 stripe_billing.reconcile_team_from_stripe(team)
         except stripe_billing.BillingError as e:
-            logger.warning("billing refresh failed for %s: %s", request.user.email, e)
-            return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        logger.info("billing refresh for %s: %s", request.user.email, summary)
+            return _billing_unavailable(f"billing refresh failed for user={request.user.pk}", e)
+        logger.info("billing refresh for user=%s: %s", request.user.pk, summary)
         return Response({"detail": summary, "personal_tier": request.user.tier or "free"})
 
 
@@ -428,13 +435,9 @@ class TeamBillingCheckoutView(AuthenticatedAPIView):
                 team, plan, _requested_currency(request)
             )
         except stripe_billing.BillingError as e:
-            logger.warning(
-                "team billing checkout failed for %s / %s: %s",
-                request.user.email,
-                team.team_name,
-                e,
+            return _billing_unavailable(
+                f"team billing checkout failed for user={request.user.pk} team={team.team_id}", e
             )
-            return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         return Response({"url": url})
 
 
@@ -455,13 +458,9 @@ class TeamBillingPortalView(AuthenticatedAPIView):
         try:
             url = stripe_billing.create_team_portal_session(team, flow=flow, plan=plan)
         except stripe_billing.BillingError as e:
-            logger.warning(
-                "team billing portal failed for %s / %s: %s",
-                request.user.email,
-                team.team_name,
-                e,
+            return _billing_unavailable(
+                f"team billing portal failed for user={request.user.pk} team={team.team_id}", e
             )
-            return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         return Response({"url": url})
 
 

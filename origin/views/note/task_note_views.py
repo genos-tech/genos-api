@@ -4,6 +4,7 @@ from django.db.models.functions import Concat
 from rest_framework import status
 from rest_framework.response import Response
 
+from apis.request_id import error_response
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.purge import purge_note
@@ -402,10 +403,9 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                     )
 
             except Exception as e:
-                # If anything fails, return a server error
-                return Response(
-                    {"error": "Failed to create note and role.", "details": str(e)},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                # The cause goes to the log, not to the client (MIP-622).
+                return error_response(
+                    "task note create failed", e, message="Failed to create note and role."
                 )
 
             increment_usage(str(request_user_id), NOTE_CREATE_KEY)

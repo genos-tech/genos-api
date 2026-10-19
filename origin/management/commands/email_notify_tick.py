@@ -37,6 +37,7 @@ from django.conf import settings
 from django.db.models import Count, Min
 from django.utils import timezone
 
+from apis.request_id import describe_exception
 from origin.management.cron_command import CronCommand
 from origin.models.common.notification_models import EmailNotificationEvent
 from origin.models.common.user_models import CustomUser
@@ -218,7 +219,8 @@ class Command(CronCommand):
                 # the next tick and must not red the cron (the
                 # ai_cost_report precedent). Persistent failure surfaces
                 # as rows hitting FAILED + the Resend dashboard.
-                log.warning("[email] send failed for user=%s: %s", uid, exc)
+                # The type only: a mail error's text quotes the address (MIP-622).
+                log.warning("[email] send failed for user=%s: %s", uid, describe_exception(exc))
                 for row in to_send:
                     row.attempts += 1
                     row.status = (

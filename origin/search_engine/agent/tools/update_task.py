@@ -19,6 +19,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from apis.request_id import log_failure
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
@@ -232,7 +233,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     except ToolError:
         raise
     except Exception as e:  # noqa: BLE001
-        raise ToolError(f"Failed to update task: {e}")
+        # The model and the MCP caller read this; the database error
+        # goes to the log with a reference (MIP-622).
+        ref = log_failure("update_task tool failed", e)
+        raise ToolError(f"Failed to update task (ref {ref}).")
 
     # The editor renders the task's Yjs doc, not `content`; without this
     # push a task that was ever opened kept its old body on screen, and the

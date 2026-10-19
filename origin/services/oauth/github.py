@@ -62,7 +62,8 @@ class GitHubOAuthProvider(OAuthProvider):
             # GitHub returns 200 with {"error": "..."} for some failures
             # (e.g. bad code). Surface that as an exception rather than
             # KeyError later.
-            raise RuntimeError(f"GitHub OAuth exchange failed: {data}")
+            # GitHub's error code only, not the whole answer (MIP-622).
+            raise RuntimeError(f"GitHub OAuth exchange failed: {data.get('error')}")
         return TokenResponse(
             access_token=data["access_token"],
             refresh_token=None,  # OAuth Apps don't issue refresh tokens.

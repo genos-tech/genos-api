@@ -47,4 +47,4 @@ def suppress(address: str, reason: str) -> None:
     ):
         row.reason = EmailSuppression.REASON_COMPLAINT
         row.save(update_fields=["reason"])
-    logger.info("[email] suppressed %s (%s)", normalized, reason)
+    logger.info("[email] suppressed id=%s (%s)", row.pk, reason)

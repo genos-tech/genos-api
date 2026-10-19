@@ -28,6 +28,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apis.request_id import describe_upstream
 from origin.models.common.user_models import ConnectedAccount, GithubWebhookRegistration
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_delivery_models import TaskDelivery, TaskDeliveryState
@@ -80,7 +81,7 @@ class GithubMyPullsView(APIView):
             params={"q": q, "sort": "updated", "order": "desc", "per_page": 50},
         )
         if not resp.ok:
-            logger.warning("GitHub search failed: %s %s", resp.status_code, resp.text)
+            logger.warning("GitHub search failed: %s", describe_upstream(resp))
             return Response(
                 {"detail": "github_api_error", "upstream_status": resp.status_code},
                 status=status.HTTP_502_BAD_GATEWAY,
@@ -156,7 +157,7 @@ class GithubAccessibleReposView(APIView):
             },
         )
         if not resp.ok:
-            logger.warning("GitHub repo list failed: %s %s", resp.status_code, resp.text)
+            logger.warning("GitHub repo list failed: %s", describe_upstream(resp))
             return Response(
                 {"detail": "github_api_error", "upstream_status": resp.status_code},
                 status=status.HTTP_502_BAD_GATEWAY,
@@ -212,7 +213,7 @@ class GithubPullDetailView(APIView):
             return _not_connected()
         pr_resp = _github_get(account, f"/repos/{owner}/{repo}/pulls/{number}")
         if not pr_resp.ok:
-            logger.warning("GitHub PR fetch failed: %s %s", pr_resp.status_code, pr_resp.text)
+            logger.warning("GitHub PR fetch failed: %s", describe_upstream(pr_resp))
             return Response(
                 {"detail": "github_api_error", "upstream_status": pr_resp.status_code},
                 status=status.HTTP_502_BAD_GATEWAY,

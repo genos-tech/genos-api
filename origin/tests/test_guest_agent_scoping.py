@@ -61,17 +61,18 @@ class GuestAgentBase(BaseAPITestCase):
 class TestGuestRosterTool(GuestAgentBase):
     def _members_for(self, user):
         ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(user.id))
-        return {m["email"] for m in GET_TEAM_MEMBERS.run({}, ctx)["members"]}
+        # By id: the tool returns no email unless asked (MIP-622).
+        return {m["user_id"] for m in GET_TEAM_MEMBERS.run({}, ctx)["members"]}
 
     def test_guest_asking_the_agent_gets_only_shared_people(self):
-        emails = self._members_for(self.guest)
-        self.assertIn(self.user.email, emails)
-        self.assertNotIn(self.bystander.email, emails)
+        visible = self._members_for(self.guest)
+        self.assertIn(str(self.user.id), visible)
+        self.assertNotIn(str(self.bystander.id), visible)
 
     def test_a_member_still_gets_the_whole_roster(self):
-        emails = self._members_for(self.user2)
-        self.assertIn(self.bystander.email, emails)
-        self.assertIn(self.user.email, emails)
+        visible = self._members_for(self.user2)
+        self.assertIn(str(self.bystander.id), visible)
+        self.assertIn(str(self.user.id), visible)
 
 
 class TestGuestSearchAcl(GuestAgentBase):

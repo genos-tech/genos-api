@@ -19,6 +19,7 @@ from typing import Any
 
 from django.db import transaction
 
+from apis.request_id import log_failure
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
@@ -111,7 +112,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 comment_body=_wrap_blocknote(body_text, ctx),
             )
     except Exception as e:  # noqa: BLE001
-        raise ToolError(f"Failed to add comment: {e}")
+        # The model and the MCP caller read this; the database error
+        # goes to the log with a reference (MIP-622).
+        ref = log_failure("add_comment tool failed", e)
+        raise ToolError(f"Failed to add comment (ref {ref}).")
 
     # Same post-write fan-out the REST endpoint runs: mirror into the v3
     # PM thread, raise mention + participant activities, push to anyone

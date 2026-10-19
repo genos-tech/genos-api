@@ -112,6 +112,19 @@ def _label(user) -> str:
     return str(getattr(user, "email", "") or getattr(user, "pk", ""))[:_LABEL_MAX]
 
 
+def _log_actor(event) -> str:
+    """Who to name in the log line: the user id, or the label when it isn't
+    an email. A failed sign-in has no user, and its label is the address
+    that was typed; the row keeps it, and the line's event id leads there
+    (MIP-622)."""
+    if event.actor_id:
+        return str(event.actor_id)
+    label = event.actor_label or ""
+    if not label:
+        return "-"
+    return "[EMAIL]" if "@" in label else label
+
+
 def user_label(user_id) -> str:
     """A target user's email, captured now because the row keeps no FK
     and deletion anonymises the address. Empty if it can't be read."""
@@ -189,7 +202,7 @@ def record_security_event(
         "security.event id=%s action=%s actor=%s team=%s target=%s:%s source=%s ip=%s",
         event.event_id,
         event.action,
-        event.actor_id or event.actor_label or "-",
+        _log_actor(event),
         event.team_id or "-",
         event.target_type or "-",
         event.target_id or "-",
@@ -207,7 +220,7 @@ def _alert(action: str, cause: SecurityEvent, metadata: dict) -> None:
     logger.warning(
         "security.alert action=%s actor=%s source=%s ip=%s cause=%s %s",
         action,
-        cause.actor_id or cause.actor_label or "-",
+        _log_actor(cause),
         cause.source,
         cause.ip or "-",
         cause.event_id,

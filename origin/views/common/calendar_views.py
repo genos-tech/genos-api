@@ -38,6 +38,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apis.request_id import describe_exception, describe_upstream
 from origin.models.common.user_models import ConnectedAccount
 from origin.services.oauth.accounts import accounts_for, resolve_account_for
 from origin.services.oauth.tokens import ReauthRequired, get_valid_access_token
@@ -242,15 +243,16 @@ class CalendarListView(APIView):
                 failed.append({"account_id": str(account.id), "reason": "google_reauth_required"})
                 continue
             except requests.RequestException as exc:
-                logger.warning("Calendar list transport error account=%s: %s", account.id, exc)
+                logger.warning(
+                    "Calendar list transport error account=%s: %s",
+                    account.id,
+                    describe_exception(exc),
+                )
                 failed.append({"account_id": str(account.id), "reason": "calendar_api_error"})
                 continue
             if not resp.ok:
                 logger.warning(
-                    "Calendar list failed account=%s: %s %s",
-                    account.id,
-                    resp.status_code,
-                    resp.text[:500],
+                    "Calendar list failed account=%s: %s", account.id, describe_upstream(resp)
                 )
                 failed.append({"account_id": str(account.id), "reason": "calendar_api_error"})
                 continue
@@ -452,11 +454,12 @@ class CalendarEventsAggregateView(APIView):
                     try:
                         fetched = future.result()
                     except requests.RequestException as exc:
+                        # No calendar id: it is usually the account's email,
+                        # and the exception's URL repeats it (MIP-622).
                         logger.warning(
-                            "Aggregate fetch transport error account=%s calendar=%s: %s",
+                            "Aggregate fetch transport error account=%s: %s",
                             account_id,
-                            calendar_id,
-                            exc,
+                            describe_exception(exc),
                         )
                         fetched = None
                     if fetched is None:
@@ -500,11 +503,7 @@ class CalendarEventsAggregateView(APIView):
         )
         if not resp.ok:
             logger.warning(
-                "Aggregate fetch failed account=%s calendar=%s status=%s body=%s",
-                account_id,
-                calendar_id,
-                resp.status_code,
-                resp.text[:300],
+                "Aggregate fetch failed account=%s: %s", account_id, describe_upstream(resp)
             )
             return None
         return resp.json().get("items", []) or []
@@ -545,7 +544,7 @@ class CalendarEventsView(APIView):
             account, "GET", f"/calendars/{_cal(calendar_id)}/events", params=params
         )
         if not resp.ok:
-            logger.warning("Calendar events GET failed: %s %s", resp.status_code, resp.text)
+            logger.warning("Calendar events GET failed: %s", describe_upstream(resp))
             return Response(
                 {"detail": "calendar_api_error", "upstream_status": resp.status_code},
                 status=status.HTTP_502_BAD_GATEWAY,
@@ -624,12 +623,13 @@ class CalendarEventsView(APIView):
             params=params or None,
         )
         if not resp.ok:
-            logger.warning("Calendar event create failed: %s %s", resp.status_code, resp.text)
+            logger.warning("Calendar event create failed: %s", describe_upstream(resp))
+            # Google's body quotes the event back, attendees included; the
+            # status is all a client acts on (MIP-622).
             return Response(
                 {
                     "detail": "calendar_api_error",
                     "upstream_status": resp.status_code,
-                    "upstream_body": resp.json() if resp.text else None,
                 },
                 status=status.HTTP_502_BAD_GATEWAY,
             )
@@ -658,7 +658,7 @@ class CalendarEventDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         if not resp.ok:
-            logger.warning("Calendar event GET failed: %s %s", resp.status_code, resp.text)
+            logger.warning("Calendar event GET failed: %s", describe_upstream(resp))
             return Response(
                 {"detail": "calendar_api_error", "upstream_status": resp.status_code},
                 status=status.HTTP_502_BAD_GATEWAY,
@@ -744,7 +744,7 @@ class CalendarEventDetailView(APIView):
             params=params or None,
         )
         if not resp.ok:
-            logger.warning("Calendar event patch failed: %s %s", resp.status_code, resp.text)
+            logger.warning("Calendar event patch failed: %s", describe_upstream(resp))
             return Response(
                 {"detail": "calendar_api_error", "upstream_status": resp.status_code},
                 status=status.HTTP_502_BAD_GATEWAY,
@@ -760,7 +760,7 @@ class CalendarEventDetailView(APIView):
             account, "DELETE", f"/calendars/{_cal(calendar_id)}/events/{event_id}"
         )
         if not resp.ok and resp.status_code != 404:
-            logger.warning("Calendar event delete failed: %s %s", resp.status_code, resp.text)
+            logger.warning("Calendar event delete failed: %s", describe_upstream(resp))
             return Response(
                 {"detail": "calendar_api_error", "upstream_status": resp.status_code},
                 status=status.HTTP_502_BAD_GATEWAY,

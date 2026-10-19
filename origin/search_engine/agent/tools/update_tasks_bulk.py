@@ -28,6 +28,7 @@ from typing import Any
 
 from django.db import transaction
 
+from apis.request_id import log_failure
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
@@ -262,7 +263,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     }
                 )
     except Exception as e:  # noqa: BLE001 — surface as ToolError for the model
-        raise ToolError(f"Bulk update failed (nothing was applied): {e}")
+        # The model and the MCP caller read this; the database error
+        # goes to the log with a reference (MIP-622).
+        ref = log_failure("update_tasks_bulk tool failed", e)
+        raise ToolError(f"Bulk update failed (nothing was applied) (ref {ref}).")
 
     # Priorities/statuses feed the project table's ordering — drop each
     # touched project's cached listing after commit.
