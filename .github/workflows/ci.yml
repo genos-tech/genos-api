@@ -160,7 +160,7 @@ jobs:
       # ruff is a standalone binary; no project deps or DB needed. Pinned,
       # so a new ruff release can't change what this job reports overnight;
       # keep it in step with requirements-dev.txt.
-      - run: pip install ruff==0.16.3
+      - run: pip install ruff==0.17.1
       - run: ruff check origin apis
 
   # Known-vulnerable dependencies (MIP-727). Report-only for now: the lock
