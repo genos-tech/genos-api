@@ -10,6 +10,7 @@ from origin.models.common.mention_group_models import (
 )
 from origin.models.common.team_models import TeamMembers
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.batch_limits import MAX_GROUP_MEMBERS_PER_ADD, check_batch_size
 from origin.views.utils.scope_guards import is_guest, is_team_member
 
 
@@ -199,6 +200,10 @@ class MentionGroupMembersView(AuthenticatedAPIView):
                 {"error": "group_id and user_ids are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if isinstance(user_ids, list) and (
+            res := check_batch_size(user_ids, MAX_GROUP_MEMBERS_PER_ADD, "user_ids")
+        ):
+            return res
 
         group, err = _require_group(request, group_id)
         if err:

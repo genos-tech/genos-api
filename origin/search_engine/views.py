@@ -25,11 +25,14 @@ from rest_framework.response import Response
 
 from origin.search_engine.metered import metered_request
 from origin.search_engine.search import memory_exclude_lanes, search
+from origin.services.throttles import SearchThrottle, with_defaults
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import participates_in_team
 
 
 class SearchView(AuthenticatedAPIView):
+    throttle_classes = with_defaults(SearchThrottle)
+
     def post(self, request):
         data = request.data or {}
 

@@ -16,6 +16,7 @@ from origin.services.calendar_sync import (
     get_google_connected_account,
     sync_task_event,
 )
+from origin.services.throttles import ExportThrottle, with_defaults
 from origin.services.user_time import is_valid_timezone, user_today
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.upload_limits import check_upload_size
@@ -759,6 +760,8 @@ class AccountExportView(AuthenticatedAPIView):
     what is included and the deliberate exclusion of team-owned content
     authored by other people.
     """
+
+    throttle_classes = with_defaults(ExportThrottle)
 
     def get(self, request):
         from django.http import JsonResponse

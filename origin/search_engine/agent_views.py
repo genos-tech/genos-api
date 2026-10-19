@@ -138,6 +138,7 @@ from origin.search_engine.quota import (
     increment_usage,
     resolve_effective_tier,
 )
+from origin.services.throttles import AgentThrottle, SummaryThrottle, with_defaults
 from origin.services.webpush_dispatch import schedule_push_to_user
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import participates_in_team
@@ -928,6 +929,8 @@ def _enforce_monthly_ceilings(user_id: str, plan: str, team_id, chosen: LlmChoic
 
 
 class AgentAskView(AuthenticatedAPIView):
+    throttle_classes = with_defaults(AgentThrottle)
+
     def post(self, request):
         data = request.data or {}
 
@@ -1565,6 +1568,8 @@ class AgentAskView(AuthenticatedAPIView):
 
 
 class AgentDecideView(AuthenticatedAPIView):
+    throttle_classes = with_defaults(AgentThrottle)
+
     def post(self, request):
         data = request.data or {}
 
@@ -2257,6 +2262,8 @@ class NoteSummaryView(AuthenticatedAPIView):
         429  LLM-ask quota exhausted (only fires when a regeneration was needed)
     """
 
+    throttle_classes = with_defaults(SummaryThrottle)
+
     def post(self, request):
         data = request.data or {}
         team_id = data.get("team_id")
@@ -2422,6 +2429,8 @@ class ThreadSummaryView(AuthenticatedAPIView):
         403  not authorized to read the thread (or thread/chat not found)
         429  LLM-ask quota exhausted (only fires when a regeneration was needed)
     """
+
+    throttle_classes = with_defaults(SummaryThrottle)
 
     def post(self, request):
         data = request.data or {}

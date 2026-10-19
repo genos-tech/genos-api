@@ -41,7 +41,9 @@ from origin.services.task_project_move import (
 )
 from origin.services.task_project_move import relocate_task_satellites, relocate_tasks
 from origin.services.thread_link import find_thread_link_conflict
+from origin.services.throttles import BatchReadThrottle, with_defaults
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.batch_limits import MAX_MENTIONS_PER_COMMENT, check_batch_size
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
@@ -2583,6 +2585,11 @@ class TaskCommentMentionView(AuthenticatedAPIView):
     def post(self, request):
         if not can_access_task(request.data.get("task_id"), request.user.id):
             return _no_task()
+        mentioned = request.data.get("mentioned_user_ids")
+        if isinstance(mentioned, list) and (
+            too_many := check_batch_size(mentioned, MAX_MENTIONS_PER_COMMENT, "mentioned_user_ids")
+        ):
+            return too_many
         res = []
         try:
             for mentioned_user_id in list(request.data["mentioned_user_ids"]):
@@ -2929,6 +2936,7 @@ class TaskDependencyBatchListView(AuthenticatedAPIView):
     """
 
     MAX_TASK_IDS = 500
+    throttle_classes = with_defaults(BatchReadThrottle)
 
     def get(self, request):
         raw_ids = request.GET.get("task_ids") or ""

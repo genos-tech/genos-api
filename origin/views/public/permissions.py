@@ -22,6 +22,7 @@ from rest_framework import throttling
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 from origin.models.common.api_key_models import SCOPE_WRITE, ApiKey
+from origin.services.throttles import RecordedThrottleMixin
 
 
 class HasApiKey(BasePermission):
@@ -51,7 +52,7 @@ class HasRequiredScope(BasePermission):
         return isinstance(key, ApiKey) and key.scope == SCOPE_WRITE
 
 
-class PublicApiThrottle(throttling.SimpleRateThrottle):
+class PublicApiThrottle(RecordedThrottleMixin, throttling.SimpleRateThrottle):
     """Per-KEY rate limiting.
 
     DRF's `UserRateThrottle` would key on the user, so a person's five
@@ -59,13 +60,13 @@ class PublicApiThrottle(throttling.SimpleRateThrottle):
     the others. The key is the unit an integrator actually controls, so
     it is the unit that gets the budget — and revoking a key frees it.
 
-    ⚠️ **This fails OPEN.** `DJANGO_REDIS_IGNORE_EXCEPTIONS = True`, so a
-    Redis outage means *unlimited*, not zero. That is the deliberate
-    house policy for quota (`search_engine/quota.py` states it), and it
-    is the right trade for the app — but it is worth knowing that the
-    public API's rate limit is an availability measure, not a security
-    control. Anything that must hold under Redis loss needs enforcing
-    somewhere else.
+    ⚠️ **This fails OPEN.** A Redis outage means *unlimited*, not zero
+    (`fail_closed` is off; since MIP-724 it at least logs each allow).
+    That is the deliberate house policy for quota
+    (`search_engine/quota.py` states it), and it is the right trade for
+    the app — but it is worth knowing that the public API's rate limit is
+    an availability measure, not a security control. Anything that must
+    hold under Redis loss needs enforcing somewhere else.
     """
 
     scope = "public_api"

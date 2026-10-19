@@ -14,7 +14,6 @@ from django.utils import timezone
 from rest_framework import mixins, permissions, status, viewsets
 from rest_framework.request import Request
 from rest_framework.response import Response
-from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
@@ -30,6 +29,7 @@ from origin.services.demo_seeder import (
     delete_demo_environment,
     kick_off_demo_reindex,
 )
+from origin.services.throttles import AuthThrottle
 
 from .base_auth_api_view import AuthenticatedAPIView
 
@@ -81,16 +81,18 @@ User = get_user_model()
 # --------------------------------------------------------------------------- #
 # Per-IP throttles for the unauthenticated auth endpoints.                    #
 #                                                                             #
-# Same pattern as DemoSignInThrottle below: AnonRateThrottle subclasses with  #
-# an explicit `rate` (so the numbers live next to the endpoints they guard)   #
-# backed by the default Redis cache. Client IP resolution behind the          #
-# Railway/Cloud Run edge is handled by REST_FRAMEWORK["NUM_PROXIES"] in       #
-# settings — without it every user would share the proxy's address and one    #
-# attacker could exhaust the bucket for everyone.                             #
+# Same pattern as DemoSignInThrottle below: AuthThrottle subclasses with an   #
+# explicit `rate` (so the numbers live next to the endpoints they guard).     #
+# AuthThrottle refuses when Redis can't be read, where a plain                #
+# AnonRateThrottle would allow everything (MIP-724). Client IP resolution     #
+# behind the Railway/Cloud Run edge is handled by                             #
+# REST_FRAMEWORK["NUM_PROXIES"] in settings — without it every user would     #
+# share the proxy's address and one attacker could exhaust the bucket for     #
+# everyone.                                                                   #
 # --------------------------------------------------------------------------- #
 
 
-class SignInBurstThrottle(AnonRateThrottle):
+class SignInBurstThrottle(AuthThrottle):
     """Caps online password guessing without bothering real users — a
     human retrying a forgotten password stays far under 20/min."""
 
@@ -98,14 +100,14 @@ class SignInBurstThrottle(AnonRateThrottle):
     scope = "signin_burst"
 
 
-class SignInSustainedThrottle(AnonRateThrottle):
+class SignInSustainedThrottle(AuthThrottle):
     """Backstop for low-and-slow guessing that ducks the burst limit."""
 
     rate = "300/hour"
     scope = "signin_sustained"
 
 
-class SignUpThrottle(AnonRateThrottle):
+class SignUpThrottle(AuthThrottle):
     """Each signup writes a user row and sends a verification email —
     uncapped, it's a mass-registration + email-spam vector."""
 
@@ -113,7 +115,7 @@ class SignUpThrottle(AnonRateThrottle):
     scope = "signup"
 
 
-class PasswordResetRequestThrottle(AnonRateThrottle):
+class PasswordResetRequestThrottle(AuthThrottle):
     """Each hit can send an email; uncapped it's an email-bombing vector
     (the enumeration-safe 200 also hides abuse from the caller)."""
 
@@ -121,7 +123,7 @@ class PasswordResetRequestThrottle(AnonRateThrottle):
     scope = "password_reset"
 
 
-class PasswordResetConfirmThrottle(AnonRateThrottle):
+class PasswordResetConfirmThrottle(AuthThrottle):
     """Token brute-force is already infeasible (256-bit random, hashed,
     short TTL); this just keeps volumetric guessing off the DB."""
 
@@ -129,7 +131,7 @@ class PasswordResetConfirmThrottle(AnonRateThrottle):
     scope = "password_reset_confirm"
 
 
-class ResendVerificationThrottle(AnonRateThrottle):
+class ResendVerificationThrottle(AuthThrottle):
     rate = "6/hour"
     scope = "resend_verification"
 
@@ -294,7 +296,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         return response
 
 
-class DemoSignInThrottle(AnonRateThrottle):
+class DemoSignInThrottle(AuthThrottle):
     """Per-IP throttle for the unauthenticated demo signin endpoint.
 
     Each call seeds ~150 rows, so without a cap a botnet could exhaust
