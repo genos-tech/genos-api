@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from apis.request_id import log_failure
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.search_engine.agent.acl import owns_personal_folder
@@ -308,7 +309,10 @@ def _apply_changes(
     try:
         note.save(update_fields=update_fields)
     except Exception as e:  # noqa: BLE001
-        raise ToolError(f"Failed to update note: {e}")
+        # The model and the MCP caller read this; the database error
+        # goes to the log with a reference (MIP-622).
+        ref = log_failure("update_note tool failed", e)
+        raise ToolError(f"Failed to update note (ref {ref}).")
 
     # Version snapshot for title/body changes (folder-only moves don't
     # snapshot — parity with the REST layer, whose move path is separate).

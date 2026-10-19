@@ -49,6 +49,7 @@ from django.conf import settings
 from django.db import connections
 from django.utils import timezone
 
+from apis.request_id import describe_exception
 from origin.search_engine.agent import tool_cache
 from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
 from origin.search_engine.agent.citation_resolver import resolve_unresolved_citations
@@ -666,7 +667,8 @@ def _friendly_arguments(args: dict[str, Any], tool_name: str | None = None) -> d
             try:
                 friendly = resolver(value)
             except Exception:  # noqa: BLE001 — labels never break the loop
-                log.exception("Friendly-arg lookup failed for %s=%r", key, value)
+                # Not the value: the model sometimes passes a title for an id.
+                log.exception("Friendly-arg lookup failed for %s (%s)", key, type(value).__name__)
                 friendly = None
             out[key] = friendly if friendly is not None else value
         else:
@@ -1771,7 +1773,8 @@ def resume_agent(
                 messages.append(_assistant_function_call_turn(function_call))
                 messages.append(_function_response_turn(call_name, {"error": str(e)}))
             except Exception as e:  # noqa: BLE001
-                log.exception("Tool %s crashed on args %r", call_name, call_args)
+                # The keys only: the values are note and task text (MIP-622).
+                log.exception("Tool %s crashed on args %s", call_name, sorted(call_args))
                 dur_ms = int((time.monotonic() - _tool_started) * 1000)
                 err = f"Internal error in tool '{call_name}'."
                 emit(
@@ -1906,7 +1909,8 @@ def _run_tool_guarded(
     except ToolError as e:
         return ("tool_error", str(e))
     except Exception:  # noqa: BLE001
-        log.exception("Tool %s crashed on args %r", call_name, call_args)
+        # The keys only: the values are note and task text (MIP-622).
+        log.exception("Tool %s crashed on args %s", call_name, sorted(call_args))
         return ("crash", f"Internal error in tool '{call_name}'.")
 
 
@@ -2518,8 +2522,11 @@ def _drive_loop(
                     )
         except Exception as e:  # noqa: BLE001 — surface as stream error
             log.exception("Agent step %d LLM call failed", step)
-            emit({"type": "error", "message": f"LLM call failed: {e}"})
-            _persist_step(run_id, step_index=step, error=f"LLM call failed: {e}")
+            # The type and status only: the client sees this, the run row
+            # keeps it, and the evals read the status (MIP-622).
+            failure = f"LLM call failed: {describe_exception(e)}"
+            emit({"type": "error", "message": failure})
+            _persist_step(run_id, step_index=step, error=failure)
             return None
 
         any_text_emitted = bool(accumulated_text_parts)

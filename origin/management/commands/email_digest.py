@@ -33,6 +33,7 @@ from django.template import TemplateDoesNotExist
 from django.template.loader import get_template
 from django.utils import timezone
 
+from apis.request_id import describe_exception
 from origin.management.cron_command import CronCommand
 from origin.models.chat.unified_models import Activity
 from origin.models.common.inbox_models import InboxItems
@@ -145,8 +146,9 @@ class Command(CronCommand):
                     skipped += 1
                     continue
                 self._send(user, total, entries)
-            except Exception:  # noqa: BLE001 — one user never kills the pass
-                log.warning("digest send failed for user=%s", uid, exc_info=True)
+            except Exception as exc:  # noqa: BLE001 — one user never kills the pass
+                # The type only: a mail error's text quotes the address (MIP-622).
+                log.warning("digest send failed for user=%s: %s", uid, describe_exception(exc))
                 failed += 1
                 continue
             user.email_digest_last_sent_at = now

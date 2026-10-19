@@ -24,6 +24,7 @@ from typing import Literal, Optional
 
 import requests
 
+from apis.request_id import describe_exception, describe_upstream
 from origin.models.common.user_models import ConnectedAccount
 from origin.services.oauth.accounts import default_account_for
 from origin.services.oauth.tokens import ReauthRequired, get_valid_access_token
@@ -151,10 +152,7 @@ def sync_task_event(account: ConnectedAccount, task) -> SyncOutcome:
                 return "cleared"
             if not resp.ok:
                 logger.warning(
-                    "calendar_sync patch failed task=%s status=%s body=%s",
-                    task.pk,
-                    resp.status_code,
-                    resp.text[:500],
+                    "calendar_sync patch failed task=%s %s", task.pk, describe_upstream(resp)
                 )
                 return "failed"
             # Google soft-deletes events from the UI: PATCH against
@@ -177,10 +175,7 @@ def sync_task_event(account: ConnectedAccount, task) -> SyncOutcome:
         resp = _google(account, "POST", f"/calendars/{calendar_id}/events", json=body)
         if not resp.ok:
             logger.warning(
-                "calendar_sync create failed task=%s status=%s body=%s",
-                task.pk,
-                resp.status_code,
-                resp.text[:500],
+                "calendar_sync create failed task=%s %s", task.pk, describe_upstream(resp)
             )
             return "failed"
         event = resp.json()
@@ -195,7 +190,9 @@ def sync_task_event(account: ConnectedAccount, task) -> SyncOutcome:
         logger.warning("calendar_sync reauth required task=%s err=%s", task.pk, exc)
         return "failed"
     except requests.RequestException as exc:
-        logger.warning("calendar_sync transport error task=%s err=%s", task.pk, exc)
+        logger.warning(
+            "calendar_sync transport error task=%s err=%s", task.pk, describe_exception(exc)
+        )
         return "failed"
 
 
@@ -219,10 +216,7 @@ def delete_task_event(account: ConnectedAccount, task) -> bool:
         )
         if resp.status_code not in (200, 204, 404) and not resp.ok:
             logger.warning(
-                "calendar_sync delete failed task=%s status=%s body=%s",
-                task.pk,
-                resp.status_code,
-                resp.text[:500],
+                "calendar_sync delete failed task=%s %s", task.pk, describe_upstream(resp)
             )
             # Even on failure, clear the link so the user can re-link
             # later without a stale pointer. Mirrors how a 404 is
@@ -236,5 +230,7 @@ def delete_task_event(account: ConnectedAccount, task) -> bool:
         logger.warning("calendar_sync delete reauth required task=%s err=%s", task.pk, exc)
         return False
     except requests.RequestException as exc:
-        logger.warning("calendar_sync delete transport error task=%s err=%s", task.pk, exc)
+        logger.warning(
+            "calendar_sync delete transport error task=%s err=%s", task.pk, describe_exception(exc)
+        )
         return False

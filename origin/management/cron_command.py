@@ -30,6 +30,8 @@ from collections.abc import Iterator
 from django.core.management.base import BaseCommand, CommandError
 from django.db import close_old_connections
 
+from apis.log_redaction import redact
+
 # Only watch the app's own loggers — third-party libraries occasionally
 # log at ERROR for conditions we tolerate, and we don't want those to red
 # a cron run.
@@ -148,9 +150,11 @@ class CronCommand(BaseCommand):
         finally:
             watched.removeHandler(tripwire)
         if tripwire.count:
+            # Printed to stderr by Django, outside the logging formatters
+            # that would otherwise redact it.
             raise CommandError(
                 f"Run logged {tripwire.count} error(s) "
-                f"(first: {tripwire.first_message}). Failing so the cron run "
-                "is marked failed."
+                f"(first: {redact(tripwire.first_message or '')}). Failing so "
+                "the cron run is marked failed."
             )
         return result

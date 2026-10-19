@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from apis.request_id import log_failure
 from origin.models.common.user_models import CustomUser
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
@@ -102,7 +103,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # incremental reindexer keys off it. See update_task.
         task.save(update_fields=["assignee_id", "ts_updated_at"])
     except Exception as e:  # noqa: BLE001
-        raise ToolError(f"Failed to assign task: {e}")
+        # The model and the MCP caller read this; the database error
+        # goes to the log with a reference (MIP-622).
+        ref = log_failure("assign_task tool failed", e)
+        raise ToolError(f"Failed to assign task (ref {ref}).")
 
     if new_assignee_username:
         summary = f"Assigned task #{task_id} to {new_assignee_username}"

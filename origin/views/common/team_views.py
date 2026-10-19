@@ -17,6 +17,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
+from apis.request_id import describe_exception
 from origin.models.common.inbox_models import InboxItems
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.security_event_models import SecurityAction
@@ -745,7 +746,10 @@ class InviteTeamMembersView(AuthenticatedAPIView):
                     },
                 )
             except Exception as exc:
-                logger.exception("Invite email send failed for %s: %s", email, exc)
+                # The type only: a mail error's text quotes the address (MIP-622).
+                logger.error(
+                    "Invite email send failed for invite=%s: %s", invite.pk, describe_exception(exc)
+                )
                 results.append({"email": email, "status": "failed"})
                 continue
 

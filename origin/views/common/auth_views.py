@@ -24,6 +24,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.utils import get_md5_hash_password
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
+from apis.request_id import describe_exception
 from origin.models.common.security_event_models import SecurityAction
 from origin.services.demo_seeder import (
     DEMO_LANGUAGES,
@@ -212,7 +213,10 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
                 _send_verification_email(user, raw)
             except Exception as exc:
                 # Don't fail the signup; user can request a resend.
-                logger.exception("Verification email send failed: %s", exc)
+                # The type only: a mail error's text quotes the address (MIP-622).
+                logger.error(
+                    "Verification email send failed user=%s: %s", user.pk, describe_exception(exc)
+                )
             return Response(
                 {"message": "verification_email_sent", "email": user.email},
                 status=status.HTTP_201_CREATED,
@@ -744,7 +748,10 @@ class PasswordResetRequestView(APIView):
             except Exception as exc:
                 # Don't leak SMTP failures to the client (would also
                 # leak that the email exists). Log for ops to chase.
-                logger.exception("Password reset email send failed: %s", exc)
+                # The type only: a mail error's text quotes the address (MIP-622).
+                logger.error(
+                    "Password reset email send failed user=%s: %s", user.pk, describe_exception(exc)
+                )
 
         return Response(status=status.HTTP_200_OK)
 
@@ -930,5 +937,8 @@ class ResendVerificationView(APIView):
             try:
                 _send_verification_email(user, raw)
             except Exception as exc:
-                logger.exception("Resend verification email failed: %s", exc)
+                # The type only: a mail error's text quotes the address (MIP-622).
+                logger.error(
+                    "Resend verification email failed user=%s: %s", user.pk, describe_exception(exc)
+                )
         return Response(status=status.HTTP_200_OK)

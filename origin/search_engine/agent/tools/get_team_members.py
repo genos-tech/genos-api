@@ -1,9 +1,13 @@
 """`get_team_members` tool — list active users in the team.
 
-Returns user_id, username, and email for every non-deleted, non-system
+Returns user_id, username and role for every non-deleted, non-system
 user who belongs to the requesting team.  This is the correct way for the
 agent to resolve "assign to John" or "who is on this team?" — the model
 gets a stable UUID → name mapping and can pass the UUID to `assign_task`.
+
+Emails only when `include_email` asks for them: every result goes to the
+LLM provider, and "who is on the team?" used to answer with the whole
+roster's addresses (MIP-622).
 
 ACL contract:
   * Only team members (ctx.team_id, via TeamMembers) are returned.
@@ -33,7 +37,8 @@ from origin.views.utils.scope_guards import (
 )
 
 
-def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG001
+def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    include_email = args.get("include_email") is True
     memberships = (
         TeamMembers.objects.filter(
             team_id=ctx.team_id,
@@ -62,14 +67,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
         # Guard against orphaned membership rows and internal accounts.
         if u is None or u.is_deleted or u.is_system_user:
             continue
-        members.append(
-            {
-                "user_id": str(u.id),
-                "username": u.username or "",
-                "email": u.email or "",
-                "role": u.role or "",
-            }
-        )
+        member = {
+            "user_id": str(u.id),
+            "username": u.username or "",
+            "role": u.role or "",
+        }
+        if include_email:
+            member["email"] = u.email or ""
+        members.append(member)
 
     return {
         "members": members,
@@ -80,15 +85,23 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
 GET_TEAM_MEMBERS = Tool(
     name="get_team_members",
     description=(
-        "List all active users in the team with their user_id, username, "
-        "and email. Use this to resolve a person's name to their UUID "
+        "List all active users in the team with their user_id, username "
+        "and role. Use this to resolve a person's name to their UUID "
         "before calling assign_task, or to answer 'who is on this team?' "
         "questions. Only returns real users in the current team — no "
         "system accounts, no deleted users, no cross-team data."
     ),
     parameters_schema={
         "type": "OBJECT",
-        "properties": {},
+        "properties": {
+            "include_email": {
+                "type": "BOOLEAN",
+                "description": (
+                    "Also return each member's email. Only when the user asks "
+                    "for an email address; names and ids answer everything else."
+                ),
+            },
+        },
         "required": [],
     },
     run=_run,

@@ -27,6 +27,7 @@ from typing import Any
 
 import requests
 
+from apis.request_id import describe_upstream
 from origin.models.common.user_models import ConnectedAccount, CustomUser
 from origin.search_engine.agent.tools.base import ToolError, wrap_workspace_content
 from origin.services.oauth.tokens import ReauthRequired, get_valid_access_token
@@ -173,10 +174,5 @@ def calendar_api_error(resp: requests.Response, context: str) -> ToolError:
     `context` is a short verb phrase like "create event" / "list events"
     that gets folded into the error message the model sees.
     """
-    logger.warning(
-        "calendar tool %s failed status=%s body=%s",
-        context,
-        resp.status_code,
-        resp.text[:500],
-    )
+    logger.warning("calendar tool %s failed: %s", context, describe_upstream(resp))
     return ToolError(f"Google Calendar {context} failed: HTTP {resp.status_code}.")

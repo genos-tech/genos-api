@@ -1,0 +1,115 @@
+{
+    "about": "Shared by genos-api (apis/log_redaction.py), genos-sockets (utils/log_redaction.py) and genos-collab (logRedaction.js). Copy this file byte for byte when it changes; each repo's test checks its own copy against its own redactor. Every secret below is made up.",
+    "masked": [
+        {
+            "in": "email sent to ken@example.com",
+            "out": "email sent to [EMAIL]"
+        },
+        {
+            "in": "Stripe customer for First.Last+tag@sub.example.co.jp failed",
+            "out": "Stripe customer for [EMAIL] failed"
+        },
+        {
+            "in": "GET /api?email=ken%40example.com&x=1",
+            "out": "GET /api?email=[EMAIL]&x=1"
+        },
+        {
+            "in": "DETAIL:  Key (email)=(ken@example.com) already exists.",
+            "out": "DETAIL:  Key (email)=([EMAIL]) already exists."
+        },
+        {
+            "in": "headers={'Authorization': 'Bearer abcdefghijklmnop.qrstuvwx'}",
+            "out": "headers={'Authorization': '[REDACTED]'}"
+        },
+        {
+            "in": "Authorization: ApiKey gnos_Ab3dEf6hIj9kLm2nOp5q",
+            "out": "Authorization: ApiKey [REDACTED]"
+        },
+        {
+            "in": "retrying with Bearer abcdefghijklmnop.qrstuvwx",
+            "out": "retrying with Bearer [REDACTED]"
+        },
+        {
+            "in": "key gnos_Ab3dEf6hIj9kLm2nOp5q rejected",
+            "out": "key [REDACTED] rejected"
+        },
+        {
+            "in": "token is eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjo0Mn0.c2lnbmF0dXJl here",
+            "out": "token is [REDACTED] here"
+        },
+        {
+            "in": "wss://sockets.example.com/socket.io/?token=eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjo0Mn0.c2lnbmF0dXJl&EIO=4",
+            "out": "wss://sockets.example.com/socket.io/?token=[REDACTED]&EIO=4"
+        },
+        {
+            "in": "payload {\"password\": \"hunter2 with spaces\", \"user\": 7}",
+            "out": "payload {\"password\": \"[REDACTED]\", \"user\": 7}"
+        },
+        {
+            "in": "kwargs={'access_token': 'ya29.a0AfH6SMBx', 'scope': 'repo'}",
+            "out": "kwargs={'access_token': '[REDACTED]', 'scope': 'repo'}"
+        },
+        {
+            "in": "client_secret=GOCSPX-abc123 refresh_token=1//0gXyz",
+            "out": "client_secret=[REDACTED] refresh_token=[REDACTED]"
+        },
+        {
+            "in": "webhook secret: s3cr3t-value",
+            "out": "webhook secret: [REDACTED]"
+        },
+        {
+            "in": "login with password=hunter failed",
+            "out": "login with password=[REDACTED] failed"
+        },
+        {
+            "in": "Bad Request: /api/v2/email/unsubscribe/eyJ1IjoxMjN9:1xIjP2:Xk9mPq2Rt7Vw4Yz8Ab3Cd6Ef1Gh5Jk0Ln/",
+            "out": "Bad Request: /api/v2/email/unsubscribe/eyJ1IjoxMjN9:1xIjP2:[REDACTED]/"
+        },
+        {
+            "in": "github said ghp_A1b2C3d4E5f6G7h8I9j0 is bad",
+            "out": "github said [REDACTED] is bad"
+        },
+        {
+            "in": "stripe sk_live_51Hx2AbCdEfGhIjKlMn and whsec_AbCdEf123456",
+            "out": "stripe [REDACTED] and [REDACTED]"
+        },
+        {
+            "in": "slack xoxb-1234567890-abcdefghij",
+            "out": "slack [REDACTED]"
+        },
+        {
+            "in": "gemini AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6",
+            "out": "gemini [REDACTED]"
+        },
+        {
+            "in": "fernet key zQ3x9Vb2Nn7Lk1Pq8Rr4Ss6Tt0Uu5Ww2Yy3Aa=",
+            "out": "fernet key [REDACTED]"
+        },
+        {
+            "in": "unknown key Xk9mPq2Rt7Vw4Yz8Ab3Cd6Ef1Gh5Jk0Ln",
+            "out": "unknown key [REDACTED]"
+        }
+    ],
+    "unchanged": [
+        "task 1327 closed by user 42 (team 7)",
+        "note 9f1c2b3a-4d5e-6f70-8a9b-0c1d2e3f4a5b saved",
+        "commit cb2f1a494dded934cf3595ab88ba1d408b2cc91f pushed",
+        "content hash sha256:3f79bb7b435b05321651daefd374cdc681dc06faa65e374e38337b88ca046dea",
+        "File \"/usr/local/lib/python3.11/site-packages/django/db/backends/utils.py\", line 89, in _execute",
+        "in _sync_existing_hook_events_if_needed_and_also_something_long",
+        "origin.search_engine.management.commands.opensearch_reindex finished",
+        "Bearer authentication failed for user 42",
+        "the token expired; refresh needed",
+        "password reset requested for user 42",
+        "missing secret: set GITHUB_WEBHOOK_SECRET",
+        "secret=[REDACTED] already masked",
+        "GitHub hook create 201 on acme/rocket",
+        "メールを送信しました (user 42)",
+        "webhook_deliver: 3 sent, 0 failed",
+        "agent turn took 1234ms, 5 tool calls",
+        "railway.app/project/0f6b5c1e-2a3d-4b4c-9d8e-7f6a5b4c3d2e",
+        "security.event id=11 action=api_key.used target=api_key:477511ac-ed4a-4475-86ed-1579d55219b2 source=mcp",
+        "    token = make_token(user)",
+        "    if not secret:"
+    ]
+}

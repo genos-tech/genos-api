@@ -11,6 +11,9 @@ ACL contract (same shape as `get_project_summary`):
     for the requested project — a non-member may not enumerate another
     project's roster (it leaks organisational structure).
   * System / soft-deleted users are excluded from the result.
+
+Emails only when `include_email` asks for them, as in `get_team_members`
+(MIP-622).
 """
 
 from __future__ import annotations
@@ -43,19 +46,20 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "You are not a member of that project."
         )
 
+    include_email = args.get("include_email") is True
     members = []
     for m in memberships:
         u = m.attendee
         if u is None or u.is_deleted or u.is_system_user:
             continue
-        members.append(
-            {
-                "user_id": str(u.id),
-                "username": u.username or "",
-                "email": u.email or "",
-                "joined_at": m.ts_joined_at.isoformat() if m.ts_joined_at else None,
-            }
-        )
+        member = {
+            "user_id": str(u.id),
+            "username": u.username or "",
+            "joined_at": m.ts_joined_at.isoformat() if m.ts_joined_at else None,
+        }
+        if include_email:
+            member["email"] = u.email or ""
+        members.append(member)
 
     return {
         "project_id": project_id,
@@ -69,7 +73,7 @@ LIST_PROJECT_MEMBERS = Tool(
     name="list_project_members",
     description=(
         "List the members of ONE specific project (user_id, username, "
-        "email, joined_at). Use this for 'who is on project X?' / "
+        "joined_at). Use this for 'who is on project X?' / "
         "'who's working on the redesign?' questions — NOT get_team_members, "
         "which lists the whole team regardless of project. Requires the "
         "project_id (find it via list_projects first if you only have a "
@@ -81,6 +85,13 @@ LIST_PROJECT_MEMBERS = Tool(
             "project_id": {
                 "type": "INTEGER",
                 "description": "The project's integer id (from list_projects).",
+            },
+            "include_email": {
+                "type": "BOOLEAN",
+                "description": (
+                    "Also return each member's email. Only when the user asks "
+                    "for an email address; names and ids answer everything else."
+                ),
             },
         },
         "required": ["project_id"],

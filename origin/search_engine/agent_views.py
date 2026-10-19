@@ -56,6 +56,7 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from apis.llm_catalog import EFFORTS
+from apis.request_id import bind_request_id, current_request_id, log_failure, reset_request_id
 from origin.middleware.current_user import clear_current_user, set_current_user
 from origin.search_engine import metered, spend_recorder
 from origin.search_engine.agent.controller import (
@@ -1555,6 +1556,7 @@ class AgentAskView(AuthenticatedAPIView):
             fallback_note=fallback_note,
             spend_kwargs=spend_kwargs,
             acting_user=request.user,
+            request_id=current_request_id(),
         )
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
@@ -1718,6 +1720,7 @@ class AgentDecideView(AuthenticatedAPIView):
             session_id=run.session_id,
             spend_kwargs=spend_kwargs,
             acting_user=request.user,
+            request_id=current_request_id(),
         )
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
@@ -1830,6 +1833,7 @@ def _stream_ndjson(
     fallback_note: dict | None = None,
     spend_kwargs: dict | None = None,
     acting_user=None,
+    request_id: str | None = None,
 ) -> Iterator[bytes]:
     """Bridge a controller callback into chunked NDJSON.
 
@@ -1868,7 +1872,8 @@ def _stream_ndjson(
     write the agent makes (`TaskActivity.actor`, `via: agent`). The
     request's own thread-local can't be relied on: a new thread never
     sees it, and by the time Django iterates this generator the
-    middleware has already cleared it.
+    middleware has already cleared it. `request_id` (the request's log
+    reference, MIP-622) is passed in for the same reason.
     """
     import queue  # noqa: PLC0415
 
@@ -1892,12 +1897,18 @@ def _stream_ndjson(
         nonlocal pause_descriptor
         if acting_user is not None:
             set_current_user(acting_user, via={"kind": "agent"})
+        # A bare thread inherits no contextvars: without this, the worker's
+        # log lines would carry no reference.
+        request_id_token = bind_request_id(request_id)
         try:
             pause_descriptor = worker_target(emit, cancel_event)
         except Exception as e:  # noqa: BLE001
-            log.exception("Agent worker crashed")
-            event_q.put({"type": "error", "message": f"Agent crashed: {e}"})
+            # The reference, not the exception: the client sees this, and
+            # the run row keeps it (MIP-622).
+            ref = log_failure("Agent worker crashed", e)
+            event_q.put({"type": "error", "message": f"Agent crashed (ref {ref})."})
         finally:
+            reset_request_id(request_id_token)
             clear_current_user()
             event_q.put(None)
 

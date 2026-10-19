@@ -34,6 +34,7 @@ from typing import Any
 
 from django.conf import settings
 
+from apis.request_id import describe_exception
 from origin.search_engine import credit_ledger
 from origin.search_engine.agent.tools.base import (
     Tool,
@@ -138,7 +139,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
             latency_ms=int((time.monotonic() - started) * 1000),
             error=f"{type(e).__name__}: {e}"[:200],
         )
-        raise ToolError(f"Web search failed: {e}")
+        # The type and status only: the client's text can quote our key
+        # back, and the model and the MCP caller read this (MIP-622).
+        raise ToolError(f"Web search failed: {describe_exception(e)}")
 
     # Successful Tavily call → charge one unit against the user's daily
     # web search quota. The increment is best-effort (logs + swallows

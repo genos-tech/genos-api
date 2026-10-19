@@ -3,6 +3,7 @@ from django.db.models import Case, CharField, F, IntegerField, Q, Value, When
 from rest_framework import status
 from rest_framework.response import Response
 
+from apis.request_id import error_response
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.purge import purge_note
@@ -487,10 +488,9 @@ class ChatNoteMasterView(AuthenticatedAPIView):
                     )
 
             except Exception as e:
-                # If anything fails, return a server error
-                return Response(
-                    {"error": "Failed to create note and role.", "details": str(e)},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                # The cause goes to the log, not to the client (MIP-622).
+                return error_response(
+                    "chat note create failed", e, message="Failed to create note and role."
                 )
 
             increment_usage(str(request_user_id), NOTE_CREATE_KEY)

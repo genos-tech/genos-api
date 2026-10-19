@@ -38,6 +38,7 @@ from typing import Any
 
 from django.db import transaction
 
+from apis.request_id import log_failure
 from origin.models.common.team_models import TeamMembers
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.milestone_models import MilestoneMaster
@@ -420,7 +421,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     except ToolError:
         raise
     except Exception as e:  # noqa: BLE001 — surface as ToolError for the model
-        raise ToolError(f"Failed to create the plan (nothing was created): {e}")
+        # The model and the MCP caller read this; the database error
+        # goes to the log with a reference (MIP-622).
+        ref = log_failure("create_task_plan tool failed", e)
+        raise ToolError(f"Failed to create the plan (nothing was created) (ref {ref}).")
 
     # Charge after commit — the whole batch, including a new
     # milestone's backing task.

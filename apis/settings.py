@@ -100,6 +100,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # First, so every log line and error answer of the request shares
+    # its reference (apis/request_id.py, MIP-622).
+    "apis.request_id.RequestIdMiddleware",
     "corsheaders.middleware.CorsMiddleware",  # Add this line at the top
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -291,7 +294,9 @@ LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
+        # Both formatters redact secrets and emails (apis/log_redaction.py).
         "default": {
+            "()": "apis.log_redaction.RedactingFormatter",
             "format": "[%(asctime)s] %(levelname)s %(name)s: %(message)s",
             "datefmt": "%Y-%m-%d %H:%M:%S",
         },

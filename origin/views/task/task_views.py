@@ -1417,7 +1417,8 @@ def _serialize_task_attachments(task, *, meta_only: bool, include_ids: bool) -> 
                 with open("./uploads/" + file_path, "rb") as f:
                     entry["file_base64"] = base64.b64encode(f.read()).decode("utf-8")
             except FileNotFoundError:
-                print(f"File not found: {file_path}")
+                # The id, not the path: the path holds the uploaded file's name.
+                logger.warning("attachment file not found: attachment_id=%s", attachment_id)
                 continue
         attached_files.append(entry)
     return attached_files
@@ -2128,9 +2129,10 @@ class TaskAttachmentsView(AuthenticatedAPIView):
                     # Don't fail the API call — the DB row deletion is
                     # the user-facing contract; a missing file is a
                     # cleanup concern, not a correctness one.
-                    print(
-                        f"[TaskAttachmentsView.delete] file cleanup failed for "
-                        f"task={task} attachment_id={attachment_id}: {file_err}"
+                    logger.warning(
+                        "[TaskAttachmentsView.delete] file cleanup failed for attachment_id=%s: %s",
+                        attachment_id,
+                        type(file_err).__name__,
                     )
             attachment.delete()
             return Response(

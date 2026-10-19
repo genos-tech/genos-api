@@ -79,7 +79,10 @@ def purge_chunks(chunk_ids: list[str], *, refresh: bool = True) -> int:
     if real_errors:
         log.error("Purge bulk reported %d errors", len(real_errors))
         for err in real_errors[:5]:
-            log.warning("  %s", err)
+            item = err.get("delete") or {}
+            reason = item.get("error")
+            reason = reason.get("type") if isinstance(reason, dict) else reason
+            log.warning("  status=%s type=%s", item.get("status"), reason)
     deleted = 0
     for i in range(0, len(chunk_ids), _BATCH):
         batch = chunk_ids[i : i + _BATCH]

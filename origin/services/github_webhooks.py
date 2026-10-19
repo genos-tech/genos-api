@@ -33,6 +33,7 @@ from django.core.cache import cache
 from django.db import IntegrityError
 from django.db.models import Q
 
+from apis.request_id import describe_upstream
 from origin.models.common.user_models import (
     ConnectedAccount,
     GithubWebhookRegistration,
@@ -318,11 +319,7 @@ def ensure_repo_webhook(user, owner: str, repo: str) -> Optional[GithubWebhookRe
         return None
 
     logger.warning(
-        "GitHub hook create unexpected %d on %s/%s: %s",
-        resp.status_code,
-        owner,
-        repo,
-        (resp.text or "")[:200],
+        "GitHub hook create unexpected on %s/%s: %s", owner, repo, describe_upstream(resp)
     )
     return None
 
@@ -392,11 +389,10 @@ def _sync_existing_hook_events_if_needed(user, owner: str, repo: str, hook_id: i
         )
     else:
         logger.warning(
-            "ensure_repo_webhook: hook events PATCH unexpected %d on %s/%s: %s",
-            resp.status_code,
+            "ensure_repo_webhook: hook events PATCH unexpected on %s/%s: %s",
             owner,
             repo,
-            (resp.text or "")[:200],
+            describe_upstream(resp),
         )
 
 

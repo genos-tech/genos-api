@@ -74,7 +74,9 @@ def route_effort(query: str, provider: str) -> str:
         verdict = "".join(chunks).strip().lower().rstrip(".")
         if verdict in EFFORTS:
             return verdict
-        log.warning("effort router returned %r; falling back to medium", verdict)
+        log.warning(
+            "effort router returned %d chars, not an effort; falling back to medium", len(verdict)
+        )
         return "medium"
     except Exception:  # noqa: BLE001
         log.exception("effort router failed; falling back to medium")

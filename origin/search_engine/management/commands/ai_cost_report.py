@@ -44,6 +44,7 @@ from django.conf import settings
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
+from apis.request_id import describe_exception
 from origin.management.cron_command import CronCommand
 from origin.search_engine.llm.spend import SURFACE_UNATTRIBUTED
 from origin.search_engine.models import AiRequestCost, AiSpendEvent
@@ -449,10 +450,11 @@ class Command(CronCommand):
                 context={"window": window, "body": "\n".join(lines)},
             )
             self.stdout.write(f"\nEmailed the summary to {to}.")
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             # WARNING, not ERROR: a mail outage must not red a cron run
             # whose actual job — reporting — succeeded.
-            log.warning("Could not email the AI cost report to %s", to, exc_info=True)
+            # The type only: a mail error's text quotes the address (MIP-622).
+            log.warning("Could not email the AI cost report: %s", describe_exception(exc))
             self.stdout.write(self.style.WARNING(f"\nCould not email the summary to {to}."))
 
     def _check_budget(self, total_jpy_milli: int, window_days: int, window: str) -> None:

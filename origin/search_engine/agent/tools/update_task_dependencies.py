@@ -34,6 +34,7 @@ from typing import Any
 from django.db import transaction
 from django.db.models import Q
 
+from apis.request_id import log_failure
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
@@ -243,7 +244,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 )
                 added.append(_edge(blocker, blocked))
     except Exception as e:  # noqa: BLE001 — surface as ToolError for the model
-        raise ToolError(f"Dependency update failed (nothing was applied): {e}")
+        # The model and the MCP caller read this; the database error
+        # goes to the log with a reference (MIP-622).
+        ref = log_failure("update_task_dependencies tool failed", e)
+        raise ToolError(f"Dependency update failed (nothing was applied) (ref {ref}).")
 
     # A Blocked/Open flip changes the project table's rows.
     for pid in {tasks_by_id[t].project_id for t in task_ids}:

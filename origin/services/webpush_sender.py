@@ -14,6 +14,7 @@ import logging
 from django.conf import settings
 from django.db import close_old_connections
 
+from apis.request_id import describe_exception
 from origin.models.common.notification_models import PushSubscription
 
 logger = logging.getLogger(__name__)
@@ -67,9 +68,11 @@ def send_web_push(
             PushSubscription.objects.filter(pk=subscription_id).delete()
             logger.info("[webpush] pruned dead subscription %s (%s)", subscription_id, status_code)
         else:
-            logger.warning("[webpush] send failed (%s): %s", status_code, exc)
+            # The status only: the error's text embeds the push service's
+            # response, and the endpoint URL is a device identifier (MIP-622).
+            logger.warning("[webpush] send failed (%s)", status_code)
     except Exception as exc:  # noqa: BLE001 — a push must never break the caller
-        logger.warning("[webpush] unexpected send error: %s", exc)
+        logger.warning("[webpush] unexpected send error: %s", describe_exception(exc))
     finally:
         # Close this thread's connection so it isn't leaked / reused stale.
         close_old_connections()

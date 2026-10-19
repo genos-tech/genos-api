@@ -3,6 +3,7 @@ from django.db.models import F, IntegerField, Value
 from rest_framework import status
 from rest_framework.response import Response
 
+from apis.request_id import error_response
 from origin.models.note.personal_note_models import PersonalNoteFolder
 from origin.search_engine.purge import purge_note
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
@@ -245,10 +246,9 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
                     )
 
             except Exception as e:
-                # If anything fails, return a server error
-                return Response(
-                    {"error": "Failed to create note and role.", "details": str(e)},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                # The cause goes to the log, not to the client (MIP-622).
+                return error_response(
+                    "personal note create failed", e, message="Failed to create note and role."
                 )
 
             increment_usage(str(request_user_id), NOTE_CREATE_KEY)

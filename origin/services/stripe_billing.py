@@ -98,7 +98,11 @@ RETURN_PATH = "/workspace/plans"
 
 class BillingError(Exception):
     """Billing is unconfigured, or a Stripe API call failed. The view
-    layer maps this to a clean 4xx/5xx instead of a traceback."""
+    layer maps this to a clean 4xx/5xx instead of a traceback.
+
+    The message is shown to the user, so it never carries Stripe's own
+    text; the Stripe exception rides along as `__cause__` for the log
+    (MIP-622)."""
 
 
 # Key types that can call the server-side API: secret and restricted.
@@ -117,10 +121,12 @@ def _secret_key_error(secret: str) -> str | None:
     if not secret:
         return "Stripe billing is not configured."
     if not secret.startswith(_SECRET_KEY_PREFIXES):
+        # Not the prefix itself: this text is logged, and shown to a user
+        # who clicks Upgrade (MIP-622).
         return (
-            f"STRIPE_SECRET_KEY does not look like a secret key "
-            f"(starts with {secret[:3]!r}; expected sk_ or rk_ — a pk_ "
-            f"publishable key cannot call the Stripe API)."
+            "STRIPE_SECRET_KEY does not look like a secret key "
+            "(expected sk_ or rk_ — a pk_ publishable key cannot call the "
+            "Stripe API)."
         )
     return None
 
@@ -321,8 +327,8 @@ def _set_personal_tier(
     previous_set_by = user.tier_set_by or TIER_SET_BY_STRIPE
     if source == TIER_SET_BY_STRIPE and previous_set_by == TIER_SET_BY_OPERATOR and tier == "free":
         log.info(
-            "stripe billing: tier for %s stays %s — operator-set, not Stripe's to remove (%s)",
-            user.email,
+            "stripe billing: tier for user=%s stays %s — operator-set, not Stripe's to remove (%s)",
+            user.pk,
             previous,
             reason,
         )
@@ -345,8 +351,8 @@ def _set_personal_tier(
     if "tier" in updates:
         invalidate_effective_tier([user.id])
     log.info(
-        "stripe billing: tier for %s: %s -> %s [source %s -> %s] (%s)",
-        user.email,
+        "stripe billing: tier for user=%s: %s -> %s [source %s -> %s] (%s)",
+        user.pk,
         previous,
         tier,
         previous_set_by,
@@ -378,7 +384,7 @@ def _customer_is_alive(stripe, customer_id: str) -> bool:
     except Exception as e:  # noqa: BLE001
         if getattr(e, "code", "") == "resource_missing":
             return False
-        raise BillingError(f"Could not verify the Stripe customer: {e}")
+        raise BillingError("Could not verify the Stripe customer.") from e
     return not customer.get("deleted", False)
 
 
@@ -398,9 +404,9 @@ def ensure_customer(user: CustomUser) -> str:
         if _customer_is_alive(stripe, user.stripe_customer_id):
             return user.stripe_customer_id
         log.warning(
-            "stripe customer %s for %s no longer exists — minting a replacement",
+            "stripe customer %s for user=%s no longer exists — minting a replacement",
             user.stripe_customer_id,
-            user.email,
+            user.pk,
         )
     try:
         customer = stripe.Customer.create(
@@ -409,7 +415,7 @@ def ensure_customer(user: CustomUser) -> str:
             metadata={"genos_user_id": str(user.id)},
         )
     except Exception as e:  # noqa: BLE001
-        raise BillingError(f"Could not create Stripe customer: {e}")
+        raise BillingError("Could not create Stripe customer.") from e
     _bind_customer(user, customer["id"])
     return customer["id"]
 
@@ -460,7 +466,7 @@ def create_checkout_session(user: CustomUser, plan: str, currency: str | None = 
     try:
         session = stripe.checkout.Session.create(**params)
     except Exception as e:  # noqa: BLE001
-        raise BillingError(f"Could not start checkout: {e}")
+        raise BillingError("Could not start checkout.") from e
     return session["url"]
 
 
@@ -583,7 +589,7 @@ def create_credit_pack_checkout_session(
     try:
         session = stripe.checkout.Session.create(**params)
     except Exception as e:  # noqa: BLE001
-        raise BillingError(f"Could not start checkout: {e}")
+        raise BillingError("Could not start checkout.") from e
     return session["url"]
 
 
@@ -708,7 +714,7 @@ def _best_live_subscription(stripe, customer_id: str) -> dict | None:
     try:
         resp = stripe.Subscription.list(customer=customer_id, status="all", limit=100)
     except Exception as e:  # noqa: BLE001
-        raise BillingError(f"Could not list subscriptions: {e}")
+        raise BillingError("Could not list subscriptions.") from e
     subs = (json.loads(str(resp)) or {}).get("data") or []
     candidates = [s for s in subs if (s or {}).get("status") in _LIVE_STATUS_RANK]
     if not candidates:
@@ -807,7 +813,7 @@ def _portal_url(stripe, customer_id: str, flow: str | None, plan: str | None, wh
     try:
         session = stripe.billing_portal.Session.create(customer=customer_id, return_url=return_url)
     except Exception as e:  # noqa: BLE001
-        raise BillingError(f"Could not open the {what}: {e}")
+        raise BillingError(f"Could not open the {what}.") from e
     return session["url"]
 
 
@@ -850,11 +856,11 @@ def verify_webhook(raw_body: bytes, signature_header: str | None) -> dict:
     try:
         stripe.Webhook.construct_event(raw_body, signature_header, webhook_secret)
     except Exception as e:  # noqa: BLE001
-        raise BillingError(f"Webhook verification failed: {e}")
+        raise BillingError("Webhook verification failed.") from e
     try:
         event = json.loads(raw_body.decode("utf-8") or "{}")
     except ValueError as e:
-        raise BillingError(f"Webhook body is not valid JSON: {e}")
+        raise BillingError("Webhook body is not valid JSON.") from e
     if not isinstance(event, dict):
         raise BillingError("Webhook body is not a JSON object.")
     return event
@@ -1054,7 +1060,7 @@ def _set_team_plan(
     if source == TIER_SET_BY_STRIPE and previous_set_by == TIER_SET_BY_OPERATOR and plan == "free":
         log.info(
             "stripe billing: plan for team %s stays %s — operator-set, not Stripe's to remove (%s)",
-            team.team_name,
+            team.team_id,
             previous,
             reason,
         )
@@ -1075,7 +1081,7 @@ def _set_team_plan(
         invalidate_effective_tier(_team_member_ids(team.team_id))
     log.info(
         "stripe billing: plan for team %s: %s -> %s [source %s -> %s] (%s)",
-        team.team_name,
+        team.team_id,
         previous,
         plan,
         previous_set_by,
@@ -1107,7 +1113,7 @@ def ensure_team_customer(team: TeamMaster) -> str:
         log.warning(
             "stripe customer %s for team %s no longer exists — minting a replacement",
             team.stripe_customer_id,
-            team.team_name,
+            team.team_id,
         )
     try:
         customer = stripe.Customer.create(
@@ -1116,7 +1122,7 @@ def ensure_team_customer(team: TeamMaster) -> str:
             metadata={"genos_team_id": str(team.team_id)},
         )
     except Exception as e:  # noqa: BLE001
-        raise BillingError(f"Could not create the team's Stripe customer: {e}")
+        raise BillingError("Could not create the team's Stripe customer.") from e
     _bind_team_customer(team, customer["id"])
     return customer["id"]
 
@@ -1151,7 +1157,7 @@ def create_team_checkout_session(team: TeamMaster, plan: str, currency: str | No
     try:
         session = stripe.checkout.Session.create(**params)
     except Exception as e:  # noqa: BLE001
-        raise BillingError(f"Could not start the team checkout: {e}")
+        raise BillingError("Could not start the team checkout.") from e
     return session["url"]
 
 
@@ -1206,7 +1212,7 @@ def sync_team_subscription_quantity(team_id) -> str:
         )
         log.info(
             "stripe billing: team %s seats %s -> %s (membership change)",
-            team.team_name,
+            team.team_id,
             item.get("quantity"),
             seats,
         )
@@ -1226,7 +1232,7 @@ def reconcile_team_from_stripe(team: TeamMaster) -> str:
     try:
         resp = stripe.Subscription.list(customer=team.stripe_customer_id, status="all", limit=100)
     except Exception as e:  # noqa: BLE001
-        raise BillingError(f"Could not list the team's subscriptions: {e}")
+        raise BillingError("Could not list the team's subscriptions.") from e
     subs = (json.loads(str(resp)) or {}).get("data") or []
     active_plans: list[str] = []
     unmapped_active = False
@@ -1249,7 +1255,7 @@ def reconcile_team_from_stripe(team: TeamMaster) -> str:
         log.warning(
             "stripe reconcile: team %s has an active subscription with an unmapped price"
             " — plan NOT changed",
-            team.team_name,
+            team.team_id,
         )
         return "unchanged: active subscription with unmapped price"
     if in_grace:
@@ -1338,7 +1344,7 @@ def reconcile_from_stripe(user: CustomUser) -> str:
     try:
         resp = stripe.Subscription.list(customer=user.stripe_customer_id, status="all", limit=100)
     except Exception as e:  # noqa: BLE001
-        raise BillingError(f"Could not list subscriptions: {e}")
+        raise BillingError("Could not list subscriptions.") from e
     # Same plain-dict discipline as `verify_webhook`: `str()` of a
     # StripeObject is its JSON rendering (pinned by test), and plain
     # dicts keep this module off the SDK's object-model churn — the
@@ -1365,9 +1371,9 @@ def reconcile_from_stripe(user: CustomUser) -> str:
         return f"tier set to {best}"
     if unmapped_active:
         log.warning(
-            "stripe reconcile: %s has an active subscription with an unmapped price"
+            "stripe reconcile: user=%s has an active subscription with an unmapped price"
             " — tier NOT changed",
-            user.email,
+            user.pk,
         )
         return "unchanged: active subscription with unmapped price"
     if in_grace:

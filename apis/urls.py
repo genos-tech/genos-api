@@ -34,6 +34,10 @@ urlpatterns = [
     # path("admin/", admin.site.urls),
 ]
 
+# An uncaught exception answers JSON with a reference, never a page that
+# describes it (MIP-622).
+handler500 = "apis.request_id.server_error"
+
 urlpatterns.extend(common_urls.urlpatterns)
 urlpatterns.extend(chat_urls.urlpatterns)
 urlpatterns.extend(chat_v3_urls.urlpatterns)

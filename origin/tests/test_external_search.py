@@ -138,27 +138,28 @@ class ExternalRosterToolTests(ExternalSearchTestCase):
 
     def _members_for(self, user):
         ctx = ToolContext(team_id=str(self.team_a.team_id), user_id=str(user.id))
-        return {m["email"] for m in GET_TEAM_MEMBERS.run({}, ctx)["members"]}
+        # By id: the tool returns no email unless asked (MIP-622).
+        return {m["user_id"] for m in GET_TEAM_MEMBERS.run({}, ctx)["members"]}
 
     def test_a_chat_participant_sees_only_who_is_in_the_chat(self):
         """Previously the whole roster: their visible set was empty, and the
         narrowing was applied only when it was not."""
         self.chat_only_participant()
-        emails = self._members_for(self.b_viewer)
-        self.assertIn(self.a_owner.email, emails)
-        self.assertNotIn(self.a_viewer.email, emails)
-        self.assertNotIn(self.a_editor.email, emails)
+        visible = self._members_for(self.b_viewer)
+        self.assertIn(str(self.a_owner.id), visible)
+        self.assertNotIn(str(self.a_viewer.id), visible)
+        self.assertNotIn(str(self.a_editor.id), visible)
 
     def test_a_folder_participant_sees_only_the_folders_people(self):
         grant = self.active_folder_grant()
         add_external_participants(grant, [self.b_viewer.id], self.b_owner)
-        emails = self._members_for(self.b_viewer)
-        self.assertNotIn(self.a_viewer.email, emails)
+        visible = self._members_for(self.b_viewer)
+        self.assertNotIn(str(self.a_viewer.id), visible)
 
     def test_a_host_member_still_gets_the_whole_roster(self):
-        emails = self._members_for(self.a_viewer)
-        self.assertIn(self.a_owner.email, emails)
-        self.assertIn(self.a_editor.email, emails)
+        visible = self._members_for(self.a_viewer)
+        self.assertIn(str(self.a_owner.id), visible)
+        self.assertIn(str(self.a_editor.id), visible)
 
 
 class ExternalAssignmentTests(CrossTeamTestCase):

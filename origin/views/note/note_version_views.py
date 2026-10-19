@@ -2,6 +2,7 @@ from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 
+from apis.request_id import error_response
 from origin.models.common.team_models import TeamMaster
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
@@ -189,9 +190,9 @@ class NoteVersionRestoreView(AuthenticatedAPIView):
                     restored_from_version_no=version_no,
                 )
         except Exception as e:
-            return Response(
-                {"error": "Failed to restore version.", "details": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            # The cause goes to the log, not to the client (MIP-622).
+            return error_response(
+                "note version restore failed", e, message="Failed to restore version."
             )
 
         return Response(

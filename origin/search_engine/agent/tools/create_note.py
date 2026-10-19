@@ -25,6 +25,7 @@ from typing import Any
 
 from django.db import transaction
 
+from apis.request_id import log_failure
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
@@ -166,7 +167,10 @@ def _create_personal(*, title: str, body, folder_id, ctx: ToolContext) -> dict[s
             )
             _snapshot_v1(note=note, note_type_code=NOTE_TYPE_PERSONAL, ctx=ctx)
     except Exception as e:  # noqa: BLE001
-        raise ToolError(f"Failed to create personal note: {e}")
+        # The model and the MCP caller read this; the database error
+        # goes to the log with a reference (MIP-622).
+        ref = log_failure("create_note tool failed", e)
+        raise ToolError(f"Failed to create personal note (ref {ref}).")
     notify_note_mentions(note, note_type=NOTE_TYPE_PERSONAL, actor_id=ctx.user_id)
     return {
         "note_id": note.note_id,
@@ -248,7 +252,10 @@ def _create_task_note(
             )
             _snapshot_v1(note=note, note_type_code=NOTE_TYPE_TASK, ctx=ctx)
     except Exception as e:  # noqa: BLE001
-        raise ToolError(f"Failed to create task note: {e}")
+        # The model and the MCP caller read this; the database error
+        # goes to the log with a reference (MIP-622).
+        ref = log_failure("create_note tool failed", e)
+        raise ToolError(f"Failed to create task note (ref {ref}).")
     notify_note_mentions(note, note_type=NOTE_TYPE_TASK, actor_id=ctx.user_id)
 
     return {

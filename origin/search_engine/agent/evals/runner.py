@@ -172,6 +172,9 @@ _INFRA_SIGNATURES = (
     "503",
     "unavailable",
     "deadline exceeded",
+    # The controller now names the status, not the provider's text
+    # (MIP-622): "LLM call failed: ServerError 504 DEADLINE_EXCEEDED".
+    "deadline_exceeded",
 )
 
 

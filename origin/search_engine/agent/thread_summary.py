@@ -32,6 +32,7 @@ from datetime import datetime
 
 from django.core.exceptions import ValidationError
 
+from apis.request_id import describe_exception
 from origin.models.chat.unified_models import Channel, Message
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.acl import chat_acl_user_ids
@@ -271,7 +272,8 @@ def summarise_thread(
                 chunks.append(text)
     except Exception as e:  # noqa: BLE001
         log.exception("Thread summarisation LLM call failed")
-        raise ThreadSummaryError(f"LLM call failed: {e}") from e
+        # The type and status only; the provider's text stays in the log.
+        raise ThreadSummaryError(f"LLM call failed: {describe_exception(e)}") from e
 
     text_out = "".join(chunks).strip()
     if not text_out:
