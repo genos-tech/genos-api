@@ -45,6 +45,9 @@ EXPOSE 8000
 # `WEB_CONCURRENCY` (each worker ≈ a full Django process) only if RAM
 # headroom allows. `GUNICORN_TIMEOUT` is bumped so a request queued
 # behind a slow one during the boot burst isn't killed mid-flight.
+# `[::]` listens on IPv6 and IPv4 both: Railway's private network is
+# IPv6-only on legacy environments, and genos-collab reaches this service
+# there (MIP-621). Quoted so sh doesn't read the brackets as a glob.
 CMD ["sh", "-c", "\
   if [ -n \"$GEMINI_SA_BASE64\" ]; then \
     mkdir -p /tmp && echo \"$GEMINI_SA_BASE64\" | base64 -d > /tmp/gemini-sa.json && chmod 600 /tmp/gemini-sa.json; \
@@ -53,7 +56,7 @@ CMD ["sh", "-c", "\
   python manage.py migrate --noinput && \
   python manage.py opensearch_setup || echo 'Warning: opensearch_setup failed — search features unavailable until OpenSearch is ready.' && \
   gunicorn apis.wsgi:application \
-    --bind 0.0.0.0:$PORT \
+    --bind \"[::]:$PORT\" \
     --workers ${WEB_CONCURRENCY:-1} \
     --worker-class gthread \
     --threads ${GUNICORN_THREADS:-8} \

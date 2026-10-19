@@ -13,6 +13,11 @@ not come up at all. Three seams, each pinned here:
   * DRF's default permission is IsAuthenticated, and the set of routes that
     are public anyway is pinned, so making one public is a reviewed diff
     here rather than a forgotten `permission_classes`.
+
+Plus, from MIP-621, every process refuses internal hops that could be read
+off the wire (`_validate_transport`): Postgres below sslmode=require, plain
+redis:// or http:// to a host that isn't private, and an api → collab push
+signed with the user-token key.
 """
 
 import os
@@ -28,7 +33,7 @@ from rest_framework.response import Response
 from rest_framework.settings import api_settings
 from rest_framework.test import APIClient
 
-from apis.settings import validate_web_config
+from apis.settings import _is_private_host, _validate_transport, validate_web_config
 
 # Through `origin.views` first: importing rest_framework.views cold resolves
 # DEFAULT_AUTHENTICATION_CLASSES, whose ApiKeyAuthentication imports
@@ -255,6 +260,190 @@ class TestWebEntrypointsRunTheCheck(SimpleTestCase):
             **_PROD_SECRETS,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
+
+
+def _transport(**overrides):
+    kwargs = {
+        "debug": False,
+        "database": {"HOST": "postgres.railway.internal", "OPTIONS": {"sslmode": "require"}},
+        "redis_url": "redis://default:pw@redis.railway.internal:6379",
+        "collab_internal_url": "http://backend-collab.railway.internal:8080",
+        "collab_internal_secret": "test-only-collab-secret",
+        "jwt_signing_key": "test-only-jwt-key",
+    }
+    kwargs.update(overrides)
+    _validate_transport(**kwargs)
+
+
+class TestValidateTransport(SimpleTestCase):
+    def test_the_railway_shape_boots(self):
+        _transport()
+
+    def test_debug_skips_every_check(self):
+        _transport(
+            debug=True,
+            database={"HOST": "db.example.com", "OPTIONS": {"sslmode": "disable"}},
+            redis_url="redis://redis.example.com:6379",
+            collab_internal_url="http://collab.example.com",
+            collab_internal_secret="",
+        )
+
+    def test_refuses_a_database_mode_that_can_be_plaintext(self):
+        # No sslmode at all is libpq's `prefer`, which falls back silently.
+        for options in ({"sslmode": "disable"}, {"sslmode": "allow"}, {"sslmode": "prefer"}, {}):
+            with (
+                self.subTest(options=options),
+                self.assertRaisesMessage(
+                    ImproperlyConfigured, "database connection can be plaintext"
+                ),
+            ):
+                _transport(database={"HOST": "postgres.railway.internal", "OPTIONS": options})
+
+    def test_accepts_require_or_stricter(self):
+        for mode in ("require", "verify-ca", "verify-full"):
+            with self.subTest(mode=mode):
+                _transport(database={"HOST": "db.example.com", "OPTIONS": {"sslmode": mode}})
+
+    def test_loopback_database_is_exempt(self):
+        # CI's Postgres service. A Unix socket has no host.
+        for host in ("localhost", "127.0.0.1", "::1", "", "/var/run/postgresql"):
+            with self.subTest(host=host):
+                _transport(database={"HOST": host, "OPTIONS": {}})
+
+    def test_refuses_plaintext_redis_off_the_private_network(self):
+        # Railway's REDIS_PUBLIC_URL is a TCP proxy on the internet.
+        for url in (
+            "redis://default:pw@monorail.proxy.rlwy.net:12345",
+            "redis://8.8.8.8:6379/1",
+        ):
+            with (
+                self.subTest(url=url),
+                self.assertRaisesMessage(ImproperlyConfigured, "REDIS_URL is plaintext"),
+            ):
+                _transport(redis_url=url)
+
+    def test_accepts_tls_or_private_redis(self):
+        for url in (
+            "rediss://default:pw@monorail.proxy.rlwy.net:12345",
+            "redis://redis:6379/1",  # docker-compose, and the settings default
+            "redis://127.0.0.1:6379",
+            "redis://[fd12::10]:6379",
+        ):
+            with self.subTest(url=url):
+                _transport(redis_url=url)
+
+    def test_refuses_plaintext_collab_off_the_private_network(self):
+        with self.assertRaisesMessage(ImproperlyConfigured, "COLLAB_INTERNAL_URL is plaintext"):
+            _transport(collab_internal_url="http://collab.genosai.dev")
+
+    def test_accepts_https_collab(self):
+        _transport(collab_internal_url="https://collab.genosai.dev")
+
+    def test_refuses_a_non_http_collab_url(self):
+        with self.assertRaisesMessage(ImproperlyConfigured, "must be an http(s) URL"):
+            _transport(collab_internal_url="collab.genosai.dev")
+
+    def test_refuses_a_collab_push_without_its_own_secret(self):
+        with self.assertRaisesMessage(ImproperlyConfigured, "COLLAB_INTERNAL_SECRET is not"):
+            _transport(collab_internal_secret="")
+        with self.assertRaisesMessage(ImproperlyConfigured, "equals JWT_SECRET_KEY"):
+            _transport(collab_internal_secret="same", jwt_signing_key="same")
+
+    def test_no_collab_url_needs_no_secret(self):
+        # The push is off, so nothing signs with it.
+        _transport(collab_internal_url="", collab_internal_secret="")
+
+    def test_private_host_classification(self):
+        # No host at all is the client's localhost default (redis-py).
+        for host in (
+            "redis",
+            "backend-collab.railway.internal",
+            "10.0.0.5",
+            "fd12::1",
+            "::1",
+            None,
+        ):
+            with self.subTest(host=host):
+                self.assertTrue(_is_private_host(host))
+        for host in (
+            "collab.genosai.dev",
+            "railway.internal.example.com",
+            "8.8.8.8",
+            "2606:4700::1",
+        ):
+            with self.subTest(host=host):
+                self.assertFalse(_is_private_host(host))
+
+
+class TestTransportAtBoot(SimpleTestCase):
+    """The DATABASES default and the check, as `import apis.settings` runs
+    them with DEBUG off."""
+
+    _REMOTE = "postgres://u:p@postgres.railway.internal:5432/origin"
+
+    def _sslmode(self, **env):
+        return _fresh_python(
+            "import apis.settings as s;"
+            " print(s.DATABASES['default'].get('OPTIONS', {}).get('sslmode'))",
+            **{**_PROD_SECRETS, **env},
+        )
+
+    def test_remote_database_defaults_to_require(self):
+        proc = self._sslmode(DATABASE_URL=self._REMOTE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "require")
+
+    def test_a_stricter_mode_in_the_url_is_kept(self):
+        proc = self._sslmode(DATABASE_URL=f"{self._REMOTE}?sslmode=verify-full")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "verify-full")
+
+    def test_a_weaker_mode_in_the_url_refuses_to_boot(self):
+        proc = self._sslmode(DATABASE_URL=f"{self._REMOTE}?sslmode=disable")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("ImproperlyConfigured: DATABASE_URL has sslmode=disable", proc.stderr)
+
+    def test_loopback_database_is_left_alone(self):
+        proc = self._sslmode()  # _PROD_SECRETS' 127.0.0.1
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "None")
+
+    def test_dev_leaves_the_database_alone(self):
+        proc = self._sslmode(DATABASE_URL=self._REMOTE, DJANGO_DEBUG="true")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "None")
+
+    def test_public_redis_refuses_to_boot(self):
+        proc = self._sslmode(REDIS_URL="redis://default:pw@monorail.proxy.rlwy.net:12345")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("ImproperlyConfigured: REDIS_URL is plaintext", proc.stderr)
+
+    def test_collab_push_without_its_secret_refuses_to_boot(self):
+        proc = self._sslmode(COLLAB_INTERNAL_URL="http://backend-collab.railway.internal:8080")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("COLLAB_INTERNAL_SECRET is not", proc.stderr)
+
+    def test_private_domain_is_an_allowed_host(self):
+        proc = _fresh_python(
+            "import apis.settings as s; print(s.ALLOWED_HOSTS)",
+            RAILWAY_PRIVATE_DOMAIN="backend-django.railway.internal",
+            ALLOWED_HOSTS="api.genosai.dev",
+            **_PROD_SECRETS,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            proc.stdout.strip(),
+            str(["api.genosai.dev", "healthcheck.railway.app", "backend-django.railway.internal"]),
+        )
+
+    def test_production_hsts_covers_subdomains(self):
+        proc = _fresh_python(
+            "import apis.settings as s;"
+            " print(s.SECURE_HSTS_SECONDS, s.SECURE_HSTS_INCLUDE_SUBDOMAINS, s.SECURE_HSTS_PRELOAD)",
+            **_PROD_SECRETS,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.split(), ["31536000", "True", "False"])
 
 
 class _Forgot(APIView):

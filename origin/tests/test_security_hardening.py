@@ -151,9 +151,10 @@ class TestSecurityHeaders(BaseAPITestCase):
         self.assertEqual(resp.headers.get("X-Frame-Options"), "DENY")
         self.assertEqual(resp.headers.get("Referrer-Policy"), "same-origin")
 
-    @override_settings(SECURE_HSTS_SECONDS=31536000)
+    @override_settings(SECURE_HSTS_SECONDS=31536000, SECURE_HSTS_INCLUDE_SUBDOMAINS=True)
     def test_hsts_emitted_on_secure_requests(self):
         resp = self.client.get("/api/v2/health/", secure=True)
         self.assertEqual(
-            resp.headers.get("Strict-Transport-Security"), "max-age=31536000"
+            resp.headers.get("Strict-Transport-Security"),
+            "max-age=31536000; includeSubDomains",
         )
