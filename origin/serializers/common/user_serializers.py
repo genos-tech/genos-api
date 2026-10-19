@@ -65,6 +65,20 @@ class UserSerializer(serializers.ModelSerializer):
             "token",
             "token_expiration",
             "ts_last_login_at",
+            # Account and privilege fields: shown in a profile read and the
+            # sign-in payload, never set from one (MIP-742). An email
+            # change needs proof of the new address; the rest belong to
+            # an admin or the account-deletion flow. `UserProfileView`
+            # refuses them by name before they get here; this is the
+            # second lock, for any other path that writes through here.
+            "email",
+            "is_active",
+            "is_staff",
+            "groups",
+            "user_permissions",
+            # The avatar path other people's browsers load. Only the
+            # upload endpoint sets it, directly, from the stored file.
+            "profile_image_file_name",
         ]
 
     def validate_current_location(self, value):

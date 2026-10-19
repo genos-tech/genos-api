@@ -27,9 +27,49 @@ logger = logging.getLogger(__name__)
 #############################
 # User views
 #############################
+
+# What the profile editor may change, and nothing else (MIP-742). An
+# allow-list, not a deny-list: this path once let a user set their own
+# email with no proof of the new address, `is_staff`, groups, permissions
+# and `is_active`, and the default parsers accept multipart, so a
+# file upload in `profile_image_url` could also skip the avatar endpoint's
+# size check. Every key the frontend has ever sent here is listed; anything
+# else is refused by name rather than ignored, so a client learns it asked
+# for something this path won't do.
+PROFILE_EDITABLE_FIELDS = frozenset(
+    {
+        "username",
+        "custom_status",
+        "custom_status_expiry",
+        "is_offline_forced",
+        "role",
+        "base_country",
+        "phone_number",
+        "current_location",
+        "location_shared",
+        "about_me",
+    }
+)
+
+
 class UserProfileView(AuthenticatedAPIView):
     def put(self, request):
         request_user_id = request.user.id
+
+        if not isinstance(request.data, dict):
+            return Response(
+                {"error": "Send the fields to change as an object."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        refused = sorted(set(request.data.keys()) - PROFILE_EDITABLE_FIELDS - {"user_id"})
+        if refused:
+            return Response(
+                {
+                    "error": f"These fields can't be changed here: {', '.join(refused)}.",
+                    "fields": refused,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         user_id = request.data.get("user_id")
 
