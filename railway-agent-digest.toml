@@ -20,7 +20,10 @@
 # AI_CREDITS_SHADOW flags in lockstep with backend-django (or the
 # ledger disagrees with itself), AND the WEBPUSH_VAPID_PUBLIC_KEY /
 # _PRIVATE_KEY / _ADMIN_EMAIL triple — webpush_sender silently no-ops
-# without it, which would run green and deliver nothing.
+# without it, which would run green and deliver nothing. With VAPID set,
+# also FIELD_ENCRYPTION_KEYS, identical to backend-django's: push
+# subscription keys are encrypted with it (MIP-618), and the run fails at
+# start without it.
 #
 # The hourly schedule is the LOCAL-TIME design, not an oversight: one
 # fixed UTC slot would land at random local hours across timezones.

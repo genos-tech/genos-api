@@ -12,3 +12,7 @@ ca0dba6a8789535dab14df50079823b968d3c897:origin/tests/test_fail_closed_config.py
 # Webhook signing secrets the GitHub webhook tests sign their own payloads with.
 be983ba52e1e4f406a15dba5107309f4018a0b92:origin/tests/test_github_pr_comment_webhook.py:generic-api-key:40
 7952a1f4c8e1b19f535a4828a731bd1390a0fd8a:origin/tests/test_github_webhook.py:generic-api-key:17
+# Second Fernet key for the fail-closed config test (a keyring that isn't settings_test's).
+cb2f1a494dded934cf3595ab88ba1d408b2cc91f:origin/tests/test_fail_closed_config.py:generic-api-key:53
+# Made-up Web Push `auth` value shaped like a browser's; it belongs to no subscription.
+cb2f1a494dded934cf3595ab88ba1d408b2cc91f:origin/tests/test_field_encryption.py:generic-api-key:31

@@ -4,6 +4,8 @@ import uuid
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
 
+from origin.services import crypto
+
 
 class CustomUserManager(BaseUserManager):
     def create_user(self, email, username, password=None, **extra_fields):
@@ -194,11 +196,10 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         max_length=16, choices=PRIMARY_AUTH_CHOICES, default="email"
     )
 
-    token = models.CharField(max_length=100, null=True, blank=True)
-    token_expiration = models.DateTimeField(null=True, blank=True)
-    # Password reset: separate from `token` above (which the demo flow
-    # repurposes) so the two paths don't collide. We store SHA-256 hash
-    # of the URL token, not the token itself.
+    # Password reset. We store the SHA-256 hash of the URL token, not the
+    # token itself. (The old plaintext `token` / `token_expiration` columns
+    # are gone from the model — MIP-618; migration 0199 left them in the
+    # table until the release that drops them.)
     password_reset_token_hash = models.CharField(
         max_length=64, null=True, blank=True, db_index=True
     )
@@ -459,6 +460,9 @@ class GithubWebhookRegistration(models.Model):
     not the user. If user A's token registered the hook and user A
     later leaves the team, the webhook stays alive; we don't tear it
     down because anyone else's task is probably still linked.
+
+    Never filter by `secret`: it's stored encrypted, so an equality
+    lookup compares ciphertext and never matches.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -471,6 +475,16 @@ class GithubWebhookRegistration(models.Model):
         CustomUser, on_delete=models.SET_NULL, null=True, related_name="+"
     )
     ts_created_at = models.DateTimeField(auto_now_add=True)
+    # The secret GitHub signs this repo's deliveries with (MIP-618), so a
+    # leaked one forges events for one repo rather than all of them.
+    # NULL on a row registered before that, or by the previous release
+    # mid-deploy, which inserts without either column.
+    secret = crypto.EncryptedTextField(null=True, blank=True)
+    # Whether a delivery signed with the shared GITHUB_WEBHOOK_SECRET is
+    # still accepted for this repo: true until GitHub is known to hold
+    # `secret`. `db_default` so the previous release's inserts get it.
+    # `github_webhooks.rekey_hook` sends the secret and clears this.
+    accepts_shared_secret = models.BooleanField(default=True, db_default=True)
 
     class Meta:
         constraints = [

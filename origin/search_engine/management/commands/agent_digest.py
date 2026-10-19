@@ -66,8 +66,10 @@ from origin.search_engine.agent.tools import REGISTRY
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.entity_links import rewrite_citation_md
 from origin.search_engine.metered import metered_request
+from origin.services import crypto
 from origin.services.user_time import resolve_zone
 from origin.services.webpush_dispatch import dispatch_push_for_inbox_item
+from origin.services.webpush_sender import vapid_configured
 
 log = logging.getLogger(__name__)
 
@@ -345,6 +347,10 @@ class Command(BaseCommand):
         preview = bool(options["preview"])
         only_user = (options["user_id"] or "").strip()
         now = timezone.now()
+        # Push keys are encrypted (MIP-618): fail the run here, not inside
+        # each push, where the dispatcher swallows the error.
+        if not dry_run and not preview and vapid_configured():
+            crypto.require_keyring()
 
         users = CustomUser.objects.filter(digest_enabled=True, is_deleted=False)
         if only_user:

@@ -611,7 +611,7 @@ def validate_web_config(
     debug: bool,
     allowed_hosts: list[str],
     cors_allowed_origins: list[str],
-    field_encryption_key: str,
+    field_encryption_keys: list[str],
     search_engine: dict,
 ) -> None:
     """What the HTTP server additionally needs before it takes traffic.
@@ -629,10 +629,13 @@ def validate_web_config(
     - CORS_ALLOWED_ORIGINS: unset falls back to the localhost list, so the
       production frontend is refused on every call. A `*` entry is refused
       too: with credentials allowed that is any site acting as the user.
-    - OAUTH_TOKEN_ENCRYPTION_KEY: encrypts OAuth tokens and webhook signing
-      secrets at rest. Missing, the first OAuth login or webhook delivery
-      fails at runtime; a malformed one fails the same way. Checked here,
-      by building the real Fernet, so it fails at deploy instead.
+    - FIELD_ENCRYPTION_KEYS (or the old OAUTH_TOKEN_ENCRYPTION_KEY):
+      encrypts OAuth tokens, webhook signing secrets and push keys at
+      rest. Missing, the first OAuth login, webhook delivery or push
+      fails at runtime; a malformed key fails the same way. Checked here,
+      by building a real Fernet from every key, so it fails at deploy
+      instead. A key listed twice is refused too: it is a rotation
+      half-done, where the "new" key is the old one.
     - OpenSearch: TLS and credentials (`build_client_kwargs`). The client
       refuses on first use anyway, but the boot CMD runs `opensearch_setup
       || echo`, so without this the server would start and fail every
@@ -663,20 +666,23 @@ def validate_web_config(
         raise ImproperlyConfigured(
             "CORS_ALLOWED_ORIGINS contains a wildcard. List the exact origins."
         )
-    if not field_encryption_key:
+    if not field_encryption_keys:
         raise ImproperlyConfigured(
-            "OAUTH_TOKEN_ENCRYPTION_KEY is unset with DJANGO_DEBUG=false. "
-            "OAuth tokens and webhook secrets cannot be encrypted without it."
+            "FIELD_ENCRYPTION_KEYS is unset with DJANGO_DEBUG=false. OAuth "
+            "tokens, webhook secrets and push keys cannot be encrypted without it."
         )
     from cryptography.fernet import Fernet
 
-    try:
-        Fernet(field_encryption_key.encode())
-    except (ValueError, TypeError):
-        raise ImproperlyConfigured(
-            "OAUTH_TOKEN_ENCRYPTION_KEY is not a valid Fernet key (32 url-safe "
-            "base64-encoded bytes)."
-        ) from None
+    for position, key in enumerate(field_encryption_keys, start=1):
+        try:
+            Fernet(key.encode())
+        except (ValueError, TypeError):
+            raise ImproperlyConfigured(
+                f"FIELD_ENCRYPTION_KEYS key #{position} is not a valid Fernet key "
+                "(32 url-safe base64-encoded bytes)."
+            ) from None
+    if len(set(field_encryption_keys)) != len(field_encryption_keys):
+        raise ImproperlyConfigured("FIELD_ENCRYPTION_KEYS lists the same key twice.")
     from origin.search_engine.opensearch_client import build_client_kwargs
 
     build_client_kwargs(search_engine, debug=debug)
@@ -2151,14 +2157,33 @@ SECURITY_EVENT_RETENTION_MIN_DAYS = 90
 # ids that aren't yours hits one per id.
 SECURITY_FORBIDDEN_BURST = int(os.environ.get("SECURITY_FORBIDDEN_BURST", "20"))
 
+
 # --- OAuth (Google, GitHub) ---
-# Fernet key used to encrypt third-party access / refresh tokens at
-# rest in the ConnectedAccount table. Generate one with:
+def _parse_field_encryption_keys(new: str, legacy: str) -> list[str]:
+    """The Fernet keyring, newest first (MIP-618).
+
+    `FIELD_ENCRYPTION_KEYS` is comma-separated: the first key encrypts,
+    every key decrypts, which is how a key rotates without downtime (see
+    `origin/services/crypto.py`). `OAUTH_TOKEN_ENCRYPTION_KEY` is the
+    single key's old name, still read when the new one is unset so an
+    existing deploy keeps working.
+    """
+    raw = new if new.strip() else legacy
+    return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+# Fernet keys encrypting OAuth tokens, webhook signing secrets and Web
+# Push subscription keys at rest. Generate one with:
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-# Required in production. In dev it can be left empty as long as you
-# don't exercise OAuth flows — the crypto helper raises a clear error
-# only when actually used (see origin/services/crypto.py).
-OAUTH_TOKEN_ENCRYPTION_KEY = os.environ.get("OAUTH_TOKEN_ENCRYPTION_KEY", "")
+# Required on the web server outside DEBUG (`validate_web_config`), and
+# on every cron that decrypts one of those: each calls
+# `crypto.require_keyring()` first, so a missing key fails the run
+# instead of skipping every push. In dev it can be left empty as long as
+# nothing encrypts: the crypto helper raises a clear error only when used.
+FIELD_ENCRYPTION_KEYS = _parse_field_encryption_keys(
+    os.environ.get("FIELD_ENCRYPTION_KEYS", ""),
+    os.environ.get("OAUTH_TOKEN_ENCRYPTION_KEY", ""),
+)
 
 # Per-provider OAuth client credentials. Empty defaults so the rest of
 # Django still imports cleanly when these aren't configured yet; the
@@ -2168,11 +2193,15 @@ GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
 GITHUB_OAUTH_CLIENT_ID = os.environ.get("GITHUB_OAUTH_CLIENT_ID", "")
 GITHUB_OAUTH_CLIENT_SECRET = os.environ.get("GITHUB_OAUTH_CLIENT_SECRET", "")
 
-# Shared secret for GitHub repo webhook payload verification. Generate
-# any random string (e.g. `openssl rand -hex 32`), set the SAME value
-# both here AND in the GitHub repo's Webhook settings (under "Secret")
-# so the signed payload's `X-Hub-Signature-256` header validates.
-# When empty, the webhook endpoint rejects all incoming requests.
+# Legacy shared secret for GitHub repo webhook payload verification.
+# Each repo's hook now signs with a secret of its own, generated when it
+# is registered and stored encrypted on its `GithubWebhookRegistration`
+# (MIP-618). This one only verifies hooks registered before that, until
+# each is given its own (`manage.py rekey_github_webhooks`, or the next
+# save linking the repo); once that command reports none left, it can
+# be unset. A hook made by hand in GitHub's settings page writes nothing
+# until Genos adopts it (a repo admin links one of its PRs), and
+# adopting it gives it its own secret too.
 GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 
 # Public-facing URL of THIS backend, used to build OAuth callback URLs

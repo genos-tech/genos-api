@@ -41,6 +41,8 @@ def _pr_payload(
     html_url: str = "https://github.com/owner/repo/pull/42",
     head_ref: str = "main",
 ) -> dict:
+    # GitHub sends the PR's own repo; the receiver refuses a mismatch.
+    full_name = "/".join(html_url.split("/")[3:5])
     return {
         "action": action,
         "pull_request": {
@@ -50,9 +52,9 @@ def _pr_payload(
             "title": "Test PR",
             "state": "closed" if merged else "open",
             "head": {"sha": "abc123", "ref": head_ref},
-            "base": {"repo": {"full_name": "owner/repo"}, "ref": "main"},
+            "base": {"repo": {"full_name": full_name}, "ref": "main"},
         },
-        "repository": {"full_name": "owner/repo"},
+        "repository": {"full_name": full_name},
     }
 
 

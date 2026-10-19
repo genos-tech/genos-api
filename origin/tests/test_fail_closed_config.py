@@ -33,7 +33,12 @@ from rest_framework.response import Response
 from rest_framework.settings import api_settings
 from rest_framework.test import APIClient
 
-from apis.settings import _is_private_host, _validate_transport, validate_web_config
+from apis.settings import (
+    _is_private_host,
+    _parse_field_encryption_keys,
+    _validate_transport,
+    validate_web_config,
+)
 
 # Through `origin.views` first: importing rest_framework.views cold resolves
 # DEFAULT_AUTHENTICATION_CLASSES, whose ApiKeyAuthentication imports
@@ -45,6 +50,7 @@ _REPO = Path(__file__).resolve().parents[2]
 # A valid Fernet key that is NOT settings_test's, so a pass here can't be
 # the test settings leaking in.
 _KEY = "Xl0rQ9nZb3pW1yV7kT5mR8sJ2hF4dC6aE0gB9uN3iLo="
+_OTHER_KEY = "pQ3wE5rT7yU9iO1aS3dF5gH7jK9lZ1xC3vB5nM7qW9e="
 
 # The production shape of SEARCH_ENGINE (MIP-721): TLS and a login. The CA is
 # left to the system store here; test_opensearch_client covers a pinned CA.
@@ -63,7 +69,7 @@ def _web(**overrides):
         "debug": False,
         "allowed_hosts": ["api.genosai.dev", "healthcheck.railway.app"],
         "cors_allowed_origins": ["https://app.genosai.dev"],
-        "field_encryption_key": _KEY,
+        "field_encryption_keys": [_KEY],
         "search_engine": _SEARCH,
     }
     kwargs.update(overrides)
@@ -133,7 +139,7 @@ class TestValidateWebConfig(SimpleTestCase):
             debug=True,
             allowed_hosts=[],
             cors_allowed_origins=[],
-            field_encryption_key="",
+            field_encryption_keys=[],
             search_engine={
                 **_SEARCH,
                 "OPENSEARCH_USE_SSL": False,
@@ -186,8 +192,8 @@ class TestValidateWebConfig(SimpleTestCase):
                 _web(cors_allowed_origins=origins)
 
     def test_refuses_a_missing_encryption_key(self):
-        with self.assertRaisesMessage(ImproperlyConfigured, "OAUTH_TOKEN_ENCRYPTION_KEY is unset"):
-            _web(field_encryption_key="")
+        with self.assertRaisesMessage(ImproperlyConfigured, "FIELD_ENCRYPTION_KEYS is unset"):
+            _web(field_encryption_keys=[])
 
     def test_refuses_a_malformed_encryption_key(self):
         for key in ("not-a-key", _KEY[:-4], "ü" * 44):
@@ -195,7 +201,30 @@ class TestValidateWebConfig(SimpleTestCase):
                 self.subTest(key=key),
                 self.assertRaisesMessage(ImproperlyConfigured, "not a valid Fernet key"),
             ):
-                _web(field_encryption_key=key)
+                _web(field_encryption_keys=[key])
+
+    def test_checks_every_key_in_the_ring(self):
+        # The old keys only decrypt, but one that is malformed still fails
+        # the first read of a row it encrypted, so it must fail the deploy.
+        with self.assertRaisesMessage(ImproperlyConfigured, "key #2 is not a valid Fernet key"):
+            _web(field_encryption_keys=[_KEY, "not-a-key"])
+
+    def test_accepts_a_rotation_ring(self):
+        _web(field_encryption_keys=[_OTHER_KEY, _KEY])
+
+    def test_refuses_a_key_listed_twice(self):
+        with self.assertRaisesMessage(ImproperlyConfigured, "lists the same key twice"):
+            _web(field_encryption_keys=[_KEY, _KEY])
+
+    def test_keyring_parsing(self):
+        # Newest first, as written; the old name only when the new is unset.
+        self.assertEqual(
+            _parse_field_encryption_keys(f" {_OTHER_KEY} , {_KEY},", ""), [_OTHER_KEY, _KEY]
+        )
+        self.assertEqual(_parse_field_encryption_keys("", _KEY), [_KEY])
+        self.assertEqual(_parse_field_encryption_keys("  ", _KEY), [_KEY])
+        self.assertEqual(_parse_field_encryption_keys(_OTHER_KEY, _KEY), [_OTHER_KEY])
+        self.assertEqual(_parse_field_encryption_keys("", ""), [])
 
     def test_refuses_opensearch_without_tls_or_a_login(self):
         # The web server's boot CMD runs `opensearch_setup || echo`, so this
@@ -226,18 +255,35 @@ class TestWebEntrypointsRunTheCheck(SimpleTestCase):
                 self.assertIn("ImproperlyConfigured: ALLOWED_HOSTS is unset", proc.stderr)
 
     def test_wsgi_and_asgi_boot_on_a_complete_config(self):
+        # The old single-key name too: a deploy that predates the keyring
+        # must keep booting until somebody renames the variable.
+        for module in ("apis.wsgi", "apis.asgi"):
+            for name, value in (
+                ("FIELD_ENCRYPTION_KEYS", f"{_OTHER_KEY},{_KEY}"),
+                ("OAUTH_TOKEN_ENCRYPTION_KEY", _KEY),
+            ):
+                with self.subTest(module=module, name=name):
+                    proc = self._boot(
+                        module,
+                        ALLOWED_HOSTS="api.genosai.dev",
+                        CORS_ALLOWED_ORIGINS="https://app.genosai.dev",
+                        OPENSEARCH_USE_SSL="true",
+                        OPENSEARCH_USERNAME="genos_app",
+                        OPENSEARCH_PASSWORD="test-only-not-a-real-password",
+                        **{name: value},
+                    )
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_wsgi_and_asgi_refuse_a_missing_keyring(self):
         for module in ("apis.wsgi", "apis.asgi"):
             with self.subTest(module=module):
                 proc = self._boot(
                     module,
                     ALLOWED_HOSTS="api.genosai.dev",
                     CORS_ALLOWED_ORIGINS="https://app.genosai.dev",
-                    OAUTH_TOKEN_ENCRYPTION_KEY=_KEY,
-                    OPENSEARCH_USE_SSL="true",
-                    OPENSEARCH_USERNAME="genos_app",
-                    OPENSEARCH_PASSWORD="test-only-not-a-real-password",
                 )
-                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertNotEqual(proc.returncode, 0)
+                self.assertIn("ImproperlyConfigured: FIELD_ENCRYPTION_KEYS is unset", proc.stderr)
 
     def test_wsgi_and_asgi_refuse_plaintext_opensearch(self):
         for module in ("apis.wsgi", "apis.asgi"):
@@ -246,7 +292,7 @@ class TestWebEntrypointsRunTheCheck(SimpleTestCase):
                     module,
                     ALLOWED_HOSTS="api.genosai.dev",
                     CORS_ALLOWED_ORIGINS="https://app.genosai.dev",
-                    OAUTH_TOKEN_ENCRYPTION_KEY=_KEY,
+                    FIELD_ENCRYPTION_KEYS=_KEY,
                 )
                 self.assertNotEqual(proc.returncode, 0)
                 self.assertIn("ImproperlyConfigured: OpenSearch needs", proc.stderr)

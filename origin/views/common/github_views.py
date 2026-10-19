@@ -251,22 +251,93 @@ DONE_STATUS = "Closed"
 DONE_STATUSES = {"Closed"}
 
 
-def _verify_signature(raw_body: bytes, signature_header: str | None) -> bool:
+def _payload_repo(payload) -> tuple[str, str] | None:
+    """(owner, repo) a delivery claims to come from: its `repository`.
+
+    Read before the signature is checked, so it is only a claim. It
+    picks which secret to check against; the delivery is trusted only
+    once that secret verifies, and then only for that repo
+    (`_pr_url_repo_mismatch`).
+    """
+    if not isinstance(payload, dict):
+        return None
+    full_name = (payload.get("repository") or {}).get("full_name")
+    if not isinstance(full_name, str):
+        return None
+    owner, _, repo = full_name.partition("/")
+    if not owner or not repo or "/" in repo:
+        return None
+    return owner, repo
+
+
+def _signing_secrets(repo_ref: tuple[str, str] | None) -> list[str]:
+    """The secrets a delivery for `repo_ref` may be signed with.
+
+    A repo's own secret (MIP-618), plus the shared GITHUB_WEBHOOK_SECRET
+    while its registration still accepts it: a hook registered before
+    per-repo secrets, or one mid-way through getting its own
+    (`github_webhooks.rekey_hook`). Once a repo has its own, the shared
+    secret no longer speaks for it, so a leaked one can't forge its
+    events. An unregistered repo gets only the shared one; it authorizes
+    nothing beyond the ping a hand-made hook sends (`_repo_team_ids`).
+    """
+    # Every case-insensitive match: rows that differ only in casing can
+    # exist (the unique constraint is case-sensitive), and each could be
+    # the one whose secret GitHub holds.
+    registrations = []
+    if repo_ref is not None:
+        registrations = list(
+            GithubWebhookRegistration.objects.filter(
+                owner__iexact=repo_ref[0], repo__iexact=repo_ref[1]
+            )
+        )
+    candidates = [r.secret for r in registrations if r.secret]
+    if not registrations or any(r.accepts_shared_secret for r in registrations):
+        if settings.GITHUB_WEBHOOK_SECRET:
+            candidates.append(settings.GITHUB_WEBHOOK_SECRET)
+    return candidates
+
+
+def _verify_signature(raw_body: bytes, signature_header: str | None, secrets: list[str]) -> bool:
     """Constant-time HMAC verification of GitHub's payload signature.
 
-    GitHub signs every webhook payload with the shared secret using
+    GitHub signs every webhook payload with the hook's secret using
     HMAC-SHA256 and sends the result in `X-Hub-Signature-256: sha256=…`.
-    Returns False when the secret is unset (refuses to accept any
-    request rather than silently trusting all senders).
+    Returns False when there is no secret to check against (refuses to
+    accept any request rather than silently trusting all senders).
     """
-    secret = settings.GITHUB_WEBHOOK_SECRET
-    if not secret or not signature_header:
+    if not secrets or not signature_header:
         return False
     if not signature_header.startswith("sha256="):
         return False
-    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
     received = signature_header.split("=", 1)[1]
-    return hmac.compare_digest(expected, received)
+    return any(
+        hmac.compare_digest(
+            hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest(), received
+        )
+        for secret in secrets
+    )
+
+
+def _pr_url_repo_mismatch(event: str | None, payload: dict, repo_ref) -> bool:
+    """Whether the PR a verified delivery is about lives in another repo.
+
+    The handlers resolve the tenant and the tasks from the PR's url, not
+    from `repository`. A delivery signed with repo A's secret naming a PR
+    in repo B would otherwise act on B: anyone holding A's secret could
+    forge B's events, which is what per-repo secrets exist to prevent.
+    GitHub never sends one.
+    """
+    if event == "issue_comment":
+        pr_url = ((payload.get("issue") or {}).get("pull_request") or {}).get("html_url")
+    else:
+        pr_url = (payload.get("pull_request") or {}).get("html_url")
+    ref = parse_pr_url(pr_url)
+    if ref is None:
+        return False  # Nothing to act on; the handlers no-op.
+    if repo_ref is None:
+        return True
+    return (ref[0].lower(), ref[1].lower()) != (repo_ref[0].lower(), repo_ref[1].lower())
 
 
 def _repo_team_ids(owner: str, repo: str) -> list:
@@ -278,9 +349,11 @@ def _repo_team_ids(owner: str, repo: str) -> list:
     install. Branch names carry a project's display id (`code` +
     number), and project codes are short, human, guessable strings, so
     a branch named after ANOTHER tenant's task closed or annotated that
-    tenant's task. One shared `GITHUB_WEBHOOK_SECRET` signs every
+    tenant's task. One shared `GITHUB_WEBHOOK_SECRET` signed every
     registered repo's payloads, so any repo connected by any customer
-    produced a valid signature.
+    produced a valid signature. (Each repo now has its own secret,
+    MIP-618, but a repo's own secret still says nothing about which
+    tenant its branch names may reach, so this scope stays.)
 
     `GithubWebhookRegistration` records who registered the hook, not
     where its tasks live — there is no `team` FK — so the best scope the
@@ -678,7 +751,18 @@ class GithubWebhookView(APIView):
         sig = request.headers.get("X-Hub-Signature-256") or request.META.get(
             "HTTP_X_HUB_SIGNATURE_256"
         )
-        if not _verify_signature(raw_body, sig):
+        # Parsed before verifying only to learn which repo's secret to
+        # check against; nothing in it is acted on until that verifies.
+        # RecursionError: deeply nested JSON from an unsigned request
+        # must be a 401, not a 500.
+        try:
+            payload = json.loads(raw_body.decode("utf-8") or "{}")
+        except (ValueError, RecursionError):
+            payload = None
+        if not isinstance(payload, dict):
+            payload = None
+        repo_ref = _payload_repo(payload)
+        if not _verify_signature(raw_body, sig, _signing_secrets(repo_ref)):
             logger.warning("GitHub webhook: bad / missing signature")
             return Response({"detail": "invalid_signature"}, status=status.HTTP_401_UNAUTHORIZED)
 
@@ -691,10 +775,16 @@ class GithubWebhookView(APIView):
         if event not in ("pull_request", "issue_comment", "pull_request_review_comment"):
             return Response({"detail": "ignored"}, status=status.HTTP_200_OK)
 
-        try:
-            payload = json.loads(raw_body.decode("utf-8") or "{}")
-        except ValueError:
+        if payload is None:
             return Response({"detail": "bad_json"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if _pr_url_repo_mismatch(event, payload, repo_ref):
+            logger.warning(
+                "GitHub webhook: %s delivery signed for %s names a PR in another repo",
+                event,
+                "/".join(repo_ref) if repo_ref else "no repo",
+            )
+            return Response({"detail": "repo_mismatch"}, status=status.HTTP_400_BAD_REQUEST)
 
         if event == "pull_request":
             pr = payload.get("pull_request") or {}

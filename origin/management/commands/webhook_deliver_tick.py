@@ -37,6 +37,7 @@ from origin.models.common.webhook_models import (
     WebhookDelivery,
     WebhookEndpoint,
 )
+from origin.services import crypto
 from origin.services.webhook_delivery import backoff_for, post_delivery
 
 log = logging.getLogger("origin.webhooks")
@@ -69,6 +70,10 @@ class Command(CronCommand):
             # repeating and "what is due" is a question about now.
             self._one_pass(limit=options["limit"], dry_run=True)
             return
+
+        # Every delivery is signed with a secret stored encrypted, so a
+        # missing key would fail each one; say so once, up front.
+        crypto.require_keyring()
 
         # Empty marker for a single pass, so a hand-run keeps the exact
         # output the runbook tells people to read.

@@ -41,7 +41,8 @@ messaging and editor collaboration live in the sibling
 | `JWT_SECRET_KEY`        | prod     | Shared with genos-collab (as `JWT_SECRET`) for token verification. genos-sockets has none: it forwards the token here. |
 | `ALLOWED_HOSTS`         | web      | The API's public host. Not `*`, not just `localhost`.              |
 | `CORS_ALLOWED_ORIGINS`  | web      | The frontend's exact origin(s). No wildcards.                      |
-| `OAUTH_TOKEN_ENCRYPTION_KEY` | web | Fernet key for OAuth tokens and webhook secrets at rest.          |
+| `FIELD_ENCRYPTION_KEYS` | web, push/webhook crons | Comma-separated Fernet keys, newest first, for OAuth tokens, webhook secrets and push subscription keys at rest. The first encrypts; all decrypt. To rotate: put a new key first, redeploy, run `manage.py rotate_field_keys`, drop the old key. The old single-key name `OAUTH_TOKEN_ENCRYPTION_KEY` is still read when this is unset. reminder-tick, agent-digest (with VAPID set) and webhook-deliver refuse to run without it. |
+| `GITHUB_WEBHOOK_SECRET` | legacy   | Verifies only GitHub hooks registered before each hook got its own secret. `manage.py rekey_github_webhooks` moves the rest over and fails while any remain; unset this once it reports none. |
 | `REDIS_URL`             | —        | Cache backend. Outside DEBUG, plain `redis://` only to a private host (`*.railway.internal`, a private IP, a compose service name); anything else needs `rediss://`. |
 | `COLLAB_INTERNAL_URL`   | —        | genos-collab's http(s) base URL for the task/note body push. Plain `http://` only to a private host. Empty = no push. |
 | `COLLAB_INTERNAL_SECRET`| with the above | Signs that push. Same value on genos-collab; must differ from `JWT_SECRET_KEY`. |
@@ -53,8 +54,9 @@ messaging and editor collaboration live in the sibling
 With `DJANGO_DEBUG` off, every process (web and crons) refuses to start
 without real `DJANGO_SECRET_KEY`, `JWT_SECRET_KEY` and `DATABASE_URL`, or on a
 plaintext hop the transport rules above refuse, and the web server
-(`apis/wsgi.py`) also refuses to start without the three **web** rows. The
-crons share the settings but never load wsgi, so they don't need those.
+(`apis/wsgi.py`) also refuses to start without the four **web** rows. The
+crons share the settings but never load wsgi, so they don't need those,
+except the crons that decrypt, which check `FIELD_ENCRYPTION_KEYS` themselves.
 
 For the full local set, see the `backend` service env in
 `genos-platform/docker/docker-compose.yml`.
