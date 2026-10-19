@@ -16,3 +16,17 @@ be983ba52e1e4f406a15dba5107309f4018a0b92:origin/tests/test_github_pr_comment_web
 cb2f1a494dded934cf3595ab88ba1d408b2cc91f:origin/tests/test_fail_closed_config.py:generic-api-key:53
 # Made-up Web Push `auth` value shaped like a browser's; it belongs to no subscription.
 cb2f1a494dded934cf3595ab88ba1d408b2cc91f:origin/tests/test_field_encryption.py:generic-api-key:31
+
+# Made-up secrets in the log-redaction cases (MIP-622), shared by
+# genos-api, genos-sockets and genos-collab: inputs the formatter must
+# mask, so they look like the real thing. None was ever issued.
+795ba64598e8b789c572ecdd6016cfa64fbca206:apis/log_redaction_cases.json:generic-api-key:49
+795ba64598e8b789c572ecdd6016cfa64fbca206:apis/log_redaction_cases.json:generic-api-key:53
+795ba64598e8b789c572ecdd6016cfa64fbca206:apis/log_redaction_cases.json:jwt:37
+795ba64598e8b789c572ecdd6016cfa64fbca206:apis/log_redaction_cases.json:stripe-access-token:73
+# Not a secret: an api_key row id in a security-event line, the case
+# that pins ids passing through unredacted (MIP-622).
+795ba64598e8b789c572ecdd6016cfa64fbca206:apis/log_redaction_cases.json:generic-api-key:111
+# The redaction tests' made-up JWT; its 12-character signature is filler,
+# not an HS256 MAC (MIP-622).
+795ba64598e8b789c572ecdd6016cfa64fbca206:origin/tests/test_log_redaction.py:jwt:42
