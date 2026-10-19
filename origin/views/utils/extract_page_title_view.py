@@ -24,6 +24,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 
 from origin.services.outbound_url import OutboundUrlError, fetch_public
+from origin.services.throttles import RecordedThrottleMixin
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ _CHARSET_RE = re.compile(r"charset=([\w-]+)", re.IGNORECASE)
 _MAX_TITLE = 300
 
 
-class PageTitleThrottle(UserRateThrottle):
+class PageTitleThrottle(RecordedThrottleMixin, UserRateThrottle):
     """A person adding links stays far under this; a script walking an
     address range does not."""
 

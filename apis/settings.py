@@ -280,7 +280,24 @@ CACHES = {
             "IGNORE_EXCEPTIONS": True,
         },
         "KEY_PREFIX": "origin",
-    }
+    },
+    # The same Redis for rate limits, but errors RAISE. Under
+    # IGNORE_EXCEPTIONS a dead Redis reads as "no requests yet", so every
+    # throttle silently allowed everything — sign-in included. The
+    # throttles catch the error themselves and choose: the auth ones
+    # refuse, the rest allow (origin/services/throttles.py). Shorter
+    # timeouts: two throttles run on every request.
+    "throttle": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": REDIS_URL,
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "SOCKET_CONNECT_TIMEOUT": 0.5,
+            "SOCKET_TIMEOUT": 0.5,
+            "IGNORE_EXCEPTIONS": False,
+        },
+        "KEY_PREFIX": "origin",
+    },
 }
 DJANGO_REDIS_IGNORE_EXCEPTIONS = True
 
@@ -340,12 +357,30 @@ REST_FRAMEWORK = {
     # what the NEXT forgotten one gets. `test_fail_closed_config` pins the
     # public set, so making a view public is a reviewed diff.
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
-    # Per-KEY rate limit for the public API. Env-overridable because the
-    # right number depends on who is integrating, and finding that out
-    # should not need a deploy. Scoped throttles only fire on views that
-    # declare them, so this affects nothing else.
+    # A per-user backstop on every view that doesn't name its own
+    # `throttle_classes` — sized for scripts, not people; the class
+    # comments in origin/services/throttles.py say what it must
+    # absorb. Anonymous requests pass these; the anonymous endpoints
+    # each carry a per-IP throttle of their own.
+    "DEFAULT_THROTTLE_CLASSES": (
+        "origin.services.throttles.UserBurstThrottle",
+        "origin.services.throttles.UserSustainedThrottle",
+    ),
+    # Every rate is env-overridable: the right number is found in
+    # production, and finding it should not need a deploy.
+    #   public_api: per KEY, for the public API (v1 + MCP).
+    #   user_*: the defaults above. The rest: views that name them.
     "DEFAULT_THROTTLE_RATES": {
         "public_api": os.environ.get("PUBLIC_API_RATE", "120/min"),
+        "user_burst": os.environ.get("THROTTLE_USER_BURST", "1500/min"),
+        "user_sustained": os.environ.get("THROTTLE_USER_SUSTAINED", "20000/hour"),
+        "search": os.environ.get("THROTTLE_SEARCH", "120/min"),
+        "agent": os.environ.get("THROTTLE_AGENT", "30/min"),
+        "agent_summary": os.environ.get("THROTTLE_AGENT_SUMMARY", "60/min"),
+        "export": os.environ.get("THROTTLE_EXPORT", "5/hour"),
+        # In addresses, not requests: one request can carry 50.
+        "invite": os.environ.get("THROTTLE_INVITE", "200/hour"),
+        "batch_read": os.environ.get("THROTTLE_BATCH_READ", "120/min"),
     },
     # Per-IP throttling behind a proxy: both prod edges (Railway, Cloud
     # Run's front end) sit exactly one hop in front of gunicorn and

@@ -40,7 +40,9 @@ from origin.services.team_membership import (
     accept_invite,
     remove_team_member,
 )
+from origin.services.throttles import InviteThrottle, RecordedThrottleMixin, with_defaults
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.batch_limits import MAX_INVITE_EMAILS, check_batch_size
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
@@ -560,6 +562,8 @@ class InviteTeamMembersView(AuthenticatedAPIView):
     machinery rather than adding a request/approve flow.
     """
 
+    throttle_classes = with_defaults(InviteThrottle)
+
     def post(self, request):
         team_id = request.data.get("team_id")
         emails = request.data.get("emails") or []
@@ -570,6 +574,8 @@ class InviteTeamMembersView(AuthenticatedAPIView):
                 {"error": "team_id and a list of emails are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if res := check_batch_size(emails, MAX_INVITE_EMAILS, "emails"):
+            return res
 
         try:
             team = TeamMaster.objects.get(team_id=team_id, is_deleted=False)
@@ -700,7 +706,7 @@ class InviteTeamMembersView(AuthenticatedAPIView):
         return Response({"results": results}, status=status.HTTP_200_OK)
 
 
-class InvitePreviewThrottle(AnonRateThrottle):
+class InvitePreviewThrottle(RecordedThrottleMixin, AnonRateThrottle):
     """The token is 32 random bytes, so this isn't about guessing one —
     it caps what an anonymous caller can make the endpoint do (a hash
     and up to three queries per request). A visitor opening their invite
