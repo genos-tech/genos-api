@@ -111,6 +111,31 @@ class TestProjectViews(TestCase):
         response = self.client.get("/api/v2/project/exist/")
         self.assertEqual(response.status_code, 400)
 
+    def test_check_project_exists_is_not_an_oracle_on_other_teams(self):
+        """MIP-716: any signed-in user could ask whether another tenant had
+        a project of a given name. Outside the team, a real name and a
+        made-up one now get the same 404."""
+        ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Secret Plan",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        TeamMaster.objects.create(team_name="Theirs", team_email="t@test.com", owner=self.user2)
+        stranger = APIClient()
+        stranger.force_authenticate(self.user2)
+
+        real, made_up = (
+            stranger.get(
+                "/api/v2/project/exist/",
+                {"team_id": str(self.team.team_id), "project_name": name},
+            )
+            for name in ("Secret Plan", "No Such Plan")
+        )
+
+        self.assertEqual(real.status_code, 404)
+        self.assertEqual((real.status_code, real.data), (made_up.status_code, made_up.data))
+
     # ── Project Join ───────────────────────────────────────────────
 
     def test_join_project(self):
@@ -367,6 +392,34 @@ class TestProjectDelete(TestCase):
 
         self._delete()
 
+        self.assertTrue(ProjectMaster.objects.filter(project_id=self.project.project_id).exists())
+
+    def test_outsider_cannot_tell_the_project_exists(self):
+        """MIP-716: the owner-only refusal confirmed a project id to anyone.
+        Outside the project, it's the same 404 as an id that isn't there."""
+        refresh = RefreshToken.for_user(self.other)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(refresh.access_token)}")
+
+        real = self._delete()
+        missing = self.client.delete(
+            f"/api/v2/project/?team_id={self.team.team_id}&project_id=999999999"
+        )
+
+        self.assertEqual(real.status_code, 404)
+        self.assertEqual((real.status_code, real.data), (missing.status_code, missing.data))
+        self.assertTrue(ProjectMaster.objects.filter(project_id=self.project.project_id).exists())
+
+    def test_member_who_is_not_the_owner_is_still_told_why(self):
+        """ModalDeleteProject shows this message on a 200, so a member
+        keeps seeing it; only outsiders get the 404."""
+        ProjectMembers.objects.create(project=self.project, attendee=self.other)
+        refresh = RefreshToken.for_user(self.other)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(refresh.access_token)}")
+
+        response = self._delete()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Only project owner", response.data["message"])
         self.assertTrue(ProjectMaster.objects.filter(project_id=self.project.project_id).exists())
 
     def test_ownerless_project_is_not_a_500(self):

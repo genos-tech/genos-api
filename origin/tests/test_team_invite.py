@@ -162,6 +162,21 @@ class TestInvitePreview(BaseAPITestCase):
         self.assertFalse(response.data["valid"])
         self.assertEqual(response.data["status"], "expired")
 
+    def test_anonymous_callers_are_throttled(self):
+        """MIP-716: it's public, so it carries its own per-IP cap."""
+        from django.core.cache import cache
+
+        from origin.views.common.team_views import InvitePreviewThrottle
+
+        cache.clear()
+        with patch.object(InvitePreviewThrottle, "rate", "2/min"):
+            codes = [
+                self.client.get("/api/v2/team/invite/preview/", {"token": "bogus"}).status_code
+                for _ in range(3)
+            ]
+        cache.clear()
+        self.assertEqual(codes, [200, 200, 429])
+
 
 class TestInviteAccept(BaseAPITestCase):
     """POST /api/v2/team/invite/accept/ — authed, email-locked."""

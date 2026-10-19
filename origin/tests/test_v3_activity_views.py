@@ -100,3 +100,39 @@ class ActivityListTeamScopeTests(BaseAPITestCase):
         )
         res = self.client.get(self.URL, {"team_id": str(self.team.team_id)})
         self.assertNotIn(str(theirs.id), self._ids(res))
+
+
+class SurfaceActivityActorGuardTests(BaseAPITestCase):
+    """`POST /api/v3/activities/surface/` and `/surface-comment/` refuse a
+    caller outside the team — and, since MIP-716, let in a team owner who
+    has no `TeamMembers` row. The old bare `TeamMembers` query refused
+    them in their own team; `is_team_member` counts ownership."""
+
+    URLS = ("/api/v3/activities/surface/", "/api/v3/activities/surface-comment/")
+
+    def _body(self, team):
+        return {
+            "surface_type": 5,
+            "team_id": str(team.team_id),
+            "entity_key": "task:1",
+            "newly_mentioned_user_ids": [],
+            "meta": {},
+        }
+
+    def test_owner_without_a_member_row_is_let_in(self):
+        TeamMembers.objects.filter(team=self.team, attendee=self.user).delete()
+        self.authenticate(self.user)
+        for url in self.URLS:
+            with self.subTest(url=url):
+                res = self.client.post(url, self._body(self.team), format="json")
+                self.assertEqual(res.status_code, 201)
+
+    def test_outsider_is_refused(self):
+        stranger_team = TeamMaster.objects.create(
+            team_name="Stranger", team_email="s@example.com", owner=self.user2
+        )
+        self.authenticate(self.user)
+        for url in self.URLS:
+            with self.subTest(url=url):
+                res = self.client.post(url, self._body(stranger_team), format="json")
+                self.assertEqual(res.status_code, 403)
