@@ -5,6 +5,7 @@ from django.db import models
 from origin.models.chat.unified_models import Activity
 from origin.models.common.inbox_models import InboxItems
 from origin.models.common.user_models import CustomUser
+from origin.services import crypto
 
 
 class NotificationPreference(models.Model):
@@ -110,9 +111,11 @@ class PushSubscription(models.Model):
     # Push service URL — can be long (FCM/Mozilla); TextField avoids a
     # length cap. Globally unique: the same browser re-subscribing upserts.
     endpoint = models.TextField(unique=True)
-    # Browser-generated encryption material (base64url).
-    p256dh = models.CharField(max_length=255)
-    auth = models.CharField(max_length=255)
+    # Browser-generated encryption material (base64url). Anyone holding
+    # both can read every push this browser receives, so they're stored
+    # encrypted (MIP-618); reads return the plaintext.
+    p256dh = crypto.EncryptedTextField()
+    auth = crypto.EncryptedTextField()
 
     user_agent = models.CharField(max_length=500, blank=True, default="")
     # Stable per-browser id the client also sends with its presence

@@ -261,8 +261,6 @@ def delete_account(user) -> dict:
         # request, so every device is signed out immediately.
         user.is_active = False
         user.is_email_verified = False
-        user.token = None
-        user.token_expiration = None
         user.password_reset_token_hash = None
         user.password_reset_token_expires_at = None
         user.digest_enabled = False

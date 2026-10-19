@@ -35,7 +35,9 @@
 # WEBPUSH_VAPID_* pair and WEBPUSH_MEDIA_BASE_URL — ⚠️ LOAD-BEARING, they
 # are the delivery channel. Without VAPID the reminder still lands in the
 # Inbox but the push (the part the user is waiting for) silently no-ops.
-# REDIS_URL is wanted but not required: it backs the presence lookup, which
+# With VAPID set, FIELD_ENCRYPTION_KEYS too, identical to backend-django's:
+# push subscription keys are encrypted with it (MIP-618), and the run fails
+# at start without it. REDIS_URL is wanted but not required: it backs the presence lookup, which
 # this job deliberately ignores (a reminder reaches you even at your desk).
 # No LLM/Vertex vars — this cron never calls a model.
 

@@ -81,7 +81,7 @@ class TestCrypto(TestCase):
     def tearDown(self):
         crypto._get_fernet.cache_clear()
 
-    @override_settings(OAUTH_TOKEN_ENCRYPTION_KEY=_TEST_KEY)
+    @override_settings(FIELD_ENCRYPTION_KEYS=[_TEST_KEY])
     def test_encrypt_decrypt_round_trip(self):
         secret = "ghp_super_secret_token_value"
         ciphertext = crypto.encrypt(secret)
@@ -89,7 +89,7 @@ class TestCrypto(TestCase):
         self.assertNotEqual(ciphertext, secret)
         self.assertEqual(crypto.decrypt(ciphertext), secret)
 
-    @override_settings(OAUTH_TOKEN_ENCRYPTION_KEY=_TEST_KEY)
+    @override_settings(FIELD_ENCRYPTION_KEYS=[_TEST_KEY])
     def test_encrypt_is_nondeterministic(self):
         # Fernet embeds a random IV + timestamp, so two encryptions of the
         # same plaintext differ — but both decrypt back to the same value.
@@ -100,23 +100,23 @@ class TestCrypto(TestCase):
         self.assertEqual(crypto.decrypt(c1), secret)
         self.assertEqual(crypto.decrypt(c2), secret)
 
-    @override_settings(OAUTH_TOKEN_ENCRYPTION_KEY=_TEST_KEY)
+    @override_settings(FIELD_ENCRYPTION_KEYS=[_TEST_KEY])
     def test_round_trip_unicode_and_empty(self):
         for value in ["", "ünïcödë-🚀-token", "a" * 5000]:
             crypto._get_fernet.cache_clear()  # not needed, but harmless
             self.assertEqual(crypto.decrypt(crypto.encrypt(value)), value)
 
-    @override_settings(OAUTH_TOKEN_ENCRYPTION_KEY="")
+    @override_settings(FIELD_ENCRYPTION_KEYS=[])
     def test_empty_key_raises_clear_runtime_error(self):
         with self.assertRaises(RuntimeError) as ctx:
             crypto.encrypt("anything")
-        self.assertIn("OAUTH_TOKEN_ENCRYPTION_KEY is not set", str(ctx.exception))
+        self.assertIn("FIELD_ENCRYPTION_KEYS is not set", str(ctx.exception))
         # decrypt funnels through the same lazy getter.
         crypto._get_fernet.cache_clear()
         with self.assertRaises(RuntimeError):
             crypto.decrypt("anything")
 
-    @override_settings(OAUTH_TOKEN_ENCRYPTION_KEY=_TEST_KEY)
+    @override_settings(FIELD_ENCRYPTION_KEYS=[_TEST_KEY])
     def test_decrypt_rejects_tampered_ciphertext(self):
         secret = "tamper-me"
         ciphertext = crypto.encrypt(secret)
@@ -126,17 +126,17 @@ class TestCrypto(TestCase):
         with self.assertRaises(InvalidToken):
             crypto.decrypt(tampered)
 
-    @override_settings(OAUTH_TOKEN_ENCRYPTION_KEY=_TEST_KEY)
+    @override_settings(FIELD_ENCRYPTION_KEYS=[_TEST_KEY])
     def test_decrypt_with_different_key_fails(self):
         ciphertext = crypto.encrypt("cross-key")
         # Swap the key and clear the lru_cache so the new key is picked up.
         other_key = Fernet.generate_key().decode()
-        with override_settings(OAUTH_TOKEN_ENCRYPTION_KEY=other_key):
+        with override_settings(FIELD_ENCRYPTION_KEYS=[other_key]):
             crypto._get_fernet.cache_clear()
             with self.assertRaises(InvalidToken):
                 crypto.decrypt(ciphertext)
 
-    @override_settings(OAUTH_TOKEN_ENCRYPTION_KEY=_TEST_KEY.encode())
+    @override_settings(FIELD_ENCRYPTION_KEYS=[_TEST_KEY.encode()])
     def test_key_may_be_bytes(self):
         # _get_fernet handles a bytes key (key.encode() is skipped when it
         # is already bytes).
@@ -372,7 +372,7 @@ class TestGoogleProvider(TestCase):
 # ──────────────────────────────────────────────────────────────────────
 # oauth/tokens.py  (get_valid_access_token + ReauthRequired)
 # ──────────────────────────────────────────────────────────────────────
-@override_settings(OAUTH_TOKEN_ENCRYPTION_KEY=_TEST_KEY)
+@override_settings(FIELD_ENCRYPTION_KEYS=[_TEST_KEY])
 class TestGetValidAccessToken(BaseAPITestCase):
     def setUp(self):
         super().setUp()
@@ -791,7 +791,12 @@ class TestEnsureRepoWebhookExtraSeams(BaseAPITestCase):
         # the sync helper must fall back to the registration's
         # `registered_by` account to obtain a token.
         GithubWebhookRegistration.objects.create(
-            owner="acme", repo="rocket", hook_id=999, registered_by=self.user
+            owner="acme",
+            repo="rocket",
+            hook_id=999,
+            registered_by=self.user,
+            secret="own-secret",
+            accepts_shared_secret=False,
         )
         mock_token.return_value = "ghp_fallback"
         ok = MagicMock(spec=requests.Response)

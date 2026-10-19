@@ -26,6 +26,10 @@ from origin.services.github_webhooks import (
 
 User = get_user_model()
 
+# A registration already re-keyed (MIP-618), so the events-sync tests see
+# only the events PATCH. The re-key itself is in test_github_webhook_secrets.
+OWN_SECRET = {"secret": "own-secret", "accepts_shared_secret": False}
+
 
 @override_settings(
     GITHUB_WEBHOOK_SECRET="test-secret",
@@ -86,13 +90,16 @@ class TestEnsureRepoWebhook(TestCase):
             sorted(["pull_request", "issue_comment", "pull_request_review_comment"]),
         )
         self.assertEqual(body["config"]["url"], "https://api.example.com/api/v2/github/webhook/")
-        self.assertEqual(body["config"]["secret"], "test-secret")
+        # The hook's own secret, not the shared one (MIP-618).
+        self.assertEqual(body["config"]["secret"], result.secret)
+        self.assertNotEqual(result.secret, "test-secret")
+        self.assertFalse(result.accepts_shared_secret)
 
     @patch("origin.services.github_webhooks.requests.patch")
     @patch("origin.services.github_webhooks.requests.post")
     def test_short_circuits_when_already_registered(self, mock_post, mock_patch):
         existing = GithubWebhookRegistration.objects.create(
-            owner="acme", repo="rocket", hook_id=999, registered_by=self.user
+            owner="acme", repo="rocket", hook_id=999, registered_by=self.user, **OWN_SECRET
         )
         result = ensure_repo_webhook(self.user, "acme", "rocket")
         self.assertEqual(result.pk, existing.pk)
@@ -112,7 +119,7 @@ class TestEnsureRepoWebhook(TestCase):
         # subscribe to issue_comment / pull_request_review_comment so
         # comment activity can flow.
         GithubWebhookRegistration.objects.create(
-            owner="acme", repo="rocket", hook_id=999, registered_by=self.user
+            owner="acme", repo="rocket", hook_id=999, registered_by=self.user, **OWN_SECRET
         )
         resp = MagicMock(spec=requests.Response)
         resp.ok = True
@@ -137,7 +144,7 @@ class TestEnsureRepoWebhook(TestCase):
         # not re-PATCH — webhook activity is best-effort and we don't
         # want it to be a per-task-save cost.
         GithubWebhookRegistration.objects.create(
-            owner="acme", repo="rocket", hook_id=999, registered_by=self.user
+            owner="acme", repo="rocket", hook_id=999, registered_by=self.user, **OWN_SECRET
         )
         resp = MagicMock(spec=requests.Response)
         resp.ok = True
@@ -157,7 +164,7 @@ class TestEnsureRepoWebhook(TestCase):
         # flag — let the next call try again in case admin perms were
         # subsequently granted.
         GithubWebhookRegistration.objects.create(
-            owner="acme", repo="rocket", hook_id=999, registered_by=self.user
+            owner="acme", repo="rocket", hook_id=999, registered_by=self.user, **OWN_SECRET
         )
         bad = MagicMock(spec=requests.Response)
         bad.ok = False
@@ -201,10 +208,12 @@ class TestEnsureRepoWebhook(TestCase):
         result = ensure_repo_webhook(self.user, "acme", "rocket")
         self.assertIsNone(result)
 
-    @override_settings(GITHUB_WEBHOOK_SECRET="")
-    def test_returns_none_when_secret_unset(self):
-        # Without a secret on our side, registering on GitHub would be
-        # pointless (the webhook receiver would reject every delivery).
+    @override_settings(FIELD_ENCRYPTION_KEYS=[])
+    @patch("origin.services.github_webhooks.get_valid_access_token", return_value="ghp_xx")
+    def test_returns_none_without_an_encryption_key(self, _token):
+        # The hook's secret is stored encrypted: without a key, a hook
+        # created on GitHub could never be verified (MIP-618). The token
+        # is patched so the check under test, not its decrypt, stops it.
         with patch("origin.services.github_webhooks.requests.post") as mock_post:
             result = ensure_repo_webhook(self.user, "acme", "rocket")
             self.assertIsNone(result)
@@ -290,10 +299,12 @@ class TestEnsureRepoWebhook(TestCase):
         mock_patch.return_value = self._mock_post(200)
         result = self._adopt(["push", "pull_request"], mock_post, mock_get)
         self.assertEqual(result.hook_id, 333)
-        mock_patch.assert_called_once()
-        self.assertIn("/repos/acme/rocket/hooks/333", mock_patch.call_args.args[0])
+        # The events fix, then the re-key (test_github_webhook_secrets).
+        self.assertEqual(mock_patch.call_count, 2)
+        events = mock_patch.call_args_list[0]
+        self.assertIn("/repos/acme/rocket/hooks/333", events.args[0])
         self.assertEqual(
-            sorted(mock_patch.call_args.kwargs["json"]["events"]),
+            sorted(events.kwargs["json"]["events"]),
             ["issue_comment", "pull_request", "pull_request_review_comment"],
         )
 
@@ -304,11 +315,13 @@ class TestEnsureRepoWebhook(TestCase):
     def test_adopted_hook_already_in_line_is_not_patched(
         self, _token, mock_post, mock_get, mock_patch
     ):
+        mock_patch.return_value = self._mock_post(200)
         result = self._adopt(
             ["pull_request_review_comment", "pull_request", "issue_comment"], mock_post, mock_get
         )
         self.assertEqual(result.hook_id, 333)
-        mock_patch.assert_not_called()
+        # Only the re-key: its events are left alone.
+        self.assertEqual([c.args[0].endswith("/config") for c in mock_patch.call_args_list], [True])
 
 
 @override_settings(

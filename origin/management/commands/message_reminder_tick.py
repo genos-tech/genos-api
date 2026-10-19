@@ -42,8 +42,9 @@ import logging
 from django.utils import timezone
 
 from origin.management.cron_command import CronCommand
-from origin.services import todo_reminders
+from origin.services import crypto, todo_reminders
 from origin.services.message_reminders import due_reminders, fire_due
+from origin.services.webpush_sender import vapid_configured
 
 log = logging.getLogger("origin.reminders")
 
@@ -82,6 +83,12 @@ class Command(CronCommand):
             self.stdout.write(f"{len(due)} message reminder(s) due")
             self.stdout.write(f"{len(todo_due)} to-do reminder(s) due")
             return
+
+        # Push keys are encrypted (MIP-618). Without the key every push
+        # fails inside the dispatcher, which logs and carries on, so the
+        # run would stay green while no reminder reached a phone.
+        if vapid_configured():
+            crypto.require_keyring()
 
         # The marker is empty for a single pass, so a hand-run keeps the
         # exact output the runbook tells people to read.

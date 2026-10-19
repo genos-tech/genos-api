@@ -29,9 +29,10 @@
 # alive, so overrunning the window would cancel the next tick.
 #
 # ENV (per-service on Railway — NOT inherited): DATABASE_URL, and
-# OAUTH_TOKEN_ENCRYPTION_KEY, which is ⚠️ LOAD-BEARING: webhook signing
-# secrets are Fernet-encrypted with it, so a missing or drifted key
-# means every delivery fails to sign. No LLM/Vertex vars — this cron
+# FIELD_ENCRYPTION_KEYS (or the old name OAUTH_TOKEN_ENCRYPTION_KEY), which
+# is ⚠️ LOAD-BEARING: webhook signing secrets are Fernet-encrypted with it.
+# The run fails at start without it; a drifted key fails every delivery.
+# Keep it identical to backend-django's, rotations included. No LLM/Vertex vars — this cron
 # never calls a model. No Redis: unlike email-notify it does not consult
 # presence.
 

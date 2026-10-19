@@ -33,7 +33,7 @@ if _test_db_name:
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 
 # A fixed Fernet key so anything that encrypts at rest works in tests.
-# `OAUTH_TOKEN_ENCRYPTION_KEY` is optional in dev and REQUIRED the moment
+# `FIELD_ENCRYPTION_KEYS` is optional in dev and REQUIRED the moment
 # something actually encrypts — `crypto._get_fernet` raises rather than
 # silently storing plaintext — so a suite that depends on the ambient
 # environment passes on a developer machine that has it and fails in CI,
@@ -46,4 +46,4 @@ PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 # key, or need it absent, still override it per-case — see
 # `test_services_extra.TestCrypto`, which also clears the `lru_cache` on
 # `_get_fernet` so a key cached by an earlier test cannot leak.
-OAUTH_TOKEN_ENCRYPTION_KEY = "zH8Zq3nQ1vJ5xK7bR2wT9yU4pS6dF0gA8cE1hL3mN5o="
+FIELD_ENCRYPTION_KEYS = ["zH8Zq3nQ1vJ5xK7bR2wT9yU4pS6dF0gA8cE1hL3mN5o="]

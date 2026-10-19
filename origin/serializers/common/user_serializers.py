@@ -41,8 +41,6 @@ class UserSerializer(serializers.ModelSerializer):
             "last_seen",
             "ts_created_at",
             "ts_updated_at",
-            "token",
-            "token_expiration",
             "ts_last_login_at",
             "groups",
             "user_permissions",
@@ -62,8 +60,6 @@ class UserSerializer(serializers.ModelSerializer):
             "timezone",
             "ts_created_at",
             "ts_updated_at",
-            "token",
-            "token_expiration",
             "ts_last_login_at",
             # Account and privilege fields: shown in a profile read and the
             # sign-in payload, never set from one (MIP-742). An email

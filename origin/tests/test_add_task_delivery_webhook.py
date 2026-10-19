@@ -10,7 +10,7 @@ fired. Contract under test:
     leave a `GithubWebhookRegistration`, which is also what scopes the
     receiver to a team.
   * A repo we already know costs no create call.
-  * No connection / no repo admin / no secret / a crash never fails the
+  * No connection / no repo admin / no encryption key / a crash never fails the
     link; the result says the webhook isn't installed, in the summary
     the model reads first.
   * The webhook's own writes (`sync_pull_request`) never call it — that
@@ -121,13 +121,19 @@ class AddTaskDeliveryWebhookTests(DeliveryBase):
         result = self._add(pr_url=PR)
         self.assertTrue(result["webhook_registered"])
         self.assertEqual(self._registration().hook_id, 699786515)
-        self.assertNotIn("push", mock_patch.call_args.kwargs["json"]["events"])
+        events = [c for c in mock_patch.call_args_list if not c.args[0].endswith("/config")]
+        self.assertNotIn("push", events[-1].kwargs["json"]["events"])
 
     @mock.patch(f"{GH}.requests.patch")
     @mock.patch(f"{GH}.requests.post")
     def test_a_known_repo_makes_no_create_call(self, mock_post, mock_patch):
         GithubWebhookRegistration.objects.create(
-            owner="Genos-Tech", repo="Genos-API", hook_id=1, registered_by=self.user
+            owner="Genos-Tech",
+            repo="Genos-API",
+            hook_id=1,
+            registered_by=self.user,
+            secret="own-secret",
+            accepts_shared_secret=False,
         )
         mock_patch.return_value = _resp(200)
         result = self._add(pr_url=PR)
@@ -145,9 +151,10 @@ class AddTaskDeliveryWebhookTests(DeliveryBase):
         self.assertLinkedWithoutWebhook(self._add(pr_url=PR))
         mock_post.assert_not_called()
 
-    @override_settings(GITHUB_WEBHOOK_SECRET="")
+    @override_settings(FIELD_ENCRYPTION_KEYS=[])
     @mock.patch(f"{GH}.requests.post")
-    def test_an_unset_secret_still_links_and_says_so(self, mock_post):
+    def test_no_encryption_key_still_links_and_says_so(self, mock_post):
+        # The hook's own secret is stored encrypted (MIP-618).
         self.assertLinkedWithoutWebhook(self._add(pr_url=PR))
         mock_post.assert_not_called()
 
@@ -200,7 +207,7 @@ class AddTaskDeliveryWebhookTests(DeliveryBase):
 
 
 class McpDeliveryWebhookWarningTests(McpBase):
-    @override_settings(GITHUB_WEBHOOK_SECRET="")
+    @override_settings(FIELD_ENCRYPTION_KEYS=[])
     def test_the_warning_leads_the_mcp_answer(self):
         self._key()
         text, is_error = self._tool_text(

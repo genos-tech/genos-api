@@ -10,8 +10,6 @@
             "last_seen": "2025-03-15T12:00:00Z",
             "ts_created_at": "2025-03-15T12:00:00Z",
             "ts_updated_at": "2025-03-15T12:00:00Z",
-            "token": "",
-            "token_expiration": "",
             "ts_last_login_at": "",
             "is_active": true,
             "is_staff": true
