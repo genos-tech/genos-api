@@ -157,16 +157,16 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: steps.gcp.outputs.available == 'true'
 
       - name: Authenticate to Google Cloud (keyless WIF)
         if: steps.gcp.outputs.available == 'true'
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.GCP_DEPLOY_SA }}
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2.2.1
         if: steps.gcp.outputs.available == 'true'
 
       - name: Start multilingual OpenSearch (prod image)
@@ -185,7 +185,7 @@ jobs:
             sleep 5
           done
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         if: steps.gcp.outputs.available == 'true'
         with:
           python-version: "3.11"
@@ -249,7 +249,7 @@ jobs:
           steps.gcp.outputs.available == 'true'
           && github.event_name == 'workflow_dispatch'
           && inputs.write_baseline == true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: trajectory-baseline
           path: origin/search_engine/agent/evals/trajectory_baseline.json

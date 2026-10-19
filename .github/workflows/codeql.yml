@@ -1,0 +1,50 @@
+name: CodeQL
+
+# Static analysis for security bugs (MIP-727): the Python code, plus the
+# workflows themselves (`actions` finds script injection from PR titles,
+# branch names and the like). Free here because the repo is public.
+#
+# Report-only: findings land in Security → Code scanning, and the job
+# fails only if the analysis itself breaks. Making new alerts block a PR
+# is a branch-ruleset setting, not something this file decides.
+#
+# This is CodeQL's "advanced setup". Don't also switch on "default setup"
+# in the repo settings; GitHub refuses uploads from this workflow while
+# default setup is on.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, so new queries run against code nobody has touched.
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, actions]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          languages: ${{ matrix.language }}
+          # Python is analysed from source; nothing is built or installed.
+          build-mode: none
+      - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          category: /language:${{ matrix.language }}
