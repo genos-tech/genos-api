@@ -16,6 +16,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
+from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.webhook_models import (
     ALL_EVENTS,
@@ -25,6 +26,7 @@ from origin.models.common.webhook_models import (
     generate_secret,
 )
 from origin.services.member_roles import can_manage, resolve_team_role
+from origin.services.security_events import record_security_event
 from origin.services.webhook_delivery import WebhookUrlError, validate_webhook_url
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import is_team_member
@@ -258,6 +260,15 @@ class WebhookListCreateView(AuthenticatedAPIView):
         )
         endpoint.set_secret(raw_secret)
         endpoint.save()
+        record_security_event(
+            SecurityAction.WEBHOOK_CREATED,
+            request=request,
+            team_id=team.team_id,
+            target_type="webhook",
+            target_id=endpoint.id,
+            target_label=url,
+            metadata={"events": events},
+        )
 
         payload = _serialize(endpoint)
         # Shown once. The receiver needs it to verify signatures, and we
@@ -279,5 +290,15 @@ class WebhookDetailView(AuthenticatedAPIView):
             # 404 rather than the manager 403 when the caller is not even
             # in the team — don't confirm the id names a real endpoint.
             return err
+        team_id, url, events = endpoint.team_id, endpoint.url, endpoint.events
         endpoint.delete()
+        record_security_event(
+            SecurityAction.WEBHOOK_DELETED,
+            request=request,
+            team_id=team_id,
+            target_type="webhook",
+            target_id=webhook_id,
+            target_label=url,
+            metadata={"events": events},
+        )
         return Response({"id": str(webhook_id)}, status=status.HTTP_200_OK)

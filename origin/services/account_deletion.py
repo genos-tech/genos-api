@@ -49,8 +49,10 @@ from origin.models.chat.personal_tag_models import PersonalChannelTag
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup
 from origin.models.common.api_key_models import ApiKey
 from origin.models.common.notification_models import NotificationPreference, PushSubscription
+from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import ConnectedAccount
+from origin.services.security_events import record_security_event
 
 log = logging.getLogger(__name__)
 
@@ -193,6 +195,11 @@ def delete_account(user) -> dict:
 
         # Memberships end, so the person stops appearing in member
         # lists, mention pickers and capacity maths.
+        left_team_ids = list(
+            TeamMembers.objects.filter(attendee=user, is_deleted=False).values_list(
+                "team_id", flat=True
+            )
+        )
         TeamMembers.objects.filter(attendee=user, is_deleted=False).update(
             is_deleted=True, ts_updated_at=timezone.now()
         )
@@ -202,9 +209,32 @@ def delete_account(user) -> dict:
         # the authenticator refuse them; revoking records it on the key
         # itself, so a team owner's key list shows it as revoked instead
         # of live (`TeamApiKeyListView`).
-        ApiKey.objects.filter(user=user, revoked_at__isnull=True).update(
+        revoked_keys = ApiKey.objects.filter(user=user, revoked_at__isnull=True).update(
             revoked_at=timezone.now(), ts_updated_at=timezone.now()
         )
+
+        # Written here, before the identity below is erased: the trail
+        # keeps the address the account had, because it holds no FK to
+        # join back through. Each team the person left gets its own row
+        # so its owner sees the departure.
+        record_security_event(
+            SecurityAction.ACCOUNT_DELETED,
+            actor=user,
+            target_type="user",
+            target_id=user_id,
+            target_label=original_email,
+            metadata={"solo_teams_closed": len(solo_team_ids), "api_keys_revoked": revoked_keys},
+        )
+        for team_id in left_team_ids:
+            record_security_event(
+                SecurityAction.MEMBER_REMOVED,
+                actor=user,
+                team_id=team_id,
+                target_type="user",
+                target_id=user_id,
+                target_label=original_email,
+                metadata={"via": "account_deleted"},
+            )
 
         _delete_personal_data(user)
         _purge_search_engine_rows(user_id)

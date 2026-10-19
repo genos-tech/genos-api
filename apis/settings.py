@@ -105,6 +105,10 @@ MIDDLEWARE = [
     # to the acting user. Must run AFTER AuthenticationMiddleware so
     # `request.user` is already resolved.
     "origin.middleware.current_user.CurrentUserMiddleware",
+    # Counts 403s per caller for the security audit log's burst alert
+    # (MIP-725). Inside CurrentUserMiddleware so the alert row it writes
+    # still sees the request.
+    "origin.services.security_events.ForbiddenBurstMiddleware",
 ]
 
 # CORS policy.
@@ -2016,6 +2020,17 @@ EMAIL_VERIFICATION_TOKEN_EXPIRY_MINUTES = int(
 # generous since the invitee may not check their inbox right away and an
 # invite is lower-risk than a password-reset link.
 TEAM_INVITE_TOKEN_EXPIRY_MINUTES = int(os.environ.get("TEAM_INVITE_TOKEN_EXPIRY_MINUTES", "10080"))
+
+# --- Security audit log (MIP-725, origin/services/security_events.py) ---
+# How long `SecurityEvent` rows are kept before `prune_security_events`
+# deletes them. A year by default, so a breach found months later still
+# has its trail. Values under the floor are raised to it.
+SECURITY_EVENT_RETENTION_DAYS = int(os.environ.get("SECURITY_EVENT_RETENTION_DAYS", "365"))
+SECURITY_EVENT_RETENTION_MIN_DAYS = 90
+# Refused (403) requests from one user or API key within a minute that
+# raise a `security.alert`. Normal use hits a 403 rarely; walking through
+# ids that aren't yours hits one per id.
+SECURITY_FORBIDDEN_BURST = int(os.environ.get("SECURITY_FORBIDDEN_BURST", "20"))
 
 # --- OAuth (Google, GitHub) ---
 # Fernet key used to encrypt third-party access / refresh tokens at

@@ -12,6 +12,7 @@ from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
 from rest_framework import mixins, permissions, status, viewsets
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -23,12 +24,14 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.utils import get_md5_hash_password
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
+from origin.models.common.security_event_models import SecurityAction
 from origin.services.demo_seeder import (
     DEMO_LANGUAGES,
     create_demo_environment,
     delete_demo_environment,
     kick_off_demo_reindex,
 )
+from origin.services.security_events import record_security_event
 from origin.services.throttles import AuthThrottle
 
 from .base_auth_api_view import AuthenticatedAPIView
@@ -178,6 +181,12 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
                 user.is_email_verified = True
                 user.save(update_fields=["is_email_verified"])
             refresh = RefreshToken.for_user(user)
+            record_security_event(
+                SecurityAction.SIGNIN_SUCCEEDED,
+                request=request,
+                actor=user,
+                metadata={"method": "invite_signup"},
+            )
             response = JsonResponse(
                 {
                     "access": str(refresh.access_token),
@@ -238,6 +247,22 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
         )
 
 
+def _record_signin_failed(request, email, *, reason: str) -> None:
+    """A refused sign-in. The address typed is the label; the account it
+    names, when one exists, is the target, so its owner's trail shows
+    the attempt."""
+    email = str(email or "")
+    target = User.objects.filter(email__iexact=email).only("pk").first() if email else None
+    record_security_event(
+        SecurityAction.SIGNIN_FAILED,
+        request=request,
+        actor_label=email,
+        target_type="user" if target else "",
+        target_id=target.pk if target else "",
+        metadata={"method": "password", "reason": reason},
+    )
+
+
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer  # Use custom serializer
     # Burst + sustained pair: the burst cap stops fast credential
@@ -263,6 +288,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 and not unverified.is_email_verified
                 and unverified.check_password(password)
             ):
+                _record_signin_failed(request, email, reason="email_not_verified")
                 return JsonResponse(
                     {
                         "detail": "email_not_verified",
@@ -271,8 +297,18 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                     status=403,
                 )
 
-        response = super().post(request, *args, **kwargs)
+        try:
+            response = super().post(request, *args, **kwargs)
+        except AuthenticationFailed:
+            _record_signin_failed(request, email, reason="bad_credentials")
+            raise
         data = response.data
+        record_security_event(
+            SecurityAction.SIGNIN_SUCCEEDED,
+            request=request,
+            actor=User.objects.filter(pk=data["user"]["id"]).first(),
+            metadata={"method": "password"},
+        )
 
         # Create JSON response (access token sent in response, refresh token in cookie)
         response = JsonResponse(
@@ -403,6 +439,12 @@ class DemoSignInView(APIView):
         kick_off_demo_reindex()
 
         refresh = RefreshToken.for_user(user)
+        record_security_event(
+            SecurityAction.SIGNIN_SUCCEEDED,
+            request=request,
+            actor=user,
+            metadata={"method": "demo"},
+        )
         response_data = {
             "access": str(refresh.access_token),
             "username": user.username,
@@ -571,6 +613,9 @@ class LogoutView(APIView):
                 # sending it.
                 pass
 
+        if user is not None:
+            record_security_event(SecurityAction.SIGNOUT, request=request, actor=user)
+
         # Demo users are deleted on signout so each demo session is
         # isolated and the DB doesn't accumulate abandoned demos. The
         # daily cron sweeps anything that slipped through. Cleanup is
@@ -661,6 +706,17 @@ class PasswordResetRequestView(APIView):
                 user.primary_auth_provider,
             )
             user = None
+        # Recorded whether or not a token went out: an attacker asking
+        # for resets is worth seeing too. Only the response has to be
+        # the same for both.
+        record_security_event(
+            SecurityAction.PASSWORD_RESET_REQUESTED,
+            request=request,
+            actor_label=email,
+            target_type="user" if user is not None else "",
+            target_id=user.pk if user is not None else "",
+            metadata={"issued": user is not None},
+        )
         if user is not None:
             token = secrets.token_urlsafe(32)
             user.password_reset_token_hash = hashlib.sha256(token.encode()).hexdigest()
@@ -754,6 +810,14 @@ class PasswordResetConfirmView(APIView):
                 "password_reset_token_hash",
                 "password_reset_token_expires_at",
             ]
+        )
+        record_security_event(
+            SecurityAction.PASSWORD_RESET,
+            request=request,
+            actor=user,
+            target_type="user",
+            target_id=user.pk,
+            target_label=user.email,
         )
         return Response(status=status.HTTP_200_OK)
 

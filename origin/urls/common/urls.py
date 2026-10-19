@@ -65,6 +65,7 @@ from origin.views.common.ownership_claim_views import (
     TeamOwnershipClaimStatusView,
 )
 from origin.views.common.runtime_config_views import RuntimeConfigView
+from origin.views.common.security_event_views import TeamSecurityEventListView
 from origin.views.common.team_connection_views import (
     CrossTeamNoticeView,
     ExternalShareObjectView,
@@ -383,6 +384,11 @@ urlpatterns = [
         "api/v2/team/api-keys/<uuid:key_id>/",
         TeamApiKeyDetailView.as_view(),
         name="team_api_key_detail",
+    ),
+    path(
+        "api/v2/team/security-events/",
+        TeamSecurityEventListView.as_view(),
+        name="team_security_events",
     ),
     path("api/v2/team/create/", TeamMasterView.as_view(), name="join_team"),
     path("api/v2/team/profile/", TeamMasterView.as_view(), name="team_profile"),

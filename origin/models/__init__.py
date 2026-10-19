@@ -8,6 +8,7 @@ from .common.feature_models import *
 from .common.inbox_models import *
 from .common.invite_models import *
 from .common.notification_models import *
+from .common.security_event_models import *
 from .common.team_models import *
 from .common.usage_models import *
 from .common.user_models import *

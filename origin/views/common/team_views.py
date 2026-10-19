@@ -19,6 +19,7 @@ from rest_framework.views import APIView
 
 from origin.models.common.inbox_models import InboxItems
 from origin.models.common.invite_models import TeamInvite
+from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
@@ -35,6 +36,7 @@ from origin.services.member_roles import (
     resolve_project_role,
     resolve_team_role,
 )
+from origin.services.security_events import record_security_event, user_label
 from origin.services.team_membership import (
     InviteAcceptError,
     accept_invite,
@@ -167,6 +169,7 @@ class TeamMasterView(AuthenticatedAPIView):
             team.team_name = new_name
             update_fields.append("team_name")
 
+        previous_owner_id = team.owner_id
         if new_owner_id is not None and str(new_owner_id) != str(team.owner.id):
             is_active_member = TeamMembers.objects.filter(
                 team_id=team_id, attendee_id=new_owner_id, is_deleted=False
@@ -187,6 +190,20 @@ class TeamMasterView(AuthenticatedAPIView):
 
         update_fields.append("ts_updated_at")
         team.save(update_fields=update_fields)
+        if "owner" in update_fields:
+            record_security_event(
+                SecurityAction.OWNER_TRANSFERRED,
+                request=request,
+                team_id=team.team_id,
+                target_type="team",
+                target_id=team.team_id,
+                target_label=team.team_name,
+                metadata={
+                    "from_user_id": str(previous_owner_id),
+                    "to_user_id": str(team.owner_id),
+                    "to_user": user_label(team.owner_id),
+                },
+            )
         return Response(
             {
                 "teamId": str(team.team_id),
@@ -306,6 +323,22 @@ class CheckTeamExistsView(AuthenticatedAPIView):
         return Response(res, status=status.HTTP_200_OK)
 
 
+def _record_member_added(request, team_id, attendee_id, *, via: str) -> None:
+    # A project's system user joins the team as part of creating the
+    # project; that is plumbing, not somebody gaining access.
+    if CustomUser.objects.filter(id=attendee_id, is_system_user=True).exists():
+        return
+    record_security_event(
+        SecurityAction.MEMBER_ADDED,
+        request=request,
+        team_id=team_id,
+        target_type="user",
+        target_id=attendee_id,
+        target_label=user_label(attendee_id),
+        metadata={"via": via},
+    )
+
+
 class TeamMembersView(AuthenticatedAPIView):
     @staticmethod
     def _seed_guide_notes_best_effort(request, team_id) -> None:
@@ -407,6 +440,10 @@ class TeamMembersView(AuthenticatedAPIView):
             )
         return None
 
+    @staticmethod
+    def _via(request) -> str:
+        return "self" if str(request.data.get("attendee_id")) == str(request.user.id) else "direct"
+
     def post(self, request):
         team_id = request.data.get("team_id")
         attendee_id = request.data.get("attendee_id")
@@ -431,12 +468,14 @@ class TeamMembersView(AuthenticatedAPIView):
             if existing.is_deleted:
                 existing.is_deleted = False
                 existing.save(update_fields=["is_deleted", "ts_updated_at"])
+                _record_member_added(request, team_id, attendee_id, via=self._via(request))
             self._seed_guide_notes_best_effort(request, data["team"])
             return Response(data, status=status.HTTP_201_CREATED)
 
         serializer = TeamMembersSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
+            _record_member_added(request, team_id, attendee_id, via=self._via(request))
             self._seed_guide_notes_best_effort(request, data["team"])
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -495,6 +534,15 @@ class LeaveTeamView(AuthenticatedAPIView):
         # OTHER teams. See `remove_team_member` for why that cascade
         # cannot be skipped.
         remove_team_member(team_id, attendee_id)
+        record_security_event(
+            SecurityAction.MEMBER_REMOVED,
+            request=request,
+            team_id=team.team_id,
+            target_type="user",
+            target_id=attendee_id,
+            target_label=user_label(attendee_id),
+            metadata={"via": "left"},
+        )
         return Response(
             {"team_id": team_id, "attendee_id": attendee_id},
             status=status.HTTP_200_OK,
@@ -531,12 +579,14 @@ class JoinTeamFromInboxView(AuthenticatedAPIView):
             if existing.is_deleted:
                 existing.is_deleted = False
                 existing.save(update_fields=["is_deleted", "ts_updated_at"])
+                _record_member_added(request, team_id, attendee_id, via="join_request")
             data["teamName"] = team_name
             return Response(data, status=status.HTTP_201_CREATED)
 
         serializer = TeamMembersSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
+            _record_member_added(request, team_id, attendee_id, via="join_request")
             res = serializer.data
             res["teamName"] = team_name
             return Response(res, status=status.HTTP_201_CREATED)
@@ -699,6 +749,19 @@ class InviteTeamMembersView(AuthenticatedAPIView):
                 results.append({"email": email, "status": "failed"})
                 continue
 
+            record_security_event(
+                SecurityAction.INVITE_SENT,
+                request=request,
+                team_id=team.team_id,
+                target_type="invite",
+                target_id=invite.pk,
+                target_label=email,
+                metadata={
+                    "role": invite.member_role,
+                    "project_id": project.project_id if project else None,
+                    "resent": resent,
+                },
+            )
             results.append(
                 {"email": email, "status": "already_invited_resent" if resent else "sent"}
             )
@@ -787,6 +850,19 @@ class InviteAcceptView(AuthenticatedAPIView):
             team = accept_invite(invite, request.user)
         except InviteAcceptError as exc:
             return Response({"detail": exc.code}, status=status.HTTP_400_BAD_REQUEST)
+        record_security_event(
+            SecurityAction.INVITE_ACCEPTED,
+            request=request,
+            team_id=team.team_id,
+            target_type="invite",
+            target_id=invite.pk,
+            target_label=invite.invited_email,
+            metadata={
+                "role": invite.member_role,
+                "project_id": project_id if was_guest else None,
+                "invited_by": str(invite.invited_by_id) if invite.invited_by_id else None,
+            },
+        )
         return Response(
             {
                 "team_id": str(team.team_id),
@@ -1477,8 +1553,19 @@ class TeamMemberRoleView(AuthenticatedAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        previous_role = row.member_role
         row.member_role = member_role
         row.save(update_fields=["member_role", "ts_updated_at"])
+        if previous_role != member_role:
+            record_security_event(
+                SecurityAction.ROLE_CHANGED,
+                request=request,
+                team_id=team.team_id,
+                target_type="user",
+                target_id=user_id,
+                target_label=user_label(user_id),
+                metadata={"scope": "team", "from": previous_role, "to": member_role},
+            )
 
         return Response(
             {"userId": str(user_id), "memberRole": member_role},

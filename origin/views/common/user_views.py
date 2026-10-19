@@ -8,6 +8,7 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
 from apis.llm_catalog import EFFORTS
+from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.user_models import CustomUser
 from origin.models.task.task_models import TaskMaster
 from origin.serializers.common.user_serializers import UserSerializer
@@ -16,6 +17,7 @@ from origin.services.calendar_sync import (
     get_google_connected_account,
     sync_task_event,
 )
+from origin.services.security_events import record_security_event
 from origin.services.throttles import ExportThrottle, with_defaults
 from origin.services.user_time import is_valid_timezone, user_today
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -774,5 +776,14 @@ class AccountExportView(AuthenticatedAPIView):
         response["Content-Disposition"] = f'attachment; filename="genos-export-{stamp}.json"'
         logger.info(
             "[account] export generated user=%s counts=%s", request.user.pk, document["counts"]
+        )
+        # Also raises the export alert (see `services/security_events`).
+        record_security_event(
+            SecurityAction.EXPORT,
+            request=request,
+            target_type="user",
+            target_id=request.user.pk,
+            target_label=request.user.email,
+            metadata={"counts": document["counts"]},
         )
         return response

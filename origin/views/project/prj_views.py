@@ -12,6 +12,7 @@ from rest_framework.response import Response
 
 from origin.models.chat.unified_models import Channel
 from origin.models.common.inbox_models import InboxItems
+from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import ExternalGrant, TeamMaster, TeamMembers
 from origin.models.project.prj_models import *
 from origin.serializers.project.prj_serializers import *
@@ -25,6 +26,7 @@ from origin.services.member_roles import (
     resolve_project_role,
 )
 from origin.services.project_code import derive_project_code
+from origin.services.security_events import record_security_event, user_label
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data
 from origin.views.utils.roster_fields import shown_location
@@ -141,12 +143,27 @@ class ProjectMasterView(AuthenticatedAPIView):
                         {"error": "The new owner must already be a member of the project."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
+                previous_owner_id = project.owner_id
                 project.owner_id = new_owner_id
                 owner_update_fields.append("owner")
 
             if owner_update_fields:
                 owner_update_fields.append("ts_updated_at")
                 project.save(update_fields=owner_update_fields)
+            if "owner" in owner_update_fields:
+                record_security_event(
+                    SecurityAction.OWNER_TRANSFERRED,
+                    request=request,
+                    team_id=project.team_id,
+                    target_type="project",
+                    target_id=project.project_id,
+                    target_label=project.project_name,
+                    metadata={
+                        "from_user_id": str(previous_owner_id),
+                        "to_user_id": str(project.owner_id),
+                        "to_user": user_label(project.owner_id),
+                    },
+                )
 
         return Response(ProjectMasterSerializer(project).data, status=status.HTTP_200_OK)
 
@@ -563,6 +580,18 @@ class ProjectsView(AuthenticatedAPIView):
         return Response(team_projects, status=status.HTTP_200_OK)
 
 
+def _record_project_member(action, request, project, attendee_id, *, via: str) -> None:
+    record_security_event(
+        action,
+        request=request,
+        team_id=project.team_id,
+        target_type="user",
+        target_id=attendee_id,
+        target_label=user_label(attendee_id),
+        metadata={"project_id": project.project_id, "project": project.project_name, "via": via},
+    )
+
+
 class JoinProjectView(AuthenticatedAPIView):
     """Add a member to a project.
 
@@ -656,6 +685,14 @@ class JoinProjectView(AuthenticatedAPIView):
         serializer = ProjectMembersSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
+            if not is_system:
+                _record_project_member(
+                    SecurityAction.MEMBER_ADDED,
+                    request,
+                    project,
+                    attendee_id,
+                    via="self_join" if is_public_self_join else "direct",
+                )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         error = serializer.errors
@@ -706,6 +743,9 @@ class LeaveProjectView(AuthenticatedAPIView):
                 {"error": "You are not a member of this project."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        _record_project_member(
+            SecurityAction.MEMBER_REMOVED, request, project, attendee_id, via="left"
+        )
         return Response(
             {"team_id": team_id, "project_id": project_id, "attendee_id": attendee_id},
             status=status.HTTP_200_OK,
@@ -752,6 +792,14 @@ class JoinProjectFromInboxView(AuthenticatedAPIView):
                 serializer = ProjectMembersSerializer(data=data)
                 if serializer.is_valid():
                     serializer.save()
+                    project = ProjectMaster.objects.get(team=team_id, project_id=project_id)
+                    _record_project_member(
+                        SecurityAction.MEMBER_ADDED,
+                        request,
+                        project,
+                        attendee_id,
+                        via="join_request",
+                    )
                     res = serializer.data
                     res["projectName"] = project_name
                     return Response(res, status=status.HTTP_201_CREATED)
@@ -2217,8 +2265,25 @@ class ProjectMemberRoleView(AuthenticatedAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        previous_role = row.member_role
         row.member_role = member_role
         row.save(update_fields=["member_role", "ts_updated_at"])
+        if previous_role != member_role:
+            record_security_event(
+                SecurityAction.ROLE_CHANGED,
+                request=request,
+                team_id=project.team_id,
+                target_type="user",
+                target_id=user_id,
+                target_label=user_label(user_id),
+                metadata={
+                    "scope": "project",
+                    "project_id": project.project_id,
+                    "project": project.project_name,
+                    "from": previous_role,
+                    "to": member_role,
+                },
+            )
 
         return Response(
             {"userId": str(user_id), "memberRole": member_role},

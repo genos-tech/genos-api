@@ -30,8 +30,10 @@ from origin.models.common.api_key_models import (
     generate_key,
     hash_key,
 )
+from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
 from origin.services.member_roles import can_manage, resolve_team_role
+from origin.services.security_events import record_security_event
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import is_team_member
 
@@ -162,12 +164,46 @@ class ApiKeyListCreateView(AuthenticatedAPIView):
             expires_at=expires_at,
             created_by=request.user,
         )
+        record_security_event(
+            SecurityAction.API_KEY_CREATED,
+            request=request,
+            team_id=key.team_id,
+            target_type="api_key",
+            target_id=key.id,
+            target_label=_label(key),
+            metadata={
+                "scope": key.scope,
+                "allow_destructive": key.allow_destructive,
+                "expires_at": key.expires_at.isoformat() if key.expires_at else None,
+            },
+        )
         payload = _serialize(key)
         # The one and only time the plaintext exists in a response. The
         # client must tell the user so before they close the dialog —
         # there is no recovery path, by design.
         payload["key"] = raw
         return Response(payload, status=status.HTTP_201_CREATED)
+
+
+def _label(key: ApiKey) -> str:
+    return f"{key.name} ({key.prefix})"
+
+
+def _revoke(request, key: ApiKey, *, by: str) -> None:
+    """Revoke and record it. Revoking an already-revoked key changes
+    nothing, so it records nothing."""
+    if key.revoked_at is not None:
+        return
+    key.revoke()
+    record_security_event(
+        SecurityAction.API_KEY_REVOKED,
+        request=request,
+        team_id=key.team_id,
+        target_type="api_key",
+        target_id=key.id,
+        target_label=_label(key),
+        metadata={"by": by, "owner_id": str(key.user_id)},
+    )
 
 
 class ApiKeyDetailView(AuthenticatedAPIView):
@@ -179,7 +215,7 @@ class ApiKeyDetailView(AuthenticatedAPIView):
         key = ApiKey.objects.filter(id=key_id, user=request.user).first()
         if key is None:
             return Response({"error": "API key not found."}, status=status.HTTP_404_NOT_FOUND)
-        key.revoke()
+        _revoke(request, key, by="self")
         return Response({"id": str(key.id), "revokedAt": key.revoked_at}, status=status.HTTP_200_OK)
 
 
@@ -259,5 +295,5 @@ class TeamApiKeyDetailView(AuthenticatedAPIView):
         key = ApiKey.objects.filter(id=key_id, team=team).first()
         if key is None:
             return Response({"error": "API key not found."}, status=status.HTTP_404_NOT_FOUND)
-        key.revoke()
+        _revoke(request, key, by="team_owner")
         return Response({"id": str(key.id), "revokedAt": key.revoked_at}, status=status.HTTP_200_OK)

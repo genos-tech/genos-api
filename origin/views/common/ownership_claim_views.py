@@ -15,6 +15,7 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.common.inbox_models import InboxItems
+from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.services.member_roles import EDITOR, resolve_team_role
 from origin.services.ownership_claim import (
@@ -28,6 +29,7 @@ from origin.services.ownership_claim import (
     is_eligible_claimant,
     pending_claim_for_team,
 )
+from origin.services.security_events import record_security_event, user_label
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
 logger = logging.getLogger(__name__)
@@ -300,7 +302,9 @@ class TeamOwnershipClaimRespondView(AuthenticatedAPIView):
                 claimant_id, team_name = item.sender_id, team.team_name
             else:
                 claimant_id, team_name = item.sender_id, team.team_name
-                _transfer(team, claimant_id, previous_owner_id=request.user.id)
+                _transfer(
+                    team, claimant_id, previous_owner_id=request.user.id, via="claim_approved"
+                )
                 item.request_status = "approved"
                 item.save(update_fields=["request_status", "ts_updated_at"])
                 logger.info(
@@ -391,7 +395,9 @@ class TeamOwnershipClaimFinalizeView(AuthenticatedAPIView):
                 )
 
             previous_owner_id = team.owner_id
-            _transfer(team, request.user.id, previous_owner_id=previous_owner_id)
+            _transfer(
+                team, request.user.id, previous_owner_id=previous_owner_id, via="claim_unanswered"
+            )
             item.request_status = "approved"
             item.save(update_fields=["request_status", "ts_updated_at"])
             member_ids = list(
@@ -415,7 +421,7 @@ class TeamOwnershipClaimFinalizeView(AuthenticatedAPIView):
         return Response({"status": "approved"}, status=status.HTTP_200_OK)
 
 
-def _transfer(team, new_owner_id, *, previous_owner_id):
+def _transfer(team, new_owner_id, *, previous_owner_id, via):
     """Move ownership, and leave the displaced owner able to act.
 
     A plain transfer would leave them on whatever `member_role` their row
@@ -431,3 +437,16 @@ def _transfer(team, new_owner_id, *, previous_owner_id):
         TeamMembers.objects.filter(
             team_id=team.team_id, attendee_id=previous_owner_id, is_deleted=False
         ).update(member_role=EDITOR)
+    record_security_event(
+        SecurityAction.OWNER_TRANSFERRED,
+        team_id=team.team_id,
+        target_type="team",
+        target_id=team.team_id,
+        target_label=team.team_name,
+        metadata={
+            "from_user_id": str(previous_owner_id),
+            "to_user_id": str(new_owner_id),
+            "to_user": user_label(new_owner_id),
+            "via": via,
+        },
+    )
