@@ -38,7 +38,7 @@ from origin.models.common.security_event_models import (
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import ConnectedAccount
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
-from origin.services import security_events, throttles
+from origin.services import blind_index, security_events, throttles
 from origin.services.account_deletion import delete_account
 from origin.services.member_roles import EDITOR
 from origin.services.oauth.base import ProviderProfile, TokenResponse
@@ -770,7 +770,7 @@ class TestInvites(SecurityEventCase):
         invitee = User.objects.create_user(
             username="invitee", email="invitee@example.com", password="pw123456"
         )
-        invite = TeamInvite.objects.get(invited_email="invitee@example.com")
+        invite = TeamInvite.objects.get(blind_index.INVITE_EMAIL.matches("invitee@example.com"))
         # The raw token only went out by email; mint a fresh one.
         import hashlib
         import secrets

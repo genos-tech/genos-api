@@ -23,11 +23,10 @@ def profile_image_path(instance, filename):
 class TeamMaster(blind_index.BlindIndexMixin, models.Model):
     team_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     team_name = models.CharField(unique=True, blank=False)
-    # Never filter or order by this (MIP-619): it's encrypted from the
-    # release after this one. Uniqueness is on `team_email_hash`, which
-    # keeps the column's case-sensitive rule: the address is built from
-    # the (case-sensitive) team name.
-    team_email = crypto.DecryptingEmailField(unique=True)
+    # Encrypted (MIP-619), so never filter or order by this. Uniqueness is
+    # on `team_email_hash`, which keeps the column's old case-sensitive
+    # rule: the address is built from the (case-sensitive) team name.
+    team_email = crypto.EncryptedEmailField()
     team_email_hash = models.CharField(max_length=64, unique=True, null=True, editable=False)
     owner = models.ForeignKey(
         CustomUser,

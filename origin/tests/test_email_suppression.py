@@ -17,6 +17,7 @@ from origin.models.common.notification_models import (
     EmailSuppression,
     NotificationPreference,
 )
+from origin.services import blind_index
 from origin.services.email import send_templated_email
 from origin.services.email_suppression import is_suppressed, suppress
 from origin.tests.test_base import BaseAPITestCase
@@ -43,12 +44,16 @@ class SuppressionServiceTests(BaseAPITestCase):
         suppress("a@example.com", EmailSuppression.REASON_BOUNCE)
         suppress("a@example.com", EmailSuppression.REASON_COMPLAINT)
         self.assertEqual(
-            EmailSuppression.objects.get(address="a@example.com").reason,
+            EmailSuppression.objects.get(
+                blind_index.SUPPRESSED_ADDRESS.matches("a@example.com")
+            ).reason,
             EmailSuppression.REASON_COMPLAINT,
         )
         suppress("a@example.com", EmailSuppression.REASON_BOUNCE)
         self.assertEqual(
-            EmailSuppression.objects.get(address="a@example.com").reason,
+            EmailSuppression.objects.get(
+                blind_index.SUPPRESSED_ADDRESS.matches("a@example.com")
+            ).reason,
             EmailSuppression.REASON_COMPLAINT,
         )
 

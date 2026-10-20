@@ -64,7 +64,7 @@ class NewSystemUserTests(BaseAPITestCase):
     def test_signup_returns_the_id_and_no_tokens(self):
         res = self._signup()
         self.assertEqual(res.status_code, 201)
-        user = User.objects.get(email=self.email)
+        user = User.objects.with_email(self.email).get()
         self.assertEqual(str(res.data["user"]["id"]), str(user.id))
         self.assertNotIn("access", res.data)
         self.assertNotIn("refresh", res.data)
@@ -72,7 +72,7 @@ class NewSystemUserTests(BaseAPITestCase):
 
     def test_the_password_is_unusable(self):
         self._signup()
-        self.assertFalse(User.objects.get(email=self.email).has_usable_password())
+        self.assertFalse(User.objects.with_email(self.email).get().has_usable_password())
 
     def test_a_person_signing_up_still_gets_their_password(self):
         res = self.anon.post(
@@ -81,7 +81,7 @@ class NewSystemUserTests(BaseAPITestCase):
             format="json",
         )
         self.assertEqual(res.status_code, 201)
-        user = User.objects.get(email="pat@example.com")
+        user = User.objects.with_email("pat@example.com").get()
         self.assertTrue(user.check_password("testpass123"))
 
 

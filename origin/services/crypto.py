@@ -28,9 +28,10 @@ from functools import lru_cache
 
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldError, ValidationError
 from django.core.signals import setting_changed
 from django.db import models
+from django.db.models.lookups import Exact
 from django.dispatch import receiver
 
 
@@ -128,18 +129,8 @@ def refuse_ciphertext_lookalike(value) -> None:
 class _DecryptOnRead:
     """Reads ciphertext back as plaintext, and writes plaintext (MIP-619).
 
-    For a column in the release BEFORE the one that encrypts it. Railway
-    runs the encrypting release's migration while this release still
-    serves, so this release has to read the ciphertext that migration
-    writes. What this release itself writes stays plaintext, which the
-    encrypting release reads as-is and `rotate_field_keys` then encrypts.
-
-    Nothing writes ciphertext here except that later release, with a key
-    this release also holds. So a value that only looks like a token, and
-    that no key opens, is plaintext: it's returned as stored, where
-    `EncryptedTextField` would raise. The serializers refuse such values
-    (the validator below), so a user can't plant one for the encrypting
-    release to trip over.
+    The previous release's PII fields, which only read ciphertext. Kept
+    because migrations 0201 and 0202 name them.
     """
 
     def __init__(self, *args, **kwargs):
@@ -168,6 +159,89 @@ class DecryptingCharField(_DecryptOnRead, models.CharField):
 
 
 class DecryptingTextField(_DecryptOnRead, models.TextField):
+    pass
+
+
+class _EmptyOrNullOnly(Exact):
+    """`exact` that refuses any value but `""` (and `None`, which Django
+    turns into `isnull`)."""
+
+    def get_prep_lookup(self):
+        if self.rhs not in ("", None):
+            raise FieldError(_LOOKUP_REFUSED.format(self.lhs.output_field))
+        return super().get_prep_lookup()
+
+
+_LOOKUP_REFUSED = (
+    "{} is encrypted, so a filter on its value would silently match "
+    "nothing. Look it up through its blind index "
+    "(origin/services/blind_index.py)."
+)
+
+
+class EncryptedPIIField:
+    """A PII column stored as Fernet ciphertext (MIP-619).
+
+    Like `EncryptedTextField`, but keeps the base field's validation (an
+    address check, a length limit) on the plaintext while the column
+    itself is `text`, since the ciphertext is several times longer.
+
+    It can't be filtered, ordered or uniqued on, so an address that has to
+    be found has a blind index (`origin/services/blind_index.py`). A
+    filter on the value raises `FieldError` rather than matching nothing
+    (a random IV makes each encryption differ); only `isnull` and `= ""`
+    are allowed.
+
+    A stored plaintext value is returned as-is: a row the previous release
+    wrote during the deploy, which migration 0203 or `rotate_field_keys`
+    encrypts. So is a value that looks like a token but that no key opens,
+    because the previous release stored such values as plaintext, and
+    raising would take down every roster that row is in. Nothing can store
+    one now (the validator below), so only an old row can be like that,
+    and `rotate_field_keys` reports it. `KeyringMissing` still raises.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.validators.append(refuse_ciphertext_lookalike)
+
+    def db_type(self, connection):
+        return "text"
+
+    def get_lookup(self, lookup_name):
+        if lookup_name == "isnull":
+            return super().get_lookup(lookup_name)
+        if lookup_name == "exact":
+            return _EmptyOrNullOnly
+        raise FieldError(_LOOKUP_REFUSED.format(self))
+
+    def get_transform(self, lookup_name):
+        raise FieldError(_LOOKUP_REFUSED.format(self))
+
+    def from_db_value(self, value, expression, connection):
+        if value is None or not looks_encrypted(value):
+            return value
+        try:
+            return decrypt(value)
+        except InvalidToken:
+            return value
+
+    def get_prep_value(self, value):
+        value = super().get_prep_value(value)
+        if value is None or value == "":
+            return value
+        return encrypt(value)
+
+
+class EncryptedEmailField(EncryptedPIIField, models.EmailField):
+    pass
+
+
+class EncryptedCharField(EncryptedPIIField, models.CharField):
+    pass
+
+
+class EncryptedPIITextField(EncryptedPIIField, models.TextField):
     pass
 
 
