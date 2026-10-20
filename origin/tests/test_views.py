@@ -211,7 +211,7 @@ class TestAuthEndpoints(TestCase):
         # via the link first.
         self.assertNotIn("access", response.data)
         self.assertEqual(response.data.get("message"), "verification_email_sent")
-        created = User.objects.get(email="new@example.com")
+        created = User.objects.with_email("new@example.com").get()
         self.assertFalse(created.is_email_verified)
         self.assertIsNotNone(created.email_verification_token_hash)
 
@@ -414,7 +414,7 @@ class TestEmailVerificationEndpoints(TestCase):
         self.assertEqual(kwargs["template_base"], "email_verification")
         self.assertIn("/verify-email?token=", kwargs["context"]["verify_url"])
         # User row exists but is unverified.
-        user = User.objects.get(email="user@example.com")
+        user = User.objects.with_email("user@example.com").get()
         self.assertFalse(user.is_email_verified)
         self.assertIsNotNone(user.email_verification_token_hash)
         self.assertIsNotNone(user.email_verification_token_expires_at)
@@ -425,7 +425,7 @@ class TestEmailVerificationEndpoints(TestCase):
         response = self.client.get("/api/v2/user/verify-email/", {"token": token})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["message"], "verified")
-        user = User.objects.get(email="user@example.com")
+        user = User.objects.with_email("user@example.com").get()
         self.assertTrue(user.is_email_verified)
         self.assertIsNone(user.email_verification_token_hash)
         self.assertIsNone(user.email_verification_token_expires_at)
@@ -445,7 +445,7 @@ class TestEmailVerificationEndpoints(TestCase):
         self._signup()
         token = self._extract_token_from_send_call()
         # Fast-forward the expiry to the past so the token is rejected.
-        user = User.objects.get(email="user@example.com")
+        user = User.objects.with_email("user@example.com").get()
         user.email_verification_token_expires_at = timezone.now() - timedelta(minutes=1)
         user.save(update_fields=["email_verification_token_expires_at"])
         response = self.client.get("/api/v2/user/verify-email/", {"token": token})
@@ -489,7 +489,9 @@ class TestEmailVerificationEndpoints(TestCase):
 
     def test_resend_verification_sends_new_email(self):
         self._signup()
-        original_hash = User.objects.get(email="user@example.com").email_verification_token_hash
+        original_hash = (
+            User.objects.with_email("user@example.com").get().email_verification_token_hash
+        )
         self.mock_send.reset_mock()
         response = self.client.post(
             "/api/v2/user/verify-email/resend/",
@@ -498,7 +500,7 @@ class TestEmailVerificationEndpoints(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.mock_send.call_count, 1)
-        new_hash = User.objects.get(email="user@example.com").email_verification_token_hash
+        new_hash = User.objects.with_email("user@example.com").get().email_verification_token_hash
         self.assertNotEqual(original_hash, new_hash)
 
     def test_resend_verification_unknown_email_returns_200_silently(self):
@@ -531,7 +533,7 @@ class TestEmailVerificationEndpoints(TestCase):
         # only assert verification when the user row was actually made.
         if response.status_code == 201:
             email = json.loads(response.content)["email"]
-            user = User.objects.get(email=email)
+            user = User.objects.with_email(email).get()
             self.assertTrue(user.is_email_verified)
 
     def test_system_user_signup_returns_the_id_and_no_credential(self):
@@ -549,7 +551,7 @@ class TestEmailVerificationEndpoints(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 201)
-        user = User.objects.get(email="bot@example.com")
+        user = User.objects.with_email("bot@example.com").get()
         self.assertEqual(str(response.data["user"]["id"]), str(user.id))
         self.assertNotIn("access", response.data)
         self.assertNotIn("refresh", response.data)

@@ -18,6 +18,7 @@ from rest_framework import status
 
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.team_models import TeamMembers
+from origin.services import blind_index
 from origin.tests.test_base import BaseAPITestCase
 
 User = get_user_model()
@@ -64,7 +65,9 @@ class TestInviteCreate(BaseAPITestCase):
         self.assertEqual(results[0]["status"], "sent")
         self.assertTrue(
             TeamInvite.objects.filter(
-                team=self.team, invited_email="new@example.com", status="pending"
+                blind_index.INVITE_EMAIL.matches("new@example.com"),
+                team=self.team,
+                status="pending",
             ).exists()
         )
         self.mock_send.assert_called_once()
@@ -114,7 +117,9 @@ class TestInviteCreate(BaseAPITestCase):
         invite.refresh_from_db()
         self.assertNotEqual(invite.token_hash, old_hash)  # token rotated
         self.assertEqual(
-            TeamInvite.objects.filter(team=self.team, invited_email="again@example.com").count(),
+            TeamInvite.objects.filter(
+                blind_index.INVITE_EMAIL.matches("again@example.com"), team=self.team
+            ).count(),
             1,  # no duplicate row
         )
         self.mock_send.assert_called_once()
@@ -248,7 +253,7 @@ class TestInviteSignup(BaseAPITestCase):
         # DemoSignInView), so parse the body rather than using .data.
         body = response.json()
         self.assertIn("access", body)
-        new_user = User.objects.get(email="fresh@example.com")
+        new_user = User.objects.with_email("fresh@example.com").get()
         self.assertTrue(new_user.is_email_verified)  # verification skipped
         # Join is NOT performed at signup — it stays pending for the funnel.
         invite.refresh_from_db()
@@ -275,4 +280,4 @@ class TestInviteSignup(BaseAPITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         # No user created for the mismatched email (validated before save).
-        self.assertFalse(User.objects.filter(email="different@example.com").exists())
+        self.assertFalse(User.objects.with_email("different@example.com").exists())

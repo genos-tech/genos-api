@@ -47,9 +47,9 @@ class TeamInvite(blind_index.BlindIndexMixin, models.Model):
         to_field="team_id",
     )
     # Always stored lowercased, so the accept-time match is
-    # case-insensitive. Encrypted from the release after this one
-    # (MIP-619): look an invite up by address through `invited_email_hash`.
-    invited_email = crypto.DecryptingEmailField()
+    # case-insensitive. Encrypted (MIP-619): look an invite up by address
+    # through `invited_email_hash`.
+    invited_email = crypto.EncryptedEmailField()
     invited_email_hash = models.CharField(max_length=64, null=True, editable=False)
     invited_by = models.ForeignKey(
         CustomUser,
@@ -97,7 +97,6 @@ class TeamInvite(blind_index.BlindIndexMixin, models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=["team", "invited_email"]),
             # The re-invite lookup (`TeamInviteView`).
             models.Index(fields=["team", "invited_email_hash"], name="teaminvite_team_email_hash"),
         ]

@@ -149,10 +149,9 @@ class EmailSuppression(blind_index.BlindIndexMixin, models.Model):
     REASON_MANUAL = "manual"
 
     # Stored lowercased (`email_suppression.suppress` normalizes).
-    # Encrypted from the release after this one (MIP-619), so it's looked
-    # up through `address_hash`, unique so re-reports upsert instead of
-    # piling up.
-    address = crypto.DecryptingEmailField(unique=True)
+    # Encrypted (MIP-619), so it's looked up through `address_hash`,
+    # unique so re-reports upsert instead of piling up.
+    address = crypto.EncryptedEmailField()
     address_hash = models.CharField(max_length=64, unique=True, null=True, editable=False)
     reason = models.CharField(max_length=16)
     ts_created_at = models.DateTimeField(auto_now_add=True)

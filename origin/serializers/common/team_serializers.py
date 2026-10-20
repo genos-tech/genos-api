@@ -10,10 +10,10 @@ class TeamMasterSerializer(serializers.ModelSerializer):
     class Meta:
         model = TeamMaster
         fields = "__all__"
-        # DRF's own unique check on `team_email` filters on the column,
-        # encrypted from MIP-619's second release, so `validate_team_email`
-        # asks the blind index. Listing validators replaces the model
-        # field's, so its lookalike check is listed again.
+        # `team_email` is encrypted (MIP-619), so uniqueness is the blind
+        # index's: `validate_team_email` asks it. Listing validators
+        # replaces the model field's, so its lookalike check is listed
+        # again.
         # (`team_email_hash` is `editable=False`, so "__all__" never
         # exposes it.)
         extra_kwargs = {"team_email": {"validators": [crypto.refuse_ciphertext_lookalike]}}

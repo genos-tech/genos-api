@@ -11,6 +11,7 @@ from unittest import mock
 
 from cryptography.fernet import Fernet, InvalidToken
 from django.apps import apps
+from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection, models
@@ -236,10 +237,14 @@ class TestEncryptedPushKeys(_FreshKeyring, BaseAPITestCase):
 class TestRotateFieldKeys(_FreshKeyring, BaseAPITestCase):
     def setUp(self):
         super().setUp()
-        self.overrides = self.keys(OLD)
+        # The fixture's PII (MIP-619) is under the suite's own key. Rotate
+        # it onto OLD first, so OLD is the only key in use.
+        self.overrides = self.keys(OLD, *settings.FIELD_ENCRYPTION_KEYS)
         self.overrides.enable()
         # A lambda, so cleanup disables whichever override `_switch` left.
         self.addCleanup(lambda: self.overrides.disable())
+        self._run()
+        self._switch(OLD)
 
         self.sub = PushSubscription.objects.create(
             user=self.user, endpoint="https://push.example.com/r", p256dh=P256DH, auth=AUTH
@@ -308,6 +313,15 @@ class TestRotateFieldKeys(_FreshKeyring, BaseAPITestCase):
         out = self._run()
         self.assertIn("origin.PushSubscription.auth: changed 1 of 1 (rotated 0, encrypted 1", out)
         self.assertEqual(crypto.decrypt(_push_raw(self.sub)[1]), AUTH)
+
+    def test_plaintext_pii_is_encrypted(self):
+        # What the previous release writes while this one deploys (MIP-619).
+        _set_raw("origin_customuser", "email", "id", self.user.pk, "test@example.com")
+        out = self._run()
+        self.assertIn("origin.CustomUser.email: changed 1 of", out)
+        self.assertIn("encrypted 1 plaintext", out)
+        stored = _raw("origin_customuser", "email", "id", self.user.pk)
+        self.assertEqual(crypto.decrypt(stored), "test@example.com")
 
     def test_a_value_no_key_opens_fails_the_run_and_is_kept(self):
         with self.keys(Fernet.generate_key().decode()):

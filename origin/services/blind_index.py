@@ -125,16 +125,13 @@ class BlindIndex:
         string: callers pass `request.data` values, which JSON lets be a
         list.
 
-        A row with no hash yet (written by the previous release while this
-        one deployed, until `rotate_field_keys` fills it in) is matched on
-        its plaintext. That fallback goes when the column is encrypted.
+        A row with no hash isn't found. Only a row the previous release
+        wrote during a deploy has none, and `rotate_field_keys` fills it
+        in: run it after every deploy.
         """
         if not isinstance(value, str) or not value.strip():
             return Q(pk__in=[])
-        plaintext = f"{prefix}{self.source}__iexact" if self.fold_case else f"{prefix}{self.source}"
-        return Q(**{f"{prefix}{self.column}__in": self.candidates(value)}) | Q(
-            **{f"{prefix}{self.column}__isnull": True, plaintext: value.strip()}
-        )
+        return Q(**{f"{prefix}{self.column}__in": self.candidates(value)})
 
 
 USER_EMAIL = BlindIndex(source="email", column="email_hash", fold_case=True)

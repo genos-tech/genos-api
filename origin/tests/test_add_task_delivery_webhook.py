@@ -30,6 +30,7 @@ from django.test import override_settings
 from origin.models.common.user_models import ConnectedAccount, GithubWebhookRegistration
 from origin.models.task.task_delivery_models import TaskDelivery
 from origin.search_engine.agent.tools.add_task_delivery import ADD_TASK_DELIVERY
+from origin.services import crypto
 from origin.services.task_delivery import sync_pull_request
 
 from .test_mcp_endpoint import McpBase
@@ -151,10 +152,11 @@ class AddTaskDeliveryWebhookTests(DeliveryBase):
         self.assertLinkedWithoutWebhook(self._add(pr_url=PR))
         mock_post.assert_not_called()
 
-    @override_settings(FIELD_ENCRYPTION_KEYS=[])
+    @mock.patch(f"{GH}.crypto.require_keyring", side_effect=crypto.KeyringMissing)
     @mock.patch(f"{GH}.requests.post")
-    def test_no_encryption_key_still_links_and_says_so(self, mock_post):
-        # The hook's own secret is stored encrypted (MIP-618).
+    def test_no_encryption_key_still_links_and_says_so(self, mock_post, _keyring):
+        # The hook's own secret is stored encrypted (MIP-618). Patched
+        # there only: since MIP-619 no user row reads without the key.
         self.assertLinkedWithoutWebhook(self._add(pr_url=PR))
         mock_post.assert_not_called()
 
@@ -207,8 +209,8 @@ class AddTaskDeliveryWebhookTests(DeliveryBase):
 
 
 class McpDeliveryWebhookWarningTests(McpBase):
-    @override_settings(FIELD_ENCRYPTION_KEYS=[])
-    def test_the_warning_leads_the_mcp_answer(self):
+    @mock.patch(f"{GH}.crypto.require_keyring", side_effect=crypto.KeyringMissing)
+    def test_the_warning_leads_the_mcp_answer(self, _keyring):
         self._key()
         text, is_error = self._tool_text(
             self._call("add_task_delivery", {"task_id": "WRD-7", "pr_url": PR})

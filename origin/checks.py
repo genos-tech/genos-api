@@ -10,7 +10,8 @@ that crashes on use doesn't need a check; it already tells you.
 """
 
 from django.conf import settings
-from django.core.checks import Warning, register
+from django.contrib.auth import get_user_model
+from django.core.checks import Error, Warning, register
 
 
 def _normalized(name: str) -> str:
@@ -94,3 +95,32 @@ def email_public_url_check(app_configs, **kwargs):
         )
 
     return issues
+
+
+@register()
+def username_field_unique_check(app_configs, **kwargs):
+    """Sign-in's address must be unique, through its blind index.
+
+    Stands in for Django's auth.E003, silenced in settings: `email` is
+    encrypted, so the column can't carry the constraint (MIP-619). Without
+    a unique hash, two accounts could share an address, and sign-in
+    (`get_by_natural_key`) would refuse both.
+    """
+    user = get_user_model()
+    index = next(
+        (i for i in getattr(user, "blind_indexes", ()) if i.source == user.USERNAME_FIELD),
+        None,
+    )
+    if index is not None and user._meta.get_field(index.column).unique:
+        return []
+    return [
+        Error(
+            f"{user._meta.label}.{user.USERNAME_FIELD} has no unique blind index.",
+            hint=(
+                "auth.E003 is silenced because the column is encrypted, so "
+                f"list a BlindIndex on {user.USERNAME_FIELD!r} in "
+                "`blind_indexes` and make its hash column unique."
+            ),
+            id="origin.E001",
+        )
+    ]

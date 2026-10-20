@@ -48,15 +48,16 @@ MANUAL_COLUMNS = [
 def encrypted_columns() -> list[tuple[type, str, bool]]:
     """(model, field name, plaintext allowed) for every encrypted column.
 
-    A plaintext value is only legitimate in an `EncryptedTextField`
-    column, which reads it as-is. In a hand-encrypted one it means a bug
-    that skipped `encrypt`, so it's reported rather than silently fixed.
+    A plaintext value is only legitimate in a column whose field encrypts
+    (`EncryptedTextField`, or a PII field from MIP-619), which reads it
+    as-is. In a hand-encrypted one it means a bug that skipped `encrypt`,
+    so it's reported rather than silently fixed.
     """
     columns = [
         (model, field.name, True)
         for model in apps.get_models()
         for field in model._meta.concrete_fields
-        if isinstance(field, crypto.EncryptedTextField)
+        if isinstance(field, (crypto.EncryptedTextField, crypto.EncryptedPIIField))
     ]
     for label, name in MANUAL_COLUMNS:
         columns.append((apps.get_model(label), name, False))

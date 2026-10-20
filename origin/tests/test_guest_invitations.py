@@ -21,6 +21,7 @@ from django.utils import timezone
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.team_models import TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.services import blind_index
 from origin.services.member_roles import EDITOR, GUEST, VIEWER
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.utils.scope_guards import is_guest, is_team_member
@@ -69,14 +70,16 @@ class TestGuestInviteCreation(GuestInviteBase):
     def test_project_id_makes_it_a_guest_invite(self):
         res = self._invite(["contractor@agency.example"], project_id=self.project.project_id)
         self.assertEqual(res.status_code, 200)
-        invite = TeamInvite.objects.get(invited_email="contractor@agency.example")
+        invite = TeamInvite.objects.get(
+            blind_index.INVITE_EMAIL.matches("contractor@agency.example")
+        )
         self.assertEqual(invite.member_role, GUEST)
         self.assertEqual(invite.project_id, self.project.project_id)
 
     def test_without_project_id_it_stays_a_team_invite(self):
         res = self._invite(["newhire@example.com"])
         self.assertEqual(res.status_code, 200)
-        invite = TeamInvite.objects.get(invited_email="newhire@example.com")
+        invite = TeamInvite.objects.get(blind_index.INVITE_EMAIL.matches("newhire@example.com"))
         self.assertEqual(invite.member_role, VIEWER)
         self.assertIsNone(invite.project_id)
 
@@ -151,7 +154,7 @@ class TestGuestInviteCreation(GuestInviteBase):
     def test_team_and_guest_invites_to_one_address_are_separate_rows(self):
         self._invite(["dual@example.com"])
         self._invite(["dual@example.com"], project_id=self.project.project_id)
-        rows = TeamInvite.objects.filter(invited_email="dual@example.com")
+        rows = TeamInvite.objects.filter(blind_index.INVITE_EMAIL.matches("dual@example.com"))
         self.assertEqual(rows.count(), 2)
         self.assertEqual({r.member_role for r in rows}, {VIEWER, GUEST})
 
@@ -159,7 +162,7 @@ class TestGuestInviteCreation(GuestInviteBase):
 class TestGuestInviteAcceptance(GuestInviteBase):
     def _pending_guest_invite(self, project=None):
         self._invite(["contractor@agency.example"], project_id=(project or self.project).project_id)
-        return TeamInvite.objects.get(invited_email="contractor@agency.example")
+        return TeamInvite.objects.get(blind_index.INVITE_EMAIL.matches("contractor@agency.example"))
 
     def test_accepting_a_guest_invite_grants_no_team_membership(self):
         """The whole model, in one assertion."""
@@ -231,7 +234,7 @@ class TestGuestInviteAcceptance(GuestInviteBase):
 
     def test_a_normal_invite_still_grants_team_membership(self):
         self._invite(["newhire@example.com"])
-        invite = TeamInvite.objects.get(invited_email="newhire@example.com")
+        invite = TeamInvite.objects.get(blind_index.INVITE_EMAIL.matches("newhire@example.com"))
         token = self._mint_token(invite)
         newhire = User.objects.create_user(
             username="newhire", email="newhire@example.com", password="pw"
@@ -249,7 +252,9 @@ class TestGuestInvitePreview(GuestInviteBase):
         reads it — so a guest's token must not disclose the workspace
         they're being kept out of."""
         self._invite(["contractor@agency.example"], project_id=self.project.project_id)
-        invite = TeamInvite.objects.get(invited_email="contractor@agency.example")
+        invite = TeamInvite.objects.get(
+            blind_index.INVITE_EMAIL.matches("contractor@agency.example")
+        )
         token = self._mint_token(invite)
 
         self.unauthenticate()
@@ -262,7 +267,7 @@ class TestGuestInvitePreview(GuestInviteBase):
 
     def test_preview_of_a_team_invite_still_names_the_team(self):
         self._invite(["newhire@example.com"])
-        invite = TeamInvite.objects.get(invited_email="newhire@example.com")
+        invite = TeamInvite.objects.get(blind_index.INVITE_EMAIL.matches("newhire@example.com"))
         token = self._mint_token(invite)
         self.unauthenticate()
         res = self.client.get(PREVIEW_URL, {"token": token})
@@ -271,7 +276,9 @@ class TestGuestInvitePreview(GuestInviteBase):
 
     def test_preview_hides_a_guest_invite_whose_project_is_gone(self):
         self._invite(["contractor@agency.example"], project_id=self.project.project_id)
-        invite = TeamInvite.objects.get(invited_email="contractor@agency.example")
+        invite = TeamInvite.objects.get(
+            blind_index.INVITE_EMAIL.matches("contractor@agency.example")
+        )
         token = self._mint_token(invite)
         self.project.is_deleted = True
         self.project.save(update_fields=["is_deleted"])

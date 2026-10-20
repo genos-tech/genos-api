@@ -1,9 +1,9 @@
-"""Blind-index email lookups and the PII fields' read path (MIP-619).
+"""Blind-index email lookups and the encrypted PII fields (MIP-619).
 
 The index itself (`blind_index`), every lookup that moved onto it, the
-uniqueness it now carries, key rotation, the migration that fills it in,
-and the `Decrypting*` fields this release reads PII through. The web
-server's key check is in test_fail_closed_config.
+uniqueness it now carries, key rotation, the migrations that fill it in
+and encrypt the rows, and the `Encrypted*` fields PII is stored through.
+The web server's key check is in test_fail_closed_config.
 """
 
 import base64
@@ -17,19 +17,23 @@ from unittest import mock
 
 from anymail.signals import tracking
 from cryptography.fernet import Fernet
+from django.apps import apps
+from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldError, ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, connection, migrations, transaction
+from django.db.models import F
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import AccessToken
 
+from origin.checks import username_field_unique_check
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.notification_models import EmailSuppression, NotificationPreference
 from origin.models.common.security_event_models import SecurityAction, SecurityEvent
-from origin.models.common.team_models import TeamMaster
+from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import ConnectedAccount
 from origin.serializers.common.team_serializers import TeamMasterSerializer
 from origin.serializers.common.user_serializers import (
@@ -48,7 +52,8 @@ OLD = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
 NEW = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
 SIGNIN = "/api/v2/user/signin/"
 
-_migration = importlib.import_module("origin.migrations.0201_pii_blind_index")
+_fill_migration = importlib.import_module("origin.migrations.0202_pii_encrypt_columns")
+_encrypt_migration = importlib.import_module("origin.migrations.0203_pii_encrypt_rows")
 
 
 def _raw(table, column, pk_column, pk):
@@ -73,16 +78,6 @@ def _invite_row(team, email):
         token_hash=secrets.token_hex(32),
         expires_at=timezone.now() + timedelta(days=1),
     )
-
-
-def _widen(*columns):
-    """Make room for ciphertext in `origin_customuser`, as release B will.
-
-    Inside the test's transaction, so it's rolled back with it.
-    """
-    with connection.cursor() as cursor:
-        for column in columns:
-            cursor.execute(f"ALTER TABLE origin_customuser ALTER COLUMN {column} TYPE text")
 
 
 class _Keys:
@@ -173,16 +168,36 @@ class TestUserLookup(_Keys, BaseAPITestCase):
         self.assertFalse(User.objects.with_email("nobody@example.com").exists())
 
     def test_the_lookup_reads_the_hash_not_the_column(self):
-        # Once the column is encrypted, a filter on it never matches; the
+        # The column is encrypted, so a filter on it never matches; the
         # hash is the only thing a lookup can use.
         _set_raw("origin_customuser", "email", "id", self.user.pk, "gAAAAA" + "x" * 120)
         self.assertEqual(User.objects.with_email("test@example.com").get().pk, self.user.pk)
 
-    def test_an_unhashed_row_is_found_by_its_plaintext(self):
-        # The previous release, still serving during the deploy, inserts
-        # without a hash.
+    def test_an_unhashed_row_is_not_found(self):
+        # No plaintext fallback any more: a row with no hash waits for
+        # `rotate_field_keys`, run after every deploy.
         _set_raw("origin_customuser", "email_hash", "id", self.user.pk, None)
-        self.assertEqual(User.objects.with_email("Test@Example.com").get(), self.user)
+        self.assertFalse(User.objects.with_email("test@example.com").exists())
+
+    def test_a_filter_on_the_encrypted_column_raises(self):
+        # Rather than silently matching nothing (a fresh IV per write).
+        for lookup in (
+            {"email": "test@example.com"},
+            {"email__iexact": "test@example.com"},
+            {"email__in": ["test@example.com"]},
+            {"email__lower": "test@example.com"},
+        ):
+            with self.subTest(lookup=lookup), self.assertRaisesMessage(FieldError, "blind index"):
+                User.objects.filter(**lookup).exists()
+        with self.assertRaisesMessage(FieldError, "blind index"):
+            TeamInvite.objects.filter(team__owner__email="test@example.com").exists()
+        # Ordering re-raises Django's own message, but still raises.
+        with self.assertRaises(FieldError):
+            list(User.objects.order_by("email__lower"))
+        # What `rotate_field_keys` and the forms still need.
+        self.assertFalse(User.objects.filter(email="").exists())
+        self.assertFalse(User.objects.filter(email__isnull=True).exists())
+        self.assertTrue(User.objects.filter(phone_number=None).exists())
 
     def test_sign_in_ignores_case(self):
         # The default `get_by_natural_key` compared the column exactly.
@@ -192,18 +207,13 @@ class TestUserLookup(_Keys, BaseAPITestCase):
         self.assertIsNone(authenticate(username="test@example.com", password="wrong-pass"))
         self.assertIsNone(authenticate(username="nobody@example.com", password="testpass123"))
 
-    def test_two_unhashed_case_variants_sign_neither_in(self):
-        # Only the previous release can write one; refusing both beats
-        # picking whichever Postgres returns first.
-        twin = User.objects.create_user(
-            email="twin@example.com", username="twin", password="pw-twin-1"
+    def test_sign_in_survives_a_lookalike_in_the_column(self):
+        # Sign-in goes through the hash only, so whatever the column holds
+        # (a plaintext lookalike an old release stored) can't block it.
+        _set_raw("origin_customuser", "email", "id", self.user.pk, "gAAAAA" + "x" * 120)
+        self.assertEqual(
+            authenticate(username="test@example.com", password="testpass123"), self.user
         )
-        _set_raw("origin_customuser", "email_hash", "id", twin.pk, None)
-        _set_raw("origin_customuser", "email_hash", "id", self.user.pk, None)
-        _set_raw("origin_customuser", "email", "id", twin.pk, "Test@Example.com")
-        self.assertIsNone(authenticate(username="test@example.com", password="testpass123"))
-        with self.assertRaises(User.DoesNotExist):
-            User.objects.get_by_natural_key("test@example.com")
 
     def test_the_sign_in_endpoint(self):
         self.user.is_email_verified = True
@@ -237,14 +247,12 @@ class TestUserLookup(_Keys, BaseAPITestCase):
         self.assertEqual(sent.call_args.kwargs["to"], "test@example.com")
 
     @mock.patch("origin.views.common.auth_views.send_templated_email")
-    def test_every_lookup_works_once_the_column_is_encrypted(self, sent):
-        # As release B leaves the column, which this release must serve
-        # while B's migration runs.
+    def test_every_lookup_works_on_a_row_still_in_plaintext(self, sent):
+        # What the previous release writes during the deploy, until
+        # `rotate_field_keys` encrypts it.
         self.user.is_email_verified = True
         self.user.save(update_fields=["is_email_verified"])
-        _set_raw(
-            "origin_customuser", "email", "id", self.user.pk, crypto.encrypt("test@example.com")
-        )
+        _set_raw("origin_customuser", "email", "id", self.user.pk, "test@example.com")
         res = self.client.post(
             SIGNIN, {"email": "test@example.com", "password": "testpass123"}, format="json"
         )
@@ -356,17 +364,19 @@ class TestInvites(_Keys, BaseAPITestCase):
     def test_a_member_is_found_in_any_case(self):
         self.assertEqual(self._invite("OTHER@example.com"), ["already_member"])
 
-    def test_a_member_is_found_once_the_column_is_encrypted(self):
-        # As release B leaves it: only the hash can match.
-        _set_raw(
-            "origin_customuser", "email", "id", self.user2.pk, crypto.encrypt("other@example.com")
+    def test_a_member_is_found_by_the_hash(self):
+        # The column is ciphertext: only the hash can match.
+        self.assertTrue(
+            crypto.looks_encrypted(_raw("origin_customuser", "email", "id", self.user2.pk))
         )
         self.assertEqual(self._invite("other@example.com"), ["already_member"])
 
-    def test_a_pending_invite_is_found_once_the_column_is_encrypted(self):
+    def test_a_pending_invite_is_found_by_the_hash(self):
         self._invite("new@example.com")
         invite = TeamInvite.objects.get()
-        _set_raw("origin_teaminvite", "invited_email", "id", invite.pk, crypto.encrypt("new@x.io"))
+        self.assertTrue(
+            crypto.looks_encrypted(_raw("origin_teaminvite", "invited_email", "id", invite.pk))
+        )
         self.assertEqual(self._invite("new@example.com"), ["already_invited_resent"])
         self.assertEqual(TeamInvite.objects.count(), 1)
 
@@ -387,14 +397,14 @@ class TestInvites(_Keys, BaseAPITestCase):
 
 
 class TestLookupsOnceEncrypted(_Keys, BaseAPITestCase):
-    """The rest of the email lookups, against a column holding
-    ciphertext as release B leaves it, so a lookup that reads the column
-    instead of the hash finds nothing."""
+    """The rest of the email lookups, against an encrypted column, so a
+    lookup that reads the column instead of the hash finds nothing (or,
+    with the field's guard, raises)."""
 
     def setUp(self):
         super().setUp()
-        _set_raw(
-            "origin_customuser", "email", "id", self.user.pk, crypto.encrypt("test@example.com")
+        self.assertTrue(
+            crypto.looks_encrypted(_raw("origin_customuser", "email", "id", self.user.pk))
         )
 
     def test_a_failed_sign_in_names_its_target(self):
@@ -426,18 +436,11 @@ class TestLookupsOnceEncrypted(_Keys, BaseAPITestCase):
 
     def test_an_invite_preview_sees_the_account(self):
         raw = secrets.token_urlsafe(32)
-        invite = TeamInvite.objects.create(
+        TeamInvite.objects.create(
             team=self.team,
             invited_email="test@example.com",
             token_hash=hashlib.sha256(raw.encode()).hexdigest(),
             expires_at=timezone.now() + timedelta(days=1),
-        )
-        _set_raw(
-            "origin_teaminvite",
-            "invited_email",
-            "id",
-            invite.pk,
-            crypto.encrypt("test@example.com"),
         )
         res = self.client.get("/api/v2/team/invite/preview/", {"token": raw})
         self.assertEqual(res.data["status"], "account_exists")
@@ -673,71 +676,221 @@ class TestRotation(_Keys, BaseAPITestCase):
 
 
 class TestMigrationFill(_Keys, BaseAPITestCase):
-    """`fill_hashes` against today's tables, with the hashes wiped."""
+    """0202's `fill_missing_hashes`: the rows the release before 0201
+    inserted without a hash, while their columns are still plaintext."""
 
-    def _wipe(self):
-        with connection.cursor() as cursor:
-            for table, _pk, _source, column, _index in _migration._INDEXES:
-                cursor.execute(f"UPDATE {table} SET {column} = NULL")
+    def setUp(self):
+        super().setUp()
+        self.invite = _invite_row(self.team, "g@example.com")
+        self.suppressed = EmailSuppression.objects.create(address="b@example.com", reason="bounce")
+        # As before 0203: every address in plaintext.
+        for table, pk, source, _column, _index, _unique in _fill_migration._INDEXES:
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT {pk}, {source} FROM {table}")
+                rows = cursor.fetchall()
+            model = {
+                "origin_customuser": User,
+                "origin_teammaster": TeamMaster,
+                "origin_teaminvite": TeamInvite,
+                "origin_emailsuppression": EmailSuppression,
+            }[table]
+            for row_id, _ in rows:
+                plain = getattr(model.objects.get(pk=row_id), source)
+                _set_raw(table, source, pk, row_id, plain)
+
+    def _unhash(self, table, column, pk_column, pk):
+        _set_raw(table, column, pk_column, pk, None)
 
     def _fill(self):
         with connection.schema_editor() as editor:
-            _migration.fill_hashes(None, editor)
+            _fill_migration.fill_missing_hashes(None, editor)
 
-    def test_it_fills_every_hash(self):
-        _invite_row(self.team, "g@example.com")
-        EmailSuppression.objects.create(address="b@example.com", reason="bounce")
-        self._wipe()
+    def test_it_fills_only_the_missing_hashes(self):
+        kept = _user_hash(self.user2)
+        self._unhash("origin_customuser", "email_hash", "id", self.user.pk)
+        self._unhash("origin_teammaster", "team_email_hash", "team_id", self.team.pk)
+        self._unhash("origin_teaminvite", "invited_email_hash", "id", self.invite.pk)
+        self._unhash("origin_emailsuppression", "address_hash", "id", self.suppressed.pk)
         self._fill()
         self.assertEqual(_user_hash(self.user), blind_index.USER_EMAIL.compute("test@example.com"))
+        self.assertEqual(_user_hash(self.user2), kept)
         self.assertEqual(
-            _raw("origin_teammaster", "team_email_hash", "team_id", self.team.pk),
-            blind_index.TEAM_EMAIL.compute("team@example.com"),
+            TeamMaster.objects.get(blind_index.TEAM_EMAIL.matches("team@example.com")), self.team
         )
-        self.assertTrue(
-            TeamInvite.objects.filter(
-                invited_email_hash=blind_index.INVITE_EMAIL.compute("G@example.com")
-            ).exists()
+        self.assertEqual(
+            TeamInvite.objects.get(blind_index.INVITE_EMAIL.matches("G@example.com")), self.invite
         )
         self.assertTrue(is_suppressed("B@example.com"))
 
-    def test_it_refuses_users_who_differ_only_in_case(self):
-        self._wipe()
+    def test_it_refuses_an_unhashed_case_variant_of_a_hashed_user(self):
+        # Only the release before 0201 could insert it: its unique rule
+        # was case-sensitive.
+        self._unhash("origin_customuser", "email_hash", "id", self.user2.pk)
         _set_raw("origin_customuser", "email", "id", self.user2.pk, " Test@Example.com")
         with self.assertRaisesMessage(RuntimeError, "origin_customuser.email: 2 rows") as caught:
             self._fill()
         self.assertIn(str(self.user.pk), str(caught.exception))
         self.assertIn(str(self.user2.pk), str(caught.exception))
         self.assertNotIn("example.com", str(caught.exception), "ids only, never addresses")
+        self.assertIsNone(_user_hash(self.user2))
+
+    def test_it_refuses_two_unhashed_case_variants(self):
+        self._unhash("origin_customuser", "email_hash", "id", self.user.pk)
+        self._unhash("origin_customuser", "email_hash", "id", self.user2.pk)
+        _set_raw("origin_customuser", "email", "id", self.user2.pk, "TEST@example.com")
+        with self.assertRaisesMessage(RuntimeError, "origin_customuser.email: 2 rows"):
+            self._fill()
 
     def test_invites_may_repeat_an_address(self):
         # Not unique: a team and a guest invite to one address are two rows.
-        _invite_row(self.team, "g@example.com")
-        _invite_row(self.team, "G@example.com")
-        self._wipe()
+        twin = _invite_row(self.team, "G@example.com")
+        _set_raw("origin_teaminvite", "invited_email", "id", twin.pk, "G@example.com")
+        self._unhash("origin_teaminvite", "invited_email_hash", "id", twin.pk)
         self._fill()
-
-    def test_team_emails_differing_in_case_are_fine(self):
-        TeamMaster.objects.create(team_name="TEST TEAM", team_email="TEAM@example.com")
-        self._wipe()
-        self._fill()
+        self.assertEqual(
+            _raw("origin_teaminvite", "invited_email_hash", "id", twin.pk),
+            _raw("origin_teaminvite", "invited_email_hash", "id", self.invite.pk),
+        )
 
     def test_an_address_of_only_spaces_is_left_unhashed(self):
         _set_raw("origin_customuser", "email", "id", self.user.pk, "  ")
-        _set_raw("origin_customuser", "email", "id", self.user2.pk, " ")
-        self._wipe()
+        self._unhash("origin_customuser", "email_hash", "id", self.user.pk)
         self._fill()
         self.assertIsNone(_user_hash(self.user))
 
-    def test_rows_need_a_key_and_an_empty_table_does_not(self):
-        self._wipe()
+    def test_rows_need_a_key_and_nothing_to_hash_does_not(self):
+        self._unhash("origin_customuser", "email_hash", "id", self.user.pk)
         with self.keys(), self.assertRaises(blind_index.BlindIndexKeyMissing):
             self._fill()
-        with connection.cursor() as cursor:
-            for table in ("origin_teammembers", "origin_teammaster", "origin_customuser"):
-                cursor.execute(f"DELETE FROM {table}")
+        _set_raw("origin_customuser", "email_hash", "id", self.user.pk, "x")
         with self.keys():
             self._fill()
+
+
+class TestMigrationEncrypt(BaseAPITestCase):
+    """0203, which encrypts what 0202's columns hold as plaintext."""
+
+    def setUp(self):
+        super().setUp()
+        crypto._get_fernet.cache_clear()
+        self.addCleanup(crypto._get_fernet.cache_clear)
+        self.account = ConnectedAccount.objects.create(
+            user=self.user, provider="google", provider_user_id="1", provider_email="g@x.io"
+        )
+        self.invite = _invite_row(self.team, "g@example.com")
+        self.suppressed = EmailSuppression.objects.create(address="b@example.com", reason="bounce")
+        self.user.phone_number = "+81 90 1234 5678"
+        self.user.base_country = "Japan"
+        self.user.current_location = "Asia/Tokyo"
+        self.user.about_me = "Runs on coffee."
+        self.user.save()
+        self.plain = {
+            ("origin_customuser", "id", "email", self.user.pk): "test@example.com",
+            ("origin_customuser", "id", "phone_number", self.user.pk): "+81 90 1234 5678",
+            ("origin_customuser", "id", "base_country", self.user.pk): "Japan",
+            ("origin_customuser", "id", "current_location", self.user.pk): "Asia/Tokyo",
+            ("origin_customuser", "id", "about_me", self.user.pk): "Runs on coffee.",
+            ("origin_connectedaccount", "id", "provider_email", self.account.pk): "g@x.io",
+            ("origin_teammaster", "team_id", "team_email", self.team.pk): "team@example.com",
+            ("origin_teaminvite", "id", "invited_email", self.invite.pk): "g@example.com",
+            ("origin_emailsuppression", "id", "address", self.suppressed.pk): "b@example.com",
+        }
+        for (table, pk, column, row_id), value in self.plain.items():
+            _set_raw(table, column, pk, row_id, value)
+
+    def _stored(self):
+        return {key: _raw(key[0], key[2], key[1], key[3]) for key in self.plain}
+
+    def _run(self, function):
+        with connection.schema_editor(atomic=False) as editor:
+            function(None, editor)
+
+    def test_every_column_0202_encrypts_is_listed(self):
+        altered = {
+            (apps.get_model("origin", op.model_name)._meta.db_table, op.name)
+            for op in _fill_migration.Migration.operations
+            if isinstance(op, migrations.AlterField)
+            and isinstance(op.field, crypto.EncryptedPIIField)
+        }
+        self.assertEqual(altered, {(t, c) for t, _pk, c in _encrypt_migration._COLUMNS})
+        self.assertEqual(len(altered), 9)
+
+    def test_it_encrypts_every_row(self):
+        self._run(_encrypt_migration.encrypt_rows)
+        for key, stored in self._stored().items():
+            with self.subTest(column=key[2]):
+                self.assertTrue(crypto.looks_encrypted(stored))
+                self.assertEqual(crypto.decrypt(stored), self.plain[key])
+        user = User.objects.get(pk=self.user.pk)
+        self.assertEqual((user.email, user.about_me), ("test@example.com", "Runs on coffee."))
+
+    def test_a_second_run_changes_nothing(self):
+        self._run(_encrypt_migration.encrypt_rows)
+        before = self._stored()
+        self._run(_encrypt_migration.encrypt_rows)
+        self.assertEqual(self._stored(), before)
+
+    def test_it_works_in_batches(self):
+        _set_raw("origin_customuser", "email", "id", self.user2.pk, "other@example.com")
+        for n in range(3):
+            user = User.objects.create_user(
+                email=f"b{n}@example.com", username=f"b{n}", password="pw"
+            )
+            _set_raw("origin_customuser", "email", "id", user.pk, f"b{n}@example.com")
+        with mock.patch.object(_encrypt_migration, "_BATCH", 2):
+            self._run(_encrypt_migration.encrypt_rows)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT email FROM origin_customuser")
+            emails = [row[0] for row in cursor.fetchall()]
+        self.assertEqual(len(emails), 5)
+        self.assertTrue(all(crypto.looks_encrypted(e) for e in emails))
+
+    def test_a_concurrent_write_wins(self):
+        # The previous release writes the row between the read and the
+        # swap: its value stays, for `rotate_field_keys` to encrypt.
+        real = _encrypt_migration._encrypt
+
+        def encrypt_after_a_write(value):
+            if value == "Runs on coffee.":
+                _set_raw("origin_customuser", "about_me", "id", self.user.pk, "Now tea.")
+            return real(value)
+
+        with mock.patch.object(_encrypt_migration, "_encrypt", encrypt_after_a_write):
+            self._run(_encrypt_migration.encrypt_rows)
+        self.assertEqual(_raw("origin_customuser", "about_me", "id", self.user.pk), "Now tea.")
+
+    def test_the_reverse_decrypts(self):
+        self._run(_encrypt_migration.encrypt_rows)
+        self._run(_encrypt_migration.decrypt_rows)
+        self.assertEqual(self._stored(), self.plain)
+
+    def test_a_lookalike_is_left_alone_both_ways(self):
+        # Plaintext an old release stored; no key opens it.
+        lookalike = "gAAAAA" + "x" * 120
+        _set_raw("origin_customuser", "about_me", "id", self.user.pk, lookalike)
+        self._run(_encrypt_migration.encrypt_rows)
+        self.assertEqual(_raw("origin_customuser", "about_me", "id", self.user.pk), lookalike)
+        self._run(_encrypt_migration.decrypt_rows)
+        self.assertEqual(_raw("origin_customuser", "about_me", "id", self.user.pk), lookalike)
+
+    def test_rows_need_a_key_and_an_empty_table_does_not(self):
+        crypto._get_fernet.cache_clear()
+        with override_settings(FIELD_ENCRYPTION_KEYS=[]):
+            with self.assertRaises(crypto.KeyringMissing):
+                self._run(_encrypt_migration.encrypt_rows)
+            # Nothing was written before it stopped.
+            self.assertEqual(self._stored(), self.plain)
+            with connection.cursor() as cursor:
+                for table in (
+                    "origin_connectedaccount",
+                    "origin_teaminvite",
+                    "origin_emailsuppression",
+                    "origin_teammembers",
+                    "origin_teammaster",
+                    "origin_customuser",
+                ):
+                    cursor.execute(f"DELETE FROM {table}")
+            self._run(_encrypt_migration.encrypt_rows)
 
 
 class _FreshKeyring:
@@ -747,59 +900,80 @@ class _FreshKeyring:
         self.addCleanup(crypto._get_fernet.cache_clear)
 
 
-class TestDecryptingFields(_FreshKeyring, BaseAPITestCase):
-    """This release reads what the next one encrypts, and writes plaintext."""
+class TestEncryptedFields(_FreshKeyring, BaseAPITestCase):
+    """PII is written as ciphertext and read back as plaintext."""
 
-    def test_ciphertext_reads_back_as_plaintext(self):
-        _widen("phone_number", "current_location", "base_country")
-        for column, value in (
-            ("email", "test@example.com"),
-            ("phone_number", "+81 90 1234 5678"),
-            ("about_me", "Runs on coffee."),
-            ("current_location", "Asia/Tokyo"),
-            ("base_country", "Japan"),
-        ):
+    def test_every_column_is_ciphertext_and_reads_back(self):
+        values = {
+            "email": "test@example.com",
+            "phone_number": "+81 90 1234 5678",
+            "about_me": "Runs on coffee.",
+            "current_location": "Asia/Tokyo",
+            "base_country": "Japan",
+        }
+        for column, value in values.items():
+            setattr(self.user, column, value)
+        self.user.save()
+        for column, value in values.items():
             with self.subTest(column=column):
-                _set_raw("origin_customuser", column, "id", self.user.pk, crypto.encrypt(value))
+                stored = _raw("origin_customuser", column, "id", self.user.pk)
+                self.assertTrue(crypto.looks_encrypted(stored))
+                self.assertEqual(crypto.decrypt(stored), value)
                 self.assertEqual(getattr(User.objects.get(pk=self.user.pk), column), value)
-                values = User.objects.filter(pk=self.user.pk).values_list(column, flat=True)
-                self.assertEqual(values.get(), value)
+                values_list = User.objects.filter(pk=self.user.pk).values_list(column, flat=True)
+                self.assertEqual(values_list.get(), value)
 
     def test_the_other_tables_too(self):
         account = ConnectedAccount.objects.create(
             user=self.user, provider="google", provider_user_id="1", provider_email="g@x.io"
         )
-        _set_raw(
-            "origin_connectedaccount", "provider_email", "id", account.pk, crypto.encrypt("g@x.io")
-        )
-        _set_raw(
-            "origin_teammaster",
-            "team_email",
-            "team_id",
-            self.team.pk,
-            crypto.encrypt("team@example.com"),
-        )
+        invite = _invite_row(self.team, "g@example.com")
+        suppressed = EmailSuppression.objects.create(address="b@example.com", reason="bounce")
+        for table, pk_column, column, pk, value in (
+            ("origin_connectedaccount", "id", "provider_email", account.pk, "g@x.io"),
+            ("origin_teammaster", "team_id", "team_email", self.team.pk, "team@example.com"),
+            ("origin_teaminvite", "id", "invited_email", invite.pk, "g@example.com"),
+            ("origin_emailsuppression", "id", "address", suppressed.pk, "b@example.com"),
+        ):
+            with self.subTest(column=column):
+                self.assertEqual(crypto.decrypt(_raw(table, column, pk_column, pk)), value)
         self.assertEqual(ConnectedAccount.objects.get(pk=account.pk).provider_email, "g@x.io")
         self.assertEqual(TeamMaster.objects.get(pk=self.team.pk).team_email, "team@example.com")
 
-    def test_writes_stay_plaintext(self):
-        self.user.phone_number = "+81 3 0000 0000"
-        self.user.save()
+    def test_rosters_read_through_the_field(self):
+        # `F()` and `values()` across a join still decrypt (team_views).
+        emails = TeamMembers.objects.filter(team=self.team).annotate(userEmail=F("attendee__email"))
         self.assertEqual(
-            _raw("origin_customuser", "phone_number", "id", self.user.pk), "+81 3 0000 0000"
+            set(emails.values_list("userEmail", flat=True)),
+            {"test@example.com", "other@example.com"},
         )
-        self.assertEqual(_raw("origin_customuser", "email", "id", self.user.pk), "test@example.com")
+        self.authenticate()
+        res = self.client.get("/api/v2/team/getTeamMembers/", {"team_id": str(self.team.team_id)})
+        self.assertEqual(
+            {m["userEmail"] for m in res.data["data"]["members"]},
+            {"test@example.com", "other@example.com"},
+        )
+
+    def test_empty_and_null_are_stored_as_they_are(self):
+        self.user.about_me = ""
+        self.user.phone_number = None
+        self.user.save()
+        self.assertEqual(_raw("origin_customuser", "about_me", "id", self.user.pk), "")
+        self.assertIsNone(_raw("origin_customuser", "phone_number", "id", self.user.pk))
+
+    def test_plaintext_the_previous_release_wrote_reads_as_is(self):
+        _set_raw("origin_customuser", "email", "id", self.user.pk, "test@example.com")
+        self.assertEqual(User.objects.get(pk=self.user.pk).email, "test@example.com")
 
     def test_a_lookalike_no_key_opens_is_returned_as_stored(self):
-        # Plaintext that only looks like a token: this release never
-        # encrypts, so it can't be ciphertext of ours.
+        # Plaintext that only looks like a token, from before the
+        # validator: raising would take down every roster it's in.
         lookalike = "gAAAAA" + "x" * 120
         _set_raw("origin_customuser", "about_me", "id", self.user.pk, lookalike)
         self.assertEqual(User.objects.get(pk=self.user.pk).about_me, lookalike)
 
     def test_ciphertext_without_a_keyring_raises(self):
         # Handing ciphertext back as an address to mail would be worse.
-        _set_raw("origin_customuser", "email", "id", self.user.pk, crypto.encrypt("x@y.io"))
         crypto._get_fernet.cache_clear()
         with (
             override_settings(FIELD_ENCRYPTION_KEYS=[]),
@@ -810,9 +984,21 @@ class TestDecryptingFields(_FreshKeyring, BaseAPITestCase):
     def test_ciphertext_from_another_ring_is_returned_as_stored(self):
         with override_settings(FIELD_ENCRYPTION_KEYS=[Fernet.generate_key().decode()]):
             foreign = crypto.encrypt("lost")
-        _widen("base_country")
+        crypto._get_fernet.cache_clear()
         _set_raw("origin_customuser", "base_country", "id", self.user.pk, foreign)
         self.assertEqual(User.objects.get(pk=self.user.pk).base_country, foreign)
+
+    def test_the_plaintext_limits_still_apply(self):
+        # The column is `text`; the field still validates the plaintext.
+        self.user.phone_number = "1" * 21
+        with self.assertRaises(ValidationError) as caught:
+            self.user.full_clean()
+        self.assertIn("phone_number", caught.exception.message_dict)
+        self.user.phone_number = None
+        self.user.email = "not-an-address"
+        with self.assertRaises(ValidationError) as caught:
+            self.user.full_clean()
+        self.assertIn("email", caught.exception.message_dict)
 
     def test_the_model_fields_refuse_a_lookalike(self):
         self.user.about_me = "gAAAAA" + "x" * 120
@@ -840,3 +1026,20 @@ class TestDecryptingFields(_FreshKeyring, BaseAPITestCase):
             format="json",
         )
         self.assertEqual(res.status_code, 200, res.content)
+
+
+class TestUsernameFieldCheck(TestCase):
+    """`origin.E001`, which stands in for the silenced auth.E003."""
+
+    def test_the_unique_hash_satisfies_it(self):
+        self.assertIn("auth.E003", settings.SILENCED_SYSTEM_CHECKS)
+        self.assertEqual(username_field_unique_check(None), [])
+
+    def test_a_hash_that_is_not_unique_fails(self):
+        field = User._meta.get_field("email_hash")
+        with mock.patch.dict(field.__dict__, {"unique": False}):
+            self.assertEqual([e.id for e in username_field_unique_check(None)], ["origin.E001"])
+
+    def test_no_index_on_the_username_fails(self):
+        with mock.patch.object(User, "blind_indexes", ()):
+            self.assertEqual([e.id for e in username_field_unique_check(None)], ["origin.E001"])

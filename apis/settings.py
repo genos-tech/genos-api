@@ -719,6 +719,11 @@ def validate_web_config(
 
 AUTH_USER_MODEL = "origin.CustomUser"
 
+# auth.E003 wants USERNAME_FIELD (`email`) unique, but the column is
+# encrypted (MIP-619) and can't be: uniqueness is on `email_hash`, which
+# `origin.E001` checks instead.
+SILENCED_SYSTEM_CHECKS = ["auth.E003"]
+
 
 CSRF_TRUSTED_ORIGINS = [
     o.strip()

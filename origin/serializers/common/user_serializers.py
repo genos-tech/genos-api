@@ -121,11 +121,10 @@ class UserCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = user_models.CustomUser
         fields = ["id", "username", "email", "password", "is_system_user", "invite_token"]
-        # DRF's own unique check filters on the column, which is encrypted
-        # from MIP-619's second release: `validate_email` asks the blind
-        # index instead, and so ignores case as sign-in now does. Listing
-        # validators replaces the model field's, so its lookalike check is
-        # listed again.
+        # The column is encrypted (MIP-619), so uniqueness is the blind
+        # index's: `validate_email` asks it, and so ignores case as sign-in
+        # does. Listing validators replaces the model field's, so its
+        # lookalike check is listed again.
         extra_kwargs = {"email": {"validators": [crypto.refuse_ciphertext_lookalike]}}
 
     def validate_email(self, value):
