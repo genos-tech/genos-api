@@ -197,6 +197,22 @@ jobs:
           pipenv sync
           pipenv run pip install -r requirements-dev.txt
 
+      # Throwaway keyrings for this run's database (MIP-619): the seed looks
+      # users up by email through the blind index, and once the PII columns
+      # are encrypted no user row reads without the keyring. Generated per
+      # run, so no key is committed.
+      - name: Generate per-run encryption keys
+        if: steps.gcp.outputs.available == 'true'
+        run: |
+          python - <<'PY'
+          import base64, os, secrets
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              for name in ("FIELD_ENCRYPTION_KEYS", "BLIND_INDEX_KEYS"):
+                  key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+                  print(f"::add-mask::{key}")
+                  env.write(f"{name}={key}\n")
+          PY
+
       - name: Migrate + set up OpenSearch index + seed fixture (Vertex reindex)
         if: steps.gcp.outputs.available == 'true'
         run: |
