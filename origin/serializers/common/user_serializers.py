@@ -7,6 +7,7 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from origin.models.common import user_models
 from origin.models.common.invite_models import TeamInvite
+from origin.services import crypto
 
 # Ceiling on `about_me`. Generous for a profile blurb and small enough that
 # a roster of a few hundred people stays a sensible response — this field
@@ -120,6 +121,19 @@ class UserCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = user_models.CustomUser
         fields = ["id", "username", "email", "password", "is_system_user", "invite_token"]
+        # DRF's own unique check filters on the column, which is encrypted
+        # from MIP-619's second release: `validate_email` asks the blind
+        # index instead, and so ignores case as sign-in now does. Listing
+        # validators replaces the model field's, so its lookalike check is
+        # listed again.
+        extra_kwargs = {"email": {"validators": [crypto.refuse_ciphertext_lookalike]}}
+
+    def validate_email(self, value):
+        if user_models.CustomUser.objects.with_email(value).exists():
+            raise serializers.ValidationError(
+                "custom user with this email already exists.", code="unique"
+            )
+        return value
 
     def validate(self, attrs):
         token = (attrs.get("invite_token") or "").strip()
@@ -183,7 +197,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def get_token(cls, user):
         token = super().get_token(user)
         token["username"] = user.username  # Add username to JWT payload
-        token["email"] = user.email  # Add email to JWT payload
+        # No `email` claim (MIP-619): a JWT is readable by anyone holding
+        # it, it outlives sign-out in `token_blacklist_outstandingtoken`,
+        # and nothing reads the claim.
         token["profile_image_file_name"] = (
             user.profile_image_file_name
         )  # Add profile image file name

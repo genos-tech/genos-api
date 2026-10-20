@@ -617,6 +617,7 @@ def validate_web_config(
     allowed_hosts: list[str],
     cors_allowed_origins: list[str],
     field_encryption_keys: list[str],
+    blind_index_keys: list[str],
     search_engine: dict,
 ) -> None:
     """What the HTTP server additionally needs before it takes traffic.
@@ -641,6 +642,9 @@ def validate_web_config(
       by building a real Fernet from every key, so it fails at deploy
       instead. A key listed twice is refused too: it is a rotation
       half-done, where the "new" key is the old one.
+    - BLIND_INDEX_KEYS: the HMAC keys email lookups go through (MIP-619).
+      Missing, every sign-in and signup fails; malformed, the same. Its
+      keys must differ from the encryption keys.
     - OpenSearch: TLS and credentials (`build_client_kwargs`). The client
       refuses on first use anyway, but the boot CMD runs `opensearch_setup
       || echo`, so without this the server would start and fail every
@@ -688,6 +692,26 @@ def validate_web_config(
             ) from None
     if len(set(field_encryption_keys)) != len(field_encryption_keys):
         raise ImproperlyConfigured("FIELD_ENCRYPTION_KEYS lists the same key twice.")
+    if not blind_index_keys:
+        raise ImproperlyConfigured(
+            "BLIND_INDEX_KEYS is unset with DJANGO_DEBUG=false. Nobody can sign "
+            "in or sign up without it: email lookups go through the blind index."
+        )
+    from origin.services.blind_index import decode_key
+
+    for position, key in enumerate(blind_index_keys, start=1):
+        try:
+            decode_key(key)
+        except ValueError:
+            raise ImproperlyConfigured(
+                f"BLIND_INDEX_KEYS key #{position} is not 32 url-safe base64-encoded bytes."
+            ) from None
+    if len(set(blind_index_keys)) != len(blind_index_keys):
+        raise ImproperlyConfigured("BLIND_INDEX_KEYS lists the same key twice.")
+    if set(blind_index_keys) & set(field_encryption_keys):
+        raise ImproperlyConfigured(
+            "BLIND_INDEX_KEYS reuses a FIELD_ENCRYPTION_KEYS key. Generate a separate one."
+        )
     from origin.search_engine.opensearch_client import build_client_kwargs
 
     build_client_kwargs(search_engine, debug=debug)
@@ -2189,6 +2213,19 @@ FIELD_ENCRYPTION_KEYS = _parse_field_encryption_keys(
     os.environ.get("FIELD_ENCRYPTION_KEYS", ""),
     os.environ.get("OAUTH_TOKEN_ENCRYPTION_KEY", ""),
 )
+
+# HMAC keys for the blind indexes that email lookups go through (MIP-619,
+# `origin/services/blind_index.py`): comma-separated, newest first, each
+# 32 random bytes in url-safe base64. Generate one with:
+#   python -c "import secrets, base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
+# Deliberately not a FIELD_ENCRYPTION_KEYS key. Required on the web server
+# outside DEBUG (`validate_web_config`); every service that signs a user
+# in, creates one, or looks an address up needs it too. Changing it
+# without the rotation steps in blind_index.py makes every account
+# unfindable by its email, so sign-in stops.
+BLIND_INDEX_KEYS = [
+    k.strip() for k in os.environ.get("BLIND_INDEX_KEYS", "").split(",") if k.strip()
+]
 
 # Per-provider OAuth client credentials. Empty defaults so the rest of
 # Django still imports cleanly when these aren't configured yet; the

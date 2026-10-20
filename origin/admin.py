@@ -8,7 +8,8 @@ from origin.models.common.feature_models import UserFeatureAccess
 class UserFeatureAccessAdmin(admin.ModelAdmin):
     list_display = ("user", "feature", "is_active", "granted_at", "revoked_at", "note")
     list_filter = ("feature", "is_active")
-    search_fields = ("user__email", "user__username", "note")
+    # Not `user__email`: encrypted, so a substring search never matches.
+    search_fields = ("user__username", "note")
     readonly_fields = ("granted_at", "revoked_at")
     ordering = ("-granted_at",)
 

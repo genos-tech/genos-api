@@ -36,6 +36,7 @@ from origin.models.common.user_models import CustomUser
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.services.demo_seeder import (
+    BOT_PROFILES,
     create_demo_environment,
     delete_demo_team_data,
 )
@@ -285,9 +286,13 @@ def reseed_fixture() -> dict:
             existing_user.delete()
         # `delete_demo_team_data` doesn't touch the bot users (they're
         # standalone CustomUser rows). Their emails are deterministic
-        # — `demo-bot-{short}-<role>@genos.app` — so we can clean them
-        # up by pattern when the fixture slug is fixed.
-        CustomUser.objects.filter(email__startswith=f"demo-bot-{FIXTURE_SHORT}-").delete()
+        # — `demo-bot-{short}-<first name>@genos.app` — so each is found
+        # by its exact address. Not by prefix: the email is encrypted, and
+        # its blind index only answers exact matches (MIP-619).
+        for profile in BOT_PROFILES:
+            CustomUser.objects.with_email(
+                f"demo-bot-{FIXTURE_SHORT}-{profile['first'].lower()}@genos.app"
+            ).filter(is_demo=True).delete()
 
         # 2. Recreate the fixture user with a known UUID so cases that
         # need the requesting user can hard-code it. `id` is the PK

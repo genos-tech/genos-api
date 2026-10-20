@@ -47,3 +47,8 @@ PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 # `test_services_extra.TestCrypto`, which also clears the `lru_cache` on
 # `_get_fernet` so a key cached by an earlier test cannot leak.
 FIELD_ENCRYPTION_KEYS = ["zH8Zq3nQ1vJ5xK7bR2wT9yU4pS6dF0gA8cE1hL3mN5o="]
+
+# Same reasoning, for the blind index every email lookup goes through
+# (MIP-619): without a key nobody could sign up or sign in. Not a
+# production key either.
+BLIND_INDEX_KEYS = ["k1mN3bV5cX7zL9aS2dF4gH6jQ8wE0rT1yU3iO5pA7sD="]

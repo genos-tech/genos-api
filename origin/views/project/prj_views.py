@@ -236,7 +236,7 @@ class ProjectMasterView(AuthenticatedAPIView):
                     "attendee__ts_created_at",
                     "attendee__is_system_user",
                 )
-                .order_by("attendee__email")
+                .order_by("attendee__username", "attendee__id")
             )
 
             caller_id = request.user.id

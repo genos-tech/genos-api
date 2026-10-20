@@ -20,7 +20,9 @@ redis:// or http:// to a host that isn't private, and an api → collab push
 signed with the user-token key.
 """
 
+import base64
 import os
+import secrets
 import subprocess
 import sys
 from pathlib import Path
@@ -51,6 +53,9 @@ _REPO = Path(__file__).resolve().parents[2]
 # the test settings leaking in.
 _KEY = "Xl0rQ9nZb3pW1yV7kT5mR8sJ2hF4dC6aE0gB9uN3iLo="
 _OTHER_KEY = "pQ3wE5rT7yU9iO1aS3dF5gH7jK9lZ1xC3vB5nM7qW9e="
+# Blind index keys (MIP-619), likewise not settings_test's.
+_INDEX_KEY = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+_OTHER_INDEX_KEY = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
 
 # The production shape of SEARCH_ENGINE (MIP-721): TLS and a login. The CA is
 # left to the system store here; test_opensearch_client covers a pinned CA.
@@ -70,6 +75,7 @@ def _web(**overrides):
         "allowed_hosts": ["api.genosai.dev", "healthcheck.railway.app"],
         "cors_allowed_origins": ["https://app.genosai.dev"],
         "field_encryption_keys": [_KEY],
+        "blind_index_keys": [_INDEX_KEY],
         "search_engine": _SEARCH,
     }
     kwargs.update(overrides)
@@ -140,6 +146,7 @@ class TestValidateWebConfig(SimpleTestCase):
             allowed_hosts=[],
             cors_allowed_origins=[],
             field_encryption_keys=[],
+            blind_index_keys=[],
             search_engine={
                 **_SEARCH,
                 "OPENSEARCH_USE_SSL": False,
@@ -226,6 +233,40 @@ class TestValidateWebConfig(SimpleTestCase):
         self.assertEqual(_parse_field_encryption_keys(_OTHER_KEY, _KEY), [_OTHER_KEY])
         self.assertEqual(_parse_field_encryption_keys("", ""), [])
 
+    def test_refuses_a_missing_blind_index_key(self):
+        with self.assertRaisesMessage(ImproperlyConfigured, "BLIND_INDEX_KEYS is unset"):
+            _web(blind_index_keys=[])
+
+    def test_refuses_a_malformed_blind_index_key(self):
+        # Too short, not base64, and 33 bytes: each would fail the first
+        # sign-in instead of the deploy.
+        too_long = base64.urlsafe_b64encode(b"x" * 33).decode()
+        for key in (_INDEX_KEY[:-4], "not base64!", too_long):
+            with (
+                self.subTest(key=key),
+                self.assertRaisesMessage(
+                    ImproperlyConfigured, "BLIND_INDEX_KEYS key #1 is not 32 url-safe"
+                ),
+            ):
+                _web(blind_index_keys=[key])
+
+    def test_checks_every_blind_index_key(self):
+        with self.assertRaisesMessage(ImproperlyConfigured, "BLIND_INDEX_KEYS key #2 is not"):
+            _web(blind_index_keys=[_INDEX_KEY, "not-a-key"])
+        _web(blind_index_keys=[_OTHER_INDEX_KEY, _INDEX_KEY])
+
+    def test_refuses_a_blind_index_key_listed_twice(self):
+        with self.assertRaisesMessage(
+            ImproperlyConfigured, "BLIND_INDEX_KEYS lists the same key twice"
+        ):
+            _web(blind_index_keys=[_INDEX_KEY, _INDEX_KEY])
+
+    def test_refuses_a_blind_index_key_shared_with_encryption(self):
+        # A Fernet key is also 32 url-safe base64 bytes, so only this
+        # check stops one key from doing both jobs.
+        with self.assertRaisesMessage(ImproperlyConfigured, "reuses a FIELD_ENCRYPTION_KEYS key"):
+            _web(blind_index_keys=[_OTHER_INDEX_KEY, _KEY])
+
     def test_refuses_opensearch_without_tls_or_a_login(self):
         # The web server's boot CMD runs `opensearch_setup || echo`, so this
         # is the check that stops a deploy, not the client's first use.
@@ -270,6 +311,7 @@ class TestWebEntrypointsRunTheCheck(SimpleTestCase):
                         OPENSEARCH_USE_SSL="true",
                         OPENSEARCH_USERNAME="genos_app",
                         OPENSEARCH_PASSWORD="test-only-not-a-real-password",
+                        BLIND_INDEX_KEYS=f"{_OTHER_INDEX_KEY},{_INDEX_KEY}",
                         **{name: value},
                     )
                     self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -285,6 +327,18 @@ class TestWebEntrypointsRunTheCheck(SimpleTestCase):
                 self.assertNotEqual(proc.returncode, 0)
                 self.assertIn("ImproperlyConfigured: FIELD_ENCRYPTION_KEYS is unset", proc.stderr)
 
+    def test_wsgi_and_asgi_refuse_a_missing_blind_index_key(self):
+        for module in ("apis.wsgi", "apis.asgi"):
+            with self.subTest(module=module):
+                proc = self._boot(
+                    module,
+                    ALLOWED_HOSTS="api.genosai.dev",
+                    CORS_ALLOWED_ORIGINS="https://app.genosai.dev",
+                    FIELD_ENCRYPTION_KEYS=_KEY,
+                )
+                self.assertNotEqual(proc.returncode, 0)
+                self.assertIn("ImproperlyConfigured: BLIND_INDEX_KEYS is unset", proc.stderr)
+
     def test_wsgi_and_asgi_refuse_plaintext_opensearch(self):
         for module in ("apis.wsgi", "apis.asgi"):
             with self.subTest(module=module):
@@ -293,6 +347,7 @@ class TestWebEntrypointsRunTheCheck(SimpleTestCase):
                     ALLOWED_HOSTS="api.genosai.dev",
                     CORS_ALLOWED_ORIGINS="https://app.genosai.dev",
                     FIELD_ENCRYPTION_KEYS=_KEY,
+                    BLIND_INDEX_KEYS=_INDEX_KEY,
                 )
                 self.assertNotEqual(proc.returncode, 0)
                 self.assertIn("ImproperlyConfigured: OpenSearch needs", proc.stderr)

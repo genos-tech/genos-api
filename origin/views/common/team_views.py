@@ -25,6 +25,7 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.serializers.common.team_serializers import TeamMasterSerializer, TeamMembersSerializer
+from origin.services import blind_index
 from origin.services.email import send_templated_email
 from origin.services.external_grants import host_team_ids_for_user
 from origin.services.member_roles import (
@@ -687,7 +688,7 @@ class InviteTeamMembersView(AuthenticatedAPIView):
             # a full team member is deliberately NOT reported as
             # already_member for a guest invite, because adding them to
             # the project is a legitimate thing to want.
-            member_user = CustomUser.objects.filter(email__iexact=email, is_deleted=False).first()
+            member_user = CustomUser.objects.with_email(email).filter(is_deleted=False).first()
             if member_user and as_guest:
                 already = ProjectMembers.objects.filter(
                     project=project, attendee_id=member_user.id
@@ -708,8 +709,8 @@ class InviteTeamMembersView(AuthenticatedAPIView):
             # invite to the same address are separate rows rather than
             # one silently overwriting the other's role.
             invite = TeamInvite.objects.filter(
+                blind_index.INVITE_EMAIL.matches(email),
                 team=team,
-                invited_email=email,
                 status="pending",
                 project=project,
             ).first()
@@ -812,9 +813,9 @@ class InvitePreviewView(APIView):
         if is_guest_invite and (invite.project is None or invite.project.is_deleted):
             return Response(invalid, status=status.HTTP_200_OK)
 
-        account_exists = CustomUser.objects.filter(
-            email__iexact=invite.invited_email, is_deleted=False
-        ).exists()
+        account_exists = (
+            CustomUser.objects.with_email(invite.invited_email).filter(is_deleted=False).exists()
+        )
         # `team_name` is what the visitor is told they're joining, so for
         # a guest it names the PROJECT. This endpoint is unauthenticated
         # — anyone holding the token reads it — and a guest's token must
@@ -1003,7 +1004,7 @@ class GetMyTeamsView(AuthenticatedAPIView):
         member_rows = (
             TeamMembers.objects.filter(team_id__in=team_ids, attendee__is_system_user=False)
             .select_related("attendee")
-            .order_by("attendee__email")
+            .order_by("attendee__username", "attendee__id")
             .annotate(
                 teamId=F("team"),
                 teamName=F("team__team_name"),
@@ -1289,7 +1290,7 @@ class GetTeamMembersView(AuthenticatedAPIView):
 
         attendees = (
             qs.select_related("attendee")
-            .order_by("attendee__email")
+            .order_by("attendee__username", "attendee__id")
             .values(
                 "is_deleted",
                 "member_role",
@@ -1421,7 +1422,6 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
         member_info = (
             TeamMembers.objects.filter(Q(team=team_id, attendee=user_id))
             .select_related("attendee")
-            .order_by("attendee__email")
             .values(
                 "team__team_name",
                 "attendee__id",

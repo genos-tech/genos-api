@@ -5,7 +5,7 @@ from django.db import models
 from origin.models.chat.unified_models import Activity
 from origin.models.common.inbox_models import InboxItems
 from origin.models.common.user_models import CustomUser
-from origin.services import crypto
+from origin.services import blind_index, crypto
 
 
 class NotificationPreference(models.Model):
@@ -133,7 +133,7 @@ class PushSubscription(models.Model):
         return f"PushSubscription(user={self.user_id}, endpoint={self.endpoint[:32]}…)"
 
 
-class EmailSuppression(models.Model):
+class EmailSuppression(blind_index.BlindIndexMixin, models.Model):
     """An address the NOTIFICATION email channel must not send to.
 
     Written by the Anymail tracking webhook (Resend bounce/complaint
@@ -148,14 +148,19 @@ class EmailSuppression(models.Model):
     REASON_COMPLAINT = "complaint"
     REASON_MANUAL = "manual"
 
-    # Stored lowercased (`email_suppression.suppress` normalizes);
-    # unique so re-reports upsert instead of piling up.
-    address = models.EmailField(unique=True)
+    # Stored lowercased (`email_suppression.suppress` normalizes).
+    # Encrypted from the release after this one (MIP-619), so it's looked
+    # up through `address_hash`, unique so re-reports upsert instead of
+    # piling up.
+    address = crypto.DecryptingEmailField(unique=True)
+    address_hash = models.CharField(max_length=64, unique=True, null=True, editable=False)
     reason = models.CharField(max_length=16)
     ts_created_at = models.DateTimeField(auto_now_add=True)
 
+    blind_indexes = (blind_index.SUPPRESSED_ADDRESS,)
+
     def __str__(self):
-        return f"EmailSuppression({self.address}, {self.reason})"
+        return f"EmailSuppression({self.pk}, {self.reason})"
 
 
 class EmailNotificationEvent(models.Model):

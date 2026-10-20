@@ -162,7 +162,7 @@ class Command(BaseCommand):
 
     def _resolve_user(self, email: str) -> CustomUser:
         try:
-            return CustomUser.objects.get(email=email, is_deleted=False)
+            return CustomUser.objects.with_email(email).get(is_deleted=False)
         except CustomUser.DoesNotExist:
             raise CommandError(f"No active user with email '{email}'.")
 
@@ -306,7 +306,7 @@ class Command(BaseCommand):
             qs = qs.filter(feature=options["feature"])
         if not options.get("show_all"):
             qs = qs.filter(is_active=True)
-        qs = qs.order_by("feature", "user__email")
+        qs = qs.order_by("feature", "user__username", "user_id")
 
         if not qs.exists():
             self.stdout.write("No grants found.")

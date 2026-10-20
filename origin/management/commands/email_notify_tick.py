@@ -41,7 +41,7 @@ from apis.request_id import describe_exception
 from origin.management.cron_command import CronCommand
 from origin.models.common.notification_models import EmailNotificationEvent
 from origin.models.common.user_models import CustomUser
-from origin.services import presence
+from origin.services import blind_index, presence
 from origin.services.email_gating import should_email
 from origin.services.email_notify_send import send_notification_batch
 
@@ -112,6 +112,9 @@ class Command(CronCommand):
         dry_run = bool(options["dry_run"])
         only_user = (options["user_id"] or "").strip()
         now = timezone.now()
+        # The suppression check finds an address by its blind index
+        # (MIP-619): fail the run here, not once per user mid-pass.
+        blind_index.require_keys()
 
         # Recover rows claimed by a pass that died mid-send. `sent_at`
         # is the claim stamp for SENDING rows (see module docstring).

@@ -42,6 +42,7 @@ from origin.models.common.notification_models import (
     NotificationPreference,
 )
 from origin.models.common.user_models import CustomUser
+from origin.services import blind_index
 from origin.services.email import send_templated_email
 from origin.services.email_notify_send import _absolute, resolve_email_locale
 from origin.services.email_suppression import is_suppressed
@@ -98,6 +99,9 @@ class Command(CronCommand):
         dry_run = bool(options["dry_run"])
         only_user = (options["user_id"] or "").strip()
         now = timezone.now()
+        # The suppression check finds an address by its blind index
+        # (MIP-619): fail the run here, not once per user mid-pass.
+        blind_index.require_keys()
 
         users = CustomUser.objects.filter(email_digest_enabled=True, is_deleted=False)
         if only_user:
