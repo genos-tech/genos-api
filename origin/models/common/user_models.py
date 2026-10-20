@@ -4,10 +4,30 @@ import uuid
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
 
-from origin.services import crypto
+from origin.services import blind_index, crypto
 
 
 class CustomUserManager(BaseUserManager):
+    def get_by_natural_key(self, username):
+        # Sign-in (`ModelBackend.authenticate`). The email is looked up by
+        # its blind index, so the match ignores case, as every other email
+        # lookup already did; the default compared the column exactly.
+        # Two matches can only be a row the previous release wrote
+        # mid-deploy, unhashed, differing in case: neither signs in.
+        users = list(self.filter(blind_index.USER_EMAIL.matches(username))[:2])
+        if len(users) != 1:
+            raise self.model.DoesNotExist
+        return users[0]
+
+    def with_email(self, email):
+        """Users whose email is `email`, ignoring case (MIP-619).
+
+        The one way to find a user by address: the column is encrypted
+        once MIP-619's second release ships, and a filter on it never
+        matches again.
+        """
+        return self.filter(blind_index.USER_EMAIL.matches(email))
+
     def create_user(self, email, username, password=None, **extra_fields):
         """Creates and returns a user with an email and username"""
         if not email:
@@ -89,11 +109,19 @@ TIER_SET_BY_CHOICES = [
 ]
 
 
-class CustomUser(AbstractBaseUser, PermissionsMixin):
+class CustomUser(blind_index.BlindIndexMixin, AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     username = models.CharField(max_length=50, unique=False)
-    email = models.EmailField(unique=True)
-    phone_number = models.CharField(max_length=20, blank=True, null=True)
+    # PII (MIP-619). Read through `Decrypting*` fields so this release can
+    # read what the next one encrypts. Never filter or order by these:
+    # find a user by address with `CustomUser.objects.with_email`.
+    email = crypto.DecryptingEmailField(unique=True)
+    # HMAC of the lowercased email (`blind_index.USER_EMAIL`), kept current
+    # by `save()`. Unique, so two accounts can't share an address in any
+    # case. NULL only on a row the previous release wrote mid-deploy;
+    # `rotate_field_keys` fills it in.
+    email_hash = models.CharField(max_length=64, unique=True, null=True, editable=False)
+    phone_number = crypto.DecryptingCharField(max_length=20, blank=True, null=True)
     profile_image_url = models.FileField(upload_to=user_profile_image_path)
     profile_image_file_name = models.CharField(blank=True, null=True)
     is_offline_forced = models.BooleanField(default=False)
@@ -107,7 +135,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     # is honoured at read time by the delivery gates.
     custom_status_expiry = models.DateTimeField(null=True, blank=True)
     role = models.CharField(max_length=50, blank=True, null=True)
-    base_country = models.CharField(max_length=50, blank=True, null=True)
+    base_country = crypto.DecryptingCharField(max_length=50, blank=True, null=True)
     # IANA timezone name ("Asia/Tokyo"), captured from the browser.
     #
     # NULL means UNKNOWN, and that is deliberately not the same as "chose
@@ -135,7 +163,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     # answers both exactly. The city component is the display label. If
     # this ever needs to hold prose ("Remote, travelling"), widen the
     # validation in `UserSerializer` and give local time its own column.
-    current_location = models.CharField(max_length=64, blank=True, null=True)
+    current_location = crypto.DecryptingCharField(max_length=64, blank=True, null=True)
     # Whether this user's location (`current_location`/`timezone`) is shown
     # to OTHER people. Default True: the field exists to answer "don't call
     # me at 3am", which only works if it's shared, so the useful default is
@@ -152,7 +180,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     # than showing an empty box. Length is capped in the serializer, not
     # here: this rides along in every team-roster row, so the cap is about
     # payload size and it belongs where the error message can say so.
-    about_me = models.TextField(blank=True, null=True)
+    about_me = crypto.DecryptingTextField(blank=True, null=True)
     # UI language ("en", "ja"), captured from the app's active locale the
     # same way `timezone` is captured from the browser: reported by the
     # client at boot, never typed by the user, unknown values stored as
@@ -333,6 +361,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     is_staff = models.BooleanField(default=False)  # Access to admin panel
 
     objects = CustomUserManager()
+    blind_indexes = (blind_index.USER_EMAIL,)
 
     USERNAME_FIELD = "email"  # Use email as the unique identifier
     REQUIRED_FIELDS = ["username"]
@@ -388,7 +417,10 @@ class ConnectedAccount(models.Model):
     )
     provider = models.CharField(max_length=16, choices=CONNECTED_PROVIDER_CHOICES)
     provider_user_id = models.CharField(max_length=255)
-    provider_email = models.EmailField(blank=True, null=True)
+    # The provider's address for this account, shown to tell a work Google
+    # account from a personal one. Never looked up by value, so it needs
+    # no blind index (MIP-619).
+    provider_email = crypto.DecryptingEmailField(blank=True, null=True)
     scopes = models.JSONField(default=list)
     access_token_encrypted = models.TextField()
     refresh_token_encrypted = models.TextField(blank=True, null=True)

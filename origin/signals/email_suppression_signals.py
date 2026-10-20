@@ -47,7 +47,7 @@ def handle_tracking_event(sender, event, esp_name, **kwargs):
     try:
         suppress(address, reason)
         if event.event_type == "complained":
-            for user in CustomUser.objects.filter(email__iexact=address):
+            for user in CustomUser.objects.with_email(address):
                 prefs, _ = NotificationPreference.objects.get_or_create(user=user)
                 if prefs.email_enabled:
                     prefs.email_enabled = False

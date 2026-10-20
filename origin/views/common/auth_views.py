@@ -256,7 +256,7 @@ def _record_signin_failed(request, email, *, reason: str) -> None:
     names, when one exists, is the target, so its owner's trail shows
     the attempt."""
     email = str(email or "")
-    target = User.objects.filter(email__iexact=email).only("pk").first() if email else None
+    target = User.objects.with_email(email).only("pk").first() if email else None
     record_security_event(
         SecurityAction.SIGNIN_FAILED,
         request=request,
@@ -285,7 +285,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         email = (request.data or {}).get("email")
         password = (request.data or {}).get("password")
         if email and password:
-            unverified = User.objects.filter(email__iexact=email).first()
+            unverified = User.objects.with_email(email).first()
             if (
                 unverified is not None
                 and unverified.primary_auth_provider == "email"
@@ -697,7 +697,7 @@ class PasswordResetRequestView(APIView):
         serializer.is_valid(raise_exception=True)
         email = serializer.validated_data["email"]
 
-        user = User.objects.filter(email__iexact=email, is_deleted=False).first()
+        user = User.objects.with_email(email).filter(is_deleted=False).first()
         if user is not None and not _password_reset_is_allowed(user):
             # Silently skip: still a 200, still no email, so this stays
             # enumeration-safe. The cost is that a Google user who clicks
@@ -927,7 +927,7 @@ class ResendVerificationView(APIView):
         serializer.is_valid(raise_exception=True)
         email = serializer.validated_data["email"]
 
-        user = User.objects.filter(email__iexact=email, is_deleted=False).first()
+        user = User.objects.with_email(email).filter(is_deleted=False).first()
         if (
             user is not None
             and user.primary_auth_provider == "email"

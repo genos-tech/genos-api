@@ -28,6 +28,7 @@ from functools import lru_cache
 
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.signals import setting_changed
 from django.db import models
 from django.dispatch import receiver
@@ -108,6 +109,66 @@ _TOKEN_MIN_LENGTH = 100
 
 def looks_encrypted(value: str) -> bool:
     return value.startswith(_TOKEN_PREFIX) and len(value) >= _TOKEN_MIN_LENGTH
+
+
+def refuse_ciphertext_lookalike(value) -> None:
+    """Validator: refuse a value that looks like a Fernet token.
+
+    Once a column is strictly encrypted, a stored value that looks like a
+    token but that no key opens raises on every read of its row. A user
+    who planted one in their profile would break every roster they're in.
+    """
+    if isinstance(value, str) and looks_encrypted(value):
+        raise ValidationError(
+            "This value can't be saved: it looks like encrypted data.",
+            code="ciphertext_lookalike",
+        )
+
+
+class _DecryptOnRead:
+    """Reads ciphertext back as plaintext, and writes plaintext (MIP-619).
+
+    For a column in the release BEFORE the one that encrypts it. Railway
+    runs the encrypting release's migration while this release still
+    serves, so this release has to read the ciphertext that migration
+    writes. What this release itself writes stays plaintext, which the
+    encrypting release reads as-is and `rotate_field_keys` then encrypts.
+
+    Nothing writes ciphertext here except that later release, with a key
+    this release also holds. So a value that only looks like a token, and
+    that no key opens, is plaintext: it's returned as stored, where
+    `EncryptedTextField` would raise. The serializers refuse such values
+    (the validator below), so a user can't plant one for the encrypting
+    release to trip over.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Appended, not a class attribute: that would shadow the base
+        # field's own (EmailField's address check).
+        self.validators.append(refuse_ciphertext_lookalike)
+
+    def from_db_value(self, value, expression, connection):
+        if value is None or not looks_encrypted(value):
+            return value
+        try:
+            return decrypt(value)
+        except InvalidToken:
+            # `KeyringMissing` still raises: ciphertext handed back as an
+            # address would be mailed to.
+            return value
+
+
+class DecryptingEmailField(_DecryptOnRead, models.EmailField):
+    pass
+
+
+class DecryptingCharField(_DecryptOnRead, models.CharField):
+    pass
+
+
+class DecryptingTextField(_DecryptOnRead, models.TextField):
+    pass
 
 
 class EncryptedTextField(models.TextField):

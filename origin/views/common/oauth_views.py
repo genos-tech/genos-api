@@ -328,8 +328,8 @@ class OAuthCallbackView(APIView):
             # CustomUser table already has a row with the same email,
             # block — the user has another account they should sign
             # into instead.
-            if profile.email and User.objects.filter(email__iexact=profile.email).exists():
-                other = User.objects.filter(email__iexact=profile.email).first()
+            if profile.email and User.objects.with_email(profile.email).exists():
+                other = User.objects.with_email(profile.email).first()
                 _record_oauth_signin_failed(provider_name, profile, "email_in_use", other)
                 return HttpResponseRedirect(
                     _frontend_failure_url(

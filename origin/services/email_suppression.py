@@ -15,7 +15,10 @@ requested, low-volume, and the reputational calculus is different.
 
 import logging
 
+from django.db import IntegrityError, transaction
+
 from origin.models.common.notification_models import EmailSuppression
+from origin.services import blind_index
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +31,9 @@ def is_suppressed(address: str) -> bool:
     normalized = _normalize(address)
     if not normalized:
         return True  # nowhere to send anyway
-    return EmailSuppression.objects.filter(address=normalized).exists()
+    return EmailSuppression.objects.filter(
+        blind_index.SUPPRESSED_ADDRESS.matches(normalized)
+    ).exists()
 
 
 def suppress(address: str, reason: str) -> None:
@@ -37,9 +42,20 @@ def suppress(address: str, reason: str) -> None:
     normalized = _normalize(address)
     if not normalized:
         return
-    row, created = EmailSuppression.objects.get_or_create(
-        address=normalized, defaults={"reason": reason}
-    )
+    # Not `get_or_create(address=...)`: the address is encrypted, so the
+    # lookup goes through its hash, and a race into the unique hash
+    # column is retried as the existing row.
+    row = EmailSuppression.objects.filter(
+        blind_index.SUPPRESSED_ADDRESS.matches(normalized)
+    ).first()
+    created = row is None
+    if created:
+        try:
+            with transaction.atomic():
+                row = EmailSuppression.objects.create(address=normalized, reason=reason)
+        except IntegrityError:
+            row = EmailSuppression.objects.get(blind_index.SUPPRESSED_ADDRESS.matches(normalized))
+            created = False
     if (
         not created
         and reason == EmailSuppression.REASON_COMPLAINT

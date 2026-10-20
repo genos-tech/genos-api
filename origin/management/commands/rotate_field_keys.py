@@ -19,6 +19,10 @@ wins and the row is counted as skipped; run it again to pick it up.
 A value that no key in the ring can decrypt is reported and left as it
 is, and the run fails, because dropping the old key now would lose
 whatever that key protects. Values are never printed, only row ids.
+
+It also rehashes the blind indexes (MIP-619) with the newest
+`BLIND_INDEX_KEYS` key, which is step 2 of rotating that ring, and fills
+in a hash the previous release left empty during a deploy.
 """
 
 from __future__ import annotations
@@ -26,9 +30,9 @@ from __future__ import annotations
 from cryptography.fernet import InvalidToken
 from django.apps import apps
 from django.core.management.base import BaseCommand, CommandError
-from django.db import connection
+from django.db import IntegrityError, connection, transaction
 
-from origin.services import crypto
+from origin.services import blind_index, crypto
 
 # Ciphertext held in a plain TextField, encrypted by hand at each write
 # (`crypto.encrypt(...)`) rather than by the field. Every
@@ -72,6 +76,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         dry_run: bool = options["dry_run"]
         crypto.require_keyring()
+        blind_index.require_keys()
 
         unreadable = []
         for model, name, plaintext_ok in encrypted_columns():
@@ -127,10 +132,70 @@ class Command(BaseCommand):
                 f"(rotated {rotated}, encrypted {encrypted} plaintext, skipped {skipped})"
             )
 
+        clashes = []
+        for model in apps.get_models():
+            for index in getattr(model, "blind_indexes", ()):
+                clashes += self._rehash(model, index, dry_run)
+
+        for entry in unreadable:
+            self.stderr.write(f"cannot rotate: {entry}")
+        for entry in clashes:
+            self.stderr.write(f"cannot hash: {entry} (another row has the same address)")
+        problems = []
         if unreadable:
-            for entry in unreadable:
-                self.stderr.write(f"cannot rotate: {entry}")
-            raise CommandError(
+            problems.append(
                 f"{len(unreadable)} value(s) could not be rotated. Keep every key in "
                 "FIELD_ENCRYPTION_KEYS until they are dealt with."
             )
+        if clashes:
+            problems.append(
+                f"{len(clashes)} row(s) share an address with another row. Resolve them "
+                "by hand (see migration 0201's header), and keep every key in "
+                "BLIND_INDEX_KEYS until then."
+            )
+        if problems:
+            raise CommandError(" ".join(problems))
+
+    def _rehash(self, model, index, dry_run: bool) -> list[str]:
+        """Bring every `index.column` in line with the newest key.
+
+        Returns the rows whose hash would break the column's uniqueness:
+        an address the previous release wrote during a deploy that
+        differs only in case from one already there.
+        """
+        label = f"{model._meta.label}.{index.column}"
+        changed = skipped = 0
+        clashes = []
+        # `values_list` reads the source through the field, so this works
+        # whether the column is encrypted yet or not.
+        rows = list(
+            model.objects.exclude(**{index.source: ""})
+            .exclude(**{f"{index.source}__isnull": True})
+            .values_list("pk", index.source, index.column)
+        )
+        for row_id, value, current in rows:
+            expected = index.compute(value)
+            if current == expected:
+                continue
+            if not dry_run:
+                # Compare-and-swap on the hash read, as above: a save that
+                # lands meanwhile wrote a current hash itself.
+                same = (
+                    {f"{index.column}__isnull": True}
+                    if current is None
+                    else {index.column: current}
+                )
+                updated = model.objects.filter(pk=row_id, **same)
+                try:
+                    with transaction.atomic():
+                        count = updated.update(**{index.column: expected})
+                except IntegrityError:
+                    clashes.append(f"{label} id={row_id}")
+                    continue
+                if count == 0:
+                    skipped += 1
+                    continue
+            changed += 1
+        verb = "would change" if dry_run else "changed"
+        self.stdout.write(f"{label}: {verb} {changed} of {len(rows)} (skipped {skipped})")
+        return clashes

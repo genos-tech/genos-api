@@ -4,6 +4,7 @@ from django.db import models
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
+from origin.services import blind_index, crypto
 
 INVITE_STATUS_CHOICES = [
     ("pending", "pending"),
@@ -12,7 +13,7 @@ INVITE_STATUS_CHOICES = [
 ]
 
 
-class TeamInvite(models.Model):
+class TeamInvite(blind_index.BlindIndexMixin, models.Model):
     """An email invitation to join a team, or to one project as a guest.
 
     Mirrors the password-reset / email-verification token model: the URL
@@ -45,9 +46,11 @@ class TeamInvite(models.Model):
         related_name="invites",
         to_field="team_id",
     )
-    # Always stored lowercased so the unique-ish lookup and the
-    # accept-time match are case-insensitive without per-query iexact.
-    invited_email = models.EmailField()
+    # Always stored lowercased, so the accept-time match is
+    # case-insensitive. Encrypted from the release after this one
+    # (MIP-619): look an invite up by address through `invited_email_hash`.
+    invited_email = crypto.DecryptingEmailField()
+    invited_email_hash = models.CharField(max_length=64, null=True, editable=False)
     invited_by = models.ForeignKey(
         CustomUser,
         on_delete=models.SET_NULL,
@@ -90,5 +93,11 @@ class TeamInvite(models.Model):
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
+    blind_indexes = (blind_index.INVITE_EMAIL,)
+
     class Meta:
-        indexes = [models.Index(fields=["team", "invited_email"])]
+        indexes = [
+            models.Index(fields=["team", "invited_email"]),
+            # The re-invite lookup (`TeamInviteView`).
+            models.Index(fields=["team", "invited_email_hash"], name="teaminvite_team_email_hash"),
+        ]
