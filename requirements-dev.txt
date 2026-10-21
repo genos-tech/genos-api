@@ -2,9 +2,9 @@
 #
 # Installed ON TOP OF `pipenv sync` (which installs the locked production deps
 # from Pipfile.lock). This mirrors the Dockerfile's "extra pip install" pattern
-# and deliberately avoids regenerating Pipfile.lock — re-locking would
-# re-resolve the many "*"-pinned prod deps and could silently bump production
-# dependency versions, which is out of scope for adding CI.
+# and deliberately stays out of Pipfile.lock — a full re-lock re-resolves
+# every transitive prod dep to its newest release and could silently bump
+# production versions (see the Pipfile header for targeted upgrades).
 #
 # Used by .github/workflows/backend-flask.yml and backend-django.yml.
 pytest>=8,<10
