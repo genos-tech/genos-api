@@ -37,7 +37,7 @@ from origin.views.utils.scope_guards import (
     require_project_member_or_response,
     require_team_member_or_response,
 )
-from origin.views.utils.upload_limits import check_upload_size
+from origin.views.utils.upload_validation import check_image_upload
 
 _PROJECT_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
 
@@ -173,6 +173,14 @@ class ProjectMasterView(AuthenticatedAPIView):
         # shows up in their project list and carries a PM channel.
         if res := require_team_member_or_response(request.user, request.data.get("team")):
             return res
+        # The default parsers accept multipart and the serializer writes every
+        # model field, so a file here would be stored as the project image
+        # without `ProjectProfileImageView`'s checks.
+        if request.FILES:
+            return Response(
+                {"error": "Set the project image with /api/v2/project/profile/image/."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         # Auto-derive a unique-per-team `code` if the caller didn't
         # supply one. The code is the prefix in human-readable task
         # display IDs (e.g. "GEN-42"). Users can edit it later from
@@ -1869,11 +1877,10 @@ class ProjectProfileImageView(AuthenticatedAPIView):
         if res := validate_request_data(data):
             return res
 
-        # Avatars were the one upload family with NO size check at all —
-        # not tier-aware, not even a flat cap — so a free user capped at
-        # 5 MB per attachment could store an arbitrarily large "avatar".
-        # Same tier ceiling as every other upload; see `upload_limits`.
-        if res := check_upload_size(request.user, profile_image):
+        # Tier size limit, then a raster sniff; stored under a generated
+        # name. See `upload_validation`.
+        upload, res = check_image_upload(request.user, profile_image)
+        if res:
             return res
 
         try:
@@ -1893,7 +1900,7 @@ class ProjectProfileImageView(AuthenticatedAPIView):
 
         # Only update the FileField
         new_profile_image_data = {
-            "profile_image_url": profile_image,
+            "profile_image_url": upload.file,
         }
 
         serializer = ProjectMasterSerializer(
@@ -1906,13 +1913,12 @@ class ProjectProfileImageView(AuthenticatedAPIView):
             # Now get the actual stored filename
             stored_file_name = saved_user.profile_image_url.name.split("/")[-1]
             # Append `?v=<ms-timestamp>` so the served URL is unique per
-            # upload — mirrors UserProfileImageView. Today's storage is
-            # FileSystemStorage, which collision-suffixes filenames, so the
-            # path already changes per upload; but if media moves to S3/R2
-            # (see settings — `AWS_S3_FILE_OVERWRITE` defaults True there),
-            # the FE's fixed `profile.jpg` name would reuse the same path
-            # and the browser would serve the stale cached avatar. The
-            # query string is ignored by media path-matching, and the
+            # upload — mirrors UserProfileImageView. The generated filename
+            # already changes per upload; the suffix predates it, from when
+            # the FE's fixed `profile.jpg` name could reuse one path on an
+            # overwriting storage and the browser would serve the stale
+            # cached avatar. The query string is ignored by media
+            # path-matching, and the
             # `profile_image_url` FileField keeps the clean path. The
             # `_ensure_pm_channel_for_project` signal then carries this
             # busted string onto the PM `Channel.profile_image_url`.

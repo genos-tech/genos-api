@@ -64,7 +64,7 @@ from origin.views.utils.incremental import (
 )
 from origin.views.utils.mention_handler import resolve_group_members
 from origin.views.utils.mention_membership import non_member_mentions
-from origin.views.utils.upload_limits import check_upload_size
+from origin.views.utils.upload_validation import check_attachment_upload
 
 
 def _retention_cutoff(user):
@@ -1005,17 +1005,21 @@ class MessageAttachmentsView(AuthenticatedAPIView):
                 {"error": "Missing multipart field 'file'."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if res := check_upload_size(request.user, file, fallback_bytes=MAX_ATTACHMENT_BYTES):
+        # The client's `mime` field is ignored: clients render `image/*`
+        # inline, so the type is derived from the bytes and the extension.
+        upload, res = check_attachment_upload(
+            request.user, file, fallback_bytes=MAX_ATTACHMENT_BYTES
+        )
+        if res:
             return res
-
-        mime = (request.data.get("mime") or file.content_type or "").strip()
 
         with transaction.atomic():
             attachment = MessageAttachment.objects.create(
                 message=message,
                 uploader=request.user,
-                file=file,
-                mime=mime,
+                file=upload.file,
+                original_name=upload.display_name,
+                mime=upload.mime,
                 size_bytes=file.size,
             )
             # Touch the parent message so delta sync picks up the new

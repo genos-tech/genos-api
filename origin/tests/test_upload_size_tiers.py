@@ -22,6 +22,7 @@ from origin.views.utils.upload_limits import ABSOLUTE_MAX_UPLOAD_BYTES, check_up
 
 from .test_base import BaseAPITestCase
 from .test_quota_monthly import TEST_QUOTAS, _search_engine_with_quotas
+from .test_upload_validation import PNG_BYTES
 
 MIB = 1024 * 1024
 
@@ -255,10 +256,11 @@ class AvatarUploadSizeTests(UploadTestBase):
         )
 
     def test_an_avatar_under_the_limit_still_uploads(self):
-        """The guard must not have closed the endpoint outright."""
+        """The guard must not have closed the endpoint outright. Real PNG
+        bytes, since avatars are content-sniffed too (MIP-726)."""
         res = self.client.put(
             "/api/v2/user/profile/image/",
-            {"user_profile_image": SimpleUploadedFile("ok.png", b"x" * 1024, "image/png")},
+            {"user_profile_image": SimpleUploadedFile("ok.png", PNG_BYTES, "image/png")},
             format="multipart",
         )
         self.assertEqual(res.status_code, 200)

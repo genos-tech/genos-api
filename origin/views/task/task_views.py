@@ -61,7 +61,7 @@ from origin.views.utils.scope_guards import (
     reachable_project_ids,
     require_team_member_or_response,
 )
-from origin.views.utils.upload_limits import check_upload_size
+from origin.views.utils.upload_validation import check_attachment_upload
 
 from .common_color import EFFORT_LEVEL_COLOR_MAP, PRIORITY_COLOR_MAP, status_color
 
@@ -2029,9 +2029,12 @@ class TaskAttachmentsView(AuthenticatedAPIView):
         if not can_access_task(task, request.user.id):
             return _no_task()
 
-        # Tier quota: per-file upload size.
-        if attached_file is not None and (res := check_upload_size(request.user, attached_file)):
-            return res
+        original_name = ""
+        if attached_file is not None:
+            upload, res = check_attachment_upload(request.user, attached_file)
+            if res:
+                return res
+            attached_file, original_name = upload.file, upload.display_name
 
         # Add only a new attachment
         if attachment_id != "" and int(attachment_id) == -1:
@@ -2039,7 +2042,6 @@ class TaskAttachmentsView(AuthenticatedAPIView):
                 Max("attachment_id")
             )["attachment_id__max"]
 
-            original_name = attached_file.name if attached_file else ""
             data = {
                 "task": task,
                 "attachment_id": (int(curr_attachments_id) if curr_attachments_id else 0) + 1,
@@ -2697,9 +2699,10 @@ class TaskBodyAttachmentView(AuthenticatedAPIView):
         if not can_access_task(data["task"], request_user_id):
             return _no_task()
 
-        # Tier quota: per-file upload size.
-        if res := check_upload_size(request.user, data["body_attachment_url"]):
+        upload, res = check_attachment_upload(request.user, data["body_attachment_url"])
+        if res:
             return res
+        data["body_attachment_url"] = upload.file
 
         serializer = TaskBodyAttachmentFactSerializer(data=data)
         if serializer.is_valid():

@@ -61,7 +61,7 @@ from origin.views.utils.scope_guards import (
     is_team_member,
     require_team_member_or_response,
 )
-from origin.views.utils.upload_limits import check_upload_size
+from origin.views.utils.upload_validation import check_image_upload
 
 logger = logging.getLogger(__name__)
 
@@ -229,11 +229,10 @@ class TeamProfileImageView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Avatars were the one upload family with NO size check at all —
-        # not tier-aware, not even a flat cap — so a free user capped at
-        # 5 MB per attachment could store an arbitrarily large "avatar".
-        # Same tier ceiling as every other upload; see `upload_limits`.
-        if res := check_upload_size(request.user, team_profile_image):
+        # Tier size limit, then a raster sniff; stored under a generated
+        # name. See `upload_validation`.
+        upload, res = check_image_upload(request.user, team_profile_image)
+        if res:
             return res
 
         try:
@@ -253,7 +252,7 @@ class TeamProfileImageView(AuthenticatedAPIView):
 
         # Only update the FileField
         new_profile_image_data = {
-            "profile_image_file": team_profile_image,
+            "profile_image_file": upload.file,
         }
 
         serializer = TeamMasterSerializer(team_data, data=new_profile_image_data, partial=True)
@@ -265,12 +264,11 @@ class TeamProfileImageView(AuthenticatedAPIView):
             stored_file_name = saved_team.profile_image_file.name.split("/")[-1]
             # Append `?v=<ms-timestamp>` so the served URL is unique per
             # upload — mirrors UserProfileImageView / ProjectProfileImageView.
-            # Local FileSystemStorage collision-suffixes the filename so the
-            # path already changes per upload; but on S3/R2/GCS (Railway /
-            # GCP, `AWS_S3_FILE_OVERWRITE=True`) the FE's fixed `profile.jpg`
-            # name reuses the same path, so without the query string the
-            # browser serves the stale cached team avatar. The query string
-            # is ignored by media path-matching.
+            # The generated filename already changes per upload; the suffix
+            # predates it, from when the FE's fixed `profile.jpg` name reused
+            # one path on an overwriting storage and the browser served the
+            # stale cached team avatar. The query string is ignored by media
+            # path-matching.
             cache_buster = int(time.time() * 1000)
             saved_team.profile_image_file_name = (
                 f"team_profiles/{team_id}/{stored_file_name}?v={cache_buster}"
