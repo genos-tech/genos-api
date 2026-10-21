@@ -30,3 +30,7 @@ cb2f1a494dded934cf3595ab88ba1d408b2cc91f:origin/tests/test_field_encryption.py:g
 # The redaction tests' made-up JWT; its 12-character signature is filler,
 # not an HS256 MAC (MIP-622).
 795ba64598e8b789c572ecdd6016cfa64fbca206:origin/tests/test_log_redaction.py:jwt:42
+
+# Not a secret: the ops-alert reopen query filters on the model's `key`
+# field, an incident name like `cron:<service>` (MIP-772).
+378511ef57f7b1f92caf31007803fe5f70b0f4f1:origin/services/ops_alerts.py:generic-api-key:125

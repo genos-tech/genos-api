@@ -15,17 +15,24 @@ def _ssl_context(ca_cert_b64):
     Empty means the system CAs. The node's certificate is signed by our own
     CA, so production passes it; trusting only that CA means no public CA can
     vouch for a host pretending to be the node.
+
+    TLS 1.2 is the floor whatever the OpenSSL build's default is.
     """
     if not ca_cert_b64:
-        return ssl.create_default_context()
-    try:
-        pem = base64.b64decode(ca_cert_b64, validate=True).decode("ascii")
-    except (binascii.Error, ValueError):
-        raise ImproperlyConfigured("OPENSEARCH_CA_CERT is not valid base64.") from None
-    try:
-        return ssl.create_default_context(cadata=pem)
-    except ssl.SSLError:
-        raise ImproperlyConfigured("OPENSEARCH_CA_CERT is not a base64 PEM certificate.") from None
+        context = ssl.create_default_context()
+    else:
+        try:
+            pem = base64.b64decode(ca_cert_b64, validate=True).decode("ascii")
+        except (binascii.Error, ValueError):
+            raise ImproperlyConfigured("OPENSEARCH_CA_CERT is not valid base64.") from None
+        try:
+            context = ssl.create_default_context(cadata=pem)
+        except ssl.SSLError:
+            raise ImproperlyConfigured(
+                "OPENSEARCH_CA_CERT is not a base64 PEM certificate."
+            ) from None
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
 
 
 def build_client_kwargs(cfg, *, debug):
