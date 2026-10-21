@@ -163,12 +163,15 @@ jobs:
       - run: pip install ruff==0.17.1
       - run: ruff check origin apis
 
-  # Known-vulnerable dependencies (MIP-727). Report-only for now: the lock
-  # has open advisories, and making this required waits on those upgrades.
+  # Known-vulnerable dependencies (MIP-727; blocking since MIP-750, when the
+  # lock was brought to zero advisories). An advisory published later turns
+  # this red on every PR until the package is bumped with `pipenv upgrade`
+  # (see the Pipfile header), or gets an `--ignore-vuln <id>` here with the
+  # reason beside it. Dependabot security updates open those bumps.
   # Audits Pipfile.lock's hashed requirements without installing them, so
   # it needs no DB and takes seconds.
   pip-audit:
-    name: pip-audit (report-only)
+    name: pip-audit (required)
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
