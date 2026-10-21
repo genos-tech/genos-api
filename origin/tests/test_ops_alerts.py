@@ -76,7 +76,11 @@ class TestEveryCronReports(TestCase):
             _HEARTBEAT.search(_START.search(t.read_text()).group(1)).group(1) for t in _tomls()
         }
         self.assertIn(ops_alerts.TICK_NAME, names)
-        self.assertEqual(names - {ops_alerts.TICK_NAME}, set(ops_alerts.CRON_SCHEDULES))
+        # The probe beats through AlertingHealthView, not a toml.
+        self.assertEqual(
+            names - {ops_alerts.TICK_NAME},
+            set(ops_alerts.CRON_SCHEDULES) - {ops_alerts.PROBE_NAME},
+        )
 
     def test_the_web_service_has_no_heartbeat(self):
         # railway.toml is backend-django, not a cron; a heartbeat there
@@ -614,3 +618,31 @@ class TestAlertingHealth(TestCase):
         self.beat(1)
         ops_alerts.raise_alert(OpsAlertKind.SECURITY, "security:x:user:1", "Account data exported")
         self.assertEqual(set(self.get().data), {"status", "tick_age_seconds", "unsent_alerts"})
+
+
+@override_settings(OPS_HEALTH_TOKEN=TOKEN)
+class TestTheProbeIsWatchedBack(_NoReconnect, TestCase):
+    """GitHub disables a schedule quietly; the tick has to notice."""
+
+    def probe(self, token=TOKEN):
+        return self.client.get(ALERTING_URL, HTTP_AUTHORIZATION=f"Bearer {token}")
+
+    def test_an_authorized_call_is_the_probe_heartbeat(self):
+        self.probe()
+        beat = CronHeartbeat.objects.get(name=ops_alerts.PROBE_NAME)
+        self.assertIsNotNone(beat.last_succeeded_at)
+
+    def test_a_refused_call_is_not(self):
+        # Anyone can GET the URL; only the probe has the token.
+        self.probe(token="guess")
+        self.assertFalse(CronHeartbeat.objects.filter(name=ops_alerts.PROBE_NAME).exists())
+
+    def test_a_silent_probe_alerts_and_its_return_resolves(self):
+        self.probe()
+        later = timezone.now() + timedelta(hours=3)
+        self.assertEqual(ops_alerts.check_crons(now=later), [ops_alerts.PROBE_NAME])
+        alert = OpsAlert.objects.get(key=f"cron:{ops_alerts.PROBE_NAME}")
+        self.assertIn("uptime probe", alert.summary)
+        self.probe()
+        alert.refresh_from_db()
+        self.assertIsNotNone(alert.resolved_at)

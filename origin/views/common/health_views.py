@@ -57,6 +57,10 @@ class AlertingHealthView(APIView):
     an alert has waited longer than that to be sent. The probe failing is
     what then reaches Ken, by GitHub's own failed-run email.
 
+    Each authorized call is also the probe's own heartbeat (`uptime-probe`
+    in `CRON_SCHEDULES`): GitHub quietly disables a schedule, so the tick
+    alerts when the probe stops asking. Each watches the other.
+
     Behind `OPS_HEALTH_TOKEN` because "alerting is down right now" is worth
     knowing to an attacker too. Without the right bearer token it answers
     404, as if the route didn't exist. The answer carries no ids or names.
@@ -76,6 +80,7 @@ class AlertingHealthView(APIView):
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
         now = timezone.now()
+        ops_alerts.probe_seen(now=now)
         try:
             beat = CronHeartbeat.objects.filter(name=ops_alerts.TICK_NAME).first()
             stuck = OpsAlert.objects.filter(

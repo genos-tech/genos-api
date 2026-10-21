@@ -52,6 +52,9 @@ logger = logging.getLogger(__name__)
 # `AlertingHealthView` reports its heartbeat to the outside probe instead.
 TICK_NAME = "ops-alert-tick"
 
+# The outside probe that watches the tick, watched back by it.
+PROBE_NAME = "uptime-probe"
+
 # How long each cron may go without a successful run before it counts as
 # missed: its interval, plus enough slack that one skipped or slow run
 # doesn't page. Keyed by the Railway service name its start command passes
@@ -75,6 +78,10 @@ CRON_SCHEDULES: dict[str, timedelta] = {
     # weekly, monthly
     "ai-cost-dashboard-weekly": timedelta(days=7, hours=3),
     "ai-cost-dashboard-monthly": timedelta(days=32),
+    # Not a Railway cron: genos-frontend's `uptime.yml`, every 10 minutes,
+    # beating through `AlertingHealthView`. GitHub runs schedules late under
+    # load and disables them after 60 days without a commit.
+    PROBE_NAME: timedelta(hours=2),
 }
 
 # A resolved incident that fires again this soon is the same incident.
@@ -268,6 +275,22 @@ def cron_failed(name: str, error: str) -> None:
     )
 
 
+def probe_seen(*, now=None) -> None:
+    """The outside probe asked: its heartbeat, start and success at once."""
+    now = now or timezone.now()
+    try:
+        if not CronHeartbeat.objects.filter(name=PROBE_NAME).update(
+            last_started_at=now, last_succeeded_at=now
+        ):
+            CronHeartbeat.objects.create(
+                name=PROBE_NAME, first_seen_at=now, last_started_at=now, last_succeeded_at=now
+            )
+    except Exception as exc:
+        logger.warning("ops.probe heartbeat write failed: %s", describe_exception(exc))
+        return
+    resolve_alert(f"cron:{PROBE_NAME}", now=now)
+
+
 def check_crons(*, now=None) -> list[str]:
     """Open a `cron:<name>` incident for each cron that has gone longer
     than its schedule allows without succeeding. Returns their names.
@@ -284,14 +307,16 @@ def check_crons(*, now=None) -> list[str]:
             continue
         overdue.append(beat.name)
         never = beat.last_succeeded_at is None
+        if beat.name == PROBE_NAME:
+            summary = f"The outside uptime probe hasn't checked in for {_age(now - since)}"
+        elif never:
+            summary = f"Cron {beat.name} has never succeeded"
+        else:
+            summary = f"Cron {beat.name} hasn't succeeded for {_age(now - since)}"
         raise_alert(
             OpsAlertKind.CRON_MISSED,
             f"cron:{beat.name}",
-            (
-                f"Cron {beat.name} has never succeeded"
-                if never
-                else f"Cron {beat.name} hasn't succeeded for {_age(now - since)}"
-            ),
+            summary,
             {
                 "service": beat.name,
                 "last_succeeded_at": since.isoformat() if not never else "",
