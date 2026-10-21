@@ -21,7 +21,7 @@ from origin.services.security_events import record_security_event
 from origin.services.throttles import ExportThrottle, with_defaults
 from origin.services.user_time import is_valid_timezone, user_today
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.views.utils.upload_limits import check_upload_size
+from origin.views.utils.upload_validation import check_image_upload
 
 logger = logging.getLogger(__name__)
 
@@ -140,24 +140,19 @@ class UserProfileImageView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Avatars were the one upload family with NO size check at all —
-        # not tier-aware, not even a flat cap — so a free user capped at
-        # 5 MB per attachment could store an arbitrarily large "avatar".
-        # Same tier ceiling as every other upload; see `upload_limits`.
-        if res := check_upload_size(request.user, user_profile_image):
+        # Tier size limit, then a raster sniff; stored under a generated
+        # name. See `upload_validation`.
+        upload, res = check_image_upload(request.user, user_profile_image)
+        if res:
             return res
 
         user_data = CustomUser.objects.get(id=request_user_id)
 
-        # Best-effort cleanup of the previous profile image file. Django's
-        # default `FileSystemStorage.get_available_name` never overwrites
-        # — every re-upload of "profile.jpg" lands as
-        # `profile_<random>.jpg`, leaving the old file behind forever. On
-        # Railway's media volume that's an unbounded disk-bloat leak per
-        # user. Deleting first means the new save lands at the canonical
-        # path (no random suffix), which also keeps the URL stable across
-        # uploads. Wrapped in a try so a missing-on-disk file doesn't
-        # block the legitimate upload from succeeding.
+        # Best-effort cleanup of the previous profile image file. Every
+        # upload is stored under a new generated name, so without this the
+        # old file stays on Railway's media volume forever: an unbounded
+        # disk-bloat leak per user. Wrapped in a try so a missing-on-disk
+        # file doesn't block the legitimate upload from succeeding.
         previous_file = user_data.profile_image_url
         if previous_file and previous_file.name:
             try:
@@ -167,7 +162,7 @@ class UserProfileImageView(AuthenticatedAPIView):
 
         # Only update the FileField
         new_profile_image_data = {
-            "profile_image_url": user_profile_image,
+            "profile_image_url": upload.file,
         }
 
         serializer = UserSerializer(user_data, data=new_profile_image_data, partial=True)
@@ -184,10 +179,10 @@ class UserProfileImageView(AuthenticatedAPIView):
             # tweak to that helper would silently drift the served URL.
             #
             # Append `?v=<ms-timestamp>` so the served URL is unique per
-            # upload. The delete-first cleanup above keeps the on-disk
-            # filename stable (`profile.jpg`), which means *without* this
-            # suffix the URL never changes and the browser keeps serving
-            # the cached bytes after a page refresh — even though
+            # upload. The generated filename already changes per upload;
+            # the suffix also covers rows written before it did, whose
+            # fixed `profile.jpg` path made the browser keep serving the
+            # cached bytes after a page refresh — even though
             # `myself.avatarImgPath` was re-hydrated from a fresh API
             # response. The query string is ignored by Django's media
             # serving (path matching uses the path part only), and the

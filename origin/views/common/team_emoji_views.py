@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from origin.models.common.team_emoji_models import TeamEmojiMaster
 from origin.models.common.team_models import TeamMaster
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.upload_validation import IMAGE_SNIFFERS, read_head
 
 # Shortcode rule: lowercase, no colons (added at render time). Max 50 so
 # `:name:` fits the reaction column (MessageReaction.emoji, CharField(64)).
@@ -18,40 +19,10 @@ _NAME_RE = re.compile(r"[a-z0-9_+-]{1,50}")
 # viewport, so "small" is the feature, not a quota.
 MAX_EMOJI_BYTES = 512 * 1024  # 512 KiB
 
-# How much of the file the sniffers see. The raster formats only need
-# the first 12 bytes, but SVG is text: its `<svg` root can sit behind an
-# XML declaration, a DOCTYPE and/or comments, so it needs a wider window.
-_SNIFF_BYTES = 1024
-
-# UTF-8 BOM. Editors (notably on Windows) emit it ahead of the XML
-# declaration, which would otherwise fail the `startswith(b"<")` check.
-_BOM_UTF8 = b"\xef\xbb\xbf"
-
-
-def _sniff_svg(head: bytes) -> bool:
-    """True when `head` looks like an SVG document.
-
-    Unlike the raster formats, SVG has no magic number — it's XML. The
-    best available structural signal is "starts with markup, and the
-    `<svg` root element appears within the sniff window".
-    """
-    text = head.lstrip(_BOM_UTF8).lstrip()
-    return text.startswith(b"<") and b"<svg" in text.lower()
-
-
-# extension -> content predicate over the first `_SNIFF_BYTES` bytes.
 # Both checks must pass: the extension names the stored file (it ends up
 # in the URL the frontend bakes into bodies), the sniff stops content
-# smuggling (e.g. an HTML file named .png).
-_MAGIC_SNIFFERS = {
-    "gif": lambda h: h.startswith((b"GIF87a", b"GIF89a")),
-    "png": lambda h: h.startswith(b"\x89PNG\r\n\x1a\n"),
-    "jpg": lambda h: h.startswith(b"\xff\xd8\xff"),
-    "jpeg": lambda h: h.startswith(b"\xff\xd8\xff"),
-    "webp": lambda h: h.startswith(b"RIFF") and h[8:12] == b"WEBP",
-    "svg": _sniff_svg,
-}
-
+# smuggling (e.g. an HTML file named .png). Every key of IMAGE_SNIFFERS
+# is accepted, SVG included.
 _ALLOWED_EXT_LABEL = ".png, .jpg, .jpeg, .gif, .webp or .svg"
 
 # Active-content markers rejected in uploaded SVG.
@@ -157,15 +128,13 @@ class TeamEmojiView(AuthenticatedAPIView):
             )
 
         ext = (file.name or "").rsplit(".", 1)[-1].lower() if "." in (file.name or "") else ""
-        sniffer = _MAGIC_SNIFFERS.get(ext)
+        sniffer = IMAGE_SNIFFERS.get(ext)
         if sniffer is None:
             return Response(
                 {"error": f"Emoji images must be {_ALLOWED_EXT_LABEL}."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        head = file.read(_SNIFF_BYTES)
-        file.seek(0)
-        if not sniffer(head):
+        if not sniffer(read_head(file)):
             return Response(
                 {"error": "File content does not match its extension."},
                 status=status.HTTP_400_BAD_REQUEST,

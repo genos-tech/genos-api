@@ -63,7 +63,7 @@ from origin.services.member_roles import (
 )
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import is_guest, is_team_member, is_team_participant
-from origin.views.utils.upload_limits import check_upload_size
+from origin.views.utils.upload_validation import check_attachment_upload, check_image_upload
 
 User = get_user_model()
 
@@ -1309,17 +1309,15 @@ class ChannelProfileImageView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Avatars were the one upload family with NO size check at all —
-        # not tier-aware, not even a flat cap — so a free user capped at
-        # 5 MB per attachment could store an arbitrarily large "avatar".
-        # Same tier ceiling as every other upload; see `upload_limits`.
-        if res := check_upload_size(request.user, profile_image):
+        # Tier size limit, then a raster sniff; stored under a generated
+        # name. See `upload_validation`.
+        upload, res = check_image_upload(request.user, profile_image)
+        if res:
             return res
 
-        # Django's storage layer resolves the final on-disk path and
-        # collision-suffixes the filename if needed. Read `.name` after
-        # save to capture whatever it actually stored.
-        channel.profile_image_file = profile_image
+        # Django's storage layer resolves the final on-disk path. Read
+        # `.name` after save to capture whatever it actually stored.
+        channel.profile_image_file = upload.file
         channel.save(update_fields=["profile_image_file", "ts_updated_at"])
         channel.profile_image_url = channel.profile_image_file.name
         channel.save(update_fields=["profile_image_url", "ts_updated_at"])
@@ -1400,13 +1398,17 @@ class ChannelInlineUploadView(AuthenticatedAPIView):
                 {"error": "Missing multipart field 'file'."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if res := check_upload_size(request.user, file, fallback_bytes=MAX_INLINE_UPLOAD_BYTES):
+        upload, res = check_attachment_upload(
+            request.user, file, fallback_bytes=MAX_INLINE_UPLOAD_BYTES
+        )
+        if res:
             return res
 
-        # default_storage sanitises the name and collision-suffixes it; the
-        # channel-scoped prefix keeps inline uploads grouped per chat.
+        # Stored under its generated name; the editor keeps the original
+        # name on the block it embeds. The channel-scoped prefix keeps
+        # inline uploads grouped per chat.
         stored_name = default_storage.save(
-            f"chats/{channel.id}/inline/{uuid.uuid4()}-{file.name}", file
+            f"chats/{channel.id}/inline/{upload.file.name}", upload.file
         )
         url = request.build_absolute_uri(default_storage.url(stored_name))
         # Behind Railway's TLS-terminating proxy `request.scheme` is "http"

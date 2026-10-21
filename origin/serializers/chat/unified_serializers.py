@@ -94,6 +94,7 @@ class MessageAttachmentSerializer(serializers.ModelSerializer):
 
     id = serializers.UUIDField(read_only=True)
     fileUrl = serializers.FileField(source="file", read_only=True)
+    fileName = serializers.SerializerMethodField()
     mime = serializers.CharField()
     sizeBytes = serializers.IntegerField(source="size_bytes")
     uploader = UserLiteSerializer(read_only=True)
@@ -101,7 +102,10 @@ class MessageAttachmentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = MessageAttachment
-        fields = ["id", "fileUrl", "mime", "sizeBytes", "uploader", "tsCreated"]
+        fields = ["id", "fileUrl", "fileName", "mime", "sizeBytes", "uploader", "tsCreated"]
+
+    def get_fileName(self, obj):
+        return obj.original_name or obj.file.name.rsplit("/", 1)[-1]
 
 
 class MessageSerializer(serializers.ModelSerializer):

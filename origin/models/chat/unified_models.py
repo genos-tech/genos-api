@@ -434,6 +434,11 @@ class MessageAttachment(models.Model):
     # blows up as `SuspiciousFileOperation`. 500 leaves room for long
     # filenames (e.g. user-supplied document names) + suffixes.
     file = models.FileField(upload_to=_message_attachment_path, max_length=500)
+    # The uploader's filename, for display only: `file` is stored under a
+    # generated name (`upload_validation`). Empty on rows written before
+    # that, whose stored name is still the original. `db_default` so the
+    # previous release's inserts get it.
+    original_name = models.CharField(max_length=255, blank=True, default="", db_default="")
     mime = models.CharField(max_length=128, blank=True, default="")
     size_bytes = models.BigIntegerField(default=0)
     ts_created_at = models.DateTimeField(auto_now_add=True)

@@ -36,7 +36,8 @@ from origin.models.common.team_emoji_models import TeamEmojiMaster
 
 # Reuse the upload endpoint's validation so seeded emoji can't be
 # anything a hand upload couldn't be.
-from origin.views.common.team_emoji_views import _MAGIC_SNIFFERS, _NAME_RE, MAX_EMOJI_BYTES
+from origin.views.common.team_emoji_views import _NAME_RE, MAX_EMOJI_BYTES
+from origin.views.utils.upload_validation import IMAGE_SNIFFERS
 
 BUNDLED_ZIP = Path(__file__).resolve().parents[2] / "fixtures" / "default_emoji.zip"
 
@@ -71,7 +72,7 @@ class Command(BaseCommand):
                     raise CommandError(f"Bundle entry without extension: {info.filename}")
                 name, ext = filename.rsplit(".", 1)
                 ext = ext.lower()
-                if ext not in _MAGIC_SNIFFERS:
+                if ext not in IMAGE_SNIFFERS:
                     raise CommandError(f"Bundle entry with unsupported extension: {info.filename}")
                 if not _NAME_RE.fullmatch(name):
                     raise CommandError(f"Bundle entry with invalid name: {info.filename}")
@@ -82,7 +83,7 @@ class Command(BaseCommand):
                     raise CommandError(
                         f"Bundle entry over {MAX_EMOJI_BYTES} bytes: {info.filename}"
                     )
-                if not _MAGIC_SNIFFERS[ext](content[:12]):
+                if not IMAGE_SNIFFERS[ext](content[:12]):
                     raise CommandError(f"Bundle entry fails magic-byte sniff: {info.filename}")
                 bundle[name] = (ext, content)
         if not bundle:
