@@ -42,5 +42,5 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 cronSchedule = "*/5 * * * *"
-startCommand = "sh /app/railway-webhook-deliver-entrypoint.sh --drain-seconds 240"
+startCommand = "sh /app/railway-webhook-deliver-entrypoint.sh --drain-seconds 240 --heartbeat webhook-deliver"
 restartPolicyType = "NEVER"

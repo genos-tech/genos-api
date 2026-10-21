@@ -19,6 +19,17 @@ below so they don't trip the wire.
 
 It also owns `drain_passes()` — the answer to a scheduler that cannot be
 asked to run every minute. See that method.
+
+**Heartbeats (MIP-772).** A non-zero exit marks the run red in Railway,
+but nobody watches that page, and a cron that stopped running at all
+shows nothing red anywhere. So a command started with `--heartbeat
+<service>` also records each run in `CronHeartbeat`: started, then
+succeeded or failed. A failure opens an alert, and `ops_alert_tick`
+notices one that has gone quiet. The flag goes in the railway-*.toml
+start command and nowhere else, so a run started by hand or in-process
+(the demo seeder runs `opensearch_reindex`) never stands in for the
+cron. `HeartbeatCommand` gives it to a command that isn't a
+`CronCommand`.
 """
 
 from __future__ import annotations
@@ -31,6 +42,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import close_old_connections
 
 from apis.log_redaction import redact
+from apis.request_id import describe_exception
 
 # Only watch the app's own loggers — third-party libraries occasionally
 # log at ERROR for conditions we tolerate, and we don't want those to red
@@ -61,7 +73,56 @@ class _ErrorTripwire(logging.Handler):
                 self.first_message = str(record.msg)
 
 
-class CronCommand(BaseCommand):
+def _failure_label(exc: BaseException) -> str:
+    """What a failed run's heartbeat keeps: the exception type, plus the
+    message only for our own `CommandError`, which is written to be read
+    (and is redacted here anyway). Anything else's text can quote data."""
+    if isinstance(exc, CommandError):
+        return redact(f"CommandError: {exc}")
+    return describe_exception(exc)
+
+
+class HeartbeatCommand(BaseCommand):
+    """`BaseCommand` with the `--heartbeat <service>` flag: records each run
+    in `CronHeartbeat` when given it, and nothing otherwise."""
+
+    def create_parser(self, prog_name, subcommand, **kwargs):
+        parser = super().create_parser(prog_name, subcommand, **kwargs)
+        parser.add_argument(
+            "--heartbeat",
+            default="",
+            metavar="SERVICE",
+            help=(
+                "Record this run as the cron SERVICE's heartbeat, so a failed "
+                "or missing run raises an alert. Set by railway-*.toml only."
+            ),
+        )
+        return parser
+
+    def execute(self, *args, **options):
+        name = options.get("heartbeat") or ""
+        if not name:
+            return self._execute(*args, **options)
+        # Imported here: management commands load before the app registry
+        # is ready to import models at module level.
+        from origin.services import ops_alerts  # noqa: PLC0415
+
+        ops_alerts.cron_started(name)
+        try:
+            result = self._execute(*args, **options)
+        except BaseException as exc:
+            ops_alerts.cron_failed(name, _failure_label(exc))
+            raise
+        ops_alerts.cron_succeeded(name)
+        return result
+
+    def _execute(self, *args, **options):
+        """The run itself. The heartbeat wraps it, so whatever a subclass
+        does here to decide that a run failed is recorded as a failure."""
+        return super().execute(*args, **options)
+
+
+class CronCommand(HeartbeatCommand):
     """`BaseCommand` that exits non-zero if any ERROR is logged during the run.
 
     Subclasses implement `handle()` exactly as usual; this base wraps
@@ -141,12 +202,12 @@ class CronCommand(BaseCommand):
             # a pass is this job's equivalent of a request.
             close_old_connections()
 
-    def execute(self, *args, **options):
+    def _execute(self, *args, **options):
         tripwire = _ErrorTripwire()
         watched = logging.getLogger(WATCHED_LOGGER)
         watched.addHandler(tripwire)
         try:
-            result = super().execute(*args, **options)
+            result = super()._execute(*args, **options)
         finally:
             watched.removeHandler(tripwire)
         if tripwire.count:

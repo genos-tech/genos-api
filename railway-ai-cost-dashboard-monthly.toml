@@ -25,5 +25,5 @@ dockerfilePath = "Dockerfile"
 # of the month it describes, never the day it ran — so a filename never
 # claims a period it holds no data from.
 cronSchedule = "45 6 1 * *"
-startCommand = "sh /app/railway-ai-cost-dashboard-entrypoint.sh --last-month"
+startCommand = "sh /app/railway-ai-cost-dashboard-entrypoint.sh --last-month --heartbeat ai-cost-dashboard-monthly"
 restartPolicyType = "NEVER"

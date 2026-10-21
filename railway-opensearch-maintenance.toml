@@ -33,5 +33,5 @@ dockerfilePath = "Dockerfile"
 # calling manage.py directly: a cron's startCommand REPLACES the
 # Dockerfile CMD (see the entrypoint header for what must be repeated).
 cronSchedule = "0 5 * * *"
-startCommand = "sh /app/railway-opensearch-maintenance-entrypoint.sh"
+startCommand = "sh /app/railway-opensearch-maintenance-entrypoint.sh --heartbeat opensearch-maintenance"
 restartPolicyType = "NEVER"

@@ -584,6 +584,9 @@ def _view_class(callback):
 # decision: say why in the PR that edits this set.
 _PUBLIC_DRF = {
     "api/v2/health/",
+    # MIP-772: the uptime probe's check on the alert cron. Its own bearer
+    # token, not a user's; 404 without it.
+    "api/v2/health/alerting/",
     "api/v2/user/signup/",
     "api/v2/user/signin/",
     "api/v2/user/signin/refresh/",

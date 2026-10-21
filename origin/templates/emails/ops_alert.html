@@ -1,0 +1,32 @@
+<html>
+  <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+    {% for alert in alerts %}
+    <div style="margin-bottom: 20px;">
+      <h3 style="margin-bottom: 4px;">{{ alert.state }}: {{ alert.summary }}</h3>
+      <p style="color: #666; margin-top: 0;">
+        {{ alert.kind_label }} &middot; opened {{ alert.opened_at|date:"Y-m-d H:i" }} UTC{% if alert.occurrences > 1 %}
+        &middot; seen {{ alert.occurrences }} times, last {{ alert.last_seen_at|date:"Y-m-d H:i" }} UTC{% endif %}
+      </p>
+      {% if alert.facts %}
+      <table style="font-size: 13px; border-collapse: collapse;">
+        {% for name, value in alert.facts %}
+        <tr>
+          <td style="color: #666; padding: 2px 12px 2px 0; vertical-align: top;">{{ name }}</td>
+          <td style="padding: 2px 0;"><code>{{ value }}</code></td>
+        </tr>
+        {% endfor %}
+      </table>
+      {% endif %}
+      {% if alert.runbook %}
+      <p style="margin-top: 8px;"><a href="{{ alert.runbook }}">Runbook: what to do</a></p>
+      {% endif %}
+    </div>
+    {% endfor %}
+    <p style="color: #666; font-size: 12px;">
+      Sent by the <code>ops-alert-tick</code> cron. Each incident is mailed
+      once; a recurrence while it is open is counted, not re-sent. It resolves
+      when its cause clears, or after an hour without a recurrence for
+      security alerts and server errors.
+    </p>
+  </body>
+</html>

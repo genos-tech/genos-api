@@ -45,5 +45,5 @@ dockerfilePath = "Dockerfile"
 # Dockerfile CMD, including the service-account decode this job needs to
 # authenticate to GCS (see the entrypoint header).
 cronSchedule = "15 6 * * *"
-startCommand = "sh /app/railway-ai-cost-dashboard-entrypoint.sh --days 1"
+startCommand = "sh /app/railway-ai-cost-dashboard-entrypoint.sh --days 1 --heartbeat ai-cost-dashboard-daily"
 restartPolicyType = "NEVER"

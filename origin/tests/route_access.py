@@ -253,6 +253,10 @@ REGISTRY = {
         "HMAC signature verified against the repo's webhook secret"
     ),
     # views.common.health_views
+    "origin.views.common.health_views.AlertingHealthView": public(
+        "outside probe of the alert cron; 404 without the OPS_HEALTH_TOKEN bearer, "
+        "and only a status, an age and a count with it"
+    ),
     "origin.views.common.health_views.HealthView": public(
         "liveness probe for the platform; returns no data"
     ),

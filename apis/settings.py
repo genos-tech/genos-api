@@ -103,6 +103,9 @@ MIDDLEWARE = [
     # First, so every log line and error answer of the request shares
     # its reference (apis/request_id.py, MIP-622).
     "apis.request_id.RequestIdMiddleware",
+    # Counts 5xx answers for the ops alert (MIP-772). Outside everything
+    # but the request id, so it sees a 500 from any layer below.
+    "origin.services.ops_alerts.ServerErrorBurstMiddleware",
     "corsheaders.middleware.CorsMiddleware",  # Add this line at the top
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -2190,6 +2193,26 @@ SECURITY_EVENT_RETENTION_MIN_DAYS = 90
 # raise a `security.alert`. Normal use hits a 403 rarely; walking through
 # ids that aren't yours hits one per id.
 SECURITY_FORBIDDEN_BURST = int(os.environ.get("SECURITY_FORBIDDEN_BURST", "20"))
+
+# --- Ops alerts (MIP-772, origin/services/ops_alerts.py) ---
+# Who `ops_alert_tick` mails, through the same Resend transport as every
+# other email. Read by that cron only; empty there means alerts are kept
+# but nobody is told, and the run fails so the gap is visible.
+OPS_ALERT_EMAIL = os.environ.get("OPS_ALERT_EMAIL", "").strip()
+# The alerts runbook; each email links to the section for what fired.
+OPS_RUNBOOK_URL = os.environ.get(
+    "OPS_RUNBOOK_URL",
+    "https://github.com/genos-tech/genos-docs/blob/main/operations/ALERTS.md",
+)
+# 5xx answers (excluding 501 and 503, which are deliberate) within a minute,
+# across every worker, that open a `server_errors` alert.
+OPS_5XX_BURST = int(os.environ.get("OPS_5XX_BURST") or "10")
+# Days before an OpenSearch certificate expires that it starts alerting.
+OPS_CERT_WARN_DAYS = int(os.environ.get("OPS_CERT_WARN_DAYS") or "30")
+# Bearer token the outside uptime probe sends to `api/v2/health/alerting/`
+# (genos-frontend's uptime workflow holds the same value as a secret). Empty
+# disables that endpoint: it answers 404.
+OPS_HEALTH_TOKEN = os.environ.get("OPS_HEALTH_TOKEN", "").strip()
 
 
 # --- OAuth (Google, GitHub) ---

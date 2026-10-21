@@ -19,10 +19,11 @@ line, so the Railway logs hold a copy even when the insert failed.
   403s within a minute (`ForbiddenBurstMiddleware`). That is what
   walking through someone else's ids looks like.
 
-There is no paging channel in this stack, so the WARNING line is the
-alert, as it is for AI spend; search the logs for `security.alert`.
-WARNING rather than ERROR because ERROR on this logger is what the cron
-tripwire treats as a failed run.
+Every `alert.*` row also opens an `OpsAlert`, which `ops_alert_tick`
+mails to `OPS_ALERT_EMAIL` (MIP-772). The WARNING line stays, as the
+copy in the logs; search them for `security.alert`. WARNING rather than
+ERROR because ERROR on this logger is what the cron tripwire treats as
+a failed run.
 """
 
 from __future__ import annotations
@@ -211,7 +212,15 @@ def record_security_event(
     )
     if action == SecurityAction.EXPORT:
         _alert(SecurityAction.ALERT_EXPORT, event, {"summary": "account data exported"})
+    elif action.startswith("alert."):
+        _page(event)
     return event
+
+
+def _page(event: SecurityEvent) -> None:
+    from origin.services import ops_alerts  # noqa: PLC0415 — imports models
+
+    ops_alerts.raise_security_alert(event)
 
 
 def _alert(action: str, cause: SecurityEvent, metadata: dict) -> None:
@@ -228,7 +237,7 @@ def _alert(action: str, cause: SecurityEvent, metadata: dict) -> None:
     )
     try:
         with transaction.atomic():
-            SecurityEvent.objects.create(
+            alert = SecurityEvent.objects.create(
                 action=action,
                 actor_id=cause.actor_id,
                 actor_label=cause.actor_label,
@@ -243,6 +252,8 @@ def _alert(action: str, cause: SecurityEvent, metadata: dict) -> None:
             )
     except Exception:
         logger.exception("security.alert write failed action=%s", action)
+        return
+    _page(alert)
 
 
 def _first_in_window(key: str, seconds: int) -> bool:

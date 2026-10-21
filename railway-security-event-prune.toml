@@ -25,5 +25,5 @@ dockerfilePath = "Dockerfile"
 [deploy]
 # Daily, half an hour after the demo cleanup so the two don't contend.
 cronSchedule = "30 3 * * *"
-startCommand = "python /app/manage.py prune_security_events"
+startCommand = "python /app/manage.py prune_security_events --heartbeat security-event-prune"
 restartPolicyType = "NEVER"
