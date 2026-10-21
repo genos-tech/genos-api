@@ -534,6 +534,20 @@ class TestTick(_NoReconnect, TestCase):
         self.assertNotIn("do-not-mail", mail.outbox[0].body)
         self.assertNotIn("do-not-mail", mail.outbox[0].alternatives[0][0])
 
+    def test_the_text_part_is_not_html_escaped_and_the_html_part_is(self):
+        # A cron's error usually quotes something: CommandError's
+        # "'gs://' names no bucket" arrived as "&#x27;gs://&#x27;".
+        ops_alerts.raise_alert(
+            OpsAlertKind.CRON_FAILED,
+            "cron:x",
+            "Cron x failed",
+            {"service": "x", "error": "CommandError: 'gs://' <b>&"},
+        )
+        self.tick()
+        message = mail.outbox[0]
+        self.assertIn("Error: CommandError: 'gs://' <b>&", message.body)
+        self.assertIn("&#x27;gs://&#x27; &lt;b&gt;&amp;", message.alternatives[0][0])
+
     def test_a_failed_send_fails_the_run_and_keeps_the_rows(self):
         ops_alerts.raise_alert(OpsAlertKind.SECURITY, "k", "s")
         with mock.patch(

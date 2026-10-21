@@ -1,4 +1,4 @@
-{% for alert in alerts %}{{ alert.state }}: {{ alert.summary }}
+{% autoescape off %}{# Plain text: an error quoting 'gs://' must not arrive as &#x27;gs://&#x27;. #}{% for alert in alerts %}{{ alert.state }}: {{ alert.summary }}
   {{ alert.kind_label }} · opened {{ alert.opened_at|date:"Y-m-d H:i" }} UTC{% if alert.occurrences > 1 %} · seen {{ alert.occurrences }} times, last {{ alert.last_seen_at|date:"Y-m-d H:i" }} UTC{% endif %}
 {% for name, value in alert.facts %}  {{ name }}: {{ value }}
 {% endfor %}{% if alert.runbook %}  Runbook: {{ alert.runbook }}
@@ -8,3 +8,4 @@ Sent by the ops-alert-tick cron. Each incident is mailed once; a
 recurrence while it is open is counted, not re-sent. It resolves when its
 cause clears, or after an hour without a recurrence for security alerts
 and server errors.
+{% endautoescape %}
