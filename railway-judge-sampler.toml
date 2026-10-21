@@ -44,5 +44,5 @@ dockerfilePath = "Dockerfile"
 # decode the Gemini SDK falls back to the AI-Studio API-key path and every
 # judge call 400s with `API_KEY_INVALID`. Same pattern as the reindexer.
 cronSchedule = "0 * * * *"
-startCommand = "sh /app/railway-judge-sampler-entrypoint.sh"
+startCommand = "sh /app/railway-judge-sampler-entrypoint.sh --heartbeat agent-judge-sampler"
 restartPolicyType = "NEVER"

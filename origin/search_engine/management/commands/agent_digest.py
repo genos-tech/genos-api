@@ -54,9 +54,9 @@ import re
 from datetime import timedelta
 
 from django.conf import settings
-from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+from origin.management.cron_command import HeartbeatCommand
 from origin.models.common.inbox_models import InboxItems
 from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
@@ -301,7 +301,7 @@ If — and only if — there is genuinely nothing worth their attention, reply \
 with exactly NOTHING_TO_REPORT and nothing else."""
 
 
-class Command(BaseCommand):
+class Command(HeartbeatCommand):
     help = (
         "Hourly digest tick: generate + deliver the proactive Genos digest "
         "to users whose tier grants one and whose local time matches."

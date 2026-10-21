@@ -44,5 +44,5 @@ dockerfilePath = "Dockerfile"
 # reindex. `--since-minutes` stays here next to cronSchedule — bump both
 # together to change cadence.
 cronSchedule = "*/10 * * * *"
-startCommand = "sh /app/railway-reindexer-entrypoint.sh --since-minutes 11"
+startCommand = "sh /app/railway-reindexer-entrypoint.sh --since-minutes 11 --heartbeat opensearch-reindexer"
 restartPolicyType = "NEVER"

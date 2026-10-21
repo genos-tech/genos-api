@@ -47,5 +47,5 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 cronSchedule = "*/5 * * * *"
-startCommand = "sh /app/railway-reminder-tick-entrypoint.sh --drain-seconds 240"
+startCommand = "sh /app/railway-reminder-tick-entrypoint.sh --drain-seconds 240 --heartbeat reminder-tick"
 restartPolicyType = "NEVER"

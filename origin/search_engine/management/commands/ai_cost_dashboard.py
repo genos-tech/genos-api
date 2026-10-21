@@ -12,10 +12,11 @@ The same ledger `ai_cost_report` prints, rendered for looking at rather
 than reading. Use the report when you want an exit code (it is the
 budget alarm); use this when you want to see the shape of the spend.
 
-Deliberately a plain `BaseCommand`, NOT a `CronCommand`: `CronCommand`
-turns a logged ERROR into a non-zero exit, which is how the budget alarm
-reds a Cloud Run job. Rendering a page must never be able to fire that
-alarm.
+Deliberately NOT a `CronCommand`: `CronCommand` turns a logged ERROR
+into a non-zero exit, which is how the budget alarm reds a Cloud Run
+job. Rendering a page must never be able to fire that alarm. It is a
+`HeartbeatCommand`, which adds only `--heartbeat`, so a run that does
+exit non-zero, or stops running, still reaches a person (MIP-772).
 
 The output is one self-contained file — no CDN, no external font, no
 network at open time — so it can be scp'd, mailed, or attached to a
@@ -59,9 +60,10 @@ from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import CommandError
 from django.utils import timezone
 
+from origin.management.cron_command import HeartbeatCommand
 from origin.search_engine import cost_dashboard
 
 _DEFAULT_OUT = "ai_cost_dashboard.html"
@@ -99,7 +101,7 @@ def _gcs_credentials():
     return credentials
 
 
-class Command(BaseCommand):
+class Command(HeartbeatCommand):
     help = "Render the AI cost ledger to a self-contained HTML dashboard."
 
     def add_arguments(self, parser):

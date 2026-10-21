@@ -21,5 +21,5 @@ dockerfilePath = "Dockerfile"
 # calendar-exact window is the monthly one, because that is the period
 # providers actually bill.
 cronSchedule = "30 6 * * 1"
-startCommand = "sh /app/railway-ai-cost-dashboard-entrypoint.sh --days 7"
+startCommand = "sh /app/railway-ai-cost-dashboard-entrypoint.sh --days 7 --heartbeat ai-cost-dashboard-weekly"
 restartPolicyType = "NEVER"

@@ -28,5 +28,5 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 cronSchedule = "*/5 * * * *"
-startCommand = "sh /app/railway-email-notify-entrypoint.sh"
+startCommand = "sh /app/railway-email-notify-entrypoint.sh --heartbeat email-notify"
 restartPolicyType = "NEVER"

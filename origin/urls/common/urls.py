@@ -38,7 +38,7 @@ from origin.views.common.github_views import (
     GithubPullsForTaskView,
     GithubWebhookView,
 )
-from origin.views.common.health_views import HealthView
+from origin.views.common.health_views import AlertingHealthView, HealthView
 from origin.views.common.inbox_views import *
 from origin.views.common.mention_group_views import (
     MentionGroupMembersView,
@@ -88,6 +88,9 @@ user_list = UserViewSet.as_view({"post": "create"})
 urlpatterns = [
     # Deploy-readiness probe (Railway healthcheckPath). Unauthenticated.
     path("api/v2/health/", HealthView.as_view(), name="health"),
+    # The outside probe's check on the alert pipeline (MIP-772). Bearer
+    # OPS_HEALTH_TOKEN, else 404.
+    path("api/v2/health/alerting/", AlertingHealthView.as_view(), name="health_alerting"),
     # User
     path("api/v2/user/signup/", user_list, name="signup"),
     path("api/v2/user/signin/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),

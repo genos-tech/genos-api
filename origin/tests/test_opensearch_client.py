@@ -74,6 +74,25 @@ class TestProductionShape(SimpleTestCase):
         self.assertEqual(subjects, [{"commonName": "genos-test-ca"}])
         self.assertTrue(ctx.check_hostname)
 
+    def test_tls_1_2_is_the_floor_even_where_the_default_is_lower(self):
+        # An OpenSSL build whose default context still allows TLS 1.0.
+        real = ssl.create_default_context
+
+        def loose(*args, **kwargs):
+            ctx = real(*args, **kwargs)
+            ctx.options &= ~(ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1)
+            ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
+            return ctx
+
+        pem = base64.b64encode(_ca_pem("genos-test-ca")).decode()
+        with mock.patch.object(opensearch_client.ssl, "create_default_context", loose):
+            for ca in ("", pem):
+                with self.subTest(pinned_ca=bool(ca)):
+                    ctx = build_client_kwargs(_cfg(OPENSEARCH_CA_CERT=ca), debug=False)[
+                        "ssl_context"
+                    ]
+                    self.assertEqual(ctx.minimum_version, ssl.TLSVersion.TLSv1_2)
+
     def test_refuses_a_ca_that_is_not_base64(self):
         with self.assertRaisesMessage(ImproperlyConfigured, "not valid base64"):
             build_client_kwargs(_cfg(OPENSEARCH_CA_CERT="-----BEGIN CERTIFICATE-----"), debug=False)
