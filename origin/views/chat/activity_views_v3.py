@@ -23,9 +23,13 @@ the `ActivityFact` model (now deleted). FE reads from this directly
 and also receives live `activity.created` events over the v3 WS.
 """
 
+import base64
+import binascii
+import json
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
@@ -58,6 +62,36 @@ def _parse_since(raw):
     return parsed
 
 
+def _encode_cursor(row) -> str:
+    """An opaque position in the newest-first order: the last row returned.
+
+    `ts_created_at` alone is not enough: rows can share a timestamp, and a
+    cursor on it would skip or repeat the ones at the boundary. `id` breaks
+    the tie, so `(ts_created_at, id)` is a total order. Opaque (base64 JSON)
+    so a client doesn't depend on its shape.
+    """
+    raw = json.dumps({"t": row.ts_created_at.isoformat(), "i": str(row.id)})
+    return base64.urlsafe_b64encode(raw.encode()).decode()
+
+
+def _decode_cursor(raw):
+    """`(datetime, uuid string)` or `None` for absent OR unreadable input.
+
+    A cursor that doesn't decode is treated as no cursor: the first page,
+    never a 500 and never a page that silently starts somewhere else.
+    """
+    if not raw:
+        return None
+    try:
+        data = json.loads(base64.urlsafe_b64decode(str(raw).encode()))
+        when = datetime.fromisoformat(data["t"])
+        if timezone.is_naive(when):
+            when = timezone.make_aware(when)
+        return when, str(uuid.UUID(str(data["i"])))
+    except (ValueError, KeyError, TypeError, binascii.Error, json.JSONDecodeError):
+        return None
+
+
 class ActivityListView(AuthenticatedAPIView):
     """GET /api/v3/activities/?since=ISO&team_id=UUID
 
@@ -70,6 +104,14 @@ class ActivityListView(AuthenticatedAPIView):
     included), so narrowing is all it takes. Same fix, same reasoning as
     `ChannelListView`, which the chat list already relies on; unnarrowed
     is the compatibility path rather than the intended one.
+
+    **A page is the `_MAX_ROWS` newest rows, and the response says so.** It
+    used to cut at 200 silently, and the client stores `server_time` as its
+    next `since`, so a user with more than 200 entries lost the rest for good
+    (on a full load it wiped the store first). `has_more` says there is an
+    older page; `next_cursor` is the position to pass back as `?cursor=` to
+    get it. A request with no `cursor` is unchanged, so an old client keeps
+    working and still gets the newest page (MIP-740).
     """
 
     def get(self, request):
@@ -119,13 +161,24 @@ class ActivityListView(AuthenticatedAPIView):
                 "message__mentions",
                 "message__attachments",
             )
-            .order_by("-ts_created_at")[:_MAX_ROWS]
+            .order_by("-ts_created_at", "-id")
         )
+        position = _decode_cursor(request.GET.get("cursor"))
+        if position is not None:
+            when, row_id = position
+            # Strictly older in the (ts_created_at, id) order.
+            qs = qs.filter(Q(ts_created_at__lt=when) | Q(ts_created_at=when, id__lt=row_id))
+        # One past the page, to know whether there is another without a COUNT.
+        rows = list(qs[: _MAX_ROWS + 1])
+        has_more = len(rows) > _MAX_ROWS
+        rows = rows[:_MAX_ROWS]
         return Response(
             {
-                "activities": ActivitySerializer(qs, many=True).data,
+                "activities": ActivitySerializer(rows, many=True).data,
                 "since": since.isoformat(),
                 "server_time": timezone.now().isoformat(),
+                "has_more": has_more,
+                "next_cursor": _encode_cursor(rows[-1]) if has_more else None,
             }
         )
 
