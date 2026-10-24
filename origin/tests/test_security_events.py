@@ -42,6 +42,7 @@ from origin.services import blind_index, security_events, throttles
 from origin.services.account_deletion import delete_account
 from origin.services.member_roles import EDITOR
 from origin.services.oauth.base import ProviderProfile, TokenResponse
+from origin.services.pii_mask import mask_email
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.common.oauth_views import OAuthCallbackView
 
@@ -267,7 +268,7 @@ class TestSignIn(SecurityEventCase):
         self.assertEqual(self._signin().status_code, 200)
         row = self.one(SecurityAction.SIGNIN_SUCCEEDED)
         self.assertEqual(row.actor_id, self.user.id)
-        self.assertEqual(row.actor_label, self.user.email)
+        self.assertEqual(row.actor_label, mask_email(self.user.email))
         self.assertEqual(row.source, SecuritySource.APP)
         self.assertEqual(row.metadata["method"], "password")
         self.assertIsNone(row.team_id, "a sign-in is the person's, not a team's")
@@ -276,7 +277,7 @@ class TestSignIn(SecurityEventCase):
         self.assertEqual(self._signin(password="nope-nope").status_code, 401)
         row = self.one(SecurityAction.SIGNIN_FAILED)
         self.assertIsNone(row.actor_id)
-        self.assertEqual(row.actor_label, self.user.email)
+        self.assertEqual(row.actor_label, mask_email(self.user.email))
         self.assertEqual(row.target_id, str(self.user.id))
         self.assertEqual(row.source, SecuritySource.ANONYMOUS)
         self.assertEqual(row.metadata["reason"], "bad_credentials")
@@ -285,7 +286,7 @@ class TestSignIn(SecurityEventCase):
     def test_an_unknown_address_is_recorded_without_a_target(self):
         self._signin(email="nobody@example.com")
         row = self.one(SecurityAction.SIGNIN_FAILED)
-        self.assertEqual(row.actor_label, "nobody@example.com")
+        self.assertEqual(row.actor_label, mask_email("nobody@example.com"))
         self.assertEqual(row.target_id, "")
 
     def test_the_password_is_never_stored(self):
@@ -326,7 +327,7 @@ class TestSignIn(SecurityEventCase):
         self.assertEqual(res.status_code, 201)
         row = self.one(SecurityAction.SIGNIN_SUCCEEDED)
         self.assertEqual(row.metadata["method"], "invite_signup")
-        self.assertEqual(row.actor_label, "fresh@example.com")
+        self.assertEqual(row.actor_label, mask_email("fresh@example.com"))
 
     def test_sign_out(self):
         self.authenticate(self.user)
@@ -360,7 +361,7 @@ class TestOAuthSignIn(SecurityEventCase):
         self._login("new-sub", "new-google@example.com")
         row = self.one(SecurityAction.SIGNIN_SUCCEEDED)
         self.assertEqual(row.metadata["method"], "google")
-        self.assertEqual(row.actor_label, "new-google@example.com")
+        self.assertEqual(row.actor_label, mask_email("new-google@example.com"))
 
     @mock.patch("origin.views.common.oauth_views.OAuthCallbackView._issue_jwt")
     def test_an_address_already_in_use_is_a_failure(self, jwt):
@@ -425,7 +426,7 @@ class TestPasswordReset(SecurityEventCase):
             "/api/v2/user/password-reset/request/", {"email": "ghost@example.com"}, format="json"
         )
         row = self.one(SecurityAction.PASSWORD_RESET_REQUESTED)
-        self.assertEqual(row.actor_label, "ghost@example.com")
+        self.assertEqual(row.actor_label, mask_email("ghost@example.com"))
         self.assertFalse(row.metadata["issued"])
 
     def test_the_reset_itself(self):
@@ -588,7 +589,7 @@ class TestTeamMembership(SecurityEventCase):
         row = self.one(SecurityAction.MEMBER_ADDED)
         self.assertEqual(row.actor_id, self.user.id)
         self.assertEqual(row.target_id, str(self.newcomer.id))
-        self.assertEqual(row.target_label, "new@example.com")
+        self.assertEqual(row.target_label, mask_email("new@example.com"))
         self.assertEqual(row.metadata["via"], "direct")
 
     def test_rejoining_by_yourself_is_labelled_as_such(self):
@@ -764,7 +765,7 @@ class TestInvites(SecurityEventCase):
         )
         self.assertEqual(res.status_code, 200, res.data)
         sent = self.one(SecurityAction.INVITE_SENT)
-        self.assertEqual(sent.target_label, "invitee@example.com")
+        self.assertEqual(sent.target_label, mask_email("invitee@example.com"))
         self.assertEqual(sent.team_id, self.team.team_id)
 
         invitee = User.objects.create_user(
@@ -899,8 +900,8 @@ class TestAccountDeletion(SecurityEventCase):
         email = self.user2.email
         delete_account(self.user2)
         deleted = self.one(SecurityAction.ACCOUNT_DELETED)
-        self.assertEqual(deleted.target_label, email)
-        self.assertEqual(deleted.actor_label, email)
+        self.assertEqual(deleted.target_label, mask_email(email))
+        self.assertEqual(deleted.actor_label, mask_email(email))
         self.assertEqual(deleted.metadata["api_keys_revoked"], 1)
         left = self.one(SecurityAction.MEMBER_REMOVED)
         self.assertEqual(left.team_id, self.team.team_id)

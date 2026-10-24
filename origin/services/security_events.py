@@ -45,6 +45,7 @@ from origin.models.common.security_event_models import (
     SecuritySource,
 )
 from origin.services import throttles
+from origin.services.pii_mask import mask_email
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +159,10 @@ def record_security_event(
     the team and the target. Pass `actor` when the request's user isn't
     the one acting: a sign-in, where nobody is authenticated yet.
     `actor_label` is for when there is no user at all, such as the
-    address a failed sign-in tried. `api_key` is for the authenticator,
+    address a failed sign-in tried. Both labels are stored with any email
+    in them masked (`k***@gmail.com`, `pii_mask.mask_email`), here and
+    not at the call sites: the row outlives the user, and a dump of this
+    table must not hand over addresses (MIP-765). `api_key` is for the authenticator,
     which runs before DRF has put the key on the request; anywhere else
     it is read from `request.auth`.
     """
@@ -184,11 +188,11 @@ def record_security_event(
             event = SecurityEvent.objects.create(
                 action=action,
                 actor_id=getattr(actor, "pk", None),
-                actor_label=(actor_label or _label(actor))[:_LABEL_MAX],
+                actor_label=mask_email(actor_label or _label(actor))[:_LABEL_MAX],
                 team_id=team_id or None,
                 target_type=target_type,
                 target_id=str(target_id or "")[:64],
-                target_label=str(target_label or "")[:_LABEL_MAX],
+                target_label=mask_email(str(target_label or ""))[:_LABEL_MAX],
                 source=source,
                 api_key_id=api_key_id,
                 ip=client_ip(request),
@@ -240,7 +244,9 @@ def _alert(action: str, cause: SecurityEvent, metadata: dict) -> None:
             alert = SecurityEvent.objects.create(
                 action=action,
                 actor_id=cause.actor_id,
-                actor_label=cause.actor_label,
+                # Masked again, not copied as stored: a cause written before
+                # MIP-765 (or before its backfill ran) still holds the address.
+                actor_label=mask_email(cause.actor_label),
                 team_id=cause.team_id,
                 target_type="security_event",
                 target_id=str(cause.event_id),
