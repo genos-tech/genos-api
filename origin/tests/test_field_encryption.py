@@ -431,12 +431,16 @@ class TestLegacyUserTokenIsGone(BaseAPITestCase):
         names = {f.name for f in self.user._meta.get_fields()}
         self.assertFalse({"token", "token_expiration"} & names)
 
-    def test_the_columns_are_cleared_but_still_exist(self):
-        # The previous release selects them during a deploy (MIP-757
-        # drops them).
+    def test_the_columns_are_gone_from_the_table(self):
+        # Migration 0199 emptied them and left them for the previous
+        # release to select during a deploy; 0206 (MIP-757) dropped them.
+        # The model test above only proves Django doesn't know them: this
+        # proves the table doesn't have them either, so a column added back
+        # by hand or by a bad merge fails here.
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT count(*) FROM origin_customuser"
-                " WHERE token IS NOT NULL OR token_expiration IS NOT NULL"
+                "SELECT column_name FROM information_schema.columns"
+                " WHERE table_name = 'origin_customuser'"
+                " AND column_name IN ('token', 'token_expiration')"
             )
-            self.assertEqual(cursor.fetchone()[0], 0)
+            self.assertEqual(cursor.fetchall(), [])
