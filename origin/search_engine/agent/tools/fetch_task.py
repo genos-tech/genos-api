@@ -21,6 +21,7 @@ from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
     ToolError,
+    ToolForbidden,
     wrap_workspace_content,
 )
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
@@ -52,7 +53,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # Tenant guard first — never leak data across teams even if the
     # within-team ACL check would let the user through.
     if str(getattr(task, "team_id", "") or "") != ctx.team_id:
-        raise ToolError("Not authorized: task is in a different team.")
+        raise ToolForbidden("Not authorized: task is in a different team.")
 
     allowed = task_acl_user_ids(
         getattr(task, "project_id", None),
@@ -60,7 +61,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         getattr(task, "reporter_id", None),
     )
     if ctx.user_id not in allowed:
-        raise ToolError(f"Not authorized to read task {task_id}.")
+        raise ToolForbidden(f"Not authorized to read task {task_id}.")
 
     content_text = extract_text(task.content)
     # `content_markdown` keeps the body's structure — headings, list

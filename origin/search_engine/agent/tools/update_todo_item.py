@@ -15,7 +15,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 
 
 def _wrap_notes(text: str) -> list[dict[str, Any]] | None:
@@ -49,9 +49,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"Todo item {item_id} not found.")
 
     if str(item.group.user_id) != ctx.user_id:
-        raise ToolError("Not authorized to update this todo item.")
+        raise ToolForbidden("Not authorized to update this todo item.")
     if str(item.group.team_id or "") != ctx.team_id:
-        raise ToolError("Todo item belongs to a different team.")
+        raise ToolForbidden("Todo item belongs to a different team.")
 
     with transaction.atomic():
         # Title

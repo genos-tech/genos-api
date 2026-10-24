@@ -97,7 +97,8 @@ from django.conf import settings
 
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.tools import REGISTRY
-from origin.search_engine.agent.tools.base import ToolContext, ToolError
+from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
+from origin.services.security_events import note_refusal
 from origin.views.public.mcp.resolve import resolve_note_ref, resolve_task_ref
 
 log = logging.getLogger(__name__)
@@ -963,6 +964,9 @@ def call(
         raise on_unknown_tool(name)
 
     if tool.write and scope != SCOPE_WRITE:
+        # A refusal that is HTTP 200, so the burst alert would never see it
+        # (MIP-744).
+        note_refusal()
         return _text_result(
             f"`{name}` writes to the workspace, and this API key is read-only. "
             f"Create a key with write scope in Genos under Settings → Developer, "
@@ -970,6 +974,7 @@ def call(
             is_error=True,
         )
     if tool.destructive and not allow_destructive:
+        note_refusal()
         return _text_result(
             f"`{name}` can't be undone, and this API key wasn't opted into "
             f"destructive tools. Ask the user to do it in Genos, or to create a "
@@ -1006,6 +1011,11 @@ def call(
     except ToolError as exc:
         # The tool's own vocabulary — not authorized, not found, invalid
         # argument. Exactly the feedback a model can retry against.
+        # Only an authorization failure counts toward the refusal burst:
+        # a bad argument or a missing id is a mistake, not probing, and the
+        # caller is told the same either way (MIP-744).
+        if isinstance(exc, ToolForbidden):
+            note_refusal()
         return _text_result(str(exc), is_error=True)
 
     fenced: list[bool] = []

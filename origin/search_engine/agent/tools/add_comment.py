@@ -22,7 +22,7 @@ from django.db import transaction
 from apis.request_id import log_failure
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
@@ -88,14 +88,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"Task {task_id} has been deleted.")
 
     if str(getattr(task, "team_id", "") or "") != ctx.team_id:
-        raise ToolError("Not authorized: task is in a different team.")
+        raise ToolForbidden("Not authorized: task is in a different team.")
     allowed = task_acl_user_ids(
         getattr(task, "project_id", None),
         getattr(task, "assignee_id", None),
         getattr(task, "reporter_id", None),
     )
     if ctx.user_id not in allowed:
-        raise ToolError(f"Not authorized to comment on task {task_id}.")
+        raise ToolForbidden(f"Not authorized to comment on task {task_id}.")
 
     # `comment_id` is per-task (UniqueConstraint(task, comment_id)).
     # Wrap the count + insert in a transaction so concurrent inserts

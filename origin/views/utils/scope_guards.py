@@ -55,6 +55,7 @@ from rest_framework.response import Response
 
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.services.security_events import note_refusal
 
 # Deliberately vague, and identical for "no such team" and "not yours".
 _TEAM_MISSING = "Team not found."
@@ -618,18 +619,29 @@ def require_team_member_or_response(user, team_id):
         if res := require_team_member_or_response(request.user, team_id):
             return res
     """
+    exists = _no_such(lambda: TeamMaster.objects.filter(team_id=team_id, is_deleted=False).exists())
     if not is_team_member(team_id, getattr(user, "id", None)):
+        # The team is real and the caller is outside it: a refusal, not a
+        # typo. The answer stays the same 404 (a 403 would confirm the id),
+        # but it counts toward the refusal burst (MIP-744).
+        if exists:
+            note_refusal()
         return Response({"error": _TEAM_MISSING}, status=status.HTTP_404_NOT_FOUND)
-    if not TeamMaster.objects.filter(team_id=team_id, is_deleted=False).exists():
+    if not exists:
         return Response({"error": _TEAM_MISSING}, status=status.HTTP_404_NOT_FOUND)
     return None
 
 
 def require_project_member_or_response(user, project_id):
     """`None` when allowed, else a 404 `Response`."""
+    exists = _no_such(
+        lambda: ProjectMaster.objects.filter(project_id=project_id, is_deleted=False).exists()
+    )
     if not is_project_member(project_id, getattr(user, "id", None)):
+        if exists:
+            note_refusal()
         return Response({"error": _PROJECT_MISSING}, status=status.HTTP_404_NOT_FOUND)
-    if not ProjectMaster.objects.filter(project_id=project_id, is_deleted=False).exists():
+    if not exists:
         return Response({"error": _PROJECT_MISSING}, status=status.HTTP_404_NOT_FOUND)
     return None
 

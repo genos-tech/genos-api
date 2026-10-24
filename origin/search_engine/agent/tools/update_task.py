@@ -23,7 +23,7 @@ from apis.request_id import log_failure
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
@@ -60,14 +60,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # Tenant + ACL: identical to the read-side fetch_task. A user who
     # can't see the task can't edit it.
     if str(getattr(task, "team_id", "") or "") != ctx.team_id:
-        raise ToolError("Not authorized: task is in a different team.")
+        raise ToolForbidden("Not authorized: task is in a different team.")
     allowed = task_acl_user_ids(
         getattr(task, "project_id", None),
         getattr(task, "assignee_id", None),
         getattr(task, "reporter_id", None),
     )
     if ctx.user_id not in allowed:
-        raise ToolError(f"Not authorized to update task {task_id}.")
+        raise ToolForbidden(f"Not authorized to update task {task_id}.")
 
     update_fields: list[str] = []
     changed: list[str] = []

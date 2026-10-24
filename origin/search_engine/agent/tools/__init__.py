@@ -44,7 +44,13 @@ from origin.search_engine.agent.model_fence import with_unfenced_arguments
 from origin.search_engine.agent.tools.add_comment import ADD_COMMENT
 from origin.search_engine.agent.tools.add_task_delivery import ADD_TASK_DELIVERY
 from origin.search_engine.agent.tools.assign_task import ASSIGN_TASK
-from origin.search_engine.agent.tools.base import REGISTRY, Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import (
+    REGISTRY,
+    Tool,
+    ToolContext,
+    ToolError,
+    ToolForbidden,
+)
 from origin.search_engine.agent.tools.create_calendar_event import CREATE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.create_note import CREATE_NOTE
 from origin.search_engine.agent.tools.create_task import CREATE_TASK
@@ -271,6 +277,7 @@ __all__ = [
     "Tool",
     "ToolContext",
     "ToolError",
+    "ToolForbidden",
     "UPDATE_CALENDAR_EVENT",
     "UPDATE_NOTE",
     "UPDATE_TASK",

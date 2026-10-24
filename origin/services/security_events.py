@@ -406,6 +406,36 @@ def note_forbidden(request) -> None:
     )
 
 
+def note_refusal() -> None:
+    """Count one refusal that never became a 403, for the request in flight.
+
+    The burst alert was blind to the probing it exists for. A refused MCP
+    tool call is HTTP 200 with `isError: true`, and a tenant guard answers
+    404 on purpose (a 403 would confirm the id names something real). Both
+    are an authorization failure, and neither passes through
+    `ForbiddenBurstMiddleware`, so a leaked key walking other teams' ids
+    never tripped the alert (MIP-744).
+
+    Call this AT THE GUARD, on the branch where the row exists and the
+    caller may not have it, not from a status code: a 404 for an id that
+    never existed, or a stale link to a deleted row, is a typo and not a
+    probe. The response the caller gets is unchanged.
+
+    Takes no request: it reads the one `CurrentUserMiddleware` holds, as
+    `record_security_event` does, so a guard deep in a view needs nothing
+    threaded through. Counts into the same per-caller window as a real 403,
+    so a mix of the two reaches the one threshold. Never raises: a counting
+    failure must not turn a refusal into a 500.
+    """
+    try:
+        request = getattr(current_user._state, "request", None)
+        if request is None:
+            return
+        note_forbidden(request)
+    except Exception:
+        logger.exception("security.refusal count failed")
+
+
 class ForbiddenBurstMiddleware:
     """Counts every 403 the app answers, wherever it came from.
 

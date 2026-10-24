@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.task_tags import project_tag_catalogue
 
 
@@ -33,10 +33,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"Project {project_id} not found.")
 
     if str(getattr(project, "team_id", "") or "") != ctx.team_id:
-        raise ToolError("Not authorized: project belongs to a different team.")
+        raise ToolForbidden("Not authorized: project belongs to a different team.")
 
     if not ProjectMembers.objects.filter(project_id=project_id, attendee_id=ctx.user_id).exists():
-        raise ToolError(
+        raise ToolForbidden(
             f"Not authorized to access project {project_id}. You are not a member of that project."
         )
 

@@ -33,7 +33,7 @@ from django.db.models import Q
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.task_tags import tag_names
 from origin.services.user_time import today_for_user_id
 
@@ -105,7 +105,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # user isn't a member of is not allowed even if they're the
         # assignee on some tasks within it.
         if project_id not in member_project_ids:
-            raise ToolError(
+            raise ToolForbidden(
                 f"Not authorized to list all tasks in project {project_id}. "
                 "You are not a member of that project."
             )
@@ -153,9 +153,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         except MilestoneMaster.DoesNotExist:
             raise ToolError(f"Milestone {milestone_id} not found.")
         if str(getattr(milestone, "team_id", "") or "") != ctx.team_id:
-            raise ToolError("Not authorized: milestone is in a different team.")
+            raise ToolForbidden("Not authorized: milestone is in a different team.")
         if milestone.project_id not in member_project_ids:
-            raise ToolError(
+            raise ToolForbidden(
                 f"Not authorized to list tasks in milestone {milestone_id}. "
                 "You are not a member of that project."
             )

@@ -32,7 +32,7 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import owns_personal_folder, task_acl_user_ids
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.search_engine.agent.tools.body_mentions import notify_note_mentions
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
@@ -201,11 +201,11 @@ def _create_task_note(
         raise ToolError(f"Project {project_id} not found.")
 
     if str(getattr(project, "team_id", "") or "") != ctx.team_id:
-        raise ToolError("Not authorized: project belongs to a different team.")
+        raise ToolForbidden("Not authorized: project belongs to a different team.")
 
     allowed = task_acl_user_ids(project_id=project_id, assignee_id=None, reporter_id=None)
     if ctx.user_id not in allowed:
-        raise ToolError(f"Not authorized to create notes in project {project_id}.")
+        raise ToolForbidden(f"Not authorized to create notes in project {project_id}.")
 
     # Optional task attachment. If supplied, verify the task lives in the
     # same project we just authorized against — prevents an oblique

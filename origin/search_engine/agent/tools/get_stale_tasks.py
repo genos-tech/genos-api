@@ -23,7 +23,7 @@ from django.utils import timezone
 
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 
 _MAX_DAYS = 365
 _MAX_LIMIT = 50
@@ -61,7 +61,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         except (TypeError, ValueError):
             raise ToolError(f"`project_id` must be an integer (got {raw_project_id!r}).")
         if scoped_project_id not in member_project_ids:
-            raise ToolError(
+            raise ToolForbidden(
                 f"Not authorized to query project {scoped_project_id}. "
                 "You are not a member of that project."
             )

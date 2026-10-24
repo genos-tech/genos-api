@@ -43,6 +43,7 @@ from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
     ToolError,
+    ToolForbidden,
     wrap_workspace_content,
 )
 from origin.services.github_webhooks import ensure_repo_webhook, parse_pr_url_full
@@ -150,14 +151,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # Tenant + ACL: identical to update_task. A user who can't edit the
     # task can't record what is delivering it.
     if str(getattr(task, "team_id", "") or "") != ctx.team_id:
-        raise ToolError("Not authorized: task is in a different team.")
+        raise ToolForbidden("Not authorized: task is in a different team.")
     allowed = task_acl_user_ids(
         getattr(task, "project_id", None),
         getattr(task, "assignee_id", None),
         getattr(task, "reporter_id", None),
     )
     if ctx.user_id not in allowed:
-        raise ToolError(f"Not authorized to update task {task_id}.")
+        raise ToolForbidden(f"Not authorized to update task {task_id}.")
 
     state = None
     merged_at = None

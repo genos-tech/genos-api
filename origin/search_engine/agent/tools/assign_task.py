@@ -34,7 +34,7 @@ from apis.request_id import log_failure
 from origin.models.common.user_models import CustomUser
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.views.utils.scope_guards import is_team_member
 
 
@@ -56,7 +56,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     # Layer 1 — tenant guard.
     if str(getattr(task, "team_id", "") or "") != ctx.team_id:
-        raise ToolError("Not authorized: task is in a different team.")
+        raise ToolForbidden("Not authorized: task is in a different team.")
 
     # Layer 2 — editor guard (same set as fetch_task / update_task).
     allowed = task_acl_user_ids(
@@ -65,7 +65,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         getattr(task, "reporter_id", None),
     )
     if ctx.user_id not in allowed:
-        raise ToolError(f"Not authorized to update task {task_id}.")
+        raise ToolForbidden(f"Not authorized to update task {task_id}.")
 
     # --- Resolve the new assignee (or None for unassign). ---
     raw_assignee_id = args.get("assignee_id")

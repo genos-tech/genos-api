@@ -27,6 +27,7 @@ from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
     ToolError,
+    ToolForbidden,
     wrap_workspace_content,
 )
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
@@ -82,7 +83,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if not allowed:
         raise ToolError(f"Chat {chat_type_label}:{chat_id} not found or has no members.")
     if ctx.user_id not in allowed:
-        raise ToolError(f"Not authorized to read chat {chat_type_label}:{chat_id}.")
+        raise ToolForbidden(f"Not authorized to read chat {chat_type_label}:{chat_id}.")
 
     # Resolve the chat ref to its v3 channel by UUID. PM may have allowed
     # members (via ProjectMembers) yet no channel row — treat as empty.
