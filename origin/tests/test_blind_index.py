@@ -532,6 +532,15 @@ class TestCronsRefuseAMissingKey(_Keys, TestCase):
                 call_command(command, stdout=StringIO())
 
 
+def _blind_indexed_models():
+    from django.apps import apps
+
+    return {m for m in apps.get_models() if getattr(m, "blind_indexes", ())}
+
+
+_BLIND_INDEXED = _blind_indexed_models()
+
+
 class TestRotation(_Keys, BaseAPITestCase):
     def setUp(self):
         super().setUp()
@@ -622,17 +631,71 @@ class TestRotation(_Keys, BaseAPITestCase):
             _user_hash(self.rotated), blind_index.USER_EMAIL.compute("rotate@example.com")
         )
 
-    def test_an_unhashed_case_variant_fails_the_run_and_is_kept(self):
-        # The previous release, mid-deploy, let a case variant in.
+    def _clash(self):
+        """The previous release, mid-deploy, let a case variant in: two users
+        whose addresses are the same once case is folded.
+
+        Returns what the command reported, and each user's hash as it stood
+        BEFORE the run (`self.before`), so a test can say what changed."""
         _set_raw("origin_customuser", "email_hash", "id", self.rotated.pk, None)
         _set_raw("origin_customuser", "email", "id", self.rotated.pk, "TEST@example.com")
+        self.before = {u.pk: _user_hash(u) for u in (self.user, self.rotated)}
         err = StringIO()
         with self.assertRaisesMessage(CommandError, "1 row(s) share an address"):
             call_command("rotate_field_keys", stdout=StringIO(), stderr=err)
-        self.assertIn(f"origin.CustomUser.email_hash id={self.rotated.pk}", err.getvalue())
-        self.assertIsNone(_user_hash(self.rotated))
+        return err.getvalue()
+
+    def test_an_unhashed_case_variant_fails_the_run_and_is_kept(self):
+        err = self._clash()
+        # Exactly one of the two is reported: the first visited takes the
+        # hash, the second would break the unique index. WHICH one is
+        # decided by primary-key order (a random UUID here), so this asserts
+        # the contract and not a particular row (MIP-802).
+        reported = [u for u in (self.user, self.rotated) if f"id={u.pk}" in err]
+        self.assertEqual(len(reported), 1, err)
+        loser, winner = reported[0], ({self.user, self.rotated} - {reported[0]}).pop()
+        self.assertIn(f"origin.CustomUser.email_hash id={loser.pk}", err)
+        # The one that clashed keeps what it had; the other holds the hash.
+        self.assertEqual(_user_hash(winner), blind_index.USER_EMAIL.compute("test@example.com"))
+        # The write that collided rolled back: the loser keeps exactly what it
+        # had before the run (NULL for `rotated`, whose hash the test cleared;
+        # the original hash for `user`), whichever of the two it turns out to be.
+        self.assertEqual(_user_hash(loser), self.before[loser.pk])
         # Everything else was still hashed.
         self.assertIsNotNone(self._hashes()["invite"])
+
+    def test_the_rehash_reads_rows_in_primary_key_order(self):
+        """The reason for `order_by("pk")`: of two rows that hash alike the
+        first visited takes the hash and the second is reported, so without an
+        order the SAME data named a different row on different runs (MIP-802),
+        which matters to an operator fixing the data by hand and re-running.
+
+        The database's own order can't be made to differ on demand, so this
+        checks the query itself: every queryset `_rehash` reads is ordered by
+        pk, for every blind-indexed model."""
+        from django.db.models.query import QuerySet
+
+        real = QuerySet.values_list
+        seen = []
+
+        def spy(qs, *args, **kwargs):
+            seen.append((qs.model, tuple(qs.query.order_by)))
+            return real(qs, *args, **kwargs)
+
+        with mock.patch.object(QuerySet, "values_list", spy):
+            self._run()
+
+        # Only the reads `_rehash` makes: they select pk first.
+        rehash_reads = [(model, order) for model, order in seen if model in _BLIND_INDEXED]
+        self.assertTrue(rehash_reads, "the spy saw no read of a blind-indexed model")
+        for model, order in rehash_reads:
+            self.assertEqual(order, ("pk",), f"{model._meta.label} is not read in pk order")
+
+    def _reset_clash(self):
+        """Back to two users sharing an address, neither with the right hash."""
+        _set_raw("origin_customuser", "email", "id", self.rotated.pk, "TEST@example.com")
+        for user in (self.user, self.rotated):
+            _set_raw("origin_customuser", "email_hash", "id", user.pk, None)
 
     def test_a_concurrent_save_wins(self):
         self._switch(NEW, OLD)

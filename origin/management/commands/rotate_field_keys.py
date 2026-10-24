@@ -169,9 +169,15 @@ class Command(BaseCommand):
         clashes = []
         # `values_list` reads the source through the field, so this works
         # whether the column is encrypted yet or not.
+        # Ordered by pk: when two rows hash to the same value (an address
+        # that differs only in case), the first one visited takes the hash and
+        # the second is reported. Without an order that is whichever the
+        # database returns first, so the same data named a different row on
+        # different runs (MIP-802).
         rows = list(
             model.objects.exclude(**{index.source: ""})
             .exclude(**{f"{index.source}__isnull": True})
+            .order_by("pk")
             .values_list("pk", index.source, index.column)
         )
         for row_id, value, current in rows:
