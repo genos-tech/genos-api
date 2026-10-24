@@ -62,6 +62,7 @@ from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
+from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.sprint_models import Sprint, SprintConfig
@@ -2933,6 +2934,14 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
         # pass. (Legacy UserChatMaster is gone — its table was dropped.)
         ToDoGroup.objects.filter(team=team_id).delete()
         ToDoCategory.objects.filter(team=team_id).delete()
+
+        # Note version history. `NoteVersionMaster.team` and `.editor` are
+        # both SET_NULL and the row keys its note by a bare `note_id`, so
+        # nothing cascades from the team, the note or the user: without this
+        # a demo user who edits a note leaves a row behind with both FKs
+        # nulled, holding the note body, forever. Before the notes below, so
+        # a version written by an in-flight save can't outlive its note.
+        NoteVersionMaster.objects.filter(team=team_id).delete()
 
         # Notes (permissions first, then masters)
         all_note_pairs = (
