@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 
+from cryptography.fernet import InvalidToken
 from django.utils import timezone
 
 from origin.management.cron_command import CronCommand
@@ -129,6 +130,7 @@ class Command(CronCommand):
         ).select_related("endpoint")
 
         sent = failed = 0
+        unreadable: set = set()
         for row in rows:
             endpoint = row.endpoint
             if endpoint is None or not endpoint.is_active:
@@ -139,9 +141,15 @@ class Command(CronCommand):
                 row.save(update_fields=["status", "last_error"])
                 continue
 
+            try:
+                secret = endpoint.secret
+            except InvalidToken:
+                self._hold_unreadable(row, endpoint, unreadable)
+                continue
+
             status_code, error = post_delivery(
                 url=endpoint.url,
-                secret=endpoint.secret,
+                secret=secret,
                 event=row.event,
                 delivery_id=str(row.id),
                 payload=row.payload,
@@ -183,6 +191,35 @@ class Command(CronCommand):
         if failed:
             log.warning("webhook_deliver: %s sent, %s failed", sent, failed)
         self.stdout.write(f"webhook_deliver: {sent} sent, {failed} failed{marker}")
+
+    @staticmethod
+    def _hold_unreadable(row: WebhookDelivery, endpoint: WebhookEndpoint, seen: set) -> None:
+        """Set aside a row whose endpoint secret no key in the ring opens.
+
+        That is our key problem, not the receiver's, so none of the usual
+        failure bookkeeping applies: the attempt isn't spent (the row must
+        survive until the key is fixed, not drift to FAILED), and the
+        endpoint's `consecutive_failures` isn't touched (ten of these would
+        disable a customer's endpoint over our mistake). The row goes back
+        to PENDING, held for `STALE_CLAIM_MINUTES` so the next drained pass
+        doesn't re-claim it, re-decrypt it and log it again.
+
+        ERROR, unlike a customer failure: `CronCommand` turns that into a
+        red run, which is what should tell somebody the keyring and the
+        data have drifted. It's logged once per endpoint per pass, not per
+        row, and never carries the ciphertext or the secret.
+        """
+        row.status = WebhookDelivery.STATUS_PENDING
+        row.claimed_at = None
+        row.next_attempt_at = timezone.now() + timezone.timedelta(minutes=STALE_CLAIM_MINUTES)
+        row.save(update_fields=["status", "claimed_at", "next_attempt_at"])
+        if endpoint.pk not in seen:
+            seen.add(endpoint.pk)
+            log.error(
+                "webhook_deliver: endpoint %s has a signing secret no key in "
+                "FIELD_ENCRYPTION_KEYS opens; its deliveries are on hold, not failed",
+                endpoint.pk,
+            )
 
     @staticmethod
     def _record_endpoint_failure(endpoint: WebhookEndpoint) -> None:
