@@ -222,8 +222,7 @@ class CustomUser(blind_index.BlindIndexMixin, AbstractBaseUser, PermissionsMixin
 
     # Password reset. We store the SHA-256 hash of the URL token, not the
     # token itself. (The old plaintext `token` / `token_expiration` columns
-    # are gone from the model — MIP-618; migration 0199 left them in the
-    # table until the release that drops them.)
+    # left the model in MIP-618 and the table in MIP-757, migration 0206.)
     password_reset_token_hash = models.CharField(
         max_length=64, null=True, blank=True, db_index=True
     )
