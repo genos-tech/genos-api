@@ -10,10 +10,14 @@ credentials), which is exactly what an unguarded webhook turns into a
 proxy for.
 """
 
+import logging
 from datetime import timedelta
 from unittest.mock import patch
 
+from cryptography.fernet import Fernet
 from django.contrib.auth import get_user_model
+from django.core.management.base import CommandError
+from django.test import override_settings
 from django.utils import timezone
 
 from origin.models.common.team_models import TeamMembers
@@ -383,3 +387,141 @@ class TestDeliveryTick(WebhookApiBase):
             return_value=(500, "HTTP 500"),
         ):
             self._run()  # would raise CommandError if anything logged ERROR
+
+
+class TestUndecryptableEndpointSecret(WebhookApiBase):
+    """One endpoint whose secret no key opens must not take the rest down.
+
+    Reached by dropping a key from `FIELD_ENCRYPTION_KEYS` before
+    `rotate_field_keys` has run, by restoring a backup taken under a key
+    that is gone, or by one corrupted value. The whole keyring being wrong
+    is a different case: nothing is deliverable, so failing every run is
+    right. Here the keyring is fine and exactly one row is not.
+    """
+
+    SENDER = "origin.management.commands.webhook_deliver_tick.post_delivery"
+
+    def _bad_endpoint(self, url="https://bad.example.com/hook"):
+        e = self._endpoint(url=url)
+        # A valid Fernet token under a key that is not in the ring.
+        WebhookEndpoint.objects.filter(pk=e.pk).update(
+            secret_encrypted=Fernet(Fernet.generate_key()).encrypt(b"x").decode()
+        )
+        e.refresh_from_db()
+        return e
+
+    def _queue(self, endpoint, **overrides):
+        return WebhookDelivery.objects.create(
+            endpoint=endpoint, event=EVENT_TASK_CREATED, payload={"id": 1}, **overrides
+        )
+
+    def _run(self):
+        from django.core.management import call_command
+
+        call_command("webhook_deliver_tick")
+
+    def _run_expecting_red(self):
+        """Our key problem is an ERROR, so the run ends red (CronCommand)."""
+        with self.assertRaises(CommandError):
+            self._run()
+
+    def test_the_bad_row_does_not_stop_other_endpoints(self):
+        bad = self._bad_endpoint()
+        self._queue(bad)  # created first, so it sorts first
+        good = self._endpoint(url="https://good.example.com/hook")
+        delivered = self._queue(good)
+        with patch(self.SENDER, return_value=(200, "")) as sender:
+            self._run_expecting_red()
+        delivered.refresh_from_db()
+        self.assertEqual(delivered.status, WebhookDelivery.STATUS_SENT)
+        # Only the good endpoint was ever signed for.
+        self.assertEqual(sender.call_count, 1)
+        self.assertEqual(sender.call_args.kwargs["url"], good.url)
+
+    def test_the_bad_row_is_released_not_left_sending(self):
+        bad = self._bad_endpoint()
+        row = self._queue(bad)
+        with patch(self.SENDER, return_value=(200, "")):
+            self._run_expecting_red()
+        row.refresh_from_db()
+        self.assertEqual(row.status, WebhookDelivery.STATUS_PENDING)
+        self.assertIsNone(row.claimed_at)
+
+    def test_it_does_not_use_up_an_attempt_or_fail_the_row(self):
+        """Our key mistake is not the receiver's fault: no retries burned,
+        so fixing the key later still delivers it."""
+        bad = self._bad_endpoint()
+        row = self._queue(bad, attempts=4)  # one failure from FAILED
+        with patch(self.SENDER, return_value=(200, "")):
+            self._run_expecting_red()
+        row.refresh_from_db()
+        self.assertEqual(row.attempts, 4)
+        self.assertNotEqual(row.status, WebhookDelivery.STATUS_FAILED)
+
+    def test_it_does_not_count_against_the_endpoints_failures(self):
+        """Ten of these would otherwise auto-disable a customer's endpoint
+        over a mistake that is ours."""
+        bad = self._bad_endpoint()
+        for _ in range(MAX_CONSECUTIVE_FAILURES + 1):
+            self._queue(bad)
+        with patch(self.SENDER, return_value=(200, "")):
+            self._run_expecting_red()
+        bad.refresh_from_db()
+        self.assertEqual(bad.consecutive_failures, 0)
+        self.assertTrue(bad.is_active)
+
+    def test_it_waits_instead_of_spinning_every_pass(self):
+        bad = self._bad_endpoint()
+        row = self._queue(bad)
+        with patch(self.SENDER, return_value=(200, "")):
+            self._run_expecting_red()
+        row.refresh_from_db()
+        self.assertGreater(row.next_attempt_at, timezone.now())
+        # A second pass inside the hold leaves it alone and logs nothing.
+        with patch(self.SENDER, return_value=(200, "")) as sender:
+            self._run()  # no ERROR now, so this must not raise
+        sender.assert_not_called()
+
+    def test_it_logs_at_error_once_per_endpoint_with_its_id_and_no_secret(self):
+        bad = self._bad_endpoint()
+        for _ in range(5):
+            self._queue(bad)
+        # A plain handler, not `assertLogs`: that one sets propagate=False,
+        # which would hide the record from CronCommand's tripwire too.
+        records: list[logging.LogRecord] = []
+        handler = logging.Handler(level=logging.ERROR)
+        handler.emit = records.append
+        logger = logging.getLogger("origin.webhooks")
+        logger.addHandler(handler)
+        try:
+            with patch(self.SENDER, return_value=(200, "")):
+                self._run_expecting_red()
+        finally:
+            logger.removeHandler(handler)
+        self.assertEqual(len(records), 1)
+        message = records[0].getMessage()
+        self.assertIn(str(bad.id), message)
+        self.assertNotIn(bad.secret_encrypted, message)
+
+    def test_a_fixed_key_delivers_it_afterwards(self):
+        """The point of not spending the attempt: nothing is lost."""
+        bad = self._bad_endpoint()
+        row = self._queue(bad)
+        with patch(self.SENDER, return_value=(200, "")):
+            self._run_expecting_red()
+        bad.set_secret(generate_secret())  # the operator fixes the key
+        bad.save()
+        WebhookDelivery.objects.filter(pk=row.pk).update(next_attempt_at=None)
+        with patch(self.SENDER, return_value=(200, "")):
+            self._run()
+        row.refresh_from_db()
+        self.assertEqual(row.status, WebhookDelivery.STATUS_SENT)
+
+    def test_a_missing_keyring_still_fails_the_run_at_start(self):
+        """The whole ring being unset is the other case and stays loud."""
+        self._queue(self._endpoint())
+        with override_settings(FIELD_ENCRYPTION_KEYS=[]):
+            with patch(self.SENDER, return_value=(200, "")) as sender:
+                with self.assertRaises(Exception):
+                    self._run()
+        sender.assert_not_called()
