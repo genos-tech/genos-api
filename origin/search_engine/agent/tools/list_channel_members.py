@@ -21,7 +21,12 @@ import uuid as uuid_mod
 from typing import Any
 
 from origin.models.chat.unified_models import Channel, ChannelMember
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import (
+    Tool,
+    ToolContext,
+    ToolError,
+    ToolForbidden,
+)
 
 _KIND_LABELS = {1: "dm", 2: "gm", 3: "pm", 4: "mdm"}
 
@@ -39,13 +44,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"Channel {channel_id} not found.")
 
     if str(getattr(channel, "team_id", "") or "") != ctx.team_id:
-        raise ToolError("Not authorized: channel belongs to a different team.")
+        raise ToolForbidden("Not authorized: channel belongs to a different team.")
 
     memberships = ChannelMember.objects.filter(
         channel=channel, is_deleted=False
     ).select_related("user")
     if not any(str(m.user_id) == ctx.user_id for m in memberships):
-        raise ToolError(
+        raise ToolForbidden(
             f"Not authorized to access channel {channel_id}. "
             "You are not a member of that channel."
         )

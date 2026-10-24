@@ -58,6 +58,22 @@ class ToolError(Exception):
     """
 
 
+class ToolForbidden(ToolError):
+    """A `ToolError` for an authorization failure: the thing exists and the
+    caller may not have it (wrong team, not a member, outside the ACL).
+
+    A subclass, so every `except ToolError` keeps catching it and the
+    caller sees the same message as before. What it adds is a kind: over
+    MCP a refusal comes back as HTTP 200 `isError`, so the refusal-burst
+    alert (MIP-725) can't see it as a 403, and a plain `ToolError` can't
+    tell a refusal from a typo. MCP counts these (MIP-744).
+
+    Raise it at the guard, for "found but not yours". A missing id, a bad
+    argument or a validation failure stays a plain `ToolError`: those are
+    mistakes, not probing.
+    """
+
+
 @dataclass(frozen=True)
 class Tool:
     """A single capability the agent can invoke.

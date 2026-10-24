@@ -29,7 +29,12 @@ from typing import Any
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import (
+    Tool,
+    ToolContext,
+    ToolError,
+    ToolForbidden,
+)
 
 
 def _hydrate_ref(dep_id: int, other: TaskMaster) -> dict[str, Any]:
@@ -62,14 +67,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"Task {task_id} not found.")
 
     if str(getattr(target, "team_id", "") or "") != ctx.team_id:
-        raise ToolError("Not authorized: task is in a different team.")
+        raise ToolForbidden("Not authorized: task is in a different team.")
     allowed = task_acl_user_ids(
         getattr(target, "project_id", None),
         getattr(target, "assignee_id", None),
         getattr(target, "reporter_id", None),
     )
     if ctx.user_id not in allowed:
-        raise ToolError(f"Not authorized to view task {task_id}.")
+        raise ToolForbidden(f"Not authorized to view task {task_id}.")
 
     # Per-edge ACL set: projects the caller can see at all. The OTHER
     # endpoint of each dependency must live in one of these projects;

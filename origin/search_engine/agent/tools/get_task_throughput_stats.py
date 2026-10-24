@@ -33,7 +33,7 @@ from django.utils import timezone
 
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_activity_models import TaskActivity
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.task_closes import CLOSE_Q, CREATED_Q, THROUGHPUT_Q
 
 _MAX_DAYS = 365
@@ -75,7 +75,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         except (TypeError, ValueError):
             raise ToolError(f"`project_id` must be an integer (got {raw_project_id!r}).")
         if scoped_project_id not in member_project_ids:
-            raise ToolError(
+            raise ToolForbidden(
                 f"Not authorized to query project {scoped_project_id}. "
                 "You are not a member of that project."
             )

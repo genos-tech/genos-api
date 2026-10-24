@@ -29,7 +29,7 @@ from django.db.models import Count, Q
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.list_tasks import _milestone_task_q
 from origin.services.user_time import today_for_user_id
 
@@ -58,14 +58,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"Milestone {milestone_id} not found.")
 
     if str(getattr(m, "team_id", "") or "") != ctx.team_id:
-        raise ToolError("Not authorized: milestone is in a different team.")
+        raise ToolForbidden("Not authorized: milestone is in a different team.")
 
     is_member = ProjectMembers.objects.filter(
         project_id=m.project_id,
         attendee_id=ctx.user_id,
     ).exists()
     if not is_member:
-        raise ToolError(
+        raise ToolForbidden(
             f"Not authorized to access milestone {milestone_id}. "
             "You are not a member of that project."
         )

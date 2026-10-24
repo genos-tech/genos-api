@@ -19,7 +19,7 @@ from typing import Any
 
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.services.user_time import today_for_user_id
 
 _STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed"]
@@ -39,14 +39,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"Project {project_id} not found.")
 
     if str(getattr(project, "team_id", "") or "") != ctx.team_id:
-        raise ToolError("Not authorized: project belongs to a different team.")
+        raise ToolForbidden("Not authorized: project belongs to a different team.")
 
     is_member = ProjectMembers.objects.filter(
         project_id=project_id,
         attendee_id=ctx.user_id,
     ).exists()
     if not is_member:
-        raise ToolError(
+        raise ToolForbidden(
             f"Not authorized to access project {project_id}. You are not a member of that project."
         )
 

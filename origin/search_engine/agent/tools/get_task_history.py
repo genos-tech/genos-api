@@ -31,6 +31,7 @@ from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
     ToolError,
+    ToolForbidden,
     wrap_workspace_content,
 )
 
@@ -166,14 +167,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"Task {task_id} not found.")
     # Tenant guard first — never leak data across teams.
     if str(getattr(task, "team_id", "") or "") != ctx.team_id:
-        raise ToolError("Not authorized: task is in a different team.")
+        raise ToolForbidden("Not authorized: task is in a different team.")
     allowed = task_acl_user_ids(
         getattr(task, "project_id", None),
         getattr(task, "assignee_id", None),
         getattr(task, "reporter_id", None),
     )
     if ctx.user_id not in allowed:
-        raise ToolError(f"Not authorized to view task {task_id}.")
+        raise ToolForbidden(f"Not authorized to view task {task_id}.")
 
     # A deleted task's history is still readable — "who deleted this" is
     # exactly the question an audit read exists for.

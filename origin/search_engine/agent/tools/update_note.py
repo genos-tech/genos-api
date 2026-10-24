@@ -32,7 +32,7 @@ from apis.request_id import log_failure
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.search_engine.agent.acl import owns_personal_folder
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.search_engine.agent.tools.body_mentions import notify_note_mentions
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
@@ -140,7 +140,7 @@ def _update_personal(
 
     # Tenant guard.
     if str(getattr(note, "team_id", "") or "") != ctx.team_id:
-        raise ToolError("Not authorized: note belongs to a different team.")
+        raise ToolForbidden("Not authorized: note belongs to a different team.")
 
     # Write ACL: owner or explicit editor.
     if not _has_write_permission(
@@ -149,7 +149,7 @@ def _update_personal(
         note_type_code=note_type_code,
         ctx=ctx,
     ):
-        raise ToolError(
+        raise ToolForbidden(
             f"Not authorized to edit personal note {note_id}. "
             "You must be the owner or have explicit editor permission."
         )
@@ -210,7 +210,7 @@ def _update_task_note(
 
     # Tenant guard.
     if str(getattr(note, "team_id", "") or "") != ctx.team_id:
-        raise ToolError("Not authorized: note belongs to a different team.")
+        raise ToolForbidden("Not authorized: note belongs to a different team.")
 
     # Write ACL: owner, implicit project-member Editor, or explicit
     # editor grant — task notes are a shared surface within the project,
@@ -222,7 +222,7 @@ def _update_task_note(
         note_type_code=note_type_code,
         ctx=ctx,
     ):
-        raise ToolError(
+        raise ToolForbidden(
             f"Not authorized to edit task note {note_id}. "
             "You must be the note owner, a member of the note's project, "
             "or have an explicit editor grant."

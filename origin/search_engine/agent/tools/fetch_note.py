@@ -27,6 +27,7 @@ from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
     ToolError,
+    ToolForbidden,
     wrap_workspace_content,
 )
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
@@ -56,7 +57,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
 def _check_team(note_team_id, expected_team_id: str) -> None:
     if str(note_team_id or "") != expected_team_id:
-        raise ToolError("Not authorized: note is in a different team.")
+        raise ToolForbidden("Not authorized: note is in a different team.")
 
 
 def _fetch_personal(note_id: int, ctx: ToolContext) -> dict[str, Any]:
@@ -68,7 +69,7 @@ def _fetch_personal(note_id: int, ctx: ToolContext) -> dict[str, Any]:
 
     allowed = personal_note_acl_user_ids(owner_id=getattr(note, "owner_id", None), note_id=note_id)
     if ctx.user_id not in allowed:
-        raise ToolError(f"Not authorized to read personal note {note_id}.")
+        raise ToolForbidden(f"Not authorized to read personal note {note_id}.")
 
     return _shape_note(
         note_id=note_id,
@@ -95,7 +96,7 @@ def _fetch_task_note(note_id: int, ctx: ToolContext) -> dict[str, Any]:
         note_id=note_id,
     )
     if ctx.user_id not in allowed:
-        raise ToolError(f"Not authorized to read task note {note_id}.")
+        raise ToolForbidden(f"Not authorized to read task note {note_id}.")
 
     return _shape_note(
         note_id=note_id,
@@ -129,7 +130,7 @@ def _fetch_chat_note(note_id: int, ctx: ToolContext) -> dict[str, Any]:
         note_id=note_id,
     )
     if ctx.user_id not in allowed:
-        raise ToolError(f"Not authorized to read chat note {note_id}.")
+        raise ToolForbidden(f"Not authorized to read chat note {note_id}.")
 
     # parent_context KEY names chat_id / thread_id are opaque deep-link
     # feed-through; the source values are now the v3 channel / thread-root
