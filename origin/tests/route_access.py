@@ -537,9 +537,6 @@ REGISTRY = {
     "origin.views.task.task_views.GetProjectTasksView": checked("is_project_member"),
     "origin.views.task.task_views.GetTaskByThreadIdView": checked("can_access_task"),
     "origin.views.task.task_views.GetTaskView": checked("can_access_task"),
-    "origin.views.task.task_views.GetTeamTasksByTagView": checked(
-        "require_team_member_or_response"
-    ),
     "origin.views.task.task_views.GetTeamTasksView": checked("require_team_member_or_response"),
     "origin.views.task.task_views.TaskAttachmentsView": checked("can_access_task"),
     "origin.views.task.task_views.TaskBodyAttachmentView": checked("can_access_task"),

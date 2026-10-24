@@ -23,7 +23,6 @@ urlpatterns = [
     path("api/v2/task/", TaskMasterView.as_view(), name="task_create"),
     path("api/v2/task/meta/", TaskMetaView.as_view(), name="task_meta"),
     path("api/v2/task/getTeamTasks/", GetTeamTasksView.as_view(), name="get_team_tasks"),
-    path("api/v2/task/getTeamTasksByTag/", GetTeamTasksByTagView.as_view(), name="get_team_tasks"),
     path("api/v2/task/getProjectTasks/", GetProjectTasksView.as_view(), name="get_project_tasks"),
     path(
         "api/v2/task/getMyAssignedTasks/",
