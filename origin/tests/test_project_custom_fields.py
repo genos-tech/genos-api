@@ -274,10 +274,9 @@ class TaskValueRoundTripTests(CustomFieldsTestBase):
         )
         self.assertEqual(row["customFieldValues"], self.values())
 
-        # Literal path: the URL name "get_team_tasks" is (pre-existing)
-        # duplicated between GetTeamTasksView and GetTeamTasksByTagView,
-        # and reverse() resolves to the LAST registration — the ByTag
-        # view — which serves a different shape entirely.
+        # Literal path, kept from when "get_team_tasks" was also the URL
+        # name of the (since deleted, MIP-741) ByTag view and reverse()
+        # resolved to that one instead.
         team_rows = self.client.get(f"/api/v2/task/getTeamTasks/?team_id={self.team.team_id}")
         team_row = next(r for r in team_rows.data if str(r["id"]) == str(task_id))
         self.assertEqual(team_row["customFieldValues"], self.values())

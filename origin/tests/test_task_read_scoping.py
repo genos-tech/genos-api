@@ -2,7 +2,8 @@
 
 Seven `high` findings from ACL_AUDIT.md, in two shapes:
 
-  **Team-wide lists** (`getTeamTasks`, `getTeamTasksByTag`) filtered on
+  **Team-wide lists** (`getTeamTasks`; `getTeamTasksByTag` too, until
+  MIP-741 deleted it as dead) filtered on
   nothing but a `team_id` the caller supplied, returning every task in
   that team — with assignee emails attached. They now scope to the
   caller's PROJECTS, which is what `TaskMetaView` already did and what
@@ -95,14 +96,18 @@ class TaskReadScopingTests(BaseAPITestCase):
         self.assertIn("Visible", titles)
         self.assertNotIn("Hidden", titles)
 
-    def test_team_task_by_tag_is_scoped_to_my_projects(self):
+    def test_the_by_tag_list_is_gone_and_the_team_list_still_serves(self):
+        """MIP-741 deleted `getTeamTasksByTag`: it listed one task per tag, was
+        N+1, and nothing called it. A team-wide list that returns tasks must
+        come back with the project scoping above, so it should not return as
+        a bare route."""
         self._auth()
-        res = self.client.get(
+        gone = self.client.get(
             "/api/v2/task/getTeamTasksByTag/", {"team_id": str(self.team.team_id)}
         )
-        self.assertEqual(res.status_code, 200)
-        project_ids = {p["projectId"] for p in res.data}
-        self.assertNotIn(self.other_project.project_id, project_ids)
+        self.assertEqual(gone.status_code, 404)
+        served = self.client.get("/api/v2/task/getTeamTasks/", {"team_id": str(self.team.team_id)})
+        self.assertEqual(served.status_code, 200)
 
     def test_a_member_of_both_still_sees_both(self):
         ProjectMembers.objects.create(

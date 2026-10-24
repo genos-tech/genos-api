@@ -1202,53 +1202,6 @@ class GetTeamTasksView(AuthenticatedAPIView):
         return Response(response_data, status=status.HTTP_200_OK)
 
 
-class GetTeamTasksByTagView(AuthenticatedAPIView):
-    def get(self, request):
-        team_id = request.GET.get("team_id")
-
-        if not team_id:
-            return Response(
-                {"error": "team_id is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Same team-wide shape as GetTeamTasksView, same fix.
-        if res := require_team_member_or_response(request.user, team_id):
-            return res
-        task_with_tags = TaskMaster.objects.prefetch_related("task_tags").filter(
-            _team_task_scope(request.user.id, team_id),
-            is_init_task=False,
-        )
-
-        projects = {}
-        for t in task_with_tags:
-            if t.tags:
-                if t.project.project_id not in projects:
-                    projects[t.project.project_id] = {
-                        "projectId": t.project.project_id,
-                        "projectName": t.project.project_name,
-                        "tags": {},
-                    }
-
-                for tag in t.tags:
-                    if tag["tag_name"] not in projects[t.project.project_id]["tags"]:
-                        projects[t.project.project_id]["tags"][tag["tag_name"]] = {
-                            "tagName": tag["tag_name"],
-                            "tagColor": tag["tag_color"],
-                            "tagTextColor": tag["tag_text_color"],
-                            "tasks": [],
-                        }
-                        projects[t.project.project_id]["tags"][tag["tag_name"]]["tasks"].append(
-                            {
-                                "taskId": t.task_id,
-                                "title": t.title,
-                                "status": t.status,
-                            }
-                        )
-
-        return Response(list(projects.values()), status=status.HTTP_200_OK)
-
-
 class ChildTaskView(AuthenticatedAPIView):
     # Status precedence used by the sub-task list, pushed into SQL so we
     # don't have to materialize/order rows in memory. Mirrors the
