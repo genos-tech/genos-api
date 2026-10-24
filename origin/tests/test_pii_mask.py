@@ -149,7 +149,7 @@ class BackfillMigrationTests(TransactionTestCase):
                 "actor_label", flat=True
             )
         )
-        self.assertEqual(labels, {f"u***@example.com"})
+        self.assertEqual(labels, {"u***@example.com"})
 
     def test_the_append_only_guard_still_holds_for_application_code(self):
         row = self._row(actor_label="kenji@gmail.com")
