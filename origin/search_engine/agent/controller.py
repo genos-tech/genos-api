@@ -55,6 +55,7 @@ from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
 from origin.search_engine.agent.citation_resolver import resolve_unresolved_citations
 from origin.search_engine.agent.egress import EgressRefused, check_web_query
 from origin.search_engine.agent.languages import language_directive
+from origin.search_engine.agent.model_fence import fence_for_model
 from origin.search_engine.agent.prompts import (
     AGENT_CRITIQUE_RETRIEVAL_DIRECTIVE,
     AGENT_SELF_CRITIQUE_PROMPT_TEMPLATE,
@@ -714,10 +715,14 @@ def _assistant_function_call_turn(function_call: FunctionCall) -> AgentMessage:
 
 
 def _function_response_turn(name: str, response: dict[str, Any]) -> AgentMessage:
+    # The model's copy only. The result dict the caller passed is what the
+    # source chips, the persisted step and the evals read, and those need
+    # titles bare; this returns a fenced copy and leaves it untouched
+    # (MIP-735, `model_fence`). Errors carry no user-typed names.
     return AgentMessage(
         role="tool_response",
         function_response_name=name,
-        function_response=response,
+        function_response=fence_for_model(response),
     )
 
 

@@ -40,6 +40,7 @@ Plus `list_milestones` gains an `assignee_user_id` filter for the
 general "which milestones is Alice on?" case.
 """
 
+from origin.search_engine.agent.model_fence import with_unfenced_arguments
 from origin.search_engine.agent.tools.add_comment import ADD_COMMENT
 from origin.search_engine.agent.tools.add_task_delivery import ADD_TASK_DELIVERY
 from origin.search_engine.agent.tools.assign_task import ASSIGN_TASK
@@ -203,6 +204,14 @@ for _t in (
     # --- Write tools (MIP-730) — link / unlink existing tasks ---
     UPDATE_TASK_DEPENDENCIES,
 ):
+    # Every tool, read and write, takes its arguments with any
+    # <workspace_content> fence the model copied from a result taken off
+    # (MIP-735), so a tool added later is covered without remembering to.
+    # Wrapped IN PLACE, not copied: the module constant (`LIST_TASKS`, which
+    # tests and other code call directly) and the registry entry must be the
+    # same object, or one of them would skip the stripping.
+    if not hasattr(_t.run, "__wrapped__"):
+        object.__setattr__(_t, "run", with_unfenced_arguments(_t.run))
     REGISTRY[_t.name] = _t
 
 
