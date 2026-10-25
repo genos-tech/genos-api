@@ -37,6 +37,7 @@ from rest_framework.response import Response
 from origin.models.chat.unified_models import Activity
 from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.incremental import capture_server_time
 from origin.views.utils.scope_guards import is_team_member
 
 _DEFAULT_SINCE_DAYS = 30
@@ -115,6 +116,12 @@ class ActivityListView(AuthenticatedAPIView):
     """
 
     def get(self, request):
+        # BEFORE any query (views/utils/incremental.py): the client stores this
+        # as its next `since`, so a row that commits while the query runs must
+        # be stamped later than it. Read after the query, as this was, a row
+        # landing in between is missing from this response AND older than the
+        # checkpoint, so no later sync fetches it (MIP-804).
+        server_time = capture_server_time()
         since = _parse_since(request.GET.get("since"))
         if since is None:
             since = timezone.now() - timedelta(days=_DEFAULT_SINCE_DAYS)
@@ -133,7 +140,7 @@ class ActivityListView(AuthenticatedAPIView):
                     {
                         "activities": [],
                         "since": since.isoformat(),
-                        "server_time": timezone.now().isoformat(),
+                        "server_time": server_time.isoformat(),
                     }
                 )
         # The team narrowing has to land BEFORE the `[:_MAX_ROWS]` slice
@@ -176,7 +183,7 @@ class ActivityListView(AuthenticatedAPIView):
             {
                 "activities": ActivitySerializer(rows, many=True).data,
                 "since": since.isoformat(),
-                "server_time": timezone.now().isoformat(),
+                "server_time": server_time.isoformat(),
                 "has_more": has_more,
                 "next_cursor": _encode_cursor(rows[-1]) if has_more else None,
             }
