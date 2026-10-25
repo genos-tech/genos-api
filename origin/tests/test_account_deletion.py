@@ -9,10 +9,21 @@ them — see `AgentHistoryErasureTests`); and the endpoint cannot be fired
 by accident or by a leaked token acting on someone else.
 """
 
+import secrets
+import shutil
+import tempfile
+from datetime import timedelta
+from pathlib import Path
+from unittest import mock
+
+from django.core.files.base import ContentFile
+from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup
+from origin.models.common.invite_models import TeamInvite
 from origin.models.common.notification_models import NotificationPreference
 from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
@@ -281,3 +292,142 @@ class AgentHistoryErasureTests(BaseAPITestCase):
 
         self.assertFalse(AgentRunFeedback.objects.filter(pk=feedback.pk).exists())
         self.assertTrue(AgentRun.objects.filter(pk=their_run.pk).exists())
+
+
+class AvatarAndInviteErasureTests(BaseAPITestCase):
+    """The photo on disk and the invitations addressed to the person (MIP-810).
+
+    Clearing the fields on the user row forgot the avatar's path but left the
+    file, and an invite keeps the address it was sent to after the account row
+    has forgotten it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._media = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self._media, ignore_errors=True)
+        override = override_settings(MEDIA_ROOT=self._media)
+        override.enable()
+        self.addCleanup(override.disable)
+
+    def _give_avatar(self, user):
+        user.profile_image_url.save("me.png", ContentFile(b"png-bytes"), save=True)
+        return Path(self._media) / user.profile_image_url.name
+
+    def _invite(self, email, **extra):
+        return TeamInvite.objects.create(
+            team=self.team,
+            invited_email=email,
+            token_hash=secrets.token_hex(32),
+            expires_at=timezone.now() + timedelta(days=1),
+            **extra,
+        )
+
+    # -- the avatar ----------------------------------------------------
+
+    def test_the_avatar_file_is_removed_from_storage(self):
+        on_disk = self._give_avatar(self.user2)
+        self.assertTrue(on_disk.exists())
+
+        delete_account(self.user2)
+
+        self.assertFalse(on_disk.exists())
+
+    def test_a_user_with_no_avatar_is_deleted_normally(self):
+        result = delete_account(self.user2)
+
+        self.assertEqual(result["user_id"], str(self.user2.id))
+        self.user2.refresh_from_db()
+        self.assertTrue(self.user2.is_deleted)
+
+    def test_a_file_already_gone_does_not_block_the_erasure(self):
+        on_disk = self._give_avatar(self.user2)
+        on_disk.unlink()
+
+        delete_account(self.user2)
+
+        self.user2.refresh_from_db()
+        self.assertTrue(self.user2.is_deleted)
+
+    def test_a_storage_error_does_not_block_the_erasure(self):
+        self._give_avatar(self.user2)
+
+        with mock.patch(
+            "origin.services.account_deletion.default_storage.delete",
+            side_effect=OSError("volume unavailable"),
+        ):
+            delete_account(self.user2)
+
+        self.user2.refresh_from_db()
+        self.assertTrue(self.user2.is_deleted)
+        self.assertFalse(self.user2.is_active)
+
+    def test_the_file_is_kept_when_the_erasure_itself_fails(self):
+        """A file delete cannot be rolled back, so it must not run before the
+        transaction has committed."""
+        on_disk = self._give_avatar(self.user2)
+
+        # Fail at the LAST step inside the transaction (the row save), after every
+        # other step has run, so a file removed anywhere before the commit
+        # would already be gone.
+        with mock.patch.object(type(self.user2), "save", side_effect=RuntimeError("database down")):
+            with self.assertRaises(RuntimeError):
+                delete_account(self.user2)
+
+        self.assertTrue(on_disk.exists())
+        self.user2.refresh_from_db()
+        self.assertFalse(self.user2.is_deleted)
+
+    def test_another_users_avatar_is_untouched(self):
+        mine = self._give_avatar(self.user2)
+        theirs = self._give_avatar(self.user)
+
+        delete_account(self.user2)
+
+        self.assertFalse(mine.exists())
+        self.assertTrue(theirs.exists())
+
+    # -- the invites ---------------------------------------------------
+
+    def test_invites_addressed_to_the_person_are_removed_in_every_status(self):
+        address = self.user2.email
+        pending = self._invite(address)
+        accepted = self._invite(address, status="accepted")
+        revoked = self._invite(address, status="revoked")
+
+        result = delete_account(self.user2)
+
+        for invite in (pending, accepted, revoked):
+            self.assertFalse(TeamInvite.objects.filter(pk=invite.pk).exists())
+        self.assertEqual(result["invites_removed"], 3)
+
+    def test_the_address_is_matched_without_regard_to_case(self):
+        invite = self._invite(self.user2.email.upper())
+
+        delete_account(self.user2)
+
+        self.assertFalse(TeamInvite.objects.filter(pk=invite.pk).exists())
+
+    def test_invites_to_other_people_are_kept(self):
+        other = self._invite("someone.else@example.com")
+        mine = self._invite(self.user2.email)
+
+        delete_account(self.user2)
+
+        self.assertTrue(TeamInvite.objects.filter(pk=other.pk).exists())
+        self.assertFalse(TeamInvite.objects.filter(pk=mine.pk).exists())
+
+    def test_invites_the_person_sent_are_kept(self):
+        """Team history: the row stays, attributed to the anonymised user like
+        the rest of their past work (the account row is anonymised, not
+        deleted, so nothing nulls the link)."""
+        sent = self._invite("newcomer@example.com", invited_by=self.user2)
+
+        delete_account(self.user2)
+
+        sent.refresh_from_db()
+        self.assertEqual(sent.invited_by_id, self.user2.id)
+        self.assertEqual(sent.invited_by.username, DELETED_USERNAME)
+
+    def test_no_invites_is_zero_removed(self):
+        self.assertEqual(delete_account(self.user2)["invites_removed"], 0)
