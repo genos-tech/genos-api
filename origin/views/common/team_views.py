@@ -1,7 +1,11 @@
+import base64
+import binascii
 import hashlib
+import json
 import logging
 import secrets
 import time
+import uuid
 from collections import defaultdict
 from datetime import timedelta
 
@@ -1225,6 +1229,43 @@ def _external_people_rows(team_id, team_name, user_id) -> list:
     return rows
 
 
+# A roster page. Opt-in: a request with no `cursor` and no `limit` returns the
+# whole roster, exactly as before (MIP-805).
+_ROSTER_PAGE_DEFAULT = 200
+_ROSTER_PAGE_MAX = 500
+
+
+def _encode_roster_cursor(username, user_id) -> str:
+    """The last row returned, as an opaque position in the roster's order.
+
+    The order is `(username, id)`. A username is not unique, so the id breaks
+    the tie, as the query's own ORDER BY already does. Opaque so a client does
+    not depend on its shape."""
+    raw = json.dumps({"u": username, "i": str(user_id)})
+    return base64.urlsafe_b64encode(raw.encode()).decode()
+
+
+def _decode_roster_cursor(raw):
+    """`(username, uuid string)`, or `None` for absent OR unreadable input: an
+    unreadable cursor is the first page, never a 500 and never a page that
+    silently starts somewhere else."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(base64.urlsafe_b64decode(str(raw).encode()))
+        return str(data["u"]), str(uuid.UUID(str(data["i"])))
+    except (ValueError, KeyError, TypeError, binascii.Error, json.JSONDecodeError):
+        return None
+
+
+def _roster_page_size(request) -> int:
+    try:
+        wanted = int(request.GET.get("limit", _ROSTER_PAGE_DEFAULT))
+    except (TypeError, ValueError):
+        return _ROSTER_PAGE_DEFAULT
+    return max(1, min(wanted, _ROSTER_PAGE_MAX))
+
+
 class GetTeamMembersView(AuthenticatedAPIView):
     """The roster of one team: every member's name, EMAIL, avatar, job
     title, permission role, country and status.
@@ -1286,10 +1327,25 @@ class GetTeamMembersView(AuthenticatedAPIView):
             # account soft-delete) since the last checkpoint.
             qs = qs.filter(Q(ts_updated_at__gt=since) | Q(attendee__ts_updated_at__gt=since))
 
+        # Paging is opt-in: with neither `cursor` nor `limit` this is the whole
+        # roster, as it has always been (MIP-805). The order is the one the
+        # query always had, and the cursor filters in SQL on the same pair, so
+        # it follows the database's own collation and not Python's.
+        paged = "cursor" in request.GET or "limit" in request.GET
+        position = _decode_roster_cursor(request.GET.get("cursor"))
+        page_size = _roster_page_size(request)
+        ordered = qs.select_related("attendee").order_by("attendee__username", "attendee__id")
+        if position is not None:
+            name, row_id = position
+            ordered = ordered.filter(
+                Q(attendee__username__gt=name)
+                | Q(attendee__username=name, attendee__id__gt=row_id)
+            )
+        if paged:
+            # One past the page, to know whether another follows without a COUNT.
+            ordered = ordered[: page_size + 1]
         attendees = (
-            qs.select_related("attendee")
-            .order_by("attendee__username", "attendee__id")
-            .values(
+            ordered.values(
                 "is_deleted",
                 "member_role",
                 "attendee__id",
@@ -1310,6 +1366,18 @@ class GetTeamMembersView(AuthenticatedAPIView):
                 "attendee__is_system_user",
                 "attendee__is_deleted",
             )
+        )
+
+        attendees = list(attendees)
+        has_more = paged and len(attendees) > page_size
+        if has_more:
+            attendees = attendees[:page_size]
+        next_cursor = (
+            _encode_roster_cursor(
+                attendees[-1]["attendee__username"], attendees[-1]["attendee__id"]
+            )
+            if has_more
+            else None
         )
 
         caller_id = request.user.id
@@ -1370,18 +1438,25 @@ class GetTeamMembersView(AuthenticatedAPIView):
             )
 
         if guest_visible is None:
-            response_data.extend(_external_people_rows(team_id, team_name, request.user.id))
+            # The cross-team people are not part of the paged queryset, so they
+            # ride on the LAST page only: on every page they would repeat, and
+            # on none they would be lost. An unpaged request is one page, and it
+            # is the last, so it gets them as it always did.
+            if not has_more:
+                response_data.extend(_external_people_rows(team_id, team_name, request.user.id))
         else:
             # `guest_visible` is only set when the caller failed
             # `is_team_member`, so this branch IS the outside-caller case.
             response_data = _without_phone(response_data)
 
-        return Response(
-            build_delta_response(
-                {"members": response_data}, server_time, force_full_reload=force_full
-            ),
-            status=status.HTTP_200_OK,
+        body = build_delta_response(
+            {"members": response_data}, server_time, force_full_reload=force_full
         )
+        if paged:
+            # Additive keys; absent on an unpaged request, which is unchanged.
+            body["has_more"] = has_more
+            body["next_cursor"] = next_cursor
+        return Response(body, status=status.HTTP_200_OK)
 
 
 class GetTeamMemberInfoView(AuthenticatedAPIView):
