@@ -287,6 +287,33 @@ def _annotate_latest_and_unread(qs, user):
     return _annotate_unread(qs, user).annotate(_latest_seq=Subquery(latest_seq))
 
 
+# A page of the chat list. Opt-in: a request with no `cursor` and no `limit`
+# returns every channel, exactly as before (MIP-808).
+_CHANNEL_PAGE_DEFAULT = 200
+_CHANNEL_PAGE_MAX = 500
+
+
+def _channel_cursor(raw):
+    """The channel id to continue after, or `None` for absent OR unreadable
+    input. A channel id is a UUID: unique and totally ordered, so the cursor is
+    exact with no ties to break. An unreadable cursor is the first page, never
+    a 500 and never a page that silently starts somewhere else."""
+    if not raw:
+        return None
+    try:
+        return str(uuid.UUID(str(raw)))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _channel_page_size(request) -> int:
+    try:
+        wanted = int(request.GET.get("limit", _CHANNEL_PAGE_DEFAULT))
+    except (TypeError, ValueError):
+        return _CHANNEL_PAGE_DEFAULT
+    return max(1, min(wanted, _CHANNEL_PAGE_MAX))
+
+
 class ChannelListView(AuthenticatedAPIView):
     """GET /api/v3/channels/
 
@@ -355,9 +382,30 @@ class ChannelListView(AuthenticatedAPIView):
                 scope |= Q(kind=ChannelKind.PM, project_id__in=list(shared_projects.keys()))
             qs = qs.filter(scope)
 
+        # Paging is opt-in: with neither `cursor` nor `limit` this is every
+        # channel, as it has always been (MIP-808). Applied to the queryset
+        # BEFORE it is evaluated, so the latest-message, member and unread work
+        # below covers only the page. Ordered by id, which the docstring already
+        # promised ("deterministic id order") but the query never enforced.
+        paged = "cursor" in request.GET or "limit" in request.GET
+        page_size = _channel_page_size(request)
+        if paged:
+            qs = qs.order_by("id")
+            after = _channel_cursor(request.GET.get("cursor"))
+            if after is not None:
+                qs = qs.filter(id__gt=after)
+            # One past the page, to know whether another follows without a COUNT.
+            qs = qs[: page_size + 1]
+
         channels = list(qs)
+        has_more = paged and len(channels) > page_size
+        if has_more:
+            channels = channels[:page_size]
         if not channels:
-            return Response({"channels": []})
+            empty = {"channels": []}
+            if paged:
+                empty.update({"has_more": False, "next_cursor": None})
+            return Response(empty)
 
         # Latest non-thread, non-deleted message per channel in ONE query.
         # Postgres DISTINCT ON (channel_id) ordered by (channel_id, -seq)
@@ -413,7 +461,12 @@ class ChannelListView(AuthenticatedAPIView):
             many=True,
             context={"request": request, "viewer_team_id": team_id},
         ).data
-        return Response({"channels": data})
+        body = {"channels": data}
+        if paged:
+            # Additive keys; absent on an unpaged request, which is unchanged.
+            body["has_more"] = has_more
+            body["next_cursor"] = str(channels[-1].id) if has_more else None
+        return Response(body)
 
     def post(self, request):
         """POST /api/v3/channels/
