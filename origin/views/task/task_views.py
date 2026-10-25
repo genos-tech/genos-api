@@ -1,4 +1,6 @@
 import base64
+import binascii
+import json
 import logging
 import os
 from collections import defaultdict
@@ -1119,6 +1121,139 @@ def _team_task_scope(user_id, team_id) -> Q:
     return scope
 
 
+def _team_task_row(t) -> dict:
+    """One task as `getTeamTasks` serialises it. Shared by the unpaged view and
+    the paged one so the two can never describe a task differently (MIP-807)."""
+    return {
+        "id": str(t.task_id),
+        "displayId": t.display_id,
+        "title": t.title,
+        "priority": t.priority,
+        "effortLevel": t.effort_level,
+        "createdDate": str(t.ts_created_at.date()),
+        "updatedAt": str(t.ts_updated_at),
+        "dueDate": str(t.due_date) if t.due_date else None,
+        "startDate": str(t.start_date) if t.start_date else None,
+        "daysLeft": (max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None),
+        "status": t.status,
+        # This is a TEAM-WIDE list, so it hits rows whose nullable
+        # FKs are actually null — an unassigned task (assignee),
+        # and a task with no project. Guard EVERY FK attribute
+        # access; an unguarded `t.assignee.id` / `t.project.project_id`
+        # raised AttributeError and 500'd the whole list. (`team`
+        # is the query filter so it's always set, but guarded too
+        # for symmetry.) Mirrors the null-safe pattern the
+        # project-tasks views already use.
+        "assigneeId": t.assignee.id if t.assignee else None,
+        "assigneeEmail": t.assignee.email if t.assignee else None,
+        "assigneeName": t.assignee.username if t.assignee else None,
+        "assigneeImgPath": (t.assignee.profile_image_file_name if t.assignee else None),
+        "parentTaskId": t.parent_task_id,
+        "rootTaskId": t.root_task_id,
+        "threadId": t.thread_id,
+        "tags": t.tags or [],
+        "concatTags": (
+            ("/" + "/".join([tag["tagName"] for tag in t.tags]) + "/") if t.tags else None
+        ),
+        "teamId": str(t.team.team_id) if t.team else None,
+        "projectId": t.project.project_id if t.project else None,
+        "isMilestone": t.is_milestone,
+        "milestoneId": t.milestone_id,
+        "sprintId": t.sprint_id,
+        # `links` powers the table's PR column. Most callers
+        # don't need it but the cost is one JSON field per
+        # row and the table is the only place this view's
+        # output lands.
+        "links": t.links or [],
+        "customFieldValues": t.custom_field_values or {},
+    }
+
+
+# A page of the team's tasks. The paged route always answers with an envelope;
+# the bare-array route above is untouched, so an old client cannot break
+# (MIP-807).
+_TEAM_TASKS_PAGE_DEFAULT = 500
+_TEAM_TASKS_PAGE_MAX = 1000
+
+
+def _decode_task_cursor(raw):
+    """The task id a cursor names, or `None` for absent OR unreadable input.
+
+    An unreadable cursor is the first page: never a 500, and never a page that
+    silently starts somewhere else. `task_id` is the primary key, so ordering
+    by it is already a total order and needs no tiebreak."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(base64.urlsafe_b64decode(str(raw).encode()))
+        return int(data["t"])
+    except (ValueError, KeyError, TypeError, binascii.Error, json.JSONDecodeError):
+        return None
+
+
+def _encode_task_cursor(task_id) -> str:
+    raw = json.dumps({"t": int(task_id)})
+    return base64.urlsafe_b64encode(raw.encode()).decode()
+
+
+def _team_tasks_page_size(request) -> int:
+    try:
+        wanted = int(request.GET.get("limit", _TEAM_TASKS_PAGE_DEFAULT))
+    except (TypeError, ValueError):
+        return _TEAM_TASKS_PAGE_DEFAULT
+    return max(1, min(wanted, _TEAM_TASKS_PAGE_MAX))
+
+
+class GetTeamTasksPageView(AuthenticatedAPIView):
+    """GET /api/v2/task/getTeamTasksPage/?team_id=&limit=&cursor=
+
+    The paged twin of `GetTeamTasksView`: the same rows, in `task_id` order,
+    as `{"tasks": [...], "has_more": bool, "next_cursor": str | None}`.
+
+    It is a separate route because `getTeamTasks` answers with a bare JSON
+    array, which has nowhere to put `has_more` / `next_cursor`, and changing
+    its shape would break every client already in the field.
+
+    Access is NOT re-implemented here: the same member check and the same
+    `_team_task_scope` as the unpaged view, so there is one rule for who sees
+    which task and the two routes cannot drift apart.
+    """
+
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        if not team_id:
+            return Response(
+                {"error": "team_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if res := require_team_member_or_response(request.user, team_id):
+            return res
+        scope = _team_task_scope(request.user.id, team_id)
+
+        qs = (
+            TaskMaster.objects.filter(scope, is_init_task=False)
+            .select_related("assignee", "team", "project")
+            .prefetch_related("task_tags")
+            .order_by("task_id")
+        )
+        after = _decode_task_cursor(request.GET.get("cursor"))
+        if after is not None:
+            qs = qs.filter(task_id__gt=after)
+        page_size = _team_tasks_page_size(request)
+        # One past the page, to know whether there is another without a COUNT.
+        rows = list(qs[: page_size + 1])
+        has_more = len(rows) > page_size
+        rows = rows[:page_size]
+        return Response(
+            {
+                "tasks": [_team_task_row(t) for t in rows],
+                "has_more": has_more,
+                "next_cursor": _encode_task_cursor(rows[-1].task_id) if has_more else None,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class GetTeamTasksView(AuthenticatedAPIView):
     def get(self, request):
         team_id = request.GET.get("team_id")
@@ -1145,59 +1280,7 @@ class GetTeamTasksView(AuthenticatedAPIView):
             .select_related("assignee", "team", "project")
             .prefetch_related("task_tags")
         )
-        response_data = []
-        for t in task_with_tags:
-            response_data.append(
-                {
-                    "id": str(t.task_id),
-                    "displayId": t.display_id,
-                    "title": t.title,
-                    "priority": t.priority,
-                    "effortLevel": t.effort_level,
-                    "createdDate": str(t.ts_created_at.date()),
-                    "updatedAt": str(t.ts_updated_at),
-                    "dueDate": str(t.due_date) if t.due_date else None,
-                    "startDate": str(t.start_date) if t.start_date else None,
-                    "daysLeft": (
-                        max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
-                    ),
-                    "status": t.status,
-                    # This is a TEAM-WIDE list, so it hits rows whose nullable
-                    # FKs are actually null — an unassigned task (assignee),
-                    # and a task with no project. Guard EVERY FK attribute
-                    # access; an unguarded `t.assignee.id` / `t.project.project_id`
-                    # raised AttributeError and 500'd the whole list. (`team`
-                    # is the query filter so it's always set, but guarded too
-                    # for symmetry.) Mirrors the null-safe pattern the
-                    # project-tasks views already use.
-                    "assigneeId": t.assignee.id if t.assignee else None,
-                    "assigneeEmail": t.assignee.email if t.assignee else None,
-                    "assigneeName": t.assignee.username if t.assignee else None,
-                    "assigneeImgPath": (
-                        t.assignee.profile_image_file_name if t.assignee else None
-                    ),
-                    "parentTaskId": t.parent_task_id,
-                    "rootTaskId": t.root_task_id,
-                    "threadId": t.thread_id,
-                    "tags": t.tags or [],
-                    "concatTags": (
-                        ("/" + "/".join([tag["tagName"] for tag in t.tags]) + "/")
-                        if t.tags
-                        else None
-                    ),
-                    "teamId": str(t.team.team_id) if t.team else None,
-                    "projectId": t.project.project_id if t.project else None,
-                    "isMilestone": t.is_milestone,
-                    "milestoneId": t.milestone_id,
-                    "sprintId": t.sprint_id,
-                    # `links` powers the table's PR column. Most callers
-                    # don't need it but the cost is one JSON field per
-                    # row and the table is the only place this view's
-                    # output lands.
-                    "links": t.links or [],
-                    "customFieldValues": t.custom_field_values or {},
-                },
-            )
+        response_data = [_team_task_row(t) for t in task_with_tags]
 
         return Response(response_data, status=status.HTTP_200_OK)
 
