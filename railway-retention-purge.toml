@@ -1,0 +1,28 @@
+# Railway config for the `retention-purge` cron service.
+#
+# Same Docker image as the `backend-django` service (built from the same
+# Dockerfile), but Railway runs it as a cron job: the container starts on each
+# tick, runs the start command to completion, and exits.
+#
+# What this does (MIP-728):
+#   Once a day at 04:00 UTC, deletes or blanks data older than each table's
+#   retention period. EVERY PERIOD DEFAULTS TO "KEEP FOREVER", so this service
+#   does nothing until a RETENTION_<NAME>_DAYS variable is set on it. The
+#   policies and their variable names are listed by:
+#       python /app/manage.py retention_purge --list
+#
+# To see what a period would remove before setting it (no DB changes):
+#   RETENTION_AGENT_RUNS_DAYS=90 python /app/manage.py retention_purge --dry-run
+#
+# All env vars from `backend-django` (DATABASE_URL, etc.) must also be set on
+# this service, plus the RETENTION_*_DAYS variables you choose.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Daily, half an hour after the security-event prune so the two don't contend.
+cronSchedule = "0 4 * * *"
+startCommand = "python /app/manage.py retention_purge --heartbeat retention-purge"
+restartPolicyType = "NEVER"
