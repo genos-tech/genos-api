@@ -35,6 +35,36 @@ def _require_team(request, team_id):
     return None
 
 
+# A page of the inbox. Opt-in: a request with no `cursor` and no `limit` returns
+# the whole inbox, exactly as before (MIP-806).
+_INBOX_PAGE_DEFAULT = 200
+_INBOX_PAGE_MAX = 500
+
+
+def _inbox_cursor(raw):
+    """The `item_id` to continue after, or `None` for absent OR unreadable input.
+
+    `item_id` is an auto-increment primary key: unique and totally ordered, so
+    unlike the roster and the activity feed there are no ties to break and no
+    collation to match. An unreadable cursor is the first page, never a 500 and
+    never a page that silently starts somewhere else."""
+    if raw in (None, ""):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _inbox_page_size(request) -> int:
+    try:
+        wanted = int(request.GET.get("limit", _INBOX_PAGE_DEFAULT))
+    except (TypeError, ValueError):
+        return _INBOX_PAGE_DEFAULT
+    return max(1, min(wanted, _INBOX_PAGE_MAX))
+
+
 class InboxItemView(AuthenticatedAPIView):
     """Inbox items.
 
@@ -187,8 +217,25 @@ class InboxItemView(AuthenticatedAPIView):
             # since the last checkpoint.
             qs = qs.filter(ts_updated_at__gt=since)
 
+        # Paging is opt-in: with neither `cursor` nor `limit` this is the whole
+        # inbox, as it has always been (MIP-806). Ordered by the primary key so
+        # a page boundary is exact.
+        paged = "cursor" in request.GET or "limit" in request.GET
+        after = _inbox_cursor(request.GET.get("cursor"))
+        page_size = _inbox_page_size(request)
+        if paged:
+            qs = qs.order_by("item_id")
+            if after is not None:
+                qs = qs.filter(item_id__gt=after)
+            # One past the page, to know whether another follows without a COUNT.
+            qs = qs[: page_size + 1]
+        rows = list(qs)
+        has_more = paged and len(rows) > page_size
+        if has_more:
+            rows = rows[:page_size]
+
         items = []
-        for item in qs:
+        for item in rows:
             items.append(
                 {
                     "itemId": item.item_id,
@@ -205,10 +252,12 @@ class InboxItemView(AuthenticatedAPIView):
                 }
             )
 
-        return Response(
-            build_delta_response({"items": items}, server_time, force_full_reload=force_full),
-            status=status.HTTP_200_OK,
-        )
+        body = build_delta_response({"items": items}, server_time, force_full_reload=force_full)
+        if paged:
+            # Additive keys; absent on an unpaged request, which is unchanged.
+            body["has_more"] = has_more
+            body["next_cursor"] = str(rows[-1].item_id) if has_more else None
+        return Response(body, status=status.HTTP_200_OK)
 
 
 class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
