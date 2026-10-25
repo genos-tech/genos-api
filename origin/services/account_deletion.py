@@ -42,16 +42,19 @@ from __future__ import annotations
 import logging
 import uuid
 
+from django.core.files.storage import default_storage
 from django.db import transaction
 from django.utils import timezone
 
 from origin.models.chat.personal_tag_models import PersonalChannelTag
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup
 from origin.models.common.api_key_models import ApiKey
+from origin.models.common.invite_models import TeamInvite
 from origin.models.common.notification_models import NotificationPreference, PushSubscription
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import ConnectedAccount
+from origin.services import blind_index
 from origin.services.security_events import record_security_event
 
 log = logging.getLogger(__name__)
@@ -166,6 +169,46 @@ def _delete_personal_data(user) -> None:
     PersonalNoteFolder.objects.filter(owner=user).delete()
 
 
+def _delete_avatar_file(path: str, user_id: str) -> None:
+    """Remove the person's photo from storage.
+
+    Clearing `profile_image_url` on the row only forgets the path; the file
+    stays on the media volume. The avatar endpoint deletes the previous file
+    when a photo is replaced (`previous_file.delete(save=False)`), and
+    deletion is the one other path that has to.
+
+    Best-effort: a file that is already gone, or a storage error, must not
+    block the erasure itself. The row is anonymised either way, so the worst
+    case is a file left behind, which is where this started. The failure is
+    logged by user id, never by path or address.
+    """
+    if not path:
+        return
+    try:
+        # The same storage the upload wrote through, so this works on the
+        # media volume and on a bucket alike.
+        default_storage.delete(path)
+    except Exception:  # noqa: BLE001 - best-effort cleanup, see above
+        log.warning("[account] avatar file not removed user=%s", user_id, exc_info=True)
+
+
+def _delete_invites_to(email: str) -> int:
+    """Remove the invitations addressed to `email`; returns how many.
+
+    An invite stores the address it was sent to (encrypted, plus a blind
+    index), so it keeps the person's address after the account row has
+    forgotten it. Only the invites TO this address go: the ones this person
+    SENT are team history, and keep pointing at the anonymised row, which
+    reads "Deleted user" like the rest of their past work.
+
+    Every status, not just pending. An accepted or revoked invite still
+    carries the address, and the audit trail the team owner reads is
+    `SecurityEvent`, which has its own (masked) record of the departure.
+    """
+    deleted, _ = TeamInvite.objects.filter(blind_index.INVITE_EMAIL.matches(email)).delete()
+    return deleted
+
+
 def delete_account(user) -> dict:
     """Erase the person, keep the workspace consistent.
 
@@ -178,6 +221,10 @@ def delete_account(user) -> dict:
 
     user_id = str(user.id)
     original_email = user.email
+    # The file is held now: the identity erasure below blanks the field. It is
+    # removed only after the commit, because a file delete cannot be rolled back
+    # and a failed erasure must not cost the person their photo.
+    avatar_path = user.profile_image_url.name if user.profile_image_url else ""
 
     with transaction.atomic():
         # Teams where this user was the last member go with them. Soft,
@@ -238,6 +285,8 @@ def delete_account(user) -> dict:
 
         _delete_personal_data(user)
         _purge_search_engine_rows(user_id)
+        # Both read the identity that is overwritten just below, so they run first.
+        invites_removed = _delete_invites_to(original_email)
 
         # Identity erasure. The email must stay unique and unroutable.
         user.email = f"deleted-{uuid.uuid4().hex[:16]}@{DELETED_EMAIL_DOMAIN}"
@@ -267,11 +316,18 @@ def delete_account(user) -> dict:
         user.email_digest_enabled = False
         user.save()
 
+    _delete_avatar_file(avatar_path, user_id)
+
     # The id only: logging `original_email` here kept the address in Railway
     # after the row forgot it (MIP-622).
     log.warning(
-        "[account] deleted user=%s solo_teams=%d",
+        "[account] deleted user=%s solo_teams=%d invites_removed=%d",
         user_id,
         len(solo_team_ids),
+        invites_removed,
     )
-    return {"user_id": user_id, "solo_teams_closed": len(solo_team_ids)}
+    return {
+        "user_id": user_id,
+        "solo_teams_closed": len(solo_team_ids),
+        "invites_removed": invites_removed,
+    }
