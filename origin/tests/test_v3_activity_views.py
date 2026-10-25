@@ -275,3 +275,93 @@ class ActivityListPagingTests(BaseAPITestCase):
         seen, _ = self._all_pages()
 
         self.assertNotIn(str(other.id), seen)
+
+
+class ActivityServerTimeIsTakenBeforeTheQueryTests(BaseAPITestCase):
+    """`server_time` is the client's next `since` (MIP-804).
+
+    The delta contract (views/utils/incremental.py): the clock is read BEFORE
+    the query, so a row that commits while the query runs is stamped later than
+    `server_time` and the next `since` catches it. Read AFTER the query, as this
+    view did, and a row that lands in between is missing from this response AND
+    older than the checkpoint, so it is never fetched.
+    """
+
+    URL = "/api/v3/activities/"
+
+    def setUp(self):
+        super().setUp()
+        self.channel = Channel.objects.create(
+            team=self.team, kind=ChannelKind.GM, title="chat", owner=self.user2
+        )
+        self.authenticate()
+
+    def _activity(self):
+        return Activity.objects.create(
+            team=self.team,
+            recipient=self.user,
+            actor=self.user2,
+            activity_type=ActivityType.MENTION,
+            channel=self.channel,
+        )
+
+    def test_a_row_created_while_the_query_runs_is_caught_by_the_next_since(self):
+        from datetime import datetime
+        from datetime import timezone as tz
+        from unittest import mock
+
+        from origin.views.chat import activity_views_v3
+
+        early = datetime(2026, 1, 1, 12, 0, 0, tzinfo=tz.utc)
+        late = datetime(2026, 1, 1, 12, 0, 5, tzinfo=tz.utc)
+        self._activity()
+        created_mid_request = []
+
+        real_list = list
+
+        def query_then_a_write_lands(iterable):
+            rows = real_list(iterable)
+            # A write commits after the query ran, before the response is built.
+            row = self._activity()
+            Activity.objects.filter(pk=row.pk).update(ts_created_at=late)
+            created_mid_request.append(row)
+            return rows
+
+        with (
+            mock.patch.object(activity_views_v3, "capture_server_time", return_value=early),
+            mock.patch.object(activity_views_v3, "list", query_then_a_write_lands, create=True),
+        ):
+            body = self.client.get(self.URL, {"team_id": str(self.team.team_id)}).json()
+
+        self.assertEqual(len(created_mid_request), 1)
+        late_row = created_mid_request[0]
+        self.assertNotIn(str(late_row.id), [a["id"] for a in body["activities"]])
+        checkpoint = datetime.fromisoformat(body["server_time"])
+        self.assertLess(
+            checkpoint,
+            late,
+            "server_time is later than a row the response missed: the next `since` skips it",
+        )
+        # And the next sync, from that checkpoint, returns it.
+        nxt = self.client.get(
+            self.URL, {"team_id": str(self.team.team_id), "since": body["server_time"]}
+        ).json()
+        self.assertIn(str(late_row.id), [a["id"] for a in nxt["activities"]])
+
+    def test_both_responses_carry_the_helpers_clock(self):
+        """The success path and the unparseable-team early return are two
+        separate `Response`s. Each must report the clock read at the top, not
+        take its own: a fixed instant from the helper must appear in both."""
+        from datetime import datetime
+        from datetime import timezone as tz
+        from unittest import mock
+
+        from origin.views.chat import activity_views_v3
+
+        fixed = datetime(2026, 1, 1, 12, 0, 0, tzinfo=tz.utc)
+        with mock.patch.object(activity_views_v3, "capture_server_time", return_value=fixed):
+            normal = self.client.get(self.URL, {"team_id": str(self.team.team_id)}).json()
+            bad_team = self.client.get(self.URL, {"team_id": "not-a-uuid"}).json()
+
+        self.assertEqual(normal["server_time"], fixed.isoformat())
+        self.assertEqual(bad_team["server_time"], fixed.isoformat())

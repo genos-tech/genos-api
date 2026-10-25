@@ -14,6 +14,16 @@ Any write that commits during the query window has commit_time
 > server_time, so the next sync will include it. Storing
 `max(ts_updated_at)` of returned rows instead would silently lose such
 writes.
+
+Use `capture_server_time()` for it; a bare `timezone.now()` written into the
+response is the same mistake with a different spelling. `ActivityListView`
+did exactly that, reading the clock after its query, until MIP-804.
+
+This applies to an endpoint whose `server_time` the client stores and sends
+back as `?since=` (checked 2026-10-25: activity, inbox, team members, project
+tasks, channel messages and threads). The pin, flag and todo lists also return
+a `server_time`, but nothing sends a `since` to them, so it is informational
+there and the ordering cannot lose a row.
 """
 
 from datetime import datetime, timedelta
