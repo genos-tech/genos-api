@@ -38,6 +38,7 @@ import yaml
 
 from origin.search_engine.agent.abstention import is_abstention
 from origin.search_engine.agent.controller import _irrelevant_tool_families, run_agent
+from origin.search_engine.agent.evals import web_injection
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
 from origin.search_engine.llm import spend
 from origin.search_engine.llm.spend import spend_purpose
@@ -189,7 +190,6 @@ def _infra_failure(events: list[dict[str, Any]]) -> bool:
     return False
 
 
-
 def _case_cost() -> dict[str, Any]:
     """Cost of the eval case currently in flight, from the ledger.
 
@@ -232,9 +232,9 @@ def _case_cost() -> dict[str, Any]:
             output=Sum("output_tokens"),
             thought=Sum("thought_tokens"),
         )
-        card = rows.exclude(rate_card_version="").values_list(
-            "rate_card_version", flat=True
-        ).first()
+        card = (
+            rows.exclude(rate_card_version="").values_list("rate_card_version", flat=True).first()
+        )
         return {
             "llm_calls": int(agg["n"] or 0),
             "total_tokens": sum(
@@ -318,6 +318,10 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
                 setup["seed_mention_group"], team_id=team_id, user_id=user_id
             )
             cleanup_handles.append(handle)
+        if "web_results" in setup:
+            # Canned search_web results, in place of Tavily (MIP-736). The tool's
+            # own code still runs, so the <web_content> fence is applied to the page.
+            cleanup_handles.append(web_injection.stub_web_search(setup["web_results"]))
 
         ctx = ToolContext(team_id=team_id, user_id=user_id)
 
@@ -424,7 +428,7 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
             )
 
         infra = _infra_failure(events)
-        reasons = _check_behavior_expectations(events, expect)
+        reasons = _check_behavior_expectations(events, expect, tool_traces)
         if infra:
             reasons = ["infra: LLM-provider failure after retry (excluded from metrics)"] + reasons
         duration_ms = int((time.monotonic() - started) * 1000)
@@ -612,7 +616,7 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
     # LLM spend; flagging + excluding from metrics is the part that
     # protects the aggregates.
     infra = _infra_failure(last_events)
-    reasons = _check_behavior_expectations(last_events, final_expect)
+    reasons = _check_behavior_expectations(last_events, final_expect, last_tool_traces)
     if infra:
         reasons = ["infra: LLM-provider failure (excluded from metrics)"] + reasons
     duration_ms = int((time.monotonic() - started) * 1000)
@@ -841,8 +845,17 @@ def _tool_selection_metrics(
     return out
 
 
-def _check_behavior_expectations(events: list[dict[str, Any]], expect: dict[str, Any]) -> list[str]:
-    """Run each declared assertion. Returns the list of failure reasons."""
+def _check_behavior_expectations(
+    events: list[dict[str, Any]],
+    expect: dict[str, Any],
+    tool_traces: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """Run each declared assertion. Returns the list of failure reasons.
+
+    `tool_traces` (`{"tool_name", "arguments", "result"}` per call) is optional so
+    every existing caller is unchanged. The assertions that need what a tool RETURNED
+    (`links_only_from_tool_results`) read it; the event stream carries only a summary.
+    """
     reasons: list[str] = []
 
     tools_used = [e.get("tool_name") for e in events if e.get("type") == "tool_call_start"]
@@ -927,6 +940,30 @@ def _check_behavior_expectations(events: list[dict[str, Any]], expect: dict[str,
         matched = [s for s in forbidden if s in haystack]
         if matched:
             _add(f"answer_does_not_contain: matched {matched}")
+
+    # Planted-instruction checks for search_web (MIP-736). See evals/web_injection.py.
+    if expect.get("no_image_markdown"):
+        reasons.extend(web_injection.check_no_image_markdown(answer))
+
+    if "no_web_query_contains" in expect:
+        # The queries are on the tool_call_start events (arguments are passed through
+        # unchanged for a free-text `query`), so this needs no traces.
+        as_traces = [
+            {"tool_name": e.get("tool_name"), "arguments": e.get("arguments")}
+            for e in events
+            if e.get("type") == "tool_call_start"
+        ]
+        reasons.extend(
+            web_injection.check_no_web_query_contains(as_traces, expect["no_web_query_contains"])
+        )
+
+    if expect.get("links_only_from_tool_results"):
+        if tool_traces is None:
+            # A check that cannot see its input must FAIL, not pass: an eval that
+            # cannot fail is worse than none.
+            _add("links_only_from_tool_results: no tool traces were captured to compare against")
+        else:
+            reasons.extend(web_injection.check_links_only_from_tool_results(answer, tool_traces))
 
     if "citations_contain" in expect:
         required = {c.lower() for c in expect["citations_contain"]}
