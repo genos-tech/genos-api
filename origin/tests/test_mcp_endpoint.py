@@ -1276,6 +1276,208 @@ class TestReferenceResolution(McpBase):
         self.assertIn("note_type", str(caught.exception))
 
 
+class TestUnknownArgumentsAreRefused(McpBase):
+    """A tool given an argument its schema does not define used to ignore it and
+    report success (MIP-763). `get_task` returns the body as `content_markdown`;
+    `update_task` takes `content_text`; writing the field you read back answered
+    `changed_fields: []` and saved nothing. MCP writes have no undo and no approval
+    step, so "nothing happened" reading as success is the risky case."""
+
+    def test_the_reported_case_is_an_error_that_names_the_field_to_use(self):
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self._tool_text(
+            self._call(
+                "update_task",
+                {"task_id": self.task.task_id, "content_markdown": "### new body"},
+            )
+        )
+
+        self.assertTrue(is_error)
+        self.assertIn("content_markdown", text)
+        self.assertIn("content_text", text)
+        self.assertIn("did you mean `content_text`", text)
+
+    def test_a_refused_write_changes_nothing(self):
+        self._key(scope=SCOPE_WRITE)
+        before = (self.task.title, self.task.priority, self.task.status)
+
+        self._call(
+            "update_task",
+            {"task_id": self.task.task_id, "title": "Renamed", "priority": "High", "bogus": 1},
+        )
+
+        self.task.refresh_from_db()
+        self.assertEqual((self.task.title, self.task.priority, self.task.status), before)
+
+    def test_a_misspelt_filter_on_a_read_is_refused_not_ignored(self):
+        """An unfiltered list that looks authoritative is the same failure."""
+        self._key(scope=SCOPE_READ)
+
+        text, is_error = self._tool_text(self._call("list_tasks", {"projct_id": 3}))
+
+        self.assertTrue(is_error)
+        self.assertIn("projct_id", text)
+        self.assertIn("did you mean `project_id`", text)
+
+    def test_it_lists_what_the_tool_does_accept(self):
+        self._key(scope=SCOPE_READ)
+
+        text, _ = self._tool_text(self._call("list_tasks", {"nonsense_key": 1}))
+
+        for accepted in ("project_id", "status", "limit"):
+            self.assertIn(f"`{accepted}`", text)
+
+    def test_a_refusal_says_nothing_was_changed(self):
+        """A model reading "does not take X" may wonder whether part of the call ran."""
+        self._key(scope=SCOPE_WRITE)
+
+        text, _ = self._tool_text(
+            self._call("update_task", {"task_id": self.task.task_id, "bogus": 1})
+        )
+
+        self.assertIn("Nothing was changed", text)
+
+    def test_the_check_reads_the_published_schema_so_a_documented_key_is_never_refused(self):
+        """Today an override only changes a property's type, so the registry's
+        schema and the published one name the same keys. The check must read the
+        PUBLISHED one: the day an override adds a key, a client that read the
+        schema and used it would otherwise be told it was wrong."""
+        from dataclasses import replace
+
+        from origin.views.public.mcp import tools as mcp_tools
+
+        tool = mcp_tools.BY_NAME["get_current_user"]
+        widened = replace(tool, schema_overrides={"brand_new_key": {"type": "string"}})
+
+        self.assertEqual(mcp_tools._unknown_arguments(widened, {"brand_new_key": "x"}), [])
+        self.assertEqual(
+            mcp_tools._unknown_arguments(tool, {"brand_new_key": "x"}), ["brand_new_key"]
+        )
+
+    def test_a_refusal_is_logged_by_key_name_and_never_by_value(self):
+        """How a client that attaches an extra key to every call would be noticed.
+        The values can hold task text and note bodies, so they never reach the log."""
+        self._key(scope=SCOPE_WRITE)
+
+        with self.assertLogs("origin.views.public.mcp.tools", level="INFO") as logs:
+            self._call(
+                "update_task",
+                {"task_id": self.task.task_id, "content_markdown": "SECRET-BODY-TEXT"},
+            )
+
+        joined = "\n".join(logs.output)
+        self.assertIn("update_task", joined)
+        self.assertIn("content_markdown", joined)
+        self.assertNotIn("SECRET-BODY-TEXT", joined)
+
+    def test_every_unknown_key_is_named_not_just_the_first(self):
+        self._key(scope=SCOPE_READ)
+
+        text, _ = self._tool_text(self._call("list_tasks", {"aaa_x": 1, "bbb_y": 2}))
+
+        self.assertIn("`aaa_x`", text)
+        self.assertIn("`bbb_y`", text)
+
+    def test_a_suggestion_is_only_offered_when_there_is_one(self):
+        self._key(scope=SCOPE_READ)
+
+        text, _ = self._tool_text(self._call("list_tasks", {"zzzzzzzz": 1}))
+
+        self.assertNotIn("did you mean", text)
+
+    def test_the_aliases_only_point_at_something_the_tool_accepts(self):
+        """`description` is an alias for `content_text`, but a tool with no
+        `content_text` must not be told to send it."""
+        self._key(scope=SCOPE_READ)
+
+        text, _ = self._tool_text(self._call("list_tasks", {"description": "x"}))
+
+        self.assertNotIn("content_text", text.split("It accepts")[0])
+
+    def test_valid_arguments_are_untouched(self):
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self._tool_text(
+            self._call("update_task", {"task_id": self.task.task_id, "priority": "High"})
+        )
+
+        self.assertFalse(is_error, text)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.priority, "High")
+
+    def test_a_note_url_still_gets_its_family_added_after_the_check(self):
+        """`call_tool` adds `note_type` itself after resolving a URL; the check looks
+        at what the CALLER sent, so the injected key must not trip it. Uses
+        `update_note`, which has always taken a URL."""
+        note = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="Before", body=[]
+        )
+        NotePermissionMaster.objects.create(
+            team=self.team, user=self.user, note_id=note.note_id, note_type=1, role_id=1
+        )
+        self._key(scope=SCOPE_WRITE)
+
+        text, is_error = self._tool_text(
+            self._call(
+                "update_note",
+                {"note_id": f"/workspace/notes/my/{note.note_id}", "title": "After"},
+            )
+        )
+
+        self.assertFalse(is_error, text)
+        note.refresh_from_db()
+        self.assertEqual(note.title, "After")
+
+    def test_a_tool_with_no_arguments_still_works_with_none(self):
+        self._key(scope=SCOPE_READ)
+
+        text, is_error = self._tool_text(self._call("get_current_user", {}))
+
+        self.assertFalse(is_error, text)
+
+    def test_a_tool_with_no_arguments_refuses_any(self):
+        self._key(scope=SCOPE_READ)
+
+        text, is_error = self._tool_text(self._call("get_current_user", {"x": 1}))
+
+        self.assertTrue(is_error)
+        self.assertIn("`x`", text)
+
+    def test_the_refusal_comes_after_the_scope_checks(self):
+        """A read-only key sending a write tool a bad argument is told about its
+        scope, not about the argument: the scope is the thing it must fix first."""
+        self._key(scope=SCOPE_READ)
+
+        text, is_error = self._tool_text(
+            self._call("update_task", {"task_id": self.task.task_id, "bogus": 1})
+        )
+
+        self.assertTrue(is_error)
+        self.assertIn("read-only", text)
+        self.assertNotIn("bogus", text)
+
+    def test_no_published_tool_reads_a_key_its_schema_does_not_publish(self):
+        """What makes the strict check safe: a tool that read an undeclared key
+        would have a working argument that the check now refuses. Held as a test
+        so the next tool added cannot introduce one silently."""
+        import inspect
+        import re
+
+        from origin.views.public.mcp import tools as mcp_tools
+
+        offenders = []
+        for tool in mcp_tools.BY_NAME.values():
+            run = REGISTRY[tool.registry_name].run
+            source = inspect.getsource(inspect.getmodule(getattr(run, "__wrapped__", run)))
+            declared = set((mcp_tools.input_schema(tool).get("properties") or {}).keys())
+            # `args.get("x")` / `args["x"]`, not `create_kwargs["x"]`: the character
+            # before `args` must not be a word character.
+            read = set(re.findall(r'(?<![A-Za-z0-9_])args\.get\(\s*"([a-z_]+)"', source))
+            read |= set(re.findall(r'(?<![A-Za-z0-9_])args\[\s*"([a-z_]+)"\s*\]', source))
+            if read - declared:
+                offenders.append((tool.name, sorted(read - declared)))
+        self.assertEqual(offenders, [])
+
+
 class TestTheNewWrites(McpBase):
     """The writes this PR published, at the seams that are easy to get
     wrong: scope, ACL, and what the caller gets back."""
