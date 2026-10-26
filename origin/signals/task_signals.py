@@ -327,6 +327,25 @@ def _resolve_actor() -> Optional[Any]:
     return user
 
 
+# Surfaces whose body rewrite keeps the previous body. The editor's own autosave
+# (`app`) does not: it is a stream of small changes, not a replacement.
+_BODY_SNAPSHOT_KINDS = {"agent", "api_key"}
+
+
+def _keeps_previous_body(instance=None) -> bool:
+    """Should the body being replaced be kept on the history row?
+
+    True for an unattended whole-body rewrite (the agent, an API key), and for a
+    write that asks for it by setting `_keep_previous_body` on the instance. A
+    restore from the history does, so a mistaken restore can be undone too
+    although it arrives as the app, whose own autosave is deliberately not kept.
+    """
+    if instance is not None and getattr(instance, "_keep_previous_body", False):
+        return True
+    source = get_current_source()
+    return bool(source) and source.get("kind") in _BODY_SNAPSHOT_KINDS
+
+
 def _record(
     *,
     task: TaskMaster,
@@ -542,14 +561,24 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
             new_value=instance.is_deleted,
         )
 
-    # Description edits are tracked as a single "edited" event without
-    # a body diff — comparing JSONField BlockNote documents is noisy
-    # and the body is preserved on the task itself anyway.
+    # Description edits are tracked as a single "edited" event, with no diff:
+    # comparing BlockNote documents is noisy, and the editor's own autosave
+    # (surface `app`) is a stream of tiny changes the live Yjs doc already
+    # holds the history of.
+    #
+    # But an unattended rewrite (the in-app agent, an API key, which is also
+    # MCP) replaces the WHOLE body in one write, and after it the row holds
+    # only the new text. A mistaken or injected rewrite of a long spec was
+    # unrecoverable (MIP-738). So for those surfaces the previous body is kept
+    # on the row as `old_value`, and `TaskBodyRestoreView` can put it back.
     if original.get("content") != instance.content:
+        keep = _keeps_previous_body(instance) and isinstance(original.get("content"), list)
         _record(
             task=instance,
             action_type=TaskActivityActionType.DESCRIPTION,
             field_name="content",
+            old_value=original.get("content") if keep else None,
+            metadata={"previousBodyKept": True} if keep else None,
         )
 
     for field in _TRACKED_TASK_FIELDS:

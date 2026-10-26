@@ -49,11 +49,18 @@ def _serialize_actor(user) -> dict | None:
 
 
 def _serialize_activity(row: TaskActivity) -> dict:
+    # A description row from an agent or API rewrite keeps the previous BODY in
+    # `old_value` so it can be restored (MIP-738). That is a whole document,
+    # and the feed has no use for it: it is fetched by the restore flow only.
+    # Sent here it would make every feed response carry old bodies, and hand a
+    # replaced description to anyone who can read the history. The row says a
+    # body is available (`metadata.previousBodyKept`) and nothing more.
+    is_body = row.action_type == TaskActivityActionType.DESCRIPTION
     return {
         "activityId": row.activity_id,
         "actionType": row.action_type,
         "fieldName": row.field_name,
-        "oldValue": row.old_value,
+        "oldValue": None if is_body else row.old_value,
         "newValue": row.new_value,
         "metadata": row.metadata or {},
         "actor": _serialize_actor(row.actor),
@@ -76,6 +83,13 @@ def _collapse_description_edits(rows: list[TaskActivity]) -> list[TaskActivity]:
 
     Non-description rows always pass through verbatim, and any change
     in actor / action / a >window gap closes the active run.
+
+    A description row that **kept the previous body** (`previousBodyKept`, an
+    agent or API-key rewrite, MIP-738) is never folded into a run and never
+    has one folded into it. It is the one place a restore is offered, and the
+    usual sequence is a rewrite followed by the user's own autosave within the
+    window; folding by "newest wins" would leave only the autosave row, which
+    kept nothing, and the restore would vanish exactly when it is needed.
     """
     desc = TaskActivityActionType.DESCRIPTION
     out: list[TaskActivity] = []
@@ -98,6 +112,17 @@ def _collapse_description_edits(rows: list[TaskActivity]) -> list[TaskActivity]:
 
     for r in rows:
         is_desc = r.action_type == desc
+        keeps_body = is_desc and bool((r.metadata or {}).get("previousBodyKept"))
+        if keeps_body:
+            # Closes the open run, stands alone, and starts none, so the
+            # edits on either side of it cannot fold into it.
+            _stamp_anchor()
+            out.append(r)
+            run_count = 0
+            run_actor_id = None
+            run_first_ts = None
+            run_prev_ts = None
+            continue
         # Tuples compare equal even when both actor_ids are None, so a
         # run of anonymous edits (rare but possible — actor FK is
         # SET_NULL) merges sensibly without merging into a named-actor
@@ -501,5 +526,87 @@ class TaskVelocityView(AuthenticatedAPIView):
 
         return Response(
             {"velocity": series, "granularity": granularity},
+            status=status.HTTP_200_OK,
+        )
+
+
+class TaskBodyRestoreView(AuthenticatedAPIView):
+    """`POST /api/v2/task/activity/restore-body/`  body: `{task_id, activity_id}`
+
+    Put back the description a task had before an agent or API-key rewrite
+    (MIP-738). `update_task` with `content_text` replaces the WHOLE body, and
+    after it the task held only the new text; the signal now keeps the previous
+    body on the `description_edited` row (`old_value`, `previousBodyKept`), and
+    this is how it comes back.
+
+    Allowed to anyone who can edit the task (`can_access_task`, which is the
+    read and the write audience at once; a role tier is a product decision and
+    is not made here).
+
+    The row is looked up BY TASK as well as by id, so an activity id from
+    another task, or one the caller cannot see, is a 404 and never a read of
+    someone else's body. It must be a description row that kept its body; any
+    other row is a 400.
+
+    A restore is itself a body rewrite, and `app` autosave does not keep the
+    previous body. So that a mistaken restore can be undone too, the body it
+    replaces is recorded explicitly on the row it writes.
+
+    Like the agent's `update_task`, it also pushes the body into the task's live
+    Yjs document (MIP-694): the editor renders that, not `content`, so without
+    the push a task that was ever opened keeps showing the rewrite.
+    """
+
+    def post(self, request):
+        raw_task_id = request.data.get("task_id")
+        raw_activity_id = request.data.get("activity_id")
+        try:
+            task_id = int(raw_task_id)
+            activity_id = int(raw_activity_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "task_id and activity_id must be integers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not can_access_task(task_id, request.user.id):
+            return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        row = TaskActivity.objects.filter(
+            activity_id=activity_id,
+            task_id=task_id,
+            action_type=TaskActivityActionType.DESCRIPTION,
+        ).first()
+        if row is None:
+            return Response({"error": "Activity not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not (row.metadata or {}).get("previousBodyKept") or not isinstance(row.old_value, list):
+            return Response(
+                {"error": "That edit did not keep the previous description."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        task = TaskMaster.objects.get(task_id=task_id)
+        previous_body = row.old_value
+        replaced_body = task.content
+
+        from origin.search_engine.agent.tools.body_mentions import (  # noqa: PLC0415
+            notify_task_body_mentions,
+        )
+        from origin.services.collab_push import push_task_body  # noqa: PLC0415
+
+        # A restore must be restorable: the signal keeps the previous body only
+        # for agent and API-key writes, and this one arrives as the app.
+        task.content = previous_body
+        task._keep_previous_body = True
+        task.save(update_fields=["content"])
+        push_task_body(task.task_id, previous_body)
+        notify_task_body_mentions(task, actor_id=str(request.user.id))
+
+        return Response(
+            {
+                "taskId": task.task_id,
+                "restoredFrom": row.activity_id,
+                "replacedBodyKept": isinstance(replaced_body, list),
+            },
             status=status.HTTP_200_OK,
         )
