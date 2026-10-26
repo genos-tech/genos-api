@@ -87,6 +87,7 @@ call time, since a client may be working from a cached list.
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import re
@@ -941,6 +942,53 @@ def _text_result(text: str, *, is_error: bool = False) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "isError": is_error}
 
 
+# Names a caller reaches for that are not the tool's own, mapped to the one it
+# takes. String similarity cannot connect these: `get_task` RETURNS the body as
+# `content_markdown`, so the natural thing is to write that same name back, and
+# `update_task` takes `content_text`.
+_ARGUMENT_ALIASES = {
+    "content_markdown": "content_text",
+    "body_markdown": "content_text",
+    "description": "content_text",
+    "body": "content_text",
+    "content": "content_text",
+}
+
+
+def _unknown_arguments(tool: McpTool, args: dict[str, Any]) -> list[str]:
+    """Keys the caller sent that the tool's PUBLISHED schema does not define."""
+    declared = set((input_schema(tool).get("properties") or {}).keys())
+    return sorted(str(k) for k in args if k not in declared)
+
+
+def _refuse_unknown_arguments(tool: McpTool, unknown: list[str]) -> dict[str, Any]:
+    """An error that says which argument was not recognised and what to send.
+
+    A tool used to ignore an argument it did not define and report success: an
+    `update_task` given `content_markdown` (the name `get_task` returns the body
+    under) answered `changed_fields: []` and saved nothing, and a misspelt filter on
+    a read returned an unfiltered list that looked authoritative (MIP-763). MCP writes
+    have no undo and no approval step, so "nothing happened" reading as success is the
+    risky case. The text is written for a model to act on: the name it sent, the name
+    to use if there is an obvious one, and what the tool accepts.
+    """
+    accepted = sorted((input_schema(tool).get("properties") or {}).keys())
+    lines = []
+    for key in unknown:
+        hint = _ARGUMENT_ALIASES.get(key.lower())
+        if hint not in accepted:
+            hint = None
+        if hint is None:
+            close = difflib.get_close_matches(key, accepted, n=1, cutoff=0.6)
+            hint = close[0] if close else None
+        lines.append(f"`{key}`" + (f" (did you mean `{hint}`?)" if hint else ""))
+    return _text_result(
+        f"`{tool.name}` does not take {', '.join(lines)}. Nothing was changed. "
+        f"It accepts: {', '.join(f'`{a}`' for a in accepted) or 'no arguments'}.",
+        is_error=True,
+    )
+
+
 def call(
     name: str,
     arguments: dict[str, Any],
@@ -983,6 +1031,13 @@ def call(
         )
 
     args = dict(arguments or {})
+    # Before anything is resolved or run, so a refused call changes nothing.
+    if unknown := _unknown_arguments(tool, args):
+        # The key NAMES only, never the values (task text, note bodies). This is how
+        # a client that attaches something extra to every call would be noticed:
+        # the refusal is new, and what real clients send is not visible from here.
+        log.info("MCP %s refused unknown argument(s): %s", name, ", ".join(unknown))
+        return _refuse_unknown_arguments(tool, unknown)
     try:
         for arg in tool.task_ref_args:
             if arg in args and args[arg] is not None:
