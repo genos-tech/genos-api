@@ -315,8 +315,11 @@ CATALOG: tuple[McpTool, ...] = (
             "Read a note's full body. Notes hold specs, designs and "
             "decisions — follow one when a task description points at it. "
             "`body_markdown` keeps the note's headings, lists and @/# chips; "
-            "`body_text` is the same body flattened."
+            "`body_text` is the same body flattened. Pass the note's Genos URL "
+            "and nothing else, or a numeric id together with `note_type`."
         ),
+        note_ref_args=("note_id",),
+        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
     ),
     McpTool(
         name="get_current_user",
