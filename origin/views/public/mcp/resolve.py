@@ -55,6 +55,23 @@ _URL_TASK = re.compile(r"/task/(\d+)")
 _DISPLAY_ID = re.compile(r"^(?P<code>[A-Za-z0-9_\-]+)-(?P<number>\d+)$")
 
 
+# A reference is a display id, a number, or a URL; the longest real one (an app
+# URL with a thread and a comment) is a few hundred characters. Anything past
+# this is not one, and is refused before any pattern runs over it, so a
+# crafted argument cannot make a worker spend seconds in a regex.
+MAX_REF_CHARS = 2048
+
+
+def _checked_text(ref) -> str:
+    text = str(ref).strip()
+    if len(text) > MAX_REF_CHARS:
+        raise ToolError(
+            f"That reference is too long ({len(text)} characters; the limit is {MAX_REF_CHARS}). "
+            "Pass a task or note URL, a display id like PRJ-123, or a numeric id."
+        )
+    return text
+
+
 def resolve_task_ref(ref, team_id: str) -> int:
     """`ref` -> a task id, or `ToolError` naming what we tried.
 
@@ -67,7 +84,7 @@ def resolve_task_ref(ref, team_id: str) -> int:
     if ref is None:
         raise ToolError("A task reference is required (e.g. PRJ-123, a task URL, or an id).")
 
-    text = str(ref).strip()
+    text = _checked_text(ref)
     if not text:
         raise ToolError("A task reference is required (e.g. PRJ-123, a task URL, or an id).")
 
@@ -112,7 +129,14 @@ def resolve_task_ref(ref, team_id: str) -> int:
 # personal note, which has no trailing `/note/` segment. Anchored on the
 # LAST id in the path so the project / task / thread ids a task- or
 # chat-note URL carries can't be mistaken for the note id.
-_URL_NOTE_TRAILING = re.compile(r"/notes?/.*/note/(\d+)")
+#
+# The `.*` between the two literals is bounded: unbounded, a string of `/note/`
+# segments that never ends in digits made the engine retry the whole tail from
+# every earlier `/notes/`, quadratic in the input (CodeQL py/polynomial-redos,
+# MIP-819). A real URL's path between the bucket and the note id is a few
+# segments; 1000 characters is far above that. `_resolve_text` also caps the
+# whole reference, which is what protects the next pattern added here.
+_URL_NOTE_TRAILING = re.compile(r"/notes?/.{0,1000}/note/(\d+)")
 _URL_NOTE_PERSONAL = re.compile(r"/notes?/(?:my|team|shared)/(\d+)")
 # Which family a note URL's bucket segment names. `my`, `team` and
 # `shared` are all PersonalNoteMaster rows — the three are sidebar
@@ -147,7 +171,7 @@ def resolve_note_ref(ref, _team_id: str) -> tuple[int, str | None]:
     if ref is None:
         raise ToolError("A note reference is required (a note URL or a numeric note id).")
 
-    text = str(ref).strip()
+    text = _checked_text(ref)
     if not text:
         raise ToolError("A note reference is required (a note URL or a numeric note id).")
 

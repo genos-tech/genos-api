@@ -46,13 +46,19 @@ _TODO_RE = re.compile(r"^todo:(\d{4}-\d{2}-\d{2}):item:(\d+)$")
 ENTITY_TOKEN_RE = re.compile(r"^(?:chat|task|note|project|todo|milestone):[^\s()\[\]]+$")
 
 # A markdown link whose target might be a citation token:  [label](target)
-_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+#
+# Bounded, and the label cannot cross a line. Both repetitions used to be
+# unbounded, so a run like `[a](` repeated made every opening bracket scan to the
+# end of the text before failing, and the next one do it again: quadratic, 26 s
+# of CPU for 192 KB (CodeQL py/polynomial-redos, MIP-819). A label is a short
+# phrase and a target is a token or a URL; the limits are far above both.
+_MD_LINK_RE = re.compile(r"\[([^\]\n]{1,500})\]\(([^)\s]{1,500})\)")
 
 # A BARE citation token in prose — `[task:12]` — that is not the label of
 # a markdown link (no following paren). Same shape as `blocknote_md`'s
 # `_BARE_TOKEN_RE`; the two must agree, because the agent emits both
 # forms and a note body and a digest should link identically.
-_BARE_TOKEN_RE = re.compile(r"\[((?:chat|task|note|project|todo|milestone):[^\]\s]+)\](?!\()")
+_BARE_TOKEN_RE = re.compile(r"\[((?:chat|task|note|project|todo|milestone):[^\]\s]{1,200})\](?!\()")
 
 
 def rewrite_citation_md(text: str, *, team_id: str) -> str:

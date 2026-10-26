@@ -27,6 +27,12 @@ privately for the connection (DNS rebinding). `fetch_public` resolves
 once, checks every address, and connects to the checked IP itself,
 sending the real name as Host and as the TLS SNI and certificate name.
 Redirects are followed by hand, each hop checked the same way.
+
+`post_public` does the same for a webhook delivery, which POSTs a signed body
+and must not follow redirects at all. Before MIP-819 the webhook path checked
+the host (`is_public_host`) and then handed the URL to `requests.post`, which
+resolved it a second time: exactly the gap above, and the alert CodeQL raised
+on `webhook_delivery.py` (`py/full-ssrf`).
 """
 
 from __future__ import annotations
@@ -129,6 +135,40 @@ def _parse(url: str, schemes: tuple[str, ...]) -> _Target:
     return _Target(scheme, host, ALLOWED_PORTS[scheme], path)
 
 
+def _pinned_pool(target: _Target, deadline: float) -> tuple[urllib3.HTTPConnectionPool, str]:
+    """A connection pool pinned to ONE checked address, and the Host header.
+
+    Resolves `target.host` once, requires every answer to be public, and
+    connects to the first. The certificate is still verified against the
+    name the user typed (SNI and hostname both), so pinning the address does
+    not weaken TLS. Shared by `fetch_public` and `post_public` so the two
+    cannot drift apart on the part that matters.
+    """
+    ip = resolve_public(target.host)[0]
+    host_header = target.host if ":" not in target.host else f"[{target.host}]"
+    remaining = max(deadline - time.monotonic(), 0.1)
+    common = dict(
+        host=ip,
+        port=target.port,
+        timeout=urllib3.Timeout(connect=remaining, read=remaining),
+        retries=False,
+        maxsize=1,
+    )
+    if target.scheme == "https":
+        pool: urllib3.HTTPConnectionPool = urllib3.HTTPSConnectionPool(
+            **common,
+            # The connection goes to the checked IP; the certificate
+            # is still verified against the name the user typed.
+            server_hostname=target.host,
+            assert_hostname=target.host,
+            cert_reqs="CERT_REQUIRED",
+            ca_certs=certifi.where(),
+        )
+    else:
+        pool = urllib3.HTTPConnectionPool(**common)
+    return pool, host_header
+
+
 @dataclass(frozen=True)
 class FetchResult:
     url: str  # the final URL, after redirects
@@ -159,28 +199,7 @@ def fetch_public(
     deadline = time.monotonic() + timeout
     for _ in range(max_redirects + 1):
         target = _parse(url, ALLOWED_SCHEMES)
-        ip = resolve_public(target.host)[0]
-        host_header = target.host if ":" not in target.host else f"[{target.host}]"
-        remaining = max(deadline - time.monotonic(), 0.1)
-        common = dict(
-            host=ip,
-            port=target.port,
-            timeout=urllib3.Timeout(connect=remaining, read=remaining),
-            retries=False,
-            maxsize=1,
-        )
-        if target.scheme == "https":
-            pool: urllib3.HTTPConnectionPool = urllib3.HTTPSConnectionPool(
-                **common,
-                # The connection goes to the checked IP; the certificate
-                # is still verified against the name the user typed.
-                server_hostname=target.host,
-                assert_hostname=target.host,
-                cert_reqs="CERT_REQUIRED",
-                ca_certs=certifi.where(),
-            )
-        else:
-            pool = urllib3.HTTPConnectionPool(**common)
+        pool, host_header = _pinned_pool(target, deadline)
         try:
             resp = pool.urlopen(
                 "GET",
@@ -217,3 +236,51 @@ def fetch_public(
         finally:
             pool.close()
     raise OutboundUrlError("The page redirected too many times.")
+
+
+def post_public(
+    url: str,
+    body: bytes,
+    *,
+    headers: dict[str, str],
+    timeout: float = 10.0,
+) -> int:
+    """POST `body` to a user-supplied https URL; returns the HTTP status.
+
+    For webhook delivery. The destination is resolved ONCE, every address must
+    be public, and the connection goes to that checked address (certificate
+    verified against the typed name), so a hostname that answers publicly for a
+    check and privately for a connection cannot reach the private network.
+
+    **Redirects are not followed.** A 3xx is returned as a status, not a hop: a
+    redirect to a private address would defeat every check above, and a webhook
+    endpoint that moved should be updated by its owner.
+
+    https only, and the standard port only, as for `fetch_public`. The reply is
+    never read: only the status matters, and a customer's endpoint must not be
+    able to make a worker buffer an unbounded body.
+
+    Raises `OutboundUrlError` for a refused destination (its message is safe to
+    show the person who configured the webhook) and `urllib3` / `OSError` for a
+    network failure (log it; do not show it).
+    """
+    deadline = time.monotonic() + timeout
+    target = _parse(url, ("https",))
+    pool, host_header = _pinned_pool(target, deadline)
+    try:
+        resp = pool.urlopen(
+            "POST",
+            target.path,
+            body=body,
+            headers={**headers, "Host": host_header},
+            redirect=False,
+            preload_content=False,
+            assert_same_host=False,
+        )
+        try:
+            return resp.status
+        finally:
+            resp.release_conn()
+            resp.close()
+    finally:
+        pool.close()

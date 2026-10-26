@@ -247,7 +247,7 @@ def _tokenize_formatting(text: str) -> list[dict[str, Any]]:
 # Bare citation token in prose — `[task:12]` — that is NOT the label of
 # a markdown link (no following paren). Same vocabulary as the frontend's
 # CITATION_PATTERN.
-_BARE_TOKEN_RE = re.compile(r"\[((?:chat|task|note|project|todo|milestone):[^\]\s]+)\](?!\()")
+_BARE_TOKEN_RE = re.compile(r"\[((?:chat|task|note|project|todo|milestone):[^\]\s]{1,200})\](?!\()")
 
 # Chip forms (MIP-708), all explicit, because a name is never guessed:
 #   - a bare `[task:12]` / `[user:<uuid>]` / `[group:4]` token;
