@@ -40,6 +40,7 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import ConnectedAccount
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskComments, TaskMaster
@@ -1114,6 +1115,135 @@ class TestReferenceResolution(McpBase):
         self.assertFalse(is_error, text)
         self.note.refresh_from_db()
         self.assertEqual(self.note.title, "Renamed from a URL")
+
+    # -- get_note takes a pasted URL, as update_note does (MIP-770) --
+    #
+    # The resolver was only ever tested directly. `get_note` had no
+    # `note_ref_args`, so `call_tool` never ran the resolver on its `note_id`,
+    # and a pasted URL reached the tool as a string with no `note_type`.
+
+    def _body_blocks(self, text):
+        return [{"type": "paragraph", "content": [{"type": "text", "text": text}]}]
+
+    def _task_note(self, text="The redirect drops the query string."):
+        return TaskNoteMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            task=self.task,
+            owner=self.user,
+            title="Task spec",
+            body=self._body_blocks(text),
+        )
+
+    def test_get_note_reads_a_personal_note_from_its_url_alone(self):
+        self.note.body = self._body_blocks("Personal body text.")
+        self.note.save(update_fields=["body"])
+        self._key(scope=SCOPE_READ)
+        url = f"https://app.genosai.dev/workspace/notes/my/{self.note.note_id}"
+
+        text, is_error = self._tool_text(self._call("get_note", {"note_id": url}))
+
+        self.assertFalse(is_error, text)
+        self.assertIn("Personal body text.", text)
+
+    def test_get_note_reads_a_task_note_from_its_url_alone(self):
+        """The exact call from the report: a task-note URL, no `note_type`."""
+        note = self._task_note()
+        self._key(scope=SCOPE_READ)
+        url = (
+            "https://genosai.dev/workspace/notes/task/project/"
+            f"{self.project.project_id}/task/{self.task.task_id}/note/{note.note_id}"
+        )
+
+        text, is_error = self._tool_text(self._call("get_note", {"note_id": url}))
+
+        self.assertFalse(is_error, text)
+        self.assertNotIn("Unknown note_type", text)
+        self.assertIn("The redirect drops the query string.", text)
+
+    def test_the_url_picks_the_family_not_the_other_way_round(self):
+        """A personal note and a task note can share a numeric id. The URL names
+        which one is meant, so reading by URL must return THAT one."""
+        personal = self.note
+        task_note = self._task_note("TASK-FAMILY-BODY")
+        personal.body = self._body_blocks("PERSONAL-FAMILY-BODY")
+        personal.save(update_fields=["body"])
+        TaskNoteMaster.objects.filter(pk=task_note.pk).update(note_id=personal.note_id)
+        self._key(scope=SCOPE_READ)
+
+        task_url = (
+            f"/workspace/notes/task/project/{self.project.project_id}"
+            f"/task/{self.task.task_id}/note/{personal.note_id}"
+        )
+        personal_url = f"/workspace/notes/my/{personal.note_id}"
+        from_task, _ = self._tool_text(self._call("get_note", {"note_id": task_url}))
+        from_personal, _ = self._tool_text(self._call("get_note", {"note_id": personal_url}))
+
+        self.assertIn("TASK-FAMILY-BODY", from_task)
+        self.assertNotIn("PERSONAL-FAMILY-BODY", from_task)
+        self.assertIn("PERSONAL-FAMILY-BODY", from_personal)
+        self.assertNotIn("TASK-FAMILY-BODY", from_personal)
+
+    def test_a_bare_numeric_note_id_still_needs_note_type(self):
+        """A number determines no family, and guessing one would read the wrong
+        table. The caller's own `note_type` is the only way."""
+        self._key(scope=SCOPE_READ)
+
+        text, is_error = self._tool_text(
+            self._call("get_note", {"note_id": str(self.note.note_id)})
+        )
+
+        self.assertTrue(is_error)
+        self.assertIn("note_type", text)
+
+    def test_a_bare_numeric_note_id_works_with_note_type(self):
+        self.note.body = self._body_blocks("Typed read.")
+        self.note.save(update_fields=["body"])
+        self._key(scope=SCOPE_READ)
+
+        text, is_error = self._tool_text(
+            self._call("get_note", {"note_id": str(self.note.note_id), "note_type": "personal"})
+        )
+
+        self.assertFalse(is_error, text)
+        self.assertIn("Typed read.", text)
+
+    def test_get_note_still_takes_an_integer_note_id(self):
+        """The schema is widened to a string; an integer must keep working."""
+        self.note.body = self._body_blocks("Integer read.")
+        self.note.save(update_fields=["body"])
+        self._key(scope=SCOPE_READ)
+
+        text, is_error = self._tool_text(
+            self._call("get_note", {"note_id": self.note.note_id, "note_type": "personal"})
+        )
+
+        self.assertFalse(is_error, text)
+        self.assertIn("Integer read.", text)
+
+    def test_get_note_advertises_that_a_url_is_enough(self):
+        self._key(scope=SCOPE_READ)
+        tools = {t["name"]: t for t in self._result(self._rpc("tools/list"))["tools"]}
+
+        schema = tools["get_note"]["inputSchema"]["properties"]["note_id"]
+
+        self.assertEqual(schema["type"], "string")
+        self.assertIn("URL", schema["description"])
+        self.assertIn("URL", tools["get_note"]["description"])
+
+    def test_a_url_for_a_note_in_another_team_is_still_refused(self):
+        """Accepting a URL must not widen access: the tool's own team and ACL
+        checks still decide."""
+        foreign = TaskNoteMaster.objects.create(
+            team=None, project=None, task=None, owner=self.user2, title="Other", body=[]
+        )
+        self._key(scope=SCOPE_READ)
+        url = f"/workspace/notes/task/project/1/task/1/note/{foreign.note_id}"
+
+        text, is_error = self._tool_text(self._call("get_note", {"note_id": url}))
+
+        self.assertTrue(is_error)
+        self.assertNotIn("Other", text)
 
     def test_a_bare_note_id_does_not_get_a_guessed_type(self):
         """A numeric id determines no family. Guessing one would turn "the
