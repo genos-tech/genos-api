@@ -180,3 +180,74 @@ class CollapseDescriptionEditsTests(SimpleTestCase):
         self.assertEqual([r.activity_id for r in out], [200, 100])
         self.assertNotIn("grouped_count", a.metadata)
         self.assertNotIn("grouped_count", b.metadata)
+
+
+class CollapseAroundABodyKeepingRowTests(SimpleTestCase):
+    """A description row that kept the previous body (MIP-738) is the one place a
+    restore is offered, so it stands alone: it is never folded into a run, and
+    the runs on either side of it neither merge with it nor with each other."""
+
+    DESC = TaskActivityActionType.DESCRIPTION
+
+    def setUp(self):
+        self.now = datetime(2026, 5, 3, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _desc(self, minutes_ago, *, kept=False, activity_id=0):
+        row = _row(
+            action_type=self.DESC,
+            ts=self.now - timedelta(minutes=minutes_ago),
+            activity_id=activity_id,
+        )
+        row.metadata = {"previousBodyKept": True} if kept else {}
+        return row
+
+    def test_the_newer_run_keeps_its_own_count_and_the_body_row_stays_whole(self):
+        # Newest first: three autosaves, then the rewrite, then two older autosaves.
+        rows = [
+            self._desc(1, activity_id=6),
+            self._desc(2, activity_id=5),
+            self._desc(3, activity_id=4),
+            self._desc(4, kept=True, activity_id=3),
+            self._desc(5, activity_id=2),
+            self._desc(6, activity_id=1),
+        ]
+
+        out = _collapse_description_edits(rows)
+
+        self.assertEqual([r.activity_id for r in out], [6, 3, 2])
+        # The run above the rewrite is closed and counted; it did not swallow it.
+        self.assertEqual(out[0].metadata["grouped_count"], 3)
+        # The rewrite is untouched: no count, still restorable.
+        self.assertNotIn("grouped_count", out[1].metadata)
+        self.assertTrue(out[1].metadata["previousBodyKept"])
+        # The run below it folds on its own, not into the one above.
+        self.assertEqual(out[2].metadata["grouped_count"], 2)
+
+    def test_edits_either_side_of_the_body_row_do_not_fold_into_each_other(self):
+        rows = [
+            self._desc(1, activity_id=3),
+            self._desc(2, kept=True, activity_id=2),
+            self._desc(3, activity_id=1),
+        ]
+
+        out = _collapse_description_edits(rows)
+
+        self.assertEqual([r.activity_id for r in out], [3, 2, 1])
+        for r in out:
+            self.assertNotIn("grouped_count", r.metadata)
+
+    def test_two_body_rows_in_a_row_are_both_kept(self):
+        rows = [
+            self._desc(1, kept=True, activity_id=2),
+            self._desc(2, kept=True, activity_id=1),
+        ]
+
+        self.assertEqual([r.activity_id for r in _collapse_description_edits(rows)], [2, 1])
+
+    def test_a_body_row_alone_passes_through(self):
+        rows = [self._desc(1, kept=True, activity_id=1)]
+
+        out = _collapse_description_edits(rows)
+
+        self.assertEqual(len(out), 1)
+        self.assertTrue(out[0].metadata["previousBodyKept"])

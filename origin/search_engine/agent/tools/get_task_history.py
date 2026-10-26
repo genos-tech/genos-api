@@ -84,6 +84,13 @@ def _custom_field_value(row: TaskActivity, side: str) -> Any:
 def _value(row: TaskActivity, side: str, usernames: dict[str, str]) -> Any:
     meta = row.metadata or {}
     raw = row.old_value if side == "old" else row.new_value
+    # A description row may carry the whole PREVIOUS body (MIP-738), kept so it
+    # can be restored. It is never handed to the model: it is a document, and
+    # one that was replaced, possibly because it held an injection. The entry
+    # says the body changed and that a previous one is `restorable`, nothing
+    # more.
+    if row.action_type == TaskActivityActionType.DESCRIPTION:
+        return None
     if row.action_type == TaskActivityActionType.CUSTOM_FIELD:
         return _custom_field_value(row, side)
     if row.field_name in _LABELLED_FIELDS and raw is not None:
@@ -140,6 +147,10 @@ def _entry(row: TaskActivity, usernames: dict[str, str]) -> dict[str, Any]:
         entry["comment_id"] = (row.metadata or {}).get("commentId")
     if row.action_type == TaskActivityActionType.PR_LINKED:
         entry["pr_url"] = (row.metadata or {}).get("pr_url")
+    if row.action_type == TaskActivityActionType.DESCRIPTION:
+        # Whether the body from before this edit was kept, so it can be put
+        # back from the task's history in the app (MIP-738).
+        entry["restorable"] = bool((row.metadata or {}).get("previousBodyKept"))
     # Carried along by a change to another row (a milestone move, a
     # project move, …) rather than edited on this task directly.
     if cascade := (row.metadata or {}).get("cascade"):

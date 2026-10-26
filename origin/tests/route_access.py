@@ -532,6 +532,7 @@ REGISTRY = {
     # views.task.task_activity_views
     "origin.views.task.task_activity_views.MilestoneBurndownView": checked("can_access_task"),
     "origin.views.task.task_activity_views.TaskActivityListView": checked("can_access_task"),
+    "origin.views.task.task_activity_views.TaskBodyRestoreView": checked("can_access_task"),
     "origin.views.task.task_activity_views.TaskVelocityView": checked("can_access_task"),
     # views.task.task_delivery_views
     "origin.views.task.task_delivery_views.TaskDeliveryListView": checked("can_access_task"),
