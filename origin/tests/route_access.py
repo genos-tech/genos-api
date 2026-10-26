@@ -323,6 +323,10 @@ REGISTRY = {
         "the build's feature flags, the same for every user"
     ),
     # views.common.security_event_views
+    "origin.views.common.security_event_views.MySecurityEventListView": self_only(
+        "lists only rows where the caller is the actor, or a team-less row that names "
+        "the caller's own account; nothing in the request names whose rows to read"
+    ),
     "origin.views.common.security_event_views.TeamSecurityEventListView": checked("_owned_team"),
     # views.common.team_connection_views
     "origin.views.common.team_connection_views.CrossTeamNoticeView": checked("is_team_member"),
