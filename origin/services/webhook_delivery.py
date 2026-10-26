@@ -19,9 +19,14 @@ to a **public** address, and redirects are refused outright at send time
 rather than followed — a 302 to `169.254.169.254` would defeat a check
 that only looked at the URL the user typed.
 
-DNS is resolved at validation AND re-checked at send time. A name that
-resolves publicly today can resolve to a private address tomorrow
-(DNS rebinding); re-checking closes the window between the two.
+DNS is checked when the webhook is configured, but that check cannot be what
+protects the send: a name that resolves publicly now can resolve to a private
+address a moment later (DNS rebinding). Re-checking just before `requests.post`
+narrowed the window without closing it, because the check and the connection
+each did their own lookup. The send now goes through
+`outbound_url.post_public`, which resolves ONCE, requires every address to be
+public, and connects to that checked address itself (certificate verified
+against the typed name). There is no second lookup left to rebind (MIP-819).
 
 ## Signing
 
@@ -41,10 +46,10 @@ import json
 from datetime import timedelta
 from urllib.parse import urlparse
 
-import requests
+import urllib3
 from django.utils import timezone
 
-from origin.services.outbound_url import is_public_host
+from origin.services.outbound_url import OutboundUrlError, is_public_host, post_public
 
 SIGNATURE_HEADER = "X-Genos-Signature"
 TIMESTAMP_HEADER = "X-Genos-Timestamp"
@@ -130,25 +135,27 @@ def post_delivery(url: str, secret: str, event: str, delivery_id: str, payload: 
         "User-Agent": "Genos-Webhooks/1",
     }
     try:
-        # Re-validate immediately before sending: a name that resolved
-        # publicly at configuration time can resolve privately now.
+        # The shape checks (https, no credentials, a host) run here too, so a
+        # row that was valid when it was queued and is not now is reported in
+        # the same words the form used.
         validate_webhook_url(url)
     except WebhookUrlError as exc:
         return None, str(exc)
 
     try:
-        resp = requests.post(
-            url,
-            data=body,
-            headers=headers,
-            timeout=TIMEOUT_SECONDS,
-            # Refused, not followed. A 302 to a private address would
-            # defeat every check above.
-            allow_redirects=False,
-        )
-    except requests.RequestException as exc:
+        # Resolves the host ONCE, requires every address to be public, and
+        # connects to that checked address. The check above and a separate
+        # `requests.post` used to resolve it twice, so a name with a short TTL
+        # could answer publicly to the check and privately to the connection
+        # (DNS rebinding; CodeQL py/full-ssrf, MIP-819). Redirects are not
+        # followed: a 3xx comes back as a status.
+        status_code = post_public(url, body, headers=headers, timeout=TIMEOUT_SECONDS)
+    except OutboundUrlError as exc:
+        # Safe to show: it names the refusal, not the network.
+        return None, str(exc)
+    except (urllib3.exceptions.HTTPError, OSError) as exc:
         return None, str(exc)[:300]
 
-    if 200 <= resp.status_code < 300:
-        return resp.status_code, ""
-    return resp.status_code, f"HTTP {resp.status_code}"
+    if 200 <= status_code < 300:
+        return status_code, ""
+    return status_code, f"HTTP {status_code}"
