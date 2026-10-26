@@ -25,7 +25,10 @@ from origin.services.thread_link import find_thread_link_conflict
 from origin.signals.task_signals import update_tasks_recorded
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import resolve_group_members
-from origin.views.utils.request_validators import validate_request_data
+from origin.views.utils.request_validators import (
+    refuse_unsafe_link_urls,
+    validate_request_data,
+)
 from origin.views.utils.scope_guards import is_project_member
 
 CLOSED_STATUSES = {"Closed", "Deleted"}
@@ -261,6 +264,12 @@ class MilestoneView(AuthenticatedAPIView):
         if not is_project_member(project.project_id, request.user.id):
             return _deny_not_found("Project")
 
+        # After the membership gate (a stranger learns nothing), before anything
+        # is written. Same rule as a task's links: a milestone's links are
+        # rendered as `<a href>` too (MIP-821).
+        if res := refuse_unsafe_link_urls(request.data.get("links")):
+            return res
+
         sprint_id = request.data.get("sprint_id")
         sprint = None
         if sprint_id is not None:
@@ -349,6 +358,9 @@ class MilestoneView(AuthenticatedAPIView):
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
         if not is_project_member(milestone.project_id, request.user.id):
             return _deny_not_found("Milestone")
+
+        if res := refuse_unsafe_link_urls(request.data.get("links")):
+            return res
 
         # Project move. A milestone is the top of its own hierarchy, so
         # unlike a sub-task it may change project — and everything filed

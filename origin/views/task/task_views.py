@@ -54,7 +54,11 @@ from origin.views.utils.incremental import (
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.quota_guards import check_monthly_creation_quota
-from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.utils.request_validators import (
+    refuse_unsafe_link_urls,
+    validate_request_data,
+    validate_request_user,
+)
 from origin.views.utils.scope_guards import (
     can_access_task,
     is_guest,
@@ -283,6 +287,9 @@ def _refuse_unreachable_task_links(request, project):
     crosses projects is legitimate (a move leaves one behind, and the
     diagram files a sub-task under its own project whatever the node's).
     """
+    if res := refuse_unsafe_link_urls(request.data.get("links")):
+        return res
+
     for key in ("assignee", "reporter"):
         person = request.data.get(key)
         if person in (None, "") or str(person) == str(request.user.id):
@@ -580,6 +587,11 @@ class TaskMasterView(AuthenticatedAPIView):
         # space isn't a task-existence oracle.
         if not can_access_task(task_id, request.user.id):
             return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # After the access check, so a stranger learns nothing about the task;
+        # before anything is read or written, so a refused link changes nothing.
+        if res := refuse_unsafe_link_urls(request.data.get("links")):
+            return res
 
         update_data = request.data.copy()
 
