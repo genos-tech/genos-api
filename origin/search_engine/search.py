@@ -1272,22 +1272,61 @@ def _is_multi_token(query: str) -> bool:
     return len(query.split()) >= 2 or _cjk_chars(query) >= 2
 
 
+# How many index terms a prefixed last word may expand to. Lucene expands
+# in term order, so a short prefix ("comm" → comma, command, …) needs room
+# to reach the word being typed.
+_PREFIX_MAX_EXPANSIONS = 200
+
+
+def _all_words(text: str) -> dict:
+    return {
+        "multi_match": {
+            "query": text,
+            "fields": list(_TIER_FIELDS),
+            "type": "cross_fields",
+            "operator": "and",
+        }
+    }
+
+
 def _tier_queries(query: str) -> list[tuple[int, dict]]:
+    """The all-words and exact-phrase queries.
+
+    Spotlight searches as the user types, so the last word is usually
+    unfinished: "the missing comm" must still count as the phrase "the
+    missing comments". Unless it is CJK (an IME commits whole characters),
+    the last word is matched as a prefix in both tiers.
+    """
+    words = query.split()
+    if not words or _cjk_chars(words[-1]):
+        return [
+            (TIER_ALL_WORDS, _all_words(query)),
+            (
+                TIER_PHRASE,
+                {"multi_match": {"query": query, "fields": list(_TIER_FIELDS), "type": "phrase"}},
+            ),
+        ]
+    prefix = {
+        "multi_match": {
+            "query": words[-1],
+            "fields": list(_TIER_FIELDS),
+            "type": "phrase_prefix",
+            "max_expansions": _PREFIX_MAX_EXPANSIONS,
+        }
+    }
+    all_words = {"bool": {"must": [_all_words(" ".join(words[:-1])), prefix]}}
     return [
+        (TIER_ALL_WORDS, all_words),
         (
-            TIER_ALL_WORDS,
+            TIER_PHRASE,
             {
                 "multi_match": {
                     "query": query,
                     "fields": list(_TIER_FIELDS),
-                    "type": "cross_fields",
-                    "operator": "and",
+                    "type": "phrase_prefix",
+                    "max_expansions": _PREFIX_MAX_EXPANSIONS,
                 }
             },
-        ),
-        (
-            TIER_PHRASE,
-            {"multi_match": {"query": query, "fields": list(_TIER_FIELDS), "type": "phrase"}},
         ),
     ]
 
