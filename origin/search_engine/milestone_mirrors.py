@@ -127,6 +127,14 @@ def resolve_milestone_mirrors(entities: list[dict[str, Any]]) -> list[dict[str, 
             for rank in ("keyword_rank", "vector_rank"):
                 if twin.get(rank) is None and e.get(rank) is not None:
                     twin[rank] = e[rank]
+            # Spotlight orders by lexical tier before score: a comment on
+            # the backing task matching the exact phrase must pin the
+            # milestone, not vanish with the dropped mirror.
+            tier = e.get("lexical_tier")
+            if tier is not None and (
+                twin.get("lexical_tier") is None or tier < twin["lexical_tier"]
+            ):
+                twin["lexical_tier"] = tier
             continue
 
         # Sole representation — relabel it in place.

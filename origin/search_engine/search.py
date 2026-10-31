@@ -390,6 +390,10 @@ def search(
     # well-calibrated per variant) and SUM the per-variant scores at
     # the chunk level. Chunks that surface for multiple variants get
     # extra weight, which is exactly the boost rewriting should give.
+    # Lexical tiers are a Spotlight (typeahead) ordering. The agent and
+    # eval modes keep plain RRF, so the agent's grounding and the
+    # retrieval suite's numbers don't move with it.
+    tiered = mode == "typeahead"
     fused = _multi_variant_fuse(
         variants=variants,
         client=client,
@@ -399,6 +403,7 @@ def search(
         use_vector=use_vector,
         for_agent=for_agent,
         ef_search=ef_search,
+        tiered=tiered,
     )
 
     # --- v2: chunk-type-aware reweighting ---
@@ -495,6 +500,9 @@ def search(
     # the #1 hit is a different type with much higher score.
     if settings.SEARCH_ENGINE.get("RAG_REPRESENTATION_FLOOR") and pre_threshold:
         grouped = _apply_representation_floor(grouped, pre_threshold)
+
+    if tiered:
+        grouped = _apply_lexical_tiers(grouped, pre_threshold, short=_is_short_query(query))
 
     # --- Phase 6: optional rerank stage (LLM judge or Cohere, flag-gated) ---
     # Off by default. When on, dispatched via RAG_RERANKER_PROVIDER
@@ -618,6 +626,7 @@ def _multi_variant_fuse(
     use_vector: bool,
     for_agent: bool,
     ef_search: int,
+    tiered: bool = False,
 ) -> list[dict]:
     """Run keyword + vector for each variant and merge into one ranked list.
 
@@ -642,7 +651,7 @@ def _multi_variant_fuse(
         weight = original_weight if idx == 0 else 1.0
 
         keyword_hits = _run_keyword(
-            client, index, variant, base_filter, pool_size, for_agent=for_agent
+            client, index, variant, base_filter, pool_size, for_agent=for_agent, tiered=tiered
         )
         vector_hits: list[dict] = []
         if use_vector:
@@ -687,6 +696,7 @@ def _multi_variant_fuse(
                 existing.get("keyword_rank"), hit.get("keyword_rank")
             )
             existing["vector_rank"] = _min_rank(existing.get("vector_rank"), hit.get("vector_rank"))
+            _merge_tier(existing, hit)
     return sorted(chunks_by_id.values(), key=lambda x: x["score"], reverse=True)
 
 
@@ -1196,8 +1206,200 @@ def _extract_matched_terms(highlight: Optional[dict]) -> list[str]:
     return sorted(seen, key=len, reverse=True)
 
 
+# --------------------------------------------------------------------------- #
+# Lexical tiers (Spotlight)                                                    #
+# --------------------------------------------------------------------------- #
+#
+# `best_fields` scores each query word on its own (OR), and RRF weighs the
+# keyword and vector lanes equally. Left alone, a long body holding the
+# user's exact sentence falls out of the lane's pool behind short titles
+# that share one of its words, and a vector-only neighbour can outrank a
+# document containing every word typed. Each keyword hit therefore gets a
+# tier, and Spotlight orders by it before score:
+#
+#   TIER_PHRASE     the exact phrase appears. Always returned, first.
+#   TIER_ALL_WORDS  every query word appears (any fields).
+#   TIER_SOME_WORDS some query words appear.
+#   (no tier)       vector-only. Ranked after the lexical tiers for a short
+#                   query; a long query keeps plain RRF after the pinned
+#                   phrase hits, since meaning matters more there.
+TIER_PHRASE = 0
+TIER_ALL_WORDS = 1
+TIER_SOME_WORDS = 2
+_VECTOR_ONLY_RANK = 3
+
+# "Short" is how people usually search: a word or a few. CJK text has no
+# spaces between words, so it is measured in characters instead.
+_SHORT_QUERY_MAX_WORDS = 3
+_SHORT_QUERY_MAX_CJK_CHARS = 6
+
+# The all-words and phrase queries use the base (`standard` analyzer)
+# fields, which keep every token and its position. The stemmed, prefix and
+# ICU/kuromoji subfields stay with the any-word query.
+_TIER_FIELDS = ("title^4", "snippet_text^2", "search_text")
+
+
+def _is_cjk(ch: str) -> bool:
+    """Han or kana. Hangul is excluded: Korean separates words with spaces."""
+    o = ord(ch)
+    return (
+        0x3040 <= o <= 0x30FF  # hiragana, katakana
+        or 0x3400 <= o <= 0x4DBF  # CJK extension A
+        or 0x4E00 <= o <= 0x9FFF  # CJK unified ideographs
+        or 0xFF66 <= o <= 0xFF9F  # half-width katakana
+    )
+
+
+def _cjk_chars(query: str) -> int:
+    return sum(1 for ch in query if _is_cjk(ch))
+
+
+def _is_short_query(query: str) -> bool:
+    words = len(query.split())
+    cjk = _cjk_chars(query)
+    if cjk:
+        return words <= _SHORT_QUERY_MAX_WORDS and cjk <= _SHORT_QUERY_MAX_CJK_CHARS
+    return words <= _SHORT_QUERY_MAX_WORDS
+
+
+def _is_multi_token(query: str) -> bool:
+    """Whether "all words" and "exact phrase" differ from "the word": two
+    or more words, or two or more CJK characters (the `standard` analyzer
+    makes each CJK character a token)."""
+    return len(query.split()) >= 2 or _cjk_chars(query) >= 2
+
+
+def _tier_queries(query: str) -> list[tuple[int, dict]]:
+    return [
+        (
+            TIER_ALL_WORDS,
+            {
+                "multi_match": {
+                    "query": query,
+                    "fields": list(_TIER_FIELDS),
+                    "type": "cross_fields",
+                    "operator": "and",
+                }
+            },
+        ),
+        (
+            TIER_PHRASE,
+            {"multi_match": {"query": query, "fields": list(_TIER_FIELDS), "type": "phrase"}},
+        ),
+    ]
+
+
+def _order_by_tier(
+    term_hits: list[dict], tier_hits: dict[int, list[dict]], size: int
+) -> list[dict]:
+    """Tag every hit with its best tier and order the lane tier-first.
+
+    Within a tier, hits the any-word query found keep its order, which
+    weighs the prefix and multilingual subfields the tier queries don't:
+    a title that IS the query stays above a body that merely contains it.
+    Tier hits outside the any-word pool follow them. Position is all RRF
+    reads from the lane, so this is what moves a deep hit into it.
+    """
+    tier_of: dict[str, int] = {}
+    for tier in sorted(tier_hits):
+        for h in tier_hits[tier]:
+            tier_of.setdefault(h["_id"], tier)
+
+    ordered: list[dict] = []
+    placed: set[str] = set()
+    for tier in (TIER_PHRASE, TIER_ALL_WORDS, TIER_SOME_WORDS):
+        for h in term_hits + tier_hits.get(tier, []):
+            hid = h["_id"]
+            if hid in placed or tier_of.get(hid, TIER_SOME_WORDS) != tier:
+                continue
+            h["_lexical_tier"] = tier
+            ordered.append(h)
+            placed.add(hid)
+    return ordered[:size]
+
+
+def _run_keyword_tiered(
+    client, index: str, query: str, base_filter: list[dict], size: int, body: dict
+) -> list[dict]:
+    bodies: list[tuple[Optional[int], dict]] = [(None, body)]
+    if _is_multi_token(query):
+        bodies += [
+            (tier, {**body, "query": {"bool": {"must": clause, "filter": base_filter}}})
+            for tier, clause in _tier_queries(query)
+        ]
+    try:
+        resp = client.msearch(body=[line for _, b in bodies for line in ({"index": index}, b)])
+        responses = resp.get("responses") or []
+    except Exception:  # noqa: BLE001 — fall back to the plain any-word query
+        log.warning("Keyword lane: tiered msearch failed; using the any-word query", exc_info=True)
+        try:
+            return list(client.search(index=index, body=body).get("hits", {}).get("hits", []))
+        except NotFoundError:
+            return []
+
+    def hits_of(i: int) -> Optional[list[dict]]:
+        r = responses[i] if i < len(responses) else {"error": "missing"}
+        return None if r.get("error") else list(r.get("hits", {}).get("hits", []))
+
+    term_hits = hits_of(0)
+    if term_hits is None:
+        return []
+    if len(bodies) == 1:
+        # One word: every hit contains it (or its stem/prefix).
+        for h in term_hits:
+            h["_lexical_tier"] = TIER_ALL_WORDS
+        return term_hits
+    tier_hits = {tier: hits_of(i) or [] for i, (tier, _) in enumerate(bodies) if tier is not None}
+    return _order_by_tier(term_hits, tier_hits, size)
+
+
+def _merge_tier(into: dict, other: dict, key: str = "lexical_tier") -> None:
+    """Keep the better (lower) lexical tier of two records of one chunk or
+    entity. A record without the key is vector-only."""
+    t = other.get(key)
+    if t is not None and (into.get(key) is None or t < into[key]):
+        into[key] = t
+
+
+def _apply_lexical_tiers(
+    grouped: list[dict], pre_threshold: list[dict], *, short: bool
+) -> list[dict]:
+    """Spotlight's final order: exact-phrase entities first, always.
+
+    A phrase entity the relevance threshold cut is put back: a comment
+    holding the typed sentence verbatim scores ~1/3 of a title both lanes
+    found (keyword lane only, comment weight 0.7), under the 0.5 floor.
+    For a short query the rest is ordered all words > some words >
+    vector-only; for a long one, by score.
+    """
+    kept = {(e.get("entity_type"), e.get("entity_id")) for e in grouped}
+    restored = [
+        e
+        for e in pre_threshold
+        if e.get("lexical_tier") == TIER_PHRASE
+        and (e.get("entity_type"), e.get("entity_id")) not in kept
+    ]
+
+    def rank(e: dict) -> int:
+        tier = e.get("lexical_tier")
+        if tier == TIER_PHRASE:
+            return 0
+        if not short:
+            return 1
+        return tier if tier is not None else _VECTOR_ONLY_RANK
+
+    return sorted(grouped + restored, key=lambda e: (rank(e), -e.get("score", 0.0)))
+
+
 def _run_keyword(
-    client, index: str, query: str, base_filter: list[dict], size: int, *, for_agent: bool = False
+    client,
+    index: str,
+    query: str,
+    base_filter: list[dict],
+    size: int,
+    *,
+    for_agent: bool = False,
+    tiered: bool = False,
 ) -> list[dict]:
     body = {
         "size": size,
@@ -1290,6 +1492,8 @@ def _run_keyword(
             },
         },
     }
+    if tiered:
+        return _run_keyword_tiered(client, index, query, base_filter, size, body)
     try:
         resp = client.search(index=index, body=body)
     except NotFoundError:
@@ -1414,6 +1618,8 @@ def _rrf_fuse(keyword_hits: list[dict], vector_hits: list[dict]) -> list[dict]:
         by_chunk[cid]["score"] += 1.0 / (RRF_K + rank)
         by_chunk[cid]["keyword_rank"] = rank
         by_chunk[cid]["source"] = hit["_source"]
+        if "_lexical_tier" in hit:
+            by_chunk[cid]["lexical_tier"] = hit["_lexical_tier"]
         # Only keyword hits carry highlights — overwrite unconditionally.
         by_chunk[cid]["matched_terms"] = _extract_matched_terms(hit.get("highlight"))
 
@@ -1502,10 +1708,16 @@ def _group_by_entity(
                 # purely presentational need. None on non-task rows and
                 # on docs indexed before the field was written.
                 entry["task_status"] = src.get("task_status")
+            if "lexical_tier" in c:
+                entry["lexical_tier"] = c["lexical_tier"]
             if for_agent:
                 entry["chunks"] = [_chunk_for_agent(c)]
             by_entity[key] = entry
         else:
+            # The best-scoring chunk isn't always the best-tier one: a
+            # comment holding the exact phrase can score under its own
+            # task's title chunk.
+            _merge_tier(existing, c)
             chunk_type = src.get("chunk_type")
             if chunk_type and chunk_type not in existing["matched_chunk_types"]:
                 existing["matched_chunk_types"].append(chunk_type)
