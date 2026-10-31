@@ -90,6 +90,14 @@ class Chunk:
     created_at: Optional[str] = None  # ISO 8601
     updated_at: Optional[str] = None
 
+    def __post_init__(self) -> None:
+        # The ACL is a set (a `terms` filter), but it is stored and
+        # fingerprinted as a list. Chunkers build it from `set` unions
+        # (iteration order differs per process: str hashing is salted)
+        # or from unordered DB rows, so one unchanged chunk got a new
+        # `meta_hash` on every run and was rewritten as a metadata update.
+        self.acl_user_ids = sorted(set(self.acl_user_ids))
+
     def to_dict(self) -> dict:
         d = asdict(self)
         return {k: v for k, v in d.items() if v is not None}
