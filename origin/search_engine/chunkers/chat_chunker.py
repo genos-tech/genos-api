@@ -352,6 +352,15 @@ def _build_message_chunks(
     return out
 
 
+def _is_task_comment_mirror(m: Message) -> bool:
+    """A task comment copied into its task's project-chat thread
+    (`unified_writer.write_task_comment_as_thread_reply`). The comment is
+    indexed from the task already, so indexing the copy too made Spotlight
+    show the same text twice, and the chat copy (chunk weight 1.0) ranked
+    above the comment itself (0.7). Same marker as `v3_activity`."""
+    return m.task_id is not None and (m.metadata or {}).get("taskCommentId") is not None
+
+
 def _build_thread_chunks(
     *,
     label: str,
@@ -373,6 +382,9 @@ def _build_thread_chunks(
     latest_ts = None
     context_size = _context_window_size()
     recent_texts: list[str] = []
+    # Left out of the window and the next replies' context too: either one
+    # would still carry the comment's text into this thread's chunks.
+    replies = [r for r in replies if not _is_task_comment_mirror(r)]
 
     if anchor is not None:
         text = extract_text(anchor.body)
