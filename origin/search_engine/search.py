@@ -1234,9 +1234,12 @@ _SHORT_QUERY_MAX_WORDS = 3
 _SHORT_QUERY_MAX_CJK_CHARS = 6
 
 # The all-words and phrase queries use the base (`standard` analyzer)
-# fields, which keep every token and its position. The stemmed, prefix and
-# ICU/kuromoji subfields stay with the any-word query.
-_TIER_FIELDS = ("title^4", "snippet_text^2", "search_text")
+# fields plus the body's English-stemmed copy. Without `.en`, typing
+# "the missing comment" did not count as the phrase "the missing
+# comments:" a comment held. Its stop filter keeps position gaps, so a
+# phrase still has to be in order. The prefix and ICU/kuromoji subfields
+# stay with the any-word query.
+_TIER_FIELDS = ("title^4", "snippet_text^2", "search_text", "search_text.en")
 
 
 def _is_cjk(ch: str) -> bool:

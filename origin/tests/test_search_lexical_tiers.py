@@ -121,7 +121,7 @@ class TestKeywordLane(SimpleTestCase):
         lane, _ = _lane(SENTENCE, ["t0", "t1", "t2"], phrase=["p0", "p1"], size=3)
         self.assertEqual([i for i, _ in lane], ["p0", "p1", "t0"])
 
-    def test_the_tier_queries_keep_the_filter_and_use_the_base_fields(self):
+    def test_the_tier_queries_keep_the_filter_and_use_the_base_and_stemmed_fields(self):
         _, client = _lane(SENTENCE, ["a"])
         self.assertEqual({c.kwargs["index"] for c in client.search.call_args_list}, {"rag"})
         tiers = {_kind(b): b for b in _bodies(client)}
@@ -131,7 +131,11 @@ class TestKeywordLane(SimpleTestCase):
             self.assertEqual(body["query"]["bool"]["filter"], FILTER)
             mm = body["query"]["bool"]["must"]["multi_match"]
             self.assertEqual(mm["query"], SENTENCE)
-            self.assertEqual(mm["fields"], ["title^4", "snippet_text^2", "search_text"])
+            # `.en` makes "the missing comment" match a body saying
+            # "the missing comments:" (plural, inflection).
+            self.assertEqual(
+                mm["fields"], ["title^4", "snippet_text^2", "search_text", "search_text.en"]
+            )
             self.assertIn("highlight", body)
         self.assertEqual(
             tiers[S.TIER_ALL_WORDS]["query"]["bool"]["must"]["multi_match"]["type"], "cross_fields"
