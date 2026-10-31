@@ -9,7 +9,10 @@
 #   Every 10 minutes, re-emits all chats/tasks/notes whose
 #   `ts_updated_at` is within the last 11 minutes (1-minute overlap
 #   covers the gap between cron ticks) and upserts the affected
-#   chunks into OpenSearch. The `RagChunk` tracking table keeps the
+#   chunks into OpenSearch. `--catch-up` starts the window at the last
+#   successful run instead when that is earlier, so a skipped or failed
+#   tick is picked up by the next one rather than lost from search.
+#   The `RagChunk` tracking table keeps the
 #   pass idempotent — unchanged chunks consume zero OpenAI / OpenSearch
 #   cost.
 #
@@ -44,5 +47,5 @@ dockerfilePath = "Dockerfile"
 # reindex. `--since-minutes` stays here next to cronSchedule — bump both
 # together to change cadence.
 cronSchedule = "*/10 * * * *"
-startCommand = "sh /app/railway-reindexer-entrypoint.sh --since-minutes 11 --heartbeat opensearch-reindexer"
+startCommand = "sh /app/railway-reindexer-entrypoint.sh --since-minutes 11 --catch-up --heartbeat opensearch-reindexer"
 restartPolicyType = "NEVER"

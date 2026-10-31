@@ -48,6 +48,7 @@ warning. The fix is to recreate the index:
 """
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
 from django.core.management.base import CommandError
@@ -59,6 +60,8 @@ from origin.search_engine.index_config import INDEX_SCHEMA_VERSION
 from origin.search_engine.ingestion import ingest_all
 from origin.search_engine.opensearch_client import get_client, get_index_alias
 from origin.search_engine.purge import sweep_orphans
+
+log = logging.getLogger(__name__)
 
 
 class Command(CronCommand):
@@ -83,6 +86,16 @@ class Command(CronCommand):
             type=str,
             default=None,
             help=("Explicit ISO 8601 timestamp lower-bound. Overrides " "--since-minutes."),
+        )
+        parser.add_argument(
+            "--catch-up",
+            action="store_true",
+            help=(
+                "With --since-minutes and --heartbeat: start the window at "
+                "the heartbeat's last successful run (minus the same "
+                "overlap) when that is earlier, so a skipped or failed run "
+                "is covered by the next one. Set by railway-reindexer.toml."
+            ),
         )
         parser.add_argument(
             "--entity-types",
@@ -148,7 +161,12 @@ class Command(CronCommand):
         if options.get("since"):
             since = datetime.fromisoformat(options["since"])
         elif options.get("since_minutes") is not None:
-            since = datetime.now(timezone.utc) - timedelta(minutes=options["since_minutes"])
+            overlap = timedelta(minutes=options["since_minutes"])
+            since = datetime.now(timezone.utc) - overlap
+            if options.get("catch_up"):
+                since = _catch_up_since(since, options.get("heartbeat") or "", overlap)
+        elif options.get("catch_up"):
+            raise CommandError("--catch-up needs --since-minutes.")
 
         dry_run = options.get("dry_run", False)
 
@@ -243,6 +261,36 @@ class Command(CronCommand):
 _ACL_ENTITY_TYPES = frozenset(
     {"chat", "task", "milestone", "note", "thread_summary", "note_summary"}
 )
+
+
+def _catch_up_since(since: datetime, heartbeat: str, overlap: timedelta) -> datetime:
+    """Widen an incremental window back to the cron's last success.
+
+    A fixed `--since-minutes` window only covers what changed since the
+    previous tick. When a tick is skipped (a redeploy, a Railway hiccup) or
+    fails, whatever was written in its window is never re-emitted, and it
+    stays missing from search until someone runs a full reindex by hand.
+
+    `last_succeeded_at` only moves on a run that finished without an ERROR,
+    so a failed run widens the next window too. The overlap is subtracted
+    from it because that run read Postgres before it finished.
+    """
+    if not heartbeat:
+        raise CommandError("--catch-up needs --heartbeat to know the last successful run.")
+    from origin.models.common.ops_models import CronHeartbeat  # noqa: PLC0415
+
+    try:
+        last_ok = (
+            CronHeartbeat.objects.filter(name=heartbeat)
+            .values_list("last_succeeded_at", flat=True)
+            .first()
+        )
+    except Exception:  # noqa: BLE001 — never block the reindex on the lookup
+        log.warning("Catch-up: heartbeat lookup failed; using the fixed window", exc_info=True)
+        return since
+    if last_ok is None:
+        return since
+    return min(since, last_ok - overlap)
 
 
 def _may_release(dirty, stats, options) -> bool:
