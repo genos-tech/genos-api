@@ -8,7 +8,9 @@
   * The agent and eval modes keep the single any-word query and plain
     RRF, untouched.
 
-No OpenSearch round-trip: the client is a mock answering `msearch`.
+No OpenSearch round-trip: the client is a mock that only has `search`,
+so a call to `msearch` fails the test: production's `genos_app` role
+can't run `_msearch` (403).
 """
 
 from unittest import mock
@@ -40,20 +42,19 @@ def _kind(body):
     return "terms"
 
 
-def _msearch_client(terms, all_words=(), phrase=()):
+def _client(terms, all_words=(), phrase=()):
     answers = {"terms": terms, S.TIER_ALL_WORDS: all_words, S.TIER_PHRASE: phrase}
-    client = mock.Mock()
-
-    def msearch(body):
-        bodies = body[1::2]
-        return {"responses": [_resp(*answers[_kind(b)]) for b in bodies]}
-
-    client.msearch.side_effect = msearch
+    client = mock.Mock(spec=["search"])
+    client.search.side_effect = lambda index, body: _resp(*answers[_kind(body)])
     return client
 
 
+def _bodies(client):
+    return [c.kwargs["body"] for c in client.search.call_args_list]
+
+
 def _lane(query, terms, all_words=(), phrase=(), size=20):
-    client = _msearch_client(terms, all_words, phrase)
+    client = _client(terms, all_words, phrase)
     hits = S._run_keyword(client, "rag", query, FILTER, size, tiered=True)
     return [(h["_id"], h["_lexical_tier"]) for h in hits], client
 
@@ -84,10 +85,10 @@ class TestQueryLength(SimpleTestCase):
 
 class TestKeywordLane(SimpleTestCase):
     def test_outside_spotlight_the_lane_is_one_plain_query(self):
-        client = mock.Mock()
+        client = mock.Mock(spec=["search"])
         client.search.return_value = _resp("a", "b")
         hits = S._run_keyword(client, "rag", SENTENCE, FILTER, 20)
-        client.msearch.assert_not_called()
+        self.assertEqual(client.search.call_count, 1)
         self.assertEqual([h["_id"] for h in hits], ["a", "b"])
         self.assertTrue(all("_lexical_tier" not in h for h in hits))
 
@@ -122,9 +123,9 @@ class TestKeywordLane(SimpleTestCase):
 
     def test_the_tier_queries_keep_the_filter_and_use_the_base_fields(self):
         _, client = _lane(SENTENCE, ["a"])
-        bodies = client.msearch.call_args.kwargs["body"]
-        self.assertEqual(bodies[0::2], [{"index": "rag"}] * 3)
-        tiers = {_kind(b): b for b in bodies[1::2]}
+        self.assertEqual({c.kwargs["index"] for c in client.search.call_args_list}, {"rag"})
+        tiers = {_kind(b): b for b in _bodies(client)}
+        self.assertEqual(len(tiers), 3)
         for tier in (S.TIER_ALL_WORDS, S.TIER_PHRASE):
             body = tiers[tier]
             self.assertEqual(body["query"]["bool"]["filter"], FILTER)
@@ -141,21 +142,17 @@ class TestKeywordLane(SimpleTestCase):
 
     def test_a_one_word_query_runs_one_query_and_counts_as_all_words(self):
         lane, client = _lane("mig_live_p0", ["a", "b"])
-        self.assertEqual(len(client.msearch.call_args.kwargs["body"]), 2)
+        self.assertEqual(client.search.call_count, 1)
         self.assertEqual(lane, [("a", S.TIER_ALL_WORDS), ("b", S.TIER_ALL_WORDS)])
 
-    def test_a_failed_msearch_falls_back_to_the_plain_query(self):
-        client = mock.Mock()
-        client.msearch.side_effect = RuntimeError("boom")
-        client.search.return_value = _resp("a")
-        hits = S._run_keyword(client, "rag", SENTENCE, FILTER, 20, tiered=True)
-        self.assertEqual([h["_id"] for h in hits], ["a"])
-
     def test_a_failed_tier_query_leaves_the_any_word_hits(self):
-        client = mock.Mock()
-        client.msearch.return_value = {
-            "responses": [_resp("a", "b"), {"error": "x"}, {"error": "x"}]
-        }
+        def search(index, body):
+            if _kind(body) == "terms":
+                return _resp("a", "b")
+            raise RuntimeError("tier query refused")
+
+        client = mock.Mock(spec=["search"])
+        client.search.side_effect = search
         lane = [
             (h["_id"], h["_lexical_tier"])
             for h in S._run_keyword(client, "rag", SENTENCE, FILTER, 20, tiered=True)
@@ -163,9 +160,9 @@ class TestKeywordLane(SimpleTestCase):
         self.assertEqual(lane, [("a", S.TIER_SOME_WORDS), ("b", S.TIER_SOME_WORDS)])
 
     def test_a_failed_any_word_query_returns_nothing(self):
-        client = mock.Mock()
-        client.msearch.return_value = {"responses": [{"error": "index_not_found"}]}
-        self.assertEqual(S._run_keyword(client, "rag", "parent", FILTER, 20, tiered=True), [])
+        client = mock.Mock(spec=["search"])
+        client.search.side_effect = S.NotFoundError(404, "index_not_found_exception", {})
+        self.assertEqual(S._run_keyword(client, "rag", SENTENCE, FILTER, 20, tiered=True), [])
 
 
 def _src(entity_id, chunk_type="task_title_content", entity_type="task"):
@@ -292,17 +289,10 @@ class TestSpotlightEndToEnd(SimpleTestCase):
         titles = [_hit(f"t{i}", **_src(f"task:{i}")) for i in range(20)]
         comment = _hit("c", **_src("task:99", "task_comment"))
         self.titles, self.comment = titles, comment
-        client = mock.Mock()
-
-        def msearch(body):
-            out = []
-            for b in body[1::2]:
-                kind = _kind(b)
-                out.append({"hits": {"hits": [comment] if kind != "terms" else list(titles)}})
-            return {"responses": out}
-
-        client.msearch.side_effect = msearch
-        client.search.return_value = {"hits": {"hits": list(titles)}}
+        client = mock.Mock(spec=["search"])
+        client.search.side_effect = lambda index, body: {
+            "hits": {"hits": list(titles) if _kind(body) == "terms" else [comment]}
+        }
         patches = [
             mock.patch.object(S, "get_client", return_value=client),
             mock.patch.object(S, "get_index_alias", return_value="rag"),

@@ -1321,35 +1321,29 @@ def _order_by_tier(
 def _run_keyword_tiered(
     client, index: str, query: str, base_filter: list[dict], size: int, body: dict
 ) -> list[dict]:
-    bodies: list[tuple[Optional[int], dict]] = [(None, body)]
-    if _is_multi_token(query):
-        bodies += [
-            (tier, {**body, "query": {"bool": {"must": clause, "filter": base_filter}}})
-            for tier, clause in _tier_queries(query)
-        ]
+    # Separate `_search` calls, not one `_msearch`: production's OpenSearch
+    # role (`genos_app`, genos-platform security/roles.yml) holds index
+    # permissions on knowledge_chunks*, and the security plugin checks
+    # `_msearch` as a cluster action it doesn't grant (403).
     try:
-        resp = client.msearch(body=[line for _, b in bodies for line in ({"index": index}, b)])
-        responses = resp.get("responses") or []
-    except Exception:  # noqa: BLE001 — fall back to the plain any-word query
-        log.warning("Keyword lane: tiered msearch failed; using the any-word query", exc_info=True)
-        try:
-            return list(client.search(index=index, body=body).get("hits", {}).get("hits", []))
-        except NotFoundError:
-            return []
-
-    def hits_of(i: int) -> Optional[list[dict]]:
-        r = responses[i] if i < len(responses) else {"error": "missing"}
-        return None if r.get("error") else list(r.get("hits", {}).get("hits", []))
-
-    term_hits = hits_of(0)
-    if term_hits is None:
+        term_hits = list(client.search(index=index, body=body).get("hits", {}).get("hits", []))
+    except NotFoundError:
         return []
-    if len(bodies) == 1:
+    if not _is_multi_token(query):
         # One word: every hit contains it (or its stem/prefix).
         for h in term_hits:
             h["_lexical_tier"] = TIER_ALL_WORDS
         return term_hits
-    tier_hits = {tier: hits_of(i) or [] for i, (tier, _) in enumerate(bodies) if tier is not None}
+
+    tier_hits: dict[int, list[dict]] = {}
+    for tier, clause in _tier_queries(query):
+        tier_body = {**body, "query": {"bool": {"must": clause, "filter": base_filter}}}
+        try:
+            resp = client.search(index=index, body=tier_body)
+            tier_hits[tier] = list(resp.get("hits", {}).get("hits", []))
+        except Exception:  # noqa: BLE001 — the any-word hits stand on their own
+            log.warning("Keyword lane: tier %s query failed; skipping it", tier, exc_info=True)
+            tier_hits[tier] = []
     return _order_by_tier(term_hits, tier_hits, size)
 
 
