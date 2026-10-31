@@ -34,8 +34,11 @@ def _resp(*ids):
 
 
 def _kind(body):
-    mm = body["query"]["bool"]["must"].get("multi_match", {})
-    if mm.get("type") == "phrase":
+    must = body["query"]["bool"]["must"]
+    if "bool" in must:  # earlier words AND + last word as a prefix
+        return S.TIER_ALL_WORDS
+    mm = must.get("multi_match", {})
+    if mm.get("type") in ("phrase", "phrase_prefix"):
         return S.TIER_PHRASE
     if mm.get("operator") == "and":
         return S.TIER_ALL_WORDS
@@ -126,23 +129,45 @@ class TestKeywordLane(SimpleTestCase):
         self.assertEqual({c.kwargs["index"] for c in client.search.call_args_list}, {"rag"})
         tiers = {_kind(b): b for b in _bodies(client)}
         self.assertEqual(len(tiers), 3)
+        # `.en` makes "the missing comment" match a body saying "the
+        # missing comments:" (plural, inflection).
+        fields = ["title^4", "snippet_text^2", "search_text", "search_text.en"]
         for tier in (S.TIER_ALL_WORDS, S.TIER_PHRASE):
-            body = tiers[tier]
-            self.assertEqual(body["query"]["bool"]["filter"], FILTER)
-            mm = body["query"]["bool"]["must"]["multi_match"]
-            self.assertEqual(mm["query"], SENTENCE)
-            # `.en` makes "the missing comment" match a body saying
-            # "the missing comments:" (plural, inflection).
-            self.assertEqual(
-                mm["fields"], ["title^4", "snippet_text^2", "search_text", "search_text.en"]
-            )
-            self.assertIn("highlight", body)
-        self.assertEqual(
-            tiers[S.TIER_ALL_WORDS]["query"]["bool"]["must"]["multi_match"]["type"], "cross_fields"
-        )
+            self.assertEqual(tiers[tier]["query"]["bool"]["filter"], FILTER)
+            self.assertIn("highlight", tiers[tier])
+        phrase = tiers[S.TIER_PHRASE]["query"]["bool"]["must"]["multi_match"]
+        self.assertEqual((phrase["query"], phrase["fields"]), (SENTENCE, fields))
+        for clause in tiers[S.TIER_ALL_WORDS]["query"]["bool"]["must"]["bool"]["must"]:
+            self.assertEqual(clause["multi_match"]["fields"], fields)
         self.assertIn(
             "search_text.ja^1.0", tiers["terms"]["query"]["bool"]["must"]["multi_match"]["fields"]
         )
+
+    def test_the_last_word_is_matched_as_a_prefix_while_typing(self):
+        # "the missing comm" must count as the phrase "the missing comments".
+        query = "Real cause of the missing comm"
+        _, client = _lane(query, ["a"])
+        tiers = {_kind(b): b["query"]["bool"]["must"] for b in _bodies(client)}
+        phrase = tiers[S.TIER_PHRASE]["multi_match"]
+        self.assertEqual((phrase["type"], phrase["query"]), ("phrase_prefix", query))
+        self.assertGreaterEqual(phrase["max_expansions"], 200)
+        earlier, last = tiers[S.TIER_ALL_WORDS]["bool"]["must"]
+        self.assertEqual(
+            (earlier["multi_match"]["type"], earlier["multi_match"]["operator"]),
+            ("cross_fields", "and"),
+        )
+        self.assertEqual(earlier["multi_match"]["query"], "Real cause of the missing")
+        self.assertEqual(
+            (last["multi_match"]["type"], last["multi_match"]["query"]), ("phrase_prefix", "comm")
+        )
+
+    def test_a_cjk_last_word_is_matched_whole(self):
+        # An IME commits whole characters, so there's no half-typed word.
+        _, client = _lane("ライブラリ 選定", ["a"])
+        tiers = {_kind(b): b["query"]["bool"]["must"] for b in _bodies(client)}
+        self.assertEqual(tiers[S.TIER_PHRASE]["multi_match"]["type"], "phrase")
+        self.assertEqual(tiers[S.TIER_ALL_WORDS]["multi_match"]["type"], "cross_fields")
+        self.assertEqual(tiers[S.TIER_ALL_WORDS]["multi_match"]["query"], "ライブラリ 選定")
 
     def test_a_one_word_query_runs_one_query_and_counts_as_all_words(self):
         lane, client = _lane("mig_live_p0", ["a", "b"])
