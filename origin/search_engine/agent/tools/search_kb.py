@@ -109,6 +109,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "note_id": entity.get("note_id"),
                 "note_type": entity.get("note_type"),
                 "project_id": entity.get("project_id"),
+                # Where a note lives (folders, project > task, chat), for a
+                # viewer who may see it (MIP-839). Names are user-typed, so
+                # they go through the same fence as the snippet.
+                **(
+                    {"context_path": wrap_workspace_content(" › ".join(entity["context_path"]))}
+                    if entity.get("context_path")
+                    else {}
+                ),
                 # Surfaced for the source-chip → workspace deep-link.
                 # `message_id` lets a chat citation focus the exact
                 # matched bubble; `related_entity_ids` is the fallback

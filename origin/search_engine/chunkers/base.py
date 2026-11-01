@@ -80,6 +80,14 @@ class Chunk:
     # is not something anyone types).
     task_display_id: Optional[str] = None
 
+    # Note containers (MIP-839; see `note_context`): the folder chain,
+    # project > milestone > task, or chat a note sits in. `context_text` is
+    # searched; `context_path` is shown; `context_acl` is who may see
+    # either. None for a note with no container.
+    context_text: Optional[str] = None
+    context_path: Optional[list] = None
+    context_acl: Optional[list] = None
+
     # v2 note overlays (note_chunker + note_summary_chunker).
     note_owner_id: Optional[str] = None
     note_parent_id: Optional[str] = None
@@ -102,6 +110,8 @@ class Chunk:
         # or from unordered DB rows, so one unchanged chunk got a new
         # `meta_hash` on every run and was rewritten as a metadata update.
         self.acl_user_ids = sorted(set(self.acl_user_ids))
+        if self.context_acl is not None:
+            self.context_acl = sorted(set(self.context_acl))
 
     def to_dict(self) -> dict:
         d = asdict(self)

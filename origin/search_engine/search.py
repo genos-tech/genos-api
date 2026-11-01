@@ -24,6 +24,7 @@ each (default 60). The wider pool gives RRF more material to fuse.
 
 from __future__ import annotations
 
+import copy
 import logging
 import math
 import re
@@ -404,6 +405,9 @@ def search(
         for_agent=for_agent,
         ef_search=ef_search,
         tiered=tiered,
+        # Container names (MIP-839): matched for the people who may see
+        # them. Not in eval, which stays raw BM25 + vector + RRF.
+        context_terms=None if mode == "eval" else _viewer_acl_terms(team_id, user_id),
     )
 
     # --- v2: chunk-type-aware reweighting ---
@@ -617,6 +621,10 @@ def search(
             for_agent=for_agent,
         )
 
+    # --- Note containers (MIP-839): the path, for those who may see it. ---
+    # Before the cut: every row, pinned or not, drops the private fields.
+    _finalize_context(grouped, _viewer_acl_terms(team_id, user_id), user_id)
+
     # --- Final pass: friendly chat titles. ---
     # OpenSearch stores a viewer-agnostic placeholder for chats ("DM 9")
     # because a DM's name depends on who's looking. Resolve here so
@@ -641,6 +649,7 @@ def _multi_variant_fuse(
     for_agent: bool,
     ef_search: int,
     tiered: bool = False,
+    context_terms: Optional[list[str]] = None,
 ) -> list[dict]:
     """Run keyword + vector for each variant and merge into one ranked list.
 
@@ -665,7 +674,14 @@ def _multi_variant_fuse(
         weight = original_weight if idx == 0 else 1.0
 
         keyword_hits = _run_keyword(
-            client, index, variant, base_filter, pool_size, for_agent=for_agent, tiered=tiered
+            client,
+            index,
+            variant,
+            base_filter,
+            pool_size,
+            for_agent=for_agent,
+            tiered=tiered,
+            context_terms=context_terms,
         )
         vector_hits: list[dict] = []
         if use_vector:
@@ -975,6 +991,15 @@ def _may_match_team_sentinel(team_id, user_id) -> bool:
         return False
 
 
+def _viewer_acl_terms(team_id: str, user_id: str) -> list[str]:
+    """What this searcher may match in an ACL field: their own id and, for
+    a member of the team, the `team:<id>` sentinel."""
+    terms = [user_id]
+    if _may_match_team_sentinel(team_id, user_id):
+        terms.append(f"team:{team_id}")
+    return terms
+
+
 def _build_filter(
     team_id: str,
     user_id: str,
@@ -1000,9 +1025,7 @@ def _build_filter(
     # whole team wiki to someone outside the company. Their own reachable
     # content still matches on `user_id`, which is how a shared project's
     # tasks, an external chat and a shared folder reach them.
-    acl_terms = [user_id]
-    if _may_match_team_sentinel(team_id, user_id):
-        acl_terms.append(f"team:{team_id}")
+    acl_terms = _viewer_acl_terms(team_id, user_id)
 
     filt: list[dict] = [
         {"term": {"team_id": team_id}},
@@ -1292,6 +1315,56 @@ def _is_multi_token(query: str) -> bool:
 _PREFIX_MAX_EXPANSIONS = 200
 
 
+# Where a note's container names (folders, project > task, chat) are
+# searched, below the title (^4) and body (^1): a folder name must not
+# outrank the note that IS the query. The tiers use the base field only,
+# like their other fields.
+_ANY_WORD_CONTEXT_FIELDS = ("context_text^0.8", "context_text.icu^0.7", "context_text.ja^0.7")
+_TIER_CONTEXT_FIELDS = ("context_text",)
+
+
+def _add_context_fields(clause: dict, fields: tuple[str, ...]) -> dict:
+    """`clause` with `fields` added to every `multi_match` in it."""
+    mm = clause.get("multi_match")
+    if mm is not None:
+        mm["fields"] = [*mm["fields"], *fields]
+    for part in ("must", "should", "filter"):
+        sub = clause.get("bool", {}).get(part)
+        if isinstance(sub, dict):
+            _add_context_fields(sub, fields)
+        elif isinstance(sub, list):
+            for item in sub:
+                _add_context_fields(item, fields)
+    return clause
+
+
+def _with_context(
+    clause: dict, context_terms: Optional[list[str]], fields: tuple[str, ...]
+) -> dict:
+    """`clause`, or (when the searcher may see container names) `clause`
+    OR a copy that also searches them, restricted to chunks whose
+    `context_acl` includes the searcher (MIP-839).
+
+    Container names are searchable for the people who may see them and
+    nobody else. A field can't be ACL-gated inside one `multi_match`, so
+    the gate is the second branch's filter; everyone else only ever runs
+    the first. The two branches OR rather than replace, so an all-words
+    query can span fields ("Specs" in the folder, "roadmap" in the title).
+    """
+    if not context_terms:
+        return clause
+    wide = _add_context_fields(copy.deepcopy(clause), fields)
+    return {
+        "bool": {
+            "should": [
+                clause,
+                {"bool": {"filter": [{"terms": {"context_acl": context_terms}}], "must": wide}},
+            ],
+            "minimum_should_match": 1,
+        }
+    }
+
+
 def _all_words(text: str) -> dict:
     return {
         "multi_match": {
@@ -1375,7 +1448,13 @@ def _order_by_tier(
 
 
 def _run_keyword_tiered(
-    client, index: str, query: str, base_filter: list[dict], size: int, body: dict
+    client,
+    index: str,
+    query: str,
+    base_filter: list[dict],
+    size: int,
+    body: dict,
+    context_terms: Optional[list[str]] = None,
 ) -> list[dict]:
     # Separate `_search` calls, not one `_msearch`: production's OpenSearch
     # role (`genos_app`, genos-platform security/roles.yml) holds index
@@ -1393,6 +1472,7 @@ def _run_keyword_tiered(
 
     tier_hits: dict[int, list[dict]] = {}
     for tier, clause in _tier_queries(query):
+        clause = _with_context(clause, context_terms, _TIER_CONTEXT_FIELDS)
         tier_body = {**body, "query": {"bool": {"must": clause, "filter": base_filter}}}
         try:
             resp = client.search(index=index, body=tier_body)
@@ -1450,6 +1530,7 @@ def _run_keyword(
     *,
     for_agent: bool = False,
     tiered: bool = False,
+    context_terms: Optional[list[str]] = None,
 ) -> list[dict]:
     body = {
         "size": size,
@@ -1465,53 +1546,57 @@ def _run_keyword(
         },
         "query": {
             "bool": {
-                "must": {
-                    "multi_match": {
-                        "query": query,
-                        # Field-level BM25 boosts. Title is the
-                        # densest signal — short, intentional, often
-                        # the verbatim query for "find me this thing"
-                        # asks. Snippet_text is the next-densest
-                        # (entity-level highlight). Search_text
-                        # carries the full chunk body. v2 added two
-                        # subfields:
-                        #   title.prefix   — edge n-gram, wins on
-                        #                    1-3 char prefixes
-                        #                    ("fra" → "framer-motion")
-                        #                    even before BM25 partial
-                        #                    matching kicks in.
-                        #   search_text.en — English-stemmed copy of
-                        #                    the body; recovers
-                        #                    conjugation variants
-                        #                    ("ruling/ruled/rules").
-                        # Base `search_text` (standard analyzer) stays
-                        # for exact-phrase matching; the .en subfield
-                        # is the recall path.
-                        # v3 multilingual subfields (analysis-icu +
-                        # analysis-kuromoji). `.icu` segments CJK into
-                        # words + folds accents for all 7 languages;
-                        # `.ja` adds Japanese base-form/inflection
-                        # recall (走った/走って → 走る). `.ja` is weighted
-                        # just above `.icu` (higher-precision JA lane);
-                        # all sit under the base/`standard` boosts so an
-                        # exact-phrase hit still wins ties.
-                        "fields": [
-                            f"title^{int(settings.SEARCH_ENGINE.get('RAG_BM25_TITLE_BOOST', 4))}",
-                            "title.prefix^4",
-                            "title.icu^3",
-                            "title.ja^3.2",
-                            "title.icu_prefix^3",
-                            f"snippet_text^{int(settings.SEARCH_ENGINE.get('RAG_BM25_SNIPPET_BOOST', 2))}",
-                            "snippet_text.icu^1.6",
-                            "snippet_text.ja^1.7",
-                            "search_text",
-                            "search_text.en^0.8",
-                            "search_text.icu^0.9",
-                            "search_text.ja^1.0",
-                        ],
-                        "type": "best_fields",
-                    }
-                },
+                "must": _with_context(
+                    {
+                        "multi_match": {
+                            "query": query,
+                            # Field-level BM25 boosts. Title is the
+                            # densest signal — short, intentional, often
+                            # the verbatim query for "find me this thing"
+                            # asks. Snippet_text is the next-densest
+                            # (entity-level highlight). Search_text
+                            # carries the full chunk body. v2 added two
+                            # subfields:
+                            #   title.prefix   — edge n-gram, wins on
+                            #                    1-3 char prefixes
+                            #                    ("fra" → "framer-motion")
+                            #                    even before BM25 partial
+                            #                    matching kicks in.
+                            #   search_text.en — English-stemmed copy of
+                            #                    the body; recovers
+                            #                    conjugation variants
+                            #                    ("ruling/ruled/rules").
+                            # Base `search_text` (standard analyzer) stays
+                            # for exact-phrase matching; the .en subfield
+                            # is the recall path.
+                            # v3 multilingual subfields (analysis-icu +
+                            # analysis-kuromoji). `.icu` segments CJK into
+                            # words + folds accents for all 7 languages;
+                            # `.ja` adds Japanese base-form/inflection
+                            # recall (走った/走って → 走る). `.ja` is weighted
+                            # just above `.icu` (higher-precision JA lane);
+                            # all sit under the base/`standard` boosts so an
+                            # exact-phrase hit still wins ties.
+                            "fields": [
+                                f"title^{int(settings.SEARCH_ENGINE.get('RAG_BM25_TITLE_BOOST', 4))}",
+                                "title.prefix^4",
+                                "title.icu^3",
+                                "title.ja^3.2",
+                                "title.icu_prefix^3",
+                                f"snippet_text^{int(settings.SEARCH_ENGINE.get('RAG_BM25_SNIPPET_BOOST', 2))}",
+                                "snippet_text.icu^1.6",
+                                "snippet_text.ja^1.7",
+                                "search_text",
+                                "search_text.en^0.8",
+                                "search_text.icu^0.9",
+                                "search_text.ja^1.0",
+                            ],
+                            "type": "best_fields",
+                        }
+                    },
+                    context_terms,
+                    _ANY_WORD_CONTEXT_FIELDS,
+                ),
                 "filter": base_filter,
             }
         },
@@ -1543,7 +1628,9 @@ def _run_keyword(
         },
     }
     if tiered:
-        return _run_keyword_tiered(client, index, query, base_filter, size, body)
+        return _run_keyword_tiered(
+            client, index, query, base_filter, size, body, context_terms=context_terms
+        )
     try:
         resp = client.search(index=index, body=body)
     except NotFoundError:
@@ -1721,6 +1808,10 @@ def _source_fields(*, for_agent: bool = False) -> list[str]:
         # other chunk families, which `to_dict()` drops.
         "task_status",
         "task_display_id",
+        # MIP-839 — read to build the result row's `context_path`, then
+        # dropped: `context_acl` (user ids) never leaves `search()`.
+        "context_path",
+        "context_acl",
     ]
     if for_agent:
         # The full chunk text — used as LLM grounding context. Excluded
@@ -1850,6 +1941,9 @@ def _group_by_entity(
                 entry["task_display_id"] = src.get("task_display_id")
             if "lexical_tier" in c:
                 entry["lexical_tier"] = c["lexical_tier"]
+            if src.get("context_acl") is not None:
+                entry["_context_acl"] = src.get("context_acl")
+                entry["_context_path"] = src.get("context_path")
             if for_agent:
                 entry["chunks"] = [_chunk_for_agent(c)]
             by_entity[key] = entry
@@ -1885,6 +1979,29 @@ def _group_by_entity(
             # Keep the highest score — `fused_chunks` is already sorted
             # by score desc, so the first occurrence wins.
     return list(by_entity.values())
+
+
+def _finalize_context(rows: list[dict], viewer_terms: list[str], viewer_id: str) -> None:
+    """Turn each note row's stored container fields into `context_path`.
+
+    The path is returned only to a viewer in the chunk's `context_acl` (see
+    `note_context`); the ACL itself, a list of user ids, is removed from
+    every row either way. A chat note's path is the viewer-relative chat
+    name (a DM shows the partner), resolved the way chat rows are.
+    """
+    allowed = set(viewer_terms)
+    for row in rows:
+        acl = row.pop("_context_acl", None)
+        path = row.pop("_context_path", None)
+        if acl is None or not path or not allowed.intersection(acl):
+            continue
+        if row.get("note_type") == "chat":
+            from origin.search_engine.friendly_titles import friendly_chat_title  # noqa: PLC0415
+
+            name = friendly_chat_title(viewer_id, row.get("chat_type"), row.get("chat_id"))
+            if name:
+                path = [name]
+        row["context_path"] = list(path)
 
 
 def _chunk_for_agent(c: dict) -> dict:

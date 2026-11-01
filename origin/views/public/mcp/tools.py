@@ -306,7 +306,10 @@ CATALOG: tuple[McpTool, ...] = (
             "Semantic search across the workspace — tasks, notes, chat "
             "messages and todos. Use it for context the task description "
             "assumes: prior discussion of a bug, a design note, an earlier "
-            "decision. Natural-language queries work better than keywords."
+            "decision. Natural-language queries work better than keywords. "
+            "A note result carries `context_path` when you may see where it "
+            "lives (its folders, project > task, or chat), and a folder, "
+            "task or chat name also finds the notes inside it."
         ),
     ),
     McpTool(
