@@ -116,3 +116,8 @@ def resync_folder_subtree(folder_id, team_id):
     """Purge every note under a team folder whose access just narrowed."""
     folder_ids = collect_folder_subtree_ids(folder_id, team_id)
     purge_notes_from_index(collect_note_ids_in_folders(folder_ids, team_id))
+    # The folders themselves are search results too (MIP-841), with the
+    # same access that just narrowed.
+    from origin.search_engine.purge import purge_note_folders  # noqa: PLC0415
+
+    purge_note_folders(folder_ids)

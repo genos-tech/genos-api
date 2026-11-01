@@ -1063,7 +1063,10 @@ def _build_filter(
         #                         back into a new answer (answer→grounding loop).
         excluded = ["conversation"]
         if mode != "typeahead":
-            excluded.append("spotlight_answer")
+            # Folders (MIP-841) are a Spotlight destination: a folder hit
+            # has no body to ground an answer on, and `list_note_folders`
+            # is the agent's way to read the tree.
+            excluded += ["spotlight_answer", "note_folder"]
         filt.append({"bool": {"must_not": [{"term": {"entity_type": et}} for et in excluded]}})
     if exclude_lanes:
         # UNCONDITIONAL lane exclusion (UX tier model §6). The default
@@ -1812,6 +1815,8 @@ def _source_fields(*, for_agent: bool = False) -> list[str]:
         # dropped: `context_acl` (user ids) never leaves `search()`.
         "context_path",
         "context_acl",
+        "folder_id",
+        "folder_scope",
     ]
     if for_agent:
         # The full chunk text — used as LLM grounding context. Excluded
@@ -1915,6 +1920,8 @@ def _group_by_entity(
                 "note_id": src.get("note_id"),
                 "note_type": src.get("note_type"),
                 "project_id": src.get("project_id"),
+                "folder_id": src.get("folder_id"),
+                "folder_scope": src.get("folder_scope"),
                 "related_entity_ids": src.get("related_entity_ids") or [],
                 "matched_terms": list(c.get("matched_terms") or []),
                 # spotlight_answer lane provenance — present only on

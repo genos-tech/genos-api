@@ -247,6 +247,9 @@ def build_mappings():
             },
             "context_path": {"type": "keyword", "index": False},
             "context_acl": {"type": "keyword"},
+            # MIP-841: a `note_folder` result opens the folder in its space.
+            "folder_id": {"type": "keyword"},
+            "folder_scope": {"type": "keyword"},
             # "MIP-739": Spotlight's display-id lookup matches it with a
             # case-insensitive term / prefix query, so no normalizer (a
             # normalizer is an index setting, which put_mapping can't add).

@@ -128,6 +128,50 @@ def team_chain_acl(chain: list[PersonalNoteFolder], index, members_of) -> set[st
     return set.intersection(*expanded)
 
 
+class FolderAclResolver:
+    """Who can read folders, with the per-team lookups cached across a pass."""
+
+    def __init__(self) -> None:
+        self._indexes: dict[str, dict] = {}
+        self._members: dict[str, set[str]] = {}
+
+    def index(self, team_id):
+        key = str(team_id)
+        if key not in self._indexes:
+            self._indexes[key] = load_team_folder_index(team_id)
+        return self._indexes[key]
+
+    def members(self, team_id) -> set[str]:
+        key = str(team_id)
+        if key not in self._members:
+            self._members[key] = {
+                str(uid)
+                for uid in TeamMembers.objects.filter(team_id=team_id).values_list(
+                    "attendee_id", flat=True
+                )
+                if uid is not None
+            }
+        return self._members[key]
+
+    def readers_of_chain(self, chain: list[PersonalNoteFolder]) -> set[str]:
+        """People who can read EVERY folder on `chain` (non-empty,
+        root-first): the audience for the names on it."""
+        leaf = chain[-1]
+        if leaf.scope == PersonalNoteFolder.SCOPE_TEAM:
+            return team_chain_acl(
+                chain, self.index(leaf.team_id), lambda: self.members(leaf.team_id)
+            )
+        # My Notes folders are their owner's alone.
+        return {str(leaf.owner_id)} if leaf.owner_id is not None else set()
+
+    def readers_of(self, folder: PersonalNoteFolder) -> set[str]:
+        """People who can read this one folder (a team folder's chain
+        grants, with the `team:<id>` sentinel when it resolves public)."""
+        if folder.scope == PersonalNoteFolder.SCOPE_TEAM:
+            return folder_ancestor_grant_user_ids(folder.folder_id, self.index(folder.team_id))
+        return {str(folder.owner_id)} if folder.owner_id is not None else set()
+
+
 def _root_folder_ids(notes) -> dict[int, int]:
     """`note_id` -> the folder its ROOT note is filed in. Only root notes
     carry a `folder_id`; a child note sits under its parent, in the same
@@ -163,21 +207,8 @@ def personal_note_contexts(notes) -> dict[int, NoteContext]:
         return {}
     folders = _load_folder_chains(set(folder_of.values()))
 
-    indexes: dict[str, dict] = {}
-    members_cache: dict[str, set[str]] = {}
+    resolver = FolderAclResolver()
     acl_cache: dict[int, set[str]] = {}
-
-    def members_of(team_id):
-        key = str(team_id)
-        if key not in members_cache:
-            members_cache[key] = {
-                str(uid)
-                for uid in TeamMembers.objects.filter(team_id=team_id).values_list(
-                    "attendee_id", flat=True
-                )
-                if uid is not None
-            }
-        return members_cache[key]
 
     out: dict[int, NoteContext] = {}
     for note in filed:
@@ -186,18 +217,8 @@ def personal_note_contexts(notes) -> dict[int, NoteContext]:
         names = _clean(f.name for f in chain)
         if not names:
             continue
-        leaf = chain[-1]
         if folder_id not in acl_cache:
-            if leaf.scope == PersonalNoteFolder.SCOPE_TEAM:
-                key = str(leaf.team_id)
-                if key not in indexes:
-                    indexes[key] = load_team_folder_index(leaf.team_id)
-                acl_cache[folder_id] = team_chain_acl(
-                    chain, indexes[key], lambda t=leaf.team_id: members_of(t)
-                )
-            else:
-                # My Notes folders are their owner's alone.
-                acl_cache[folder_id] = {str(leaf.owner_id)} if leaf.owner_id is not None else set()
+            acl_cache[folder_id] = resolver.readers_of_chain(chain)
         out[note.note_id] = NoteContext(
             path=names, text=" ".join(names), acl=sorted(acl_cache[folder_id])
         )

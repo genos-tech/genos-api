@@ -52,6 +52,7 @@ from origin.search_engine.chunkers.conversation_chunker import (
 )
 from origin.search_engine.chunkers.milestone_chunker import iter_milestone_chunks
 from origin.search_engine.chunkers.note_chunker import iter_all_note_chunks
+from origin.search_engine.chunkers.note_folder_chunker import iter_note_folder_chunks
 from origin.search_engine.chunkers.note_summary_chunker import iter_note_summary_chunks
 from origin.search_engine.chunkers.spotlight_answer_chunker import iter_spotlight_answer_chunks
 from origin.search_engine.chunkers.task_chunker import iter_task_chunks
@@ -123,6 +124,7 @@ def ingest_all(
         "task",
         "milestone",
         "note",
+        "note_folder",
         "thread_summary",
         "note_summary",
         "todo",
@@ -161,6 +163,9 @@ def _ingest_all_bound(
     if "note" in entity_types:
         log.info("Ingesting notes (since=%s, dry_run=%s)...", since, dry_run)
         _ingest_stream(iter_all_note_chunks(since=since, dirty=dirty), stats, dry_run=dry_run)
+    if "note_folder" in entity_types:
+        log.info("Ingesting note folders (since=%s, dry_run=%s)...", since, dry_run)
+        _ingest_stream(iter_note_folder_chunks(since=since), stats, dry_run=dry_run)
     if "thread_summary" in entity_types:
         log.info("Ingesting thread summaries (since=%s, dry_run=%s)...", since, dry_run)
         _ingest_stream(iter_thread_summary_chunks(since=since, dirty=dirty), stats, dry_run=dry_run)

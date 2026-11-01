@@ -147,6 +147,19 @@ def purge_note(note_type_label: str, note_id) -> None:
         log.exception("Best-effort purge failed for note %s:%s", note_type_label, note_id)
 
 
+def purge_note_folders(folder_ids) -> None:
+    """Folders deleted, or their access narrowed (the reindexer restores a
+    narrowed folder with its new, smaller ACL). Best-effort, like the note
+    purge beside it; the sweep retries a delete this misses."""
+    pairs = [("note_folder", f"note_folder:{fid}") for fid in folder_ids]
+    if not pairs:
+        return
+    try:
+        purge_entities(pairs)
+    except Exception:  # noqa: BLE001
+        log.exception("Best-effort purge failed for note folders %s", sorted(folder_ids))
+
+
 def purge_todo_item(item_id) -> None:
     """Todo item deleted. The entity id embeds the group's local_date
     (`todo:<date>:item:<id>`) which the caller no longer has after the
@@ -350,6 +363,25 @@ def _resolve_notes(eids: list[str]) -> tuple[set[str], int]:
         )
         dead.update(eid for pk, eid in by_pk.items() if pk not in live)
     return dead, unparseable
+
+
+def _resolve_note_folders(eids: list[str]) -> tuple[set[str], int]:
+    from origin.models.note.personal_note_models import PersonalNoteFolder
+
+    by_pk: dict[int, str] = {}
+    unparseable = 0
+    for eid in eids:
+        pk = _int_after(eid, "note_folder:")
+        if pk is None:
+            unparseable += 1
+        else:
+            by_pk[pk] = eid
+    live = set(
+        PersonalNoteFolder.objects.filter(folder_id__in=by_pk.keys()).values_list(
+            "folder_id", flat=True
+        )
+    )
+    return {eid for pk, eid in by_pk.items() if pk not in live}, unparseable
 
 
 def _resolve_note_summaries(eids: list[str]) -> tuple[set[str], int]:
@@ -583,6 +615,7 @@ _RESOLVERS = {
     "task": _resolve_tasks,
     "milestone": _resolve_milestones,
     "note": _resolve_notes,
+    "note_folder": _resolve_note_folders,
     "note_summary": _resolve_note_summaries,
     "chat": _resolve_chats,
     "thread_summary": _resolve_thread_summaries,
