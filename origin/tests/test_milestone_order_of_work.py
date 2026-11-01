@@ -190,9 +190,10 @@ class MilestoneOrderOfWorkTests(BaseAPITestCase):
         self.assertEqual(len(out["ready_now"]), 50)
         self.assertEqual(out["ready_now_count"], 55)
 
-    def test_the_existing_counts_are_unchanged(self):
+    def test_the_counts_are_the_milestones_live_work(self):
         self._task("a")
         self._task("b", status="Closed")
         out = self._summary()
-        self.assertEqual(out["total_tasks"], 2 + 1)  # plus the milestone's backing row
+        # The milestone's own backing row is not one of its tasks (MIP-777).
+        self.assertEqual(out["total_tasks"], 2)
         self.assertEqual(out["status_breakdown"]["Closed"], 1)

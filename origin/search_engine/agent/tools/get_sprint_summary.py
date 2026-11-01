@@ -27,7 +27,7 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
-from origin.search_engine.agent.tools.list_tasks import _milestone_task_q
+from origin.services.milestone_rollup import milestone_work_q
 from origin.services.user_time import today_for_user_id
 
 _STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"]
@@ -81,9 +81,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         annotations[f"_priority_{label}"] = Count(
             "task_id", distinct=True, filter=Q(priority=label)
         )
-    agg = base_qs.aggregate(**annotations)
+    # "Deleted" is gone, not finished (MIP-777): it is left out of the totals
+    # and of "closed", and counted only in its own row of the breakdown.
+    agg = base_qs.exclude(status="Deleted").aggregate(**annotations)
 
     status_breakdown = {label: agg.get(f"_status_{label}", 0) or 0 for label in _STATUS_LABELS}
+    status_breakdown["Deleted"] = base_qs.filter(status="Deleted").count()
     priority_breakdown = {
         label: agg.get(f"_priority_{label}", 0) or 0 for label in _PRIORITY_LABELS
     }
@@ -97,11 +100,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         is_deleted=False,
     ):
         m_agg = (
-            TaskMaster.objects.filter(_milestone_task_q(m))
+            TaskMaster.objects.filter(milestone_work_q(m))
             .distinct()
             .aggregate(
                 tasks_total=Count("task_id", distinct=True),
-                tasks_closed=Count("task_id", distinct=True, filter=Q(status__in=_CLOSED_STATUSES)),
+                tasks_closed=Count("task_id", distinct=True, filter=Q(status="Closed")),
             )
         )
         milestones.append(
@@ -123,7 +126,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     total = agg.get("total_tasks", 0) or 0
     open_n = status_breakdown.get("Open", 0)
     wip_n = status_breakdown.get("WIP", 0)
-    closed_n = status_breakdown.get("Closed", 0) + status_breakdown.get("Deleted", 0)
+    closed_n = status_breakdown.get("Closed", 0)
     overdue_n = agg.get("overdue_count", 0) or 0
 
     return {

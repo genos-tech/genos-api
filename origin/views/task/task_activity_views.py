@@ -10,9 +10,9 @@ from origin.models.task.task_models import TaskMaster
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import can_access_task
 
-# Mirrors `milestone_views.CLOSED_STATUSES` — kept duplicated here on
-# purpose so the burndown view doesn't import from the milestone view
-# (and risk a circular import as the modules grow).
+# Closed or Deleted: neither is work still to do, which is what a burndown
+# counts down. (Milestone PROGRESS is different: Deleted is gone, not done, and
+# is not counted as closed there; see `services/milestone_rollup.py`.)
 _CLOSED_STATUSES = {"Closed", "Deleted"}
 
 

@@ -1,5 +1,4 @@
 from django.db import transaction
-from django.db.models import Q
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -11,6 +10,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.purge import purge_milestone, purge_task
 from origin.services import mention_extractor
 from origin.services.custom_fields import sanitize_custom_field_values
+from origin.services.milestone_rollup import milestone_work_q
 from origin.services.milestone_service import (
     create_milestone,
     ensure_backing_task,
@@ -30,8 +30,6 @@ from origin.views.utils.request_validators import (
     validate_request_data,
 )
 from origin.views.utils.scope_guards import is_project_member
-
-CLOSED_STATUSES = {"Closed", "Deleted"}
 
 # Backing-task invariants moved to `origin/services/milestone_service.py`
 # so the agent's composite write tool (`create_task_plan`) shares them.
@@ -152,20 +150,12 @@ def _serialize_milestone(m: MilestoneMaster, *, with_aggregates: bool = True) ->
         ],
     }
     if with_aggregates:
-        # Tasks belong to a milestone via the explicit FK *or* by being
-        # children of the milestone's backing task (parent_task_id).
-        # Either path counts as "in this milestone" for rollups.
-        q = Q(milestone=m, is_deleted=False, is_init_task=False)
-        if m.task_id is not None:
-            q = q | Q(
-                parent_task_id=m.task_id,
-                is_deleted=False,
-                is_init_task=False,
-                is_milestone=False,
-            )
-        tasks = TaskMaster.objects.filter(q).distinct()
+        # Progress is counted over the milestone's live work (MIP-777): not its
+        # own backing row, and not "Deleted" tasks (gone, not finished). One
+        # definition, shared with the agent/MCP rollups so they reconcile.
+        tasks = TaskMaster.objects.filter(milestone_work_q(m)).distinct()
         total = tasks.count()
-        closed = tasks.filter(status__in=list(CLOSED_STATUSES)).count()
+        closed = tasks.filter(status="Closed").count()
         out["tasksTotal"] = total
         out["tasksClosed"] = closed
     return out

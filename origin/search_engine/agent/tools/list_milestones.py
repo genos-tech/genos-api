@@ -22,7 +22,7 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
-from origin.search_engine.agent.tools.list_tasks import _milestone_task_q
+from origin.services.milestone_rollup import milestone_work_q
 from origin.services.user_time import today_for_user_id
 
 _MAX_LIMIT = 100
@@ -102,10 +102,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     today = today_for_user_id(ctx.user_id)
     milestones: list[dict[str, Any]] = []
     for m in qs:
-        task_qs = TaskMaster.objects.filter(_milestone_task_q(m)).distinct()
+        task_qs = TaskMaster.objects.filter(milestone_work_q(m)).distinct()
         agg = task_qs.aggregate(
             tasks_total=Count("task_id", distinct=True),
-            tasks_closed=Count("task_id", distinct=True, filter=Q(status__in=_CLOSED_STATUSES)),
+            tasks_closed=Count("task_id", distinct=True, filter=Q(status="Closed")),
             overdue=Count(
                 "task_id",
                 distinct=True,

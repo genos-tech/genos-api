@@ -95,15 +95,20 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     sprints: list[dict[str, Any]] = []
     for sp in sprints_raw:
-        agg = TaskMaster.objects.filter(
-            team_id=ctx.team_id,
-            project_id=sp.project_id,
-            sprint_id=sp.sprint_id,
-            is_deleted=False,
-            is_init_task=False,
-        ).aggregate(
-            tasks_total=Count("task_id", distinct=True),
-            tasks_closed=Count("task_id", distinct=True, filter=Q(status__in=_CLOSED_STATUSES)),
+        # "Deleted" is gone, not finished (MIP-777): neither in the total nor closed.
+        agg = (
+            TaskMaster.objects.filter(
+                team_id=ctx.team_id,
+                project_id=sp.project_id,
+                sprint_id=sp.sprint_id,
+                is_deleted=False,
+                is_init_task=False,
+            )
+            .exclude(status="Deleted")
+            .aggregate(
+                tasks_total=Count("task_id", distinct=True),
+                tasks_closed=Count("task_id", distinct=True, filter=Q(status="Closed")),
+            )
         )
         milestone_count = MilestoneMaster.objects.filter(
             sprint_id=sp.sprint_id,
@@ -157,9 +162,7 @@ LIST_SPRINTS = Tool(
         "properties": {
             "project_id": {
                 "type": "INTEGER",
-                "description": (
-                    "Restrict to one project. Omit to span all accessible " "projects."
-                ),
+                "description": ("Restrict to one project. Omit to span all accessible projects."),
             },
             "status": {
                 "type": "ARRAY",
