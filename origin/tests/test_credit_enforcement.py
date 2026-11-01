@@ -634,9 +634,9 @@ class AskPathEnforcementTests(_StreamingBase):
 
         credit_ledger.ensure_monthly_grant(str(self.user.id), "free")
         self.user.preferred_llm_provider = "claude"
-        self.user.preferred_llm_model = "claude-opus-5"  # highend: 0/day on free
+        self.user.preferred_llm_model = "claude-opus-5-5"  # highend: 0/day on free
         self.user.save()
-        increment_usage(str(self.user.id), "claude-opus-5")
+        increment_usage(str(self.user.id), "claude-opus-5-5")
         cache.clear()
         resp = self._ask()
         self.assertEqual(

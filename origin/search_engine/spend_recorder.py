@@ -67,6 +67,12 @@ def price_llm_usage(usage) -> tuple[int, int, str]:
     cache_write = max(int(usage.cache_write_tokens), 0)
     output = max(int(usage.output_tokens), 0) + max(int(usage.thought_tokens), 0)
 
+    # A tiered model (Claude Haiku 5.5) bills the WHOLE request at its
+    # higher card once the prompt passes the threshold, and the prompt
+    # counts cache reads and writes — a mostly-cached 150K prompt still
+    # pays the long rates. Flat-priced models get `price` back unchanged.
+    price = price.for_prompt(prompt + cached + cache_write)
+
     usd = (
         prompt * price.input
         + cached * price.cached_input

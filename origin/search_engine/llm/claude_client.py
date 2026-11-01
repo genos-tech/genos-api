@@ -224,6 +224,22 @@ class ClaudeClient:
         if settings.LLM_CATALOG.supports_temperature(model):
             stream_kwargs["temperature"] = 0.2
 
+        # Thinking + effort, per model, from the catalog (`effort:`).
+        # Claude Haiku 5.5 / Sonnet 5.5 / Opus 5.5 run adaptive thinking
+        # BY DEFAULT and spend its tokens from the same `max_tokens`
+        # budget as the answer, and their default effort differs per
+        # model (medium on Haiku and Opus, high on Sonnet) — so a client
+        # that sends nothing gets whatever each model's default happens
+        # to be. A catalog entry that declares `effort:` pins both
+        # explicitly. An entry that does not (older ids, and any model an
+        # operator pins via CLAUDE_MODEL that is not in the catalog) gets
+        # the request it always got: Haiku 4.5 rejects adaptive thinking
+        # and `effort` outright, so this must never be sent blindly.
+        effort = settings.LLM_CATALOG.request_effort(model)
+        if effort:
+            stream_kwargs["thinking"] = {"type": "adaptive"}
+            stream_kwargs["output_config"] = {"effort": effort}
+
         try:
             with _get_client().messages.stream(**stream_kwargs) as stream:
                 for event in stream:
