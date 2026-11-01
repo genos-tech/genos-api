@@ -186,7 +186,9 @@ class FavoriteAccessTests(NoteRefAccessBase):
         self.authenticate(self.user2)
         res = self._meta(FAVORITE_META, self.user2, self.team)
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.data, {"personalNotes": [], "taskNotes": [], "chatNotes": []})
+        self.assertEqual(
+            res.data, {"personalNotes": [], "taskNotes": [], "chatNotes": [], "folders": []}
+        )
         for secret in ("My diary", "Who goes", "Layoff plan", "Leadership", "Board minutes"):
             self.assertNotIn(secret, str(res.data))
 

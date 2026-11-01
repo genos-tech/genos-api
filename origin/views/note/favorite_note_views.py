@@ -4,11 +4,12 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.note.chat_note_models import ChatNoteMaster
-from origin.models.note.favorite_note_models import NoteFavoriteMaster
-from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.favorite_note_models import NoteFavoriteMaster, NoteFolderFavorite
+from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.serializers.note.note_serializers import NoteFavoriteMasterSerializer
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.note_folder_role import get_folder_role
 from origin.views.utils.note_role import readable_note_ids, readable_note_ref
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
@@ -152,7 +153,114 @@ class AllFavoriteNotesMetaView(AuthenticatedAPIView):
             )
             result["chatNotes"] = list(chat_notes)
 
+        result["folders"] = favorite_folders_meta(request_user_id, data["team_id"])
+
         return Response(result, status=status.HTTP_200_OK)
+
+
+def can_see_folder(user_id, folder: PersonalNoteFolder) -> bool:
+    """A My Notes folder is its owner's alone; a Team Notes folder —
+    including one another team shared — is visible to whoever its chain
+    gives a role, resolved in the folder's own team."""
+    if folder.scope == PersonalNoteFolder.SCOPE_TEAM:
+        return get_folder_role(user_id, folder.folder_id, folder.team_id) is not None
+    return str(folder.owner_id) == str(user_id)
+
+
+def favorite_folders_meta(user_id, team_id) -> list[dict]:
+    """The folders this user starred that belong in team `team_id`'s
+    sidebar and that they can still see (MIP-747), newest first: the
+    team's own folders, plus folders another team shared with it. A
+    favorite outlives the access it was made with, so unreachable ones are
+    left out rather than shown blank.
+
+    Not filtered on the favorite's `team`: a request naming another team's
+    folder has its `team_id` aligned to the host (`align_team_to_object`),
+    so a cross-team star is recorded under the host team."""
+    from origin.views.note.team_note_folder_views import _external_reach  # noqa: PLC0415
+
+    shared_in: set[int] | None = None
+    rows = []
+    for fav in NoteFolderFavorite.objects.filter(user=user_id).select_related("folder"):
+        folder = fav.folder
+        if str(folder.team_id) == str(team_id):
+            if not can_see_folder(user_id, folder):
+                continue
+            external = False
+        else:
+            if shared_in is None:
+                shared_in = {
+                    int(fid)
+                    for _host, _roots, _folders, reach in _external_reach(user_id, team_id)
+                    for fid in reach
+                }
+            if folder.folder_id not in shared_in:
+                continue
+            external = True
+        rows.append(
+            {
+                "folderId": folder.folder_id,
+                "name": folder.name,
+                "scope": folder.scope,
+                "parentFolderId": folder.parent_folder_id,
+                # Shared from another team: the client opens it in Team
+                # Notes, where those folders are listed.
+                "isExternal": external,
+                "tsCreated": fav.ts_created_at,
+            }
+        )
+    return rows
+
+
+class NoteFolderFavoriteView(AuthenticatedAPIView):
+    """Star (POST) or unstar (DELETE) a note folder (MIP-747)."""
+
+    def post(self, request):
+        request_user_id = request.user.id
+        data = {
+            "team_id": request.data.get("team_id"),
+            "user_id": request.data.get("user_id"),
+            "folder_id": request.data.get("folder_id"),
+        }
+        if res := validate_request_data(data):
+            return res
+        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+            return res
+
+        folder = PersonalNoteFolder.objects.filter(folder_id=data["folder_id"]).first()
+        # One answer for "no such folder" and "not yours to see".
+        if folder is None or not can_see_folder(request_user_id, folder):
+            return Response({"error": "Folder not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        _fav, created = NoteFolderFavorite.objects.get_or_create(
+            user_id=request_user_id, folder=folder, defaults={"team_id": data["team_id"]}
+        )
+        return Response(
+            {"isFavorited": True, "folderId": folder.folder_id},
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    def delete(self, request):
+        request_user_id = request.user.id
+        data = {
+            "team_id": request.GET.get("team_id"),
+            "user_id": request.GET.get("user_id"),
+            "folder_id": request.GET.get("folder_id"),
+        }
+        if res := validate_request_data(data):
+            return res
+        if res := validate_request_user(str(request_user_id), str(data["user_id"])):
+            return res
+
+        deleted, _ = NoteFolderFavorite.objects.filter(
+            user_id=request_user_id, folder_id=data["folder_id"]
+        ).delete()
+        if not deleted:
+            return Response(
+                {"error": "Favorite not found.", "isFavorited": False},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response({"isFavorited": False}, status=status.HTTP_200_OK)
 
 
 class NoteFavoriteView(AuthenticatedAPIView):
