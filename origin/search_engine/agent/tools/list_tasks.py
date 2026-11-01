@@ -237,6 +237,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "tags": tag_names(t.tags),
                 "project_id": t.project_id,
                 "project_name": t.project.project_name if t.project else None,
+                # Where it sits (MIP-779), so a milestone's hierarchy can be
+                # rebuilt from one listing. Ids only: a title or code from
+                # another row would need its own read check.
+                "parent_task_id": t.parent_task_id,
+                "milestone_id": t.milestone_id,
+                "is_milestone": bool(t.is_milestone),
             }
         )
 
@@ -258,7 +264,10 @@ LIST_TASKS = Tool(
         "'what are my open tasks?', 'which Critical tasks are in milestone X?', "
         "'overdue tasks in project Y', or 'list all WIP tasks assigned to me'. "
         "Returns task_id, title, status, priority, due_date, assignee_id, "
-        "project_id, and project_name. Rows are newest-updated first. When more "
+        "project_id, project_name, and where it sits: parent_task_id, "
+        "milestone_id and is_milestone (a task filed under a milestone by "
+        "its parent alone has a null milestone_id; the milestone's own "
+        "row has is_milestone true). Rows are newest-updated first. When more "
         "tasks match than were returned, `has_more` is true and `next_cursor` "
         "starts the next page: pass it back as `cursor` with the same filters "
         "(the list is partial until `has_more` is false). Prefer naming projects by their "
