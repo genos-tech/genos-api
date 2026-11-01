@@ -529,7 +529,39 @@ def _refresh_token_password_is_current(refresh_value: str) -> bool:
     )
 
 
+# Claims that earlier releases put in the JWT and that must not outlive them.
+# New tokens carry no `email` (MIP-619), but simplejwt's refresh ROTATION builds
+# the next token out of the one it is given and copies every claim except
+# `exp`, `jti` and the token type. So a session that began before MIP-619
+# carried the address forward on every rotation, for as long as the user stayed
+# active: in the cookie, in each access token, and in a plaintext
+# `token_blacklist_outstandingtoken` row (MIP-766). `flushexpired` alone cannot
+# clear that, because the live chain keeps minting new rows.
+_LEGACY_PII_CLAIMS = ("email",)
+
+
+class _ScrubbedRefreshToken(RefreshToken):
+    """A refresh token that drops legacy PII claims as soon as it is loaded.
+
+    The signature is verified on the token as presented, then the claim is
+    removed, so everything minted from it (the rotated refresh token and the
+    access token) is clean. Nothing else is touched.
+    """
+
+    def __init__(self, token=None, verify=True):
+        super().__init__(token, verify)
+        for claim in _LEGACY_PII_CLAIMS:
+            self.payload.pop(claim, None)
+
+
+class _ScrubbingTokenRefreshSerializer(TokenRefreshSerializer):
+    token_class = _ScrubbedRefreshToken
+
+
 class CookieTokenRefreshView(TokenRefreshView):
+    # The inherited `post` uses this too, so both ways in scrub the claim.
+    serializer_class = _ScrubbingTokenRefreshSerializer
+
     def get(self, request: Request, *args, **kwargs):
         refresh = request.COOKIES.get("refresh")  # Get refresh token from cookies
 
@@ -540,7 +572,7 @@ class CookieTokenRefreshView(TokenRefreshView):
             return Response({"error": "Invalid or expired refresh token"}, status=401)
 
         # Manually create the serializer with the refresh token
-        serializer = TokenRefreshSerializer(data={"refresh": refresh})
+        serializer = _ScrubbingTokenRefreshSerializer(data={"refresh": refresh})
 
         try:
             serializer.is_valid(raise_exception=True)
