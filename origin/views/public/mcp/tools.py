@@ -638,10 +638,11 @@ CATALOG: tuple[McpTool, ...] = (
         name="update_tasks_bulk",
         registry_name="update_tasks_bulk",
         description=(
-            "Change priority, due date, status, effort or milestone on MANY "
-            "tasks in one call — for reprioritizing or tidying a milestone, or "
+            "Change priority, due date, status, effort, assignee or milestone on "
+            "MANY tasks in one call — for reprioritizing or tidying a milestone, "
             "filing a batch of tasks under one (`milestone_id`, '' to take a "
-            "task out). Read the "
+            "task out), or assigning a batch (`assignee_id`, '' to unassign; "
+            "not for a milestone's own backing task). Read the "
             "current state first (`list_tasks`, and `list_task_dependencies` "
             "so blockers land before what they block), since each entry needs "
             "a one-sentence `rationale` recorded with the change. "
@@ -676,7 +677,10 @@ CATALOG: tuple[McpTool, ...] = (
             "existing task (`parent_task_id`). Use this instead of repeated "
             "`create_task` calls whenever the work is related — it is the only "
             "way to wire dependencies between tasks being created, by array "
-            "index (`blocked_by_indexes`). Max 20 tasks. Requires a "
+            "index (`blocked_by_indexes`). Max 20 tasks. A new milestone can "
+            "take `tags`; `default_assignee_id` assigns every task that has no "
+            "`assignee_id` of its own, and a new milestone with exactly one "
+            "assignee passes that person on to those tasks. Requires a "
             "write-scoped API key."
         ),
         write=True,
