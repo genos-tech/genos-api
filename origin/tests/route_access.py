@@ -249,6 +249,12 @@ REGISTRY = {
     ),
     "origin.views.common.github_views.GithubPullsForTaskView": checked("can_access_task"),
     "origin.views.common.github_views.GithubPullsForTasksView": checked("can_access_task"),
+    "origin.views.common.github_views.GithubRegisterRepoView": self_only(
+        "registers with the caller's own GitHub token, so GitHub enforces admin on the repo"
+    ),
+    "origin.views.common.github_views.GithubUnregisteredReposView": self_only(
+        "a repo is listed only if the caller's own GitHub token can read it"
+    ),
     "origin.views.common.github_views.GithubWebhookView": public(
         "HMAC signature verified against the repo's webhook secret"
     ),
