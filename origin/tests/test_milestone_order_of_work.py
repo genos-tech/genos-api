@@ -7,6 +7,8 @@ sub-task of a blocked parent shows Open. Now it lists the ready-now tasks
 open blockers, what is in progress, and the critical path.
 """
 
+import re
+
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster
@@ -68,7 +70,7 @@ class MilestoneOrderOfWorkTests(BaseAPITestCase):
         self.assertEqual(out["ready_now_count"], 1)
         self.assertEqual(out["blocked_count"], 2)
         self.assertNotIn("dependency_cycle", out)
-        self.assertIn("1 ready to start, 2 blocked", out["__summary__"])
+        self.assertIn("1 ready to start, 2 waiting on blockers", out["__summary__"])
 
     def test_a_blocked_task_names_its_open_blockers(self):
         a, d, b = self._task("a"), self._task("d"), self._task("b")
@@ -197,3 +199,47 @@ class MilestoneOrderOfWorkTests(BaseAPITestCase):
         # The milestone's own backing row is not one of its tasks (MIP-777).
         self.assertEqual(out["total_tasks"], 2)
         self.assertEqual(out["status_breakdown"]["Closed"], 1)
+
+    # Pending is waiting on someone, so it is not a place to start (MIP-851)
+    def test_a_pending_task_is_listed_apart_and_not_offered_to_start(self):
+        self._task("waiting", status="Pending")
+        self._task("go")
+        out = self._summary()
+        self.assertEqual(self._titles(out["ready_now"]), ["go"])
+        self.assertEqual(self._titles(out["pending"]), ["waiting"])
+        self.assertEqual((out["ready_now_count"], out["pending_count"]), (1, 1))
+        self.assertEqual(out["blocked"], [])
+
+    def test_a_pending_task_with_an_open_blocker_is_blocked_not_pending(self):
+        a = self._task("a")
+        b = self._task("b", status="Pending")
+        self._block(a, b)
+        out = self._summary()
+        self.assertEqual(self._titles(out["blocked"]), ["b"])
+        self.assertEqual(out["pending"], [])
+
+    def test_the_headline_adds_up_to_the_total_whatever_the_statuses(self):
+        for status in ("Open", "WIP", "Blocked", "Pending", "Closed"):
+            for i in range(2 if status == "Pending" else 1):
+                self._task(f"{status}{i}", status=status)
+        self._task("gone", status="Deleted")
+        out = self._summary()
+        self.assertEqual(out["total_tasks"], 6)
+        self.assertIn(
+            "6 task(s) — 1 open, 1 WIP, 1 Blocked, 2 Pending, 1 closed, 0 overdue",
+            out["__summary__"],
+        )
+        counts = [
+            int(x)
+            for x in re.findall(r"(\d+) (?:open|WIP|Blocked|Pending|closed)", out["__summary__"])
+        ]
+        self.assertEqual(sum(counts), out["total_tasks"])
+
+    def test_the_headline_does_not_call_dependency_waits_blocked(self):
+        # Status Blocked and "waiting on an open blocker" are different sets;
+        # one word for both read as a contradiction.
+        a, b = self._task("a"), self._task("b", status="Open")
+        self._block(a, b)
+        text = self._summary()["__summary__"]
+        self.assertTrue(text.endswith("1 waiting on blockers"), text)
+        self.assertNotIn(" blocked", text)
