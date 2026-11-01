@@ -50,6 +50,11 @@ CLASSES = ("light", "middle", "highend")
 # `effort_for_model` collapses a legacy saved model onto.
 EFFORTS = ("low", "medium", "high")
 
+# Values the Anthropic `output_config.effort` parameter accepts, which a
+# catalog entry's optional `effort:` is checked against at boot. Distinct
+# from EFFORTS above: that is Genos's own low/medium/high user ladder.
+REQUEST_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
 # Marker for a tier that gets no per-model caps at all.
 UNLIMITED = "unlimited"
 
@@ -129,6 +134,31 @@ class ModelPrice:
     output: float
     cached_input: float
     cache_write: float
+    #: Optional second rate card for long prompts (Claude Haiku 5.5:
+    #: a request whose prompt is over 100,000 tokens is billed at higher
+    #: rates). `long_prompt_above` is the threshold in prompt tokens;
+    #: `long_prompt` is the rate card that applies strictly above it.
+    #: Both None for every flat-priced model. Use `for_prompt`, never
+    #: these fields directly.
+    long_prompt_above: int | None = None
+    long_prompt: "ModelPrice | None" = None
+
+    def for_prompt(self, prompt_tokens: int) -> "ModelPrice":
+        """The rate card that applies to a request with this prompt size.
+
+        `prompt_tokens` is the WHOLE prompt as the provider counts it for
+        tiering: uncached input + cache reads + cache writes (Anthropic
+        counts a cache hit toward the threshold, and prices the request
+        on the higher card even when most of it was a hit). Each request
+        is priced alone. Flat-priced models return themselves.
+        """
+        if (
+            self.long_prompt is not None
+            and self.long_prompt_above is not None
+            and prompt_tokens > self.long_prompt_above
+        ):
+            return self.long_prompt
+        return self
 
 
 @dataclass(frozen=True)
@@ -273,6 +303,22 @@ class LlmCatalog:
             return True
         return bool(entry.get("supports_temperature", True))
 
+    def request_effort(self, model: str) -> str | None:
+        """The Anthropic `output_config.effort` this model is called with.
+
+        None (the default, and the answer for any model outside the
+        catalog) means "send no thinking/effort settings", i.e. the
+        request is exactly what it was before the field existed. A
+        catalog entry opts in by declaring `effort:` — the models that
+        think by default (Claude Haiku 5.5 and later) must be told how
+        hard, and the older ones reject the parameter outright, so this
+        has to be per-model data rather than a client constant.
+        """
+        entry = self.by_model.get(model)
+        if entry is None:
+            return None
+        return entry.get("effort") or None
+
 
 def _fail(msg: str) -> None:
     raise CatalogError(f"llm_models.yaml: {msg}")
@@ -309,7 +355,46 @@ def _parse_price(provider: str, entry: dict[str, Any]) -> ModelPrice:
         if v < 0:
             _fail(f"{provider}/{model!r}: price.{key} must not be negative, got {v!r}")
         values[key] = float(v)
-    return ModelPrice(**values)
+    long_prompt = _parse_long_prompt(provider, entry)
+    if long_prompt is None:
+        return ModelPrice(**values)
+    above, long_price = long_prompt
+    return ModelPrice(**values, long_prompt_above=above, long_prompt=long_price)
+
+
+def _parse_long_prompt(provider: str, entry: dict[str, Any]) -> tuple[int, ModelPrice] | None:
+    """Validate an entry's optional `long_prompt_price` tier.
+
+    {above_tokens: <int>, input, output, cached_input, cache_write}: the
+    four rates, with the same strictness as `price`, that apply when a
+    request's prompt is strictly above `above_tokens`. Absent = flat.
+    """
+    model = entry.get("model")
+    raw = entry.get("long_prompt_price")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        _fail(f"{provider}/{model!r}: `long_prompt_price` must be a mapping")
+    unknown = set(raw) - {"above_tokens", *_PRICE_FIELDS}
+    if unknown:
+        _fail(f"{provider}/{model!r}: unknown long_prompt_price key(s) {sorted(unknown)}")
+    above = raw.get("above_tokens")
+    if isinstance(above, bool) or not isinstance(above, int) or above <= 0:
+        _fail(
+            f"{provider}/{model!r}: long_prompt_price.above_tokens must be a positive "
+            f"integer, got {above!r}"
+        )
+    tier = _parse_price(
+        provider,
+        {"model": model, "price": {k: v for k, v in raw.items() if k != "above_tokens"}},
+    )
+    base = entry["price"]
+    if tier.input < float(base["input"]) or tier.output < float(base["output"]):
+        _fail(
+            f"{provider}/{model!r}: long_prompt_price is CHEAPER than `price`. The long "
+            f"tier is the higher one; swapped by mistake?"
+        )
+    return above, tier
 
 
 def _parse_unit_prices(raw: dict) -> dict[tuple[str, str, str], float]:
@@ -391,8 +476,7 @@ def _parse_rate_card(
     payload = {
         "fx": float(fx),
         "prices": {
-            model: [p.input, p.output, p.cached_input, p.cache_write]
-            for model, p in sorted(prices.items())
+            model: _fingerprint_row(p) for model, p in sorted(prices.items())
         },
         "unit_prices": {
             "/".join(key): rate for key, rate in sorted(unit_prices.items())
@@ -409,6 +493,28 @@ def _parse_rate_card(
         fingerprint=fingerprint,
         display_fx_per_usd=display_fx,
     )
+
+
+def _fingerprint_row(p: ModelPrice) -> list[Any]:
+    """One model's contribution to the rate-card fingerprint.
+
+    The four flat rates, plus the long-prompt tier ONLY when there is
+    one — so a flat-priced model hashes exactly as it did before tiers
+    existed, and adding or editing a tier moves the fingerprint like any
+    other price edit.
+    """
+    row: list[Any] = [p.input, p.output, p.cached_input, p.cache_write]
+    if p.long_prompt is not None:
+        row.append(
+            [
+                p.long_prompt_above,
+                p.long_prompt.input,
+                p.long_prompt.output,
+                p.long_prompt.cached_input,
+                p.long_prompt.cache_write,
+            ]
+        )
+    return row
 
 
 def _check_price_order(provider: str, entries: list[dict[str, Any]]) -> None:
@@ -506,6 +612,13 @@ def load_llm_catalog(path: str | Path) -> LlmCatalog:
             unknown_tiers = set(overrides) - set(tier_caps)
             if unknown_tiers:
                 _fail(f"{model!r}: `caps` names unknown tier(s) {sorted(unknown_tiers)}")
+
+            request_effort = entry.get("effort")
+            if request_effort is not None and request_effort not in REQUEST_EFFORTS:
+                _fail(
+                    f"{model!r}: `effort` must be one of {REQUEST_EFFORTS} "
+                    f"(or omitted), got {request_effort!r}"
+                )
 
             by_model[model] = entry
             prices[model] = _parse_price(provider, entry)

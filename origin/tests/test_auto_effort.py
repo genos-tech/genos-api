@@ -60,7 +60,7 @@ class RouterTests(SimpleTestCase):
         with mock.patch.object(effort_router, "get_model_client", return_value=client):
             effort_router.route_effort("q", "claude")
         kwargs = client.generate_step.call_args.kwargs
-        self.assertEqual(kwargs["model_override"], "claude-haiku-4-5")
+        self.assertEqual(kwargs["model_override"], "claude-haiku-5-5")
         self.assertEqual(kwargs["tools"], [])
 
 
@@ -71,7 +71,7 @@ class FlagOffRollbackTests(SimpleTestCase):
         choice = resolve_user_effort("claude", "auto", "")
         self.assertEqual(choice.effort, "low")
         self.assertFalse(choice.auto)
-        derived = resolve_user_effort("claude", "auto", "claude-opus-5")
+        derived = resolve_user_effort("claude", "auto", "claude-opus-5-5")
         self.assertEqual(derived.effort, "high")
 
 
@@ -103,7 +103,7 @@ class ResolveChoiceAutoTests(BaseAPITestCase):
         choice = _resolve_choice_for(self.user)
         self.assertTrue(choice.auto)
         self.assertEqual(choice.effort, "medium")
-        self.assertEqual(choice.model, "claude-sonnet-5")
+        self.assertEqual(choice.model, "claude-sonnet-5-5")
 
     @override_settings(SEARCH_ENGINE=_se(auto_flag=False, tier_auto=True))
     def test_flag_off_ignores_the_saved_auto(self):

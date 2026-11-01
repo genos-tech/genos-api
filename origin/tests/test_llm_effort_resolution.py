@@ -48,9 +48,9 @@ class ResolveUserEffortTests(SimpleTestCase):
 
     def test_explicit_effort_maps_to_the_rung(self):
         for effort, expected in (
-            ("low", "claude-haiku-4-5"),
-            ("medium", "claude-sonnet-5"),
-            ("high", "claude-opus-5"),
+            ("low", "claude-haiku-5-5"),
+            ("medium", "claude-sonnet-5-5"),
+            ("high", "claude-opus-5-5"),
         ):
             choice = resolve_user_effort("claude", effort, "")
             self.assertEqual(choice, LlmChoice("claude", expected, effort))
@@ -68,13 +68,13 @@ class ResolveUserEffortTests(SimpleTestCase):
             self.assertEqual(choice.model, model, "derivation must not change the model")
 
     def test_explicit_effort_beats_the_legacy_model(self):
-        choice = resolve_user_effort("claude", "low", "claude-opus-5")
-        self.assertEqual(choice.model, "claude-haiku-4-5")
+        choice = resolve_user_effort("claude", "low", "claude-opus-5-5")
+        self.assertEqual(choice.model, "claude-haiku-5-5")
 
     def test_stale_legacy_model_falls_back_to_default_effort(self):
         choice = resolve_user_effort("claude", "", "claude-retired-model")
         self.assertEqual(choice.effort, "low")
-        self.assertEqual(choice.model, "claude-haiku-4-5")
+        self.assertEqual(choice.model, "claude-haiku-5-5")
 
     def test_no_preference_at_all_is_low_on_the_default_provider(self):
         """Low is the product default (2026-07-28): a first-touch user
@@ -105,7 +105,7 @@ class MaxEffortClampTests(SimpleTestCase):
 
     def test_saved_high_clamps_to_a_low_ceiling(self):
         choice = resolve_user_effort("claude", "high", "", max_effort="low")
-        self.assertEqual(choice, LlmChoice("claude", "claude-haiku-4-5", "low"))
+        self.assertEqual(choice, LlmChoice("claude", "claude-haiku-5-5", "low"))
 
     def test_medium_ceiling_clamps_high_only(self):
         clamped = resolve_user_effort("claude", "high", "", max_effort="medium")
@@ -120,9 +120,9 @@ class MaxEffortClampTests(SimpleTestCase):
 
     def test_effort_derived_from_a_legacy_model_is_clamped_too(self):
         # The read-time migration path must not tunnel under the gate.
-        choice = resolve_user_effort("claude", "", "claude-opus-5", max_effort="low")
+        choice = resolve_user_effort("claude", "", "claude-opus-5-5", max_effort="low")
         self.assertEqual(choice.effort, "low")
-        self.assertEqual(choice.model, "claude-haiku-4-5")
+        self.assertEqual(choice.model, "claude-haiku-5-5")
 
     def test_garbage_ceiling_is_permissive(self):
         # Mirrors quota.get_max_effort: an unknown ceiling never
@@ -146,18 +146,18 @@ class EffortSeamsTests(SimpleTestCase):
         self.addCleanup(reset_llm_choice, token)
 
     def test_profile_is_none_when_flag_off(self):
-        self._bound(LlmChoice("claude", "claude-opus-5", "high"))
+        self._bound(LlmChoice("claude", "claude-opus-5-5", "high"))
         with override_settings(SEARCH_ENGINE=_se(AGENT_EFFORT_LEVELS=False)):
             self.assertIsNone(active_effort_profile())
 
     def test_profile_is_none_without_an_effort_carrying_choice(self):
         # Legacy resolve path / evals / crons: choice has effort="".
-        self._bound(LlmChoice("claude", "claude-opus-5"))
+        self._bound(LlmChoice("claude", "claude-opus-5-5"))
         with override_settings(SEARCH_ENGINE=_se(AGENT_EFFORT_LEVELS=True)):
             self.assertIsNone(active_effort_profile())
 
     def test_profile_resolves_when_flag_on_and_effort_set(self):
-        self._bound(LlmChoice("claude", "claude-haiku-4-5", "low"))
+        self._bound(LlmChoice("claude", "claude-haiku-5-5", "low"))
         with override_settings(SEARCH_ENGINE=_se(AGENT_EFFORT_LEVELS=True)):
             profile = active_effort_profile()
         self.assertIsNotNone(profile)
@@ -165,18 +165,18 @@ class EffortSeamsTests(SimpleTestCase):
         self.assertEqual(profile.max_steps, 6)
 
     def test_pin_is_none_when_flag_off(self):
-        choice = LlmChoice("claude", "claude-opus-5", "high")
+        choice = LlmChoice("claude", "claude-opus-5-5", "high")
         with override_settings(SEARCH_ENGINE=_se(AGENT_EFFORT_LEVELS=False)):
             self.assertIsNone(subprocess_model_override("rerank", choice))
 
     def test_pin_is_the_providers_cheapest_rung_when_flag_on(self):
-        choice = LlmChoice("claude", "claude-opus-5", "high")
+        choice = LlmChoice("claude", "claude-opus-5-5", "high")
         with override_settings(SEARCH_ENGINE=_se(AGENT_EFFORT_LEVELS=True)):
             self.assertEqual(
-                subprocess_model_override("rerank", choice), "claude-haiku-4-5"
+                subprocess_model_override("rerank", choice), "claude-haiku-5-5"
             )
             self.assertEqual(
-                subprocess_model_override("summaries", choice), "claude-haiku-4-5"
+                subprocess_model_override("summaries", choice), "claude-haiku-5-5"
             )
 
     def test_pin_is_same_provider_for_every_provider(self):
@@ -194,10 +194,10 @@ class EffortSeamsTests(SimpleTestCase):
         """RAG_*_MODEL env is the operator rollback lever — when set,
         the pin returns None so the caller's own env logic applies,
         exactly as before effort levels existed."""
-        choice = LlmChoice("claude", "claude-opus-5", "high")
+        choice = LlmChoice("claude", "claude-opus-5-5", "high")
         with override_settings(
             SEARCH_ENGINE=_se(
-                AGENT_EFFORT_LEVELS=True, RAG_RERANKER_MODEL="claude-sonnet-5"
+                AGENT_EFFORT_LEVELS=True, RAG_RERANKER_MODEL="claude-sonnet-5-5"
             )
         ):
             self.assertIsNone(subprocess_model_override("rerank", choice))
@@ -223,7 +223,7 @@ class PreferenceEndpointEffortTests(TestCase):
         self.assertEqual(resp.json(), {"provider": "", "model": "", "effort": ""})
 
     def test_patch_effort_round_trips_without_touching_the_model(self):
-        self.user.preferred_llm_model = "claude-opus-5"
+        self.user.preferred_llm_model = "claude-opus-5-5"
         self.user.save(update_fields=["preferred_llm_model"])
         resp = self.client.patch(
             PREF_URL, {"provider": "claude", "effort": "low"}, format="json"
@@ -233,7 +233,7 @@ class PreferenceEndpointEffortTests(TestCase):
         self.assertEqual(self.user.preferred_llm_effort, "low")
         # The legacy field is the rollback substrate — never cleared by
         # an effort write.
-        self.assertEqual(self.user.preferred_llm_model, "claude-opus-5")
+        self.assertEqual(self.user.preferred_llm_model, "claude-opus-5-5")
 
     def test_patch_rejects_an_unknown_effort(self):
         resp = self.client.patch(
@@ -249,12 +249,12 @@ class PreferenceEndpointEffortTests(TestCase):
         self.user.preferred_llm_effort = "high"
         self.user.save(update_fields=["preferred_llm_effort"])
         resp = self.client.patch(
-            PREF_URL, {"provider": "claude", "model": "claude-haiku-4-5"}, format="json"
+            PREF_URL, {"provider": "claude", "model": "claude-haiku-5-5"}, format="json"
         )
         self.assertEqual(resp.status_code, 200)
         self.user.refresh_from_db()
         self.assertEqual(self.user.preferred_llm_effort, "")
-        self.assertEqual(self.user.preferred_llm_model, "claude-haiku-4-5")
+        self.assertEqual(self.user.preferred_llm_model, "claude-haiku-5-5")
 
 
 @override_settings(SEARCH_ENGINE_PATCHED=None)
@@ -310,17 +310,17 @@ class LoopWiringTests(SimpleTestCase):
 
     def test_low_effort_caps_the_loop_at_its_profile_steps(self):
         n, events = self._run(
-            flag=True, choice=LlmChoice("claude", "claude-haiku-4-5", "low")
+            flag=True, choice=LlmChoice("claude", "claude-haiku-5-5", "low")
         )
         self.assertEqual(n, 6)  # low profile max_steps
         self.assertTrue(any(e.get("type") == "error" for e in events))
 
     def test_flag_off_keeps_the_env_step_cap(self):
-        n, _ = self._run(flag=False, choice=LlmChoice("claude", "claude-haiku-4-5", "low"))
+        n, _ = self._run(flag=False, choice=LlmChoice("claude", "claude-haiku-5-5", "low"))
         self.assertEqual(n, 10)  # AGENT_MAX_STEPS
 
     def test_effortless_choice_keeps_the_env_step_cap_even_with_flag_on(self):
-        n, _ = self._run(flag=True, choice=LlmChoice("claude", "claude-haiku-4-5"))
+        n, _ = self._run(flag=True, choice=LlmChoice("claude", "claude-haiku-5-5"))
         self.assertEqual(n, 10)
 
 
@@ -432,7 +432,7 @@ class SubprocessPinWiringTests(SimpleTestCase):
         return captured.get("override")
 
     def test_rewriter_uses_the_pin_when_flag_on(self):
-        token = set_llm_choice(LlmChoice("claude", "claude-opus-5", "high"))
+        token = set_llm_choice(LlmChoice("claude", "claude-opus-5-5", "high"))
         try:
             with override_settings(
                 SEARCH_ENGINE=_se(AGENT_EFFORT_LEVELS=True, RAG_REWRITE_MODEL="")
@@ -440,23 +440,23 @@ class SubprocessPinWiringTests(SimpleTestCase):
                 override = self._capture_override()
         finally:
             reset_llm_choice(token)
-        self.assertEqual(override, "claude-haiku-4-5")
+        self.assertEqual(override, "claude-haiku-5-5")
 
     def test_rewriter_env_override_beats_the_pin(self):
-        token = set_llm_choice(LlmChoice("claude", "claude-opus-5", "high"))
+        token = set_llm_choice(LlmChoice("claude", "claude-opus-5-5", "high"))
         try:
             with override_settings(
                 SEARCH_ENGINE=_se(
-                    AGENT_EFFORT_LEVELS=True, RAG_REWRITE_MODEL="claude-sonnet-5"
+                    AGENT_EFFORT_LEVELS=True, RAG_REWRITE_MODEL="claude-sonnet-5-5"
                 )
             ):
                 override = self._capture_override()
         finally:
             reset_llm_choice(token)
-        self.assertEqual(override, "claude-sonnet-5")
+        self.assertEqual(override, "claude-sonnet-5-5")
 
     def test_rewriter_inherits_when_flag_off(self):
-        token = set_llm_choice(LlmChoice("claude", "claude-opus-5"))
+        token = set_llm_choice(LlmChoice("claude", "claude-opus-5-5"))
         try:
             with override_settings(
                 SEARCH_ENGINE=_se(AGENT_EFFORT_LEVELS=False, RAG_REWRITE_MODEL="")

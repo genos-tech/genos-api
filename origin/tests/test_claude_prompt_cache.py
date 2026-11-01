@@ -45,7 +45,7 @@ def _stream_kwargs(*, cache_flag: bool, n_tools: int = 2):
     client.messages.stream.return_value = stream_cm
     with (
         override_settings(
-            SEARCH_ENGINE=_se(CLAUDE_MODEL="claude-sonnet-5", CLAUDE_PROMPT_CACHE=cache_flag)
+            SEARCH_ENGINE=_se(CLAUDE_MODEL="claude-sonnet-5-5", CLAUDE_PROMPT_CACHE=cache_flag)
         ),
         patch("origin.search_engine.llm.claude_client._get_client", return_value=client),
     ):
@@ -78,7 +78,7 @@ class ClaudePromptCacheTests(SimpleTestCase):
         client.messages.stream.return_value = stream_cm
         with (
             override_settings(
-                SEARCH_ENGINE=_se(CLAUDE_MODEL="claude-sonnet-5", CLAUDE_PROMPT_CACHE=True)
+                SEARCH_ENGINE=_se(CLAUDE_MODEL="claude-sonnet-5-5", CLAUDE_PROMPT_CACHE=True)
             ),
             patch(
                 "origin.search_engine.llm.claude_client._get_client", return_value=client

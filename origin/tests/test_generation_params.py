@@ -41,7 +41,7 @@ class ClaudeParamsTests(SimpleTestCase):
         client = MagicMock()
         client.messages.stream.return_value = stream_cm
         with (
-            override_settings(SEARCH_ENGINE=_se(CLAUDE_MODEL="claude-sonnet-5")),
+            override_settings(SEARCH_ENGINE=_se(CLAUDE_MODEL="claude-sonnet-5-5")),
             patch(
                 "origin.search_engine.llm.claude_client._get_client", return_value=client
             ),
@@ -71,7 +71,12 @@ class ClaudeParamsTests(SimpleTestCase):
         """Gemini-only knob. A profile carrying a budget must stay safe
         to resolve on Claude — ignored, not translated, not a 400."""
         kwargs = self._stream_kwargs(params=GenerationParams(thinking_budget=0))
-        self.assertNotIn("thinking", kwargs)
+        # `thinking` is now sent on catalog models that declare `effort:`
+        # (claude-sonnet-5-5 does) — but from the catalog, never from the
+        # Gemini-style budget: the request must be identical with and
+        # without it, and must not carry a token budget (a 400 on 5.5).
+        self.assertEqual(kwargs, self._stream_kwargs(params=None))
+        self.assertNotIn("budget_tokens", kwargs["thinking"])
         self.assertEqual(kwargs["max_tokens"], 4096)
 
 

@@ -1010,7 +1010,7 @@ SEARCH_ENGINE = {
     "CLAUDE_API_KEY": os.environ.get("CLAUDE_API_KEY", ""),
     # `or`, not a get() default — compose passes unset vars as "", which
     # shadows a get() default (see VERTEX_EMBEDDING_DIMENSIONS above).
-    "CLAUDE_MODEL": os.environ.get("CLAUDE_MODEL") or "claude-sonnet-5",
+    "CLAUDE_MODEL": os.environ.get("CLAUDE_MODEL") or "claude-sonnet-5-5",
     # Anthropic requires max_tokens to be set explicitly on every
     # call (unlike Gemini, which has a sensible server-side default).
     "CLAUDE_MAX_TOKENS": int(os.environ.get("CLAUDE_MAX_TOKENS", "4096")),
@@ -1530,7 +1530,7 @@ SEARCH_ENGINE = {
         #     anchor that makes pro the default buy (Good-Better-Best).
         #
         # Per-ask cost classes (FX JPY150/USD, LLM_TIER_COST_OPTIMIZATION §3):
-        #   flash-class ~JPY1-2  gemini-3.5-flash, claude-haiku-4-5, gpt-5.6-luna
+        #   flash-class ~JPY1-2  gemini-3.5-flash, claude-haiku-5-5, gpt-5.6-luna
         #   mid-class   ~JPY10-18 gemini-3.1-pro-preview, claude-sonnet-4-6,
         #                         gpt-5.6-terra
         #   premium     ~JPY60-70 claude-opus-4-7, claude-opus-4-8, gpt-5.6-sol

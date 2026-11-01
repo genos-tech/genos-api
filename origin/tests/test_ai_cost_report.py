@@ -56,7 +56,7 @@ class ReportTests(TestCase):
 
     def test_totals_and_provider_reconciliation(self):
         _event(cost_jpy_milli=1500, cost_usd_micro=10_000)
-        _event(provider="claude", model="claude-sonnet-5", cost_jpy_milli=4500, cost_usd_micro=30_000)
+        _event(provider="claude", model="claude-sonnet-5-5", cost_jpy_milli=4500, cost_usd_micro=30_000)
         text = _report("--days", "7")
         self.assertIn("-- Providers", text)
         self.assertIn("gemini", text)

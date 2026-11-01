@@ -67,6 +67,9 @@ def _cost_usd(model: str, prompt: int, cached: int, cache_write: int, output: in
     price = catalog.price_for(model) if catalog is not None else None
     if price is None:
         return None
+    # Tiered models (Haiku 5.5) bill the whole request at the higher card
+    # when the prompt, cache reads and writes included, passes a threshold.
+    price = price.for_prompt(prompt + cached + cache_write)
     return (
         prompt * price.input
         + cached * price.cached_input
