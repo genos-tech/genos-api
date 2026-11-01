@@ -15,6 +15,7 @@ from django.db import transaction
 
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.services.user_time import today_for_user_id
 
 
@@ -51,6 +52,7 @@ def _parse_date(value, default):
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    check_body_size(args.get("notes_text"), "notes_text")
     title = (args.get("title") or "").strip()
     if not title:
         raise ToolError("`title` is required.")

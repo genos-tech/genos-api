@@ -46,6 +46,7 @@ from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
+from origin.search_engine.agent.tools.body_limits import check_body_sizes
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
 from origin.search_engine.agent.tools.task_enums import (
@@ -116,7 +117,22 @@ def _find_dependency_cycle(edges_by_node: dict[int, list[int]]) -> list[int] | N
     return None
 
 
+def _plan_bodies(args: dict[str, Any]) -> list[tuple[str, Any]]:
+    """Every markdown body in the plan, as `(field path, text)`."""
+    bodies: list[tuple[str, Any]] = []
+    milestone = args.get("milestone")
+    if isinstance(milestone, dict):
+        bodies.append(("milestone.description_markdown", milestone.get("description_markdown")))
+    tasks = args.get("tasks")
+    if isinstance(tasks, list):
+        for i, spec in enumerate(tasks):
+            if isinstance(spec, dict):
+                bodies.append((f"tasks[{i}].content_markdown", spec.get("content_markdown")))
+    return bodies
+
+
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    check_body_sizes(_plan_bodies(args))
     # ---- project + ACL (same layering as create_task) ----
     raw_project_id = args.get("project_id")
     try:

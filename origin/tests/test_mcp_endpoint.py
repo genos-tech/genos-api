@@ -1779,3 +1779,81 @@ class TestOriginCheck(McpBase):
         check must not fire on them."""
         self._key()
         self.assertEqual(self._rpc("tools/list").status_code, 200)
+
+
+@override_settings(AGENT_MAX_BODY_BYTES=200)
+class TestBodySizeCap(McpBase):
+    """MIP-822: an MCP write dispatches to the same registry tool, so the cap
+    is the tool's. Pinned here at the wire: the refusal is an `isError`
+    result the client can read, and nothing is written."""
+
+    OK = "a" * 200
+    BIG = "a" * 201
+
+    def _refused(self, name, arguments):
+        text, is_error = self._tool_text(self._call(name, arguments))
+        self.assertTrue(is_error, text)
+        self.assertIn("too large", text)
+        self.assertIn("201 bytes", text)
+        self.assertIn("limit is 200 bytes", text)
+        return text
+
+    def test_add_comment(self):
+        self._key(scope=SCOPE_WRITE)
+        before = TaskComments.objects.filter(task=self.task).count()
+        text = self._refused("add_comment", {"task_id": "WRD-7", "body_text": self.BIG})
+        self.assertIn("`body_text`", text)
+        self.assertEqual(TaskComments.objects.filter(task=self.task).count(), before)
+        _text, is_error = self._tool_text(
+            self._call("add_comment", {"task_id": "WRD-7", "body_text": self.OK})
+        )
+        self.assertFalse(is_error, _text)
+        self.assertEqual(TaskComments.objects.filter(task=self.task).count(), before + 1)
+
+    def test_create_note_and_update_note(self):
+        self._key(scope=SCOPE_WRITE)
+        self._refused(
+            "create_note",
+            {"note_type": "personal", "title": "Big", "content_text": self.BIG},
+        )
+        self.assertFalse(PersonalNoteMaster.objects.filter(title="Big").exists())
+        note = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="mine", body=[]
+        )
+        self._refused(
+            "update_note",
+            {"note_type": "personal", "note_id": note.note_id, "content_text": self.BIG},
+        )
+        note.refresh_from_db()
+        self.assertEqual(note.body, [])
+
+    def test_create_task_and_update_task(self):
+        self._key(scope=SCOPE_WRITE)
+        self._refused(
+            "create_task",
+            {"title": "Huge", "project_id": self.project.project_id, "content_text": self.BIG},
+        )
+        self.assertFalse(TaskMaster.objects.filter(title="Huge").exists())
+        self._refused("update_task", {"task_id": "WRD-7", "content_text": self.BIG})
+        self.task.refresh_from_db()
+        self.assertFalse(self.task.content)
+
+    def test_create_task_plan(self):
+        self._key(scope=SCOPE_WRITE)
+        text = self._refused(
+            "create_task_plan",
+            {
+                "project_id": self.project.project_id,
+                "tasks": [{"title": "Step 0", "content_markdown": self.BIG}],
+            },
+        )
+        self.assertIn("tasks[0].content_markdown", text)
+        self.assertFalse(TaskMaster.objects.filter(title="Step 0").exists())
+
+    def test_a_multibyte_body_is_counted_in_bytes_over_the_wire(self):
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self._tool_text(
+            self._call("add_comment", {"task_id": "WRD-7", "body_text": "あ" * 67})
+        )
+        self.assertTrue(is_error, text)
+        self.assertIn("201 bytes", text)

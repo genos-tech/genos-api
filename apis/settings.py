@@ -2300,6 +2300,16 @@ COLLAB_INTERNAL_URL = os.environ.get("COLLAB_INTERNAL_URL", "").rstrip("/")
 # and must differ from JWT_SECRET_KEY (`_validate_transport`).
 COLLAB_INTERNAL_SECRET = os.environ.get("COLLAB_INTERNAL_SECRET", "")
 
+# --- Size cap on bodies written by an agent (MIP-822) ---
+# The most UTF-8 bytes of ONE note, comment, task or to-do-note body that an
+# agent tool will accept (the in-app Spotlight agent, MCP, and anything else
+# that dispatches through the agent tool registry). Counted on the raw
+# submitted markdown/text, checked before any parsing. 262144 = 256 KB is a
+# proposal for the owner to confirm: bodies cost ~1 s of regex work per
+# 256 KB. Override with AGENT_MAX_BODY_BYTES (an integer; zero or negative
+# falls back to the default, a non-number fails at boot like the other ints).
+AGENT_MAX_BODY_BYTES = int(os.environ.get("AGENT_MAX_BODY_BYTES") or "262144")
+
 _validate_transport(
     debug=DEBUG,
     database=DATABASES["default"],
