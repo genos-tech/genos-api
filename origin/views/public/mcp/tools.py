@@ -314,7 +314,10 @@ CATALOG: tuple[McpTool, ...] = (
             "decision. Natural-language queries work better than keywords. "
             "A note result carries `context_path` when you may see where it "
             "lives (its folders, project > task, or chat), and a folder, "
-            "task or chat name also finds the notes inside it."
+            "task or chat name also finds the notes inside it. Pass "
+            "`project_id` (from `list_projects`) or `milestone_id` (from "
+            "`list_milestones`) to search only that project or milestone; "
+            "the limit is filled from it, not from other projects."
         ),
     ),
     McpTool(

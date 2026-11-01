@@ -16,10 +16,30 @@ from typing import Any
 from django.conf import settings
 
 from origin.search_engine.agent.mentions import mention_search_params
-from origin.search_engine.agent.tools.base import Tool, ToolContext, wrap_workspace_content
+from origin.search_engine.agent.tools.base import (
+    Tool,
+    ToolContext,
+    ToolError,
+    wrap_workspace_content,
+)
 from origin.search_engine.search import search
 
 _MAX_LIMIT = 20
+
+
+def _scope_ids(args: dict[str, Any], key: str) -> list[str] | None:
+    """`[id]` for a positive integer argument, None when it is absent. A
+    non-integer is refused so a typo cannot silently search everything."""
+    raw = args.get(key)
+    if raw is None or raw == "":
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ToolError(f"`{key}` must be an integer (got {raw!r}).")
+    if value <= 0:
+        raise ToolError(f"`{key}` must be a positive integer (got {raw!r}).")
+    return [str(value)]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -52,6 +72,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # applies on top of the person clause.
     person_id = (args.get("person_id") or "").strip() or None
 
+    # Scope to one project / milestone (MIP-797). Both only NARROW: the ACL
+    # filter is applied regardless, so naming something the caller cannot see
+    # returns nothing rather than an error that would confirm it exists.
+    project_ids = _scope_ids(args, "project_id")
+    milestone_ids = _scope_ids(args, "milestone_id")
+
     # Mentions v2 — invisible soft boost derived from the run's
     # server-trusted resolved mentions (never from LLM args).
     boost = mention_search_params(ctx.resolved_mentions)
@@ -65,6 +91,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         for_agent=True,
         rewrite=use_rewrite,
         person_id=person_id,
+        project_ids=project_ids,
+        milestone_ids=milestone_ids,
         boost_person_ids=boost["boost_person_ids"],
         boost_entity_ids=boost["boost_entity_ids"],
         boost_project_ids=boost["boost_project_ids"],
@@ -166,6 +194,26 @@ SEARCH_KNOWLEDGE_BASE = Tool(
                 "type": "INTEGER",
                 "description": (
                     f"Max entity-level matches to return (1-{_MAX_LIMIT}). Default 10."
+                ),
+            },
+            "project_id": {
+                "type": "INTEGER",
+                "description": (
+                    "Optional. Search only this project (a project id from "
+                    "`list_projects`). Applied in the search itself, so the "
+                    "`limit` is filled from this project. It drops everything "
+                    "that belongs to no project: DMs, personal notes and "
+                    "todos. Omit to search everywhere."
+                ),
+            },
+            "milestone_id": {
+                "type": "INTEGER",
+                "description": (
+                    "Optional. Search only this milestone: its tasks, their "
+                    "comments, and the milestone itself (an id from "
+                    "`list_milestones`). A task attached to a milestone only "
+                    "as a child of its row, with no milestone set, is not "
+                    "matched. Omit to search the whole project or workspace."
                 ),
             },
             "person_id": {
