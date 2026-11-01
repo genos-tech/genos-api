@@ -252,7 +252,9 @@ CATALOG: tuple[McpTool, ...] = (
         description=(
             "One milestone in depth: its tasks, their statuses, what is done "
             "and what remains. Use it to plan the order of work across a "
-            "milestone."
+            "milestone: it lists what is ready to start now (every blocker "
+            "closed, including its parent's), what is blocked and by what, and "
+            "the critical path."
         ),
     ),
     McpTool(
