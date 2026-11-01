@@ -26,6 +26,7 @@ from origin.search_engine.agent.tools.base import (
 )
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
 from origin.search_engine.agent.tools.task_tags import tag_names
+from origin.search_engine.agent.tools.template_prompts import without_untouched_prompts
 from origin.search_engine.text_extraction import extract_text
 from origin.services.task_delivery import delivery_as_dict
 
@@ -63,14 +64,17 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if ctx.user_id not in allowed:
         raise ToolForbidden(f"Not authorized to read task {task_id}.")
 
-    content_text = extract_text(task.content)
+    # Template prompts the author never filled in are instructions, not
+    # content (MIP-825); read the body without them.
+    body = without_untouched_prompts(task.content)
+    content_text = extract_text(body)
     # `content_markdown` keeps the body's structure — headings, list
     # markers, checkbox state, code fences. A task description is a spec,
     # and a reader acting on it needs to tell "- [x] done" from
     # "- [ ] todo", which the flattened form cannot express. Returned
     # ALONGSIDE `content_text` rather than replacing it: existing callers
     # (and the evals pinned to them) keep the string they were built on.
-    content_markdown = blocks_to_markdown(task.content)
+    content_markdown = blocks_to_markdown(body)
 
     # Most-recent N comments. The chunker indexes all comments, but the
     # LLM rarely needs full history — last 20 is plenty for grounding.
