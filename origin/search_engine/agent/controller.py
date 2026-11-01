@@ -886,7 +886,9 @@ def _note_source(
     s["note_id"] = str(note_id) if note_id is not None else None
     s["note_type"] = note_type
     pc = parent_context or {}
-    s["project_id"] = pc.get("project_id")
+    # Tools report `project_id` as a number (MIP-781); the chip carries a string.
+    pid = pc.get("project_id")
+    s["project_id"] = str(pid) if pid is not None else None
     s["task_id"] = pc.get("task_id")
     s["chat_type"] = pc.get("chat_type")
     s["chat_id"] = pc.get("chat_id")

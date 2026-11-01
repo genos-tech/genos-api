@@ -108,7 +108,7 @@ def _fetch_task_note(note_id: int, ctx: ToolContext) -> dict[str, Any]:
         ts_updated_at=note.ts_updated_at,
         parent_context={
             "owner_id": str(note.owner_id) if note.owner_id else None,
-            "project_id": str(note.project_id) if note.project_id else None,
+            "project_id": note.project_id or None,
             "task_id": str(note.task_id) if note.task_id else None,
         },
     )

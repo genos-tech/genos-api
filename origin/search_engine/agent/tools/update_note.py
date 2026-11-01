@@ -269,7 +269,7 @@ def _note_parent_context(note, note_type: str) -> dict[str, Any] | None:
     if note_type != "task":
         return None
     pc = {
-        "project_id": str(note.project_id) if note.project_id else None,
+        "project_id": note.project_id or None,
         "task_id": str(note.task_id) if note.task_id else None,
     }
     return {k: v for k, v in pc.items() if v is not None}

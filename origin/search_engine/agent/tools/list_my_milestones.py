@@ -24,6 +24,7 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.user_time import today_for_user_id
 
@@ -96,7 +97,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "project_name": m.project.project_name if m.project_id else None,
                 "title": m.title,
                 "status": m.status,
-                "priority": m.priority,
+                "priority": blank_to_none(m.priority),
                 "due_date": m.due_date.isoformat() if m.due_date else None,
                 "tasks_total": agg.get("tasks_total", 0) or 0,
                 "tasks_closed": agg.get("tasks_closed", 0) or 0,

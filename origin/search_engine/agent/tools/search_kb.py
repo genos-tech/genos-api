@@ -42,6 +42,15 @@ def _scope_ids(args: dict[str, Any], key: str) -> list[str] | None:
     return [str(value)]
 
 
+def _as_int(value: Any) -> Any:
+    """The index stores ids as strings; every tool reports `project_id` as a
+    number (MIP-781). Anything that is not an integer is returned as it was."""
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return value
+
+
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     query = (args.get("query") or "").strip()
     if not query:
@@ -136,7 +145,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "task_id": entity.get("task_id"),
                 "note_id": entity.get("note_id"),
                 "note_type": entity.get("note_type"),
-                "project_id": entity.get("project_id"),
+                "project_id": _as_int(entity.get("project_id")),
                 # Where a note lives (folders, project > task, chat), for a
                 # viewer who may see it (MIP-839). Names are user-typed, so
                 # they go through the same fence as the snippet.
