@@ -569,6 +569,29 @@ class ShippedRateCardTests(SimpleTestCase):
             p = self.cat.price_for(entry["model"])
             self.assertLessEqual(p.cached_input, p.input, entry["model"])
 
+    def test_claude_sonnet_5_is_priced_at_its_permanent_list_price(self):
+        """MIP-859: the entry carried $3/$15, the price the $2/$10 intro
+        rate was expected to revert to. Anthropic made $2/$10 permanent,
+        so every Sonnet 5 request was costed 50% high (ledger AND
+        credits — both read this table). Pin the numbers so a "restore
+        the list price" edit has to change this test on purpose."""
+        p = self.cat.price_for("claude-sonnet-5")
+        self.assertEqual(
+            (p.input, p.output, p.cached_input, p.cache_write), (2.0, 10.0, 0.2, 2.5)
+        )
+
+    def test_claude_cache_rates_follow_anthropics_multipliers(self):
+        """Anthropic bills a cache read at 10% and a 5-minute write at
+        125% of the base input rate, on every model. A Claude entry that
+        breaks this was edited by hand against a stale page — the same
+        mistake class as the Sonnet 5 price above."""
+        for entry in self.cat.catalog:
+            if entry["provider"] != "claude":
+                continue
+            p = self.cat.price_for(entry["model"])
+            self.assertAlmostEqual(p.cached_input, p.input * 0.10, places=6, msg=entry["model"])
+            self.assertAlmostEqual(p.cache_write, p.input * 1.25, places=6, msg=entry["model"])
+
     def test_the_shipped_rate_card_is_complete(self):
         rc = self.cat.rate_card
         self.assertTrue(rc.label)
