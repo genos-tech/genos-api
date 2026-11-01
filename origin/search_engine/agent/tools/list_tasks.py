@@ -39,10 +39,11 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.task_tags import tag_names
+from origin.services.milestone_rollup import milestone_tasks_q
 from origin.services.user_time import today_for_user_id
 
 _MAX_LIMIT = 50
-_VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed"}
+_VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"}
 # Mirror of the canonical frontend enum in `taskMeta.ts` (Minimal/Low/
 # Normal/High/Critical). Invalid values are rejected with a clear error
 # so the model corrects course rather than silently returning [].
@@ -68,26 +69,12 @@ def _decode_cursor(cursor: str) -> tuple[datetime, int]:
 
 
 def _milestone_task_q(milestone: MilestoneMaster) -> Q:
-    """Predicate for "tasks belonging to this milestone".
-
-    Matches `_serialize_milestone` in milestone_views.py:200-208 verbatim
-    so agent rollups reconcile with the UI:
-      * tasks with a direct FK to this milestone, OR
-      * tasks whose `parent_task_id` is the milestone's backing task
-        (the table renders these as subtasks).
-    Preserves the existing quirk where the FK branch does NOT exclude
-    `is_milestone=True` — the divergence would otherwise break the
-    reconciliation contract.
-    """
-    q = Q(milestone=milestone, is_deleted=False, is_init_task=False)
-    if milestone.task_id is not None:
-        q = q | Q(
-            parent_task_id=milestone.task_id,
-            is_deleted=False,
-            is_init_task=False,
-            is_milestone=False,
-        )
-    return q
+    """Every task belonging to this milestone, its own backing row and
+    "Deleted" ones included: the full set, for callers that need all of it
+    (dependency edges, order of work). Rollups and `list_tasks` use
+    `milestone_work_q` instead. The definition is shared with the UI's
+    `_serialize_milestone` in `origin/services/milestone_rollup.py`."""
+    return milestone_tasks_q(milestone)
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -103,23 +90,16 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     )
 
     # --- Base queryset: tenant-scoped, soft-delete excluded. ---
-    qs = (
-        TaskMaster.objects.filter(
-            team_id=ctx.team_id,
-            is_deleted=False,
-            is_init_task=False,
-        )
-        # A task deleted in the UI is marked by this status (the task tree
-        # filters on it too; `is_deleted` is not always set): keep it out
-        # of every page.
-        .exclude(status="Deleted")
-        .filter(
-            # ACL row-filter: mirrors task_acl_user_ids logic as a set-based
-            # predicate so we get a single query rather than per-row checks.
-            Q(project_id__in=member_project_ids)
-            | Q(assignee_id=ctx.user_id)
-            | Q(reporter_id=ctx.user_id)
-        )
+    qs = TaskMaster.objects.filter(
+        team_id=ctx.team_id,
+        is_deleted=False,
+        is_init_task=False,
+    ).filter(
+        # ACL row-filter: mirrors task_acl_user_ids logic as a set-based
+        # predicate so we get a single query rather than per-row checks.
+        Q(project_id__in=member_project_ids)
+        | Q(assignee_id=ctx.user_id)
+        | Q(reporter_id=ctx.user_id)
     )
 
     # --- Optional caller filters ---
@@ -151,6 +131,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 f"Must be one of {sorted(_VALID_STATUSES)}."
             )
         qs = qs.filter(status__in=raw_statuses)
+
+    # A task deleted in the UI is marked by this status (the task tree filters
+    # on it too; `is_deleted` is not always set). It is gone, so it stays out
+    # of every page unless the caller asks for it by name (MIP-776).
+    asked_for_deleted = "Deleted" in (raw_statuses or [])
+    if not asked_for_deleted:
+        qs = qs.exclude(status="Deleted")
 
     raw_assignee_id = args.get("assignee_id")
     if raw_assignee_id:
@@ -190,7 +177,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             )
         # Use the same Q-union as the milestone UI rollup so subtasks are
         # included. `.distinct()` because the union can match a row twice.
-        qs = qs.filter(_milestone_task_q(milestone)).distinct()
+        # The milestone's work: not its own backing row, and (unless asked for)
+        # not Deleted tasks, so the rows add up to the milestone's totals.
+        qs = qs.filter(
+            milestone_tasks_q(milestone, own_row=False, deleted=asked_for_deleted)
+        ).distinct()
 
     if args.get("overdue_only"):
         today = today_for_user_id(ctx.user_id)
@@ -282,8 +273,9 @@ LIST_TASKS = Tool(
                 "description": (
                     "Restrict to one milestone. Includes both direct-FK tasks "
                     "AND subtasks (tasks whose `parent_task_id` is the "
-                    "milestone's backing task). Resolve a milestone name to "
-                    "an id with `list_milestones` first. The milestone's "
+                    "milestone's backing task), but not the milestone's own "
+                    "row, so the rows add up to its task counts. Resolve a "
+                    "milestone name to an id with `list_milestones` first. The milestone's "
                     "project membership is checked just like `project_id`."
                 ),
             },
@@ -291,10 +283,12 @@ LIST_TASKS = Tool(
                 "type": "ARRAY",
                 "items": {
                     "type": "STRING",
-                    "enum": ["Open", "WIP", "Blocked", "Pending", "Closed"],
+                    "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"],
                 },
                 "description": (
-                    "Filter by one or more statuses. Omit to include all non-deleted tasks."
+                    "Filter by one or more statuses. Omit to get live work: "
+                    "tasks with status Deleted are gone and are left out unless "
+                    "you ask for `Deleted` by name."
                 ),
             },
             "priority": {

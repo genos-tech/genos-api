@@ -9,12 +9,12 @@ through `parent_task_id`) are included — same Q-union as
 `_serialize_milestone` in milestone_views.py, so the agent rollup
 reconciles with the table view.
 
-Note on `status_breakdown`: it returns FIVE keys including "Deleted"
-(the enum value, distinct from the soft-delete tombstone `is_deleted`).
-Soft-deleted rows are still excluded everywhere. This is an explicit
-divergence from `get_project_summary`'s four-key breakdown — the agent
-needs the fifth bucket so it can answer the user's literal
-'closed/opened/wip/deleted' question.
+Note on `status_breakdown`: it keeps a "Deleted" key (the status value, not
+the soft-delete flag `is_deleted`) so the agent can answer the literal
+'closed/opened/wip/deleted' question. A Deleted task is GONE, not finished
+(MIP-777): it is counted only in that row, never in `total_tasks`, the
+priority/effort breakdowns, or as closed. The milestone's own backing task is
+not one of its tasks either.
 
 ACL contract:
   * Tenant guard: milestone.team_id must equal ctx.team_id.
@@ -32,8 +32,8 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
-from origin.search_engine.agent.tools.list_tasks import _milestone_task_q
 from origin.search_engine.agent.tools.milestone_order import order_of_work
+from origin.services.milestone_rollup import milestone_tasks_q, milestone_work_q
 from origin.services.user_time import today_for_user_id
 
 # Five-row breakdown (vs four in get_project_summary). "Deleted" is the
@@ -77,7 +77,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     # Single aggregate query for every breakdown so this is one DB round
     # trip rather than O(status × priority × effort) counts.
-    qs = TaskMaster.objects.filter(_milestone_task_q(m)).distinct()
+    # The milestone's live work: its own backing row and "Deleted" tasks are
+    # not part of its totals or breakdowns (MIP-777). Deleted tasks are still
+    # counted, apart, in the `Deleted` row of `status_breakdown`.
+    qs = TaskMaster.objects.filter(milestone_work_q(m)).distinct()
     annotations: dict[str, Any] = {
         "total_tasks": Count("task_id", distinct=True),
         "overdue_count": Count(
@@ -102,6 +105,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     agg = qs.aggregate(**annotations)
 
     status_breakdown = {label: agg.get(f"_status_{label}", 0) or 0 for label in _STATUS_LABELS}
+    status_breakdown["Deleted"] = (
+        TaskMaster.objects.filter(milestone_tasks_q(m, own_row=False), status="Deleted")
+        .distinct()
+        .count()
+    )
     priority_breakdown = {
         label: agg.get(f"_priority_{label}", 0) or 0 for label in _PRIORITY_LABELS
     }
@@ -118,7 +126,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     open_n = status_breakdown.get("Open", 0)
     wip_n = status_breakdown.get("WIP", 0)
-    closed_n = status_breakdown.get("Closed", 0) + status_breakdown.get("Deleted", 0)
+    # Deleted is gone, not finished: it is not progress.
+    closed_n = status_breakdown.get("Closed", 0)
     overdue_n = agg.get("overdue_count", 0) or 0
     total = agg.get("total_tasks", 0) or 0
 
@@ -160,9 +169,10 @@ GET_MILESTONE_SUMMARY = Tool(
     name="get_milestone_summary",
     description=(
         "Return task-count statistics for one milestone: total tasks, "
-        "status_breakdown (Open / WIP / Pending / Closed / Deleted — five "
-        "rows including the Deleted status enum, NOT soft-delete "
-        "tombstones), priority_breakdown (Minimal/Low/Normal/High/Critical), "
+        "status_breakdown (Open / WIP / Pending / Closed, plus a separate "
+        "Deleted row for tasks with status Deleted, which are gone: they "
+        "are NOT in total_tasks or the other breakdowns and do not count as "
+        "closed), priority_breakdown (Minimal/Low/Normal/High/Critical), "
         "effort_breakdown (Minimal/Low/Moderate/High/Extensive), overdue "
         "count, unassigned count, and the milestone's assignees. It also "
         "says where to start: `ready_now` (open tasks whose blockers are all "
