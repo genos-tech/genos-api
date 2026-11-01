@@ -625,6 +625,10 @@ def search(
     # Before the cut: every row, pinned or not, drops the private fields.
     _finalize_context(grouped, _viewer_acl_terms(team_id, user_id), user_id)
 
+    # --- Result text (MIP-836): the matched part of the chunk. ---
+    # After the rerank, which reads `snippet`; the agent shape keeps its own.
+    _apply_match_snippets(grouped)
+
     # --- Final pass: friendly chat titles. ---
     # OpenSearch stores a viewer-agnostic placeholder for chats ("DM 9")
     # because a DM's name depends on who's looking. Resolve here so
@@ -1246,6 +1250,87 @@ def _extract_matched_terms(highlight: Optional[dict]) -> list[str]:
     return sorted(seen, key=len, reverse=True)
 
 
+# The result row shows the part of the chunk that matched (MIP-836), not the
+# first 280 characters `snippet_text` was fixed to at index time. The keyword
+# query already highlights `search_text` as a whole (`number_of_fragments: 0`),
+# so the marked text is in the response: window it here, with the analyzer's
+# own idea of a match (stems, prefixes, Japanese tokens), and no reindex.
+_MATCH_SNIPPET_CHARS = 250
+_MATCH_SNIPPET_PAD = 30  # context kept before the first matched word
+_MATCH_SNIPPET_DRIFT = 20  # how far a cut may move to land on a space
+_MATCH_SNIPPET_MIN_TEXT = 280  # `make_snippet`'s cap: a shorter chunk is already whole
+
+
+def _snap_to_space(text: str, pos: int) -> int:
+    """Move a cut back to the nearest space within the drift; a run of CJK
+    text with no space nearby is cut where it falls."""
+    if pos <= 0 or pos >= len(text):
+        return max(0, min(pos, len(text)))
+    for i in range(pos, max(0, pos - _MATCH_SNIPPET_DRIFT), -1):
+        if text[i - 1] == " ":
+            return i
+    return pos
+
+
+def _match_snippet(highlight: Optional[dict]) -> Optional[str]:
+    """The ~250 characters of a chunk's body around where the query matched,
+    or None when the indexed top-of-body snippet already shows the match:
+    vector-only hits (no highlight), a short chunk, or a match at the start.
+
+    Returns plain text: the highlight markers are removed, and the frontend
+    bolds the words from `matched_terms`.
+    """
+    if not highlight:
+        return None
+    best_text: Optional[str] = None
+    best_spans: list[tuple[int, int]] = []
+    for field, fragments in highlight.items():
+        if not field.startswith("search_text") or not isinstance(fragments, list):
+            continue
+        for frag in fragments:
+            if not frag:
+                continue
+            # Collapse whitespace the way `make_snippet` does; the markers
+            # are control characters, so they survive it.
+            marked = " ".join(frag.split())
+            parts: list[str] = []
+            spans: list[tuple[int, int]] = []
+            pos = length = 0
+            for m in _HIGHLIGHT_TERM_RE.finditer(marked):
+                before = marked[pos : m.start()]
+                parts.append(before)
+                length += len(before)
+                parts.append(m.group(1))
+                spans.append((length, length + len(m.group(1))))
+                length += len(m.group(1))
+                pos = m.end()
+            parts.append(marked[pos:])
+            if len(spans) > len(best_spans):
+                best_text, best_spans = "".join(parts), spans
+    if not best_text or not best_spans or len(best_text) <= _MATCH_SNIPPET_MIN_TEXT:
+        return None
+
+    # The window holding the most matched words; the earliest on a tie.
+    start, most = 0, 0
+    for s_start, _ in best_spans:
+        cand = max(0, s_start - _MATCH_SNIPPET_PAD)
+        n = sum(1 for a, _b in best_spans if cand <= a < cand + _MATCH_SNIPPET_CHARS)
+        if n > most:
+            start, most = cand, n
+    if start == 0:
+        return None
+    end = min(len(best_text), start + _MATCH_SNIPPET_CHARS)
+    if end == len(best_text):
+        start = max(0, end - _MATCH_SNIPPET_CHARS)
+    start = _snap_to_space(best_text, start)
+    if end < len(best_text):
+        end = _snap_to_space(best_text, end)
+    window = best_text[start:end].strip()
+    if not window:
+        return None
+    return ("… " if start > 0 else "") + window + (" …" if end < len(best_text) else "")
+
+
 # --------------------------------------------------------------------------- #
 # Lexical tiers (Spotlight)                                                    #
 # --------------------------------------------------------------------------- #
@@ -1857,6 +1942,7 @@ def _rrf_fuse(keyword_hits: list[dict], vector_hits: list[dict]) -> list[dict]:
             by_chunk[cid]["lexical_tier"] = hit["_lexical_tier"]
         # Only keyword hits carry highlights — overwrite unconditionally.
         by_chunk[cid]["matched_terms"] = _extract_matched_terms(hit.get("highlight"))
+        by_chunk[cid]["match_snippet"] = _match_snippet(hit.get("highlight"))
 
     for rank, hit in enumerate(vector_hits, start=1):
         cid = hit["_id"]
@@ -1948,6 +2034,8 @@ def _group_by_entity(
                 entry["task_display_id"] = src.get("task_display_id")
             if "lexical_tier" in c:
                 entry["lexical_tier"] = c["lexical_tier"]
+            if not for_agent and c.get("match_snippet"):
+                entry["_match_snippet"] = c["match_snippet"]
             if src.get("context_acl") is not None:
                 entry["_context_acl"] = src.get("context_acl")
                 entry["_context_path"] = src.get("context_path")
@@ -1958,7 +2046,15 @@ def _group_by_entity(
             # The best-scoring chunk isn't always the best-tier one: a
             # comment holding the exact phrase can score under its own
             # task's title chunk.
+            tier_before = existing.get("lexical_tier")
             _merge_tier(existing, c)
+            if (
+                not for_agent
+                and existing.get("lexical_tier") != tier_before
+                and c.get("match_snippet")
+            ):
+                # This chunk is the entity's best match: show its text.
+                existing["_match_snippet"] = c["match_snippet"]
             chunk_type = src.get("chunk_type")
             if chunk_type and chunk_type not in existing["matched_chunk_types"]:
                 existing["matched_chunk_types"].append(chunk_type)
@@ -1986,6 +2082,15 @@ def _group_by_entity(
             # Keep the highest score — `fused_chunks` is already sorted
             # by score desc, so the first occurrence wins.
     return list(by_entity.values())
+
+
+def _apply_match_snippets(rows: list[dict]) -> None:
+    """Show each row's matched passage as its `snippet`. Rows without one
+    (vector-only, short, or matched at the start) keep the indexed snippet."""
+    for row in rows:
+        passage = row.pop("_match_snippet", None)
+        if passage:
+            row["snippet"] = passage
 
 
 def _finalize_context(rows: list[dict], viewer_terms: list[str], viewer_id: str) -> None:
