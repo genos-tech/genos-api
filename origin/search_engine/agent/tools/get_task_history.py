@@ -15,6 +15,13 @@ A custom-field change is one entry per field: `field` is the field's name
 as it was when the change was made, and the values are resolved — option
 labels for a tag field, the username for a member field.
 
+Which `old_value` / `new_value` are fenced (MIP-867): the text a person typed
+— a title, a username, an attachment's file name, a custom-field value, a tag,
+a relation's label, and a status / priority / effort outside the product's own
+set. What the model passes back to a write tool stays bare: ids, display ids,
+dates, booleans and the known enum values. The model-side fence can't tell the
+two apart by key, so it is done here (`model_fence.FENCED_IN_TOOL`).
+
 ACL contract: same gate as `fetch_task` — tenant guard on
 `ctx.team_id`, then `task_acl_user_ids` (project member, assignee or
 reporter).
@@ -34,6 +41,11 @@ from origin.search_engine.agent.tools.base import (
     ToolForbidden,
     wrap_workspace_content,
 )
+from origin.search_engine.agent.tools.task_enums import (
+    VALID_EFFORTS,
+    VALID_PRIORITIES,
+    VALID_STATUSES,
+)
 
 _DEFAULT_LIMIT = 30
 _MAX_LIMIT = 100
@@ -44,8 +56,33 @@ _LABELLED_FIELDS = {"parent_task_id", "milestone_id", "sprint_id", "project_id"}
 # Rows whose old/new values are user-authored text. Wrapped so the model
 # treats them as data, never as instructions.
 _FREE_TEXT_ACTIONS = {TaskActivityActionType.TITLE, TaskActivityActionType.CREATED}
-# Rows whose old/new values are raw user ids, shown as usernames.
+# Rows whose old/new values are raw user ids, shown as usernames. A username
+# is typed by its owner (up to 50 characters), so it is wrapped; an id that
+# resolves to no one stays a bare id.
 _USER_ACTIONS = {TaskActivityActionType.ASSIGNEE, TaskActivityActionType.REPORTER}
+# Rows whose old/new value is the uploaded file's name, typed by the uploader.
+_FILENAME_ACTIONS = {
+    TaskActivityActionType.ATTACHMENT_ADDED,
+    TaskActivityActionType.ATTACHMENT_REMOVED,
+}
+# Rows whose values are enums the model passes back to `update_task` /
+# `create_task` verbatim, so they stay bare. But the column is a plain
+# CharField and the REST API saves a value outside the set (see the note in
+# `update_task`), so a member can put free text here: anything outside the
+# product's own vocabulary is wrapped like any other user text.
+_ENUM_VOCABULARY = {
+    TaskActivityActionType.STATUS: VALID_STATUSES | {"Deleted"},
+    TaskActivityActionType.PRIORITY: VALID_PRIORITIES,
+    TaskActivityActionType.EFFORT: VALID_EFFORTS,
+}
+
+
+def _enum_or_fenced(action_type: str, value: Any) -> Any:
+    """`value` as it is when it is one of the action's known enum values (the
+    model passes those back), wrapped when it is any other string."""
+    if isinstance(value, str) and value not in _ENUM_VOCABULARY[action_type]:
+        return wrap_workspace_content(value)
+    return value
 
 
 def _via(row: TaskActivity) -> dict[str, Any]:
@@ -100,12 +137,23 @@ def _value(row: TaskActivity, side: str, usernames: dict[str, str]) -> Any:
         if label := meta.get(f"{side}Label"):
             return wrap_workspace_content(label)
     if row.action_type in _USER_ACTIONS and raw is not None:
-        return usernames.get(str(raw), raw)
+        username = usernames.get(str(raw))
+        return wrap_workspace_content(username) if username else raw
     if isinstance(raw, str) and row.action_type in _FREE_TEXT_ACTIONS:
         return wrap_workspace_content(raw)
+    if isinstance(raw, str) and row.action_type in _FILENAME_ACTIONS:
+        return wrap_workspace_content(raw)
+    if row.action_type in _ENUM_VOCABULARY:
+        return _enum_or_fenced(row.action_type, raw)
     if isinstance(raw, dict) and row.action_type == TaskActivityActionType.CREATED:
         return {
-            k: wrap_workspace_content(v) if k == "title" and isinstance(v, str) else v
+            k: (
+                wrap_workspace_content(v)
+                if k == "title" and isinstance(v, str)
+                else _enum_or_fenced(TaskActivityActionType.STATUS, v)
+                if k == "status"
+                else v
+            )
             for k, v in raw.items()
         }
     # Tag names are typed by users; flatten `[{"tagName": …}]` to the
