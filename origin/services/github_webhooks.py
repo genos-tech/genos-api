@@ -36,6 +36,7 @@ from django.db.models import Q
 from apis.request_id import describe_upstream
 from origin.models.common.user_models import (
     ConnectedAccount,
+    GithubUnregisteredDelivery,
     GithubWebhookRegistration,
 )
 from origin.services import crypto
@@ -191,9 +192,25 @@ def ensure_repo_webhook(user, owner: str, repo: str) -> Optional[GithubWebhookRe
     Returns the registration row on success, None on any failure mode
     (not connected, no token, no admin, 4xx, network error, no
     encryption key). Never raises — this runs on the task-save hot path.
+    `register_repo_webhook` is the same thing with the reason it failed.
 
     Logs at every silent early-return path so prod debugging can answer
     "why didn't this register?" by grepping for `ensure_repo_webhook`.
+    """
+    return register_repo_webhook(user, owner, repo)[0]
+
+
+def register_repo_webhook(
+    user, owner: str, repo: str
+) -> tuple[Optional[GithubWebhookRegistration], str]:
+    """`ensure_repo_webhook` with a reason (MIP-755), for a caller that can tell
+    the person what to do: `(registration, reason)`.
+
+    `reason` is `created`, `adopted` (an existing hook was taken over),
+    `already_registered`, or why not: `encryption_unavailable`,
+    `not_connected`, `token_unavailable`, `github_unreachable`,
+    `repo_not_found` (the token cannot see the repo, e.g. its org has not
+    granted the app), `no_admin`, `adopt_failed`, `github_error`.
     """
     try:
         crypto.require_keyring()
@@ -205,7 +222,7 @@ def ensure_repo_webhook(user, owner: str, repo: str) -> Optional[GithubWebhookRe
             owner,
             repo,
         )
-        return None
+        return None, "encryption_unavailable"
 
     existing = GithubWebhookRegistration.objects.filter(
         owner__iexact=owner, repo__iexact=repo
@@ -225,7 +242,7 @@ def ensure_repo_webhook(user, owner: str, repo: str) -> Optional[GithubWebhookRe
             repo,
             existing.hook_id,
         )
-        return existing
+        return existing, "already_registered"
 
     account = ConnectedAccount.objects.filter(user=user, provider="github").first()
     if account is None:
@@ -235,13 +252,13 @@ def ensure_repo_webhook(user, owner: str, repo: str) -> Optional[GithubWebhookRe
             owner,
             repo,
         )
-        return None  # User hasn't connected GitHub at all.
+        return None, "not_connected"  # User hasn't connected GitHub at all.
 
     try:
         token = get_valid_access_token(account)
     except Exception:
         logger.exception("Could not get valid GitHub token for user %s", user.id)
-        return None
+        return None, "token_unavailable"
 
     logger.info("ensure_repo_webhook: posting hook to %s/%s (user=%s)", owner, repo, user.id)
     payload_url = _webhook_payload_url()
@@ -268,7 +285,7 @@ def ensure_repo_webhook(user, owner: str, repo: str) -> Optional[GithubWebhookRe
         )
     except requests.RequestException as exc:
         logger.warning("GitHub hook create network error on %s/%s: %s", owner, repo, exc)
-        return None
+        return None, "github_unreachable"
 
     if resp.status_code == 201:
         try:
@@ -277,15 +294,18 @@ def ensure_repo_webhook(user, owner: str, repo: str) -> Optional[GithubWebhookRe
             logger.warning(
                 "GitHub hook create returned 201 but unparseable id on %s/%s", owner, repo
             )
-            return None
+            return None, "github_error"
         try:
-            return GithubWebhookRegistration.objects.create(
-                owner=owner,
-                repo=repo,
-                hook_id=hook_id,
-                registered_by=user,
-                secret=secret,
-                accepts_shared_secret=False,
+            return (
+                GithubWebhookRegistration.objects.create(
+                    owner=owner,
+                    repo=repo,
+                    hook_id=hook_id,
+                    registered_by=user,
+                    secret=secret,
+                    accepts_shared_secret=False,
+                ),
+                "created",
             )
         except IntegrityError:
             # Lost a race — another concurrent task save just created
@@ -297,13 +317,14 @@ def ensure_repo_webhook(user, owner: str, repo: str) -> Optional[GithubWebhookRe
                 # Our hook signs with a secret no row holds, so every
                 # delivery it makes would be refused; don't leave it.
                 _delete_hook(headers, owner, repo, hook_id)
-            return winner
+            return winner, "already_registered"
 
     if resp.status_code == 422:
         # 422 = unprocessable. Most common cause: a hook with our
         # payload URL already exists on this repo (e.g. left over from
         # a prior install). Look it up so we don't fight the API.
-        return _adopt_existing_hook(user, owner, repo, headers, payload_url)
+        adopted = _adopt_existing_hook(user, owner, repo, headers, payload_url)
+        return (adopted, "adopted") if adopted is not None else (None, "adopt_failed")
 
     if resp.status_code in (401, 403, 404):
         # 401/403: user lacks admin on this repo (token doesn't grant
@@ -316,12 +337,81 @@ def ensure_repo_webhook(user, owner: str, repo: str) -> Optional[GithubWebhookRe
             repo,
             user.id,
         )
-        return None
+        return None, ("repo_not_found" if resp.status_code == 404 else "no_admin")
 
     logger.warning(
         "GitHub hook create unexpected on %s/%s: %s", owner, repo, describe_upstream(resp)
     )
-    return None
+    return None, "github_error"
+
+
+# GitHub's own shapes: a login is letters, digits, hyphen (and underscore for
+# managed accounts), 39 chars at most; a repo name adds dots, 100 at most. A
+# payload outside this is not a repo we would ever register, so it is not
+# recorded, and the names go into a GitHub API path with the caller's token, so
+# "." and ".." (which would walk out of /repos/) are refused.
+_OWNER_RE = re.compile(r"^[A-Za-z0-9_-]{1,39}$")
+_REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
+# Rows kept. Recording needs a delivery signed with the shared secret, so this is
+# a bound on a misconfigured install, not on the public.
+_MAX_UNREGISTERED_ROWS = 500
+
+
+def is_valid_repo_ref(owner: str, repo: str) -> bool:
+    return (
+        bool(_OWNER_RE.match(owner or ""))
+        and bool(_REPO_NAME_RE.match(repo or ""))
+        and repo not in (".", "..")
+    )
+
+
+def record_unregistered_delivery(owner: str, repo: str, event: str) -> None:
+    """Remember that `owner/repo` sent a verified delivery but has no
+    registration (MIP-755), so the integrations page can offer to register it.
+
+    Best effort, and never raises: it runs inside the webhook, whose job is to
+    answer GitHub. Only the verified deliveries of unregistered repos reach it.
+    """
+    from django.db.models import F  # noqa: PLC0415
+    from django.utils import timezone  # noqa: PLC0415
+
+    if not is_valid_repo_ref(owner, repo):
+        return
+    key = f"{owner}/{repo}".lower()
+    try:
+        now = timezone.now()
+        updated = GithubUnregisteredDelivery.objects.filter(repo_key=key).update(
+            event_count=F("event_count") + 1,
+            last_event=(event or "")[:64],
+            ts_last_seen_at=now,
+            owner=owner,
+            repo=repo,
+        )
+        if updated:
+            return
+        if GithubUnregisteredDelivery.objects.count() >= _MAX_UNREGISTERED_ROWS:
+            logger.warning("Unregistered-repo deliveries: at the %d cap", _MAX_UNREGISTERED_ROWS)
+            return
+        try:
+            GithubUnregisteredDelivery.objects.create(
+                repo_key=key,
+                owner=owner,
+                repo=repo,
+                last_event=(event or "")[:64],
+                ts_last_seen_at=now,
+            )
+        except IntegrityError:
+            # Two first deliveries at once: the other one made the row.
+            GithubUnregisteredDelivery.objects.filter(repo_key=key).update(
+                event_count=F("event_count") + 1, ts_last_seen_at=now
+            )
+    except Exception:  # noqa: BLE001 - never fail a webhook over bookkeeping
+        logger.exception("Could not record an unregistered-repo delivery for %s/%s", owner, repo)
+
+
+def forget_unregistered_delivery(owner: str, repo: str) -> None:
+    """Drop the record once the repo is registered."""
+    GithubUnregisteredDelivery.objects.filter(repo_key=f"{owner}/{repo}".lower()).delete()
 
 
 def _events_synced_cache_key(owner: str, repo: str) -> str:

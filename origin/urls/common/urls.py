@@ -36,6 +36,8 @@ from origin.views.common.github_views import (
     GithubPullDetailView,
     GithubPullsForTasksView,
     GithubPullsForTaskView,
+    GithubRegisterRepoView,
+    GithubUnregisteredReposView,
     GithubWebhookView,
 )
 from origin.views.common.health_views import AlertingHealthView, HealthView
@@ -182,6 +184,16 @@ urlpatterns = [
         name="github_pull_detail",
     ),
     # Inbound webhook receiver — auto-status sync on PR merge.
+    path(
+        "api/v2/github/register-repo/",
+        GithubRegisterRepoView.as_view(),
+        name="github_register_repo",
+    ),
+    path(
+        "api/v2/github/unregistered-repos/",
+        GithubUnregisteredReposView.as_view(),
+        name="github_unregistered_repos",
+    ),
     path(
         "api/v2/github/webhook/",
         GithubWebhookView.as_view(),

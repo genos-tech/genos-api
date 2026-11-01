@@ -29,11 +29,22 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apis.request_id import describe_upstream
-from origin.models.common.user_models import ConnectedAccount, GithubWebhookRegistration
+from origin.models.common.user_models import (
+    ConnectedAccount,
+    GithubUnregisteredDelivery,
+    GithubWebhookRegistration,
+)
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_delivery_models import TaskDelivery, TaskDeliveryState
 from origin.models.task.task_models import TaskMaster
-from origin.services.github_webhooks import parse_pr_url, parse_pr_url_full
+from origin.services.github_webhooks import (
+    forget_unregistered_delivery,
+    is_valid_repo_ref,
+    parse_pr_url,
+    parse_pr_url_full,
+    record_unregistered_delivery,
+    register_repo_webhook,
+)
 from origin.services.oauth.tokens import get_valid_access_token
 from origin.services.task_delivery import canonical_pr_url, sync_pull_request
 from origin.views.utils.scope_guards import can_access_task, team_ids_for_user
@@ -729,6 +740,109 @@ def _sync_task_deliveries(owner: str, repo: str, pr: dict, team_ids: list) -> di
         return None
 
 
+# Why a registration did not happen, as an HTTP status for the client.
+_REGISTER_FAILURE_STATUS = {
+    "not_connected": status.HTTP_400_BAD_REQUEST,
+    "token_unavailable": status.HTTP_400_BAD_REQUEST,
+    "no_admin": status.HTTP_403_FORBIDDEN,
+    "repo_not_found": status.HTTP_404_NOT_FOUND,
+    "adopt_failed": status.HTTP_409_CONFLICT,
+}
+
+
+class GithubRegisterRepoView(APIView):
+    """POST /api/v2/github/register-repo/  {owner, repo}
+
+    Install Genos's PR webhook on a repo, or take over a hook someone added by
+    hand (MIP-755). A hook added in GitHub's settings answers 200 and links
+    nothing, because the registration row is what says which teams its events
+    may write into, and only `ensure_repo_webhook` creates it. This is the
+    explicit way to make one, using the CALLER's GitHub connection, so it needs
+    the same rights as always: admin on the repo. On a 422 it adopts the
+    existing hook and brings its events in line.
+
+    The failure reason comes back as `detail`, so the page can say what to do.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request: Request):
+        owner = str(request.data.get("owner") or "").strip()
+        repo = str(request.data.get("repo") or "").strip()
+        if not is_valid_repo_ref(owner, repo):
+            return Response({"detail": "invalid_repo"}, status=status.HTTP_400_BAD_REQUEST)
+
+        registration, reason = register_repo_webhook(request.user, owner, repo)
+        if registration is None:
+            return Response(
+                {"detail": reason},
+                status=_REGISTER_FAILURE_STATUS.get(reason, status.HTTP_502_BAD_GATEWAY),
+            )
+        forget_unregistered_delivery(registration.owner, registration.repo)
+        return Response(
+            {
+                "registered": True,
+                "reason": reason,
+                "owner": registration.owner,
+                "repo": registration.repo,
+            }
+        )
+
+
+class GithubUnregisteredReposView(APIView):
+    """GET /api/v2/github/unregistered-repos/
+
+    Repos that have sent Genos webhook events but are not registered (MIP-755),
+    so the integrations page can say "these send events and link nothing" and
+    offer to register them.
+
+    The record carries no tenant, so WHO may see a repo is decided here by the
+    caller's own GitHub token: a row is returned only if GitHub lets that token
+    read the repo. Without it, one customer would see the names of another's
+    private repos. Nobody connected, nobody sees anything.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    # Most recent first, and few: each candidate costs one GitHub call.
+    _MAX_CANDIDATES = 20
+
+    def get(self, request: Request):
+        account = _connected_account(request.user)
+        if account is None:
+            return Response({"repos": [], "connected": False})
+
+        repos = []
+        for row in GithubUnregisteredDelivery.objects.order_by("-ts_last_seen_at")[
+            : self._MAX_CANDIDATES
+        ]:
+            # Already registered since (by another path): not "unknown" any more.
+            if GithubWebhookRegistration.objects.filter(
+                owner__iexact=row.owner, repo__iexact=row.repo
+            ).exists():
+                forget_unregistered_delivery(row.owner, row.repo)
+                continue
+            try:
+                resp = _github_get(account, f"/repos/{row.owner}/{row.repo}")
+            except Exception:  # noqa: BLE001 - one bad lookup must not hide the rest
+                logger.warning("GitHub repo lookup failed for an unregistered repo", exc_info=True)
+                continue
+            if not resp.ok:
+                continue  # not reachable with THIS token: not theirs to see
+            perms = (resp.json() or {}).get("permissions") or {}
+            repos.append(
+                {
+                    "owner": row.owner,
+                    "repo": row.repo,
+                    "event_count": row.event_count,
+                    "last_event": row.last_event,
+                    "last_seen_at": row.ts_last_seen_at.isoformat(),
+                    "can_admin": bool(perms.get("admin")),
+                }
+            )
+        return Response({"repos": repos, "connected": True})
+
+
 @method_decorator(csrf_exempt, name="dispatch")
 class GithubWebhookView(APIView):
     """Receive GitHub repo webhooks (`pull_request` events).
@@ -768,6 +882,19 @@ class GithubWebhookView(APIView):
             return Response({"detail": "invalid_signature"}, status=status.HTTP_401_UNAUTHORIZED)
 
         event = request.headers.get("X-GitHub-Event") or request.META.get("HTTP_X_GITHUB_EVENT")
+        # A verified delivery from a repo Genos holds no registration for: it
+        # answers 200 and writes nothing (`_repo_team_ids` fails closed), which
+        # looks healthy from GitHub's side. Remember it so the integrations
+        # page can offer to register the repo (MIP-755). The tenant guard is
+        # untouched: this only records that the repo exists.
+        if (
+            repo_ref
+            and not GithubWebhookRegistration.objects.filter(
+                owner__iexact=repo_ref[0], repo__iexact=repo_ref[1]
+            ).exists()
+        ):
+            record_unregistered_delivery(repo_ref[0], repo_ref[1], event or "")
+
         # Acknowledge ping (sent once when the webhook is created) so the
         # GitHub UI shows a green check. No body action needed.
         if event == "ping":

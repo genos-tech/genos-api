@@ -523,3 +523,35 @@ class GithubWebhookRegistration(models.Model):
 
     def __str__(self) -> str:
         return f"{self.owner}/{self.repo} (hook#{self.hook_id})"
+
+
+class GithubUnregisteredDelivery(models.Model):
+    """A repo that sends Genos webhook events but has no registration (MIP-755).
+
+    A hook added by hand in GitHub's settings, signed with the shared secret,
+    answers 200 and writes nothing: the registration row is what says which
+    teams its events may write into, and a webhook alone cannot say. This
+    remembers that such a repo exists, so the integrations page can offer to
+    register it instead of leaving the PRs silently unlinked.
+
+    One row per repo (`repo_key` is `owner/repo`, lowercased: GitHub names are
+    case-insensitive), counting deliveries. Only a delivery whose signature
+    verified is recorded. It holds no payload, no tenant and no user: who may
+    SEE a row is decided at read time by whether their own GitHub token can
+    reach the repo.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    repo_key = models.CharField(max_length=512, unique=True)
+    owner = models.CharField(max_length=255)
+    repo = models.CharField(max_length=255)
+    event_count = models.BigIntegerField(default=1)
+    last_event = models.CharField(max_length=64, blank=True, default="")
+    ts_first_seen_at = models.DateTimeField(auto_now_add=True)
+    ts_last_seen_at = models.DateTimeField()
+
+    class Meta:
+        indexes = [models.Index(fields=["-ts_last_seen_at"], name="gh_unreg_delivery_recent")]
+
+    def __str__(self) -> str:
+        return f"{self.owner}/{self.repo} ({self.event_count} deliveries)"
