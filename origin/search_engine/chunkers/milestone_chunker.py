@@ -35,6 +35,7 @@ from origin.search_engine.chunkers.base import (
     EntityChunks,
     iso,
     make_snippet,
+    typed_display_id,
 )
 from origin.search_engine.text_extraction import extract_text
 
@@ -47,7 +48,9 @@ def iter_milestone_chunks(
     With `since`, also every milestone in a project whose membership
     changed (`dirty`): the project members are its ACL.
     """
-    qs = MilestoneMaster.objects.filter(is_deleted=False).select_related("team", "project")
+    qs = MilestoneMaster.objects.filter(is_deleted=False).select_related(
+        "team", "project", "task__project"
+    )
     if since is not None:
         window = Q(ts_updated_at__gte=since)
         if dirty and dirty.project_ids:
@@ -118,6 +121,7 @@ def iter_milestone_chunks(
             # existing task deep-link. None for legacy milestones whose
             # backing task hasn't been auto-created yet.
             task_id=str(m.task_id) if m.task_id else None,
+            task_display_id=typed_display_id(m.task) if m.task_id else None,
             created_at=iso(m.ts_created_at),
             updated_at=iso(m.ts_updated_at),
         )

@@ -45,6 +45,7 @@ from origin.search_engine.chunkers.base import (
     chat_entity_id,
     iso,
     make_snippet,
+    typed_display_id,
 )
 from origin.search_engine.text_extraction import extract_text
 
@@ -137,6 +138,7 @@ def iter_task_chunks(
             "task_assignee_id": str(task.assignee_id) if task.assignee_id else None,
             "task_milestone_id": str(task.milestone_id) if task.milestone_id else None,
             "task_sprint_id": str(task.sprint_id) if task.sprint_id else None,
+            "task_display_id": typed_display_id(task),
         }
 
         chunks: list[Chunk] = []

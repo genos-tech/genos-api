@@ -603,6 +603,20 @@ def search(
             index=index,
         )
 
+    # --- Display-id lookup (MIP-739): "MIP-739" pins that task first. ---
+    # A task's id isn't in its text, so the lanes above can't find it (the
+    # standard analyzer splits it into "mip" + "739"). Not in eval mode,
+    # which stays raw BM25 + vector + RRF.
+    if mode != "eval":
+        grouped = _pin_display_id_matches(
+            grouped,
+            query,
+            client=client,
+            index=index,
+            base_filter=base_filter,
+            for_agent=for_agent,
+        )
+
     # --- Final pass: friendly chat titles. ---
     # OpenSearch stores a viewer-agnostic placeholder for chats ("DM 9")
     # because a DM's name depends on who's looking. Resolve here so
@@ -1537,6 +1551,94 @@ def _run_keyword(
     return list(resp.get("hits", {}).get("hits", []))
 
 
+# A task id as typed: the project code (a letter, then up to five letters or
+# digits) and its number, with an optional leading "#". "MIP-" (no number
+# yet) and "MIP-7" are prefixes of what the user is typing.
+_DISPLAY_ID_QUERY = re.compile(r"^#?([A-Za-z][A-Za-z0-9]{0,5}-\d{0,9})$")
+# The chunks that carry a task's own id: its title chunk, and a milestone's.
+_DISPLAY_ID_CHUNK_TYPES = ("task_title_content", "milestone_title_content")
+_DISPLAY_ID_MAX_PINS = 10
+
+
+def _display_id_number(entity: dict) -> int:
+    tail = (entity.get("task_display_id") or "").rsplit("-", 1)[-1]
+    return int(tail) if tail.isdigit() else 0
+
+
+def _pin_display_id_matches(
+    grouped: list[dict],
+    query: str,
+    *,
+    client,
+    index: str,
+    base_filter: list[dict],
+    for_agent: bool,
+) -> list[dict]:
+    """Put the tasks (and milestones) whose display id the query is, or
+    starts with, ahead of everything else: the exact id first, then the
+    rest in number order. Same ACL and filters as every other lane."""
+    m = _DISPLAY_ID_QUERY.match((query or "").strip())
+    if not m:
+        return grouped
+    typed = m.group(1)
+    body = {
+        "size": _DISPLAY_ID_MAX_PINS * 2,
+        "track_total_hits": False,
+        "_source": {"includes": _source_fields(for_agent=for_agent), "excludes": ["embedding"]},
+        "query": {
+            "bool": {
+                "should": [
+                    {"term": {"task_display_id": {"value": typed, "case_insensitive": True}}},
+                    {"prefix": {"task_display_id": {"value": typed, "case_insensitive": True}}},
+                ],
+                "minimum_should_match": 1,
+                "filter": [*base_filter, {"terms": {"chunk_type": list(_DISPLAY_ID_CHUNK_TYPES)}}],
+            }
+        },
+    }
+    try:
+        hits = client.search(index=index, body=body).get("hits", {}).get("hits", [])
+    except Exception:  # noqa: BLE001 — the ranked results stand on their own
+        log.warning("Display-id lookup failed; skipping it", exc_info=True)
+        return grouped
+    if not hits:
+        return grouped
+
+    top = max((e.get("score", 0.0) for e in grouped), default=0.0) or 1.0
+    pins = _group_by_entity(
+        [
+            {
+                "chunk_id": h["_id"],
+                "source": h["_source"],
+                "score": top,
+                "keyword_rank": None,
+                "vector_rank": None,
+                "matched_terms": [typed.lower()],
+            }
+            for h in hits
+        ],
+        for_agent=for_agent,
+    )
+    # `_group_by_entity` exposes the id on the UI shape only; the order
+    # below, and the agent's reading of a pin, need it either way.
+    by_key = {(h["_source"].get("entity_type"), h["_source"].get("entity_id")): h for h in hits}
+    for e in pins:
+        src = by_key[(e["entity_type"], e["entity_id"])]["_source"]
+        e["task_display_id"] = src.get("task_display_id")
+        e["display_id_match"] = True
+    pins = resolve_milestone_mirrors(pins)
+    exact = typed.lower()
+    pins.sort(
+        key=lambda e: (
+            (e.get("task_display_id") or "").lower() != exact,
+            _display_id_number(e),
+        )
+    )
+    pins = pins[:_DISPLAY_ID_MAX_PINS]
+    pinned = {(e.get("entity_type"), e.get("entity_id")) for e in pins}
+    return pins + [e for e in grouped if (e.get("entity_type"), e.get("entity_id")) not in pinned]
+
+
 def _run_vector(
     client,
     index: str,
@@ -1618,6 +1720,7 @@ def _source_fields(*, for_agent: bool = False) -> list[str]:
         # chunk incl. comments, and by milestone_chunker; absent on all
         # other chunk families, which `to_dict()` drops.
         "task_status",
+        "task_display_id",
     ]
     if for_agent:
         # The full chunk text — used as LLM grounding context. Excluded
@@ -1744,6 +1847,7 @@ def _group_by_entity(
                 # purely presentational need. None on non-task rows and
                 # on docs indexed before the field was written.
                 entry["task_status"] = src.get("task_status")
+                entry["task_display_id"] = src.get("task_display_id")
             if "lexical_tier" in c:
                 entry["lexical_tier"] = c["lexical_tier"]
             if for_agent:

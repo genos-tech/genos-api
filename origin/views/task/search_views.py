@@ -1,3 +1,4 @@
+import re
 from collections import defaultdict
 
 from django.db.models import Q
@@ -150,3 +151,60 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
         team_tasks.sort(key=lambda t: t["projectId"])
 
         return Response(team_tasks, status=status.HTTP_200_OK)
+
+
+# "MIP-12" / "mip-12" / "#MIP-12" (a code is a letter, then up to five
+# letters or digits; see prj_views._PROJECT_CODE_RE).
+_DISPLAY_ID_RE = re.compile(r"^#?([A-Za-z][A-Za-z0-9]{1,5})-(\d{1,9})$")
+
+
+class GetTaskByDisplayIdView(AuthenticatedAPIView):
+    def get(self, request):
+        """One task by its display id, whatever its status (MIP-739).
+
+        The task lists behind the `#` menus and the task search bar hold
+        open work only; this is how an exact id still finds a closed task.
+        Scoped like `GetSearchTeamTasksView`'s all-projects branch: only
+        projects this person can reach. Same row shape as that view."""
+        team_id = request.GET.get("team_id")
+        match = _DISPLAY_ID_RE.match((request.GET.get("display_id") or "").strip())
+        if not team_id or not match:
+            return Response(
+                {"error": "team_id and a display_id like PRJ-12 are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        code, number = match.group(1).upper(), int(match.group(2))
+        task = (
+            TaskMaster.objects.filter(
+                project__in=reachable_project_ids(request.user.id, team_id),
+                project__code=code,
+                project_task_number=number,
+                is_init_task=False,
+                is_deleted=False,
+            )
+            .select_related("project")
+            .first()
+        )
+        if task is None:
+            return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
+        colors = status_color(task.status)
+        return Response(
+            {
+                "projectId": task.project_id,
+                "projectName": task.project.project_name,
+                "projectCode": task.project.code,
+                "projectTags": task.tags,
+                "taskId": task.task_id,
+                "displayId": f"{task.project.code}-{task.project_task_number}",
+                "title": task.title,
+                "isMilestone": bool(task.is_milestone),
+                "status": {
+                    "code": 0,
+                    "status": task.status,
+                    "color": colors["chipColor"],
+                    "textColor": colors["textColor"],
+                },
+                "tsUpdated": task.ts_updated_at,
+            },
+            status=status.HTTP_200_OK,
+        )

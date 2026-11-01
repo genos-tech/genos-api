@@ -328,7 +328,8 @@ class ChipRoundTripTests(ChipTestBase):
         )
         rendered = blocks_to_markdown(body)
         self.assertIn(f"[@otheruser](user:{self.user2.id})", rendered)
-        self.assertIn(f"[#{self.task.display_id} · Chips](task:{self.task.task_id})", rendered)
+        # Written as a bare id, the chip is compact (MIP-739) and renders so.
+        self.assertIn(f"[#{self.task.display_id}](task:{self.task.task_id})", rendered)
         self.assertEqual(markdown_to_blocks(rendered, entity_chip_resolver=resolver), body)
 
     def test_chip_labels_reach_the_search_text(self):

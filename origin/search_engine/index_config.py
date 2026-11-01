@@ -235,6 +235,10 @@ def build_mappings():
             "task_assignee_id": {"type": "keyword"},
             "task_milestone_id": {"type": "keyword"},
             "task_sprint_id": {"type": "keyword"},
+            # "MIP-739": Spotlight's display-id lookup matches it with a
+            # case-insensitive term / prefix query, so no normalizer (a
+            # normalizer is an index setting, which put_mapping can't add).
+            "task_display_id": {"type": "keyword"},
             # v2: note overlays — "my notes about X" and parent-note
             # traversal without DB lookups.
             "note_owner_id": {"type": "keyword"},

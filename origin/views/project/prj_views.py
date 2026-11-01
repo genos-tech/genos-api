@@ -15,6 +15,7 @@ from origin.models.common.inbox_models import InboxItems
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import ExternalGrant, TeamMaster, TeamMembers
 from origin.models.project.prj_models import *
+from origin.search_engine.acl_dirty import mark_projects_dirty
 from origin.serializers.project.prj_serializers import *
 from origin.services.custom_fields import CUSTOM_FIELD_TYPES, validate_field_options
 from origin.services.external_grants import external_objects_for_member
@@ -107,6 +108,11 @@ class ProjectMasterView(AuthenticatedAPIView):
                 )
             project.code = new_code
             project.save(update_fields=["code", "ts_updated_at"])
+            # The code prefixes every task's display id, which search
+            # indexes (MIP-739): re-emit the project's tasks and milestones
+            # on the next incremental pass. Bumping each task's own
+            # `ts_updated_at` instead would reorder every list sorted by it.
+            mark_projects_dirty([project.project_id])
 
         # Authorization for these two happened above (rename => manager,
         # transfer => owner). What is left here is validation.

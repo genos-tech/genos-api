@@ -74,6 +74,11 @@ class Chunk:
     task_assignee_id: Optional[str] = None
     task_milestone_id: Optional[str] = None
     task_sprint_id: Optional[str] = None
+    # The human-readable id ("MIP-739") of the task — or a milestone's
+    # backing task — so Spotlight can find a task by its id (MIP-739).
+    # None when the project has no code (`display_id`'s "#<id>" fallback
+    # is not something anyone types).
+    task_display_id: Optional[str] = None
 
     # v2 note overlays (note_chunker + note_summary_chunker).
     note_owner_id: Optional[str] = None
@@ -143,3 +148,15 @@ def chat_entity_id(chat_label: str, chat_id, thread_id=None) -> str:
     if thread_id is not None:
         return f"{base}:thread:{thread_id}"
     return base
+
+
+def typed_display_id(task) -> Optional[str]:
+    """A task's display id as people type it ("MIP-739"), or None when its
+    project has no code or it has no number yet."""
+    if task is None:
+        return None
+    code = getattr(getattr(task, "project", None), "code", None)
+    number = getattr(task, "project_task_number", None)
+    if not code or number is None:
+        return None
+    return f"{code}-{number}"
