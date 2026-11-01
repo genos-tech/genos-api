@@ -66,7 +66,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             )
         statuses_filter = list(raw_statuses)
 
-    raw_assignee_user_id = args.get("assignee_user_id")
+    # `assignee_id` is the name every sibling tool uses; `assignee_user_id` is
+    # the older spelling, kept as an alias (MIP-827).
+    new_name, old_name = args.get("assignee_id"), args.get("assignee_user_id")
+    if new_name and old_name and str(new_name).strip().lower() != str(old_name).strip().lower():
+        raise ToolError(
+            "`assignee_id` and `assignee_user_id` are the same filter and were given "
+            "different values. Send one of them (`assignee_id`)."
+        )
+    raw_assignee_user_id = new_name or old_name
     assignee_user_id: str | None = None
     if raw_assignee_user_id:
         # We don't ACL-check the assignee id itself — it's a filter value,
@@ -185,7 +193,7 @@ LIST_MILESTONES = Tool(
                     "to include all non-tombstone milestones."
                 ),
             },
-            "assignee_user_id": {
+            "assignee_id": {
                 "type": "STRING",
                 "description": (
                     "Filter to milestones where this user is an assignee "
@@ -194,6 +202,13 @@ LIST_MILESTONES = Tool(
                     "`get_team_members` to resolve a name to a UUID. "
                     "Prefer the dedicated `list_my_milestones` tool when "
                     "the question is about the caller themselves."
+                ),
+            },
+            "assignee_user_id": {
+                "type": "STRING",
+                "description": (
+                    "Older spelling of `assignee_id` (the name `list_tasks` "
+                    "uses too); accepted for now. Send `assignee_id`."
                 ),
             },
             "limit": {
