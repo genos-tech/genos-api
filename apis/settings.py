@@ -451,6 +451,30 @@ REST_FRAMEWORK = {
     **({"NUM_PROXIES": 1} if not DEBUG else {}),
 }
 
+
+def _env_switch(name: str) -> bool:
+    """An emergency OFF switch read from the environment (MIP-865).
+
+    Anything set that is not an explicit "no" turns it ON, so a typo
+    (`PUBLIC_API_DISABLED=yse`) shuts the surface rather than silently
+    leaving it open: an off switch that fails open is not one. Unset or
+    empty is off, which is the default.
+    """
+    return os.environ.get(name, "").strip().lower() not in ("", "0", "false", "no", "off")
+
+
+# Incident off switches for the API-key surfaces, answered 503 before any
+# key is looked up (`PublicApiView.initial`). Read through `settings` at
+# request time, so a test can override them; the env is read once per
+# process, so changing it means a restart/redeploy.
+#   PUBLIC_API_DISABLED  all API-key access: REST v1 and MCP.
+#   MCP_DISABLED         the MCP endpoint only; REST v1 stays up.
+# Independent of TIER_QUOTAS_JSON, which is untouched: that one is a full
+# replace where a missing key UNCAPS a tier, the wrong failure direction
+# for an emergency.
+PUBLIC_API_DISABLED = _env_switch("PUBLIC_API_DISABLED")
+MCP_DISABLED = _env_switch("MCP_DISABLED")
+
 SIMPLE_JWT = {
     # NOT shortened, deliberately. A shorter access token would be the
     # normal hardening move, but the frontend has no proactive refresh:
