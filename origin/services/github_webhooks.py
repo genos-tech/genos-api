@@ -40,7 +40,7 @@ from origin.models.common.user_models import (
     GithubWebhookRegistration,
 )
 from origin.services import crypto
-from origin.services.oauth.tokens import get_valid_access_token
+from origin.services.oauth.tokens import ReauthRequired, get_valid_access_token
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +119,16 @@ def hook_admin_headers(user, registration) -> Optional[dict]:
         return None
     try:
         return _hooks_api_headers(get_valid_access_token(account))
+    except ReauthRequired:
+        # A revoked or expired connection is the user's to fix, not a
+        # fault: WARNING, so a cron that reaches many repos is not failed
+        # (CronCommand's tripwire is ERROR-only) by one dead token.
+        logger.warning(
+            "GitHub connection needs reconnecting; no token for the hook on %s/%s",
+            registration.owner,
+            registration.repo,
+        )
+        return None
     except Exception:
         logger.exception(
             "Could not get valid GitHub token for the hook on %s/%s",
