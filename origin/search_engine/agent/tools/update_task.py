@@ -28,6 +28,12 @@ from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
+from origin.search_engine.agent.tools.task_body_edit import (
+    append_blocks,
+    body_hash,
+    prepend_blocks,
+    replace_in_body,
+)
 from origin.search_engine.agent.tools.task_tags import resolve_tags, tag_names
 from origin.services.collab_push import push_task_body
 from origin.services.milestone_service import sync_backing_task
@@ -71,6 +77,31 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if ctx.user_id not in allowed:
         raise ToolForbidden(f"Not authorized to update task {task_id}.")
 
+    # --- body guards (MIP-824): validated before anything is touched ---
+    edit_modes = [
+        key
+        for key in ("content_text", "body_append", "body_prepend", "body_replace")
+        if args.get(key) is not None
+    ]
+    if len(edit_modes) > 1:
+        raise ToolError(
+            f"Send only one of content_text, body_append, body_prepend, body_replace "
+            f"(got {', '.join(edit_modes)}). Nothing was changed."
+        )
+    base_hash = args.get("base_body_hash")
+    if base_hash is not None:
+        # The hash `fetch_task` returned. Refuses the whole call, so a stale
+        # caller changes nothing (not even a status sent alongside).
+        if not isinstance(base_hash, str) or not base_hash.strip():
+            raise ToolError("`base_body_hash` must be the `body_hash` string from fetch_task.")
+        current_hash = body_hash(task.content)
+        if base_hash.strip() != current_hash:
+            raise ToolError(
+                "The task body changed since you read it (`base_body_hash` is stale). "
+                "Read the task again and redo the edit against the current body. "
+                "Nothing was changed."
+            )
+
     update_fields: list[str] = []
     changed: list[str] = []
 
@@ -85,11 +116,28 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             changed.append("title")
 
     # --- content_text → BlockNote shape ---
+    # --- partial body edits (MIP-824): splice into the stored blocks ---
+    new_content: list[dict[str, Any]] | None = None
     if "content_text" in args and args["content_text"] is not None:
         new_content = task_body_blocks(
             args.get("content_text") or "",
             entity_chip_resolver=chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id),
         )
+    elif edit_modes:
+        resolver = chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id)
+        mode = edit_modes[0]
+        if mode == "body_append":
+            new_content = append_blocks(task.content, args["body_append"], resolver)
+        elif mode == "body_prepend":
+            new_content = prepend_blocks(task.content, args["body_prepend"], resolver)
+        else:
+            patch = args["body_replace"]
+            if not isinstance(patch, dict):
+                raise ToolError("`body_replace` must be an object {old_text, new_text}.")
+            new_content = replace_in_body(
+                task.content, patch.get("old_text"), patch.get("new_text"), resolver
+            )
+    if new_content is not None:
         if new_content != task.content:
             task.content = new_content
             update_fields.append("content")
@@ -182,6 +230,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         return {
             "task_id": task_id,
             "changed_fields": [],
+            **({"body_hash": body_hash(task.content)} if (edit_modes or base_hash) else {}),
             "__summary__": f"No changes applied to task {task.display_id}.",
         }
 
@@ -251,10 +300,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # a re-save of the same body pings no one twice (MIP-708).
         notify_task_body_mentions(task, actor_id=ctx.user_id)
 
+    # A caller chaining edits needs the hash of what it just wrote, without
+    # another read. Taken from the row as stored (a milestone's backing row
+    # was re-derived by `sync_backing_task`).
+    hash_field = {"body_hash": body_hash(task.content)} if (edit_modes or base_hash) else {}
     if not changed:
         return {
             "task_id": task_id,
             "changed_fields": [],
+            **hash_field,
             "__summary__": f"No changes applied to task {task.display_id}.",
         }
     return {
@@ -263,6 +317,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "status": task.status,
         "title": task.title,
         "milestone_id": task.milestone_id,
+        **hash_field,
         "__summary__": f"Updated task {task.display_id}: {', '.join(changed)}",
     }
 
@@ -274,7 +329,11 @@ UPDATE_TASK = Tool(
         "APPROVAL — the user sees your proposed changes and decides "
         "whether to execute. Required: task_id. Optional (omit fields "
         "you don't want to change): title, content_text, status, "
-        "priority, effort_level, due_date, milestone_id, tags. Pass `due_date: ''` to "
+        "priority, effort_level, due_date, milestone_id, tags. To change "
+        "part of the body, send ONE of body_append, body_prepend or "
+        "body_replace instead of content_text (which rewrites all of it); "
+        "pass base_body_hash (the body_hash fetch_task returned) to refuse "
+        "the edit if the body changed since you read it. Pass `due_date: ''` to "
         "clear the due date. Pass `milestone_id` (from `list_milestones`, same "
         "project) to move the task and its sub-tasks into that milestone, or "
         "`milestone_id: ''` to take it out. Status enum: Open, WIP, Blocked, Pending, Closed, "
@@ -299,6 +358,49 @@ UPDATE_TASK = Tool(
                 "description": (
                     "Replace the task body with this markdown. Omit to leave "
                     "unchanged. Pass '' to clear the body." + CHIP_SYNTAX_HINT
+                ),
+            },
+            "body_append": {
+                "type": "STRING",
+                "description": (
+                    "Markdown added after the end of the existing body, which is "
+                    "left as it is. Instead of content_text; send only one of "
+                    "content_text, body_append, body_prepend, body_replace." + CHIP_SYNTAX_HINT
+                ),
+            },
+            "body_prepend": {
+                "type": "STRING",
+                "description": (
+                    "Markdown added before the start of the existing body, which "
+                    "is left as it is. Instead of content_text." + CHIP_SYNTAX_HINT
+                ),
+            },
+            "body_replace": {
+                "type": "OBJECT",
+                "description": (
+                    "Replace one passage of the body. `old_text` must appear "
+                    "exactly once in the task's `content_markdown` (copy it from "
+                    "there); zero or several matches are refused. Instead of "
+                    "content_text."
+                ),
+                "properties": {
+                    "old_text": {
+                        "type": "STRING",
+                        "description": "The markdown to find, exactly as in content_markdown.",
+                    },
+                    "new_text": {
+                        "type": "STRING",
+                        "description": "What to put in its place. '' deletes the match.",
+                    },
+                },
+                "required": ["old_text", "new_text"],
+            },
+            "base_body_hash": {
+                "type": "STRING",
+                "description": (
+                    "The `body_hash` that fetch_task / get_task returned when you "
+                    "read the task. If the body has changed since, the whole call "
+                    "is refused and nothing is written. Omit to skip the check."
                 ),
             },
             "status": {
