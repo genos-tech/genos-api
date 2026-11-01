@@ -22,6 +22,7 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
+from origin.search_engine.agent.tools.template_prompts import has_written_body
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.user_time import today_for_user_id
 
@@ -132,6 +133,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "tasks_closed": agg.get("tasks_closed", 0) or 0,
                 "overdue_count": agg.get("overdue", 0) or 0,
                 "assignee_count": assignee_count,
+                # False when the description is empty or only the unmodified
+                # template: nobody has written what this milestone is for.
+                "has_goal": has_written_body(m.description),
             }
         )
 
@@ -156,7 +160,9 @@ LIST_MILESTONES = Tool(
     name="list_milestones",
     description=(
         "List milestones with per-row task rollups: tasks_total, "
-        "tasks_closed, overdue_count, assignee_count. Use for 'how many "
+        "tasks_closed, overdue_count, assignee_count, and has_goal (false "
+        "when nobody has written the milestone's description: it is empty "
+        "or still the unmodified template). Use for 'how many "
         "tasks does each milestone have?', 'show me all milestones', "
         "'what milestones are in project X?'. Pair with "
         "`get_milestone_summary(milestone_id)` for a deeper per-milestone "

@@ -38,6 +38,7 @@ from typing import Iterator, Optional
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.acl_dirty import DirtyScopes
+from origin.search_engine.agent.tools.template_prompts import without_untouched_prompts
 from origin.search_engine.chunkers.base import (
     CHAT_TYPE_LABEL,
     Chunk,
@@ -82,9 +83,7 @@ def iter_task_chunks(
         # dirty so the re-chunk drops the comment's chunk. (The content
         # query below still excludes deleted comments.)
         comment_dirty_task_ids = set(
-            TaskComments.objects.filter(ts_updated_at__gte=since).values_list(
-                "task_id", flat=True
-            )
+            TaskComments.objects.filter(ts_updated_at__gte=since).values_list("task_id", flat=True)
         )
         dirty_task_ids |= comment_dirty_task_ids
         task_qs = task_qs.filter(task_id__in=dirty_task_ids)
@@ -146,7 +145,10 @@ def iter_task_chunks(
         # 1) Title + content chunk(s). Short tasks keep one chunk
         # (v1 behavior); long tasks split into a title-led precision
         # chunk + a content-only recall chunk.
-        content_text = extract_text(task.content)
+        # Untouched template prompts are instructions, not content (MIP-799):
+        # the same helper `get_task` reads through, so search and the
+        # agent agree about what a task says.
+        content_text = extract_text(without_untouched_prompts(task.content))
         title_clean = (task.title or "").strip()
 
         if title_clean or content_text:
