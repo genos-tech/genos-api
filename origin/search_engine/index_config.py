@@ -235,6 +235,18 @@ def build_mappings():
             "task_assignee_id": {"type": "keyword"},
             "task_milestone_id": {"type": "keyword"},
             "task_sprint_id": {"type": "keyword"},
+            # MIP-839: what contains a note. `context_text` is searched
+            # (lower weight than the title) only for viewers in
+            # `context_acl`; `context_path` is stored for the result row.
+            "context_text": {
+                "type": "text",
+                "fields": {
+                    "icu": {"type": "text", "analyzer": "multilingual_icu"},
+                    "ja": {"type": "text", "analyzer": "japanese_kuromoji"},
+                },
+            },
+            "context_path": {"type": "keyword", "index": False},
+            "context_acl": {"type": "keyword"},
             # "MIP-739": Spotlight's display-id lookup matches it with a
             # case-insensitive term / prefix query, so no normalizer (a
             # normalizer is an index setting, which put_mapping can't add).

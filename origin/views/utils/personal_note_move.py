@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
+from origin.search_engine.chunkers.note_chunker import refresh_personal_notes
 from origin.views.utils.note_acl_resync import collect_note_subtree_ids, purge_notes_from_index
 from origin.views.utils.note_folder_role import get_folder_role
 from origin.views.utils.note_role import ROLE_EDITOR, ROLE_VIEWER
@@ -109,6 +110,12 @@ def apply_personal_note_move(*, team_id, note: PersonalNoteMaster, plan: MovePla
     # broadens — the widened window handles it.
     if plan.leaves_team_space:
         purge_notes_from_index(collect_note_subtree_ids(note.note_id, team_id))
+
+    # The folder path is part of the note's index entry now (MIP-839), and
+    # the `.update()` above hides the move from the incremental window.
+    # After the purge: a note that just left Team Notes is re-added with
+    # its new, narrower access.
+    refresh_personal_notes(collect_note_subtree_ids(note.note_id, team_id))
 
 
 def move_personal_note(*, user_id, team_id, note: PersonalNoteMaster, target_folder_id) -> None:

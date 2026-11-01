@@ -44,6 +44,12 @@ from origin.search_engine.chunkers.base import (
     iso,
     make_snippet,
 )
+from origin.search_engine.note_context import (
+    NoteContext,
+    chat_note_contexts,
+    personal_note_contexts,
+    task_note_contexts,
+)
 from origin.search_engine.text_extraction import extract_sections
 
 # ----------------------------- ChatNote -----------------------------
@@ -56,7 +62,12 @@ def iter_chat_note_chunks(
     if since is not None:
         # Plus every note in a channel whose membership changed, and in a
         # PM channel whose project's did (PM members are project members).
-        qs = qs.filter(Q(ts_updated_at__gte=since) | _dirty_channel_q(dirty))
+        # A renamed channel renames its notes' context (MIP-839).
+        qs = qs.filter(
+            Q(ts_updated_at__gte=since)
+            | _dirty_channel_q(dirty)
+            | Q(channel__ts_updated_at__gte=since)
+        )
 
     notes = list(qs)
     if not notes:
@@ -67,6 +78,7 @@ def iter_chat_note_chunks(
 
     # Pre-resolve chat ACLs in batches keyed by channel UUID.
     acl_by_chat = _resolve_chat_acls(notes)
+    contexts = chat_note_contexts(notes, acl_by_chat)
 
     for note in notes:
         if not note.team_id:
@@ -114,6 +126,7 @@ def iter_chat_note_chunks(
             thread_id=thread_id_str,
             note_owner_id=str(note.owner_id) if note.owner_id else None,
             note_parent_id=(str(note.parent_note_id) if note.parent_note_id else None),
+            context=contexts.get(note.note_id),
         )
         if chunks:
             yield EntityChunks(
@@ -160,12 +173,14 @@ def iter_task_note_chunks(
         if dirty and dirty.project_ids:
             # The project members are this note's ACL.
             window |= Q(project_id__in=dirty.project_ids)
+        window |= _renamed_task_container_q(since)
         qs = qs.filter(window)
     notes = list(qs)
     if not notes:
         return
 
     grants_by_note = _load_grants(NOTE_TYPE_TASK, [n.note_id for n in notes])
+    contexts = task_note_contexts(notes)
 
     # Project ACLs.
     project_ids = {n.project_id for n in notes if n.project_id}
@@ -207,6 +222,7 @@ def iter_task_note_chunks(
             task_id=str(note.task_id) if note.task_id else None,
             note_owner_id=str(note.owner_id) if note.owner_id else None,
             note_parent_id=(str(note.parent_note_id) if note.parent_note_id else None),
+            context=contexts.get(note.note_id),
         )
         if chunks:
             yield EntityChunks(
@@ -219,8 +235,14 @@ def iter_task_note_chunks(
 # ----------------------------- PersonalNote -----------------------------
 
 
-def iter_personal_note_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
+def iter_personal_note_chunks(
+    since: Optional[datetime] = None, note_ids: Optional[list[int]] = None
+) -> Iterator[EntityChunks]:
     qs = PersonalNoteMaster.objects.select_related("team", "owner")
+    if note_ids is not None:
+        # One-off refresh of specific notes (a folder move), see
+        # `refresh_personal_notes`.
+        qs = qs.filter(note_id__in=note_ids)
     if since is not None:
         # Two-clause window (same shape as `todo_chunker`): a note whose
         # own body changed, OR one sitting in a TEAM folder whose ACL
@@ -231,12 +253,24 @@ def iter_personal_note_chunks(since: Optional[datetime] = None) -> Iterator[Enti
         touched_folder_ids = PersonalNoteFolder.objects.filter(
             scope=PersonalNoteFolder.SCOPE_TEAM, ts_updated_at__gte=since
         ).values_list("folder_id", flat=True)
-        qs = qs.filter(Q(ts_updated_at__gte=since) | Q(folder_id__in=touched_folder_ids))
+        # A renamed or moved folder (of any scope) changes the context of
+        # every note beneath it (MIP-839).
+        renamed = _folder_subtree_ids(
+            PersonalNoteFolder.objects.filter(ts_updated_at__gte=since).values_list(
+                "folder_id", flat=True
+            )
+        )
+        qs = qs.filter(
+            Q(ts_updated_at__gte=since)
+            | Q(folder_id__in=touched_folder_ids)
+            | Q(note_id__in=_note_ids_under_folders(renamed))
+        )
     notes = list(qs)
     if not notes:
         return
 
     grants_by_note = _load_grants(NOTE_TYPE_PERSONAL, [n.note_id for n in notes])
+    contexts = personal_note_contexts(notes)
     folder_acl_cache: dict[int, set[str]] = {}
 
     for note in notes:
@@ -270,6 +304,7 @@ def iter_personal_note_chunks(since: Optional[datetime] = None) -> Iterator[Enti
             updated_at=note.ts_updated_at,
             note_owner_id=str(note.owner_id) if note.owner_id else None,
             note_parent_id=(str(note.parent_note_id) if note.parent_note_id else None),
+            context=contexts.get(note.note_id),
         )
         if chunks:
             yield EntityChunks(
@@ -280,6 +315,114 @@ def iter_personal_note_chunks(since: Optional[datetime] = None) -> Iterator[Enti
 
 
 # ----------------------------- helpers -----------------------------
+
+
+def _folder_subtree_ids(root_ids) -> set[int]:
+    """The folders given and every folder beneath them. One query per
+    level; the level cap guards a corrupt parent loop."""
+    found: set[int] = {int(r) for r in root_ids}
+    frontier = set(found)
+    for _ in range(12):
+        if not frontier:
+            break
+        children = (
+            set(
+                PersonalNoteFolder.objects.filter(parent_folder_id__in=frontier).values_list(
+                    "folder_id", flat=True
+                )
+            )
+            - found
+        )
+        found |= children
+        frontier = children
+    return found
+
+
+def _note_ids_under_folders(folder_ids) -> set[int]:
+    """Root notes filed in these folders, and the child notes under them
+    (children carry no folder of their own)."""
+    found = set(
+        PersonalNoteMaster.objects.filter(folder_id__in=list(folder_ids)).values_list(
+            "note_id", flat=True
+        )
+    )
+    frontier = set(found)
+    for _ in range(12):
+        if not frontier:
+            break
+        children = (
+            set(
+                PersonalNoteMaster.objects.filter(parent_note_id__in=frontier).values_list(
+                    "note_id", flat=True
+                )
+            )
+            - found
+        )
+        found |= children
+        frontier = children
+    return found
+
+
+def _renamed_task_container_q(since: datetime) -> Q:
+    """Task notes whose project, milestone or task (or one of the task's
+    ancestors) changed since `since`: their path names changed with it."""
+    from origin.models.project.prj_models import ProjectMaster  # noqa: PLC0415
+    from origin.models.task.milestone_models import MilestoneMaster  # noqa: PLC0415
+    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+
+    project_ids = list(
+        ProjectMaster.objects.filter(ts_updated_at__gte=since).values_list("project_id", flat=True)
+    )
+    milestone_ids = list(
+        MilestoneMaster.objects.filter(ts_updated_at__gte=since).values_list(
+            "milestone_id", flat=True
+        )
+    )
+    touched = set(
+        TaskMaster.objects.filter(ts_updated_at__gte=since).values_list("task_id", flat=True)
+    )
+    # A renamed task renames its sub-tasks' paths.
+    frontier = set(touched)
+    for _ in range(12):
+        if not frontier:
+            break
+        children = (
+            set(
+                TaskMaster.objects.filter(parent_task_id__in=frontier).values_list(
+                    "task_id", flat=True
+                )
+            )
+            - touched
+        )
+        touched |= children
+        frontier = children
+    return (
+        Q(project_id__in=project_ids)
+        | Q(task__milestone_id__in=milestone_ids)
+        | Q(task_id__in=touched)
+    )
+
+
+def refresh_personal_notes(note_ids) -> None:
+    """Re-index these personal notes now (a folder move changes their
+    context without touching `ts_updated_at`, which would reorder the
+    sidebar). Text is unchanged, so this is the metadata-only lane: no
+    embedding. Best-effort, like the purge beside it: the move is already
+    committed, and a full reindex reconciles."""
+    if not note_ids:
+        return
+    try:
+        from origin.search_engine.ingestion import IngestionStats, _ingest_stream  # noqa: PLC0415
+
+        _ingest_stream(
+            iter_personal_note_chunks(note_ids=list(note_ids)),
+            IngestionStats(),
+            dry_run=False,
+        )
+    except Exception:  # noqa: BLE001
+        import logging  # noqa: PLC0415
+
+        logging.getLogger(__name__).exception("Failed to refresh note context after a move")
 
 
 def _load_grants(note_type_code: int, note_ids: list[int]) -> dict[int, list[str]]:
@@ -321,6 +464,8 @@ def _note_to_section_chunks(
     # v2 — note overlays.
     note_owner_id: Optional[str] = None,
     note_parent_id: Optional[str] = None,
+    # MIP-839 — what contains the note (folders / project > task / chat).
+    context: Optional[NoteContext] = None,
 ) -> list[Chunk]:
     """Split the body into heading-bounded sections; one Chunk per section.
 
@@ -385,6 +530,9 @@ def _note_to_section_chunks(
                 related_entity_ids=related,
                 note_owner_id=note_owner_id,
                 note_parent_id=note_parent_id,
+                context_text=context.text if context else None,
+                context_path=list(context.path) if context else None,
+                context_acl=list(context.acl) if context else None,
                 created_at=iso(created_at),
                 updated_at=iso(updated_at),
             )

@@ -35,6 +35,11 @@ def _resp(*ids):
 
 def _kind(body):
     must = body["query"]["bool"]["must"]
+    # A searcher who may see note container names (MIP-839) gets each clause
+    # as `should[clause, gated-copy]`: read the plain clause.
+    inner = must.get("bool", {})
+    if "should" in inner and "must" not in inner and inner.get("minimum_should_match") == 1:
+        must = inner["should"][0]
     if "bool" in must:  # earlier words AND + last word as a prefix
         return S.TIER_ALL_WORDS
     mm = must.get("multi_match", {})
