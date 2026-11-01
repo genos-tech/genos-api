@@ -319,6 +319,7 @@ class ApprovalCardTests(DependencyBase):
         friendly = _friendly_arguments(
             {"add": [_edge(self.a, self.b)], "remove": [_edge(self.b, self.c)]},
             "update_task_dependencies",
+            ctx=self.ctx,
         )
         self.assertEqual(friendly["add"][0]["blocker_task_id"], "HK-1 Task 1")
         self.assertEqual(friendly["remove"][0]["blocked_task_id"], "HK-3 Task 3")

@@ -299,6 +299,7 @@ class FriendlyArgumentTests(NoteWriteToolTestBase):
         out = _friendly_arguments(
             {"note_type": "task", "note_id": note.note_id, "content_text": "x"},
             tool_name="update_note",
+            ctx=self.ctx,
         )
         self.assertEqual(out["note_title"], "Perf research")
         self.assertEqual(out["note_id"], note.note_id)
@@ -308,6 +309,7 @@ class FriendlyArgumentTests(NoteWriteToolTestBase):
         out = _friendly_arguments(
             {"note_type": "personal", "title": "n", "folder_id": folder.folder_id},
             tool_name="create_note",
+            ctx=self.ctx,
         )
         self.assertEqual(out["folder_id"], "Research")
 
