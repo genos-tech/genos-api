@@ -9,7 +9,10 @@ enrichment in the controller.
   * per-task diff semantics match `update_task` (no-op fields skipped,
     unchanged tasks reported in `noops`);
   * "Deleted" is not an accepted status;
-  * due_date '' clears.
+  * due_date '' clears;
+  * `assignee_id` assigns on the `assign_task` guard (teammate or project
+    guest), '' clears, a milestone's backing row is refused, and an
+    unchanged assignee is a no-op that writes no history (MIP-823).
 
 `list_task_dependencies` contract:
   * exactly one of project_id / milestone_id;
@@ -27,8 +30,11 @@ Friendly-argument enrichment (`_friendly_arguments` nested pass):
 
 from datetime import date
 
+from django.contrib.auth import get_user_model
+
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
+from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent import controller
 from origin.search_engine.agent.tools import ToolContext, ToolError
@@ -193,6 +199,137 @@ class UpdateTasksBulkTests(OrganizeToolsTestBase):
             )
 
 
+class UpdateTasksBulkAssigneeTests(OrganizeToolsTestBase):
+    def _assign(self, *rows, ctx=None):
+        return UPDATE_TASKS_BULK.run(
+            {"updates": [{"rationale": "Hand the work to its owner.", **row} for row in rows]},
+            ctx or self.ctx,
+        )
+
+    def _history(self, task):
+        return TaskActivity.objects.filter(task=task, action_type=TaskActivityActionType.ASSIGNEE)
+
+    def test_assigns_several_tasks_and_records_history(self):
+        out = self._assign(
+            {"task_id": self.task_a.task_id, "assignee_id": str(self.user2.id)},
+            {
+                "task_id": self.task_b.task_id,
+                "assignee_id": str(self.user2.id).upper(),  # spelling is normalised
+            },
+        )
+        self.task_a.refresh_from_db()
+        self.task_b.refresh_from_db()
+        self.assertEqual(self.task_a.assignee_id, self.user2.id)
+        self.assertEqual(self.task_b.assignee_id, self.user2.id)
+        self.assertEqual([r["changed_fields"] for r in out["updated"]], [["assignee_id"]] * 2)
+        self.assertEqual(self._history(self.task_a).count(), 1)
+
+    def test_empty_string_unassigns(self):
+        self.task_a.assignee_id = self.user2.id
+        self.task_a.save()
+        out = self._assign({"task_id": self.task_a.task_id, "assignee_id": ""})
+        self.task_a.refresh_from_db()
+        self.assertIsNone(self.task_a.assignee_id)
+        self.assertEqual(out["updated"][0]["changed_fields"], ["assignee_id(cleared)"])
+        self.assertIn("1 assignee_id", out["__summary__"])
+
+    def test_unchanged_assignee_is_a_noop_and_writes_no_history(self):
+        self.task_a.assignee_id = self.user2.id
+        self.task_a.save()
+        before = self._history(self.task_a).count()
+        stamp = TaskMaster.objects.get(pk=self.task_a.pk).ts_updated_at
+        out = self._assign(
+            {"task_id": self.task_a.task_id, "assignee_id": str(self.user2.id)},
+            # clearing an already-empty assignee is a no-op too
+            {"task_id": self.task_b.task_id, "assignee_id": ""},
+        )
+        self.assertEqual(out["updated"], [])
+        self.assertEqual(sorted(out["noops"]), sorted([self.task_a.task_id, self.task_b.task_id]))
+        self.assertEqual(self._history(self.task_a).count(), before)
+        self.assertEqual(TaskMaster.objects.get(pk=self.task_a.pk).ts_updated_at, stamp)
+
+    def test_assignee_beside_other_fields(self):
+        out = self._assign(
+            {"task_id": self.task_a.task_id, "priority": "High", "assignee_id": str(self.user2.id)}
+        )
+        self.assertEqual(out["updated"][0]["changed_fields"], ["priority", "assignee_id"])
+
+    def test_project_guest_may_be_assigned(self):
+        guest = get_user_model().objects.create_user(
+            username="guestuser", email="guest@example.com", password="x"
+        )
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=guest)
+        self._assign({"task_id": self.task_a.task_id, "assignee_id": str(guest.id)})
+        self.task_a.refresh_from_db()
+        self.assertEqual(self.task_a.assignee_id, guest.id)
+
+    def test_stranger_and_garbage_reject_the_whole_batch(self):
+        stranger = get_user_model().objects.create_user(
+            username="stranger", email="stranger@example.com", password="x"
+        )
+        with self.assertRaises(ToolError) as caught:
+            self._assign(
+                {"task_id": self.task_a.task_id, "assignee_id": str(self.user2.id)},
+                {"task_id": self.task_b.task_id, "assignee_id": str(stranger.id)},
+                {"task_id": self.task_b.task_id + 1000, "assignee_id": "nope"},
+            )
+        msg = str(caught.exception)
+        self.assertIn("updates[1]: User", msg)
+        self.assertIn("not an active member", msg)
+        self.task_a.refresh_from_db()
+        self.assertIsNone(self.task_a.assignee_id)  # nothing applied
+
+    def test_garbage_id_is_named(self):
+        with self.assertRaisesMessage(ToolError, "`assignee_id` must be a user id"):
+            self._assign({"task_id": self.task_a.task_id, "assignee_id": "nope"})
+
+    def test_a_milestones_backing_row_is_refused(self):
+        backing = ensure_backing_task(
+            MilestoneMaster.objects.create(
+                team=self.team, project=self.project, reporter=self.user, title="M"
+            )
+        )
+        with self.assertRaisesMessage(ToolError, "milestone's backing task"):
+            self._assign(
+                {"task_id": self.task_a.task_id, "assignee_id": str(self.user2.id)},
+                {"task_id": backing.task_id, "assignee_id": str(self.user2.id)},
+            )
+        self.task_a.refresh_from_db()
+        self.assertIsNone(self.task_a.assignee_id)
+
+    def test_a_deleted_account_is_refused(self):
+        self.user2.is_deleted = True
+        self.user2.save()
+        with self.assertRaisesMessage(ToolError, "has been deleted"):
+            self._assign({"task_id": self.task_a.task_id, "assignee_id": str(self.user2.id)})
+
+    def test_approval_card_labels_proposed_and_current_assignee(self):
+        self.task_a.assignee_id = self.user.id
+        self.task_a.save()
+        raw = {
+            "updates": [
+                {
+                    "task_id": self.task_a.task_id,
+                    "assignee_id": str(self.user2.id),
+                    "rationale": "Hand over.",
+                }
+            ]
+        }
+        out = controller._friendly_arguments(raw, "update_tasks_bulk", ctx=self.ctx)
+        row = out["updates"][0]
+        self.assertEqual(row["assignee_id"], "otheruser")
+        self.assertEqual(row["current"]["assignee_id"], "testuser")
+        self.assertEqual(raw["updates"][0]["assignee_id"], str(self.user2.id))  # raw untouched
+
+    def test_plan_card_labels_the_default_assignee(self):
+        out = controller._friendly_arguments(
+            {"project_id": self.project.project_id, "default_assignee_id": str(self.user2.id)},
+            "create_task_plan",
+            ctx=self.ctx,
+        )
+        self.assertEqual(out["default_assignee_id"], "otheruser")
+
+
 class ListTaskDependenciesTests(OrganizeToolsTestBase):
     def setUp(self):
         super().setUp()
@@ -281,6 +418,7 @@ class FriendlyArgumentEnrichmentTests(OrganizeToolsTestBase):
                 "status": "Open",
                 "due_date": "2026-08-01",
                 "milestone_id": None,
+                "assignee_id": None,
             },
         )
         # Proposed values and task_id survive untouched.
