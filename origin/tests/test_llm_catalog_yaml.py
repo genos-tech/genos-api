@@ -569,6 +569,22 @@ class ShippedRateCardTests(SimpleTestCase):
             p = self.cat.price_for(entry["model"])
             self.assertLessEqual(p.cached_input, p.input, entry["model"])
 
+    def test_claude_sonnet_5_is_priced_at_its_permanent_list_price(self):
+        """MIP-859: the entry carried $3/$15, the price the $2/$10 intro
+        rate was expected to revert to. Anthropic made $2/$10 permanent,
+        so every Sonnet 5 request was costed 50% high (ledger AND
+        credits — both read this table). Pin the numbers so a "restore
+        the list price" edit has to change this test on purpose."""
+        p = self.cat.price_for("claude-sonnet-5")
+        if p is None:
+            # The Claude 5.5 refresh (MIP-859) replaces this id with
+            # claude-sonnet-5-5, whose own prices are pinned in
+            # test_claude_catalog_models.
+            self.skipTest("claude-sonnet-5 is no longer in the catalog")
+        self.assertEqual(
+            (p.input, p.output, p.cached_input, p.cache_write), (2.0, 10.0, 0.2, 2.5)
+        )
+
     def test_the_shipped_rate_card_is_complete(self):
         rc = self.cat.rate_card
         self.assertTrue(rc.label)
