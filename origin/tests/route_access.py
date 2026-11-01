@@ -530,6 +530,8 @@ REGISTRY = {
     ),
     # views.task.milestone_views
     "origin.views.task.milestone_views.MilestoneAssigneesView": checked("is_project_member"),
+    "origin.views.task.milestone_views.MilestoneFolderListView": checked("is_project_member"),
+    "origin.views.task.milestone_views.MilestoneFolderView": checked("is_project_member"),
     "origin.views.task.milestone_views.MilestoneView": checked("is_project_member"),
     "origin.views.task.milestone_views.ProjectMilestonesView": checked("is_project_member"),
     # views.task.search_views

@@ -181,6 +181,7 @@ def create_milestone(
     tags=None,
     links=None,
     assignee_ids=(),
+    folder=None,
 ) -> MilestoneMaster:
     """Create a milestone with its backing task and assignee rows.
 
@@ -194,6 +195,7 @@ def create_milestone(
         team=project.team,
         project=project,
         sprint=sprint,
+        folder=folder,
         reporter_id=reporter_id,
         title=title,
         description=description_blocks,
