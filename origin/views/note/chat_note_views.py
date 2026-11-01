@@ -10,11 +10,14 @@ from origin.search_engine.purge import purge_note
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.chat_note_target import (
+    ChatNoteTargetNotFound,
+    chat_note_roles,
+    resolve_chat_note_target,
+)
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.note_role import (
-    ROLE_EDITOR,
-    ROLE_OWNER,
     ROLE_VIEWER,
     delete_note_permissions,
     get_effective_role,
@@ -355,7 +358,6 @@ class ChatNoteMasterView(AuthenticatedAPIView):
         data = {
             "team": request.data.get("team_id"),
             "owner": request.data.get("user_id"),
-            "chat_type": request.data.get("chat_type"),
             "channel": request.data.get("chat_id"),
             "title": request.data.get("title"),
             "body": request.data.get("body"),
@@ -367,19 +369,13 @@ class ChatNoteMasterView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["owner"])):
             return res
 
-        # Tier quota: monthly note-creation cap (shared across
-        # personal / task / chat notes).
-        if res := check_monthly_creation_quota(request_user_id, NOTE_CREATE_KEY, "note_create"):
-            return res
-
         # Assigned AFTER validate_request_data: `is_thread` coerces to a
         # Python bool and `thread_root_id` is None for non-thread notes —
         # validate_request_data 400s on any None value, so these must not
         # be in the validated dict (same pattern as parent_note_id below).
         is_thread_bool = str(request.data.get("is_thread")).lower() in ("true", "1")
         thread_id_raw = request.data.get("thread_id")
-        data["is_thread"] = is_thread_bool
-        data["thread_root_id"] = (
+        thread_root_id = (
             thread_id_raw
             if (
                 is_thread_bool
@@ -388,6 +384,26 @@ class ChatNoteMasterView(AuthenticatedAPIView):
             )
             else None
         )
+
+        # The caller must be in the conversation, and the note's kind is
+        # the channel's own — the request's `chat_type` is ignored (MIP-838).
+        try:
+            target = resolve_chat_note_target(
+                user_id=request_user_id,
+                channel_id=data["channel"],
+                thread_root_id=thread_root_id,
+            )
+        except ChatNoteTargetNotFound as e:
+            return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
+        data["chat_type"] = target.chat_type
+
+        # Tier quota: monthly note-creation cap (shared across
+        # personal / task / chat notes).
+        if res := check_monthly_creation_quota(request_user_id, NOTE_CREATE_KEY, "note_create"):
+            return res
+
+        data["is_thread"] = is_thread_bool
+        data["thread_root_id"] = target.thread_root_id
         data["parent_note_id"] = request.data.get("parent_note_id")
 
         serializer = ChatNoteMasterSerializer(data=data)
@@ -415,59 +431,13 @@ class ChatNoteMasterView(AuthenticatedAPIView):
                         "tsUpdated": serializer.data["ts_updated_at"],
                     }
 
-                    # Second, fan out note roles to the chat's members. A
-                    # chat note is shared per-channel (every member sees it
-                    # in the notes panel), so a creator-only OWNER row left
-                    # every other member at the implicit VIEWER fallback
-                    # (note_role.get_effective_role) — which 403s the moment
-                    # they edit the shared note, e.g. adding an @mention.
-                    # That was the "You don't have permission to do that"
-                    # chat-note-mention bug. Role matrix, by chat kind:
-                    #   DM / MDM (1 / 4): every active member is an OWNER.
-                    #   GM (2):           the GM owner is OWNER; every other
-                    #                     active member is an EDITOR.
-                    #   other (e.g. PM):  only the creator is an OWNER
-                    #                     (unchanged default).
+                    # Second, fan out note roles to the chat's members
+                    # (see `chat_note_roles` for the matrix by chat kind).
                     team_obj = TeamMaster.objects.get(team_id=data["team"])
                     note_id = note["noteId"]
-                    chat_type = serializer.data["chat_type"]
-                    channel_id = serializer.data["channel"]
-
-                    member_ids = list(
-                        ChannelMember.objects.filter(
-                            channel_id=channel_id, is_deleted=False
-                        ).values_list("user_id", flat=True)
+                    role_by_user = chat_note_roles(
+                        channel=target.channel, creator_id=request_user_id
                     )
-                    role_by_user: dict[str, int] = {}
-                    if chat_type in (ChannelKind.DM, ChannelKind.MDM):
-                        for uid in member_ids:
-                            role_by_user[str(uid)] = ROLE_OWNER
-                    elif chat_type == ChannelKind.GM:
-                        owner_id = (
-                            Channel.objects.filter(id=channel_id)
-                            .values_list("owner_id", flat=True)
-                            .first()
-                        )
-                        if owner_id is None:
-                            # Legacy-bridged GMs may have a null Channel.owner;
-                            # fall back to the member flagged role="owner".
-                            owner_id = (
-                                ChannelMember.objects.filter(
-                                    channel_id=channel_id, role="owner", is_deleted=False
-                                )
-                                .values_list("user_id", flat=True)
-                                .first()
-                            )
-                        for uid in member_ids:
-                            role_by_user[str(uid)] = (
-                                ROLE_OWNER if str(uid) == str(owner_id) else ROLE_EDITOR
-                            )
-                    # Guarantee the creator always has at least an OWNER row:
-                    # covers the PM / unknown fallback (preserving the old
-                    # creator-only behaviour) and never downgrades a creator
-                    # who is already an OWNER above. A GM creator who isn't the
-                    # GM owner keeps their EDITOR role (set above), as intended.
-                    role_by_user.setdefault(str(request_user_id), ROLE_OWNER)
 
                     for uid, role_id in role_by_user.items():
                         NotePermissionMaster.objects.update_or_create(
