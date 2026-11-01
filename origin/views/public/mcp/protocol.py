@@ -62,6 +62,8 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 HEADER_MISMATCH = -32020
 UNSUPPORTED_PROTOCOL_VERSION = -32022
+# Implementation-defined range (-32000..-32099): the endpoint is switched off.
+SERVICE_UNAVAILABLE = -32001
 
 
 class JsonRpcError(Exception):
@@ -203,7 +205,8 @@ def initialize_result(params: dict[str, Any]) -> dict[str, Any]:
             "Genos is the user's workspace: projects, tasks, milestones, notes "
             "and chat. Read a task's description from `content_markdown` when it "
             "is present — it keeps headings, checklists and code fences — and "
-            "fall back to `content_text`, which is the same body flattened. A "
+            "fall back to `content_text`, the same body flattened, which comes "
+            "back only when there is no markdown. A "
             "task can be named by its display id (e.g. PRJ-123), its URL, or its "
             "numeric id. Start from `list_my_tasks` when the user says 'my tasks' "
             "or names no task at all. "

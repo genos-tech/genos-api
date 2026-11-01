@@ -26,6 +26,28 @@ from origin.search_engine.search import search
 
 _MAX_LIMIT = 20
 
+# Longest chunk text an MCP caller gets back (MIP-798). A task body is indexed
+# as one chunk, so a single hit could carry thousands of characters next to a
+# `snippet` that is already enough to judge it. `get_task` / `get_note` read
+# the rest. MCP only: the in-app agent keeps the full chunk, so its grounding
+# does not move.
+MCP_CHUNK_MAX_CHARS = 1000
+
+
+def _chunk_payload(chunk: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    text = chunk.get("text", "") or ""
+    out: dict[str, Any] = {"chunk_id": chunk.get("chunk_id")}
+    # Cut BEFORE fencing: the MCP layer strips a fence only when the string
+    # still starts with the opener and ends with the closer, so cutting the
+    # wrapped string would leave the markup in the caller's context.
+    if ctx.surface == "mcp" and len(text) > MCP_CHUNK_MAX_CHARS:
+        text = text[:MCP_CHUNK_MAX_CHARS]
+        out["text"] = wrap_workspace_content(text)
+        out["truncated"] = True
+    else:
+        out["text"] = wrap_workspace_content(chunk.get("text", ""))
+    return out
+
 
 def _scope_ids(args: dict[str, Any], key: str) -> list[str] | None:
     """`[id]` for a positive integer argument, None when it is absent. A
@@ -40,6 +62,15 @@ def _scope_ids(args: dict[str, Any], key: str) -> list[str] | None:
     if value <= 0:
         raise ToolError(f"`{key}` must be a positive integer (got {raw!r}).")
     return [str(value)]
+
+
+def _as_int(value: Any) -> Any:
+    """The index stores ids as strings; every tool reports `project_id` as a
+    number (MIP-781). Anything that is not an integer is returned as it was."""
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return value
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -115,13 +146,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # <workspace_content> boundary marker so the model is steered
         # to treat them as data, not instructions. See
         # `wrap_workspace_content` for the rationale.
-        chunks = [
-            {
-                "chunk_id": c.get("chunk_id"),
-                "text": wrap_workspace_content(c.get("text", "")),
-            }
-            for c in (entity.get("chunks") or [])
-        ]
+        chunks = [_chunk_payload(c, ctx) for c in (entity.get("chunks") or [])]
         matches.append(
             {
                 "entity_type": entity.get("entity_type"),
@@ -136,7 +161,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "task_id": entity.get("task_id"),
                 "note_id": entity.get("note_id"),
                 "note_type": entity.get("note_type"),
-                "project_id": entity.get("project_id"),
+                "project_id": _as_int(entity.get("project_id")),
                 # Where a note lives (folders, project > task, chat), for a
                 # viewer who may see it (MIP-839). Names are user-typed, so
                 # they go through the same fence as the snippet.

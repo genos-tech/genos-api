@@ -33,6 +33,7 @@ from origin.search_engine.llm.types import (
     CallUsage,
     FunctionCall,
     GenerationParams,
+    ModelRefusal,
     ToolDeclaration,
 )
 
@@ -115,6 +116,7 @@ __all__ = [
     "FunctionCall",
     "GenerationParams",
     "ModelClient",
+    "ModelRefusal",
     "ToolDeclaration",
     "get_model_client",
 ]

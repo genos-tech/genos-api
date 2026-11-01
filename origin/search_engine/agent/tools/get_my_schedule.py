@@ -36,6 +36,7 @@ from origin.search_engine.agent.calendar import (
     shape_event,
 )
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.services.user_time import zone_for_user_id
 
 _DEFAULT_WINDOW_DAYS = 7
@@ -121,7 +122,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "title": t.title,
                 "due_date": t.due_date.isoformat() if t.due_date else None,
                 "status": t.status,
-                "priority": t.priority,
+                "priority": blank_to_none(t.priority),
                 "project_id": t.project_id,
                 "project_name": t.project.project_name if t.project else None,
             }

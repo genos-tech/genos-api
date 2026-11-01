@@ -43,6 +43,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import owns_personal_folder, task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
+from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_note_mentions
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
@@ -133,6 +134,7 @@ def _snapshot_v1(*, note, note_type_code: int, ctx: ToolContext) -> None:
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    check_body_size(args.get("content_text"), "content_text")
     note_type = normalize_note_type(args.get("note_type"))
     if note_type == "shared":
         raise ToolError(
@@ -307,7 +309,7 @@ def _create_task_note(
         "parent_context": {
             k: v
             for k, v in {
-                "project_id": str(project_id),
+                "project_id": project_id,
                 "task_id": str(task_id_field) if task_id_field else None,
             }.items()
             if v is not None

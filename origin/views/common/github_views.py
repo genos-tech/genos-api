@@ -724,8 +724,8 @@ def _tasks_for_branch(head_ref: str, team_ids: list) -> list:
 def _sync_task_deliveries(owner: str, repo: str, pr: dict, team_ids: list) -> dict | None:
     """Record / update `TaskDelivery` rows for one `pull_request` event
     (MIP-687). Never lets a failure here cost the auto-close or the link
-    activity that follow it: those are the older contract, and GitHub
-    would retry the whole delivery on a 500."""
+    activity that follow it: those are the older contract. (A 500 would
+    NOT make GitHub retry the delivery; it would be lost, MIP-861.)"""
     try:
         head_ref = ((pr.get("head") or {}).get("ref")) or ""
         return sync_pull_request(
@@ -738,6 +738,31 @@ def _sync_task_deliveries(owner: str, repo: str, pr: dict, team_ids: list) -> di
     except Exception:  # noqa: BLE001
         logger.exception("GitHub webhook: task delivery sync failed for %s/%s", owner, repo)
         return None
+
+
+def apply_pull_request(owner: str, repo: str, pr: dict, action: str | None, team_ids: list) -> dict:
+    """What a `pull_request` event does to Genos: sync the PR's delivery
+    rows, then close the tasks it finished.
+
+    Shared by `GithubWebhookView` and `reconcile_pr_deliveries` (MIP-861),
+    so a close recovered from GitHub's REST state and one made by a live
+    event follow ONE rule: `_close_tasks_for_merged_pr`, with its tenant
+    scope (`team_ids`, from `_repo_team_ids`), the assignee's
+    `auto_close_on_pr_merge` opt-in and the wait for every linked PR.
+
+    `pr` is a webhook `pull_request` object or the REST pull object; both
+    carry the fields read here. Returns `{"deliveries": counts | None,
+    "updated": closed-task count | None}` (`updated` is None unless the
+    event was a merge).
+    """
+    deliveries = None
+    if action in _DELIVERY_ACTIONS:
+        deliveries = _sync_task_deliveries(owner, repo, pr, team_ids)
+    updated = None
+    head_ref = ((pr.get("head") or {}).get("ref")) or ""
+    if action == "closed" and pr.get("merged") and head_ref:
+        updated = _close_tasks_for_merged_pr(head_ref, team_ids, pr.get("html_url") or "")
+    return {"deliveries": deliveries, "updated": updated}
 
 
 # Why a registration did not happen, as an HTTP status for the client.
@@ -853,9 +878,15 @@ class GithubWebhookView(APIView):
     task's assignee has opted in* via the `auto_close_on_pr_merge`
     preference. Default is opt-out.
 
-    GitHub retries failed webhooks for ~3 days, so we always return 200
-    once signature verification passes — even when no tasks matched.
-    Signature failures get 401 so GitHub stops sending obvious garbage.
+    We answer 200 once signature verification passes — even when no
+    tasks matched — so GitHub shows the delivery as healthy. Signature
+    failures get 401 so GitHub stops sending obvious garbage.
+
+    GitHub does NOT retry a failed delivery on its own (the "Redeliver"
+    button and the deliveries API are manual). A delivery that lands
+    while this service is redeploying and gets a platform 500 is lost,
+    so `manage.py reconcile_pr_deliveries` (MIP-861) recovers the state
+    from the PR itself, through `apply_pull_request` below.
     """
 
     permission_classes = [permissions.AllowAny]
@@ -940,14 +971,18 @@ class GithubWebhookView(APIView):
                 team_ids = _repo_team_ids(owner_inv, repo_inv)
 
             deliveries = None
-            if ref is not None and action in _DELIVERY_ACTIONS:
-                deliveries = _sync_task_deliveries(owner_inv, repo_inv, pr, team_ids)
+            updated = None
+            if ref is not None:
+                # The same two steps `reconcile_pr_deliveries` runs, so a
+                # recovered event and a live one close tasks by one rule.
+                applied = apply_pull_request(owner_inv, repo_inv, pr, action, team_ids)
+                deliveries, updated = applied["deliveries"], applied["updated"]
 
             # MVP: only the merge transition fires. Other action types
             # (opened, ready_for_review, closed-unmerged, etc.) are
             # acknowledged but not acted on.
             if action == "closed" and merged and head_ref:
-                updated = _close_tasks_for_merged_pr(head_ref, team_ids, html_url)
+                updated = updated or 0
                 logger.info(
                     "GitHub webhook: PR merged %s (head=%s) → updated %d task(s)",
                     html_url,

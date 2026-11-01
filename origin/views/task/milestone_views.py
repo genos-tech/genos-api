@@ -4,7 +4,11 @@ from rest_framework.response import Response
 
 from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster
-from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
+from origin.models.task.milestone_models import (
+    MilestoneAssignees,
+    MilestoneFolder,
+    MilestoneMaster,
+)
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.purge import purge_milestone, purge_task
@@ -44,6 +48,26 @@ def _deny_not_found(kind: str):
     integers, so a 403 would turn this endpoint into an existence oracle
     for the whole install. Mirrors the `channel_views` convention."""
     return Response({"error": f"{kind} not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
+def _resolve_folder(data, project_id):
+    """The `folder_id` of a milestone write, as `(folder, error_response)`.
+
+    Absent / null / "" means unfiled (`(None, None)`). A folder must belong
+    to the milestone's own project: a folder from another project is
+    refused with a 400 that does not say whether the id exists elsewhere.
+    """
+    raw = data.get("folder_id")
+    if raw in (None, "", "null"):
+        return None, None
+    try:
+        folder = MilestoneFolder.objects.get(folder_id=raw, project_id=project_id)
+    except (MilestoneFolder.DoesNotExist, ValueError, TypeError):
+        return None, Response(
+            {"error": "Folder not found in this project."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return folder, None
 
 
 def _format_due_date(value):
@@ -108,6 +132,8 @@ def _serialize_milestone(m: MilestoneMaster, *, with_aggregates: bool = True) ->
         "projectId": m.project_id,
         "teamId": m.team_id,
         "sprintId": m.sprint_id,
+        # Grouping folder (MIP-847); null = unfiled. Independent of the sprint.
+        "folderId": m.folder_id,
         "reporterId": m.reporter_id,
         # Resolved reporter user object so the milestone preview can
         # render an avatar / name without an extra team-member lookup.
@@ -271,6 +297,10 @@ class MilestoneView(AuthenticatedAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+        folder, res = _resolve_folder(request.data, project.project_id)
+        if res:
+            return res
+
         # Chat-thread origin (milestone created from a DM/GM/MDM thread).
         # Stored on the backing TaskMaster row — same columns and same
         # one-task-per-thread rule as regular task creation, since the
@@ -305,6 +335,7 @@ class MilestoneView(AuthenticatedAPIView):
                 start_date=request.data.get("start_date"),
                 due_date=request.data.get("due_date"),
                 sprint=sprint,
+                folder=folder,
                 tags=request.data.get("tags"),
                 links=request.data.get("links"),
                 assignee_ids=request.data.get("assignee_ids") or [],
@@ -390,6 +421,16 @@ class MilestoneView(AuthenticatedAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+        # Folder move (MIP-847): resolved before the transaction like the other
+        # lookups. A project move leaves the folder behind (folders belong to
+        # one project), so a `folder_id` riding along with it is ignored.
+        folder_in_request = project_move is None and "folder_id" in request.data
+        new_folder = None
+        if folder_in_request:
+            new_folder, res = _resolve_folder(request.data, milestone.project_id)
+            if res:
+                return res
+
         with transaction.atomic():
             # Sprint move support: explicit `sprint_id` key (including
             # `None`) is honored; absent key leaves the sprint as-is.
@@ -406,6 +447,8 @@ class MilestoneView(AuthenticatedAPIView):
                 milestone.sprint = None
                 # Fans the cleared sprint out to the member tasks below.
                 sprint_changed = True
+                # Folders belong to one project; the milestone lands unfiled.
+                milestone.folder = None
             elif "sprint_id" in request.data:
                 sprint_changed = True
                 new_sprint_id = request.data.get("sprint_id")
@@ -424,6 +467,9 @@ class MilestoneView(AuthenticatedAPIView):
                             status=status.HTTP_400_BAD_REQUEST,
                         )
                     milestone.sprint = target
+
+            if folder_in_request:
+                milestone.folder = new_folder
 
             for field in (
                 "title",
@@ -677,3 +723,135 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
             {"milestone": _serialize_milestone(milestone)},
             status=status.HTTP_200_OK,
         )
+
+
+_FOLDER_NAME_MAX = MilestoneFolder._meta.get_field("name").max_length
+
+
+def _serialize_folder(f: MilestoneFolder) -> dict:
+    return {
+        "folderId": f.folder_id,
+        "projectId": f.project_id,
+        "name": f.name,
+        "sortOrder": f.sort_order,
+        "tsCreatedAt": f.ts_created_at,
+        "tsUpdatedAt": f.ts_updated_at,
+    }
+
+
+def _clean_folder_name(raw):
+    """`(name, error_response)`: trimmed, non-empty, within the column."""
+    name = raw.strip() if isinstance(raw, str) else ""
+    if not name or len(name) > _FOLDER_NAME_MAX:
+        return None, Response(
+            {"error": f"name is required, at most {_FOLDER_NAME_MAX} characters."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return name, None
+
+
+class MilestoneFolderListView(AuthenticatedAPIView):
+    """GET (list) / POST (create) milestone folders of a project (MIP-847).
+
+    Any project member may read and manage folders, like milestones.
+    """
+
+    def get(self, request):
+        project_id = request.GET.get("project_id")
+        if res := validate_request_data({"project_id": project_id}):
+            return res
+        try:
+            project = ProjectMaster.objects.get(project_id=project_id, is_deleted=False)
+        except (ProjectMaster.DoesNotExist, ValueError):
+            return _deny_not_found("Project")
+        if not is_project_member(project.project_id, request.user.id):
+            return _deny_not_found("Project")
+        folders = MilestoneFolder.objects.filter(project=project).order_by(
+            "sort_order", "folder_id"
+        )
+        return Response({"folders": [_serialize_folder(f) for f in folders]})
+
+    def post(self, request):
+        project_id = request.data.get("project_id")
+        if res := validate_request_data({"project_id": project_id}):
+            return res
+        try:
+            project = ProjectMaster.objects.get(project_id=project_id, is_deleted=False)
+        except (ProjectMaster.DoesNotExist, ValueError, TypeError):
+            return _deny_not_found("Project")
+        if not is_project_member(project.project_id, request.user.id):
+            return _deny_not_found("Project")
+        name, res = _clean_folder_name(request.data.get("name"))
+        if res:
+            return res
+        if MilestoneFolder.objects.filter(project=project, name=name).exists():
+            return Response(
+                {"error": "This project already has a folder with that name."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        last = (
+            MilestoneFolder.objects.filter(project=project)
+            .order_by("-sort_order")
+            .values_list("sort_order", flat=True)
+            .first()
+        )
+        folder = MilestoneFolder.objects.create(
+            team=project.team,
+            project=project,
+            name=name,
+            sort_order=(last + 1) if last is not None else 0,
+        )
+        return Response({"folder": _serialize_folder(folder)}, status=status.HTTP_201_CREATED)
+
+
+class MilestoneFolderView(AuthenticatedAPIView):
+    """PATCH (rename / reorder) / DELETE one milestone folder (MIP-847).
+
+    Deleting a folder unfiles its milestones (FK is SET_NULL); no
+    milestone or task is deleted.
+    """
+
+    def _get_folder(self, request, folder_id):
+        try:
+            folder = MilestoneFolder.objects.get(folder_id=folder_id)
+        except MilestoneFolder.DoesNotExist:
+            return None
+        if not is_project_member(folder.project_id, request.user.id):
+            return None
+        return folder
+
+    def patch(self, request, folder_id: int):
+        folder = self._get_folder(request, folder_id)
+        if folder is None:
+            return _deny_not_found("Folder")
+        if "name" in request.data:
+            name, res = _clean_folder_name(request.data.get("name"))
+            if res:
+                return res
+            if (
+                MilestoneFolder.objects.filter(project_id=folder.project_id, name=name)
+                .exclude(folder_id=folder.folder_id)
+                .exists()
+            ):
+                return Response(
+                    {"error": "This project already has a folder with that name."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            folder.name = name
+        if "sort_order" in request.data:
+            try:
+                folder.sort_order = int(request.data.get("sort_order") or 0)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": "sort_order must be an integer."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        folder.save()
+        return Response({"folder": _serialize_folder(folder)})
+
+    def delete(self, request, folder_id: int):
+        folder = self._get_folder(request, folder_id)
+        if folder is None:
+            return _deny_not_found("Folder")
+        folder.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

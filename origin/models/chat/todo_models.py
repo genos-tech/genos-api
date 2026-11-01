@@ -53,6 +53,12 @@ class ToDoCategory(models.Model):
         related_name="todo_categories",
     )
     name = models.CharField(max_length=64)
+    # Chip colour (MIP-759), same shape as `ProjectTags.tag_color` /
+    # `tag_text_color`: a preset hex and the text colour that reads on it.
+    # Defaults to the palette's neutral gray so a tag created by name
+    # alone (the agent's `create_todo_item`) still gets a valid chip.
+    color = models.CharField(max_length=10, default="#808080")
+    text_color = models.CharField(max_length=10, default="white")
     sort_order = models.IntegerField(default=0)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

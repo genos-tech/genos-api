@@ -2,6 +2,8 @@ from django.urls import path
 
 from origin.views.task.milestone_views import (
     MilestoneAssigneesView,
+    MilestoneFolderListView,
+    MilestoneFolderView,
     MilestoneView,
     ProjectMilestonesView,
 )
@@ -120,6 +122,21 @@ urlpatterns = [
     # Milestone
     path("api/v2/milestone/", MilestoneView.as_view(), name="milestone_create"),
     path("api/v2/milestone/list/", ProjectMilestonesView.as_view(), name="project_milestones"),
+    path(
+        "api/v2/milestone/folder/list/",
+        MilestoneFolderListView.as_view(),
+        name="milestone_folder_list",
+    ),
+    path(
+        "api/v2/milestone/folder/",
+        MilestoneFolderListView.as_view(),
+        name="milestone_folder_create",
+    ),
+    path(
+        "api/v2/milestone/folder/<int:folder_id>/",
+        MilestoneFolderView.as_view(),
+        name="milestone_folder_detail",
+    ),
     path(
         "api/v2/milestone/<int:milestone_id>/",
         MilestoneView.as_view(),

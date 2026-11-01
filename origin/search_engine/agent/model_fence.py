@@ -34,6 +34,12 @@ folder's in three tools (display text) and a TAG in `list_project_tags` (an
 identifier). The same key means two things, so it is fenced by (tool, key),
 never by key alone.
 
+**Keys the boundary cannot fence (MIP-867).** `get_task_history`'s `old_value`
+and `new_value` hold a task title, a username or a file name in one entry and
+an id, an enum or a date in the next, so no key rule is right for both. The
+tool fences by the kind of change it is reporting, and `FENCED_IN_TOOL` records
+that, so the key is a decision on the page and not a gap.
+
 Idempotent: a value a tool already fenced is left as it is, and the persisted
 steps replayed on a resume go through the same function.
 """
@@ -60,6 +66,7 @@ FENCED_KEYS = frozenset(
 # tools an event or calendar id). `unfence_arguments` would also strip a fence
 # the model copied into an argument.
 _PEOPLE = frozenset({"username"})
+_ATTENDEE_NAMES = frozenset({"displayName"})
 FENCED_KEYS_BY_TOOL: dict[str, frozenset[str]] = {
     # A sprint's or a folder's name.
     "get_sprint_summary": frozenset({"name"}),
@@ -80,7 +87,16 @@ FENCED_KEYS_BY_TOOL: dict[str, frozenset[str]] = {
     # is already fenced by `calendar.shape_event`; it is listed for
     # `create_calendar_event` so the fence holds if that changes. Idempotent.
     "list_calendars": frozenset({"summary"}),
-    "create_calendar_event": frozenset({"summary"}),
+    "create_calendar_event": frozenset({"summary", "displayName"}),
+    # A calendar attendee's name (MIP-867), `attendees[].displayName` out of
+    # `calendar.shape_event`. Google lets whoever creates an event write the
+    # name of each attendee, so it is not the invitee's own word. The model
+    # addresses attendees by `email`, which stays bare: `attendees` in the
+    # create/update tools is a list of emails and nothing takes a name back.
+    # `get_my_schedule` is the fourth caller of `shape_event`.
+    "list_calendar_events": _ATTENDEE_NAMES,
+    "update_calendar_event": _ATTENDEE_NAMES,
+    "get_my_schedule": _ATTENDEE_NAMES,
 }
 
 # User-typed, but the model passes them back to a write tool verbatim, so
@@ -99,13 +115,33 @@ EXEMPT_TOOL_KEYS = {
     ),
 }
 
-# User-typed strings the tools return that this module does NOT fence yet.
-# Each needs a decision of its own (does the model pass it back, and is the key
-# shared with a non-text field), not a blanket rule.
+# (tool, key) pairs the boundary must NOT fence by key, because the same key
+# holds user text AND identifiers and only the tool knows which (MIP-867). The
+# tool fences the user-typed values itself, by what kind of change the entry
+# records, and leaves the rest bare. A key rule here would wrap the ids, enums
+# and dates the model passes back to a write tool.
+FENCED_IN_TOOL = {
+    ("get_task_history", "old_value"): (
+        "`get_task_history._value` fences it by kind of change: a title, a username, a "
+        "file name, a custom-field value, a tag, a relation's label and any status, "
+        "priority or effort outside the product's own set are wrapped; ids, display ids, "
+        "dates, booleans and the known enum values stay bare for the model to pass back"
+    ),
+    ("get_task_history", "new_value"): "the same entries as `old_value`, the other side",
+}
+
+# User-typed strings the tools return that nothing fences yet. Each needs a
+# decision of its own (does the model pass it back, and is the key shared with
+# a non-text field), not a blanket rule. A string found bare goes here until it
+# has that decision, and `FENCED_KEYS_BY_TOOL`, `EXEMPT_*` or `FENCED_IN_TOOL`
+# takes it when it does.
 UNFENCED_FOLLOW_UP = {
-    "displayName": "a calendar attendee's name (`calendar.shape_event`: list/create/update events)",
-    "old_value": "get_task_history: a field's previous value, which can be a title or a username",
-    "new_value": "get_task_history: a field's new value, which can be a title or a username",
+    # Found reading `get_task_history` for MIP-867; not part of it.
+    "key_name": (
+        "get_task_history: `via.key_name`, the name someone gave an API key (a write "
+        "through that key is stamped with it); never passed back, so it can be fenced "
+        "by (tool, key)"
+    ),
 }
 
 _OPEN = "<workspace_content>"

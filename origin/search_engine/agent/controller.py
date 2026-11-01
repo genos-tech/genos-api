@@ -70,6 +70,7 @@ from origin.search_engine.llm import (
     CallUsage,
     FunctionCall,
     GenerationParams,
+    ModelRefusal,
     ToolDeclaration,
     get_model_client,
     spend,
@@ -109,6 +110,18 @@ CREDITS_EXHAUSTED_MESSAGE = (
     "You've run out of AI credits, so this request stopped partway. "
     "Your credits reset at the start of next month — or upgrade your "
     "plan to keep going now."
+)
+
+# Emitted when the provider's safety layer declines the request (Claude
+# `stop_reason: "refusal"`, MIP-859). A module constant for the same
+# reason as the two above: `agent_views` classifies the run's outcome
+# from it, into `safety_refusal`, which is NOT billable (the user got
+# nothing, and the credit policy bills only work performed). Says what
+# happened and what to do; names no category (it can be absent, and a
+# policy label would read as an accusation).
+MODEL_REFUSAL_MESSAGE = (
+    "The AI model declined to answer this request. "
+    "Try rephrasing it or asking about something more specific."
 )
 
 # Appended as a final user turn when the loop exhausts its step budget
@@ -358,6 +371,7 @@ _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any, LabelAccess], str | None]] = {
     "task_id": _resolve_task_display_id,
     "project_id": _resolve_project_name,
     "assignee_id": _resolve_user_name,
+    "default_assignee_id": _resolve_user_name,
     "reporter_id": _resolve_user_name,
     "new_assignee_id": _resolve_user_name,
     "item_id": _resolve_todo_item_title,
@@ -440,6 +454,21 @@ def _friendly_bulk_update_arguments(
     targets = access.milestone_titles(
         row.get("milestone_id") for row in updates if isinstance(row, dict)
     )
+    # Proposed and current assignees, labelled in ONE query (MIP-823). An
+    # empty id is "unassign" and stays as sent.
+    people: set[str] = set()
+    for row in updates:
+        if not isinstance(row, dict):
+            continue
+        if row.get("assignee_id"):
+            people.add(str(row["assignee_id"]))
+        try:
+            task = by_id.get(int(row.get("task_id")))
+        except (TypeError, ValueError):
+            task = None
+        if task is not None and task.assignee_id:
+            people.add(str(task.assignee_id))
+    names = access.usernames(people) if people else {}
     new_updates = []
     for row in updates:
         if isinstance(row, dict):
@@ -458,8 +487,15 @@ def _friendly_bulk_update_arguments(
                         "status": task.status,
                         "due_date": task.due_date.isoformat() if task.due_date else None,
                         "milestone_id": _current_milestone_title(task, access),
+                        "assignee_id": (
+                            names.get(str(task.assignee_id), str(task.assignee_id))
+                            if task.assignee_id
+                            else None
+                        ),
                     },
                 }
+            if row.get("assignee_id"):
+                row = {**row, "assignee_id": names.get(str(row["assignee_id"]), row["assignee_id"])}
             row = _with_milestone_title(row, targets)
         new_updates.append(row)
     out["updates"] = new_updates
@@ -886,7 +922,9 @@ def _note_source(
     s["note_id"] = str(note_id) if note_id is not None else None
     s["note_type"] = note_type
     pc = parent_context or {}
-    s["project_id"] = pc.get("project_id")
+    # Tools report `project_id` as a number (MIP-781); the chip carries a string.
+    pid = pc.get("project_id")
+    s["project_id"] = str(pid) if pid is not None else None
     s["task_id"] = pc.get("task_id")
     s["chat_type"] = pc.get("chat_type")
     s["chat_id"] = pc.get("chat_id")
@@ -2495,6 +2533,16 @@ def _drive_loop(
                     accumulated_text_parts, accumulated_function_calls = _collect_and_record(
                         step, "synthesis"
                     )
+        except ModelRefusal as e:
+            # The provider answered, by declining. Not a crash (no
+            # traceback) and not a generic failure: a specific message
+            # the user can act on, and a distinct run error so refusals
+            # count separately from outages. Text already streamed this
+            # step stays on screen.
+            log.info("Agent run %s step %d declined by the provider: %s", run_id, step, e)
+            emit({"type": "error", "message": MODEL_REFUSAL_MESSAGE})
+            _persist_step(run_id, step_index=step, error="model_refusal")
+            return None
         except Exception as e:  # noqa: BLE001 — surface as stream error
             log.exception("Agent step %d LLM call failed", step)
             # The type and status only: the client sees this, the run row

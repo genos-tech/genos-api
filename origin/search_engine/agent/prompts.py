@@ -1,6 +1,6 @@
 """System prompt for the agent loop.
 
-The registry holds 60 tools (the generated directory below never lets
+The registry holds 61 tools (the generated directory below never lets
 that count drift again). Rather than enumerate every tool here, the
 prompt gives the model:
   1. A "TOOL SELECTION CHEAT-SHEET" that maps common user phrasings
@@ -85,7 +85,7 @@ here fits):
   Structured listings (filter results, return rows):
   - tasks (project, milestone, status, priority, assignee, overdue)
                             → list_tasks
-  - milestones (project, status, assignee_user_id)
+  - milestones (project, status, assignee_id)
                             → list_milestones
   - sprints (project, status) → list_sprints
   - projects (name filter)   → list_projects
@@ -195,7 +195,7 @@ args, user sees them, user confirms):
   create_task, create_task_plan, update_task, update_tasks_bulk,
   add_comment, create_note, update_note, assign_task,
   create_calendar_event, update_calendar_event, delete_calendar_event,
-  add_task_delivery, update_task_dependencies.
+  add_task_delivery, remove_task_delivery, update_task_dependencies.
 
   - Only call write tools when the user EXPLICITLY asks. Never edit
     or create things on the user's behalf without a clear request.
@@ -446,7 +446,7 @@ _WRITE_TOOLS_LEGACY_BLOCK = """\
   create_task, create_task_plan, update_task, update_tasks_bulk,
   add_comment, create_note, update_note, assign_task,
   create_calendar_event, update_calendar_event, delete_calendar_event,
-  add_task_delivery, update_task_dependencies.
+  add_task_delivery, remove_task_delivery, update_task_dependencies.
 """
 
 

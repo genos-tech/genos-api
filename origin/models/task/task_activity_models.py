@@ -76,6 +76,13 @@ class TaskActivityActionType(models.TextChoices):
     # may not be a Genos user; the PR url / number / branch / title are
     # stored in metadata for rendering.
     PR_LINKED = "pr_linked", "PR linked"
+    # A delivery link removed by hand (MIP-834: `remove_task_delivery`)
+    # because it was recorded against the wrong task. actor = whoever
+    # removed it; the PR / branch / repo it pointed at, the link's state
+    # and who removed it are snapshotted in metadata, because the
+    # `TaskDelivery` row itself is deleted. Only a manually recorded link
+    # can be removed, so this never says a webhook link went away.
+    PR_UNLINKED = "pr_unlinked", "PR unlinked"
 
 
 class TaskActivity(models.Model):

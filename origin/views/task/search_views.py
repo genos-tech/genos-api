@@ -44,6 +44,21 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
         top_n = int(raw_top_n)
         include_all = request.GET.get("include_all", "false") == "true"
 
+        # Optional: keep the N most recently updated tasks PER PROJECT
+        # instead of N in total (`top_n`). Absent => today's behaviour.
+        raw_top_n_per_project = request.GET.get("top_n_per_project")
+        top_n_per_project = None
+        if raw_top_n_per_project not in (None, ""):
+            try:
+                top_n_per_project = int(raw_top_n_per_project)
+            except ValueError:
+                top_n_per_project = 0
+            if top_n_per_project < 1:
+                return Response(
+                    {"error": "top_n_per_project must be a positive integer."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         team_tasks = []
 
         # Get all tasks in all project
@@ -110,10 +125,24 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
             return False
 
         _team_tasks = defaultdict(list)
-        for task in list(tasks)[: top_n if top_n != -1 else 100000]:
+        _kept_per_project: dict[int, int] = defaultdict(int)
+        # `tasks` is newest-first, so the first N seen per project are its
+        # N most recent. With the per-project cap the global slice is
+        # skipped (it would starve every project but the busiest).
+        _rows = list(tasks)
+        if top_n_per_project is None:
+            _rows = _rows[: top_n if top_n != -1 else 100000]
+        for task in _rows:
             # Skip tasks whose parent chain contains a closed/deleted task
             if has_finished_ancestor(task[3]):
                 continue
+
+            # Counted AFTER the skip above so hidden tasks don't use up a
+            # project's quota.
+            if top_n_per_project is not None:
+                if _kept_per_project[task[0]] >= top_n_per_project:
+                    continue
+                _kept_per_project[task[0]] += 1
 
             # Compute display id from the tuple positions added above.
             # Mirrors `TaskMaster.display_id` semantics — falls back to

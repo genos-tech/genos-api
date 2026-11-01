@@ -51,6 +51,11 @@ class SecurityAction(models.TextChoices):
     OAUTH_DISCONNECTED = "oauth.disconnected", "Account disconnected"
     ALERT_EXPORT = "alert.export", "Alert: data exported"
     ALERT_FORBIDDEN_BURST = "alert.forbidden_burst", "Alert: many refused requests"
+    # Taken from a shell by an operator, `manage.py operator_cutoff`
+    # (MIP-865). The reason and the operator's OS user are in the metadata.
+    OPERATOR_USER_DEACTIVATED = "operator.user_deactivated", "Operator: user cut off"
+    OPERATOR_API_KEY_REVOKED = "operator.api_key_revoked", "Operator: API key revoked"
+    OPERATOR_TEAM_KEYS_REVOKED = "operator.team_keys_revoked", "Operator: team API keys revoked"
 
 
 class SecuritySource(models.TextChoices):
@@ -61,6 +66,9 @@ class SecuritySource(models.TextChoices):
     SYSTEM = "system", "System"
     # No authenticated caller: a sign-in attempt, a reset request.
     ANONYMOUS = "anonymous", "Anonymous"
+    # A person at a shell with production access, not a request: the
+    # incident-response commands (MIP-865).
+    OPERATOR = "operator", "Operator"
 
 
 class AppendOnlyError(RuntimeError):

@@ -188,3 +188,27 @@ class CreateTaskBodyTests(BaseAPITestCase):
         with self.assertRaisesRegex(ToolError, "must be an integer"):
             self._create(milestone_id="soon")
         self.assertEqual(TaskMaster.objects.filter(is_milestone=False).count(), 0)
+
+    # ---- the response shows what was stored (MIP-828) ----------------
+
+    def test_the_response_echoes_priority_effort_and_due_date(self):
+        task, out = self._create(priority="High", effort_level="Low", due_date="2026-06-30")
+        self.assertEqual(out["priority"], "High")
+        self.assertEqual(out["effort_level"], "Low")
+        self.assertEqual(out["due_date"], "2026-06-30")
+        # ... and they are what the row holds.
+        self.assertEqual((task.priority, task.effort_level), ("High", "Low"))
+        self.assertEqual(task.due_date.isoformat(), "2026-06-30")
+
+    def test_unset_fields_are_null_not_missing_or_empty(self):
+        _, out = self._create()
+        for key in ("priority", "effort_level", "due_date"):
+            self.assertIn(key, out)
+            self.assertIsNone(out[key])
+
+    def test_the_due_date_is_the_stored_iso_date_not_the_raw_input(self):
+        # `create()` leaves the caller's string on the instance; the response
+        # reports the date the row holds.
+        task, out = self._create(due_date="2026-6-3")
+        self.assertEqual(out["due_date"], "2026-06-03")
+        self.assertEqual(task.due_date.isoformat(), "2026-06-03")

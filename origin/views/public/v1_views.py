@@ -42,8 +42,10 @@ from __future__ import annotations
 
 import uuid
 
+from django.conf import settings
 from django.utils import timezone
 from rest_framework import status
+from rest_framework.exceptions import APIException
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
@@ -64,6 +66,12 @@ MAX_OFFSET = 1_000_000
 MAX_PAGE = 100
 
 
+class PublicApiDisabled(APIException):
+    """Raised by `PublicApiView.initial` when an off switch is on."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+
 class PublicApiView(APIView):
     """Shared base: API key required, scope enforced, throttled per key."""
 
@@ -74,6 +82,29 @@ class PublicApiView(APIView):
     authentication_classes = [JWTAuthentication, ApiKeyAuthentication]
     permission_classes = [HasApiKey, HasRequiredScope]
     throttle_classes = [PublicApiThrottle]
+
+    # Incident off switch (MIP-865). Checked in `initial`, before DRF
+    # authenticates, so a refused request does no key lookup and a caller
+    # learns nothing about whether their key is valid. Read from `settings`
+    # per request, not at import.
+    def disabled_message(self) -> str | None:
+        if getattr(settings, "PUBLIC_API_DISABLED", False):
+            return "The public API is temporarily unavailable."
+        return None
+
+    def initial(self, request, *args, **kwargs):
+        message = self.disabled_message()
+        if message is not None:
+            raise PublicApiDisabled(message)
+        super().initial(request, *args, **kwargs)
+
+    def handle_exception(self, exc):
+        if isinstance(exc, PublicApiDisabled):
+            return self.disabled_response(str(exc.detail))
+        return super().handle_exception(exc)
+
+    def disabled_response(self, message: str) -> Response:
+        return Response({"error": message}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
     def resolve_team(self, request):
         """The team this request operates in, or `None`.

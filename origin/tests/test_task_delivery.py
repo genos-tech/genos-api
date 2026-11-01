@@ -39,6 +39,8 @@ from origin.search_engine.agent.tools.add_task_delivery import ADD_TASK_DELIVERY
 from origin.search_engine.agent.tools.fetch_task import FETCH_TASK
 from origin.search_engine.agent.tools.find_task_by_delivery import FIND_TASK_BY_DELIVERY
 from origin.search_engine.agent.tools.get_my_focus_tasks import GET_MY_FOCUS_TASKS
+from origin.search_engine.agent.tools.get_task_history import GET_TASK_HISTORY
+from origin.search_engine.agent.tools.remove_task_delivery import REMOVE_TASK_DELIVERY
 from origin.services.task_delivery import record_delivery, sync_pull_request
 
 from .test_base import BaseAPITestCase, User
@@ -304,6 +306,25 @@ class WebhookDeliveryTests(DeliveryBase):
         self._merge()
         self.assertEqual(self._status(), "Open")
 
+    def test_removing_the_holding_link_lets_the_merge_close_the_task(self):
+        """MIP-834: a wrong open link holds the close; taking it back
+        releases the hold, so the PR that really delivers the task closes
+        it."""
+        self._opt_in()
+        self._link(self.task, number=9, state=TaskDeliveryState.OPEN)
+        self._merge()
+        self.assertEqual(self._status(), "Open")
+        REMOVE_TASK_DELIVERY.run(
+            {
+                "task_id": self.task.task_id,
+                "pr_url": "https://github.com/genos-tech/genos-api/pull/9",
+            },
+            self.ctx,
+        )
+        res = self._merge()
+        self.assertEqual(res.data["updated"], 1)
+        self.assertEqual(self._status(), "Closed")
+
     def test_the_last_pr_on_an_unnamed_branch_closes_the_task(self):
         """The named PR merges first and is held; the other was linked by
         hand on a branch no display id names. Its merge must still close
@@ -504,6 +525,221 @@ class AddTaskDeliveryTests(DeliveryBase):
         self.task.save(update_fields=["is_deleted"])
         with self.assertRaisesMessage(ToolError, "deleted"):
             self._add(pr_url=PR)
+
+    # ── MIP-834: the warning when the link does not name the task ─────
+
+    def _github_says(self, pr):
+        return (
+            mock.patch(
+                "origin.views.common.github_views._connected_account", return_value=object()
+            ),
+            mock.patch("origin.views.common.github_views._fetch_pr_by_number", return_value=pr),
+        )
+
+    def test_a_pr_that_does_not_name_the_task_is_flagged(self):
+        pr = {"number": 7, "state": "open", "title": "Unrelated work", "branch": "feat/other"}
+        a, b = self._github_says(pr)
+        with a, b:
+            result = self._add(pr_url=PR)
+        self.assertIn("HK-42", result["display_id_warning"])
+        self.assertIn("remove_task_delivery", result["display_id_warning"])
+        self.assertEqual(result["outcome"], "created")  # a warning, not a refusal
+        self.assertEqual(TaskDelivery.objects.filter(task=self.task).count(), 1)
+
+    def test_the_branch_naming_the_task_is_enough(self):
+        pr = {"number": 7, "state": "open", "title": "Unrelated", "branch": "feature/hk-42-x"}
+        a, b = self._github_says(pr)
+        with a, b:
+            self.assertNotIn("display_id_warning", self._add(pr_url=PR))
+
+    def test_the_title_naming_the_task_is_enough(self):
+        pr = {"number": 7, "state": "open", "title": "HK-42: fix it", "branch": "feat/other"}
+        a, b = self._github_says(pr)
+        with a, b:
+            self.assertNotIn("display_id_warning", self._add(pr_url=PR))
+
+    def test_a_longer_number_is_not_the_task(self):
+        pr = {"number": 7, "state": "open", "title": "HK-421: other", "branch": "feat/hk-4210"}
+        a, b = self._github_says(pr)
+        with a, b:
+            self.assertIn("display_id_warning", self._add(pr_url=PR))
+
+    def test_an_unnamed_branch_given_by_hand_is_flagged_not_refused(self):
+        result = self._add(branch="feat/mcp-publish-built-writes", repo="genos-tech/genos-api")
+        self.assertIn("display_id_warning", result)
+        self.assertEqual(result["outcome"], "created")
+
+    def test_a_bare_url_that_could_not_be_read_has_nothing_to_judge(self):
+        self.assertNotIn("display_id_warning", self._add(pr_url=PR))
+
+
+# ── remove_task_delivery (MIP-834) ─────────────────────────────────────
+
+
+class RemoveTaskDeliveryTests(DeliveryBase):
+    def _remove(self, ctx=None, **args):
+        return REMOVE_TASK_DELIVERY.run({"task_id": self.task.task_id, **args}, ctx or self.ctx)
+
+    def _webhook_row(self, task=None, number=8):
+        row, _ = record_delivery(
+            task=task or self.task,
+            owner="genos-tech",
+            repo="genos-api",
+            branch="feature/HK-42-x",
+            pr_number=number,
+            state=TaskDeliveryState.OPEN,
+            source=TaskDeliverySource.WEBHOOK,
+        )
+        return row
+
+    def test_it_is_an_approval_gated_write(self):
+        self.assertTrue(REMOVE_TASK_DELIVERY.requires_approval)
+
+    def test_a_manual_link_is_removed_and_the_history_says_who_and_which_pr(self):
+        self._link(self.task, number=7, state=TaskDeliveryState.MERGED)
+        result = self._remove(pr_url=PR)
+        self.assertFalse(TaskDelivery.objects.filter(task=self.task).exists())
+        self.assertEqual(result["removed"]["pr_url"], PR)
+        row = TaskActivity.objects.get(task=self.task, action_type="pr_unlinked")
+        self.assertEqual(row.actor_id, self.user.id)
+        self.assertEqual(row.metadata["pr_url"], PR)
+        self.assertEqual(row.metadata["repo"], "genos-tech/genos-api")
+        self.assertEqual(row.metadata["state"], "merged")
+        self.assertEqual(row.metadata["removed_by"]["user_id"], str(self.user.id))
+
+    def test_the_pr_url_casing_does_not_matter(self):
+        self._link(self.task)
+        self._remove(pr_url=PR.replace("genos-tech/genos-api", "Genos-Tech/Genos-API"))
+        self.assertFalse(TaskDelivery.objects.exists())
+
+    def test_a_branch_only_link_is_removed_by_branch_and_repo(self):
+        record_delivery(
+            task=self.task,
+            owner="genos-tech",
+            repo="genos-api",
+            branch="feat/x",
+            source=TaskDeliverySource.MANUAL,
+        )
+        self._remove(branch="feat/x", repo="genos-tech/genos-api")
+        self.assertFalse(TaskDelivery.objects.exists())
+        row = TaskActivity.objects.get(task=self.task, action_type="pr_unlinked")
+        self.assertEqual((row.metadata["branch"], row.metadata["pr_url"]), ("feat/x", None))
+
+    def test_a_webhook_link_is_refused_and_stays(self):
+        self._webhook_row()
+        with self.assertRaisesMessage(ToolError, "would add it back"):
+            self._remove(pr_url="https://github.com/genos-tech/genos-api/pull/8")
+        self.assertEqual(TaskDelivery.objects.filter(task=self.task).count(), 1)
+        self.assertFalse(TaskActivity.objects.filter(action_type="pr_unlinked").exists())
+
+    def test_a_backfilled_link_is_refused_too(self):
+        row = self._link(self.task)
+        row.source = TaskDeliverySource.BACKFILL
+        row.save(update_fields=["source"])
+        with self.assertRaisesMessage(ToolError, "not removed here"):
+            self._remove(pr_url=PR)
+        self.assertTrue(TaskDelivery.objects.exists())
+
+    def test_only_this_tasks_link_goes(self):
+        other = self._task(43)
+        self._link(self.task)
+        self._link(other)
+        self._remove(pr_url=PR)
+        self.assertEqual(
+            list(TaskDelivery.objects.values_list("task_id", flat=True)), [other.task_id]
+        )
+
+    def test_a_link_that_is_not_there_is_not_found(self):
+        with self.assertRaisesMessage(ToolError, "nothing to remove"):
+            self._remove(pr_url=PR)
+        self.assertFalse(TaskActivity.objects.filter(action_type="pr_unlinked").exists())
+
+    def test_two_links_on_one_branch_need_the_pr_url(self):
+        for n in (7, 8):
+            record_delivery(
+                task=self.task,
+                owner="genos-tech",
+                repo="genos-api",
+                branch="feat/x",
+                pr_number=n,
+                source=TaskDeliverySource.MANUAL,
+            )
+        with self.assertRaisesMessage(ToolError, "Pass the `pr_url`"):
+            self._remove(branch="feat/x", repo="genos-tech/genos-api")
+        self.assertEqual(TaskDelivery.objects.count(), 2)
+
+    def test_another_team_is_refused(self):
+        self._link(self.task)
+        other = TeamMaster.objects.create(team_name="O", team_email="o@x.com", owner=self.user)
+        with self.assertRaisesMessage(ToolError, "different team"):
+            self._remove(
+                ToolContext(team_id=str(other.team_id), user_id=str(self.user.id)), pr_url=PR
+            )
+        self.assertTrue(TaskDelivery.objects.exists())
+
+    def test_a_teammate_off_the_project_is_refused(self):
+        self._link(self.task)
+        ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user2.id))
+        with self.assertRaisesMessage(ToolError, "Not authorized"):
+            self._remove(ctx, pr_url=PR)
+        self.assertTrue(TaskDelivery.objects.exists())
+        self.assertFalse(TaskActivity.objects.filter(action_type="pr_unlinked").exists())
+
+    def test_bad_input_is_refused_before_anything_is_removed(self):
+        self._link(self.task)
+        cases = [
+            ({}, "Give the `pr_url`"),
+            ({"pr_url": "https://github.com/a/b/issues/1"}, "Not a GitHub PR URL"),
+            ({"branch": "x"}, "needs `repo`"),
+            ({"branch": "two words", "repo": "a/b"}, "Not a valid git branch"),
+        ]
+        for args, message in cases:
+            with self.subTest(args=args), self.assertRaisesMessage(ToolError, message):
+                self._remove(**args)
+        self.assertTrue(TaskDelivery.objects.exists())
+
+    def test_a_deleted_task_is_refused(self):
+        self._link(self.task)
+        self.task.is_deleted = True
+        self.task.save(update_fields=["is_deleted"])
+        with self.assertRaisesMessage(ToolError, "deleted"):
+            self._remove(pr_url=PR)
+
+    def test_removing_a_link_lets_find_task_by_delivery_forget_it(self):
+        self._link(self.task)
+        self._remove(pr_url=PR)
+        found = FIND_TASK_BY_DELIVERY.run({"pr_url": PR}, self.ctx)
+        self.assertEqual(found["matches"], [])
+
+    def test_re_adding_is_the_undo(self):
+        self._link(self.task)
+        self._remove(pr_url=PR)
+        again = ADD_TASK_DELIVERY.run({"task_id": self.task.task_id, "pr_url": PR}, self.ctx)
+        self.assertEqual(again["outcome"], "created")
+
+    def test_get_task_history_shows_the_removal(self):
+        self._link(self.task)
+        self._remove(pr_url=PR)
+        history = GET_TASK_HISTORY.run({"task_id": self.task.task_id}, self.ctx)
+        entry = next(e for e in history["history"] if e["action"] == "pr_unlinked")
+        self.assertEqual(entry["pr_url"], PR)
+        self.assertEqual(entry["actor"]["user_id"], str(self.user.id))
+        self.assertEqual(entry["repo"], "genos-tech/genos-api")
+
+    def test_the_webhook_writes_a_removed_branch_link_back_as_a_webhook_row(self):
+        """The caveat the tool's description gives: a manual link on a
+        branch that does name the task comes back from the next event."""
+        self._link(self.task, number=8, branch="feature/HK-42-x")
+        self._remove(pr_url="https://github.com/genos-tech/genos-api/pull/8")
+        sync_pull_request(
+            owner="genos-tech",
+            repo="genos-api",
+            pr={"number": 8, "state": "open", "title": "t", "head": {"ref": "feature/HK-42-x"}},
+            matched_tasks=[self.task],
+            team_ids=[self.team.team_id],
+        )
+        row = TaskDelivery.objects.get(task=self.task)
+        self.assertEqual(row.source, TaskDeliverySource.WEBHOOK)
 
 
 # ── find_task_by_delivery ──────────────────────────────────────────────
@@ -844,6 +1080,52 @@ class McpDeliveryTests(McpBase):
         self.assertEqual(TaskDelivery.objects.filter(task=self.task).count(), 1)
         found = self._result(self._call("find_task_by_delivery", {"pr_url": PR}))
         self.assertEqual(found["structuredContent"]["matches"][0]["display_id"], "WRD-7")
+
+    def test_a_write_key_takes_a_wrong_link_back(self):
+        self._key()
+        record_delivery(
+            task=self.task,
+            owner="genos-tech",
+            repo="genos-api",
+            pr_number=7,
+            state=TaskDeliveryState.MERGED,
+            source=TaskDeliverySource.MANUAL,
+        )
+        result = self._result(
+            self._call("remove_task_delivery", {"task_id": "WRD-7", "pr_url": PR})
+        )
+        self.assertFalse(result.get("isError"), result)
+        self.assertFalse(TaskDelivery.objects.filter(task=self.task).exists())
+        row = TaskActivity.objects.get(task=self.task, action_type="pr_unlinked")
+        # Attributed to the key's user, and to the API key as the surface.
+        self.assertEqual(row.actor_id, self.user.id)
+        self.assertEqual(row.metadata["via"]["kind"], "api_key")
+
+    def test_a_read_key_cannot_remove_a_link(self):
+        from origin.models.common.api_key_models import SCOPE_READ
+
+        self._key(scope=SCOPE_READ)
+        record_delivery(
+            task=self.task,
+            owner="genos-tech",
+            repo="genos-api",
+            pr_number=7,
+            source=TaskDeliverySource.MANUAL,
+        )
+        result = self._result(
+            self._call("remove_task_delivery", {"task_id": "WRD-7", "pr_url": PR})
+        )
+        self.assertTrue(result.get("isError"), result)
+        self.assertTrue(TaskDelivery.objects.filter(task=self.task).exists())
+
+    def test_removing_a_link_needs_no_destructive_opt_in(self):
+        """Re-adding is the undo, so unlike `delete_calendar_event` it is
+        not behind `allow_destructive`."""
+        from origin.views.public.mcp import tools as mcp_tools
+
+        tool = next(t for t in mcp_tools.CATALOG if t.name == "remove_task_delivery")
+        self.assertTrue(tool.write)
+        self.assertFalse(tool.destructive)
 
     def test_list_my_tasks_takes_the_filter(self):
         self._key()

@@ -354,8 +354,12 @@ def _record(
     old_value: Any = None,
     new_value: Any = None,
     metadata: Optional[dict] = None,
+    actor: Optional[Any] = None,
 ) -> None:
     """Single point for inserting an activity row.
+
+    `actor` overrides the request's user, for a caller that already
+    knows who is acting (see `record_activity`).
 
     Tolerates missing tasks (None pk) so signals during fixture loads
     or partial saves don't blow up.
@@ -379,12 +383,40 @@ def _record(
         team=task.team,
         project=task.project,
         task=task,
-        actor=_resolve_actor(),
+        actor=actor if actor is not None else _resolve_actor(),
         action_type=action_type,
         field_name=field_name,
         old_value=_to_jsonable(old_value),
         new_value=_to_jsonable(new_value),
         metadata=_to_jsonable(metadata),
+    )
+
+
+def record_activity(
+    *,
+    task: TaskMaster,
+    action_type: TaskActivityActionType,
+    field_name: Optional[str] = None,
+    old_value: Any = None,
+    new_value: Any = None,
+    metadata: Optional[dict] = None,
+    actor: Optional[Any] = None,
+) -> None:
+    """Write one history row from outside the signal handlers.
+
+    For a change that is not a field diff of `TaskMaster` and so has no
+    signal to ride on (a delivery link removed, MIP-834). It is `_record`
+    on purpose: the same `via` stamping and the same suppression during
+    bulk teardown, so such a row reads like every other one.
+    """
+    _record(
+        task=task,
+        action_type=action_type,
+        field_name=field_name,
+        old_value=old_value,
+        new_value=new_value,
+        metadata=metadata,
+        actor=actor,
     )
 
 

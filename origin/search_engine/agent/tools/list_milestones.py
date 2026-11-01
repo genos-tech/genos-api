@@ -22,12 +22,24 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
+from origin.search_engine.agent.tools.template_prompts import has_written_body
+from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.user_time import today_for_user_id
 
 _MAX_LIMIT = 100
-_VALID_STATUSES = {"Open", "WIP", "Pending", "Closed", "Deleted"}
+_VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"}
 _CLOSED_STATUSES = ["Closed", "Deleted"]
+
+
+def _backing_display_id(m: MilestoneMaster) -> str | None:
+    """`PRJ-123` for the milestone's backing task; None for a legacy milestone
+    with no backing task or a task with no project code (`display_id` would
+    fall back to `#<task_id>`, which is not a reference to a milestone)."""
+    if not m.task_id:
+        return None
+    shown = m.task.display_id
+    return None if shown.startswith("#") else shown
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -66,7 +78,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             )
         statuses_filter = list(raw_statuses)
 
-    raw_assignee_user_id = args.get("assignee_user_id")
+    # `assignee_id` is the name every sibling tool uses; `assignee_user_id` is
+    # the older spelling, kept as an alias (MIP-827).
+    new_name, old_name = args.get("assignee_id"), args.get("assignee_user_id")
+    if new_name and old_name and str(new_name).strip().lower() != str(old_name).strip().lower():
+        raise ToolError(
+            "`assignee_id` and `assignee_user_id` are the same filter and were given "
+            "different values. Send one of them (`assignee_id`)."
+        )
+    raw_assignee_user_id = new_name or old_name
     assignee_user_id: str | None = None
     if raw_assignee_user_id:
         # We don't ACL-check the assignee id itself — it's a filter value,
@@ -81,7 +101,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         limit = 50
     limit = max(1, min(limit, _MAX_LIMIT))
 
-    qs = MilestoneMaster.objects.select_related("project", "task").filter(
+    qs = MilestoneMaster.objects.select_related("project", "task", "folder").filter(
         team_id=ctx.team_id,
         project_id__in=scoped_project_ids,
         is_deleted=False,
@@ -119,19 +139,28 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "milestone_id": m.milestone_id,
                 "project_id": m.project_id,
                 "project_name": m.project.project_name if m.project_id else None,
+                # Grouping folder (MIP-847); null when unfiled.
+                "folder_id": m.folder_id,
+                "folder_name": m.folder.name if m.folder_id else None,
                 # Backing task (every milestone is mirrored by a task row;
                 # None for legacy milestones created before the mirror).
                 # Needed to attach a plan NOTE to a milestone — task notes
                 # hang off a task_id.
                 "task_id": m.task_id,
+                # The backing task's display id (MIP-617): what people call the
+                # milestone, and a reference the MCP milestone tools accept.
+                "display_id": _backing_display_id(m),
                 "title": m.title,
                 "status": m.status,
-                "priority": m.priority,
+                "priority": blank_to_none(m.priority),
                 "due_date": m.due_date.isoformat() if m.due_date else None,
                 "tasks_total": agg.get("tasks_total", 0) or 0,
                 "tasks_closed": agg.get("tasks_closed", 0) or 0,
                 "overdue_count": agg.get("overdue", 0) or 0,
                 "assignee_count": assignee_count,
+                # False when the description is empty or only the unmodified
+                # template: nobody has written what this milestone is for.
+                "has_goal": has_written_body(m.description),
             }
         )
 
@@ -156,7 +185,9 @@ LIST_MILESTONES = Tool(
     name="list_milestones",
     description=(
         "List milestones with per-row task rollups: tasks_total, "
-        "tasks_closed, overdue_count, assignee_count. Use for 'how many "
+        "tasks_closed, overdue_count, assignee_count, and has_goal (false "
+        "when nobody has written the milestone's description: it is empty "
+        "or still the unmodified template). Use for 'how many "
         "tasks does each milestone have?', 'show me all milestones', "
         "'what milestones are in project X?'. Pair with "
         "`get_milestone_summary(milestone_id)` for a deeper per-milestone "
@@ -164,7 +195,8 @@ LIST_MILESTONES = Tool(
         "Counts include subtasks via the same Q-union as the milestone "
         "table view. Each row's task_id is the milestone's BACKING task "
         "(use it e.g. to attach a plan note to the milestone; null on "
-        "legacy milestones). Scoped to milestones in projects the "
+        "legacy milestones); display_id is that task's display id (PRJ-123), "
+        "the name people use for the milestone. Scoped to milestones in projects the "
         "current user is a member of."
     ),
     parameters_schema={
@@ -178,14 +210,14 @@ LIST_MILESTONES = Tool(
                 "type": "ARRAY",
                 "items": {
                     "type": "STRING",
-                    "enum": ["Open", "WIP", "Pending", "Closed", "Deleted"],
+                    "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"],
                 },
                 "description": (
                     "Filter milestones by one or more status values. Omit "
                     "to include all non-tombstone milestones."
                 ),
             },
-            "assignee_user_id": {
+            "assignee_id": {
                 "type": "STRING",
                 "description": (
                     "Filter to milestones where this user is an assignee "
@@ -194,6 +226,13 @@ LIST_MILESTONES = Tool(
                     "`get_team_members` to resolve a name to a UUID. "
                     "Prefer the dedicated `list_my_milestones` tool when "
                     "the question is about the caller themselves."
+                ),
+            },
+            "assignee_user_id": {
+                "type": "STRING",
+                "description": (
+                    "Older spelling of `assignee_id` (the name `list_tasks` "
+                    "uses too); accepted for now. Send `assignee_id`."
                 ),
             },
             "limit": {

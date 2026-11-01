@@ -128,7 +128,7 @@
 #                  API. Test a new model BOTH ways before listing it —
 #                  one request each, and it is the only proof.
 #
-#  Prices verified 2026-07-25. Re-check on every swap; they move.
+#  Prices verified 2026-11-01. Re-check on every swap; they move.
 # =====================================================================
 
 version: 1
@@ -159,7 +159,7 @@ version: 1
 #  reports in JPY (normalized).
 #
 rate_card:
-    label: "2026-07-25"
+    label: "2026-11-01"
 
     # USD is the BASE unit of the whole cost system — it is what every
     # provider actually invoices. `fx_jpy_per_usd` is stamped onto each
