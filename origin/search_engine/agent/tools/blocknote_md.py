@@ -357,6 +357,8 @@ def _collect_links(
         label, href = m.group(1), m.group(2)
         chip = chips(href) if chips and label.lstrip().startswith(("@", "#")) else None
         if chip:
+            if _is_bare_display_id(label, chip):
+                _make_compact(chip)
             parts.append([chip])
         elif href.startswith(("http://", "https://", "mailto:")):
             parts.append([_link_node(href, _tokenize_formatting(label))])
@@ -370,6 +372,21 @@ def _collect_links(
                 parts.append(label)
         cursor = m.end()
     _collect_citation_tokens(text[cursor:], resolver, chips, parts)
+
+
+def _is_bare_display_id(label: str, chip: dict[str, Any]) -> bool:
+    """`[#MIP-739](task:12)`: a task chip labelled with its id alone."""
+    if chip.get("type") != "hashTask":
+        return False
+    display_id = str((chip.get("props") or {}).get("displayId") or "")
+    return bool(display_id) and label.strip().lstrip("#").strip().lower() == display_id.lower()
+
+
+def _make_compact(chip: dict[str, Any]) -> None:
+    """Mark a task chip compact (MIP-739): it renders as `#MIP-739`, the
+    title on hover. Other chip types have no compact form."""
+    if chip.get("type") == "hashTask":
+        chip.setdefault("props", {})["labelMode"] = "id"
 
 
 def _collect_citation_tokens(
@@ -393,6 +410,8 @@ def _collect_citation_tokens(
     for m in _DISPLAY_ID_RE.finditer(text) if chips else ():
         chip = chips(f"display:{m.group(1)}")
         if chip:
+            # Written as a bare id, so it stays one: a compact chip.
+            _make_compact(chip)
             found.append((m.start(), m.end(), [chip]))
     taken = [(s, e) for s, e, _ in found]
     for m in _BARE_TOKEN_RE.finditer(text) if resolver else ():

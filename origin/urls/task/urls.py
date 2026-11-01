@@ -99,6 +99,11 @@ urlpatterns = [
         GetSearchTeamTasksView.as_view(),
         name="search_team_tasks",
     ),
+    path(
+        "api/v2/search/taskByDisplayId/",
+        GetTaskByDisplayIdView.as_view(),
+        name="task_by_display_id",
+    ),
     # Reaction
     path(
         "api/v2/task/comment/reaction/",

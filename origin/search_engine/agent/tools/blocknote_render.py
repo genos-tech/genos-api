@@ -217,6 +217,10 @@ def _chip(node: dict[str, Any]) -> str:
     if not label:
         return ""
     props = node.get("props") or {}
+    # A compact task chip (MIP-739) shows its id alone; written that way
+    # its label is what `blocknote_md` reads back as compact.
+    if node["type"] == "hashTask" and props.get("labelMode") == "id" and props.get("displayId"):
+        label = f"#{props['displayId']}"
     template = _CHIP_TOKENS[node["type"]]
     template = template(props) if callable(template) else template
     try:

@@ -64,6 +64,7 @@ from origin.search_engine.embeddings import (
 )
 from origin.search_engine.index_config import INDEX_SCHEMA_VERSION
 from origin.search_engine.llm import spend
+from origin.search_engine.mapping_guard import ensure_additive_mapping
 from origin.search_engine.models import RagChunk
 from origin.search_engine.opensearch_client import get_client, get_index_alias
 
@@ -450,6 +451,7 @@ def _bulk_index(actions: list[dict]) -> None:
         return
     batch_size = settings.SEARCH_ENGINE["BULK_BATCH_SIZE"]
     client = get_client()
+    ensure_additive_mapping(client, get_index_alias())
     # `raise_on_error=False` so a single bad doc doesn't abort the
     # whole batch; we log instead.
     #
