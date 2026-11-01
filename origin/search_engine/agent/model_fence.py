@@ -18,15 +18,21 @@ MODEL is fenced as it is turned into a `function_response`. The chips, the
 persisted step JSON, the eval harness and the tools themselves never see a
 fence, and a tool added tomorrow is covered without remembering to wrap.
 
-**What is fenced is a reviewed list** (`FENCED_KEYS`), by key name, at any
-depth. It is deliberately NOT "every string":
+**What is fenced is a reviewed list**, by key name, at any depth: the keys in
+`FENCED_KEYS` everywhere, and the keys in `FENCED_KEYS_BY_TOOL` only in the
+named tool's result. It is deliberately NOT "every string":
 
   * ids, enums, dates, urls the tools build, and `error` are not user text;
   * a TAG NAME is an identifier the model passes back verbatim to
     `create_task` / `update_task` (`tags=[...]`), and a fence would be echoed
     back as part of the name. `list_project_tags` says so itself. Tag names
-    are also capped at 20 characters. They are in `EXEMPT_KEYS` with that
-    reason, and a test holds the two sets apart.
+    are also capped at 20 characters. They are in `EXEMPT_KEYS` /
+    `EXEMPT_TOOL_KEYS` with that reason, and a test holds the sets apart.
+
+**Why some keys are per tool (MIP-801).** `name` is a sprint's or a note
+folder's in three tools (display text) and a TAG in `list_project_tags` (an
+identifier). The same key means two things, so it is fenced by (tool, key),
+never by key alone.
 
 Idempotent: a value a tool already fenced is left as it is, and the persisted
 steps replayed on a resume go through the same function.
@@ -45,27 +51,61 @@ FENCED_KEYS = frozenset(
     }
 )
 
+# Fenced only in the results of the tools named here (MIP-801): the key is
+# display text in these tools but means something else elsewhere, or the
+# tool is the only place a given key holds user text.
+#
+# Nothing here is passed back to a tool as an identifier: the write tools take
+# ids (`assign_task` a user id, the folder and sprint tools an id, the calendar
+# tools an event or calendar id). `unfence_arguments` would also strip a fence
+# the model copied into an argument.
+_PEOPLE = frozenset({"username"})
+FENCED_KEYS_BY_TOOL: dict[str, frozenset[str]] = {
+    # A sprint's or a folder's name.
+    "get_sprint_summary": frozenset({"name"}),
+    "list_sprints": frozenset({"name"}),
+    "list_note_folders": frozenset({"name"}),
+    # A person's display name.
+    "get_team_members": _PEOPLE,
+    "list_project_members": _PEOPLE,
+    "list_channel_members": _PEOPLE,
+    "get_workload_distribution": _PEOPLE,
+    "get_top_task_closers": _PEOPLE,
+    "get_milestone_assignee_counts": _PEOPLE,
+    "get_milestone_summary": _PEOPLE,
+    "get_current_user": _PEOPLE,
+    # Not in MIP-801's list: `actor.username` on every history entry.
+    "get_task_history": _PEOPLE,
+    # A calendar's name. An EVENT's `summary` (list/create/update_calendar_event)
+    # is already fenced by `calendar.shape_event`; it is listed for
+    # `create_calendar_event` so the fence holds if that changes. Idempotent.
+    "list_calendars": frozenset({"summary"}),
+    "create_calendar_event": frozenset({"summary"}),
+}
+
 # User-typed, but the model passes them back to a write tool verbatim, so
 # fencing would break the call. Listed so the exemption is a decision on the
-# page and not an accident of what is missing from FENCED_KEYS, and so a test
-# can refuse a key in both sets.
-#
-# `tags` is the only key here on purpose. `name` is NOT exempt as a key: in
-# `list_project_tags` it is a tag (an identifier), but `get_sprint_summary`,
-# `list_sprints` and `list_note_folders` also return `name` for a sprint or a
-# folder, which are display text. Until the key is split by tool it is simply
-# not fenced, which is a gap (see UNFENCED_FOLLOW_UP), not an exemption.
+# page and not an accident of what is missing from the fenced sets, and so a
+# test can refuse a key in both.
 EXEMPT_KEYS = {
     "tags": "a task's tag names: identifiers the model passes back verbatim as `tags=[...]`",
 }
 
-# User-typed strings the tools return that this module does NOT fence yet,
-# found by reading every tool (MIP-735). Each needs a decision of its own
-# (per-tool key, or whether the model passes it back), not a blanket rule.
+# (tool, key) exemptions: the key is fenced in other tools, but here it holds
+# an identifier.
+EXEMPT_TOOL_KEYS = {
+    ("list_project_tags", "name"): (
+        "a tag name: an identifier the model passes back verbatim as `tags=[...]`"
+    ),
+}
+
+# User-typed strings the tools return that this module does NOT fence yet.
+# Each needs a decision of its own (does the model pass it back, and is the key
+# shared with a non-text field), not a blanket rule.
 UNFENCED_FOLLOW_UP = {
-    "name": "sprint names and note-folder names are display text; tag names are not (see above)",
-    "username": "a person's display name; eight tools return it",
-    "summary": "a calendar event's title (list_calendars / create_calendar_event)",
+    "displayName": "a calendar attendee's name (`calendar.shape_event`: list/create/update events)",
+    "old_value": "get_task_history: a field's previous value, which can be a title or a username",
+    "new_value": "get_task_history: a field's new value, which can be a title or a username",
 }
 
 _OPEN = "<workspace_content>"
@@ -85,23 +125,26 @@ def _fence(value: str) -> str:
     return wrap_workspace_content(value)
 
 
-def fence_for_model(value: Any) -> Any:
-    """`value` with every `FENCED_KEYS` string fenced, at any depth.
+def fence_for_model(value: Any, tool_name: str | None = None) -> Any:
+    """`value` with every fenced string fenced, at any depth: the
+    `FENCED_KEYS`, plus the `FENCED_KEYS_BY_TOOL` keys of `tool_name`'s result.
 
     Returns a new structure; the argument is not modified, because the same
     dict is also what the chips and the persisted step are built from.
     """
+    return _fence_keys(value, FENCED_KEYS | FENCED_KEYS_BY_TOOL.get(tool_name or "", frozenset()))
+
+
+def _fence_keys(value: Any, keys: frozenset[str]) -> Any:
     if isinstance(value, dict):
         return {
             key: (
-                _fence(item)
-                if key in FENCED_KEYS and isinstance(item, str)
-                else fence_for_model(item)
+                _fence(item) if key in keys and isinstance(item, str) else _fence_keys(item, keys)
             )
             for key, item in value.items()
         }
     if isinstance(value, list):
-        return [fence_for_model(item) for item in value]
+        return [_fence_keys(item, keys) for item in value]
     return value
 
 

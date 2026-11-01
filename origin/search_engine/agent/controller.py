@@ -692,7 +692,7 @@ def _function_response_turn(name: str, response: dict[str, Any]) -> AgentMessage
     return AgentMessage(
         role="tool_response",
         function_response_name=name,
-        function_response=fence_for_model(response),
+        function_response=fence_for_model(response, name),
     )
 
 
