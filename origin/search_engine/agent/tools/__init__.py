@@ -109,6 +109,7 @@ from origin.search_engine.agent.tools.list_task_dependencies import LIST_TASK_DE
 from origin.search_engine.agent.tools.list_tasks import LIST_TASKS
 from origin.search_engine.agent.tools.list_today_todos import LIST_TODAY_TODOS
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
+from origin.search_engine.agent.tools.remove_task_delivery import REMOVE_TASK_DELIVERY
 from origin.search_engine.agent.tools.search_kb import SEARCH_KNOWLEDGE_BASE
 from origin.search_engine.agent.tools.search_past_conversations import (
     SEARCH_PAST_CONVERSATIONS,
@@ -207,6 +208,7 @@ for _t in (
     UPDATE_TODO_ITEM,
     # --- Write tools (MIP-687) — record a task's branch / PR ---
     ADD_TASK_DELIVERY,
+    REMOVE_TASK_DELIVERY,
     # --- Write tools (MIP-730) — link / unlink existing tasks ---
     UPDATE_TASK_DEPENDENCIES,
 ):
@@ -224,6 +226,7 @@ for _t in (
 __all__ = [
     "ADD_COMMENT",
     "ADD_TASK_DELIVERY",
+    "REMOVE_TASK_DELIVERY",
     "ASSIGN_TASK",
     "CREATE_CALENDAR_EVENT",
     "CREATE_NOTE",

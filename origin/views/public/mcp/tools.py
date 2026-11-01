@@ -66,7 +66,10 @@ answer is a hang. Two consequences, both load-bearing:
   `delete_calendar_event` is published because the registry's own
   description calls it out as destructive and a user asks for it by name;
   it is the only delete in the registry, and the asymmetry is on purpose
-  rather than an oversight to be "fixed" by adding more. Write scope
+  rather than an oversight to be "fixed" by adding more. (The one
+  removal besides it, `remove_task_delivery` (MIP-834), is not a delete in
+  this sense: it only takes back a link `add_task_delivery` made, and
+  adding it again is the undo, so it needs no opt-in.) Write scope
   alone doesn't reach it: it is `destructive=True`, which also needs the
   key's `allow_destructive` opt-in (MIP-723). An instruction planted in a
   task body is read by the agent on the other end, and write scope is
@@ -588,7 +591,28 @@ CATALOG: tuple[McpTool, ...] = (
             "`branch` + `repo` (owner/name). Repeating it is harmless. It also "
             "installs the repo's webhook with your GitHub connection; "
             "`webhook_warning` in the result means it couldn't, so pass that "
-            "on to the user. Requires a write-scoped API key."
+            "on to the user. `display_id_warning` means neither the branch nor "
+            "the PR title names this task, so it may be the wrong one: check, "
+            "and undo it with `remove_task_delivery`. Requires a write-scoped "
+            "API key."
+        ),
+        write=True,
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
+        name="remove_task_delivery",
+        registry_name="remove_task_delivery",
+        description=(
+            "Take back a branch / PR link that was recorded on the wrong task "
+            "with `add_task_delivery`. Pass `pr_url`, or `branch` + `repo` "
+            "(owner/name) for a link with no PR. Only a link someone added by "
+            "hand can be removed: one the GitHub webhook made (the PR's branch "
+            "name carries the task's display id) is refused, because the next "
+            "PR event would add it back; rename the branch instead. The "
+            "removal is written to the task's history, and `add_task_delivery` "
+            "puts the link back. Removing an open PR's link also stops it "
+            "holding the task's auto-close. Requires a write-scoped API key."
         ),
         write=True,
         task_ref_args=("task_id",),
