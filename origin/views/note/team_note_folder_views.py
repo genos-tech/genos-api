@@ -43,6 +43,7 @@ from origin.models.note.common_note_models import (
 )
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
+from origin.search_engine.purge import purge_note_folders
 from origin.services.external_grants import external_objects_for_member, externally_shared
 from origin.services.group_expansion import expand_groups
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -718,6 +719,7 @@ class TeamNoteFolderView(AuthenticatedAPIView):
             PersonalNoteFolder.objects.filter(folder_id__in=folder_ids).delete()
 
         purge_notes_from_index(note_ids)
+        purge_note_folders(folder_ids)
 
         return Response(
             {

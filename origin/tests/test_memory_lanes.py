@@ -41,9 +41,13 @@ def _must_not_entity_types(filt):
 class BuildFilterExcludeLanesTests(SimpleTestCase):
     def test_default_exclusions_unchanged_without_exclude_lanes(self):
         filt = _build_filter("team-1", "user-1", None, None, None)
+        # Folders (MIP-841) are a Spotlight destination, not agent grounding.
         self.assertEqual(
-            sorted(_must_not_entity_types(filt)), ["conversation", "spotlight_answer"]
+            sorted(_must_not_entity_types(filt)),
+            ["conversation", "note_folder", "spotlight_answer"],
         )
+        typeahead = _build_filter("team-1", "user-1", None, None, None, mode="typeahead")
+        self.assertEqual(_must_not_entity_types(typeahead), ["conversation"])
 
     def test_explicit_entity_types_bypass_default_exclusions(self):
         # The pre-existing contract the opt-in tools rely on.

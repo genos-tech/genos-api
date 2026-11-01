@@ -32,6 +32,7 @@ from rest_framework.response import Response
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
+from origin.search_engine.purge import purge_note_folders
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.personal_note_move import NoteMoveRefused, move_personal_note
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
@@ -283,6 +284,8 @@ class PersonalNoteFolderView(AuthenticatedAPIView):
                 PersonalNoteFolder.objects.filter(folder_id__in=folder_ids).delete()
         except PersonalNoteFolder.DoesNotExist:
             return Response({"error": "Folder not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        purge_note_folders(folder_ids)
 
         # 200 with the deleted ids (not 204): the frontend uses them to
         # close tabs and purge local caches for every destroyed note.

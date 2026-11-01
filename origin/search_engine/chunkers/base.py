@@ -88,6 +88,11 @@ class Chunk:
     context_path: Optional[list] = None
     context_acl: Optional[list] = None
 
+    # `note_folder` entities (MIP-841): the folder's id and which sidebar
+    # space it lives in ("personal" = My Notes, "team" = Team Notes).
+    folder_id: Optional[str] = None
+    folder_scope: Optional[str] = None
+
     # v2 note overlays (note_chunker + note_summary_chunker).
     note_owner_id: Optional[str] = None
     note_parent_id: Optional[str] = None

@@ -106,6 +106,7 @@ class Command(CronCommand):
                 "task",
                 "milestone",
                 "note",
+                "note_folder",
                 "thread_summary",
                 "note_summary",
                 "todo",
