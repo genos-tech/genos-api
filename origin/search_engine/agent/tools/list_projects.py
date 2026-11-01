@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.db.models import Q
+
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.agent.tools.base import Tool, ToolContext
 
@@ -43,7 +45,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     name_filter = (args.get("name_filter") or "").strip()
     if name_filter:
-        qs = qs.filter(project_name__icontains=name_filter)
+        # Name or short code: people say "the MIP project" as often as the name.
+        qs = qs.filter(Q(project_name__icontains=name_filter) | Q(code__icontains=name_filter))
 
     projects = []
     for p in qs.order_by("project_name"):
@@ -52,6 +55,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             {
                 "project_id": p.project_id,
                 "project_name": p.project_name,
+                "code": p.code,
                 "is_private": p.is_private,
                 "member_count": member_count,
             }
@@ -78,7 +82,7 @@ LIST_PROJECTS = Tool(
             "name_filter": {
                 "type": "STRING",
                 "description": (
-                    "Optional case-insensitive substring filter on project name. "
+                    "Optional case-insensitive substring filter on project name or short code. "
                     "Omit to list all accessible projects."
                 ),
             },

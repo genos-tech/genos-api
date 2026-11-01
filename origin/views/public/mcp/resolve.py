@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import re
 
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import ToolError
 
@@ -123,6 +124,70 @@ def resolve_task_ref(ref, team_id: str) -> int:
         f"Could not read {ref!r} as a task. Use a display id (PRJ-123), a task "
         f"URL, or a numeric id."
     )
+
+
+# A milestone id no row has. What a QUIET resolution (search) returns for a
+# well-formed reference that names no milestone the caller could be told about,
+# so the scope matches nothing instead of producing an error that would confirm
+# a task or milestone exists (search_kb.py, MIP-797).
+NO_SUCH_MILESTONE_ID = 2**31 - 1
+
+
+def resolve_milestone_ref(ref, team_id: str, *, quiet: bool = False):
+    """`ref` -> a milestone id (int), or `''` when `ref` is `''`.
+
+    A milestone is also a task, and people name it by that task's display id
+    (`MIP-617`) or URL, neither of which is the milestone id the tools take.
+    Those two resolve to the backing task, then to its milestone, team-scoped.
+
+    Rules that keep existing callers unchanged:
+    * a bare number (`98`, `#98`) is a MILESTONE id, never a backing task id;
+    * `''` passes through, because `update_task` / `update_tasks_bulk` use it
+      for "take the task out of its milestone" (`resolve_task_ref` raises on
+      it);
+    * anything unreadable is left for the tool to refuse in its own words.
+
+    `quiet` is for search: a well-formed reference that does not lead to a
+    milestone yields `NO_SUCH_MILESTONE_ID` rather than an error, so the call
+    cannot be used to probe which tasks exist.
+    """
+    if isinstance(ref, int):
+        return ref
+    if ref is None:
+        raise ToolError("A milestone reference is required (e.g. PRJ-123 or a milestone id).")
+
+    text = _checked_text(ref)
+    if text == "":
+        return ""
+    bare = text[1:].strip() if text.startswith("#") else text
+    if bare.isdigit():
+        return int(bare)
+    if not (_URL_TASK.search(text) or _DISPLAY_ID.match(text)):
+        # Not something we read: the tool's own "must be an integer" error is
+        # the feedback, and it says nothing about what exists.
+        return text
+
+    def _fail(message: str):
+        if quiet:
+            return NO_SUCH_MILESTONE_ID
+        raise ToolError(message)
+
+    try:
+        task_id = resolve_task_ref(text, team_id)
+    except ToolError as exc:
+        return _fail(str(exc))
+    milestone_id = (
+        MilestoneMaster.objects.filter(task_id=task_id, team_id=team_id, is_deleted=False)
+        .values_list("milestone_id", flat=True)
+        .first()
+    )
+    if milestone_id is None:
+        return _fail(
+            f"{text} is not a milestone (or is not one in this team), so it has no "
+            "milestone id. Use `list_milestones` to find the milestone, or pass its "
+            "numeric `milestone_id`."
+        )
+    return milestone_id
 
 
 # `/workspace/notes/<bucket>/…/note/12`, or `/workspace/notes/my/12` for a
