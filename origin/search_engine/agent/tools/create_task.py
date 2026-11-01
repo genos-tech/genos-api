@@ -223,6 +223,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if assignee is not None:
         assignee_username = assignee.username or str(assignee.id)
         summary += f", assigned to {assignee_username}"
+    # `due_date` is still the raw input string on the instance `create()`
+    # returned (`2026-6-30`, a datetime), so read what was stored back: the
+    # response shows what the row holds, not an echo of what was sent (MIP-828).
+    task.refresh_from_db(fields=["priority", "effort_level", "due_date"])
     return {
         "task_id": task.task_id,
         "display_id": task.display_id,
@@ -233,6 +237,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "tags": [tag["tagName"] for tag in tags],
         "title": task.title,
         "status": task.status,
+        "priority": task.priority or None,
+        "effort_level": task.effort_level or None,
+        "due_date": task.due_date.isoformat() if task.due_date else None,
         "__summary__": summary,
     }
 
