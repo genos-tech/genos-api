@@ -10,7 +10,12 @@ Two modes, sharing the same `CaseResult` dataclass and CLI:
   2. **Retrieval mode** — case file `retrieval_cases.yaml`. Each case
      calls `search(...)` directly and asserts on the ranked entity
      list (gold-standard recall checks: "query X must return entity Y
-     in top N"). No LLM calls; fast and free.
+     in top N"). Cheap and fast, but NOT LLM-free: unless a case pins
+     `rewrite: false`, `search(...)` runs the query rewriter (one small
+     Gemini call per case, flag `RAG_USE_QUERY_REWRITE`, default on),
+     and every query is embedded. The rewrite is stochastic, so a case
+     whose target is reachable only through a rewrite variant flips
+     between runs (MIP-860: `mention_project_boost`).
 
 Design notes:
 
@@ -1210,12 +1215,30 @@ def _precision_at_k(
     return out
 
 
+def _case_rewrite(case: dict[str, Any], flag: bool) -> bool:
+    """Whether this retrieval case runs the query rewriter.
+
+    `flag` is `SEARCH_ENGINE["RAG_USE_QUERY_REWRITE"]`. A case can only
+    turn the rewrite OFF (`rewrite: false`), never force it on: the flag
+    stays the single switch `agent_eval_compare --b-overrides` flips for
+    an A/B. A case that pins it off therefore ignores such an override,
+    on purpose: its verdict must not depend on an LLM.
+    """
+    return flag and case.get("rewrite", True) is not False
+
+
 def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
     """Execute one retrieval case by calling `search(...)` directly.
 
-    No agent loop, no LLM calls. The case YAML specifies a query +
-    optional filters and a set of gold-standard assertions about
-    which entities should appear (and at what rank) in the result.
+    No agent loop. The case YAML specifies a query + optional filters
+    and a set of gold-standard assertions about which entities should
+    appear (and at what rank) in the result.
+
+    NOT LLM-free: with `RAG_USE_QUERY_REWRITE` on (the default, and
+    nothing in CI turns it off) `search(...)` asks the rewrite model for
+    query variants, which differ run to run. A case that must give the
+    same verdict every time pins `rewrite: false` in its YAML (see
+    `_case_rewrite`).
     """
     case = _resolve_fixture(case)
     case_id = case.get("id") or "(unnamed)"
@@ -1271,7 +1294,9 @@ def run_retrieval_case(case: dict[str, Any]) -> CaseResult:
             date_to=case.get("date_to"),
             limit=int(case.get("limit", 10)),
             use_vector=bool(case.get("use_vector", True)),
-            rewrite=bool(_settings.SEARCH_ENGINE.get("RAG_USE_QUERY_REWRITE", False)),
+            rewrite=_case_rewrite(
+                case, bool(_settings.SEARCH_ENGINE.get("RAG_USE_QUERY_REWRITE", False))
+            ),
             boost_person_ids=boost["boost_person_ids"],
             boost_entity_ids=boost["boost_entity_ids"],
             boost_project_ids=boost["boost_project_ids"],

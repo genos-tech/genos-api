@@ -30,6 +30,7 @@ from django.db.models import Q
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.search_engine.acl_dirty import DirtyScopes
+from origin.search_engine.agent.tools.template_prompts import without_untouched_prompts
 from origin.search_engine.chunkers.base import (
     Chunk,
     EntityChunks,
@@ -90,7 +91,8 @@ def iter_milestone_chunks(
             acl.add(str(m.reporter_id))
 
         title_clean = (m.title or "").strip()
-        body_text = extract_text(m.description)
+        # Untouched template prompts are not content (MIP-799).
+        body_text = extract_text(without_untouched_prompts(m.description))
         search_text = "\n".join(p for p in [title_clean, body_text] if p).strip()
         # Nothing to index (no title and no body).
         if not search_text:

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from origin.search_engine.text_extraction import _top_level_blocks
+from origin.search_engine.text_extraction import _top_level_blocks, extract_text
 
 PROMPTS: frozenset[str] = frozenset(
     {
@@ -137,3 +137,24 @@ def without_untouched_prompts(body: Any) -> Any:
             has_content = True
     flush()
     return out
+
+
+def has_written_body(body: Any) -> bool:
+    """True when `body` says something besides untouched template prompts.
+
+    The test behind "does this milestone have a goal" (MIP-799): a body that
+    is empty, or only the unmodified template, has no goal. Deliberately not
+    a check of the "Goal" section, which breaks on custom templates and
+    renamed headings.
+    """
+    return bool(extract_text(without_untouched_prompts(body)).strip())
+
+
+def is_untouched_template(body: Any) -> bool:
+    """True when `body` is the template with no prompt filled in: it has at
+    least one untouched prompt and nothing else the author wrote. An empty
+    body is not "a template", so it is not matched (nothing to clean)."""
+    blocks = _top_level_blocks(body)
+    if not blocks or not any(_is_untouched_prompt(b) for b in blocks):
+        return False
+    return not has_written_body(body)

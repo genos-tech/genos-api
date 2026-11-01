@@ -33,6 +33,8 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.milestone_order import order_of_work
+from origin.search_engine.agent.tools.template_prompts import has_written_body
+from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.services.milestone_rollup import milestone_tasks_q, milestone_work_q
 from origin.services.user_time import today_for_user_id
 
@@ -126,6 +128,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     open_n = status_breakdown.get("Open", 0)
     wip_n = status_breakdown.get("WIP", 0)
+    status_blocked_n = status_breakdown.get("Blocked", 0)
+    pending_n = status_breakdown.get("Pending", 0)
     # Deleted is gone, not finished: it is not progress.
     closed_n = status_breakdown.get("Closed", 0)
     overdue_n = agg.get("overdue_count", 0) or 0
@@ -147,11 +151,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "folder_name": m.folder.name if m.folder_id else None,
         "title": m.title,
         "status": m.status,
-        "priority": m.priority,
-        "effort_level": m.effort_level,
+        "priority": blank_to_none(m.priority),
+        "effort_level": blank_to_none(m.effort_level),
         "due_date": m.due_date.isoformat() if m.due_date else None,
         "start_date": m.start_date.isoformat() if m.start_date else None,
         "assignees": assignees,
+        # False when the description is empty or only the unmodified
+        # template: nobody has written what this milestone is for.
+        "has_goal": has_written_body(m.description),
         "total_tasks": total,
         "unassigned_task_count": agg.get("unassigned_task_count", 0) or 0,
         "status_breakdown": status_breakdown,
@@ -161,9 +168,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         **order,
         "__summary__": (
             f"Milestone '{m.title}': {total} task(s) — "
-            f"{open_n} open, {wip_n} WIP, {closed_n} closed, "
-            f"{overdue_n} overdue; {order['ready_now_count']} ready to start, "
-            f"{order['blocked_count']} blocked"
+            f"{open_n} open, {wip_n} WIP, {status_blocked_n} Blocked, "
+            f"{pending_n} Pending, {closed_n} closed, {overdue_n} overdue; "
+            f"{order['ready_now_count']} ready to start, "
+            f"{order['blocked_count']} waiting on blockers"
         ),
     }
 
@@ -172,15 +180,19 @@ GET_MILESTONE_SUMMARY = Tool(
     name="get_milestone_summary",
     description=(
         "Return task-count statistics for one milestone: total tasks, "
-        "status_breakdown (Open / WIP / Pending / Closed, plus a separate "
+        "status_breakdown (Open / WIP / Blocked / Pending / Closed, plus a separate "
         "Deleted row for tasks with status Deleted, which are gone: they "
         "are NOT in total_tasks or the other breakdowns and do not count as "
         "closed), priority_breakdown (Minimal/Low/Normal/High/Critical), "
         "effort_breakdown (Minimal/Low/Moderate/High/Extensive), overdue "
-        "count, unassigned count, and the milestone's assignees. It also "
+        "count, unassigned count, the milestone's assignees, and has_goal "
+        "(false when nobody has written its description: empty or still the "
+        "unmodified template). It also "
         "says where to start: `ready_now` (open tasks whose blockers are all "
         "closed, counting the blockers of their parent tasks), `in_progress`, "
-        "`blocked` (each with its open blockers) and `critical_path` (the "
+        "`pending` (status Pending with nothing blocking it: waiting on "
+        "someone, so not a place to start), `blocked` (waiting on blockers, "
+        "each with its open blockers, or set Blocked by hand) and `critical_path` (the "
         "longest chain of open tasks along the dependencies). 'Open' status "
         "alone does not mean ready: use `ready_now`. Counts "
         "include subtasks (tasks whose parent_task_id is the milestone's "

@@ -85,7 +85,7 @@ here fits):
   Structured listings (filter results, return rows):
   - tasks (project, milestone, status, priority, assignee, overdue)
                             → list_tasks
-  - milestones (project, status, assignee_user_id)
+  - milestones (project, status, assignee_id)
                             → list_milestones
   - sprints (project, status) → list_sprints
   - projects (name filter)   → list_projects

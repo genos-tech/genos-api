@@ -47,6 +47,10 @@ class UserSerializer(serializers.ModelSerializer):
             "user_permissions",
             "is_active",
             "is_staff",
+            # A demo account (visitor sandbox). Read-only: the client gates
+            # demo-only UI on it (MIP-837) instead of a localStorage flag
+            # that outlives the session.
+            "is_demo",
         ]
 
         read_only_fields = [
@@ -76,6 +80,8 @@ class UserSerializer(serializers.ModelSerializer):
             # The avatar path other people's browsers load. Only the
             # upload endpoint sets it, directly, from the stored file.
             "profile_image_file_name",
+            # Set when the demo account is provisioned, never from a request.
+            "is_demo",
         ]
 
     def validate_current_location(self, value):

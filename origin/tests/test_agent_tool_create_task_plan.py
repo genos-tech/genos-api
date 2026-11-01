@@ -16,7 +16,9 @@ Contract under test:
 
 from unittest.mock import patch
 
-from origin.models.common.team_models import TeamMaster
+from django.contrib.auth import get_user_model
+
+from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster
@@ -359,6 +361,113 @@ class CreateTaskPlanAclTests(CreateTaskPlanTestBase):
                 ctx=ctx2,
             )
         self.assert_nothing_created()
+
+
+class CreateTaskPlanAssigneeTests(CreateTaskPlanTestBase):
+    """MIP-823: precedence own > plan default > the new milestone's sole
+    assignee, and the same assignee guard as `create_task` / `assign_task`."""
+
+    def setUp(self):
+        super().setUp()
+        self.user3 = get_user_model().objects.create_user(
+            username="thirduser", email="third@example.com", password="x"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=self.user3)
+
+    def _plan(self, milestone=None, **extra):
+        args = {
+            "project_id": self.project.project_id,
+            "tasks": [
+                {"title": "own", "assignee_id": str(self.user3.id)},
+                {"title": "plain"},
+                {"title": "child", "parent_index": 1},
+            ],
+            **extra,
+        }
+        if milestone is not None:
+            args["milestone"] = {"title": "M", **milestone}
+        out = self.run_tool(args)
+        return {t["title"]: str(t["assignee_id"] or "") for t in out["tasks"]}, out
+
+    def test_single_milestone_assignee_is_inherited_by_unassigned_tasks(self):
+        got, out = self._plan({"assignee_ids": [str(self.user2.id)]})
+        self.assertEqual(got["own"], str(self.user3.id))  # its own wins
+        self.assertEqual(got["plain"], str(self.user2.id))
+        self.assertEqual(got["child"], str(self.user2.id))
+        self.assertEqual(out["tasks"][1]["assignee_id"], str(self.user2.id))
+        self.assertEqual(TaskMaster.objects.get(title="plain").assignee_id, self.user2.id)
+
+    def test_several_milestone_assignees_are_not_inherited(self):
+        got, _ = self._plan({"assignee_ids": [str(self.user2.id), str(self.user3.id)]})
+        self.assertEqual(got, {"own": str(self.user3.id), "plain": "", "child": ""})
+
+    def test_duplicate_milestone_assignee_still_counts_as_one(self):
+        got, _ = self._plan({"assignee_ids": [str(self.user2.id), str(self.user2.id)]})
+        self.assertEqual(got["plain"], str(self.user2.id))
+
+    def test_default_assignee_beats_the_milestone_assignee(self):
+        got, _ = self._plan(
+            {"assignee_ids": [str(self.user2.id)]}, default_assignee_id=str(self.user.id)
+        )
+        self.assertEqual(got["own"], str(self.user3.id))
+        self.assertEqual(got["plain"], str(self.user.id))
+        self.assertEqual(got["child"], str(self.user.id))
+
+    def test_default_assignee_without_a_milestone(self):
+        got, _ = self._plan(default_assignee_id=str(self.user2.id))
+        self.assertEqual(got["plain"], str(self.user2.id))
+
+    def test_several_assignees_plus_default_uses_the_default(self):
+        got, _ = self._plan(
+            {"assignee_ids": [str(self.user2.id), str(self.user3.id)]},
+            default_assignee_id=str(self.user.id),
+        )
+        self.assertEqual(got["plain"], str(self.user.id))
+
+    def test_nothing_set_leaves_tasks_unassigned(self):
+        got, _ = self._plan({})
+        self.assertEqual(got["plain"], "")
+
+    def test_existing_milestone_does_not_lend_its_assignee(self):
+        existing = MilestoneMaster.objects.create(
+            team=self.team, project=self.project, reporter=self.user, title="Old"
+        )
+        MilestoneAssignees.objects.create(team=self.team, milestone=existing, user=self.user2)
+        out = self.run_tool(
+            {
+                "project_id": self.project.project_id,
+                "existing_milestone_id": existing.milestone_id,
+                "tasks": [{"title": "A"}],
+            }
+        )
+        self.assertIsNone(out["tasks"][0]["assignee_id"])
+
+    def test_project_guest_is_accepted_as_default_and_inherited(self):
+        guest = get_user_model().objects.create_user(
+            username="guestuser", email="guest@example.com", password="x"
+        )
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=guest)
+        got, _ = self._plan({"assignee_ids": [str(guest.id)]})
+        self.assertEqual(got["plain"], str(guest.id))
+        got, _ = self._plan(default_assignee_id=str(guest.id))
+        self.assertEqual(got["plain"], str(guest.id))
+
+    def test_stranger_is_refused_as_default_and_nothing_is_created(self):
+        stranger = get_user_model().objects.create_user(
+            username="stranger", email="stranger@example.com", password="x"
+        )
+        with self.assertRaisesMessage(ToolError, "not an active member"):
+            self._plan(default_assignee_id=str(stranger.id))
+        self.assert_nothing_created()
+
+    def test_malformed_default_is_refused(self):
+        with self.assertRaisesMessage(ToolError, "is not a user id"):
+            self._plan(default_assignee_id="not-a-uuid")
+        self.assert_nothing_created()
+
+    def test_literal_null_default_means_none(self):
+        got, _ = self._plan(default_assignee_id="null")
+        self.assertEqual(got["plain"], "")
 
 
 class CreateTaskPlanAtomicityTests(CreateTaskPlanTestBase):

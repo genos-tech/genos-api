@@ -4,7 +4,9 @@
 # PR runs the agent eval harness against a deterministic seeded fixture, and
 # a merge to `main` only deploys to Cloud Run if the quality gate passes.
 #
-#   * HARD gate  = the RETRIEVAL suite (deterministic, no LLM). Regression if
+#   * HARD gate  = the RETRIEVAL suite (BM25 + vector + RRF; NOT LLM-free:
+#     each case's search() runs the query rewriter, one small Gemini call,
+#     unless the case pins `rewrite: false`; MIP-860). Regression if
 #     fewer cases pass than the committed baseline, or mrr/recall drop below
 #     their floors. This is what blocks a deploy.
 #   * REPORT-ONLY = the BEHAVIOR suite + LLM judge (real Gemini via Vertex).
@@ -144,9 +146,11 @@ jobs:
       # model of choice. Unlike the gemini-2.5-flash it replaced, it is
       # IN the catalog (apis/llm_models.yaml), so quota and per-model
       # telemetry attribute eval runs correctly instead of to a model
-      # nothing else knows about. The HARD gate (retrieval suite) makes no LLM
-      # calls at all, so this cannot affect what blocks a deploy; it only
-      # touches the report-only behavior suite + judge.
+      # nothing else knows about. The retrieval gate's only LLM call is the
+      # query rewrite (RAG_USE_QUERY_REWRITE, default on; a case can pin it
+      # off with `rewrite: false`). With no RAG_REWRITE_MODEL / effort pin it
+      # inherits GEMINI_MODEL, so this setting reaches the gate too, not only
+      # the report-only behavior suite + judge.
       # NB: a step-change in judge scores right after this landed is the
       # cheaper judge, not a quality regression — re-baseline the trend.
       # If a run starts 404-ing, check REGION first (is the model served
@@ -157,7 +161,9 @@ jobs:
       GEMINI_MODEL: gemini-3.5-flash-lite
       # Reranker OFF for the gate: it adds a Gemini call per query
       # (non-deterministic, slow, Vertex-quota-bound). The gate tests the
-      # deterministic retrieval core (BM25 + vector + RRF).
+      # retrieval core (BM25 + vector + RRF); the query rewrite stays ON
+      # (RAG_USE_QUERY_REWRITE is not set here), so verdicts vary a little
+      # run to run, except for cases that pin `rewrite: false`.
       RAG_USE_RERANKER: "false"
     services:
       postgres:
@@ -252,16 +258,16 @@ jobs:
           fi
           echo "Gate passes so \`deploy: needs: agent-evals\` stays valid."
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.changes.outputs.relevant == 'true'
 
       - name: Authenticate to Google Cloud (keyless WIF)
         if: steps.changes.outputs.relevant == 'true'
-        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.GCP_DEPLOY_SA }}
-      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2.2.1
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
         if: steps.changes.outputs.relevant == 'true'
 
       - name: Start multilingual OpenSearch (prod image)
@@ -280,7 +286,7 @@ jobs:
             sleep 5
           done
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         if: steps.changes.outputs.relevant == 'true'
         with:
           python-version: "3.11"
@@ -377,13 +383,13 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Authenticate to Google Cloud (keyless WIF)
-        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.GCP_DEPLOY_SA }}
-      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2.2.1
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
       - name: Build + push api image (amd64 — Cloud Run requires it)
         run: |
           gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
