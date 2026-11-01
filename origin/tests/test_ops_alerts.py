@@ -2,7 +2,8 @@
 
 What's pinned, roughly in order of how silently each would break:
 
-1. **Every cron reports.** Each railway-*.toml passes `--heartbeat` with
+1. **Every cron reports.** Each cron (a `.railway/railway.ts` service or a
+   railway-*.toml) passes `--heartbeat` with
    its own service name, and each name has a schedule to be missed
    against. A cron left out is a cron whose death nobody hears about.
 2. **The heartbeat tells success from failure,** including a run the
@@ -44,6 +45,8 @@ from origin.tests.test_security_events import SecurityEventCase
 
 REPO = Path(settings.BASE_DIR)
 _START = re.compile(r'^startCommand = "(.*)"$', re.M)
+# `service("name", { ... startCommand: "..." ...` in `.railway/railway.ts`.
+_TS_SERVICE = re.compile(r'service\("([a-z0-9-]+)",.*?startCommand: "([^"]*)"', re.S)
 _HEARTBEAT = re.compile(r"--heartbeat ([a-z0-9-]+)")
 
 TOKEN = "probe-token-for-tests"
@@ -54,29 +57,69 @@ def _tomls():
     return sorted(p for p in REPO.glob("railway-*.toml"))
 
 
+def _ts_crons() -> dict[str, str]:
+    """The cron services in `.railway/railway.ts` (MIP-857), service name to
+    start command. A service created after 2026-08-28 cannot have a
+    railway-*.toml, so that file is where a new cron is defined."""
+    text = (REPO / ".railway" / "railway.ts").read_text()
+    return dict(_TS_SERVICE.findall(text))
+
+
+def _crons() -> list[tuple[str, str]]:
+    """(label, start command) of every cron: the railway.ts services, plus
+    the railway-*.toml files (still read by Railway until each service is
+    cut over, and the only definition of a cron not moved yet)."""
+    out = [(f"railway.ts:{name}", start) for name, start in _ts_crons().items()]
+    for toml in _tomls():
+        found = _START.search(toml.read_text())
+        out.append((toml.name, found.group(1) if found else ""))
+    return out
+
+
+def _heartbeat_names(starts) -> list[str]:
+    return [_HEARTBEAT.search(start).group(1) for start in starts]
+
+
 class TestEveryCronReports(TestCase):
-    def test_every_cron_toml_passes_its_heartbeat(self):
-        for toml in _tomls():
-            with self.subTest(toml=toml.name):
-                start = _START.search(toml.read_text())
-                self.assertIsNotNone(start, "no startCommand")
-                names = _HEARTBEAT.findall(start.group(1))
+    def test_every_cron_passes_its_heartbeat(self):
+        crons = _crons()
+        # Not vacuous: the ts file and the tomls were both found.
+        self.assertGreaterEqual(len(_ts_crons()), 15)
+        self.assertGreaterEqual(len(_tomls()), 15)
+        for label, start in crons:
+            with self.subTest(cron=label):
+                self.assertTrue(start, "no startCommand")
+                names = _HEARTBEAT.findall(start)
                 self.assertEqual(len(names), 1, "expected exactly one --heartbeat")
 
+    def test_a_railway_ts_service_beats_under_its_own_name(self):
+        for name, start in _ts_crons().items():
+            with self.subTest(service=name):
+                self.assertEqual(_HEARTBEAT.findall(start), [name])
+
     def test_heartbeat_names_are_unique(self):
-        names = [
-            _HEARTBEAT.search(_START.search(t.read_text()).group(1)).group(1) for t in _tomls()
-        ]
-        self.assertEqual(len(names), len(set(names)), names)
+        for source in (
+            list(_ts_crons().values()),
+            [_START.search(t.read_text()).group(1) for t in _tomls()],
+        ):
+            names = _heartbeat_names(source)
+            self.assertEqual(len(names), len(set(names)), names)
+
+    def test_a_cron_added_after_the_config_files_ended_has_no_toml(self):
+        # MIP-861: reconcile-pr-deliveries is defined in railway.ts only. A
+        # toml for it would be ignored by Railway for a new service.
+        self.assertIn("reconcile-pr-deliveries", _ts_crons())
+        self.assertNotIn(
+            "reconcile-pr-deliveries",
+            _heartbeat_names(s for _l, s in _crons() if _l.endswith(".toml")),
+        )
 
     def test_every_watched_cron_has_a_schedule_and_every_schedule_a_cron(self):
         # The tick is the one cron nothing inside can watch: the outside
         # probe does, through AlertingHealthView.
-        names = {
-            _HEARTBEAT.search(_START.search(t.read_text()).group(1)).group(1) for t in _tomls()
-        }
+        names = set(_heartbeat_names(start for _label, start in _crons()))
         self.assertIn(ops_alerts.TICK_NAME, names)
-        # The probe beats through AlertingHealthView, not a toml.
+        # The probe beats through AlertingHealthView, not a cron.
         self.assertEqual(
             names - {ops_alerts.TICK_NAME},
             set(ops_alerts.CRON_SCHEDULES) - {ops_alerts.PROBE_NAME},
@@ -91,9 +134,8 @@ class TestEveryCronReports(TestCase):
         # A plain BaseCommand would refuse `--heartbeat` and fail every run.
         # Followed through the entrypoint, which must pass "$@" on.
         manage = re.compile(r"manage\.py (\w+)(?: \\\n\s*)? \"\$@\"")
-        for toml in _tomls():
-            start = _START.search(toml.read_text()).group(1)
-            with self.subTest(toml=toml.name):
+        for label, start in _crons():
+            with self.subTest(cron=label):
                 direct = re.match(r"python /app/manage\.py (\w+) ", start)
                 if direct:
                     command = direct.group(1)
@@ -167,7 +209,7 @@ class TestHeartbeat(_NoReconnect, TestCase):
         self.assertFalse(OpsAlert.objects.exists())
 
     def test_the_flag_goes_through_the_parser(self):
-        # The wiring railway-*.toml relies on: `--heartbeat` on a command
+        # The wiring the cron start commands rely on: `--heartbeat` on a command
         # that never declared it.
         call_command(_Clean(), "--heartbeat", "demo-user-cleanup")
         self.assertIsNotNone(self.beat().last_succeeded_at)
