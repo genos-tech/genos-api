@@ -4,7 +4,9 @@
 # PR runs the agent eval harness against a deterministic seeded fixture, and
 # a merge to `main` only deploys to Cloud Run if the quality gate passes.
 #
-#   * HARD gate  = the RETRIEVAL suite (deterministic, no LLM). Regression if
+#   * HARD gate  = the RETRIEVAL suite (BM25 + vector + RRF; NOT LLM-free:
+#     each case's search() runs the query rewriter, one small Gemini call,
+#     unless the case pins `rewrite: false`; MIP-860). Regression if
 #     fewer cases pass than the committed baseline, or mrr/recall drop below
 #     their floors. This is what blocks a deploy.
 #   * REPORT-ONLY = the BEHAVIOR suite + LLM judge (real Gemini via Vertex).
@@ -144,9 +146,11 @@ jobs:
       # model of choice. Unlike the gemini-2.5-flash it replaced, it is
       # IN the catalog (apis/llm_models.yaml), so quota and per-model
       # telemetry attribute eval runs correctly instead of to a model
-      # nothing else knows about. The HARD gate (retrieval suite) makes no LLM
-      # calls at all, so this cannot affect what blocks a deploy; it only
-      # touches the report-only behavior suite + judge.
+      # nothing else knows about. The retrieval gate's only LLM call is the
+      # query rewrite (RAG_USE_QUERY_REWRITE, default on; a case can pin it
+      # off with `rewrite: false`). With no RAG_REWRITE_MODEL / effort pin it
+      # inherits GEMINI_MODEL, so this setting reaches the gate too, not only
+      # the report-only behavior suite + judge.
       # NB: a step-change in judge scores right after this landed is the
       # cheaper judge, not a quality regression — re-baseline the trend.
       # If a run starts 404-ing, check REGION first (is the model served
@@ -157,7 +161,9 @@ jobs:
       GEMINI_MODEL: gemini-3.5-flash-lite
       # Reranker OFF for the gate: it adds a Gemini call per query
       # (non-deterministic, slow, Vertex-quota-bound). The gate tests the
-      # deterministic retrieval core (BM25 + vector + RRF).
+      # retrieval core (BM25 + vector + RRF); the query rewrite stays ON
+      # (RAG_USE_QUERY_REWRITE is not set here), so verdicts vary a little
+      # run to run, except for cases that pin `rewrite: false`.
       RAG_USE_RERANKER: "false"
     services:
       postgres:
