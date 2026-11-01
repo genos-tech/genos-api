@@ -27,7 +27,7 @@ class CaseCostTests(TestCase):
     def _row(self, request_id, **kw):
         kw.setdefault("surface", "eval")
         kw.setdefault("provider", "gemini")
-        kw.setdefault("model", "gemini-3.6-flash")
+        kw.setdefault("model", "gemini-3.8-flash")
         kw.setdefault("rate_card_version", "card-a")
         return AiSpendEvent.objects.create(request_id=request_id, **kw)
 

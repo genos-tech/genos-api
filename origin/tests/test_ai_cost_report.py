@@ -35,7 +35,7 @@ def _event(**kw):
     kw.setdefault("surface", "ask")
     kw.setdefault("purpose", "loop")
     kw.setdefault("provider", "gemini")
-    kw.setdefault("model", "gemini-3.6-flash")
+    kw.setdefault("model", "gemini-3.8-flash")
     kw.setdefault("cost_basis", "priced")
     kw.setdefault("rate_card_version", "card-a")
     kw.setdefault("user_id", "u1")

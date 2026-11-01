@@ -97,8 +97,10 @@
 #                    * cached_input = 10% of input, all three providers.
 #                    * Anthropic cache_write = 125% of input (5-min TTL).
 #   supports_temperature (opt, default true) — false for models whose
-#                  API rejects `temperature`. Read by
-#                  llm/claude_client.py.
+#                  API rejects `temperature` (Claude's newer families) or
+#                  silently ignores it (Gemini 3.x on Vertex): the
+#                  adapter then omits it. Read by llm/claude_client.py
+#                  and llm/gemini_client.py.
 #
 #                  Anthropic returns a hard 400 "`temperature` is
 #                  deprecated for this model." on its newer families.
@@ -293,19 +295,33 @@ providers:
           # is the model to point RAG_RERANKER_MODEL / RAG_REWRITE_MODEL
           # at (LLM_SPEND_MAP.md section 7, levers 2 and 3).
 
-        - model: gemini-3.6-flash
+        - model: gemini-3.8-flash
           class: light
-          label: Gemini 3.6 Flash
+          label: Gemini 3.8 Flash
           note: Balanced speed and quality — the default.
           price: { input: 1.50, output: 7.50, cached_input: 0.15, cache_write: 0 }
-          # Released 2026-07-21. The server default (GEMINI_MODEL), and
-          # the direct successor to gemini-3.5-flash: same input price,
-          # 17% cheaper output, and it beats 3.1 Pro on coding.
+          supports_temperature: false
+          # Replaces gemini-3.6-flash (MIP-859). Same price on Google's
+          # pricing page, so the caps, the cost classes and the agent's
+          # economics are unchanged. The server default (GEMINI_MODEL).
           #
-          # `light` because gemini-3.5-flash was flash-class (~JPY1-2 per
-          # ask) and this is cheaper still. Light caps equal the umbrella
-          # `llm_ask_daily`, i.e. the default model is effectively
-          # unmetered — which is exactly what it must be.
+          # PROVEN TO SERVE on Vertex with a real tool-calling request
+          # (2026-11-02) at location `global` ONLY: it 404s in
+          # asia-northeast1 and in us-central1, exactly like 3.6-flash and
+          # 3.5-flash-lite. Production already runs the LLM client at
+          # `global` (GEMINI_LOCATION=global on Railway; GEMINI_LLM_LOCATION
+          # locally and in CI), so no location change is needed — but a
+          # deployment that pins a regional location will 404 every call.
+          #
+          # `supports_temperature: false`: Gemini 3.x on Vertex ACCEPTS a
+          # temperature and then ignores it. Measured on 3.6-flash,
+          # 3.8-flash and 3.5-flash-lite: temperature=0.0 gave 4-5 distinct
+          # answers in 4-5 samples, no fewer than temperature=2.0. The
+          # client used to send 0.2 on every call, which read like a
+          # determinism lever and was not one; it is now omitted for models
+          # that declare this. Nothing changes in behaviour, and a future
+          # Google change from "ignored" to "rejected" cannot 400 the
+          # default model.
           #
           # The 10x cached-input discount matters more here than the
           # headline rate: Genos re-sends 57 tool schemas on every call,
@@ -324,7 +340,7 @@ providers:
           # Unchanged from the previous catalog, where it was also mid.
           #
           # Two caveats worth knowing:
-          #   * gemini-3.6-flash above reportedly beats it on coding at
+          #   * gemini-3.8-flash above reportedly beats it on coding at
           #     lower cost, so this is a thinking-depth rung, not a
           #     quality-dominance one.
           #   * Price steps to $4.00/$18.00 above 200K context, and the
@@ -548,7 +564,7 @@ efforts:
         thinking_budget: null
         # The two-tier target: planning on flash-lite (~$0.006/call
         # even on a cache miss vs ~$0.028 on 3.6-flash), synthesis on
-        # 3.6-flash. Loop calls are 99%+ of medium's cost.
+        # 3.8-flash (same price as 3.6). Loop calls are 99%+ of medium's cost.
         loop_rung: 0
     high:
         rung: 2

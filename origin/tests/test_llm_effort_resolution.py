@@ -82,7 +82,7 @@ class ResolveUserEffortTests(SimpleTestCase):
         with a derivable legacy model keep their rung — see
         test_legacy_model_derives_its_rungs_effort."""
         with override_settings(
-            SEARCH_ENGINE=_se(LLM_PROVIDER="gemini", GEMINI_MODEL="gemini-3.6-flash")
+            SEARCH_ENGINE=_se(LLM_PROVIDER="gemini", GEMINI_MODEL="gemini-3.8-flash")
         ):
             choice = resolve_user_effort("", "", "")
         self.assertEqual(choice, LlmChoice("gemini", "gemini-3.5-flash-lite", "low"))

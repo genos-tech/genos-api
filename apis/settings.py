@@ -925,7 +925,7 @@ SEARCH_ENGINE = {
     # default (it's an operator escape hatch), so a stale default here ships
     # silently: the loop runs it while the Settings picker only offers the
     # catalog. `test_default_models_are_in_catalog` guards against that drift.
-    "GEMINI_MODEL": os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash",
+    "GEMINI_MODEL": os.environ.get("GEMINI_MODEL") or "gemini-3.8-flash",
     # (AGENT_CONTEXT_CHUNKS used to live here — removed as dead code.
     # Nothing ever read it; the real context budget is search()'s
     # max_chunks_per_entity × the per-tool entity limit.)

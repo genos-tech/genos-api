@@ -207,7 +207,7 @@ class PruneTests(TestCase):
             user_id=_UID_A,
             surface="ask",
             provider="gemini",
-            model="gemini-3.6-flash",
+            model="gemini-3.8-flash",
             cost_jpy_milli=100,
             cost_usd_micro=700,
         )
@@ -276,7 +276,7 @@ class DashboardShadowSectionTests(TestCase):
             user_id=_UID_A,
             surface="ask",
             provider="gemini",
-            model="gemini-3.6-flash",
+            model="gemini-3.8-flash",
             cost_jpy_milli=100,
             cost_usd_micro=700,
         )

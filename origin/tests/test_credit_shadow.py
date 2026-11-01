@@ -63,7 +63,7 @@ class _ShadowBase(TestCase):
     def _spend_and_finish(self, ctx, *, tokens=1_000_000, result=AiRequestCost.RESULT_SUCCESS):
         token = spend._context.set(ctx)
         try:
-            usage = CallUsage(provider="gemini", model="gemini-3.6-flash")
+            usage = CallUsage(provider="gemini", model="gemini-3.8-flash")
             usage.prompt_tokens = tokens
             spend.record_llm_call(usage)
         finally:
@@ -255,7 +255,7 @@ class MeteredSurfaceSettlementTests(_ShadowBase):
         with metered.metered_request(
             surface="thread_summary", user_id="u1", team_id="t1"
         ):
-            usage = CallUsage(provider="gemini", model="gemini-3.6-flash")
+            usage = CallUsage(provider="gemini", model="gemini-3.8-flash")
             usage.prompt_tokens = 1_000_000
             spend.record_llm_call(usage)
 
@@ -270,7 +270,7 @@ class MeteredSurfaceSettlementTests(_ShadowBase):
         from origin.search_engine import metered  # noqa: PLC0415
 
         with metered.metered_request(surface="search", user_id="u1"):
-            usage = CallUsage(provider="gemini", model="gemini-3.6-flash")
+            usage = CallUsage(provider="gemini", model="gemini-3.8-flash")
             usage.prompt_tokens = 1_000_000
             spend.record_llm_call(usage)
 

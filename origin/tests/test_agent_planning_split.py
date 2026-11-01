@@ -233,7 +233,7 @@ class TwoTierLoopTests(SimpleTestCase):
     def test_medium_plans_on_the_loop_rung_and_synthesizes_on_its_own(self):
         fast_draft = [("A mediocre draft.", None)]
         client = _ScriptedClient([_TOOL_STEP, fast_draft, _FINAL_STEP])
-        events = self._run_bound(client, effort="medium", model="gemini-3.6-flash")
+        events = self._run_bound(client, effort="medium", model="gemini-3.8-flash")
         self.assertEqual(
             client.overrides,
             ["gemini-3.5-flash-lite", "gemini-3.5-flash-lite", None],
@@ -255,7 +255,7 @@ class TwoTierLoopTests(SimpleTestCase):
         from origin.search_engine.llm.choice import reset_llm_choice, set_llm_choice
 
         token = set_llm_choice(
-            LlmChoice(provider="gemini", model="gemini-3.6-flash", effort="medium")
+            LlmChoice(provider="gemini", model="gemini-3.8-flash", effort="medium")
         )
         try:
             with override_settings(
@@ -276,7 +276,7 @@ class TwoTierLoopTests(SimpleTestCase):
         self._run_bound(
             client,
             effort="medium",
-            model="gemini-3.6-flash",
+            model="gemini-3.8-flash",
             RAG_PLANNING_MODEL="gemini-3.1-pro-preview",
         )
         self.assertEqual(client.overrides[0], "gemini-3.1-pro-preview")

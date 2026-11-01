@@ -270,7 +270,7 @@ class RebuildGuardTests(_RestoresRecorder, _ClearsBalanceCache):
         # A closed, charged request from "last policy regime".
         rid = str(uuid.uuid4())
         with spend.spend_context(surface="ask", user_id="u1", request_id=rid) as ctx:
-            usage = CallUsage(provider="gemini", model="gemini-3.6-flash")
+            usage = CallUsage(provider="gemini", model="gemini-3.8-flash")
             usage.prompt_tokens = 1_000_000
             spend.record_llm_call(usage)
             spend_recorder.close_request(ctx, result=AiRequestCost.RESULT_SUCCESS)
@@ -309,7 +309,7 @@ class RebuildGuardTests(_RestoresRecorder, _ClearsBalanceCache):
         requests remain charged under v1' looks like in data."""
         rid = str(uuid.uuid4())
         with spend.spend_context(surface="ask", user_id="u1", request_id=rid) as ctx:
-            usage = CallUsage(provider="gemini", model="gemini-3.6-flash")
+            usage = CallUsage(provider="gemini", model="gemini-3.8-flash")
             usage.prompt_tokens = 1_000_000
             spend.record_llm_call(usage)
             spend_recorder.close_request(ctx, result=AiRequestCost.RESULT_SUCCESS)

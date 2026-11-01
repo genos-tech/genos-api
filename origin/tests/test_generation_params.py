@@ -118,13 +118,13 @@ class OpenAIParamsTests(SimpleTestCase):
 
 
 class GeminiParamsTests(SimpleTestCase):
-    def _config(self, *, params=None):
+    def _config(self, *, params=None, model="gemini-3.8-flash"):
         from origin.search_engine.llm.gemini_client import GeminiClient
 
         client = MagicMock()
         client.models.generate_content_stream.return_value = iter(())
         with (
-            override_settings(SEARCH_ENGINE=_se(GEMINI_MODEL="gemini-3.6-flash")),
+            override_settings(SEARCH_ENGINE=_se(GEMINI_MODEL=model)),
             patch(
                 "origin.search_engine.llm.gemini_client._get_client", return_value=client
             ),
@@ -138,7 +138,21 @@ class GeminiParamsTests(SimpleTestCase):
         some default)."""
         config = self._config(params=None)
         self.assertIsNone(getattr(config, "max_output_tokens", None))
-        self.assertEqual(config.temperature, 0.2)
+
+    def test_a_model_that_ignores_temperature_is_not_sent_one(self):
+        """MIP-859: Gemini 3.x on Vertex accepts `temperature` and then
+        ignores it (temperature=0.0 still varied on every sample), so the
+        catalog marks gemini-3.8-flash `supports_temperature: false` and
+        the request omits it."""
+        config = self._config(model="gemini-3.8-flash")
+        self.assertIsNone(getattr(config, "temperature", None))
+
+    def test_a_model_without_the_flag_keeps_the_exact_old_request(self):
+        """Undeclared models (older rungs, and operator-pinned preview
+        ids outside the catalog) must keep receiving temperature=0.2."""
+        for model in ("gemini-3.5-flash-lite", "gemini-uncatalogued-preview"):
+            with self.subTest(model=model):
+                self.assertEqual(self._config(model=model).temperature, 0.2)
 
     def test_per_call_cap_is_applied(self):
         config = self._config(params=GenerationParams(max_output_tokens=4096))

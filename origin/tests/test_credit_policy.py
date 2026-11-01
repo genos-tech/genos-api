@@ -324,7 +324,7 @@ class RollupCreditFieldsTests(_RestoresRecorder, TestCase):
     def _run_request(self, *, surface="ask", result=AiRequestCost.RESULT_SUCCESS, tokens=1_000_000):
         rid = str(uuid.uuid4())
         with spend.spend_context(surface=surface, user_id="u1", request_id=rid) as ctx:
-            usage = CallUsage(provider="gemini", model="gemini-3.6-flash")
+            usage = CallUsage(provider="gemini", model="gemini-3.8-flash")
             usage.prompt_tokens = tokens
             spend.record_llm_call(usage)
             spend_recorder.close_request(ctx, result=result)

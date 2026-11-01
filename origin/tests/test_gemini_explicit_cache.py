@@ -60,7 +60,7 @@ class ExplicitCacheAdapterTests(SimpleTestCase):
         with (
             override_settings(
                 SEARCH_ENGINE=_se(
-                    GEMINI_MODEL="gemini-3.6-flash", GEMINI_EXPLICIT_CACHE=flag
+                    GEMINI_MODEL="gemini-3.8-flash", GEMINI_EXPLICIT_CACHE=flag
                 )
             ),
             patch(
@@ -95,7 +95,7 @@ class ExplicitCacheAdapterTests(SimpleTestCase):
         with (
             override_settings(
                 SEARCH_ENGINE=_se(
-                    GEMINI_MODEL="gemini-3.6-flash", GEMINI_EXPLICIT_CACHE=True
+                    GEMINI_MODEL="gemini-3.8-flash", GEMINI_EXPLICIT_CACHE=True
                 )
             ),
             patch(
@@ -133,7 +133,7 @@ class ExplicitCacheAdapterTests(SimpleTestCase):
         with (
             override_settings(
                 SEARCH_ENGINE=_se(
-                    GEMINI_MODEL="gemini-3.6-flash", GEMINI_EXPLICIT_CACHE=True
+                    GEMINI_MODEL="gemini-3.8-flash", GEMINI_EXPLICIT_CACHE=True
                 )
             ),
             patch(

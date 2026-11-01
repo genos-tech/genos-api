@@ -180,7 +180,7 @@ class UserDailyAlertTests(TestCase):
             user_id=user_id,
             surface="ask",
             provider="gemini",
-            model="gemini-3.6-flash",
+            model="gemini-3.8-flash",
             cost_jpy_milli=int(usd_micro * 150 / 1000),
             cost_usd_micro=usd_micro,
         )
@@ -255,7 +255,7 @@ class MonthlyCeilingTests(TestCase):
         cache.clear()
         self.addCleanup(cache.clear)
 
-    def _chosen(self, model="gemini-3.6-flash"):
+    def _chosen(self, model="gemini-3.8-flash"):
         from origin.search_engine.llm.choice import LlmChoice
 
         return LlmChoice(provider="gemini", model=model)
@@ -267,7 +267,7 @@ class MonthlyCeilingTests(TestCase):
             team_id=team_id or None,
             surface="ask",
             provider="gemini",
-            model="gemini-3.6-flash",
+            model="gemini-3.8-flash",
             cost_jpy_milli=int(usd_micro * 150 / 1000),
             cost_usd_micro=usd_micro,
         )
@@ -292,7 +292,7 @@ class MonthlyCeilingTests(TestCase):
             resp, note, chosen = self._enforce()
         self.assertIsNone(resp)
         self.assertIsNone(note)
-        self.assertEqual(chosen.model, "gemini-3.6-flash")
+        self.assertEqual(chosen.model, "gemini-3.8-flash")
         logger.warning.assert_not_called()
 
     def test_over_the_ceiling_defaults_to_alert_only(self):
@@ -301,7 +301,7 @@ class MonthlyCeilingTests(TestCase):
             resp, note, chosen = self._enforce()
         self.assertIsNone(resp, "both levers off — nothing may block")
         self.assertIsNone(note)
-        self.assertEqual(chosen.model, "gemini-3.6-flash")
+        self.assertEqual(chosen.model, "gemini-3.8-flash")
         self.assertTrue(any("monthly AI cost ceiling" in line for line in cm.output))
 
     def test_pause_lever_429s_with_a_money_free_message(self):
@@ -320,7 +320,7 @@ class MonthlyCeilingTests(TestCase):
         self.assertEqual(chosen.model, "gemini-3.5-flash-lite")
         self.assertEqual(
             note,
-            {"requested_model": "gemini-3.6-flash", "used_model": "gemini-3.5-flash-lite"},
+            {"requested_model": "gemini-3.8-flash", "used_model": "gemini-3.5-flash-lite"},
             "the same model_fallback note the quota fallback uses, so the "
             "frontend needs nothing new",
         )
@@ -361,7 +361,7 @@ class MonthlyCeilingTests(TestCase):
                     _UID, "free", "", self._chosen()
                 )
         self.assertIsNone(resp, "a check that cannot run must never block")
-        self.assertEqual(chosen.model, "gemini-3.6-flash")
+        self.assertEqual(chosen.model, "gemini-3.8-flash")
 
     def test_team_ceiling_alerts_and_never_blocks(self):
         self._spend(usd_micro=5_000_000, team_id="team-9")  # $5

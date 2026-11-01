@@ -41,7 +41,7 @@ METER_ON = override_settings(SEARCH_ENGINE=_se(AI_COST_METER=True))
 METER_OFF = override_settings(SEARCH_ENGINE=_se(AI_COST_METER=False))
 
 
-def _usage(model="gemini-3.6-flash", provider="gemini", **kw):
+def _usage(model="gemini-3.8-flash", provider="gemini", **kw):
     u = CallUsage(provider=provider, model=model)
     for k, v in kw.items():
         setattr(u, k, v)
@@ -90,7 +90,7 @@ class ContextHygieneTests(SimpleTestCase):
         )
 
         token = set_llm_choice(
-            LlmChoice(provider="gemini", model="gemini-3.6-flash", effort="medium")
+            LlmChoice(provider="gemini", model="gemini-3.8-flash", effort="medium")
         )
         try:
             with spend.spend_context(surface="eval") as ctx:
