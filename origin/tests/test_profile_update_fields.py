@@ -83,6 +83,12 @@ class ProfileUpdateFieldTests(TestCase):
         self.user.refresh_from_db()
         self.assertFalse(self.user.is_superuser)
 
+    def test_is_demo_is_refused(self):
+        res = self.put({"is_demo": True}, format="json")
+        self.assert_refused(res, "is_demo")
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_demo)
+
     def test_avatar_path_is_refused(self):
         res = self.put({"profile_image_file_name": "https://evil.example/x.png"}, format="json")
         self.assert_refused(res, "profile_image_file_name")
@@ -163,6 +169,17 @@ class ProfileUpdateFieldTests(TestCase):
         self.assertIn("is_active", res.data)
         self.assertIn("profile_image_file_name", res.data)
 
+    def test_is_demo_is_exposed_to_the_owner(self):
+        # The client gates demo-only UI on it (MIP-837).
+        res = self.client.get("/api/v2/user/me/")
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertIs(res.data["is_demo"], False)
+        # The request carries this same instance, so set it on the instance.
+        self.user.is_demo = True
+        self.user.save(update_fields=["is_demo"])
+        res = self.client.get("/api/v2/user/me/")
+        self.assertIs(res.data["is_demo"], True)
+
 
 class UserSerializerLockTests(TestCase):
     """The second lock: `UserSerializer` itself won't write these, for any
@@ -184,6 +201,7 @@ class UserSerializerLockTests(TestCase):
                 "groups": [group.id],
                 "user_permissions": [Permission.objects.first().id],
                 "profile_image_file_name": "https://evil.example/x.png",
+                "is_demo": True,
             },
             partial=True,
         )
@@ -197,6 +215,7 @@ class UserSerializerLockTests(TestCase):
         self.assertFalse(self.user.groups.exists())
         self.assertFalse(self.user.user_permissions.exists())
         self.assertIsNone(self.user.profile_image_file_name)
+        self.assertFalse(self.user.is_demo)
 
     def test_the_avatar_upload_still_writes_through_it(self):
         # `UserProfileImageView` saves the file through this serializer,
