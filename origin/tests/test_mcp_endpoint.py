@@ -42,6 +42,7 @@ from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine import quota
@@ -1336,6 +1337,65 @@ class TestUnknownArgumentsAreRefused(McpBase):
         )
 
         self.assertIn("Nothing was changed", text)
+
+    def _milestones(self, **args):
+        result = self._result(
+            self._call("list_milestones", {"project_id": self.project.project_id, **args})
+        )
+        self.assertFalse(result.get("isError"), result)
+        return [m["title"] for m in result["structuredContent"]["milestones"]]
+
+    def _milestone_for_user(self):
+        m = MilestoneMaster.objects.create(
+            team=self.team, project=self.project, reporter=self.user, title="Mine", status="Open"
+        )
+        MilestoneAssignees.objects.create(milestone=m, user=self.user)
+        MilestoneMaster.objects.create(
+            team=self.team, project=self.project, reporter=self.user, title="Theirs", status="Open"
+        )
+
+    def test_list_milestones_takes_the_same_assignee_name_as_list_tasks(self):
+        """`list_tasks` says `assignee_id`; `list_milestones` said
+        `assignee_user_id`, and carrying the name across was a refused call
+        (MIP-827). Both work; the older one is a documented alias."""
+        self._key(scope=SCOPE_READ)
+        self._milestone_for_user()
+        who = str(self.user.id)
+
+        self.assertEqual(self._milestones(assignee_id=who), ["Mine"])
+        self.assertEqual(self._milestones(assignee_user_id=who), ["Mine"])
+        self.assertEqual(sorted(self._milestones()), ["Mine", "Theirs"])
+
+    def test_list_milestones_publishes_both_names_and_says_which_to_send(self):
+        props = tools.input_schema(tools.BY_NAME["list_milestones"])["properties"]
+
+        self.assertIn("assignee_id", props)
+        self.assertIn("assignee_user_id", props)
+        self.assertIn("list_tasks", props["assignee_id"]["description"])
+        self.assertIn("Older spelling", props["assignee_user_id"]["description"])
+        # list_my_milestones is not published on this surface.
+        self.assertNotIn("list_my_milestones", json.dumps(props))
+
+    def test_list_milestones_refuses_two_different_assignees(self):
+        self._key(scope=SCOPE_READ)
+        self._milestone_for_user()
+
+        text, is_error = self._tool_text(
+            self._call(
+                "list_milestones",
+                {"assignee_id": str(self.user.id), "assignee_user_id": str(self.user2.id)},
+            )
+        )
+
+        self.assertTrue(is_error)
+        self.assertIn("different values", text)
+
+    def test_list_milestones_accepts_both_names_when_they_agree(self):
+        self._key(scope=SCOPE_READ)
+        self._milestone_for_user()
+        who = str(self.user.id)
+
+        self.assertEqual(self._milestones(assignee_id=who, assignee_user_id=who), ["Mine"])
 
     def test_the_check_reads_the_published_schema_so_a_documented_key_is_never_refused(self):
         """Today an override only changes a property's type, so the registry's

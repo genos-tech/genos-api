@@ -237,20 +237,27 @@ CATALOG: tuple[McpTool, ...] = (
             "milestone is also backed by a task, so `update_task` on that "
             "backing id is how a milestone's own title and dates change."
         ),
-        # The registry description of `assignee_user_id` points at
+        # The registry description of `assignee_id` points at
         # `list_my_milestones`, which this surface does not publish —
         # `_rewrite_refs` can only rename a tool, not remove a reference
         # to an absent one. Overridden rather than renamed: the caller
-        # already has `get_current_user` for "mine".
+        # already has `get_current_user` for "mine". `assignee_user_id` is the
+        # older spelling of the same filter; both are published because this
+        # layer refuses any argument not in the schema (MIP-827).
         schema_overrides={
-            "assignee_user_id": {
+            "assignee_id": {
                 "type": "string",
                 "description": (
                     "Only milestones this user is assigned to. A user UUID — "
                     "`get_current_user` for the caller's own, or "
-                    "`get_team_members` to resolve a name."
+                    "`get_team_members` to resolve a name. Same name as in "
+                    "`list_tasks`."
                 ),
-            }
+            },
+            "assignee_user_id": {
+                "type": "string",
+                "description": "Older spelling of `assignee_id`; send `assignee_id`.",
+            },
         },
     ),
     McpTool(
