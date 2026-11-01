@@ -25,7 +25,11 @@ import re
 from django.conf import settings
 
 from origin.search_engine.llm import AgentMessage, get_model_client
-from origin.search_engine.llm.choice import get_llm_choice, subprocess_model_override
+from origin.search_engine.llm.choice import (
+    get_llm_choice,
+    subprocess_model_override,
+    subprocess_params,
+)
 from origin.search_engine.llm.spend import spend_purpose
 
 log = logging.getLogger(__name__)
@@ -96,6 +100,7 @@ def rewrite_query(query: str, *, num_variants: int = 3) -> list[str]:
             tools=[],
             system_instruction=_SYSTEM_PROMPT,
             model_override=model_override,
+            params=subprocess_params("rewrite"),
         ):
             if text:
                 chunks.append(text)

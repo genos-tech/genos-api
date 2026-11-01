@@ -35,6 +35,11 @@ def _ssl_context(ca_cert_b64):
     return context
 
 
+# Connections kept per host. Comfortably above the widest fan-out in the code
+# (a search with 3 rewrites + the original is 4 lanes of 2 queries).
+_POOL_MAXSIZE = 10
+
+
 def build_client_kwargs(cfg, *, debug):
     """The OpenSearch(...) arguments for `cfg` (settings.SEARCH_ENGINE).
 
@@ -71,6 +76,12 @@ def build_client_kwargs(cfg, *, debug):
         "hosts": [{"host": cfg["OPENSEARCH_HOST"], "port": cfg["OPENSEARCH_PORT"]}],
         "http_compress": True,
         "use_ssl": use_ssl,
+        # The client is one shared singleton. opensearch-py's urllib3 pool
+        # holds ONE connection by default, so any second request in flight
+        # (an agent search runs its query variants side by side, and a gunicorn
+        # worker serves threads) opened a fresh TLS connection and threw it away
+        # ("Connection pool is full, discarding connection").
+        "pool_maxsize": _POOL_MAXSIZE,
     }
     if use_ssl:
         kwargs["ssl_context"] = _ssl_context(cfg.get("OPENSEARCH_CA_CERT", ""))

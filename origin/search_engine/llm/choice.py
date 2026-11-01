@@ -26,10 +26,14 @@ from __future__ import annotations
 import logging
 from contextvars import ContextVar
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from django.conf import settings
 
 from apis.llm_catalog import EFFORTS
+
+if TYPE_CHECKING:
+    from origin.search_engine.llm.types import GenerationParams
 
 log = logging.getLogger(__name__)
 
@@ -256,9 +260,7 @@ def resolve_user_effort(
 
     effort = (preferred_effort or "").lower().strip()
     if effort not in EFFORTS:
-        derived = settings.LLM_CATALOG.effort_for_model(
-            provider, (preferred_model or "").strip()
-        )
+        derived = settings.LLM_CATALOG.effort_for_model(provider, (preferred_model or "").strip())
         effort = derived or DEFAULT_EFFORT
 
     ceiling = (max_effort or "").lower().strip()
@@ -289,6 +291,32 @@ def active_effort_profile():
     if choice is None or not choice.effort:
         return None
     return settings.LLM_CATALOG.efforts.get(choice.effort)
+
+
+def subprocess_params(kind: str) -> GenerationParams | None:
+    """Generation params for a rewrite / rerank sub-call, or None.
+
+    These calls emit a short list, so a thinking model's default dynamic
+    thinking (hundreds of tokens, seconds of latency, billed as output) buys
+    nothing. `RAG_SUBPROCESS_THINKING_BUDGET` is the budget: 0 turns thinking
+    off (the default), a number caps it, and "default"/empty returns None, the
+    adapter's existing behaviour. Adapters other than Gemini ignore it.
+
+    `kind` is accepted so a call can later get its own budget without touching
+    every call site.
+    """
+    from origin.search_engine.llm.types import GenerationParams  # noqa: PLC0415
+
+    raw = str(settings.SEARCH_ENGINE.get("RAG_SUBPROCESS_THINKING_BUDGET", "0")).strip().lower()
+    if raw in ("", "default", "none"):
+        return None
+    try:
+        budget = int(raw)
+    except ValueError:
+        return None
+    if budget < 0:
+        return None
+    return GenerationParams(thinking_budget=budget)
 
 
 def subprocess_model_override(kind: str, choice: LlmChoice | None) -> str | None:

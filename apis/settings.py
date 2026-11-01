@@ -1060,6 +1060,13 @@ SEARCH_ENGINE = {
     # GEMINI_MODEL/CLAUDE_MODEL used for answer generation. Empty =
     # use the provider's default.
     "RAG_RERANKER_MODEL": os.environ.get("RAG_RERANKER_MODEL", ""),
+    # Thinking budget for the query-rewrite and LLM-rerank sub-calls (MIP-843).
+    # Both are "emit a short list" jobs, and on a thinking model (3.6-flash)
+    # they spent 400-900 thought tokens, ~2-4 s each, on the agent search path
+    # (MCP `search_workspace`, the in-app agent). 0 = thinking off. Set it to
+    # "default" (or empty) to leave the model's own behaviour, a number to cap
+    # it. Gemini only; other providers ignore it.
+    "RAG_SUBPROCESS_THINKING_BUDGET": os.environ.get("RAG_SUBPROCESS_THINKING_BUDGET", "0"),
     # "rerank but never drop" mode for the LLM reranker — keep items
     # the model omitted, append in pre-rerank order. Off by default.
     "RAG_RERANK_KEEP_DROPPED": (

@@ -55,7 +55,11 @@ from django.conf import settings
 
 from apis.request_id import describe_upstream
 from origin.search_engine.llm import AgentMessage, get_model_client, spend
-from origin.search_engine.llm.choice import get_llm_choice, subprocess_model_override
+from origin.search_engine.llm.choice import (
+    get_llm_choice,
+    subprocess_model_override,
+    subprocess_params,
+)
 from origin.search_engine.llm.spend import spend_purpose
 
 log = logging.getLogger(__name__)
@@ -268,6 +272,7 @@ def _rerank_llm(
             tools=[],
             system_instruction=_SYSTEM_PROMPT,
             model_override=model_override,
+            params=subprocess_params("rerank"),
         ):
             if text:
                 chunks.append(text)

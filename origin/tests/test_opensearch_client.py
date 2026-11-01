@@ -65,6 +65,19 @@ class TestProductionShape(SimpleTestCase):
         self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED)
         self.assertTrue(ctx.check_hostname)
 
+    def test_the_pool_holds_more_than_one_connection(self):
+        """Left at opensearch-py's default of 1, concurrent requests (an agent
+        search's query variants, a worker's threads) each opened a new TLS
+        connection and discarded it (MIP-843)."""
+        from opensearchpy import OpenSearch
+
+        kwargs = build_client_kwargs(_cfg(), debug=False)
+        self.assertGreaterEqual(kwargs["pool_maxsize"], 8)
+        client = OpenSearch(**kwargs)
+        self.assertEqual(
+            client.transport.get_connection().pool.pool.maxsize, kwargs["pool_maxsize"]
+        )
+
     def test_a_pinned_ca_is_the_only_one_trusted(self):
         pem = _ca_pem("genos-test-ca")
         ctx = build_client_kwargs(

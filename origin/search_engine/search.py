@@ -24,16 +24,20 @@ each (default 60). The wider pool gives RRF more material to fuse.
 
 from __future__ import annotations
 
+import contextvars
 import copy
 import logging
 import math
 import re
 import time
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Literal, Optional
 
+from django import db
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from opensearchpy.exceptions import NotFoundError
@@ -172,6 +176,37 @@ DEFAULT_MIN_SCORE_RATIO = 0.5
 DEFAULT_MIN_SCORE = 0.040
 
 
+@contextmanager
+def _timed(stages: dict[str, float], name: str):
+    """Add the time spent in the block to `stages[name]` (milliseconds)."""
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        stages[name] = stages.get(name, 0.0) + (time.perf_counter() - started) * 1000.0
+
+
+def _log_stage_timing(mode: str, stages: dict[str, float], total_s: float, results: int) -> None:
+    """One line per search saying where the time went (MIP-843).
+
+    The agent path spends seconds in LLM calls and embeddings; this is how to
+    see which, from the logs, without a profiler. Typeahead runs on every
+    keystroke, so it logs at DEBUG.
+    """
+    log.log(
+        logging.DEBUG if mode == "typeahead" else logging.INFO,
+        "search timing mode=%s total_ms=%d rewrite_ms=%d retrieve_ms=%d rerank_ms=%d "
+        "graph_ms=%d results=%d",
+        mode,
+        total_s * 1000.0,
+        stages.get("rewrite", 0.0),
+        stages.get("retrieve", 0.0),
+        stages.get("rerank", 0.0),
+        stages.get("graph", 0.0),
+        results,
+    )
+
+
 def search(
     *,
     query: str,
@@ -292,6 +327,8 @@ def search(
 
     # Mode resolution. Infer from `for_agent` if caller didn't pin it
     # — keeps existing call sites working with no signature changes.
+    _search_started = time.perf_counter()
+    _stage_ms: dict[str, float] = {}
     if mode is None:
         mode = "ai_search" if for_agent else "typeahead"
     mode_cfg = _MODE_CONFIG.get(mode, _MODE_CONFIG["typeahead"])
@@ -379,10 +416,40 @@ def search(
         )
     else:
         num_variants = 0
+    tiered = mode == "typeahead"
+    # Container names (MIP-839): matched for the people who may see them. Not
+    # in eval, which stays raw BM25 + vector + RRF. Resolved here, on this
+    # thread, because it reads the database.
+    context_terms = None if mode == "eval" else _viewer_acl_terms(team_id, user_id)
+    lane_args = dict(
+        client=client,
+        index=index,
+        base_filter=base_filter,
+        pool_size=pool_size,
+        use_vector=use_vector,
+        for_agent=for_agent,
+        ef_search=ef_search,
+        tiered=tiered,
+        context_terms=context_terms,
+    )
+    first_lane_pool: Optional[ThreadPoolExecutor] = None
+    first_lane: Optional[Future] = None
     if num_variants > 0:
         from origin.search_engine.query_rewriter import rewrite_query  # noqa: PLC0415
 
-        variants = rewrite_query(query, num_variants=num_variants)
+        # The rewrite is an LLM call (seconds), and the original query's own
+        # lanes don't depend on it, so start them now and let them run under
+        # it (MIP-843). `rewrite_query` always returns the original first.
+        first_lane_pool = ThreadPoolExecutor(max_workers=1)
+        first_lane = first_lane_pool.submit(
+            contextvars.copy_context().run, _variant_runner(**lane_args), query
+        )
+        try:
+            with _timed(_stage_ms, "rewrite"):
+                variants = rewrite_query(query, num_variants=num_variants)
+        except BaseException:
+            first_lane_pool.shutdown(wait=False)
+            raise
     else:
         variants = [query]
 
@@ -394,21 +461,16 @@ def search(
     # Lexical tiers are a Spotlight (typeahead) ordering. The agent and
     # eval modes keep plain RRF, so the agent's grounding and the
     # retrieval suite's numbers don't move with it.
-    tiered = mode == "typeahead"
-    fused = _multi_variant_fuse(
-        variants=variants,
-        client=client,
-        index=index,
-        base_filter=base_filter,
-        pool_size=pool_size,
-        use_vector=use_vector,
-        for_agent=for_agent,
-        ef_search=ef_search,
-        tiered=tiered,
-        # Container names (MIP-839): matched for the people who may see
-        # them. Not in eval, which stays raw BM25 + vector + RRF.
-        context_terms=None if mode == "eval" else _viewer_acl_terms(team_id, user_id),
-    )
+    with _timed(_stage_ms, "retrieve"):
+        try:
+            fused = _multi_variant_fuse(
+                variants=variants,
+                first_result=first_lane if variants and variants[0] == query else None,
+                **lane_args,
+            )
+        finally:
+            if first_lane_pool is not None:
+                first_lane_pool.shutdown(wait=False)
 
     # --- v2: chunk-type-aware reweighting ---
     # Multiply each chunk's RRF score by its chunk_type's weight
@@ -564,24 +626,26 @@ def search(
             # head doesn't count toward the model's input budget.
             tail_input_k = max(0, input_k - lock_top_n)
             tail_output_k = max(0, min(output_k, limit) - lock_top_n)
-            reranked_tail = (
-                rerank(
-                    query=query,
-                    entities=tail,
-                    input_k=tail_input_k,
-                    output_k=tail_output_k,
+            with _timed(_stage_ms, "rerank"):
+                reranked_tail = (
+                    rerank(
+                        query=query,
+                        entities=tail,
+                        input_k=tail_input_k,
+                        output_k=tail_output_k,
+                    )
+                    if tail_output_k > 0 and tail_input_k > 0
+                    else []
                 )
-                if tail_output_k > 0 and tail_input_k > 0
-                else []
-            )
             grouped = head + reranked_tail
         else:
-            grouped = rerank(
-                query=query,
-                entities=grouped,
-                input_k=input_k,
-                output_k=min(output_k, limit),
-            )
+            with _timed(_stage_ms, "rerank"):
+                grouped = rerank(
+                    query=query,
+                    entities=grouped,
+                    input_k=input_k,
+                    output_k=min(output_k, limit),
+                )
 
     # --- GraphRAG: fuse the relationship graph into ranking (Q2.4 / A1). ---
     # After hybrid retrieval, pull in one-hop TaskDependency neighbors of the
@@ -598,14 +662,15 @@ def search(
         and overlays_enabled
         and grouped
     ):
-        grouped = _graph_expand(
-            grouped,
-            team_id=team_id,
-            user_id=user_id,
-            for_agent=for_agent,
-            client=client,
-            index=index,
-        )
+        with _timed(_stage_ms, "graph"):
+            grouped = _graph_expand(
+                grouped,
+                team_id=team_id,
+                user_id=user_id,
+                for_agent=for_agent,
+                client=client,
+                index=index,
+            )
 
     # --- Display-id lookup (MIP-739): "MIP-739" pins that task first. ---
     # A task's id isn't in its text, so the lanes above can't find it (the
@@ -639,12 +704,12 @@ def search(
     final = grouped[:limit]
     apply_friendly_titles(final, user_id)
 
+    _log_stage_timing(mode, _stage_ms, time.perf_counter() - _search_started, len(final))
     return {"query": query, "results": final}
 
 
-def _multi_variant_fuse(
+def _variant_runner(
     *,
-    variants: list[str],
     client,
     index: str,
     base_filter: list[dict],
@@ -652,31 +717,19 @@ def _multi_variant_fuse(
     use_vector: bool,
     for_agent: bool,
     ef_search: int,
-    tiered: bool = False,
-    context_terms: Optional[list[str]] = None,
-) -> list[dict]:
-    """Run keyword + vector for each variant and merge into one ranked list.
+    tiered: bool,
+    context_terms: Optional[list[str]],
+):
+    """The lanes of ONE query variant, as a function that is safe to run on a
+    worker thread: keyword search, query embedding and vector search, fused
+    with RRF. Returns `variant -> fused chunk list`.
 
-    Per-variant: `_run_keyword` + `_run_vector` (if enabled) → `_rrf_fuse`.
-    Across variants: chunk-level WEIGHTED score summation. The original
-    query (index 0 in `variants`) contributes at a higher weight than
-    LLM-generated rewrites because it carries the user's actual intent;
-    rewrites are aids that can drift on-topic-but-off-meaning. Without
-    this weighting, an exact-phrase match against the original (e.g.
-    "competitor analysis" → task titled "Competitor analysis") gets
-    crowded out by RRF noise from variant-only hits.
-
-    Weight is `RAG_REWRITE_ORIGINAL_WEIGHT` (default 2.0); each
-    variant contributes weight 1.0. With weight 1.0 the behavior is
-    byte-identical to the un-weighted Phase-10 path. Single-variant
-    case (`len(variants) == 1`) is unaffected by weighting.
+    A worker thread that touched the ORM (the embedding's spend row) owns a
+    connection of its own, so the wrapper closes it rather than leaving it to
+    GC.
     """
-    original_weight = float(settings.SEARCH_ENGINE.get("RAG_REWRITE_ORIGINAL_WEIGHT", 2.0))
 
-    chunks_by_id: dict[str, dict] = {}
-    for idx, variant in enumerate(variants):
-        weight = original_weight if idx == 0 else 1.0
-
+    def run_variant(variant: str) -> list[dict]:
         keyword_hits = _run_keyword(
             client,
             index,
@@ -709,7 +762,81 @@ def _multi_variant_fuse(
                     "Vector search failed for a variant, keyword-only: %s", describe_exception(e)
                 )
 
-        variant_fused = _rrf_fuse(keyword_hits, vector_hits)
+        return _rrf_fuse(keyword_hits, vector_hits)
+
+    def run_in_worker(variant: str) -> list[dict]:
+        try:
+            return run_variant(variant)
+        finally:
+            db.connections.close_all()
+
+    return run_in_worker
+
+
+def _multi_variant_fuse(
+    *,
+    variants: list[str],
+    client,
+    index: str,
+    base_filter: list[dict],
+    pool_size: int,
+    use_vector: bool,
+    for_agent: bool,
+    ef_search: int,
+    tiered: bool = False,
+    context_terms: Optional[list[str]] = None,
+    first_result: Optional[Future] = None,
+) -> list[dict]:
+    """Run keyword + vector for each variant and merge into one ranked list.
+
+    Per-variant: `_run_keyword` + `_run_vector` (if enabled) → `_rrf_fuse`.
+    Across variants: chunk-level WEIGHTED score summation. The original
+    query (index 0 in `variants`) contributes at a higher weight than
+    LLM-generated rewrites because it carries the user's actual intent;
+    rewrites are aids that can drift on-topic-but-off-meaning. Without
+    this weighting, an exact-phrase match against the original (e.g.
+    "competitor analysis" → task titled "Competitor analysis") gets
+    crowded out by RRF noise from variant-only hits.
+
+    Weight is `RAG_REWRITE_ORIGINAL_WEIGHT` (default 2.0); each
+    variant contributes weight 1.0. With weight 1.0 the behavior is
+    byte-identical to the un-weighted Phase-10 path. Single-variant
+    case (`len(variants) == 1`) is unaffected by weighting.
+    """
+    original_weight = float(settings.SEARCH_ENGINE.get("RAG_REWRITE_ORIGINAL_WEIGHT", 2.0))
+
+    run_variant = _variant_runner(
+        client=client,
+        index=index,
+        base_filter=base_filter,
+        pool_size=pool_size,
+        use_vector=use_vector,
+        for_agent=for_agent,
+        ef_search=ef_search,
+        tiered=tiered,
+        context_terms=context_terms,
+    )
+
+    # Each variant is an embedding call plus two OpenSearch queries, and they
+    # are independent, so they run side by side (MIP-843: four embeddings one
+    # after another were about a third of an agent search). The merge below
+    # still walks the results in variant order, so scores are summed in the
+    # same order and the ranking is identical to the sequential loop. Each
+    # worker runs in a copy of this thread's context, which carries the spend
+    # attribution and the LLM choice.
+    #
+    # `first_result` is the original query's lanes, already started by the
+    # caller while the rewrite LLM call was still running (they don't depend
+    # on it); only the rewrites are run here.
+    rest = variants[1:] if first_result is not None else variants
+    with ThreadPoolExecutor(max_workers=max(1, len(rest))) as pool:
+        futures = [pool.submit(contextvars.copy_context().run, run_variant, v) for v in rest]
+        results = [f.result() for f in futures]
+    per_variant = ([first_result.result()] if first_result is not None else []) + results
+
+    chunks_by_id: dict[str, dict] = {}
+    for idx, variant_fused in enumerate(per_variant):
+        weight = original_weight if idx == 0 else 1.0
         for hit in variant_fused:
             cid = hit["chunk_id"]
             weighted_score = hit["score"] * weight
