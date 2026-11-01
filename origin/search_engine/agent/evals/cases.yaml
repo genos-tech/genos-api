@@ -839,6 +839,20 @@
     expected_tools: ["get_my_focus_tasks"]
     forbidden_tools: ["add_task_delivery"]
 
+- id: delivery_remove_wrong_link
+  # MIP-834. The write is approval-gated, so it surfaces as a pending
+  # tool call; metric-only like the rest of this section until validated
+  # with `agent_eval --case delivery_remove_wrong_link`.
+  fixture: true
+  query: >
+    I linked https://github.com/genos-tech/genos-api/pull/7 to the "Build
+    Hero + FeatureGrid" task in Website Redesign by mistake. Take that PR
+    link off that task.
+  expect:
+    no_errors: true
+    expected_tools: ["remove_task_delivery"]
+    forbidden_tools: ["add_task_delivery", "search_web"]
+
 # ============================================================ #
 # S. Fact-level completeness (Q2.2 / plan-then-execute target) #
 # ============================================================ #

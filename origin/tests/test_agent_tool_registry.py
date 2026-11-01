@@ -36,7 +36,7 @@ from origin.search_engine.agent.tools import REGISTRY
 # Verb prefixes that mark a tool as write-shaped. A new write VERB (e.g.
 # `send_`, `mark_`) must be added here — test_write_prefixes_are_complete
 # fails until it is, so the vocabulary can't silently rot.
-WRITE_PREFIXES = ("create_", "update_", "delete_", "assign_", "add_")
+WRITE_PREFIXES = ("create_", "update_", "delete_", "assign_", "add_", "remove_")
 
 # Schema `type` values both provider adapters accept. Tools are authored
 # in Gemini's UPPERCASE form; `llm.schema.normalize_schema` maps

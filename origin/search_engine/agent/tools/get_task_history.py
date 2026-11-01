@@ -145,8 +145,16 @@ def _entry(row: TaskActivity, usernames: dict[str, str]) -> dict[str, Any]:
         TaskActivityActionType.COMMENT_DELETED,
     ):
         entry["comment_id"] = (row.metadata or {}).get("commentId")
-    if row.action_type == TaskActivityActionType.PR_LINKED:
+    if row.action_type in (
+        TaskActivityActionType.PR_LINKED,
+        TaskActivityActionType.PR_UNLINKED,
+    ):
         entry["pr_url"] = (row.metadata or {}).get("pr_url")
+    if row.action_type == TaskActivityActionType.PR_UNLINKED:
+        # A branch-only link has no PR; the repo and branch say which one went.
+        meta = row.metadata or {}
+        entry["repo"] = meta.get("repo")
+        entry["branch"] = meta.get("branch")
     if row.action_type == TaskActivityActionType.DESCRIPTION:
         # Whether the body from before this edit was kept, so it can be put
         # back from the task's history in the app (MIP-738).
