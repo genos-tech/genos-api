@@ -53,7 +53,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     try:
         m = (
-            MilestoneMaster.objects.select_related("project", "task")
+            MilestoneMaster.objects.select_related("project", "task", "folder")
             .prefetch_related("milestone_assignees__user")
             .get(milestone_id=milestone_id, is_deleted=False)
         )
@@ -142,6 +142,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "milestone_id": m.milestone_id,
         "project_id": m.project_id,
         "project_name": m.project.project_name if m.project_id else None,
+        # Grouping folder (MIP-847); null when unfiled.
+        "folder_id": m.folder_id,
+        "folder_name": m.folder.name if m.folder_id else None,
         "title": m.title,
         "status": m.status,
         "priority": m.priority,

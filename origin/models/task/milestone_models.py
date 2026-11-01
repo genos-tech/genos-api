@@ -6,6 +6,43 @@ from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.sprint_models import Sprint
 
 
+class MilestoneFolder(models.Model):
+    """A named group of milestones within a project (MIP-847), like a Jira
+    epic over milestones.
+
+    Independent of sprints: a milestone has a folder AND a sprint, and the
+    sprint stays a chip. Any project member manages folders, as they do
+    milestones. Deleting a folder leaves its milestones unfiled
+    (`MilestoneMaster.folder` is SET_NULL); it never deletes work.
+    """
+
+    folder_id = models.BigAutoField(primary_key=True)
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="team_milestone_folders",
+        to_field="team_id",
+    )
+    project = models.ForeignKey(
+        ProjectMaster,
+        on_delete=models.CASCADE,
+        related_name="project_milestone_folders",
+        to_field="project_id",
+    )
+    name = models.CharField(max_length=100)
+    sort_order = models.IntegerField(default=0)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "name"], name="uniq_milestone_folder_per_project"
+            )
+        ]
+
+
 class MilestoneMaster(models.Model):
     """Goal that groups multiple tasks within a project.
 
@@ -35,6 +72,17 @@ class MilestoneMaster(models.Model):
         blank=True,
         related_name="sprint_milestones",
         to_field="sprint_id",
+    )
+    # Optional grouping folder (MIP-847). SET_NULL: deleting a folder
+    # unfiles its milestones. Always in the milestone's own project; the
+    # views enforce that and clear it on a project move.
+    folder = models.ForeignKey(
+        MilestoneFolder,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="folder_milestones",
+        to_field="folder_id",
     )
     reporter = models.ForeignKey(
         CustomUser,
