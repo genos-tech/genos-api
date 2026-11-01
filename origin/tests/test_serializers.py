@@ -829,11 +829,16 @@ class ToDoSerializerTests(BaseAPITestCase):
         data = ToDoCategorySerializer(cat).data
         self.assertEqual(
             set(data.keys()),
-            {"categoryId", "name", "sortOrder", "tsCreatedAt", "tsUpdatedAt"},
+            {
+                "categoryId", "name", "color", "textColor", "sortOrder",
+                "tsCreatedAt", "tsUpdatedAt",
+            },
         )
         self.assertEqual(data["categoryId"], cat.category_id)
         self.assertEqual(data["name"], "Work")
         self.assertEqual(data["sortOrder"], 3)
+        self.assertEqual(data["color"], "#808080")
+        self.assertEqual(data["textColor"], "white")
 
     def test_item_shape_and_camelcase(self):
         group = self._group()
