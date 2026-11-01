@@ -1521,6 +1521,36 @@ class TestTheNewWrites(McpBase):
         self.assertIn("heading", kinds)
         self.assertIn("bulletListItem", kinds)
 
+    def test_a_created_task_reports_the_fields_that_were_stored(self):
+        """The response used to carry only ids, tags, title and status, so a
+        client could not assert that priority, effort or due date were saved
+        without a second read (MIP-828). Unset ones are null, the same rule
+        every other tool uses."""
+        self._key(scope=SCOPE_WRITE)
+        full = self._result(
+            self._call(
+                "create_task",
+                {
+                    "title": "Full",
+                    "project_id": self.project.project_id,
+                    "priority": "High",
+                    "effort_level": "Moderate",
+                    "due_date": "2026-12-24",
+                },
+            )
+        )["structuredContent"]
+        bare = self._result(
+            self._call("create_task", {"title": "Bare", "project_id": self.project.project_id})
+        )["structuredContent"]
+
+        self.assertEqual(
+            (full["priority"], full["effort_level"], full["due_date"]),
+            ("High", "Moderate", "2026-12-24"),
+        )
+        self.assertEqual(
+            (bare["priority"], bare["effort_level"], bare["due_date"]), (None, None, None)
+        )
+
     def test_a_read_key_is_shown_no_write_tool_at_all(self):
         self._key(scope=SCOPE_READ)
         names = {t["name"] for t in self._result(self._rpc("tools/list"))["tools"]}
