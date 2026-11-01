@@ -42,6 +42,7 @@ from origin.search_engine.llm.types import (
     CallUsage,
     FunctionCall,
     GenerationParams,
+    ModelRefusal,
     ToolDeclaration,
 )
 
@@ -259,12 +260,47 @@ class ClaudeClient:
                 # Usage telemetry, after the stream is fully drained.
                 # Observability only — a logging failure must never break
                 # generation, so swallow everything here.
+                final_message = None
                 try:
-                    final_usage = stream.get_final_message().usage
+                    final_message = stream.get_final_message()
+                    final_usage = final_message.usage
                     _log_usage(final_usage, model)
                     _fill_usage_sink(sink, final_usage, model)
                 except Exception:
                     log.debug("Claude usage logging failed", exc_info=True)
+                # Refusals (MIP-859). Claude's safety layer declines with
+                # HTTP 200 and `stop_reason == "refusal"` — the stream
+                # ends normally, often with NO content, so without this
+                # check the loop sees an empty step and reports "Model
+                # returned an empty response". Checked AFTER the usage
+                # block (the declined call is billed like any other and
+                # its row must be sized) and OUTSIDE its try, whose
+                # blanket except exists for logging and must not swallow
+                # this. Branch on stop_reason only: `stop_details` and
+                # its `category` can be null on a real refusal.
+                stop_reason = getattr(final_message, "stop_reason", None)
+                if stop_reason == "refusal":
+                    details = getattr(final_message, "stop_details", None)
+                    category = getattr(details, "category", None)
+                    raise ModelRefusal(
+                        "claude", model, category if isinstance(category, str) else None
+                    )
+                if stop_reason == "max_tokens":
+                    # Adaptive thinking spends from the same budget as the
+                    # answer, so a small cap can end a turn before any text.
+                    log.warning(
+                        "claude %s hit max_tokens=%s (output=%s) — the answer may be "
+                        "truncated or empty; thinking shares this budget",
+                        model,
+                        max_tokens,
+                        sink.output_tokens,
+                    )
+        except ModelRefusal as exc:
+            # A declined request is an outcome, not a crash: no traceback,
+            # and the spend row carries the reason.
+            call_error = f"refusal:{exc.category or 'n/a'}"
+            log.info("Claude declined a request: %s", exc)
+            raise
         except BaseException as exc:
             # BaseException so a client disconnect (GeneratorExit) is
             # recorded too — that call was billed like any other.

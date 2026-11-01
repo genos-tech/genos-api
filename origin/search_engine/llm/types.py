@@ -20,6 +20,28 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 
+class ModelRefusal(Exception):
+    """The provider's safety layer declined to answer this request.
+
+    NOT a failure of the provider and NOT a failure of ours: the call
+    succeeded (HTTP 200) and the model or a classifier chose not to
+    answer. Adapters raise this after the stream is drained and the
+    call's usage is recorded, so the loop can end the run with a
+    specific, retry-worthy message instead of a generic "LLM call
+    failed" or, worse, an empty answer.
+
+    `category` is the provider's policy category when it reports one
+    ("cyber", "bio", ...); it may be None even on a refusal, so nothing
+    may branch on it. It is for logs and the spend row only.
+    """
+
+    def __init__(self, provider: str, model: str, category: str | None = None):
+        self.provider = provider
+        self.model = model
+        self.category = category
+        super().__init__(f"{provider}/{model} declined the request (category={category or 'n/a'})")
+
+
 @dataclass(frozen=True)
 class FunctionCall:
     """A function call the model wants to make.

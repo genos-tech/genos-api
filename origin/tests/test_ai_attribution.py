@@ -535,6 +535,36 @@ class AskFlowAttributionTests(_RestoresRecorder, _StreamingAPIBase):
         self.assertEqual(row.call_count, 2, "the rollup must include the post-run embed")
         _assert_nothing_unattributed(self)
 
+    @METER_ON
+    def test_a_model_refusal_is_scored_safety_refusal_and_bills_nothing(self):
+        """MIP-859: a provider refusal is neither an outage nor billable
+        work. The view classifies the run from the error text the loop
+        emits, so this drives the real classifier end to end."""
+        from origin.search_engine.agent.controller import MODEL_REFUSAL_MESSAGE
+
+        def fake_run_agent(query, ctx, emit, **kwargs):
+            _record_fake_llm_call()  # the declined call was still paid for
+            emit({"type": "error", "message": MODEL_REFUSAL_MESSAGE})
+            from django.db import connections  # noqa: PLC0415
+
+            connections.close_all()
+            return None
+
+        self.authenticate()
+        with patch("origin.search_engine.agent_views.run_agent", side_effect=fake_run_agent):
+            resp = self.client.post(
+                self.URL,
+                {"query": "q", "team_id": str(self.team.pk)},
+                format="json",
+                HTTP_HOST="localhost",
+            )
+            self.assertEqual(resp.status_code, 200)
+            self._consume(resp)
+
+        row = AiRequestCost.objects.get()
+        self.assertEqual(row.result, AiRequestCost.RESULT_SAFETY_REFUSAL)
+        self.assertEqual(row.eligible_usd_micro, 0, "a refusal must not be charged to the user")
+
 
 # --------------------------------------------------------------------------- #
 # /decide/ — the resume leg                                                   #

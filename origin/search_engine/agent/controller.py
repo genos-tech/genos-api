@@ -70,6 +70,7 @@ from origin.search_engine.llm import (
     CallUsage,
     FunctionCall,
     GenerationParams,
+    ModelRefusal,
     ToolDeclaration,
     get_model_client,
     spend,
@@ -109,6 +110,18 @@ CREDITS_EXHAUSTED_MESSAGE = (
     "You've run out of AI credits, so this request stopped partway. "
     "Your credits reset at the start of next month — or upgrade your "
     "plan to keep going now."
+)
+
+# Emitted when the provider's safety layer declines the request (Claude
+# `stop_reason: "refusal"`, MIP-859). A module constant for the same
+# reason as the two above: `agent_views` classifies the run's outcome
+# from it, into `safety_refusal`, which is NOT billable (the user got
+# nothing, and the credit policy bills only work performed). Says what
+# happened and what to do; names no category (it can be absent, and a
+# policy label would read as an accusation).
+MODEL_REFUSAL_MESSAGE = (
+    "The AI model declined to answer this request. "
+    "Try rephrasing it or asking about something more specific."
 )
 
 # Appended as a final user turn when the loop exhausts its step budget
@@ -2520,6 +2533,16 @@ def _drive_loop(
                     accumulated_text_parts, accumulated_function_calls = _collect_and_record(
                         step, "synthesis"
                     )
+        except ModelRefusal as e:
+            # The provider answered, by declining. Not a crash (no
+            # traceback) and not a generic failure: a specific message
+            # the user can act on, and a distinct run error so refusals
+            # count separately from outages. Text already streamed this
+            # step stays on screen.
+            log.info("Agent run %s step %d declined by the provider: %s", run_id, step, e)
+            emit({"type": "error", "message": MODEL_REFUSAL_MESSAGE})
+            _persist_step(run_id, step_index=step, error="model_refusal")
+            return None
         except Exception as e:  # noqa: BLE001 — surface as stream error
             log.exception("Agent step %d LLM call failed", step)
             # The type and status only: the client sees this, the run row
