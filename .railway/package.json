@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "description": "Railway Infrastructure as Code SDK for railway.ts (MIP-857). Not part of the app.",
+  "dependencies": {
+    "railway": "3.16.0"
+  }
+}
