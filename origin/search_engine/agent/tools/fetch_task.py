@@ -118,7 +118,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # "- [ ] todo", which the flattened form cannot express. Returned
     # ALONGSIDE `content_text` rather than replacing it: existing callers
     # (and the evals pinned to them) keep the string they were built on.
+    # Over MCP (MIP-826) the plain copy is left out when the markdown is
+    # there: it is the same words again, and the caller pays for both.
     content_markdown = blocks_to_markdown(body)
+    body_fields: dict[str, Any] = {}
+    if not (ctx.surface == "mcp" and content_markdown):
+        body_fields["content_text"] = wrap_workspace_content(content_text)
+    body_fields["content_markdown"] = wrap_workspace_content(content_markdown)
 
     # Most-recent N comments. The chunker indexes all comments, but the
     # LLM rarely needs full history — last 20 is plenty for grounding.
@@ -128,13 +134,23 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     comments = []
     for c in reversed(list(comments_qs)):  # back into chronological order
         text = extract_text(c.comment_body)
+        # The skip stays keyed on the plain text so both surfaces list the
+        # same comments (an image-only comment has no text and is hidden).
         if not text:
             continue
+        if ctx.surface == "mcp":
+            # MIP-854: an external caller gets the comment with its structure
+            # (paragraphs, lists, code fences, chips as tokens) in place of
+            # `text`, one copy of it. `blocks_to_markdown` degrades to the
+            # plain text on shapes it does not know.
+            body_key, body_val = "markdown", blocks_to_markdown(c.comment_body) or text
+        else:
+            body_key, body_val = "text", text
         comments.append(
             {
                 "comment_id": c.comment_id,
                 "sender_id": str(getattr(c, "sender_id", "") or ""),
-                "text": wrap_workspace_content(text),
+                body_key: wrap_workspace_content(body_val),
                 "ts": c.ts_sent_at.isoformat() if c.ts_sent_at else None,
             }
         )
@@ -159,8 +175,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "reporter_id": str(task.reporter_id) if task.reporter_id else None,
         "tags": tag_names(task.tags),
         **_hierarchy(task, ctx),
-        "content_text": wrap_workspace_content(content_text),
-        "content_markdown": wrap_workspace_content(content_markdown),
+        **body_fields,
         "comments": comments,
         "deliveries": deliveries,
         "__summary__": (

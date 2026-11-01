@@ -181,11 +181,13 @@ CATALOG: tuple[McpTool, ...] = (
             "Read one task in full: title, status, priority, assignee, dates, "
             "tags, where it sits (`parent_task_id`, `milestone_id`, and "
             "`backs_milestone_id` when it is a milestone's own row), its "
-            "description, and its comments. Prefer `content_markdown` for "
-            "the description when it is present — it keeps headings, checklists "
+            "description, and its comments. Read the description from "
+            "`content_markdown` when it is present — it keeps headings, checklists "
             "and code fences — and fall back to `content_text`, the same body "
-            "flattened. This is the first call when the user names a task to "
-            "work on."
+            "flattened, which is sent only when there is no markdown (the body "
+            "is never returned twice). Each comment's `markdown` keeps its "
+            "paragraphs, lists and code fences. This is the first call when the "
+            "user names a task to work on."
         ),
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
@@ -319,7 +321,10 @@ CATALOG: tuple[McpTool, ...] = (
             "task or chat name also finds the notes inside it. Pass "
             "`project_id` (from `list_projects`) or `milestone_id` (from "
             "`list_milestones`) to search only that project or milestone; "
-            "the limit is filled from it, not from other projects."
+            "the limit is filled from it, not from other projects. Each "
+            "returned chunk's `text` is cut at 1,000 characters, and a cut "
+            "chunk carries `truncated: true`: call `get_task` / `get_note` "
+            "for the full text."
         ),
     ),
     McpTool(

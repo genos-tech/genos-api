@@ -249,7 +249,7 @@ class McpView(PublicApiView):
             )
 
         scope = getattr(request.auth, "scope", SCOPE_READ)
-        return ToolContext(team_id=team_id, user_id=user_id), scope
+        return ToolContext(team_id=team_id, user_id=user_id, surface="mcp"), scope
 
     @staticmethod
     def _allows_destructive(request) -> bool:

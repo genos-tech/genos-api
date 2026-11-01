@@ -45,6 +45,12 @@ class ToolContext:
     # run without a known locale, which leaves the prompt untouched.
     # `_drive_loop` reads it via `language_directive`.
     locale: str = ""
+    # Which front door the call came through: "mcp" for the public MCP
+    # server, "" for the in-app agent (MIP-798). Server-set, NEVER from the
+    # LLM or the caller. A few read tools shape their output differently for
+    # an external client (cap a long chunk, send one copy of a body); the
+    # empty default keeps every in-app call byte-identical to before.
+    surface: str = ""
 
 
 class ToolError(Exception):
