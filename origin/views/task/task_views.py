@@ -97,29 +97,40 @@ def _cascade_project_to_subtasks(root_task_id, project_id, team_id):
 
 
 def _is_nested_task(task) -> bool:
-    """Is anything filed above this task?
+    """Is this task filed under another TASK, so that it follows that
+    task's project?
 
-    Only a milestone or a ROOT task — one with no parent task at all —
-    may change project. Everything else follows what it sits under, and
-    that includes a task living directly in a milestone: those hang off
-    the milestone's backing row via `parent_task_id` (see
-    `_bridge_milestone_to_parent`), so the milestone owns which project
-    they are in and `milestone_views.patch` is what moves them.
+    A milestone, a ROOT task (no parent) and a task living DIRECTLY in a
+    milestone may change project. Everything below an ordinary task follows
+    it, and travels when it moves.
 
-    This used to make an exception for exactly that case, reasoning that
-    a milestone contains its tasks rather than parenting them, so one
-    could move out on its own and shed the milestone. It cannot: the
-    milestone stays where it is, and rule ii says its tasks travel WITH
-    it, not away from it.
+    A task directly in a milestone hangs off the milestone's backing row via
+    `parent_task_id` (see `_bridge_milestone_to_parent`). It was once exempt
+    from this rule, was then locked (commit 4af00625: "the milestone owns
+    which project its tasks are in"), and is exempt again (MIP-786): people move a
+    task out of "Backlog" into another project's milestone, and the move is a
+    detach, not a copy. What made the first version lose rows, a parent left
+    behind in the project the task came from, is handled by the PUT's project
+    change: it clears the stale milestone, sprint and the parent edge when it
+    pointed at that milestone's backing row (the bridge's CLEAR branch), and
+    carries the task's own sub-tree along. The destination milestone is a
+    second step, or the same request when the client names one.
 
-    A dangling `parent_task_id` (parent hard-deleted) reads as root — the
-    same fallback `_resolve_root_task_id` makes — so a move is never
-    blocked on data we can no longer resolve, which would strand the row
-    in its project for good.
+    A dangling `parent_task_id` (parent hard-deleted) reads as root, the same
+    fallback `_resolve_root_task_id` makes, so a move is never blocked on data
+    we can no longer resolve, which would strand the row in its project for
+    good.
     """
     if task.parent_task_id is None or task.is_milestone:
         return False
-    return TaskMaster.objects.filter(task_id=task.parent_task_id).exists()
+    parent_is_milestone = (
+        TaskMaster.objects.filter(task_id=task.parent_task_id)
+        .values_list("is_milestone", flat=True)
+        .first()
+    )
+    if parent_is_milestone is None:  # dangling parent
+        return False
+    return not parent_is_milestone
 
 
 def _normalize_task_id(value):
@@ -752,8 +763,9 @@ class TaskMasterView(AuthenticatedAPIView):
                     {"error": "Destination project not found."},
                     status=status.HTTP_404_NOT_FOUND,
                 )
-            # Only a milestone or a root task may change project; anything
-            # filed underneath follows what it sits in. Moving one on its
+            # Only a milestone, a root task or a task directly in a milestone
+            # may change project; anything filed under an ordinary task
+            # follows what it sits in. Moving one on its
             # own left it nested under a `parent_task_id` in the project it
             # came from, so the destination's table — which nests rows
             # under their parent — had nowhere to draw it and the row was
@@ -768,8 +780,7 @@ class TaskMasterView(AuthenticatedAPIView):
                 return Response(
                     {
                         "error": (
-                            "A task follows the project of the task or milestone "
-                            "it is filed under."
+                            "A task follows the project of the task or milestone it is filed under."
                         ),
                         # Kept from when this rule covered sub-tasks only:
                         # the project table nests a milestone's tasks under
@@ -939,6 +950,22 @@ class TaskMasterView(AuthenticatedAPIView):
             # and their per-project numbers to move.
             if project_changed:
                 task.refresh_from_db()
+                # A task filed under a milestone's backing row by `parent_task_id`
+                # alone (no milestone FK) is not reached by the bridge's CLEAR
+                # branch, which keys off the FK. If it is still under a
+                # milestone of the project it just left, detach it here, or it
+                # keeps a parent it cannot be drawn under (MIP-786).
+                if task.parent_task_id is not None:
+                    parent = (
+                        TaskMaster.objects.filter(task_id=task.parent_task_id, is_milestone=True)
+                        .only("task_id", "project_id")
+                        .first()
+                    )
+                    if parent is not None and parent.project_id != task.project_id:
+                        task.parent_task_id = None
+                        task.root_task_id = task.task_id
+                        task.save(update_fields=["parent_task_id", "root_task_id", "ts_updated_at"])
+                        _cascade_tree_position_to_subtasks(task)
                 _cascade_project_to_subtasks(task.task_id, task.project_id, task.team_id)
                 # The moved row's own columns were written by the serializer
                 # above; this carries the rows keyed to it (its notes, its
@@ -2699,9 +2726,7 @@ class TaskCommentMentionView(AuthenticatedAPIView):
 
         if not team_id or not mentioned_user_ids or not task_id or not comment_id:
             return Response(
-                {
-                    "error": "`team_id`, `mentioned_user_ids`, `task_id`, `comment_id` are required."
-                },
+                {"error": "`team_id`, `mentioned_user_ids`, `task_id`, `comment_id` are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if not can_access_task(task_id, request.user.id):
