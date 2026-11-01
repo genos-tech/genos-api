@@ -315,6 +315,94 @@ class TestTaskViews(TestCase):
         response = self._search_team_tasks(include_all="true")
         self.assertIn(child["task_id"], {t["taskId"] for t in response.data})
 
+    def _second_project(self):
+        project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Second Project",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        ProjectMembers.objects.create(team=self.team, project=project, attendee=self.user)
+        return project
+
+    def _search_all_projects(self, **extra):
+        params = {
+            "team_id": str(self.team.team_id),
+            "project_id": -1,
+            "statuses": "open,wip,blocked,pending",
+            "top_n": 30,
+        }
+        params.update(extra)
+        return self.client.get("/api/v2/search/teamTasks/", params)
+
+    def _seed_recents(self, per_project=25):
+        """`per_project` tasks in each of two projects; later-created =
+        more recently updated. Returns {project_id: [task_id oldest..newest]}."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from origin.models.task.task_models import TaskMaster
+
+        other = self._second_project()
+        base = timezone.now() - timedelta(days=1)
+        ids = {self.project.project_id: [], other.project_id: []}
+        for i in range(per_project):
+            for project in (self.project, other):
+                task_id = self._create_task(
+                    title=f"{project.project_name} {i}", project=project.project_id
+                ).data["task"]["task_id"]
+                TaskMaster.objects.filter(task_id=task_id).update(
+                    ts_updated_at=base + timedelta(minutes=i)
+                )
+                ids[project.project_id].append(task_id)
+        return ids
+
+    def test_search_team_tasks_top_n_per_project_caps_each_project(self):
+        ids = self._seed_recents()
+        response = self._search_all_projects(top_n_per_project=20)
+        self.assertEqual(response.status_code, 200)
+        for project_id, task_ids in ids.items():
+            got = [t for t in response.data if t["projectId"] == project_id]
+            self.assertEqual(len(got), 20)
+            # The 20 newest of that project (oldest 5 dropped), newest first.
+            self.assertEqual([t["taskId"] for t in got], list(reversed(task_ids[5:])))
+
+    def test_search_team_tasks_without_top_n_per_project_keeps_global_cap(self):
+        self._seed_recents()
+        response = self._search_all_projects()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 30)
+
+    def test_search_team_tasks_top_n_per_project_ignores_global_top_n(self):
+        self._seed_recents()
+        response = self._search_all_projects(top_n=1, top_n_per_project=20)
+        self.assertEqual(len(response.data), 40)
+
+    def test_search_team_tasks_top_n_per_project_not_used_up_by_hidden_tasks(self):
+        # Newest tasks are children of a closed parent (hidden); they must
+        # not eat the project's quota.
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from origin.models.task.task_models import TaskMaster
+
+        parent = self._create_task(title="Closed parent", status="Closed").data["task"]
+        visible = self._create_task(title="Visible").data["task"]
+        TaskMaster.objects.filter(task_id=visible["task_id"]).update(
+            ts_updated_at=timezone.now() - timedelta(days=2)
+        )
+        for i in range(3):
+            self._create_task(title=f"Hidden {i}", parent_task_id=parent["task_id"])
+        response = self._search_all_projects(top_n_per_project=2)
+        self.assertIn(visible["task_id"], {t["taskId"] for t in response.data})
+
+    def test_search_team_tasks_top_n_per_project_rejects_bad_values(self):
+        for bad in ("0", "-3", "abc"):
+            response = self._search_all_projects(top_n_per_project=bad)
+            self.assertEqual(response.status_code, 400, bad)
+
     # ── GetTaskView missing params ─────────────────────────────────
 
     def test_get_task_missing_params(self):
