@@ -11,6 +11,7 @@ from django.test import SimpleTestCase
 from origin.search_engine.agent.model_fence import (
     EXEMPT_KEYS,
     EXEMPT_TOOL_KEYS,
+    FENCED_IN_TOOL,
     FENCED_KEYS,
     FENCED_KEYS_BY_TOOL,
     UNFENCED_FOLLOW_UP,
@@ -224,7 +225,10 @@ class FenceByToolTests(SimpleTestCase):
                 "get_current_user": ["username"],
                 "get_task_history": ["username"],
                 "list_calendars": ["summary"],
-                "create_calendar_event": ["summary"],
+                "create_calendar_event": ["displayName", "summary"],
+                "list_calendar_events": ["displayName"],
+                "update_calendar_event": ["displayName"],
+                "get_my_schedule": ["displayName"],
             },
         )
 
@@ -232,7 +236,11 @@ class FenceByToolTests(SimpleTestCase):
         """A renamed or mistyped tool would silently fence nothing."""
         from origin.search_engine.agent.tools import REGISTRY
 
-        names = set(FENCED_KEYS_BY_TOOL) | {tool for tool, _key in EXEMPT_TOOL_KEYS}
+        names = (
+            set(FENCED_KEYS_BY_TOOL)
+            | {tool for tool, _key in EXEMPT_TOOL_KEYS}
+            | {tool for tool, _key in FENCED_IN_TOOL}
+        )
 
         self.assertEqual(sorted(names - set(REGISTRY)), [])
 
@@ -433,3 +441,332 @@ class ControllerBoundaryTests(SimpleTestCase):
         turn = _function_response_turn("fetch_task", {"error": "not allowed"})
 
         self.assertEqual(turn.function_response, {"error": "not allowed"})
+
+
+ATTENDEE_TOOLS = (
+    "list_calendar_events",
+    "create_calendar_event",
+    "update_calendar_event",
+    "get_my_schedule",
+)
+
+
+def _google_event(**over):
+    event = {
+        "id": "evt1",
+        "summary": "Planning",
+        "start": {"dateTime": "2026-11-02T10:00:00Z"},
+        "end": {"dateTime": "2026-11-02T11:00:00Z"},
+        "attendees": [
+            {"email": "eve@example.com", "displayName": INJECTION, "responseStatus": "accepted"},
+            {"email": "bob@example.com", "responseStatus": "needsAction"},
+        ],
+    }
+    event.update(over)
+    return event
+
+
+class AttendeeDisplayNameTests(SimpleTestCase):
+    """MIP-867: an attendee's name is typed by whoever made the event."""
+
+    def _seen(self, tool, event=None):
+        from origin.search_engine.agent.calendar import shape_event
+        from origin.search_engine.agent.controller import _function_response_turn
+
+        result = {"events": [shape_event(event or _google_event())]}
+        return result, _function_response_turn(tool, result).function_response
+
+    def test_the_model_sees_a_fenced_name_in_every_tool_that_returns_events(self):
+        for tool in ATTENDEE_TOOLS:
+            with self.subTest(tool=tool):
+                _result, seen = self._seen(tool)
+
+                attendee = seen["events"][0]["attendees"][0]
+                self.assertEqual(attendee["displayName"], wrap_workspace_content(INJECTION))
+
+    def test_the_email_and_status_stay_bare_because_the_model_passes_emails_back(self):
+        for tool in ATTENDEE_TOOLS:
+            with self.subTest(tool=tool):
+                _result, seen = self._seen(tool)
+
+                attendee = seen["events"][0]["attendees"][0]
+                self.assertEqual(attendee["email"], "eve@example.com")
+                self.assertEqual(attendee["responseStatus"], "accepted")
+
+    def test_an_attendee_with_no_name_stays_none(self):
+        _result, seen = self._seen("list_calendar_events")
+
+        self.assertIsNone(seen["events"][0]["attendees"][1]["displayName"])
+
+    def test_the_tool_result_the_caller_holds_stays_bare(self):
+        result, _seen = self._seen("list_calendar_events")
+
+        self.assertEqual(result["events"][0]["attendees"][0]["displayName"], INJECTION)
+
+    def test_a_schedule_nests_events_and_the_name_is_still_fenced(self):
+        from origin.search_engine.agent.calendar import shape_event
+        from origin.search_engine.agent.controller import _function_response_turn
+
+        result = {"tasks_due": [], "calendar_events": [shape_event(_google_event())]}
+
+        seen = _function_response_turn("get_my_schedule", result).function_response
+
+        name = seen["calendar_events"][0]["attendees"][0]["displayName"]
+        self.assertEqual(name, wrap_workspace_content(INJECTION))
+
+    def test_the_event_summary_is_still_fenced_exactly_once(self):
+        _result, seen = self._seen("create_calendar_event")
+
+        self.assertEqual(seen["events"][0]["summary"], wrap_workspace_content("Planning"))
+
+    def test_the_name_is_bare_in_a_tool_that_is_not_listed(self):
+        data = {"attendees": [{"displayName": "plain"}]}
+
+        self.assertEqual(fence_for_model(data, "list_calendars"), data)
+
+
+class FencedInToolDecisionTests(SimpleTestCase):
+    """MIP-867: `old_value` / `new_value` are decided by the tool, by kind of change."""
+
+    KEYS = (("get_task_history", "old_value"), ("get_task_history", "new_value"))
+
+    def test_the_boundary_leaves_the_history_values_to_the_tool(self):
+        """A blanket key rule would wrap ids, dates and enums the model passes
+        back; the boundary must not touch these keys."""
+        entry = {"history": [{"old_value": "WIP", "new_value": "2026-11-02"}]}
+
+        self.assertEqual(fence_for_model(entry, "get_task_history"), entry)
+
+    def test_each_is_declared_with_a_reason_and_is_in_no_other_set(self):
+        for tool, key in self.KEYS:
+            with self.subTest(tool=tool, key=key):
+                self.assertTrue(FENCED_IN_TOOL[(tool, key)])
+                self.assertNotIn(key, FENCED_KEYS_BY_TOOL.get(tool, ()))
+                self.assertNotIn(key, FENCED_KEYS)
+                self.assertNotIn((tool, key), EXEMPT_TOOL_KEYS)
+                self.assertNotIn(key, UNFENCED_FOLLOW_UP)
+
+    def test_the_three_keys_left_by_mip_801_are_decided_not_pending(self):
+        for key in ("displayName", "old_value", "new_value"):
+            with self.subTest(key=key):
+                self.assertNotIn(key, UNFENCED_FOLLOW_UP)
+
+    def test_the_follow_up_list_is_pinned(self):
+        """What is still undecided is a short, named list: adding to it or
+        clearing it is a choice made on purpose."""
+        self.assertEqual(sorted(UNFENCED_FOLLOW_UP), ["key_name"])
+        self.assertNotIn("key_name", set(FENCED_KEYS).union(*FENCED_KEYS_BY_TOOL.values()))
+
+
+class TaskHistoryValueTests(BaseAPITestCase):
+    """MIP-867: what each kind of change puts in `old_value` / `new_value`, read
+    from the real tool, and what the model is then given."""
+
+    def setUp(self):
+        super().setUp()
+        from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+        from origin.models.task.task_models import TaskMaster
+        from origin.search_engine.agent.tools import ToolContext
+
+        self.user2.username = SHORT_INJECTION
+        self.user2.save()
+        self.project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Website",
+            code="WEB",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user)
+        self.task = TaskMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            reporter=self.user,
+            title="Task",
+            status="Open",
+            is_init_task=False,
+        )
+        self.ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id))
+
+    def _row(self, action_type, old=None, new=None, field=None, **meta):
+        from origin.models.task.task_activity_models import TaskActivity
+
+        return TaskActivity.objects.create(
+            team=self.team,
+            project=self.project,
+            task=self.task,
+            actor=self.user,
+            action_type=action_type,
+            field_name=field,
+            old_value=old,
+            new_value=new,
+            metadata=meta,
+        )
+
+    def _entry(self, action_type):
+        from origin.search_engine.agent.controller import _function_response_turn
+        from origin.search_engine.agent.tools import REGISTRY
+
+        result = REGISTRY["get_task_history"].run({"task_id": self.task.task_id}, self.ctx)
+        seen = _function_response_turn("get_task_history", result).function_response
+        bare = next(e for e in result["history"] if e["action"] == action_type)
+        fenced = next(e for e in seen["history"] if e["action"] == action_type)
+        self.assertEqual(bare["old_value"], fenced["old_value"])  # the boundary adds nothing
+        return fenced
+
+    # ---- user text: fenced --------------------------------------------
+
+    def test_an_assignee_is_fenced_as_the_username_it_resolves_to(self):
+        from origin.models.task.task_activity_models import TaskActivityActionType as A
+
+        self._row(A.ASSIGNEE, old=None, new=str(self.user2.id), field="assignee_id")
+
+        entry = self._entry(A.ASSIGNEE)
+
+        self.assertIsNone(entry["old_value"])
+        self.assertEqual(entry["new_value"], wrap_workspace_content(SHORT_INJECTION))
+
+    def test_a_reporter_is_fenced_on_both_sides(self):
+        from origin.models.task.task_activity_models import TaskActivityActionType as A
+
+        self._row(A.REPORTER, old=str(self.user2.id), new=str(self.user.id), field="reporter_id")
+
+        entry = self._entry(A.REPORTER)
+
+        self.assertEqual(entry["old_value"], wrap_workspace_content(SHORT_INJECTION))
+        self.assertEqual(entry["new_value"], wrap_workspace_content(self.user.username))
+
+    def test_an_id_that_resolves_to_no_one_stays_a_bare_id(self):
+        from origin.models.task.task_activity_models import TaskActivityActionType as A
+
+        gone = "11111111-2222-3333-4444-555555555555"
+        self._row(A.ASSIGNEE, old=gone, new=None, field="assignee_id")
+
+        self.assertEqual(self._entry(A.ASSIGNEE)["old_value"], gone)
+
+    def test_an_attachment_file_name_is_fenced(self):
+        from origin.models.task.task_activity_models import TaskActivityActionType as A
+
+        self._row(A.ATTACHMENT_ADDED, new=INJECTION + ".pdf", field="attachment")
+        self._row(A.ATTACHMENT_REMOVED, old=INJECTION + ".png", field="attachment")
+
+        added = self._entry(A.ATTACHMENT_ADDED)
+        removed = self._entry(A.ATTACHMENT_REMOVED)
+
+        self.assertEqual(added["new_value"], wrap_workspace_content(INJECTION + ".pdf"))
+        self.assertEqual(removed["old_value"], wrap_workspace_content(INJECTION + ".png"))
+
+    def test_a_status_priority_or_effort_outside_the_product_set_is_fenced(self):
+        from origin.models.task.task_activity_models import TaskActivityActionType as A
+
+        for action, field in (
+            (A.STATUS, "status"),
+            (A.PRIORITY, "priority"),
+            (A.EFFORT, "effort_level"),
+        ):
+            with self.subTest(action=action):
+                self._row(action, old="free text " + INJECTION, new=None, field=field)
+
+                entry = self._entry(action)
+
+                self.assertEqual(
+                    entry["old_value"], wrap_workspace_content("free text " + INJECTION)
+                )
+
+    def test_a_created_row_fences_the_title_and_a_status_outside_the_set(self):
+        from origin.models.task.task_activity_models import TaskActivityActionType as A
+
+        self._row(
+            A.CREATED,
+            new={"title": INJECTION, "status": "free " + INJECTION, "is_milestone": False},
+        )
+
+        new = self._entry(A.CREATED)["new_value"]
+
+        self.assertEqual(new["title"], wrap_workspace_content(INJECTION))
+        self.assertEqual(new["status"], wrap_workspace_content("free " + INJECTION))
+        self.assertIs(new["is_milestone"], False)
+
+    # ---- identifiers the model passes back: bare ------------------------
+
+    def test_known_status_priority_and_effort_values_stay_bare(self):
+        from origin.models.task.task_activity_models import TaskActivityActionType as A
+
+        for action, field, value in (
+            (A.STATUS, "status", "WIP"),
+            (A.STATUS, "status", "Blocked"),
+            (A.STATUS, "status", "Deleted"),
+            (A.PRIORITY, "priority", "Critical"),
+            (A.EFFORT, "effort_level", "Extensive"),
+        ):
+            with self.subTest(value=value):
+                self._row(action, old=value, new=value, field=field)
+
+                entry = self._entry(action)
+
+                self.assertEqual((entry["old_value"], entry["new_value"]), (value, value))
+
+    def test_a_created_row_keeps_a_known_status_bare(self):
+        from origin.models.task.task_activity_models import TaskActivityActionType as A
+
+        self._row(A.CREATED, new={"title": "t", "status": "Open", "is_milestone": True})
+
+        new = self._entry(A.CREATED)["new_value"]
+
+        self.assertEqual((new["status"], new["is_milestone"]), ("Open", True))
+
+    def test_dates_stay_bare(self):
+        from origin.models.task.task_activity_models import TaskActivityActionType as A
+
+        self._row(A.DUE_DATE, old="2026-11-02", new="2026-11-09T00:00:00+00:00", field="due_date")
+        self._row(A.START_DATE, old=None, new="2026-11-03", field="start_date")
+
+        due = self._entry(A.DUE_DATE)
+        start = self._entry(A.START_DATE)
+
+        self.assertEqual(
+            (due["old_value"], due["new_value"]), ("2026-11-02", "2026-11-09T00:00:00+00:00")
+        )
+        self.assertEqual(start["new_value"], "2026-11-03")
+
+    def test_a_relation_with_no_label_keeps_its_bare_id_and_a_parent_its_display_id(self):
+        from origin.models.task.task_activity_models import TaskActivityActionType as A
+
+        self._row(A.MILESTONE_LINK, old=None, new=41, field="milestone_id")
+        self._row(A.PARENT, old=None, new=7, field="parent_task_id", newDisplayId="WEB-7")
+
+        self.assertEqual(self._entry(A.MILESTONE_LINK)["new_value"], 41)
+        self.assertEqual(self._entry(A.PARENT)["new_value"], "WEB-7")
+
+    def test_a_relation_label_is_still_fenced(self):
+        from origin.models.task.task_activity_models import TaskActivityActionType as A
+
+        self._row(A.SPRINT_LINK, old=None, new=3, field="sprint_id", newLabel=INJECTION)
+
+        self.assertEqual(self._entry(A.SPRINT_LINK)["new_value"], wrap_workspace_content(INJECTION))
+
+    def test_a_milestone_assignee_id_and_a_delete_flag_stay_bare(self):
+        from origin.models.task.task_activity_models import TaskActivityActionType as A
+
+        uid = str(self.user2.id)
+        self._row(A.MILESTONE_ASSIGNEE_ADDED, new=uid, field="milestone_assignee", userName="x")
+        self._row(A.DELETED, old=False, new=True, field="is_deleted")
+
+        self.assertEqual(self._entry(A.MILESTONE_ASSIGNEE_ADDED)["new_value"], uid)
+        deleted = self._entry(A.DELETED)
+        self.assertEqual((deleted["old_value"], deleted["new_value"]), (False, True))
+
+    # ---- already fenced before this change: unchanged ------------------
+
+    def test_a_title_a_tag_and_a_custom_field_value_are_still_fenced(self):
+        from origin.models.task.task_activity_models import TaskActivityActionType as A
+
+        self._row(A.TITLE, old="a", new=INJECTION, field="title")
+        self._row(A.TAGS, old=None, new=[{"tagName": INJECTION}], field="tags")
+        self._row(A.CUSTOM_FIELD, new="v", field="custom_field", fieldName="F", newLabel=INJECTION)
+
+        self.assertEqual(self._entry(A.TITLE)["new_value"], wrap_workspace_content(INJECTION))
+        self.assertEqual(self._entry(A.TAGS)["new_value"], [wrap_workspace_content(INJECTION)])
+        self.assertEqual(
+            self._entry(A.CUSTOM_FIELD)["new_value"], wrap_workspace_content(INJECTION)
+        )

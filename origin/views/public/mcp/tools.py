@@ -66,7 +66,10 @@ answer is a hang. Two consequences, both load-bearing:
   `delete_calendar_event` is published because the registry's own
   description calls it out as destructive and a user asks for it by name;
   it is the only delete in the registry, and the asymmetry is on purpose
-  rather than an oversight to be "fixed" by adding more. Write scope
+  rather than an oversight to be "fixed" by adding more. (The one
+  removal besides it, `remove_task_delivery` (MIP-834), is not a delete in
+  this sense: it only takes back a link `add_task_delivery` made, and
+  adding it again is the undo, so it needs no opt-in.) Write scope
   alone doesn't reach it: it is `destructive=True`, which also needs the
   key's `allow_destructive` opt-in (MIP-723). An instruction planted in a
   task body is read by the agent on the other end, and write scope is
@@ -100,7 +103,11 @@ from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.tools import REGISTRY
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.services.security_events import note_refusal
-from origin.views.public.mcp.resolve import resolve_note_ref, resolve_task_ref
+from origin.views.public.mcp.resolve import (
+    resolve_milestone_ref,
+    resolve_note_ref,
+    resolve_task_ref,
+)
 
 log = logging.getLogger(__name__)
 
@@ -166,6 +173,15 @@ class McpTool:
     # Applied to a property nested inside an array item's schema, keyed
     # `(list_arg, item_key)` — the schema half of `nested_task_ref_args`.
     nested_schema_overrides: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
+    # Argument names holding a MILESTONE reference (MIP-852): the numeric
+    # milestone id, or the display id / URL of the milestone's backing task.
+    # `nested_milestone_ref_args` is the `(list_arg, item_key)` form, for
+    # `update_tasks_bulk` rows.
+    milestone_ref_args: tuple[str, ...] = ()
+    nested_milestone_ref_args: tuple[tuple[str, str], ...] = ()
+    # Search must not say whether a task or milestone exists, so an
+    # unresolvable milestone reference there matches nothing instead of failing.
+    quiet_milestone_refs: bool = False
 
 
 def _rewrite_refs(text: str) -> str:
@@ -181,11 +197,15 @@ CATALOG: tuple[McpTool, ...] = (
             "Read one task in full: title, status, priority, assignee, dates, "
             "tags, where it sits (`parent_task_id`, `milestone_id`, and "
             "`backs_milestone_id` when it is a milestone's own row), its "
-            "description, and its comments. Prefer `content_markdown` for "
-            "the description when it is present — it keeps headings, checklists "
+            "description, and its comments. Read the description from "
+            "`content_markdown` when it is present — it keeps headings, checklists "
             "and code fences — and fall back to `content_text`, the same body "
-            "flattened. This is the first call when the user names a task to "
-            "work on."
+            "flattened, which is sent only when there is no markdown (the body "
+            "is never returned twice). Each comment's `markdown` keeps its "
+            "paragraphs, lists and code fences. `body_hash` identifies the body "
+            "you were shown: pass it to `update_task` as `base_body_hash` to "
+            "refuse an edit that would overwrite a newer one. This is the first call when the "
+            "user names a task to work on."
         ),
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
@@ -206,6 +226,7 @@ CATALOG: tuple[McpTool, ...] = (
     McpTool(
         name="list_tasks",
         registry_name="list_tasks",
+        milestone_ref_args=("milestone_id",),
         description=(
             "List tasks with filters — by project, milestone, status, "
             "priority, assignee, or overdue. Use this to survey a milestone "
@@ -237,25 +258,33 @@ CATALOG: tuple[McpTool, ...] = (
             "`has_goal` is false when nobody has written what the milestone "
             "is for."
         ),
-        # The registry description of `assignee_user_id` points at
+        # The registry description of `assignee_id` points at
         # `list_my_milestones`, which this surface does not publish —
         # `_rewrite_refs` can only rename a tool, not remove a reference
         # to an absent one. Overridden rather than renamed: the caller
-        # already has `get_current_user` for "mine".
+        # already has `get_current_user` for "mine". `assignee_user_id` is the
+        # older spelling of the same filter; both are published because this
+        # layer refuses any argument not in the schema (MIP-827).
         schema_overrides={
-            "assignee_user_id": {
+            "assignee_id": {
                 "type": "string",
                 "description": (
                     "Only milestones this user is assigned to. A user UUID — "
                     "`get_current_user` for the caller's own, or "
-                    "`get_team_members` to resolve a name."
+                    "`get_team_members` to resolve a name. Same name as in "
+                    "`list_tasks`."
                 ),
-            }
+            },
+            "assignee_user_id": {
+                "type": "string",
+                "description": "Older spelling of `assignee_id`; send `assignee_id`.",
+            },
         },
     ),
     McpTool(
         name="get_milestone_summary",
         registry_name="get_milestone_summary",
+        milestone_ref_args=("milestone_id",),
         description=(
             "One milestone in depth: its tasks, their statuses, what is done "
             "and what remains. Use it to plan the order of work across a "
@@ -312,6 +341,8 @@ CATALOG: tuple[McpTool, ...] = (
     McpTool(
         name="search_workspace",
         registry_name="search_knowledge_base",
+        milestone_ref_args=("milestone_id",),
+        quiet_milestone_refs=True,
         description=(
             "Semantic search across the workspace — tasks, notes, chat "
             "messages and todos. Use it for context the task description "
@@ -322,7 +353,10 @@ CATALOG: tuple[McpTool, ...] = (
             "task or chat name also finds the notes inside it. Pass "
             "`project_id` (from `list_projects`) or `milestone_id` (from "
             "`list_milestones`) to search only that project or milestone; "
-            "the limit is filled from it, not from other projects."
+            "the limit is filled from it, not from other projects. Each "
+            "returned chunk's `text` is cut at 1,000 characters, and a cut "
+            "chunk carries `truncated: true`: call `get_task` / `get_note` "
+            "for the full text."
         ),
     ),
     McpTool(
@@ -378,6 +412,7 @@ CATALOG: tuple[McpTool, ...] = (
     McpTool(
         name="list_task_dependencies",
         registry_name="list_task_dependencies",
+        milestone_ref_args=("milestone_id",),
         description=(
             "Every blocker→blocked edge in one project or one milestone — the "
             "whole dependency graph in a single call, rather than "
@@ -508,12 +543,20 @@ CATALOG: tuple[McpTool, ...] = (
     McpTool(
         name="update_task",
         registry_name="update_task",
+        milestone_ref_args=("milestone_id",),
         description=(
             "Change a task: status, title, description, priority, effort, "
             "due date or milestone. Set status to 'WIP' when you start and "
             "'Closed' when the work is merged. `content_text` replaces the "
             "whole description, so read the task first and send the full new "
-            "body rather than a fragment. `milestone_id` (from "
+            "body rather than a fragment. To change part of it, send one of "
+            "`body_append` / `body_prepend` (markdown added at the end / "
+            "start) or `body_replace` ({old_text, new_text}: `old_text` must "
+            "match exactly once in `content_markdown`) instead of "
+            "`content_text`. Pass `base_body_hash` (the `body_hash` `get_task` "
+            "returned) and the call is refused, with nothing written, if the "
+            "body has changed since you read it; the result carries the new "
+            "`body_hash`. `milestone_id` (from "
             "`list_milestones`, same project) files the task and its sub-tasks "
             "under that milestone; '' takes it out. `tags` replaces the task's "
             "tags with names from `list_project_tags` ([] clears). Requires a "
@@ -549,7 +592,28 @@ CATALOG: tuple[McpTool, ...] = (
             "`branch` + `repo` (owner/name). Repeating it is harmless. It also "
             "installs the repo's webhook with your GitHub connection; "
             "`webhook_warning` in the result means it couldn't, so pass that "
-            "on to the user. Requires a write-scoped API key."
+            "on to the user. `display_id_warning` means neither the branch nor "
+            "the PR title names this task, so it may be the wrong one: check, "
+            "and undo it with `remove_task_delivery`. Requires a write-scoped "
+            "API key."
+        ),
+        write=True,
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
+        name="remove_task_delivery",
+        registry_name="remove_task_delivery",
+        description=(
+            "Take back a branch / PR link that was recorded on the wrong task "
+            "with `add_task_delivery`. Pass `pr_url`, or `branch` + `repo` "
+            "(owner/name) for a link with no PR. Only a link someone added by "
+            "hand can be removed: one the GitHub webhook made (the PR's branch "
+            "name carries the task's display id) is refused, because the next "
+            "PR event would add it back; rename the branch instead. The "
+            "removal is written to the task's history, and `add_task_delivery` "
+            "puts the link back. Removing an open PR's link also stops it "
+            "holding the task's auto-close. Requires a write-scoped API key."
         ),
         write=True,
         task_ref_args=("task_id",),
@@ -587,6 +651,7 @@ CATALOG: tuple[McpTool, ...] = (
     McpTool(
         name="create_task",
         registry_name="create_task",
+        milestone_ref_args=("milestone_id",),
         description=(
             "Create a task in a project. Use it to split discovered work out "
             "of the task you're on, rather than widening that one. Get the "
@@ -619,11 +684,13 @@ CATALOG: tuple[McpTool, ...] = (
     McpTool(
         name="update_tasks_bulk",
         registry_name="update_tasks_bulk",
+        nested_milestone_ref_args=(("updates", "milestone_id"),),
         description=(
-            "Change priority, due date, status, effort or milestone on MANY "
-            "tasks in one call — for reprioritizing or tidying a milestone, or "
+            "Change priority, due date, status, effort, assignee or milestone on "
+            "MANY tasks in one call — for reprioritizing or tidying a milestone, "
             "filing a batch of tasks under one (`milestone_id`, '' to take a "
-            "task out). Read the "
+            "task out), or assigning a batch (`assignee_id`, '' to unassign; "
+            "not for a milestone's own backing task). Read the "
             "current state first (`list_tasks`, and `list_task_dependencies` "
             "so blockers land before what they block), since each entry needs "
             "a one-sentence `rationale` recorded with the change. "
@@ -651,6 +718,7 @@ CATALOG: tuple[McpTool, ...] = (
     McpTool(
         name="create_task_plan",
         registry_name="create_task_plan",
+        milestone_ref_args=("existing_milestone_id",),
         description=(
             "Create a whole plan in one call: a new milestone with its tasks "
             "and their dependencies, or a batch of tasks under an existing "
@@ -658,7 +726,10 @@ CATALOG: tuple[McpTool, ...] = (
             "existing task (`parent_task_id`). Use this instead of repeated "
             "`create_task` calls whenever the work is related — it is the only "
             "way to wire dependencies between tasks being created, by array "
-            "index (`blocked_by_indexes`). Max 20 tasks. Requires a "
+            "index (`blocked_by_indexes`). Max 20 tasks. A new milestone can "
+            "take `tags`; `default_assignee_id` assigns every task that has no "
+            "`assignee_id` of its own, and a new milestone with exactly one "
+            "assignee passes that person on to those tasks. Requires a "
             "write-scoped API key."
         ),
         write=True,
@@ -820,12 +891,45 @@ def _to_json_schema(node: Any) -> Any:
     return node
 
 
+_MILESTONE_REF_HINT = (
+    " Also accepts the milestone's display id (the id of its backing task, e.g. "
+    "PRJ-123) or its Genos URL; a bare number is always the milestone id."
+)
+
+
+def _milestone_ref_property(prop: dict[str, Any]) -> dict[str, Any]:
+    """A milestone-id property widened to a string reference, keeping the
+    registry's own wording (what the argument does for THIS tool)."""
+    return {
+        **prop,
+        "type": "string",
+        "description": str(prop.get("description") or "").rstrip() + _MILESTONE_REF_HINT,
+    }
+
+
 def input_schema(tool: McpTool) -> dict[str, Any]:
     schema = _to_json_schema(REGISTRY[tool.registry_name].parameters_schema)
     if tool.schema_overrides:
         properties = dict(schema.get("properties") or {})
         properties.update(tool.schema_overrides)
         schema = {**schema, "properties": properties}
+    for arg in tool.milestone_ref_args:
+        properties = dict(schema.get("properties") or {})
+        if arg in properties:
+            properties[arg] = _milestone_ref_property(properties[arg])
+            schema = {**schema, "properties": properties}
+    for list_arg, item_key in tool.nested_milestone_ref_args:
+        # Same rebuild-without-mutating dance as the overrides below.
+        properties = dict(schema.get("properties") or {})
+        array_schema = dict(properties.get(list_arg) or {})
+        items = dict(array_schema.get("items") or {})
+        item_properties = dict(items.get("properties") or {})
+        if item_key in item_properties:
+            item_properties[item_key] = _milestone_ref_property(item_properties[item_key])
+            items["properties"] = item_properties
+            array_schema["items"] = items
+            properties[list_arg] = array_schema
+            schema = {**schema, "properties": properties}
     for (list_arg, item_key), override in tool.nested_schema_overrides.items():
         # Rebuild the path `properties[list_arg].items.properties[item_key]`
         # without mutating the registry's own schema dict, which is module
@@ -1076,6 +1180,20 @@ def call(
                 # into a confident write against the wrong table.
                 if note_type is not None:
                     args["note_type"] = note_type
+        for arg in tool.milestone_ref_args:
+            if arg in args and args[arg] is not None:
+                args[arg] = resolve_milestone_ref(
+                    args[arg], ctx.team_id, quiet=tool.quiet_milestone_refs
+                )
+        for list_arg, item_key in tool.nested_milestone_ref_args:
+            entries = args.get(list_arg)
+            if isinstance(entries, list):
+                args[list_arg] = [
+                    {**entry, item_key: resolve_milestone_ref(entry[item_key], ctx.team_id)}
+                    if isinstance(entry, dict) and entry.get(item_key) is not None
+                    else entry
+                    for entry in entries
+                ]
         for list_arg, item_key in tool.nested_task_ref_args:
             entries = args.get(list_arg)
             if not isinstance(entries, list):

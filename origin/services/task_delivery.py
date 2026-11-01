@@ -290,3 +290,80 @@ def delivery_as_dict(row: TaskDelivery, wrap=lambda s: s) -> dict:
         "merged_at": row.merged_at.isoformat() if row.merged_at else None,
         "source": row.source,
     }
+
+
+class DeliveryNotRemovable(Exception):
+    """The delivery was made by something other than a person, so
+    deleting it here would not stick. `reason` is written for the
+    caller to read."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def mentions_display_id(display_id: str | None, *texts: str | None) -> bool:
+    """Does any of `texts` (a branch name, a PR title) carry `display_id`
+    at a word boundary, case-insensitively? The same rule the webhook
+    links a branch by, so "GEN-4" does not match "GEN-42"."""
+    if not display_id or display_id.startswith("#"):
+        return False
+    pattern = re.compile(rf"(^|[^A-Za-z0-9]){re.escape(display_id)}([^A-Za-z0-9]|$)", re.IGNORECASE)
+    return any(text and pattern.search(text) for text in texts)
+
+
+def remove_delivery(*, row: TaskDelivery, removed_by) -> dict:
+    """Delete one manually recorded delivery and leave a history row.
+
+    Only a `manual` row goes. A `webhook` row records that the PR's
+    branch names the task, which stays true: the next event for the PR
+    (`sync_pull_request`) would write it again, so deleting it would
+    look like it worked and then undo itself. A `backfill` row came from
+    the same webhook-era PR links. Both are refused with a reason.
+
+    The history row snapshots who removed what, because the row it
+    describes no longer exists. Removing an open link also lifts its
+    hold on the task's auto-close (`_other_open_prs`); no close is
+    triggered here, the next merge event decides.
+
+    Returns the snapshot, which is also the history row's metadata.
+    """
+    if row.source != TaskDeliverySource.MANUAL:
+        made_by = (
+            "the GitHub webhook"
+            if row.source == TaskDeliverySource.WEBHOOK
+            else "a backfill of earlier PR links"
+        )
+        raise DeliveryNotRemovable(
+            f"That link was made by {made_by}, "
+            "not added by hand, so it is not removed here: the next event for the PR "
+            "would add it back while the branch name carries the task's display id. "
+            "Rename or retarget the branch (or the PR) instead."
+        )
+    from origin.models.task.task_activity_models import TaskActivityActionType  # noqa: PLC0415
+    from origin.signals.task_signals import record_activity  # noqa: PLC0415
+
+    snapshot = {
+        "pr_url": row.pr_url,
+        "pr_number": row.pr_number,
+        "pr_title": row.pr_title,
+        "branch": row.branch or None,
+        "repo": f"{row.repo_owner}/{row.repo_name}",
+        "state": row.state,
+        "source": row.source,
+        "removed_by": {
+            "user_id": str(removed_by.id),
+            "username": removed_by.username,
+        },
+    }
+    task = row.task
+    with transaction.atomic():
+        row.delete()
+        record_activity(
+            task=task,
+            action_type=TaskActivityActionType.PR_UNLINKED,
+            field_name="delivery",
+            metadata=snapshot,
+            actor=removed_by,
+        )
+    return snapshot

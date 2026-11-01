@@ -33,19 +33,21 @@ the model can self-correct after a rejection or error.
 
 from __future__ import annotations
 
+import uuid
 from datetime import date
 from typing import Any
 
 from django.db import transaction
 
 from apis.request_id import log_failure
-from origin.models.common.team_models import TeamMembers
+from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
+from origin.search_engine.agent.tools.body_limits import check_body_sizes
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
 from origin.search_engine.agent.tools.task_enums import (
@@ -62,6 +64,7 @@ from origin.search_engine.quota import (
 )
 from origin.services.milestone_service import create_milestone, ensure_backing_task
 from origin.services.task_cache import invalidate_project_tasks_cache
+from origin.views.utils.scope_guards import is_team_member
 
 # Hard cap on tasks per plan. Keeps the single function-call emission
 # well under model output limits and the approval card reviewable; the
@@ -116,7 +119,60 @@ def _find_dependency_cycle(edges_by_node: dict[int, list[int]]) -> list[int] | N
     return None
 
 
+def _task_assignee(spec: dict[str, Any], default: str | None, inherited: str | None) -> str | None:
+    """The task's own assignee, else the plan default, else the new
+    milestone's sole assignee (MIP-823)."""
+    own = spec.get("assignee_id")
+    if own and own != "null":
+        return str(own)
+    return default or inherited
+
+
+def _assignee_errors(assignee_ids: set[str], project_acl: set[str], ctx: ToolContext) -> list[str]:
+    """Problems with the plan's referenced users, on the SAME terms as
+    `create_task` / `assign_task`: an active teammate OR someone already on
+    the project (a guest collaborator holds a project row and no team row).
+    Both sets are scoped to this team, so another tenant's UUID is refused."""
+    errors: list[str] = []
+    valid: set[str] = set()
+    for raw in sorted(assignee_ids):
+        try:
+            valid.add(str(uuid.UUID(raw)))
+        except ValueError:
+            errors.append(f"assignee {raw!r} is not a user id. Use get_team_members for valid ids.")
+    assignable = {uid for uid in valid if uid in project_acl or is_team_member(ctx.team_id, uid)}
+    for missing in sorted(valid - assignable):
+        errors.append(
+            f"assignee {missing!r} is not an active member of this team, and is not "
+            "on this project. Use get_team_members or list_project_members to find "
+            "valid user ids."
+        )
+    live = {str(u.id): u for u in CustomUser.objects.filter(id__in=list(assignable))}
+    for uid in sorted(assignable):
+        user = live.get(uid)
+        if user is None:
+            errors.append(f"assignee {uid!r} not found.")
+        elif user.is_deleted:
+            errors.append(f"assignee {uid!r} account has been deleted.")
+    return errors
+
+
+def _plan_bodies(args: dict[str, Any]) -> list[tuple[str, Any]]:
+    """Every markdown body in the plan, as `(field path, text)`."""
+    bodies: list[tuple[str, Any]] = []
+    milestone = args.get("milestone")
+    if isinstance(milestone, dict):
+        bodies.append(("milestone.description_markdown", milestone.get("description_markdown")))
+    tasks = args.get("tasks")
+    if isinstance(tasks, list):
+        for i, spec in enumerate(tasks):
+            if isinstance(spec, dict):
+                bodies.append((f"tasks[{i}].content_markdown", spec.get("content_markdown")))
+    return bodies
+
+
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    check_body_sizes(_plan_bodies(args))
     # ---- project + ACL (same layering as create_task) ----
     raw_project_id = args.get("project_id")
     try:
@@ -191,6 +247,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     # ---- validate the whole plan up-front, collecting every problem ----
     errors: list[str] = []
+    milestone_tags: list[dict[str, str]] = []
 
     if milestone_spec is not None:
         if not isinstance(milestone_spec, dict):
@@ -205,6 +262,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         )
         _parse_date(milestone_spec.get("start_date"), "milestone.start_date", errors)
         _parse_date(milestone_spec.get("due_date"), "milestone.due_date", errors)
+        # MIP-780: same catalogue lookup + unknown-name refusal as a task's
+        # tags. `create_milestone` mirrors them onto the backing task.
+        if milestone_spec.get("tags") is not None:
+            try:
+                milestone_tags = resolve_tags(
+                    milestone_spec["tags"], project_id, where="milestone.tags"
+                )
+            except ToolError as e:
+                errors.append(str(e))
 
     tasks = args.get("tasks")
     if not isinstance(tasks, list) or not tasks:
@@ -217,10 +283,25 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     # Collect every referenced user id for one batched membership check.
     assignee_ids: set[str] = set()
+    milestone_assignees: list[str] = []
     if milestone_spec:
         for uid in milestone_spec.get("assignee_ids") or []:
-            if uid:
+            if uid and str(uid) not in milestone_assignees:
+                milestone_assignees.append(str(uid))
                 assignee_ids.add(str(uid))
+    # MIP-823: a plan-wide default. "null" is what a model sends for "none".
+    default_assignee = args.get("default_assignee_id")
+    default_assignee = (
+        str(default_assignee) if default_assignee and default_assignee != "null" else None
+    )
+    if default_assignee:
+        assignee_ids.add(default_assignee)
+    # A milestone can have several assignees and a task only one, so tasks
+    # inherit only when there is exactly one; with several they stay
+    # unassigned unless the plan says otherwise. Only a milestone created
+    # BY this plan lends its assignee: attaching to an existing one must
+    # not silently hand its owner new work.
+    milestone_default = milestone_assignees[0] if len(milestone_assignees) == 1 else None
 
     edges_by_node: dict[int, list[int]] = {i: [] for i in range(len(tasks))}
     # Each task's stored tags, resolved against the project's catalogue
@@ -293,22 +374,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         errors.append("dependency cycle: " + " -> ".join(str(n) for n in cycle))
 
     if assignee_ids:
-        # Every referenced user must be an active member of THIS team —
-        # scoped to ctx.team_id so the model cannot smuggle in a foreign
-        # tenant's UUID (same layering as assign_task).
-        member_ids = {
-            str(a)
-            for a in TeamMembers.objects.filter(
-                team_id=ctx.team_id,
-                attendee_id__in=list(assignee_ids),
-                is_deleted=False,
-            ).values_list("attendee_id", flat=True)
-        }
-        for missing in sorted(assignee_ids - member_ids):
-            errors.append(
-                f"assignee {missing!r} is not an active member of this team. "
-                "Use get_team_members to find valid user ids."
-            )
+        errors.extend(_assignee_errors(assignee_ids, allowed, ctx))
 
     if errors:
         raise ToolError("Plan validation failed:\n- " + "\n- ".join(errors[:25]))
@@ -351,6 +417,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     start_date=milestone_spec.get("start_date") or None,
                     due_date=milestone_spec.get("due_date") or None,
                     assignee_ids=milestone_spec.get("assignee_ids") or [],
+                    tags=milestone_tags or None,
                 )
             elif existing_milestone is not None:
                 milestone = existing_milestone
@@ -385,7 +452,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                         milestone=task_milestone,
                         sprint_id=sprint_id,
                         reporter_id=ctx.user_id,
-                        assignee_id=str(spec["assignee_id"]) if spec.get("assignee_id") else None,
+                        assignee_id=_task_assignee(spec, default_assignee, milestone_default),
                         title=spec["title"].strip(),
                         content=task_body_blocks(
                             spec.get("content_markdown") or "", entity_chip_resolver=chips
@@ -456,6 +523,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "task_id": milestone.task_id,
             "display_id": milestone.task.display_id if milestone.task_id else None,
             "title": milestone.title,
+            "tags": [tag["tagName"] for tag in milestone_tags],
         }
 
     tasks_out = [
@@ -466,6 +534,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "title": t.title,
             "parent_task_id": t.parent_task_id,
             "tags": [tag["tagName"] for tag in tags_by_index.get(i) or []],
+            "assignee_id": str(t.assignee_id) if t.assignee_id else None,
         }
         for i, t in enumerate(created)
     ]
@@ -535,7 +604,8 @@ _TASK_ITEM_SCHEMA: dict[str, Any] = {
             "type": "STRING",
             "description": (
                 "Optional assignee user UUID from get_team_members / "
-                "list_project_members. Omit for unassigned."
+                "list_project_members. Omit to use default_assignee_id, "
+                "else the new milestone's single assignee, else unassigned."
             ),
         },
         "tags": {
@@ -634,7 +704,20 @@ CREATE_TASK_PLAN = Tool(
                         "type": "ARRAY",
                         "items": {"type": "STRING"},
                         "description": (
-                            "Optional assignee user UUIDs (milestones support multiple assignees)."
+                            "Optional assignee user UUIDs (milestones support multiple "
+                            "assignees). With exactly ONE, every plan task that has no "
+                            "assignee_id of its own is assigned to that person too; with "
+                            "several, tasks stay unassigned unless default_assignee_id or "
+                            "their own assignee_id says otherwise."
+                        ),
+                    },
+                    "tags": {
+                        "type": "ARRAY",
+                        "items": {"type": "STRING"},
+                        "description": (
+                            "Optional tag names from list_project_tags (the project's "
+                            "catalogue) for the milestone. An unknown name fails the "
+                            "plan. Omit when none fits."
                         ),
                     },
                 },
@@ -657,6 +740,15 @@ CREATE_TASK_PLAN = Tool(
                     "sprint. Mutually exclusive with milestone / "
                     "existing_milestone_id. Use fetch_task first to read "
                     "the task and its comments."
+                ),
+            },
+            "default_assignee_id": {
+                "type": "STRING",
+                "description": (
+                    "Optional assignee user UUID for every task in the plan "
+                    "that sets no assignee_id of its own (get_team_members / "
+                    "list_project_members). Wins over the new milestone's "
+                    "assignee. Omit to leave them unassigned."
                 ),
             },
             "tasks": {

@@ -51,6 +51,7 @@ from origin.services.oauth.tokens import ReauthRequired
 from origin.services.task_delivery import (
     clean_branch,
     delivery_as_dict,
+    mentions_display_id,
     parse_merged_at,
     parse_repo,
     pr_state,
@@ -210,6 +211,20 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "GitHub in Genos and recording any PR or branch of the repo."
         )
         summary += f"; couldn't install the Genos webhook on {owner}/{repo}"
+    # A link whose branch and title both fail to name the task is usually
+    # the wrong task (MIP-834: a PR number guessed before `gh pr create`
+    # returned it). Not an error: a branch can legitimately carry no id,
+    # that being what this tool is for. Said only when there is a branch
+    # or title to judge by; a bare url that couldn't be read says nothing.
+    if (row.branch or row.pr_title) and not mentions_display_id(
+        task.display_id, row.branch, row.pr_title
+    ):
+        out["display_id_warning"] = (
+            f"Neither this link's branch ({row.branch or 'unknown'!r}) nor its PR title "
+            f"mention {task.display_id}. If it is on the wrong task, take it back with "
+            "`remove_task_delivery` and link the right one."
+        )
+        summary += f"; check it is the right task: neither the branch nor the title names {task.display_id}"
     out["__summary__"] = summary
     return out
 
@@ -224,7 +239,10 @@ ADD_TASK_DELIVERY = Tool(
         "or to record a branch before its PR exists. Pass `pr_url`, or "
         "`branch` + `repo` (owner/name), or all three. Safe to repeat: the "
         "same PR is never linked twice, and a PR opened later on a linked "
-        "branch attaches to that link."
+        "branch attaches to that link. If neither the branch nor the PR title "
+        "mentions the task's display id the result carries `display_id_warning`: "
+        "check it is the right task, and undo a wrong link with "
+        "`remove_task_delivery`."
     ),
     parameters_schema={
         "type": "OBJECT",

@@ -3,9 +3,13 @@
 #   python manage.py agent_eval_setup       # one-time fixture provision
 #   python manage.py agent_eval --retrieval # the suite
 #
-# Each case calls `search(...)` DIRECTLY — no agent loop, no LLM
-# calls — and asserts on the ranked entity list. Free + fast: ideal
-# for CI on every PR.
+# Each case calls `search(...)` DIRECTLY — no agent loop — and asserts
+# on the ranked entity list. Cheap + fast, but NOT LLM-free (MIP-860):
+# unless a case sets `rewrite: false`, `search(...)` runs the query
+# rewriter (one small Gemini call, flag RAG_USE_QUERY_REWRITE, default
+# on, nothing in CI turns it off), whose variants differ run to run.
+# Every query is also embedded (Vertex). A case whose verdict must be
+# the same on every run pins `rewrite: false`.
 #
 # Case schema
 # -----------
@@ -21,6 +25,11 @@
 #   date_to       : optional ISO-8601, upper bound on updated_at
 #   limit         : optional, max entities returned (default 10)
 #   use_vector    : optional, default true
+#   rewrite       : optional; `false` pins the query rewriter OFF for
+#                   this case (deterministic: BM25 + vector + RRF of the
+#                   query as written). Omitted = follows the
+#                   RAG_USE_QUERY_REWRITE flag. It can't force it ON, so
+#                   `agent_eval_compare --b-overrides` still owns the flag.
 #
 #   expect:
 #     # Hard-pinned ids — use only when ids are stable across reseeds.
@@ -885,27 +894,35 @@
 
 - id: mention_project_boost
   fixture: true
-  query: "analytics"
+  query: "enforcement"
+  # Pinned off (MIP-860): this case used to query "analytics", a word the
+  # target does not contain, so it was reachable only through a rewrite
+  # variant ("usage stats" found it at rank 1, "reports and dashboards"
+  # did not) and the verdict flipped with the LLM. Measured 2026-11-01
+  # against the fixture: with rewrite off, "analytics" never retrieves the
+  # target at all (3 of 3 runs); with it on, the target landed at rank
+  # 4-10 in 8 of 8 reps of a direct search, and the case itself passed
+  # once and failed twice in 3 runs.
+  rewrite: false
   mentions:
     - type: project
       lookup_name: "Q2 Roadmap"
   expect:
-    # Project boost matches the chunk-level `project_id` field. At
-    # baseline (measured 2026-07-11, rewrite on) "analytics" is
-    # stably dominated by the vendor-evaluation note and Website-
-    # Redesign items, with the Q2-Roadmap tasks at ranks 4-7;
-    # mentioning #Q2 Roadmap lifts "Usage metering pipeline for plan
-    # limits" into the top 3 (measured over 3 reps: 1 / 1 / 3). The
-    # query was chosen for pool stability: the target is retrieved by
-    # the base query's keyword lane, not a stochastic rewrite variant
-    # ("what should we prioritize" failed exactly that way).
+    # Project boost matches the chunk-level `project_id` field. Measured
+    # 2026-11-01, rewrite off, 4/4 reps each way (the output is
+    # deterministic): without the mention "enforcement" returns three
+    # results and "Usage metering pipeline for plan limits" is not among
+    # them; mentioning #Q2 Roadmap adds the project's chunks to the pool
+    # and puts it at rank 2 (behind "Integrate payment provider sandbox").
+    # n=3 leaves one rank of slack.
     must_contain_title_in_top_n:
       n: 3
       title_substrings: ["usage metering pipeline"]
 
 - id: mention_project_boost_control
   fixture: true
-  query: "analytics"
+  query: "enforcement"
+  rewrite: false
   limit: 3
   expect:
     # Control for mention_project_boost — see mention_member_boost_control.

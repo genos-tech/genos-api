@@ -1331,12 +1331,20 @@ def _delete_demo_team_search_chunks(team_id: uuid.UUID) -> None:
         if not chunk_ids:
             return
 
+        # Rows of chunks whose OpenSearch delete did not happen (the bulk
+        # raised, or this id's delete failed with anything but a 404) are
+        # KEPT. The Postgres rows they describe are about to be deleted, so
+        # `sweep_orphans` finds those entities dead and purges the
+        # leftovers; a dropped row would leave documents in the index that
+        # nothing can ever find again.
+        keep_ids: set[str] = set(chunk_ids)
         try:
             # Local import so import-time failures (missing client
             # config in dev) don't prevent the demo cleanup from
             # running at all — only the OpenSearch side will skip.
             from opensearchpy import helpers as os_helpers
 
+            from origin.search_engine import bulk_errors
             from origin.search_engine.opensearch_client import (
                 get_client,
                 get_index_alias,
@@ -1347,7 +1355,18 @@ def _delete_demo_team_search_chunks(team_id: uuid.UUID) -> None:
                 for cid in chunk_ids
             ]
             client = get_client()
-            os_helpers.bulk(client, actions, raise_on_error=False, raise_on_exception=False)
+            _, errors = os_helpers.bulk(
+                client, actions, raise_on_error=False, raise_on_exception=False
+            )
+            real_errors = [e for e in errors if bulk_errors.error_info(e)[0] != 404]
+            keep_ids = bulk_errors.failed_ids(real_errors, chunk_ids)
+            if real_errors:
+                logger.warning(
+                    "Demo OpenSearch chunk delete failed for %d chunk(s) of team %s; "
+                    "their tracking rows are kept for the orphan sweep",
+                    len(keep_ids),
+                    team_id_str,
+                )
         except Exception as exc:
             logger.warning(
                 "Demo OpenSearch chunk delete failed for team %s: %s",
@@ -1356,10 +1375,7 @@ def _delete_demo_team_search_chunks(team_id: uuid.UUID) -> None:
                 exc_info=True,
             )
 
-        # Drop the tracking rows regardless of whether the OpenSearch
-        # bulk delete succeeded — they're per-team and unreachable
-        # without the team's Postgres rows anyway.
-        RagChunk.objects.filter(team_id=team_id).delete()
+        RagChunk.objects.filter(team_id=team_id).exclude(chunk_id__in=keep_ids).delete()
     except Exception as exc:
         logger.warning(
             "Demo RagChunk cleanup failed for team %s: %s",

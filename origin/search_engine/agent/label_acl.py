@@ -34,15 +34,10 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent.acl import chat_acl_user_ids, owns_personal_folder
+from origin.search_engine.agent.acl import chat_acl_user_ids, may_read_note, owns_personal_folder
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.views.utils.note_folder_role import get_folder_role
-from origin.views.utils.note_role import (
-    NOTE_TYPE_CHAT,
-    NOTE_TYPE_PERSONAL,
-    NOTE_TYPE_TASK,
-    get_effective_role,
-)
+from origin.views.utils.note_role import NOTE_TYPE_CHAT, NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
 from origin.views.utils.scope_guards import (
     external_visible_user_ids,
     guest_visible_user_ids,
@@ -263,8 +258,8 @@ class LabelAccess:
         note = model.objects.filter(note_id=nid).first()
         if note is None or str(note.team_id or "") != self.team_id:
             return None
-        if str(note.owner_id or "") != self.user_id and (
-            get_effective_role(self.user_id, code, nid) is None
+        if not may_read_note(
+            user_id=self.user_id, note_type_code=code, note_id=nid, owner_id=note.owner_id
         ):
             return None
         return note.title

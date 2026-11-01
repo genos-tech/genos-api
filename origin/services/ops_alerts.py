@@ -58,7 +58,8 @@ PROBE_NAME = "uptime-probe"
 # How long each cron may go without a successful run before it counts as
 # missed: its interval, plus enough slack that one skipped or slow run
 # doesn't page. Keyed by the Railway service name its start command passes
-# as `--heartbeat`; `test_ops_alerts` holds every railway-*.toml to it.
+# as `--heartbeat`; `test_ops_alerts` holds every cron to it (the services in
+# `.railway/railway.ts`, and the railway-*.toml files not yet moved there).
 CRON_SCHEDULES: dict[str, timedelta] = {
     # */5
     "email-notify": timedelta(minutes=20),
@@ -66,6 +67,8 @@ CRON_SCHEDULES: dict[str, timedelta] = {
     "webhook-deliver": timedelta(minutes=20),
     # */10
     "opensearch-reindexer": timedelta(minutes=35),
+    # */15
+    "reconcile-pr-deliveries": timedelta(minutes=50),
     # hourly
     "agent-digest": timedelta(hours=3),
     "agent-judge-sampler": timedelta(hours=3),

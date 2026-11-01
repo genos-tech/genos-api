@@ -22,8 +22,9 @@ Fail-safe rules the sweep MUST keep:
   * An entity id that doesn't parse, or an entity_type the sweep doesn't
     know, is KEPT and logged — never purged. A parser bug must not be
     able to empty the index.
-  * OpenSearch deletes run before the RagChunk rows are removed, so a
-    failed bulk leaves the tracking rows in place and the next sweep
+  * OpenSearch deletes run before the RagChunk rows are removed, and only
+    the rows of chunks whose delete SUCCEEDED (or 404'd) are removed, so a
+    failed delete leaves its tracking row in place and the next sweep
     retries.
 
 Known limitation: a `spotlight_answer` / `conversation` chunk is purged
@@ -42,6 +43,7 @@ from typing import Iterable, Optional
 
 from opensearchpy import helpers as os_helpers
 
+from origin.search_engine import bulk_errors
 from origin.search_engine.models import RagChunk
 from origin.search_engine.opensearch_client import get_client, get_index_alias
 
@@ -57,8 +59,15 @@ _BATCH = 500
 
 def purge_chunks(chunk_ids: list[str], *, refresh: bool = True) -> int:
     """Delete specific chunks from OpenSearch and RagChunk. Returns the
-    number of tracking rows removed. Raises on OpenSearch transport
-    failure (RagChunk rows are then kept so the sweep can retry)."""
+    number of tracking rows removed.
+
+    A chunk whose OpenSearch delete failed KEEPS its tracking row (a 404
+    is success: the doc is already gone). `sweep_orphans` walks `RagChunk`,
+    so a row dropped after a failed delete would leave a document in the
+    index that nothing can ever find again; with the row kept, the next
+    sweep retries. Does not raise on a per-document or transport failure
+    (the rows are kept and the error is logged); the best-effort hooks
+    below rely on that."""
     if not chunk_ids:
         return 0
     alias = get_index_alias()
@@ -73,19 +82,17 @@ def purge_chunks(chunk_ids: list[str], *, refresh: bool = True) -> int:
     )
     # A 404 means the doc was already gone (e.g. tracking drift) — that's
     # the outcome we wanted; only report real failures.
-    real_errors = [
-        e for e in errors if (e.get("delete") or {}).get("status") != 404
-    ]
+    real_errors = [e for e in errors if bulk_errors.error_info(e)[0] != 404]
+    failed = bulk_errors.failed_ids(real_errors, chunk_ids)
     if real_errors:
         log.error("Purge bulk reported %d errors", len(real_errors))
         for err in real_errors[:5]:
-            item = err.get("delete") or {}
-            reason = item.get("error")
-            reason = reason.get("type") if isinstance(reason, dict) else reason
-            log.warning("  status=%s type=%s", item.get("status"), reason)
+            status, etype = bulk_errors.error_info(err)
+            log.warning("  status=%s type=%s", status, etype)
     deleted = 0
-    for i in range(0, len(chunk_ids), _BATCH):
-        batch = chunk_ids[i : i + _BATCH]
+    deletable = [cid for cid in chunk_ids if cid not in failed]
+    for i in range(0, len(deletable), _BATCH):
+        batch = deletable[i : i + _BATCH]
         deleted += RagChunk.objects.filter(chunk_id__in=batch).delete()[0]
     return deleted
 

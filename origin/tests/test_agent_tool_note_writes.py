@@ -144,9 +144,7 @@ class UpdateNoteAclTests(NoteWriteToolTestBase):
         note = self._task_note()
         foreign = ToolContext(team_id="other-team", user_id=str(self.user.id))
         with self.assertRaises(ToolError):
-            update_note_run(
-                {"note_type": "task", "note_id": note.note_id, "title": "x"}, foreign
-            )
+            update_note_run({"note_type": "task", "note_id": note.note_id, "title": "x"}, foreign)
 
 
 class UpdateNoteSnapshotTests(NoteWriteToolTestBase):
@@ -224,7 +222,7 @@ class UpdateNotePayloadTests(NoteWriteToolTestBase):
         self.assertEqual(res["title"], "renamed")
         self.assertEqual(
             res["parent_context"],
-            {"project_id": str(self.project.project_id), "task_id": str(task.task_id)},
+            {"project_id": self.project.project_id, "task_id": str(task.task_id)},
         )
 
 
@@ -252,7 +250,9 @@ class CreateNoteParityTests(NoteWriteToolTestBase):
             },
             self.ctx,
         )
-        self.assertEqual([v.version_no for v in self._versions(NOTE_TYPE_TASK, res["note_id"])], [1])
+        self.assertEqual(
+            [v.version_no for v in self._versions(NOTE_TYPE_TASK, res["note_id"])], [1]
+        )
         self.assertTrue(
             NotePermissionMaster.objects.filter(
                 note_id=res["note_id"],
@@ -263,7 +263,7 @@ class CreateNoteParityTests(NoteWriteToolTestBase):
         )
         self.assertEqual(
             res["parent_context"],
-            {"project_id": str(self.project.project_id), "task_id": str(task.task_id)},
+            {"project_id": self.project.project_id, "task_id": str(task.task_id)},
         )
 
 
@@ -344,8 +344,12 @@ class NoteBodyEntityLinkTests(NoteWriteToolTestBase):
             team=self.team, owner=self.user, title="Research", body=[]
         )
         task_note = TaskNoteMaster.objects.create(
-            team=self.team, project=self.project, owner=self.user,
-            task=task, title="Plan", body=[],
+            team=self.team,
+            project=self.project,
+            owner=self.user,
+            task=task,
+            title="Plan",
+            body=[],
         )
         team_id = str(self.team.team_id)
         pid = self.project.project_id
@@ -372,8 +376,7 @@ class NoteBodyEntityLinkTests(NoteWriteToolTestBase):
         self.assertEqual(
             resolve_note_entity_link(f"note:task:{task_note.note_id}", team_id=team_id),
             (
-                f"/workspace/notes/task/project/{pid}/task/{task.task_id}"
-                f"/note/{task_note.note_id}",
+                f"/workspace/notes/task/project/{pid}/task/{task.task_id}/note/{task_note.note_id}",
                 "Plan",
             ),
         )
@@ -468,7 +471,12 @@ class NoteBodyEntityLinkTests(NoteWriteToolTestBase):
         note.refresh_from_db()
         self.assertEqual(
             _links_in(note.body),
-            [(f"/workspace/tasks/project/{self.project.project_id}/task/{task.task_id}", "the fix")],
+            [
+                (
+                    f"/workspace/tasks/project/{self.project.project_id}/task/{task.task_id}",
+                    "the fix",
+                )
+            ],
         )
 
     def test_cross_team_token_degrades_to_prose(self):

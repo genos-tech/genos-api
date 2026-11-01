@@ -257,6 +257,38 @@ class CreateTaskPlanTagsTests(TaskTagTestBase):
         self.assertEqual(self._task_count(), 0)
 
 
+class CreateTaskPlanMilestoneTagsTests(TaskTagTestBase):
+    """MIP-780: the new milestone takes tags, and so does its backing task."""
+
+    def _plan(self, tags):
+        return CREATE_TASK_PLAN.run(
+            {
+                "project_id": self.project.project_id,
+                "milestone": {"title": "M", "tags": tags},
+                "tasks": [{"title": "A"}],
+            },
+            self.ctx,
+        )
+
+    def test_milestone_and_backing_task_carry_the_tags(self):
+        out = self._plan(["bug", "frontend"])
+        milestone = MilestoneMaster.objects.get(milestone_id=out["milestone"]["milestone_id"])
+        self.assertEqual(milestone.tags, [BUG, FRONTEND])
+        self.assertEqual(milestone.task.tags, [BUG, FRONTEND])
+        self.assertEqual(out["milestone"]["tags"], ["bug", "Frontend"])
+
+    def test_unknown_name_is_refused_and_nothing_is_created(self):
+        with self.assertRaisesRegex(ToolError, r"milestone\.tags: unknown tag"):
+            self._plan(["bug", "infra"])  # `infra` lives on the other project
+        self.assertEqual(MilestoneMaster.objects.count(), 0)
+        self.assertEqual(TaskMaster.objects.count(), 0)
+
+    def test_omitted_or_empty_tags_leave_the_milestone_untagged(self):
+        out = self._plan([])
+        self.assertEqual(out["milestone"]["tags"], [])
+        self.assertFalse(MilestoneMaster.objects.get().tags)
+
+
 class McpTagFlowTests(McpBase):
     """The whole loop on the MCP surface: read the catalogue, tag a task
     by display id, read it back — and the history row names the key's
