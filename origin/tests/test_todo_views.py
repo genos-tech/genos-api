@@ -6,7 +6,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from origin.models.chat.todo_models import ToDoGroup, ToDoItem
+from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.models.common.team_models import TeamMaster
 
 User = get_user_model()
@@ -234,3 +234,126 @@ class TestToDoItemMove(TestCase):
         item.refresh_from_db()
         self.assertEqual(item.title, "Carried over")
         self.assertEqual(item.group.local_date, self.tomorrow)
+
+
+class TestToDoCategoryColors(TestCase):
+    """MIP-759: a To Do tag carries a chip colour. Existing tags and the
+    agent's by-name create take the neutral default; writes are validated;
+    a rename onto an existing name is a 400, not a 500."""
+
+    URL = "/api/v2/todo/categories/"
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="catuser", email="cat@test.com", password="testpass123"
+        )
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(refresh.access_token)}")
+        self.team = TeamMaster.objects.create(
+            team_name="Test Team", team_email="team@test.com", owner=self.user
+        )
+
+    def _make(self, name, **kw):
+        return ToDoCategory.objects.create(team=self.team, user=self.user, name=name, **kw)
+
+    def _post(self, **body):
+        body.setdefault("team_id", str(self.team.team_id))
+        return self.client.post(self.URL, body, format="json")
+
+    def _patch(self, category, **body):
+        return self.client.patch(f"{self.URL}{category.category_id}/", body, format="json")
+
+    def test_a_tag_created_by_name_gets_the_neutral_default(self):
+        res = self._post(name="Work")
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["color"], "#808080")
+        self.assertEqual(res.data["textColor"], "white")
+
+    def test_create_takes_a_colour(self):
+        res = self._post(name="Work", color="#1DC200", text_color="black")
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual((res.data["color"], res.data["textColor"]), ("#1dc200", "black"))
+        self.assertEqual(ToDoCategory.objects.get(name="Work").color, "#1dc200")
+
+    def test_the_list_carries_the_colour(self):
+        self._make("Home", color="#0044c2", text_color="white")
+        res = self.client.get(self.URL, {"team_id": str(self.team.team_id)})
+        self.assertEqual(res.data[0]["color"], "#0044c2")
+        self.assertEqual(res.data[0]["textColor"], "white")
+
+    def test_create_refuses_a_bad_colour(self):
+        for body in (
+            {"color": "red"},
+            {"color": "#12345"},
+            {"color": "javascript:alert(1)"},
+            {"color": 5},
+            {"text_color": "purple"},
+            {"text_color": None},
+        ):
+            with self.subTest(body=body):
+                res = self._post(name="Bad", **body)
+                self.assertEqual(res.status_code, 400, res.data)
+        self.assertFalse(ToDoCategory.objects.filter(name="Bad").exists())
+
+    def test_create_refuses_a_name_over_the_column_limit(self):
+        self.assertEqual(self._post(name="x" * 65).status_code, 400)
+
+    def test_posting_an_existing_name_keeps_its_colour(self):
+        self._make("Work", color="#0044c2")
+        res = self._post(name="Work", color="#ff2323")
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["color"], "#0044c2")
+
+    def test_patch_recolours_and_renames_together(self):
+        cat = self._make("Work")
+        res = self._patch(cat, name="Deep work", color="#8e23ff", text_color="white")
+        self.assertEqual(res.status_code, 200)
+        cat.refresh_from_db()
+        self.assertEqual((cat.name, cat.color, cat.text_color), ("Deep work", "#8e23ff", "white"))
+
+    def test_patch_without_colour_leaves_it(self):
+        cat = self._make("Work", color="#8e23ff", text_color="white")
+        self.assertEqual(self._patch(cat, sort_order=4).status_code, 200)
+        cat.refresh_from_db()
+        self.assertEqual(cat.color, "#8e23ff")
+
+    def test_patch_refuses_a_bad_colour_and_changes_nothing(self):
+        cat = self._make("Work")
+        res = self._patch(cat, name="Renamed", color="nope")
+        self.assertEqual(res.status_code, 400)
+        cat.refresh_from_db()
+        self.assertEqual((cat.name, cat.color), ("Work", "#808080"))
+
+    def test_renaming_onto_an_existing_name_is_a_400_not_a_500(self):
+        self._make("Home")
+        cat = self._make("Work")
+        res = self._patch(cat, name="Home")
+        self.assertEqual(res.status_code, 400)
+        cat.refresh_from_db()
+        self.assertEqual(cat.name, "Work")
+
+    def test_renaming_to_its_own_name_is_fine(self):
+        cat = self._make("Work")
+        self.assertEqual(self._patch(cat, name="Work", color="#ff2323").status_code, 200)
+
+    def test_another_users_tag_with_the_same_name_is_no_clash(self):
+        other = User.objects.create_user(
+            username="other", email="other@test.com", password="testpass123"
+        )
+        ToDoCategory.objects.create(team=self.team, user=other, name="Home")
+        cat = self._make("Work")
+        self.assertEqual(self._patch(cat, name="Home").status_code, 200)
+
+    def test_an_empty_name_is_refused(self):
+        cat = self._make("Work")
+        self.assertEqual(self._patch(cat, name="   ").status_code, 400)
+
+    def test_a_tag_is_personal(self):
+        other = User.objects.create_user(
+            username="other2", email="other2@test.com", password="testpass123"
+        )
+        theirs = ToDoCategory.objects.create(team=self.team, user=other, name="Theirs")
+        self.assertEqual(self._patch(theirs, color="#ff2323").status_code, 403)
+        theirs.refresh_from_db()
+        self.assertEqual(theirs.color, "#808080")

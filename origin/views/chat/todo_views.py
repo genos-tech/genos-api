@@ -1,3 +1,4 @@
+import re
 from datetime import date as date_cls
 from datetime import datetime, timedelta
 
@@ -396,6 +397,35 @@ class ToDoItemReminderListView(AuthenticatedAPIView):
         )
 
 
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+_TEXT_COLORS = {"black", "white"}
+_CATEGORY_NAME_MAX = ToDoCategory._meta.get_field("name").max_length
+
+
+def _clean_category_colors(data):
+    """Validate the `color` / `text_color` keys of a category write.
+
+    Returns `({model_field: value}, None)` for the keys that were sent, or
+    `(None, error_message)`. `color` is a `#rrggbb` hex (the tag palette's
+    presets); `text_color` is `black` / `white` (what `TagColorOption`
+    carries) or a hex. Both are optional: an absent key is left alone, so
+    the agent's by-name create keeps the model default.
+    """
+    out = {}
+    if "color" in data:
+        color = data.get("color")
+        if not isinstance(color, str) or not _HEX_COLOR.match(color.strip()):
+            return None, "color must be a hex value like #1dc200."
+        out["color"] = color.strip().lower()
+    if "text_color" in data:
+        text_color = data.get("text_color")
+        text_color = text_color.strip().lower() if isinstance(text_color, str) else None
+        if text_color not in _TEXT_COLORS and not (text_color and _HEX_COLOR.match(text_color)):
+            return None, "text_color must be 'black', 'white' or a hex value."
+        out["text_color"] = text_color
+    return out, None
+
+
 class ToDoCategoryListView(AuthenticatedAPIView):
     """GET (list) / POST (create) /api/v2/todo/categories/."""
 
@@ -416,11 +446,22 @@ class ToDoCategoryListView(AuthenticatedAPIView):
         if res := validate_request_data({"team_id": team_id, "name": name}):
             return res
 
+        if len(name) > _CATEGORY_NAME_MAX:
+            return Response(
+                {"error": f"name must be at most {_CATEGORY_NAME_MAX} characters."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        colors, error = _clean_category_colors(request.data)
+        if error:
+            return Response({"error": error}, status=status.HTTP_400_BAD_REQUEST)
+
+        # get_or_create: a tag that already has this name is returned as it
+        # is (its colour is changed with PATCH, not by re-creating it).
         category, _ = ToDoCategory.objects.get_or_create(
             team_id=team_id,
             user_id=request.user.id,
             name=name,
-            defaults={"sort_order": request.data.get("sort_order", 0)},
+            defaults={"sort_order": request.data.get("sort_order", 0), **colors},
         )
         return Response(ToDoCategorySerializer(category).data, status=status.HTTP_201_CREATED)
 
@@ -438,8 +479,32 @@ class ToDoCategoryDetailView(AuthenticatedAPIView):
         category = self._get_owned(request, category_id)
         if category is None:
             return Response({"error": "forbidden"}, status=status.HTTP_403_FORBIDDEN)
+        colors, error = _clean_category_colors(request.data)
+        if error:
+            return Response({"error": error}, status=status.HTTP_400_BAD_REQUEST)
         if "name" in request.data:
-            category.name = (request.data.get("name") or "").strip()
+            name = (request.data.get("name") or "").strip()
+            if not name or len(name) > _CATEGORY_NAME_MAX:
+                return Response(
+                    {"error": f"name is required, at most {_CATEGORY_NAME_MAX} characters."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            # Renaming onto another tag's name would hit
+            # `uniq_todo_category_per_user` and surface as a 500.
+            if (
+                ToDoCategory.objects.filter(
+                    team_id=category.team_id, user_id=category.user_id, name=name
+                )
+                .exclude(category_id=category.category_id)
+                .exists()
+            ):
+                return Response(
+                    {"error": "You already have a tag with that name."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            category.name = name
+        for field, value in colors.items():
+            setattr(category, field, value)
         if "sort_order" in request.data:
             category.sort_order = int(request.data.get("sort_order") or 0)
         category.save()

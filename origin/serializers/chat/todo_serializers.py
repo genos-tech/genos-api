@@ -12,12 +12,21 @@ from origin.models.chat.todo_models import (
 class ToDoCategorySerializer(serializers.ModelSerializer):
     categoryId = serializers.IntegerField(source="category_id", read_only=True)
     sortOrder = serializers.IntegerField(source="sort_order", required=False)
+    textColor = serializers.CharField(source="text_color", read_only=True)
     tsCreatedAt = serializers.DateTimeField(source="ts_created_at", read_only=True)
     tsUpdatedAt = serializers.DateTimeField(source="ts_updated_at", read_only=True)
 
     class Meta:
         model = ToDoCategory
-        fields = ["categoryId", "name", "sortOrder", "tsCreatedAt", "tsUpdatedAt"]
+        fields = [
+            "categoryId",
+            "name",
+            "color",
+            "textColor",
+            "sortOrder",
+            "tsCreatedAt",
+            "tsUpdatedAt",
+        ]
 
 
 class ToDoItemSerializer(serializers.ModelSerializer):
