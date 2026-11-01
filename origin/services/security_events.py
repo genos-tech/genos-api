@@ -151,6 +151,7 @@ def record_security_event(
     target_id="",
     target_label: str = "",
     metadata: dict | None = None,
+    force_source: str | None = None,
 ) -> SecurityEvent | None:
     """Append one event. Returns it, or None if it couldn't be written.
 
@@ -164,7 +165,9 @@ def record_security_event(
     not at the call sites: the row outlives the user, and a dump of this
     table must not hand over addresses (MIP-765). `api_key` is for the authenticator,
     which runs before DRF has put the key on the request; anywhere else
-    it is read from `request.auth`.
+    it is read from `request.auth`. `force_source` overrides what is worked out
+    from the request, for a caller that has no request to work it out
+    from: the operator command passes `SecuritySource.OPERATOR`.
     """
     try:
         if request is None:
@@ -181,6 +184,8 @@ def record_security_event(
             # password, an OAuth round trip, a reset token, the cookie
             # being signed out. That is a person using the app.
             source = SecuritySource.APP
+        if force_source:
+            source = force_source
         meta = getattr(request, "META", None) or {}
         # A savepoint, so a failed insert can't poison a transaction the
         # caller is in the middle of.

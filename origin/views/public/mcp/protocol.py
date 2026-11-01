@@ -62,6 +62,8 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 HEADER_MISMATCH = -32020
 UNSUPPORTED_PROTOCOL_VERSION = -32022
+# Implementation-defined range (-32000..-32099): the endpoint is switched off.
+SERVICE_UNAVAILABLE = -32001
 
 
 class JsonRpcError(Exception):
