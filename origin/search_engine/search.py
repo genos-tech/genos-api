@@ -214,6 +214,7 @@ def search(
     user_id: str,
     entity_types: Optional[list[str]] = None,
     project_ids: Optional[list[str]] = None,
+    milestone_ids: Optional[list[str]] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     limit: int = DEFAULT_LIMIT,
@@ -248,6 +249,11 @@ def search(
             Spotlight project filter); callers that want project
             relevance without excluding everything else want
             `boost_project_ids` instead.
+        milestone_ids: hard filter — keep only tasks (and their comments)
+            filed under these milestones, and the milestones themselves.
+            Same FILTER semantics as `project_ids`. A task attached to a
+            milestone by `parent_task_id` alone has no milestone id in the
+            index and is not matched (MIP-797).
         date_from/date_to: ISO 8601 strings (compared against `updated_at`).
         limit: max number of entity-level results to return (after
             relevance filtering).
@@ -394,6 +400,7 @@ def search(
         chat_retention_cutoff=chat_retention_cutoff,
         conversation_retention_cutoff=conversation_retention_cutoff,
         project_ids=project_ids,
+        milestone_ids=milestone_ids,
         exclude_lanes=exclude_lanes,
     )
 
@@ -1142,6 +1149,7 @@ def _build_filter(
     chat_retention_cutoff: Optional[str] = None,
     conversation_retention_cutoff: Optional[str] = None,
     project_ids: Optional[list[str]] = None,
+    milestone_ids: Optional[list[str]] = None,
     exclude_lanes: Optional[frozenset[str]] = None,
 ) -> list[dict]:
     # `acl_user_ids` holds user ids plus, for content readable by the
@@ -1220,6 +1228,25 @@ def _build_filter(
         # Deliberately a filter and not a boost — see the `project_ids`
         # note in `search()`'s docstring for why both exist.
         filt.append({"terms": {"project_id": [str(p) for p in project_ids]}})
+    if milestone_ids:
+        # Milestone scoping (MIP-797): the tasks filed under it (and their
+        # comments: `task_milestone_id` is on every task chunk, the milestone's
+        # own backing row included) plus the milestone's own chunk. A task
+        # attached to a milestone by `parent_task_id` alone has no
+        # `task_milestone_id` and is not matched. Like `project_ids` this is a
+        # FILTER, applied in the query so it also narrows `limit`.
+        ids = [str(m) for m in milestone_ids]
+        filt.append(
+            {
+                "bool": {
+                    "should": [
+                        {"terms": {"task_milestone_id": ids}},
+                        {"terms": {"entity_id": [f"milestone:{m}" for m in ids]}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        )
     if date_from or date_to:
         rng: dict = {}
         if date_from:
