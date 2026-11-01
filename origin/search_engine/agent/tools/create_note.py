@@ -1,19 +1,27 @@
 """`create_note` write tool — Phase 11.
 
-Create a new personal or task note. Chat-attached notes (which need
-chat_type / chat_id / thread_id wiring) are deliberately out of scope
-for the first cut — they have more failure modes and the agent rarely
-needs to file one. Easy to add later.
+Create a new note in any space the user could create one in through the UI.
 
-Dispatch:
-  * note_type='personal' → PersonalNoteMaster, owner = requesting user
-  * note_type='task'     → TaskNoteMaster, attached to a project (and
-                           optionally a specific task)
+Dispatch (`note_type`):
+  * 'personal' → PersonalNoteMaster, private to the creator; optionally
+                 filed into one of their own My-Notes folders.
+  * 'team'     → PersonalNoteMaster filed into a Team Notes folder
+                 (`folder_id` required); the folder carries the ACL.
+  * 'shared'   → refused: a shared note is someone else's note shared with
+                 you, so there is nothing to create.
+  * 'task'     → TaskNoteMaster, attached to a project (and optionally a
+                 specific task).
+  * 'chat'     → ChatNoteMaster, attached to a chat (and optionally one of
+                 its threads), MIP-749.
 
 ACL:
   * personal: anyone — the note is private to the creator by definition
+  * team: Editor or stronger on the folder (`get_folder_role`), same gate
+    as the REST create
   * task: requesting user must be a project member (same set the
     read-side `fetch_note` enforces)
+  * chat: an active member of the chat (`resolve_chat_note_target`, the
+    helper the REST create uses since MIP-838)
 
 Approval flow (Phase 7): `requires_approval=True`. The user sees the
 proposed title + body in the Approve / Reject card.
@@ -26,6 +34,7 @@ from typing import Any
 from django.db import transaction
 
 from apis.request_id import log_failure
+from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
@@ -37,26 +46,48 @@ from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.search_engine.agent.tools.body_mentions import notify_note_mentions
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
+from origin.search_engine.agent.tools.note_targets import (
+    chat_note_parent_context,
+    normalize_note_type,
+    parse_chat_ref,
+    writable_team_folder,
+)
 from origin.search_engine.quota import (
     NOTE_CREATE_KEY,
     check_remaining_monthly,
     increment_usage,
 )
-from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK, ROLE_OWNER
+from origin.views.utils.chat_note_target import (
+    ChatNoteTargetNotFound,
+    chat_note_roles,
+    resolve_chat_note_target,
+)
+from origin.views.utils.note_role import (
+    NOTE_TYPE_CHAT,
+    NOTE_TYPE_PERSONAL,
+    NOTE_TYPE_TASK,
+    ROLE_OWNER,
+)
 from origin.views.utils.note_version import snapshot_note_version
-
-_VALID_TYPES = {"personal", "task"}
 
 
 def _resolve_folder_id(args: dict[str, Any], note_type: str, ctx: ToolContext):
-    """Validate an optional `folder_id` for a personal note. Returns the
-    owned folder id (int) or None (top level). Folders are personal-only
-    and owner-scoped — see `owns_personal_folder`."""
+    """The folder a new personal-family note is filed into, or None (top
+    level of My Notes). 'personal' takes only the caller's own My-Notes
+    folders, 'team' only a Team Notes folder they can add to — so a note
+    meant to be private can't land in a shared folder by a wrong id."""
     raw = args.get("folder_id")
+    if note_type == "team":
+        if raw is None or raw == "":
+            raise ToolError(
+                "`folder_id` is required for note_type='team': the Team Notes folder to "
+                "put the note in. Call list_note_folders to see the team folders."
+            )
+        return writable_team_folder(raw, ctx)
     if raw is None or raw == "":
         return None
     if note_type != "personal":
-        raise ToolError("`folder_id` is only valid for personal notes.")
+        raise ToolError("`folder_id` is only valid for personal and team notes.")
     try:
         folder_id = int(raw)
     except (TypeError, ValueError):
@@ -64,6 +95,7 @@ def _resolve_folder_id(args: dict[str, Any], note_type: str, ctx: ToolContext):
     if not owns_personal_folder(folder_id=folder_id, team_id=ctx.team_id, user_id=ctx.user_id):
         raise ToolError(
             f"Folder {folder_id} is not one of your personal-note folders. "
+            "For a Team Notes folder use note_type='team'. "
             "Call list_note_folders to see the available folders and their ids."
         )
     return folder_id
@@ -101,11 +133,12 @@ def _snapshot_v1(*, note, note_type_code: int, ctx: ToolContext) -> None:
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    note_type = (args.get("note_type") or "").lower().strip()
-    if note_type not in _VALID_TYPES:
+    note_type = normalize_note_type(args.get("note_type"))
+    if note_type == "shared":
         raise ToolError(
-            f"`note_type` must be one of {sorted(_VALID_TYPES)} (got {note_type!r}). "
-            "Chat-attached notes are not supported by this tool."
+            "A shared note is someone else's note shared with you, so it can't be created. "
+            "Use note_type='personal' for a note private to you, or 'team' for one in a "
+            "Team Notes folder."
         )
 
     title = (args.get("title") or "").strip()
@@ -127,15 +160,21 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "Upgrade your plan to keep going."
         )
 
-    if note_type == "personal":
-        result = _create_personal(title=title, body=body, folder_id=folder_id, ctx=ctx)
-    else:
+    if note_type in ("personal", "team"):
+        result = _create_personal(
+            title=title, body=body, folder_id=folder_id, space=note_type, ctx=ctx
+        )
+    elif note_type == "task":
         result = _create_task_note(args=args, title=title, body=body, ctx=ctx)
+    else:
+        result = _create_chat_note(args=args, title=title, body=body, ctx=ctx)
     increment_usage(ctx.user_id, NOTE_CREATE_KEY)
     return result
 
 
-def _create_personal(*, title: str, body, folder_id, ctx: ToolContext) -> dict[str, Any]:
+def _create_personal(
+    *, title: str, body, folder_id, space: str, ctx: ToolContext
+) -> dict[str, Any]:
     """Personal notes are gated by an explicit NotePermissionMaster role
     row, NOT by the `owner` column — `note_role.get_effective_role` grants
     personal notes *no* implicit access, so the read/write ACL checks
@@ -144,8 +183,8 @@ def _create_personal(*, title: str, body, folder_id, ctx: ToolContext) -> dict[s
     note AND a ROLE_OWNER row in one transaction; this tool must do the
     same or the creator gets a 403 opening the note it just made.
 
-    `folder_id` (already validated as owned, or None for top level) files
-    the new root note into a sidebar folder.
+    `folder_id` (already validated for `space`, or None for top level)
+    files the new root note into a My-Notes or Team Notes folder.
 
     Wrapped in a transaction so a failure writing the role can't leave an
     orphaned, permanently-inaccessible note behind."""
@@ -170,15 +209,16 @@ def _create_personal(*, title: str, body, folder_id, ctx: ToolContext) -> dict[s
         # The model and the MCP caller read this; the database error
         # goes to the log with a reference (MIP-622).
         ref = log_failure("create_note tool failed", e)
-        raise ToolError(f"Failed to create personal note (ref {ref}).")
+        raise ToolError(f"Failed to create {space} note (ref {ref}).")
     notify_note_mentions(note, note_type=NOTE_TYPE_PERSONAL, actor_id=ctx.user_id)
     return {
         "note_id": note.note_id,
         "note_type": "personal",
+        "space": space,
         "title": note.title,
         "folder_id": folder_id,
         "__summary__": (
-            f'Created personal note #{note.note_id}: "{title[:60]}"'
+            f'Created {space} note #{note.note_id}: "{title[:60]}"'
             + (f" in folder #{folder_id}" if folder_id else "")
         ),
     }
@@ -279,29 +319,86 @@ def _create_task_note(
     }
 
 
+def _create_chat_note(
+    *, args: dict[str, Any], title: str, body, ctx: ToolContext
+) -> dict[str, Any]:
+    """A note on a chat, or on one thread in it. Same rules and role
+    fan-out as the REST create: the caller must be an active member, a
+    thread root must be in that chat, and the kind is the channel's."""
+    channel_id, thread_id = parse_chat_ref(args.get("chat_id"), args.get("thread_id"))
+    try:
+        target = resolve_chat_note_target(
+            user_id=ctx.user_id, channel_id=channel_id, thread_root_id=thread_id
+        )
+    except ChatNoteTargetNotFound as e:
+        raise ToolError(f"{e} You can only add notes to chats you are a member of.")
+
+    try:
+        with transaction.atomic():
+            note = ChatNoteMaster.objects.create(
+                team_id=ctx.team_id,
+                owner_id=ctx.user_id,
+                chat_type=target.chat_type,
+                channel=target.channel,
+                is_thread=target.thread_root_id is not None,
+                thread_root_id=target.thread_root_id,
+                title=title,
+                body=body,
+            )
+            for uid, role_id in chat_note_roles(
+                channel=target.channel, creator_id=ctx.user_id
+            ).items():
+                NotePermissionMaster.objects.update_or_create(
+                    user_id=uid,
+                    note_type=NOTE_TYPE_CHAT,
+                    note_id=note.note_id,
+                    defaults={"team_id": ctx.team_id, "role_id": role_id},
+                )
+            _snapshot_v1(note=note, note_type_code=NOTE_TYPE_CHAT, ctx=ctx)
+    except Exception as e:  # noqa: BLE001
+        # The model and the MCP caller read this; the database error
+        # goes to the log with a reference (MIP-622).
+        ref = log_failure("create_note tool failed", e)
+        raise ToolError(f"Failed to create chat note (ref {ref}).")
+    notify_note_mentions(note, note_type=NOTE_TYPE_CHAT, actor_id=ctx.user_id)
+
+    where = "thread" if target.thread_root_id else "chat"
+    return {
+        "note_id": note.note_id,
+        "note_type": "chat",
+        "title": note.title,
+        "parent_context": chat_note_parent_context(note),
+        "__summary__": f'Created chat note #{note.note_id} on a {where}: "{title[:60]}"',
+    }
+
+
 CREATE_NOTE = Tool(
     name="create_note",
     description=(
         "Create a new note. REQUIRES USER APPROVAL — the user sees your "
-        "proposed title and body before it's saved. Two types: "
-        "'personal' (private to the creator; optionally filed into a "
-        "sidebar folder via folder_id) or 'task' (attached to a project, "
-        "optionally to a specific task; needs project_id, optionally "
-        "task_id). Use the task type for plan/research DOCUMENTS about a "
-        "task or milestone (a milestone's note attaches to its backing "
-        "task_id — see list_milestones); when the user wants TASKS "
-        "created instead of a document, use create_task_plan. "
-        "Chat-attached notes are not supported by this tool — "
-        "users add those through the UI."
+        "proposed title and body before it's saved. Kinds: "
+        "'personal' (private to the creator; optionally filed into one of "
+        "their My-Notes folders via folder_id), 'team' (in a Team Notes "
+        "folder, shared with whoever the folder is shared with; needs "
+        "folder_id), 'task' (attached to a project, optionally to a "
+        "specific task; needs project_id, optionally task_id) or 'chat' "
+        "(attached to a chat the user is in, optionally to one thread; "
+        "needs chat_id, optionally thread_id). Resolve folder names with "
+        "list_note_folders. Use the task type for plan/research DOCUMENTS "
+        "about a task or milestone (a milestone's note attaches to its "
+        "backing task_id — see list_milestones); when the user wants TASKS "
+        "created instead of a document, use create_task_plan."
     ),
     parameters_schema={
         "type": "OBJECT",
         "properties": {
             "note_type": {
                 "type": "STRING",
-                "enum": ["personal", "task"],
+                "enum": ["personal", "team", "task", "chat"],
                 "description": (
-                    "'personal' for a private note, 'task' for a project / task-attached note."
+                    "'personal' for a private note, 'team' for a note in a Team "
+                    "Notes folder, 'task' for a project / task-attached note, "
+                    "'chat' for a note on a chat or thread."
                 ),
             },
             "title": {
@@ -337,10 +434,26 @@ CREATE_NOTE = Tool(
             "folder_id": {
                 "type": "INTEGER",
                 "description": (
-                    "Optional (only valid with note_type='personal'): file "
-                    "the note into a My-Notes sidebar folder. Resolve the "
-                    "folder NAME to its id with `list_note_folders` first. "
-                    "Omit to leave the note at the top level."
+                    "With note_type='personal' (optional): one of the user's "
+                    "My-Notes folders; omit for the top level. With "
+                    "note_type='team' (required): the Team Notes folder. "
+                    "Resolve the folder NAME to its id with "
+                    "`list_note_folders` first."
+                ),
+            },
+            "chat_id": {
+                "type": "STRING",
+                "description": (
+                    "Required when note_type='chat': the chat's id (a UUID, "
+                    "e.g. a search result's chat_id) or its Genos URL."
+                ),
+            },
+            "thread_id": {
+                "type": "STRING",
+                "description": (
+                    "Optional (only with note_type='chat'): the thread's id "
+                    "(the UUID of the message that starts it) to attach the "
+                    "note to that thread instead of the whole chat."
                 ),
             },
         },

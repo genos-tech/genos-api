@@ -373,11 +373,13 @@ CATALOG: tuple[McpTool, ...] = (
         name="list_note_folders",
         registry_name="list_note_folders",
         description=(
-            "How the caller's personal notes are filed into sidebar folders, "
-            "with each folder's id and the notes in it. Folders are personal-"
-            "only, and this is the only tool that sees them — `search_workspace` "
-            "does not. Call it to turn a folder NAME into the `folder_id` that "
-            "`create_note` and `update_note` take."
+            "How the caller's notes are filed into sidebar folders: their own "
+            "My-Notes folders (`folders`) and the Team Notes folders they can "
+            "reach (`team_folders`, each with `your_role` and `can_add_notes`), "
+            "with each folder's id and the notes in it. This is the only tool "
+            "that sees folders — `search_workspace` does not. Call it to turn a "
+            "folder NAME into the `folder_id` that `create_note` and "
+            "`update_note` take."
         ),
     ),
     McpTool(
@@ -662,14 +664,16 @@ CATALOG: tuple[McpTool, ...] = (
         description=(
             "Write a new note — a document, not a task. Use it for a spec, a "
             "design, a research write-up or a hand-off: anything whose value "
-            "is the prose. Two kinds: 'personal' (private to you, optionally "
-            "filed into a folder via `folder_id` from `list_note_folders`) or "
-            "'task' (shared with a project, needs `project_id`, optionally "
-            "`task_id` to attach it to one task). `content_text` is markdown — "
+            "is the prose. Kinds: 'personal' (private to you, optionally filed "
+            "into one of your My-Notes folders via `folder_id`), 'team' (in a "
+            "Team Notes folder you can add to; needs `folder_id`), 'task' "
+            "(shared with a project, needs `project_id`, optionally `task_id` "
+            "to attach it to one task) or 'chat' (on a chat you're in, needs "
+            "`chat_id` — its id or Genos URL — optionally `thread_id`). Folder "
+            "ids come from `list_note_folders`. `content_text` is markdown — "
             "headings, lists and code fences are preserved. When the work "
             "wants TASKS rather than a document, use `create_task_plan`. "
-            "Chat-attached notes cannot be created here. Requires a "
-            "write-scoped API key."
+            "Requires a write-scoped API key."
         ),
         write=True,
         task_ref_args=("task_id",),
@@ -688,15 +692,16 @@ CATALOG: tuple[McpTool, ...] = (
         name="update_note",
         registry_name="update_note",
         description=(
-            "Edit an existing note's title and/or body, or move a personal "
-            "note between folders. `content_text` REPLACES the entire body, so "
+            "Edit an existing note's title and/or body — personal, team, shared, "
+            "task or chat — or move a personal or team note between My-Notes and "
+            "Team Notes folders. `content_text` REPLACES the entire body, so "
             "read the note with `get_note` first and edit its `body_markdown` "
             "— every section you are not changing included — rather than "
             "sending a fragment. Every edit is snapshotted into the note's version "
             "history, so a change can be rolled back in the Genos UI. You must "
-            "be the note's owner, an editor on it, or (for a task note) a "
-            "member of its project. Chat notes cannot be edited here. Requires "
-            "a write-scoped API key."
+            "be the note's owner, an editor on it, an editor of a team note's "
+            "folder, a member of a task note's project, or a member of a chat "
+            "note's chat. Requires a write-scoped API key."
         ),
         write=True,
         note_ref_args=("note_id",),

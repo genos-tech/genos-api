@@ -578,15 +578,54 @@ def _friendly_update_note_arguments(out: dict[str, Any], _args: dict[str, Any]) 
         nid = int(out.get("note_id"))
     except (TypeError, ValueError):
         return
+    from origin.models.note.chat_note_models import ChatNoteMaster  # noqa: PLC0415
     from origin.models.note.personal_note_models import PersonalNoteMaster  # noqa: PLC0415
     from origin.models.note.task_note_models import TaskNoteMaster  # noqa: PLC0415
 
-    model = {"personal": PersonalNoteMaster, "task": TaskNoteMaster}.get(ntype)
+    model = {
+        "personal": PersonalNoteMaster,
+        "team": PersonalNoteMaster,
+        "shared": PersonalNoteMaster,
+        "task": TaskNoteMaster,
+        "chat": ChatNoteMaster,
+    }.get(ntype)
     if model is None:
         return
     title = model.objects.filter(note_id=nid).values_list("title", flat=True).first()
     if title:
         out["note_title"] = title
+
+
+def _friendly_create_note_arguments(out: dict[str, Any], args: dict[str, Any]) -> None:
+    """In-place nested enrichment for `create_note` arguments.
+
+    ADDS `chat_name` for a chat note so the approval card can say which
+    conversation the note goes on: the chat's title, or for a DM / MDM
+    (which have none) its members' names. `chat_id` stays as sent."""
+    if str(args.get("note_type") or "").lower() != "chat" or not args.get("chat_id"):
+        return
+    from origin.search_engine.agent.tools.base import ToolError  # noqa: PLC0415
+    from origin.search_engine.agent.tools.note_targets import parse_chat_ref  # noqa: PLC0415
+
+    try:
+        channel_id, _thread = parse_chat_ref(args.get("chat_id"), args.get("thread_id"))
+    except ToolError:
+        return
+    from origin.models.chat.unified_models import Channel, ChannelMember  # noqa: PLC0415
+
+    channel = Channel.objects.filter(id=channel_id).only("title").first()
+    if channel is None:
+        return
+    name = (channel.title or "").strip()
+    if not name:
+        names = list(
+            ChannelMember.objects.filter(channel_id=channel_id, is_deleted=False)
+            .values_list("user__username", flat=True)
+            .order_by("user__username")[:6]
+        )
+        name = ", ".join(n for n in names if n)
+    if name:
+        out["chat_name"] = name
 
 
 def _friendly_dependency_arguments(out: dict[str, Any], _args: dict[str, Any]) -> None:
@@ -649,6 +688,7 @@ _FRIENDLY_NESTED_ENRICHERS: dict[str, Callable[[dict[str, Any], dict[str, Any]],
     "update_tasks_bulk": _friendly_bulk_update_arguments,
     "update_task_dependencies": _friendly_dependency_arguments,
     "update_note": _friendly_update_note_arguments,
+    "create_note": _friendly_create_note_arguments,
 }
 
 

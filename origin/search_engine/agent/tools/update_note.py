@@ -1,19 +1,22 @@
-"""`update_note` write tool — edit an existing personal or task note.
+"""`update_note` write tool — edit an existing note of any family.
 
 Symmetric with `update_task`: partial-update title and/or body text of a
-note the requesting user already has edit rights to.  Chat notes are out
-of scope (same boundary as `create_note`).
+note the requesting user already has edit rights to. `note_type` takes the
+three tables (personal, task, chat) plus 'team' and 'shared', which are
+aliases of personal (sidebar spaces over the same table, MIP-749).
 
 ACL contract (UI parity — mirrors the REST layer's `require_write_role`):
   * Tenant guard: note.team_id must equal ctx.team_id.
   * WRITE access: the note owner always may edit; otherwise the user's
     effective role must be Editor or stronger (`get_effective_role`:
     explicit NotePermissionMaster row first, then implicit access —
-    task-note project members are implicit Editors, personal notes grant
-    no implicit access). An explicit Viewer row wins over the implicit
-    fallback, so a deliberately-downgraded project member stays
-    read-only. This matches exactly what the same user could do through
-    the note UI.
+    task-note project members and chat members are implicit Editors,
+    personal notes only through a Team Notes folder). An explicit Viewer
+    row wins over the implicit
+    fallback, so a deliberately-downgraded member stays read-only. This
+    matches exactly what the same user could do through the note UI.
+  * Folder moves (personal family) go through the same authorization as
+    the REST move (`personal_note_move`).
 
 Every successful title/body change also writes a version snapshot
 (`snapshot_note_version`, same coalescing as the REST PUT) so agent
@@ -29,23 +32,32 @@ import logging
 from typing import Any
 
 from apis.request_id import log_failure
+from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
-from origin.search_engine.agent.acl import owns_personal_folder
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.search_engine.agent.tools.body_mentions import notify_note_mentions
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
-from origin.search_engine.chunkers.base import NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
+from origin.search_engine.agent.tools.note_targets import (
+    PERSONAL_FAMILY,
+    chat_note_parent_context,
+    normalize_note_type,
+)
+from origin.search_engine.chunkers.base import NOTE_TYPE_CHAT, NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
 from origin.services.collab_push import push_note_body
 from origin.views.utils.note_role import ROLE_EDITOR, get_effective_role
 from origin.views.utils.note_version import snapshot_note_version
+from origin.views.utils.personal_note_move import (
+    NoteMoveRefused,
+    apply_personal_note_move,
+    authorize_personal_note_move,
+)
 
 log = logging.getLogger(__name__)
 
-_VALID_TYPES = {"personal", "task"}
-_NOTE_TYPE_CODE = {"personal": NOTE_TYPE_PERSONAL, "task": NOTE_TYPE_TASK}
+_NOTE_TYPE_CODE = {"personal": NOTE_TYPE_PERSONAL, "task": NOTE_TYPE_TASK, "chat": NOTE_TYPE_CHAT}
 
 
 def _wrap_blocknote(text: str, ctx: ToolContext) -> list[dict[str, Any]]:
@@ -70,8 +82,8 @@ def _has_write_permission(*, owner_id, note_id: int, note_type_code: int, ctx: T
     Check 2: effective role is Editor or stronger — same resolution the
              REST layer's `require_write_role` uses: an explicit
              NotePermissionMaster row wins; otherwise task-note project
-             members are implicit Editors (personal notes grant no
-             implicit access).
+             members and chat members are implicit Editors, and a
+             personal note's Team Notes folder grants what it grants.
     """
     if str(owner_id or "") == ctx.user_id:
         return True
@@ -80,12 +92,9 @@ def _has_write_permission(*, owner_id, note_id: int, note_type_code: int, ctx: T
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    note_type = (args.get("note_type") or "").lower().strip()
-    if note_type not in _VALID_TYPES:
-        raise ToolError(
-            f"`note_type` must be one of {sorted(_VALID_TYPES)} (got {note_type!r}). "
-            "Chat notes are not supported by this tool."
-        )
+    note_type = normalize_note_type(args.get("note_type"))
+    if note_type in PERSONAL_FAMILY:
+        note_type = "personal"
 
     raw_note_id = args.get("note_id")
     try:
@@ -96,10 +105,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     has_title = "title" in args and args["title"] is not None
     has_body = "content_text" in args and args["content_text"] is not None
     # `folder_id` present (incl. explicit null → unfile to top level) is a
-    # move. Folders are personal-only.
+    # move. Folders hold personal-family notes only.
     has_folder = "folder_id" in args
     if has_folder and note_type != "personal":
-        raise ToolError("`folder_id` is only valid for personal notes.")
+        raise ToolError("`folder_id` is only valid for personal, team and shared notes.")
     if not has_title and not has_body and not has_folder:
         raise ToolError("At least one of `title`, `content_text`, or `folder_id` must be provided.")
 
@@ -114,7 +123,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             has_title=has_title,
             has_body=has_body,
         )
-    return _update_task_note(
+    model = TaskNoteMaster if note_type == "task" else ChatNoteMaster
+    return _update_shared_surface_note(
+        model=model,
+        note_type=note_type,
         note_id=note_id,
         args=args,
         ctx=ctx,
@@ -142,7 +154,7 @@ def _update_personal(
     if str(getattr(note, "team_id", "") or "") != ctx.team_id:
         raise ToolForbidden("Not authorized: note belongs to a different team.")
 
-    # Write ACL: owner or explicit editor.
+    # Write ACL: owner, editor grant, or editor of its Team Notes folder.
     if not _has_write_permission(
         owner_id=getattr(note, "owner_id", None),
         note_id=note_id,
@@ -150,15 +162,16 @@ def _update_personal(
         ctx=ctx,
     ):
         raise ToolForbidden(
-            f"Not authorized to edit personal note {note_id}. "
-            "You must be the owner or have explicit editor permission."
+            f"Not authorized to edit note {note_id}. You must be the owner, have "
+            "editor permission on it, or be an editor of its Team Notes folder."
         )
 
-    # Optional folder move (personal-only). `folder_id` present in args —
-    # including an explicit null — is a move; None unfiles to the top level.
-    folder_provided = "folder_id" in args
-    new_folder_id = None
-    if folder_provided:
+    # Optional folder move. `folder_id` present in args — including an
+    # explicit null — is a move; None unfiles to the top level of My Notes.
+    # Authorized up front, by the REST move's own rules, so a refused move
+    # can't leave a half-applied title/body edit behind.
+    move_plan = None
+    if "folder_id" in args:
         # `folder_id` is only meaningful on ROOT notes; child notes ride
         # along with their root (see PersonalNoteMaster.folder_id).
         if getattr(note, "parent_note_id", None) is not None:
@@ -167,17 +180,23 @@ def _update_personal(
                 "child note — move its parent (root) note instead."
             )
         raw = args.get("folder_id")
+        new_folder_id = None
         if raw is not None and raw != "":
             try:
                 new_folder_id = int(raw)
             except (TypeError, ValueError):
                 raise ToolError(f"`folder_id` must be an integer or null (got {raw!r}).")
-            if not owns_personal_folder(
-                folder_id=new_folder_id, team_id=ctx.team_id, user_id=ctx.user_id
-            ):
+        if new_folder_id != note.folder_id:
+            try:
+                move_plan = authorize_personal_note_move(
+                    user_id=ctx.user_id,
+                    team_id=ctx.team_id,
+                    note=note,
+                    target_folder_id=new_folder_id,
+                )
+            except NoteMoveRefused as e:
                 raise ToolError(
-                    f"Folder {new_folder_id} is not one of your personal-note folders. "
-                    "Call list_note_folders to see the available folders and their ids."
+                    f"{e} Call list_note_folders to see the folders you can file notes into."
                 )
 
     return _apply_changes(
@@ -189,13 +208,14 @@ def _update_personal(
         note_id=note_id,
         note_type="personal",
         note_type_code=note_type_code,
-        folder_provided=folder_provided,
-        new_folder_id=new_folder_id,
+        move_plan=move_plan,
     )
 
 
-def _update_task_note(
+def _update_shared_surface_note(
     *,
+    model,
+    note_type: str,
     note_id: int,
     args: dict[str, Any],
     ctx: ToolContext,
@@ -203,29 +223,29 @@ def _update_task_note(
     has_title: bool,
     has_body: bool,
 ) -> dict[str, Any]:
+    """Task and chat notes: shared surfaces of a project or a chat."""
     try:
-        note = TaskNoteMaster.objects.get(note_id=note_id)
-    except TaskNoteMaster.DoesNotExist:
-        raise ToolError(f"Task note {note_id} not found.")
+        note = model.objects.get(note_id=note_id)
+    except model.DoesNotExist:
+        raise ToolError(f"{note_type.capitalize()} note {note_id} not found.")
 
     # Tenant guard.
     if str(getattr(note, "team_id", "") or "") != ctx.team_id:
         raise ToolForbidden("Not authorized: note belongs to a different team.")
 
-    # Write ACL: owner, implicit project-member Editor, or explicit
-    # editor grant — task notes are a shared surface within the project,
-    # so members can edit them (matching the note UI). An explicit
-    # Viewer row still locks a member out.
+    # Write ACL: owner, implicit Editor (project member / chat member), or
+    # explicit editor grant — matching the note UI. An explicit Viewer row
+    # still locks a member out.
     if not _has_write_permission(
         owner_id=getattr(note, "owner_id", None),
         note_id=note_id,
         note_type_code=note_type_code,
         ctx=ctx,
     ):
+        member = "a member of the note's project" if note_type == "task" else "in the chat"
         raise ToolForbidden(
-            f"Not authorized to edit task note {note_id}. "
-            "You must be the note owner, a member of the note's project, "
-            "or have an explicit editor grant."
+            f"Not authorized to edit {note_type} note {note_id}. "
+            f"You must be the note owner, {member}, or have an explicit editor grant."
         )
 
     return _apply_changes(
@@ -235,15 +255,17 @@ def _update_task_note(
         has_title=has_title,
         has_body=has_body,
         note_id=note_id,
-        note_type="task",
+        note_type=note_type,
         note_type_code=note_type_code,
     )
 
 
 def _note_parent_context(note, note_type: str) -> dict[str, Any] | None:
-    """Task-note project/task refs in `fetch_note`'s parent_context shape
-    so the controller's `_note_source` chip builder (and the frontend
-    deep link) consume the result unchanged."""
+    """Task / chat refs in `fetch_note`'s parent_context shape so the
+    controller's `_note_source` chip builder (and the frontend deep link)
+    consume the result unchanged."""
+    if note_type == "chat":
+        return chat_note_parent_context(note)
     if note_type != "task":
         return None
     pc = {
@@ -263,8 +285,7 @@ def _apply_changes(
     note_id: int,
     note_type: str,
     note_type_code: int,
-    folder_provided: bool = False,
-    new_folder_id=None,
+    move_plan=None,
 ) -> dict[str, Any]:
     update_fields: list[str] = []
     changed: list[str] = []
@@ -285,16 +306,12 @@ def _apply_changes(
             update_fields.append("body")
             changed.append("body")
 
-    # Folder move (personal-only; `new_folder_id` already validated as
-    # owned, or None for top level).
-    if folder_provided and getattr(note, "folder_id", None) != new_folder_id:
-        note.folder_id = new_folder_id
-        update_fields.append("folder_id")
+    if move_plan is not None:
         changed.append("folder")
 
     parent_context = _note_parent_context(note, note_type)
 
-    if not update_fields:
+    if not changed:
         result = {
             "note_id": note_id,
             "note_type": note_type,
@@ -307,7 +324,10 @@ def _apply_changes(
         return result
 
     try:
-        note.save(update_fields=update_fields)
+        if update_fields:
+            note.save(update_fields=update_fields)
+        if move_plan is not None:
+            apply_personal_note_move(team_id=ctx.team_id, note=note, plan=move_plan)
     except Exception as e:  # noqa: BLE001
         # The model and the MCP caller read this; the database error
         # goes to the log with a reference (MIP-622).
@@ -360,11 +380,13 @@ UPDATE_NOTE = Tool(
     name="update_note",
     description=(
         "Update an existing note's title and/or body text, and/or move a "
-        "personal note between sidebar folders. REQUIRES USER APPROVAL — the "
-        "user sees your proposed changes before they are saved. "
-        "Supports note_type 'personal' and 'task'. Chat notes are not supported. "
-        "Edit rights mirror the note UI: the owner, anyone with an editor "
-        "grant, and (for task notes) any member of the note's project. "
+        "personal or team note between My-Notes and Team Notes folders. "
+        "REQUIRES USER APPROVAL — the user sees your proposed changes before "
+        "they are saved. Works on every kind of note: personal, team, shared "
+        "(someone else's note shared with the user), task and chat. Edit "
+        "rights mirror the note UI: the owner, anyone with an editor grant, "
+        "an editor of a team note's folder, any member of a task note's "
+        "project, and any member of a chat note's chat. "
         "Use fetch_note first to read the current content before proposing "
         "content changes; use list_note_folders to resolve a folder name to "
         "its id before moving a note with folder_id."
@@ -378,8 +400,12 @@ UPDATE_NOTE = Tool(
             },
             "note_type": {
                 "type": "STRING",
-                "enum": ["personal", "task"],
-                "description": "Which note family the note_id refers to.",
+                "enum": ["personal", "team", "shared", "task", "chat"],
+                "description": (
+                    "Which kind of note note_id is. 'personal', 'team' and "
+                    "'shared' all name the same personal-note ids (fetch_note "
+                    "reports them as 'personal'), so any of the three works."
+                ),
             },
             "title": {
                 "type": "STRING",
@@ -400,11 +426,12 @@ UPDATE_NOTE = Tool(
             "folder_id": {
                 "type": "INTEGER",
                 "description": (
-                    "Optional (only valid with note_type='personal'): move the "
-                    "note into this My-Notes sidebar folder. Resolve the folder "
-                    "NAME to its id with `list_note_folders` first. Pass null to "
-                    "move it back to the top level. Omit to leave the folder "
-                    "unchanged."
+                    "Optional (personal, team or shared notes only): move the "
+                    "note into this My-Notes or Team Notes folder. Resolve the "
+                    "folder NAME to its id with `list_note_folders` first. Pass "
+                    "null to move it back to the top level of My Notes. Omit to "
+                    "leave the folder unchanged. Only the owner can move a note "
+                    "out of Team Notes."
                 ),
             },
         },
