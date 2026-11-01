@@ -15,8 +15,10 @@ Walks `EntityChunks` produced by each chunker, and for every entity:
      `metadata_only` chunks as partial doc updates that leave the
      stored embedding — and so the embedding bill — untouched.
   5. Deletes stale chunks from OpenSearch.
-  6. Mirrors all of that into `RagChunk` (upsert / delete) so the
-     next run can repeat steps 1-2.
+  6. Mirrors what LANDED into `RagChunk` (upsert / delete) so the
+     next run can repeat steps 1-2. A write or delete that failed is
+     not mirrored: the row stays as it was, so the chunk is still
+     `new` / `changed` / `metadata_only` (or still stale) next pass.
 
 Why step 4 has two lanes: the metadata a chunk carries is NOT part of
 the text it was embedded from, so a status flip (Open → Closed), a
@@ -35,7 +37,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Iterable, Optional
 
@@ -43,6 +45,7 @@ from django.conf import settings
 from django.db import transaction
 from opensearchpy import helpers as os_helpers
 
+from origin.search_engine import bulk_errors
 from origin.search_engine.acl_dirty import DirtyScopes
 from origin.search_engine.chunkers.base import Chunk, EntityChunks
 from origin.search_engine.chunkers.chat_chunker import iter_all_chat_chunks
@@ -211,7 +214,8 @@ def ingest_conversation_run(run) -> bool:
     has already been sent), so the ~1 embed call + bulk write + refresh
     it costs never delays an answer. Returns True when a chunk was
     indexed, False when the run isn't durable memory (wrong status,
-    empty answer, missing scope).
+    empty answer, missing scope) or when the write failed (the periodic
+    reindex then retries it: no tracking row was recorded).
 
     Idempotent with the 10-minute incremental reindexer that remains
     the backstop: `_ingest_entity` hash-diffs against `RagChunk`, so
@@ -239,7 +243,7 @@ def ingest_conversation_run(run) -> bool:
             log.exception(
                 "Post-conversation refresh failed; the chunk becomes searchable on next refresh."
             )
-    return True
+    return not stats.errors
 
 
 def _ingest_stream(
@@ -329,21 +333,46 @@ def _ingest_entity(entity: EntityChunks, stats: IngestionStats, *, dry_run: bool
         for cid, vec in zip(to_embed_ids, vectors):
             embeddings_by_id[cid] = vec
 
-    # Bulk index new + changed.
+    # Bulk index new + changed. Ids a write really failed for (see
+    # `_bulk_index`) are NOT mirrored into `RagChunk` below: recording a
+    # row for a chunk that never landed makes the next pass call it
+    # `unchanged`, forever (MIP-855: 709 chunks stayed without a field
+    # after an OpenSearch redeploy, and a full reindex was hash-gated).
+    failed_ids: set[str] = set()
+    missing_ids: set[str] = set()
     if to_embed_ids:
-        _bulk_index(
+        result = _bulk_index(
             [_to_os_doc(incoming[cid], embeddings_by_id[cid], model) for cid in to_embed_ids]
         )
+        failed_ids |= set(result.failed)
 
     # Refresh metadata-only chunks in place. Separate bulk call from the
     # one above because these are `update` ops, not full `index` ops —
     # that is what preserves the existing embedding.
     if meta_only_ids:
-        _bulk_index([_to_os_metadata_update(incoming[cid]) for cid in meta_only_ids])
+        result = _bulk_index([_to_os_metadata_update(incoming[cid]) for cid in meta_only_ids])
+        failed_ids |= set(result.failed)
+        missing_ids |= set(result.missing)
+
+    # A metadata update for a document OpenSearch doesn't hold: the row
+    # claims a doc that isn't there (an index recreated or restored under a
+    # live tracking table). Skipping the row would repeat the same failing
+    # update forever, since the text hash still matches; dropping it makes
+    # the chunk `new` next pass, which re-embeds and writes the whole doc.
+    if missing_ids:
+        RagChunk.objects.filter(chunk_id__in=missing_ids).delete()
 
     # Stale = previously tracked under this entity but not in current set.
     keep_ids = set(incoming.keys())
     _delete_stale(entity.entity_type, entity.entity_id, keep_chunk_ids=keep_ids, stats=stats)
+
+    if failed_ids:
+        # Into `stats.errors` so `_may_release` keeps the ACL marks: a
+        # membership change whose metadata update failed hasn't been applied.
+        stats.errors.append(
+            f"{entity.entity_type}/{entity.entity_id}: bulk write failed for "
+            f"{len(failed_ids)} chunk(s); retried next pass"
+        )
 
     # Mirror to RagChunk.
     _upsert_tracking(
@@ -353,7 +382,7 @@ def _ingest_entity(entity: EntityChunks, stats: IngestionStats, *, dry_run: bool
         hashes=incoming_hashes,
         meta_hashes=incoming_meta_hashes,
         model=model,
-        affected_ids=set(to_embed_ids) | set(meta_only_ids),
+        affected_ids=(set(to_embed_ids) | set(meta_only_ids)) - failed_ids - missing_ids,
     )
 
 
@@ -432,28 +461,36 @@ def _to_os_doc(chunk: Chunk, embedding: list[float], model: str) -> dict:
     }
 
 
-def _bulk_error_info(err) -> tuple[Optional[int], Optional[str]]:
-    """Pull (status, error type) out of one `helpers.bulk` error entry.
+# Kept under its old name: the tests and `_delete_stale` read errors through it.
+_bulk_error_info = bulk_errors.error_info
 
-    Each entry is `{<op>: {"status": ..., "error": {"type": ...}}}`, where
-    `<op>` is the op type OpenSearch echoes back. Written defensively (and
-    without naming the op) because this is an error path: a transport-level
-    failure can hand back a shape that doesn't match, and a crash here
-    would replace a logged warning with a traceback that aborts the run.
+
+@dataclass
+class BulkResult:
+    """What `_bulk_index` could not land.
+
+    `failed`: transient failures (429 / 5xx / no response, or an error
+    entry that can't be attributed to an id). Retrying can succeed, so the
+    caller must not record these as indexed.
+
+    `missing`: `update` ops whose document isn't in the index. Not
+    "failed" in the retry sense (the same update would fail again); the
+    caller drops their tracking rows so the chunk is re-embedded whole.
+
+    Permanent rejections (a 400 such as `mapper_parsing_exception`) are in
+    neither: logged at ERROR once and treated as written, because a
+    document OpenSearch refuses outright would otherwise be re-embedded
+    and re-sent on every cron tick, forever.
     """
-    if not isinstance(err, dict):
-        return None, None
-    action = next(iter(err.values()), None)
-    if not isinstance(action, dict):
-        return None, None
-    etype = action.get("error")
-    etype = etype.get("type") if isinstance(etype, dict) else None
-    return action.get("status"), etype
+
+    failed: set[str] = field(default_factory=set)
+    missing: set[str] = field(default_factory=set)
 
 
-def _bulk_index(actions: list[dict]) -> None:
+def _bulk_index(actions: list[dict]) -> BulkResult:
+    result = BulkResult()
     if not actions:
-        return
+        return result
     batch_size = settings.SEARCH_ENGINE["BULK_BATCH_SIZE"]
     client = get_client()
     ensure_additive_mapping(client, get_index_alias())
@@ -492,13 +529,23 @@ def _bulk_index(actions: list[dict]) -> None:
     # Same shape and same argument as `purge.py`, which discounts a 404 on
     # delete ("the doc was already gone — that's the outcome we wanted").
     # Real errors still log at ERROR and still fail the run.
-    benign, real_errors = [], []
+    attempted = [str(a["_id"]) for a in actions if a.get("_id") is not None]
+    benign, transient, permanent, missing = [], [], [], []
     for err in errors:
         status, etype = _bulk_error_info(err)
-        if status == 409 and etype == "version_conflict_engine_exception":
+        if status == 409 and etype == bulk_errors.VERSION_CONFLICT:
             benign.append(err)
+        elif (
+            status == 404
+            and etype == bulk_errors.DOCUMENT_MISSING
+            and bulk_errors.error_op(err) == "update"
+        ):
+            missing.append(err)
+        elif bulk_errors.is_transient(status, etype):
+            transient.append(err)
         else:
-            real_errors.append(err)
+            permanent.append(err)
+    real_errors = transient + permanent
 
     if benign:
         # WARNING, so it stays visible (a spike means unexpected write
@@ -508,14 +555,36 @@ def _bulk_index(actions: list[dict]) -> None:
             "(409, treated as success)",
             len(benign),
         )
+    if missing:
+        # WARNING: self-healing. The caller drops these tracking rows, so
+        # the next pass re-embeds and writes the whole document.
+        log.warning(
+            "Bulk index: %d metadata update(s) targeted a document missing "
+            "from the index; tracking rows dropped so they are re-embedded",
+            len(missing),
+        )
+        result.missing = bulk_errors.failed_ids(missing, attempted)
     if real_errors:
         # ERROR (not WARNING) so a CronCommand-based reindex fails the run —
         # a bulk that wrote nothing must not leave the cron green.
         log.error("Bulk index reported %d errors (success=%d)", len(real_errors), success)
         # Status and type only: a transport failure's entry holds the whole
-        # document, chunk text and all (MIP-622).
+        # document, chunk text and all (MIP-622). The chunk id is safe.
         for err in real_errors[:5]:
-            log.warning("  status=%s type=%s", *_bulk_error_info(err))
+            log.warning(
+                "  status=%s type=%s chunk=%s %s",
+                *_bulk_error_info(err),
+                bulk_errors.error_id(err),
+                "(retried next pass)" if err in transient else "(permanent, not retried)",
+            )
+    if transient:
+        result.failed = bulk_errors.failed_ids(transient, attempted)
+    # Permanent rejections stay out of `failed` on purpose (see BulkResult),
+    # but one that can't be attributed to an id is indistinguishable from a
+    # transient failure of the whole call, and is retried as one.
+    if any(bulk_errors.error_id(e) is None for e in permanent):
+        result.failed = set(attempted)
+    return result
 
 
 def _delete_stale(
@@ -525,7 +594,9 @@ def _delete_stale(
     stats: IngestionStats,
 ) -> None:
     """Delete chunks tracked for this entity but missing from the
-    regeneration. Both OpenSearch and RagChunk are cleaned."""
+    regeneration. Both OpenSearch and RagChunk are cleaned, except that a
+    chunk whose OpenSearch delete failed (a 404 counts as success) keeps
+    its tracking row."""
     stale_ids = list(
         RagChunk.objects.filter(entity_type=entity_type, entity_id=entity_id)
         .exclude(chunk_id__in=keep_chunk_ids)
@@ -554,10 +625,20 @@ def _delete_stale(
     # ERROR, so an overlapping reindex could red the cron for successfully
     # deleting an already-deleted chunk.
     real_del_errors = [e for e in del_errors if _bulk_error_info(e)[0] != 404]
+    # A chunk whose delete failed keeps its tracking row. Dropping it would
+    # leave a document in OpenSearch that no row points at: `sweep_orphans`
+    # walks `RagChunk`, so nothing could ever find it again. With the row
+    # kept, the next pass sees the chunk as stale and retries the delete.
+    failed = bulk_errors.failed_ids(real_del_errors, stale_ids)
     if real_del_errors:
         log.error("Stale-chunk delete reported %d errors", len(real_del_errors))
-    RagChunk.objects.filter(chunk_id__in=stale_ids).delete()
-    stats.chunks_deleted += len(stale_ids)
+        stats.errors.append(
+            f"{entity_type}/{entity_id}: stale-chunk delete failed for "
+            f"{len(failed)} chunk(s); retried next pass"
+        )
+    deleted_ids = [cid for cid in stale_ids if cid not in failed]
+    RagChunk.objects.filter(chunk_id__in=deleted_ids).delete()
+    stats.chunks_deleted += len(deleted_ids)
 
 
 @transaction.atomic
@@ -573,9 +654,10 @@ def _upsert_tracking(
 ) -> None:
     """Insert or update RagChunk rows for the chunks we just indexed.
 
-    `affected_ids` are the ids we actually wrote to OpenSearch this pass
-    — new + changed (re-embedded) plus metadata-only (refreshed in
-    place). Both lanes must land here: skipping the metadata-only ones
+    `affected_ids` are the ids that actually LANDED in OpenSearch this
+    pass — new + changed (re-embedded) plus metadata-only (refreshed in
+    place), minus any whose bulk write failed (those keep their old row,
+    or none, so the next pass retries them). Both lanes must land here: skipping the metadata-only ones
     would leave `meta_hash` stale, so every subsequent pass would
     re-detect the same diff and re-issue the same update forever.
     Unchanged rows are left alone to avoid pointless writes.
