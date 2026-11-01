@@ -1,5 +1,9 @@
 """Where to start a milestone (MIP-782): ready-now, blocked, critical path.
 
+Open work falls into one list: in progress (WIP), blocked (an open blocker, or
+status Blocked), pending (status Pending and nothing blocks it: it waits on
+someone, so it is not offered as a place to start), or ready now.
+
 `get_milestone_summary` used to return counts only, so a reader of a
 20-task milestone with 18 dependency edges could not tell which task to take
 first. This reads the dependency edges and answers it.
@@ -160,7 +164,7 @@ def order_of_work(milestone: MilestoneMaster, member_project_ids: set[int]) -> d
         if _is_open(dep.blocker_task):
             open_blockers[dep.blocked_task_id].append(dep)
 
-    ready, blocked, in_progress = [], [], []
+    ready, blocked, in_progress, pending = [], [], [], []
     preds: dict[int, set[int]] = defaultdict(set)
     for tid, t in sorted(work.items()):
         sources = [(t, "self"), *((a, a) for a in _ancestors(t, tasks))]
@@ -187,6 +191,9 @@ def order_of_work(milestone: MilestoneMaster, member_project_ids: set[int]) -> d
             if not blockers and not redacted:
                 row["note"] = "Status is Blocked but no open task blocks it (set by hand)."
             blocked.append(row)
+        elif t.status == "Pending":
+            # Pending means waiting on someone, not startable (MIP-851).
+            pending.append(_row(t))
         else:
             ready.append(_row(t))
 
@@ -196,6 +203,8 @@ def order_of_work(milestone: MilestoneMaster, member_project_ids: set[int]) -> d
         "ready_now_count": len(ready),
         "in_progress": in_progress[:_MAX_ROWS],
         "in_progress_count": len(in_progress),
+        "pending": pending[:_MAX_ROWS],
+        "pending_count": len(pending),
         "blocked": blocked[:_MAX_ROWS],
         "blocked_count": len(blocked),
         "critical_path": [_ref(t) for t in chain] if len(chain) >= 2 else [],
