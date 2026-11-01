@@ -131,6 +131,11 @@ urlpatterns = [
         name="note_favorite",
     ),
     path(
+        "api/v2/note/favorite/folder/",
+        NoteFolderFavoriteView.as_view(),
+        name="note_folder_favorite",
+    ),
+    path(
         "api/v2/note/favorite/meta/",
         AllFavoriteNotesMetaView.as_view(),
         name="all_favorite_notes_meta",

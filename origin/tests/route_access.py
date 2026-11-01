@@ -413,6 +413,9 @@ REGISTRY = {
     # views.note.favorite_note_views
     "origin.views.note.favorite_note_views.AllFavoriteNotesMetaView": checked("readable_note_ids"),
     "origin.views.note.favorite_note_views.CheckNoteFavoriteView": checked("validate_request_user"),
+    "origin.views.note.favorite_note_views.NoteFolderFavoriteView": checked(
+        "can_see_folder", "validate_request_user"
+    ),
     "origin.views.note.favorite_note_views.NoteFavoriteView": checked(
         "validate_request_user", "get_effective_role"
     ),
