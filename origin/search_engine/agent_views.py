@@ -62,6 +62,7 @@ from origin.search_engine import metered, spend_recorder
 from origin.search_engine.agent.controller import (
     COST_CEILING_MESSAGE,
     CREDITS_EXHAUSTED_MESSAGE,
+    MODEL_REFUSAL_MESSAGE,
     _chat_source,
     _note_source,
     reconstruct_sources_for_run,
@@ -1961,6 +1962,11 @@ def _stream_ndjson(
                 # credit_policy.yaml for why scoring this as a failure
                 # would make an empty balance the cheapest way to ask.
                 result = AiRequestCost.RESULT_CREDITS_EXHAUSTED
+            elif final_error == MODEL_REFUSAL_MESSAGE:
+                # The provider declined to answer. Neither an outage nor
+                # our failure, and NOT billable (it is absent from
+                # `billable_results`): the user received nothing.
+                result = AiRequestCost.RESULT_SAFETY_REFUSAL
             elif final_status == "step_cap" or final_error == COST_CEILING_MESSAGE:
                 # Reached the step cap without answering. We spent the
                 # money and the user got nothing usable, so this is not
