@@ -221,6 +221,22 @@ class EveryWritePathRefusesAnOversizeBody(BaseAPITestCase):
         self.task.refresh_from_db()
         self.assertTrue(self.task.content)
 
+    def test_update_task_partial_edits(self):
+        """MIP-824's partial edits write to the same body, so the same cap applies."""
+        args = {"task_id": self.task.task_id}
+        self._refused("update_task", {**args, "body_append": self.big}, "body_append")
+        self._refused("update_task", {**args, "body_prepend": self.big}, "body_prepend")
+        self._refused(
+            "update_task",
+            {**args, "body_replace": {"old_text": "x", "new_text": self.big}},
+            "body_replace.new_text",
+        )
+        self._refused(
+            "update_task",
+            {**args, "body_replace": {"old_text": self.big, "new_text": "x"}},
+            "body_replace.old_text",
+        )
+
     # -- create_task_plan --
 
     def _plan(self, *bodies, milestone_body=None):
@@ -289,7 +305,7 @@ GUARDED = {
     "update_note": {"content_text"},
     "add_comment": {"body_text"},
     "create_task": {"content_text"},
-    "update_task": {"content_text"},
+    "update_task": {"content_text", "body_append", "body_prepend", "old_text", "new_text"},
     "create_task_plan": {"content_markdown", "description_markdown"},
     "create_todo_item": {"notes_text"},
     "update_todo_item": {"notes_text"},
@@ -299,6 +315,8 @@ GUARDED = {
 LEFT_OUT = {
     "create_calendar_event": {"description"},
     "update_calendar_event": {"description"},
+    # A hash of the body, not a body: fetch_task's short `body_hash` string.
+    "update_task": {"base_body_hash"},
 }
 _BODY_WORDS = ("text", "markdown", "body", "content", "notes", "description")
 

@@ -52,6 +52,12 @@ _VALID_EFFORTS = {"Minimal", "Low", "Moderate", "High", "Extensive"}
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     check_body_size(args.get("content_text"), "content_text")
+    check_body_size(args.get("body_append"), "body_append")
+    check_body_size(args.get("body_prepend"), "body_prepend")
+    body_patch = args.get("body_replace")
+    if isinstance(body_patch, dict):
+        check_body_size(body_patch.get("old_text"), "body_replace.old_text")
+        check_body_size(body_patch.get("new_text"), "body_replace.new_text")
     raw_task_id = args.get("task_id")
     try:
         task_id = int(raw_task_id)
