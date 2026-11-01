@@ -26,6 +26,10 @@ LLM's function-call arguments.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
+from datetime import datetime
 from typing import Any
 
 from django.db.models import Q
@@ -43,6 +47,24 @@ _VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed"}
 # Normal/High/Critical). Invalid values are rejected with a clear error
 # so the model corrects course rather than silently returning [].
 _VALID_PRIORITIES = {"Minimal", "Low", "Normal", "High", "Critical"}
+
+
+def _encode_cursor(updated_at: datetime, task_id: int) -> str:
+    """Opaque position of the last row of a page: where the next one starts."""
+    raw = json.dumps({"t": updated_at.isoformat(), "id": task_id}, separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, int]:
+    try:
+        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+        data = json.loads(raw)
+        return datetime.fromisoformat(data["t"]), int(data["id"])
+    except (binascii.Error, ValueError, KeyError, TypeError):
+        raise ToolError(
+            "`cursor` is not valid. Pass back the `next_cursor` of the previous page "
+            "unchanged, together with the same filters."
+        )
 
 
 def _milestone_task_q(milestone: MilestoneMaster) -> Q:
@@ -81,16 +103,23 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     )
 
     # --- Base queryset: tenant-scoped, soft-delete excluded. ---
-    qs = TaskMaster.objects.filter(
-        team_id=ctx.team_id,
-        is_deleted=False,
-        is_init_task=False,
-    ).filter(
-        # ACL row-filter: mirrors task_acl_user_ids logic as a set-based
-        # predicate so we get a single query rather than per-row checks.
-        Q(project_id__in=member_project_ids)
-        | Q(assignee_id=ctx.user_id)
-        | Q(reporter_id=ctx.user_id)
+    qs = (
+        TaskMaster.objects.filter(
+            team_id=ctx.team_id,
+            is_deleted=False,
+            is_init_task=False,
+        )
+        # A task deleted in the UI is marked by this status (the task tree
+        # filters on it too; `is_deleted` is not always set): keep it out
+        # of every page.
+        .exclude(status="Deleted")
+        .filter(
+            # ACL row-filter: mirrors task_acl_user_ids logic as a set-based
+            # predicate so we get a single query rather than per-row checks.
+            Q(project_id__in=member_project_ids)
+            | Q(assignee_id=ctx.user_id)
+            | Q(reporter_id=ctx.user_id)
+        )
     )
 
     # --- Optional caller filters ---
@@ -175,10 +204,23 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         limit = 20
     limit = max(1, min(limit, _MAX_LIMIT))
 
-    qs = qs.select_related("project").order_by("-ts_updated_at")[:limit]
+    # Newest update first, task id to break ties: a total order, so a page
+    # boundary falls between two rows the same way every time. A task updated
+    # between two page requests moves to the front and is not seen again.
+    qs = qs.select_related("project").order_by("-ts_updated_at", "-task_id")
+    raw_cursor = args.get("cursor")
+    if raw_cursor:
+        after_at, after_id = _decode_cursor(str(raw_cursor))
+        qs = qs.filter(
+            Q(ts_updated_at__lt=after_at) | Q(ts_updated_at=after_at, task_id__lt=after_id)
+        )
+    # One extra row says whether anything is left.
+    rows = list(qs[: limit + 1])
+    has_more = len(rows) > limit
+    rows = rows[:limit]
 
     tasks = []
-    for t in qs:
+    for t in rows:
         tasks.append(
             {
                 "task_id": t.task_id,
@@ -198,10 +240,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             }
         )
 
-    return {
-        "tasks": tasks,
-        "__summary__": f"Found {len(tasks)} task(s)",
-    }
+    result: dict[str, Any] = {"tasks": tasks, "has_more": has_more}
+    summary = f"Found {len(tasks)} task(s)"
+    if has_more:
+        result["next_cursor"] = _encode_cursor(rows[-1].ts_updated_at, rows[-1].task_id)
+        summary += " (more available)"
+    result["__summary__"] = summary
+    return result
 
 
 LIST_TASKS = Tool(
@@ -213,7 +258,10 @@ LIST_TASKS = Tool(
         "'what are my open tasks?', 'which Critical tasks are in milestone X?', "
         "'overdue tasks in project Y', or 'list all WIP tasks assigned to me'. "
         "Returns task_id, title, status, priority, due_date, assignee_id, "
-        "project_id, and project_name. Prefer naming projects by their "
+        "project_id, and project_name. Rows are newest-updated first. When more "
+        "tasks match than were returned, `has_more` is true and `next_cursor` "
+        "starts the next page: pass it back as `cursor` with the same filters "
+        "(the list is partial until `has_more` is false). Prefer naming projects by their "
         "project_name in prose (e.g. 'In **Website Redesign**: ...') rather "
         "than as 'Project N'. Results are scoped to tasks the current user is "
         "authorised to see (project member, assignee, or reporter)."
@@ -278,7 +326,14 @@ LIST_TASKS = Tool(
             },
             "limit": {
                 "type": "INTEGER",
-                "description": f"Max results to return (1–{_MAX_LIMIT}). Default 20.",
+                "description": f"Page size (1–{_MAX_LIMIT}). Default 20.",
+            },
+            "cursor": {
+                "type": "STRING",
+                "description": (
+                    "The `next_cursor` of the previous page, to get the next one. "
+                    "Use the same filters as that call."
+                ),
             },
         },
         "required": [],

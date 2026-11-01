@@ -208,7 +208,10 @@ CATALOG: tuple[McpTool, ...] = (
             "List tasks with filters — by project, milestone, status, "
             "priority, assignee, or overdue. Use this to survey a milestone "
             "before starting, or to find a task whose id you don't have. Each "
-            "row carries its tag names."
+            "row carries its tag names. Rows are newest-updated first, at most "
+            "50 a page: when `has_more` is true the list is partial, and "
+            "`next_cursor` (passed back as `cursor`, with the same filters) "
+            "returns the next page."
         ),
     ),
     McpTool(
