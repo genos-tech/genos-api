@@ -28,6 +28,7 @@ from typing import Any
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.tools.list_tasks import _milestone_task_q
+from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.services.task_blocking import CLOSED_STATUSES
 
 # Rows listed per group; the counts beside them are always complete.
@@ -52,8 +53,8 @@ def _ref(task: TaskMaster) -> dict[str, Any]:
 def _row(task: TaskMaster) -> dict[str, Any]:
     return {
         **_ref(task),
-        "priority": task.priority,
-        "effort_level": task.effort_level,
+        "priority": blank_to_none(task.priority),
+        "effort_level": blank_to_none(task.effort_level),
         "assignee_id": str(task.assignee_id) if task.assignee_id else None,
         "parent_task_id": task.parent_task_id,
     }

@@ -41,6 +41,7 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_delivery_models import TaskDelivery, TaskDeliveryState
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.services.user_time import today_for_user_id
 
 _MAX_LIMIT = 20
@@ -165,7 +166,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "display_id": t.display_id,
             "title": t.title,
             "status": t.status,
-            "priority": t.priority,
+            "priority": blank_to_none(t.priority),
             "due_date": t.due_date.isoformat() if t.due_date else None,
             "is_overdue": is_overdue,
             "days_until_due": days_until_due,

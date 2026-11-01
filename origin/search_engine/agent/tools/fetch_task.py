@@ -167,10 +167,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "display_id": task.display_id,
         "title": task.title or "",
         "status": task.status,
-        "priority": task.priority,
-        "effort_level": task.effort_level,
+        "priority": task.priority or None,  # "" and NULL both mean unset (MIP-781)
+        "effort_level": task.effort_level or None,
         "due_date": task.due_date.isoformat() if task.due_date else None,
-        "project_id": str(task.project_id) if task.project_id else None,
+        "project_id": task.project_id or None,
         "assignee_id": str(task.assignee_id) if task.assignee_id else None,
         "reporter_id": str(task.reporter_id) if task.reporter_id else None,
         "tags": tag_names(task.tags),

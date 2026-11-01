@@ -24,6 +24,7 @@ from django.utils import timezone
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
+from origin.search_engine.agent.tools.task_enums import blank_to_none
 
 _MAX_DAYS = 365
 _MAX_LIMIT = 50
@@ -94,7 +95,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "display_id": t.display_id,
                 "title": t.title,
                 "status": t.status,
-                "priority": t.priority,
+                "priority": blank_to_none(t.priority),
                 "assignee_id": str(t.assignee_id) if t.assignee_id else None,
                 "project_id": t.project_id,
                 "project_name": t.project.project_name if t.project else None,

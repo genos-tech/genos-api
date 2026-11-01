@@ -309,7 +309,7 @@ def _create_task_note(
         "parent_context": {
             k: v
             for k, v in {
-                "project_id": str(project_id),
+                "project_id": project_id,
                 "task_id": str(task_id_field) if task_id_field else None,
             }.items()
             if v is not None
