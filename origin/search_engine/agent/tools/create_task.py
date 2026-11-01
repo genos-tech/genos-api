@@ -46,6 +46,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
+from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
 from origin.search_engine.agent.tools.task_tags import resolve_tags
@@ -106,6 +107,7 @@ def _resolve_assignee(raw_id: Any, project_acl: set[str], ctx: ToolContext) -> C
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    check_body_size(args.get("content_text"), "content_text")
     title = (args.get("title") or "").strip()
     if not title:
         raise ToolError("`title` is required.")

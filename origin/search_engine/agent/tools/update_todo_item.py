@@ -16,6 +16,7 @@ from django.utils import timezone
 
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
+from origin.search_engine.agent.tools.body_limits import check_body_size
 
 
 def _wrap_notes(text: str) -> list[dict[str, Any]] | None:
@@ -37,6 +38,7 @@ def _wrap_notes(text: str) -> list[dict[str, Any]] | None:
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    check_body_size(args.get("notes_text"), "notes_text")
     raw_id = args.get("item_id")
     try:
         item_id = int(raw_id)
