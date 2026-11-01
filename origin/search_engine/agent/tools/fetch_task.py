@@ -26,6 +26,7 @@ from origin.search_engine.agent.tools.base import (
     wrap_workspace_content,
 )
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
+from origin.search_engine.agent.tools.task_body_edit import body_hash
 from origin.search_engine.agent.tools.task_tags import tag_names
 from origin.search_engine.agent.tools.template_prompts import without_untouched_prompts
 from origin.search_engine.text_extraction import extract_text
@@ -175,6 +176,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "reporter_id": str(task.reporter_id) if task.reporter_id else None,
         "tags": tag_names(task.tags),
         **_hierarchy(task, ctx),
+        # What `update_task(base_body_hash=...)` checks a later write against
+        # (MIP-824). Over the body as shown here, prompts left out.
+        "body_hash": body_hash(task.content),
         **body_fields,
         "comments": comments,
         "deliveries": deliveries,
