@@ -10,6 +10,8 @@ another. A dead Redis is simulated by making the throttle cache raise
 from __future__ import annotations
 
 import io
+import time
+from types import SimpleNamespace
 from unittest import mock
 
 from django.core.cache import cache
@@ -68,6 +70,20 @@ class _ThrottleCase(BaseAPITestCase):
         super().setUp()
         cache.clear()
         self.addCleanup(cache.clear)
+        # The limits are fixed-window (`int(now // duration)`), so a test
+        # that sends N requests under a `3/min` rate and expects the last
+        # to be refused fails whenever the real clock crosses a minute (or
+        # hour) boundary between them (MIP-858). Freeze the clock the
+        # limiter reads at mid-minute and mid-hour. The fake goes on the
+        # `throttles` module only: patching `time.time` itself would
+        # freeze the stdlib for everyone, cache expiry included. It is
+        # derived from the real clock so the hour bucket other code reads
+        # (the `throttle_denials` command) still lines up.
+        self.now = time.time() // 3600 * 3600 + 1830
+        fake = SimpleNamespace(time=lambda: self.now, monotonic=time.monotonic)
+        patcher = mock.patch.object(throttles, "time", fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         # The breaker is per process; a test that trips it must not
         # leave the next one skipping the cache.
         self.addCleanup(setattr, throttles, "_down_until", 0.0)
@@ -106,6 +122,22 @@ class TestDefaultPerUserThrottle(_ThrottleCase):
         self.assertEqual(r.status_code, 429)
         self.assertGreater(int(r["Retry-After"]), 0)
         self.assertLessEqual(int(r["Retry-After"]), 60)
+
+    def test_the_window_is_fixed_so_a_new_minute_starts_a_new_count(self):
+        # The documented trade-off of the fixed window: the budget resets
+        # at the boundary, so a burst split across it is not refused. This
+        # is exactly what the other tests in this file must never straddle.
+        self.authenticate()
+        self.now = self.now // 60 * 60 + 59
+        with mock.patch.object(UserBurstThrottle, "rate", "3/min"):
+            before = [self.client.get(_ME).status_code for _ in range(3)]
+            self.now += 2
+            after = self.client.get(_ME).status_code
+            again = [self.client.get(_ME).status_code for _ in range(3)]
+        self.assertEqual(before, [200, 200, 200])
+        self.assertEqual(after, 200)
+        # The new window holds its own budget of 3, one already spent.
+        self.assertEqual(again, [200, 200, 429])
 
     def test_the_budget_is_per_user(self):
         with mock.patch.object(UserBurstThrottle, "rate", "2/min"):
