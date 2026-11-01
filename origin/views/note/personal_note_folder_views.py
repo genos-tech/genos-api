@@ -33,9 +33,7 @@ from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.views.utils.note_acl_resync import collect_note_subtree_ids, purge_notes_from_index
-from origin.views.utils.note_folder_role import get_folder_role
-from origin.views.utils.note_role import ROLE_EDITOR, ROLE_VIEWER
+from origin.views.utils.personal_note_move import NoteMoveRefused, move_personal_note
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
 NOTE_TYPE = 1  # Personal Notes
@@ -58,14 +56,6 @@ def _get_owned_folder(folder_id, team_id, owner_id):
     return PersonalNoteFolder.objects.get(
         folder_id=folder_id, team=team_id, owner=owner_id, scope=SCOPE
     )
-
-
-def _is_team_folder(folder_id, team_id) -> bool:
-    if folder_id is None:
-        return False
-    return PersonalNoteFolder.objects.filter(
-        folder_id=folder_id, team=team_id, scope=PersonalNoteFolder.SCOPE_TEAM
-    ).exists()
 
 
 def _creates_cycle(owner_id, team_id, folder_id, target_parent_id) -> bool:
@@ -342,67 +332,15 @@ class PersonalNoteMoveView(AuthenticatedAPIView):
         except PersonalNoteMaster.DoesNotExist:
             return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        is_owner = str(note.owner_id) == str(request_user_id)
-        source_team_role = (
-            get_folder_role(request_user_id, note.folder_id, data["team_id"])
-            if _is_team_folder(note.folder_id, data["team_id"])
-            else None
-        )
-        target_is_team = _is_team_folder(target_folder_id, data["team_id"])
-
-        # Moving INTO the team space: any editor of the destination may
-        # file a note there, and an editor of the source team folder may
-        # rearrange it — the sidebar being rearranged is the team's, not
-        # a colleague's private one, so the owner-only rule that guards
-        # personal folders doesn't apply.
-        #
-        # Moving OUT of the team space (to a personal folder or to root)
-        # is owner-only even for a team-folder editor: it would pull
-        # shared content into one person's private sidebar.
-        if target_is_team:
-            if not is_owner and (source_team_role is None or source_team_role > ROLE_EDITOR):
-                return Response(
-                    {"error": "You do not have permission to move this note."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-            if (
-                get_folder_role(request_user_id, target_folder_id, data["team_id"]) or ROLE_VIEWER
-            ) > ROLE_EDITOR:
-                return Response(
-                    {"error": "You do not have permission to add notes to that folder."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-        else:
-            if not is_owner:
-                return Response(
-                    {"error": "Only the note owner can move it."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-            if target_folder_id is not None:
-                try:
-                    _get_owned_folder(target_folder_id, data["team_id"], data["user_id"])
-                except PersonalNoteFolder.DoesNotExist:
-                    return Response(
-                        {"error": "Target folder not found."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-
-        # Queryset .update() on purpose: skips auto_now so the move
-        # neither reshuffles the -tsUpdated sidebar ordering nor routes
-        # the note into the incremental reindex window (folder
-        # membership isn't indexed). See module docstring.
-        PersonalNoteMaster.objects.filter(note_id=note.note_id).update(
-            folder_id=target_folder_id,
-            parent_note_id=None,
-        )
-
-        # Crossing the team boundary CHANGES the note's ACL, which the
-        # `.update()` above deliberately hides from the reindexer. Moving
-        # out of the team space narrows access, so purge now rather than
-        # leave the note findable by the team for another reindex cycle.
-        # Moving in only broadens — the widened window handles it.
-        if source_team_role is not None and not target_is_team:
-            purge_notes_from_index(collect_note_subtree_ids(note.note_id, data["team_id"]))
+        try:
+            move_personal_note(
+                user_id=request_user_id,
+                team_id=data["team_id"],
+                note=note,
+                target_folder_id=target_folder_id,
+            )
+        except NoteMoveRefused as e:
+            return Response({"error": str(e)}, status=e.status)
 
         return Response(
             {

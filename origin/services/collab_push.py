@@ -4,7 +4,8 @@
 A task body lives in two stores: `TaskMaster.content` (what the agent / MCP
 `update_task` tool writes) and the Yjs doc `task-body:<id>` that genos-collab
 persists and the editor actually renders. A note is the same: its `body`
-(written by `update_note`) and the doc `my-note:<id>` / `task-note:<id>`.
+(written by `update_note`) and the doc `my-note:<id>` / `task-note:<id>` /
+`chat-note:<id>`.
 The editor seeds from the row only while that doc is empty, so once a task
 or note had been opened an API body write never reached it: the stale doc
 kept showing, and the next keystroke autosaved the old body back over the
@@ -65,8 +66,9 @@ def _internal_token() -> str:
 
 
 # The editors' document names (genos-frontend `bnMyNoteEditor` /
-# `bnTaskNoteEditor`). genos-collab only accepts these and `task-body:`.
-_NOTE_DOCUMENT_PREFIX = {"personal": "my-note", "task": "task-note"}
+# `bnTaskNoteEditor` / `bnChatNoteEditor`). genos-collab only accepts these
+# and `task-body:`.
+_NOTE_DOCUMENT_PREFIX = {"personal": "my-note", "task": "task-note", "chat": "chat-note"}
 
 
 def _post(document_name: str, blocks: list[dict[str, Any]]) -> None:
@@ -109,6 +111,6 @@ def push_task_body(task_id: int, blocks: list[dict[str, Any]]) -> None:
 
 
 def push_note_body(note_type: str, note_id: int, blocks: list[dict[str, Any]]) -> None:
-    """Push a note body into `my-note:<id>` (note_type "personal") or
-    `task-note:<id>` (note_type "task")."""
+    """Push a note body into `my-note:<id>` (note_type "personal"),
+    `task-note:<id>` ("task") or `chat-note:<id>` ("chat")."""
     _push(f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}", blocks)
