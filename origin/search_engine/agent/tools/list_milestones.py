@@ -31,6 +31,16 @@ _VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"}
 _CLOSED_STATUSES = ["Closed", "Deleted"]
 
 
+def _backing_display_id(m: MilestoneMaster) -> str | None:
+    """`PRJ-123` for the milestone's backing task; None for a legacy milestone
+    with no backing task or a task with no project code (`display_id` would
+    fall back to `#<task_id>`, which is not a reference to a milestone)."""
+    if not m.task_id:
+        return None
+    shown = m.task.display_id
+    return None if shown.startswith("#") else shown
+
+
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     member_project_ids = set(
         ProjectMembers.objects.filter(
@@ -90,7 +100,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         limit = 50
     limit = max(1, min(limit, _MAX_LIMIT))
 
-    qs = MilestoneMaster.objects.select_related("project", "task").filter(
+    qs = MilestoneMaster.objects.select_related("project", "task__project").filter(
         team_id=ctx.team_id,
         project_id__in=scoped_project_ids,
         is_deleted=False,
@@ -133,6 +143,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 # Needed to attach a plan NOTE to a milestone — task notes
                 # hang off a task_id.
                 "task_id": m.task_id,
+                # The backing task's display id (MIP-617): what people call the
+                # milestone, and a reference the MCP milestone tools accept.
+                "display_id": _backing_display_id(m),
                 "title": m.title,
                 "status": m.status,
                 "priority": blank_to_none(m.priority),
@@ -173,7 +186,8 @@ LIST_MILESTONES = Tool(
         "Counts include subtasks via the same Q-union as the milestone "
         "table view. Each row's task_id is the milestone's BACKING task "
         "(use it e.g. to attach a plan note to the milestone; null on "
-        "legacy milestones). Scoped to milestones in projects the "
+        "legacy milestones); display_id is that task's display id (PRJ-123), "
+        "the name people use for the milestone. Scoped to milestones in projects the "
         "current user is a member of."
     ),
     parameters_schema={

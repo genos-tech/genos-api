@@ -100,7 +100,11 @@ from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.tools import REGISTRY
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.services.security_events import note_refusal
-from origin.views.public.mcp.resolve import resolve_note_ref, resolve_task_ref
+from origin.views.public.mcp.resolve import (
+    resolve_milestone_ref,
+    resolve_note_ref,
+    resolve_task_ref,
+)
 
 log = logging.getLogger(__name__)
 
@@ -166,6 +170,15 @@ class McpTool:
     # Applied to a property nested inside an array item's schema, keyed
     # `(list_arg, item_key)` — the schema half of `nested_task_ref_args`.
     nested_schema_overrides: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
+    # Argument names holding a MILESTONE reference (MIP-852): the numeric
+    # milestone id, or the display id / URL of the milestone's backing task.
+    # `nested_milestone_ref_args` is the `(list_arg, item_key)` form, for
+    # `update_tasks_bulk` rows.
+    milestone_ref_args: tuple[str, ...] = ()
+    nested_milestone_ref_args: tuple[tuple[str, str], ...] = ()
+    # Search must not say whether a task or milestone exists, so an
+    # unresolvable milestone reference there matches nothing instead of failing.
+    quiet_milestone_refs: bool = False
 
 
 def _rewrite_refs(text: str) -> str:
@@ -210,6 +223,7 @@ CATALOG: tuple[McpTool, ...] = (
     McpTool(
         name="list_tasks",
         registry_name="list_tasks",
+        milestone_ref_args=("milestone_id",),
         description=(
             "List tasks with filters — by project, milestone, status, "
             "priority, assignee, or overdue. Use this to survey a milestone "
@@ -237,7 +251,9 @@ CATALOG: tuple[McpTool, ...] = (
             "milestone is how a multi-task piece of work is grouped — start "
             "here when the user names one rather than a single task. A "
             "milestone is also backed by a task, so `update_task` on that "
-            "backing id is how a milestone's own title and dates change."
+            "backing id is how a milestone's own title and dates change. Every tool "
+            "that takes a `milestone_id` also accepts that backing display id "
+            "(`display_id` on each row) or its Genos URL."
         ),
         # The registry description of `assignee_id` points at
         # `list_my_milestones`, which this surface does not publish —
@@ -265,6 +281,7 @@ CATALOG: tuple[McpTool, ...] = (
     McpTool(
         name="get_milestone_summary",
         registry_name="get_milestone_summary",
+        milestone_ref_args=("milestone_id",),
         description=(
             "One milestone in depth: its tasks, their statuses, what is done "
             "and what remains. Use it to plan the order of work across a "
@@ -320,6 +337,8 @@ CATALOG: tuple[McpTool, ...] = (
     McpTool(
         name="search_workspace",
         registry_name="search_knowledge_base",
+        milestone_ref_args=("milestone_id",),
+        quiet_milestone_refs=True,
         description=(
             "Semantic search across the workspace — tasks, notes, chat "
             "messages and todos. Use it for context the task description "
@@ -389,6 +408,7 @@ CATALOG: tuple[McpTool, ...] = (
     McpTool(
         name="list_task_dependencies",
         registry_name="list_task_dependencies",
+        milestone_ref_args=("milestone_id",),
         description=(
             "Every blocker→blocked edge in one project or one milestone — the "
             "whole dependency graph in a single call, rather than "
@@ -519,6 +539,7 @@ CATALOG: tuple[McpTool, ...] = (
     McpTool(
         name="update_task",
         registry_name="update_task",
+        milestone_ref_args=("milestone_id",),
         description=(
             "Change a task: status, title, description, priority, effort, "
             "due date or milestone. Set status to 'WIP' when you start and "
@@ -605,6 +626,7 @@ CATALOG: tuple[McpTool, ...] = (
     McpTool(
         name="create_task",
         registry_name="create_task",
+        milestone_ref_args=("milestone_id",),
         description=(
             "Create a task in a project. Use it to split discovered work out "
             "of the task you're on, rather than widening that one. Get the "
@@ -637,6 +659,7 @@ CATALOG: tuple[McpTool, ...] = (
     McpTool(
         name="update_tasks_bulk",
         registry_name="update_tasks_bulk",
+        nested_milestone_ref_args=(("updates", "milestone_id"),),
         description=(
             "Change priority, due date, status, effort, assignee or milestone on "
             "MANY tasks in one call — for reprioritizing or tidying a milestone, "
@@ -670,6 +693,7 @@ CATALOG: tuple[McpTool, ...] = (
     McpTool(
         name="create_task_plan",
         registry_name="create_task_plan",
+        milestone_ref_args=("existing_milestone_id",),
         description=(
             "Create a whole plan in one call: a new milestone with its tasks "
             "and their dependencies, or a batch of tasks under an existing "
@@ -842,12 +866,45 @@ def _to_json_schema(node: Any) -> Any:
     return node
 
 
+_MILESTONE_REF_HINT = (
+    " Also accepts the milestone's display id (the id of its backing task, e.g. "
+    "PRJ-123) or its Genos URL; a bare number is always the milestone id."
+)
+
+
+def _milestone_ref_property(prop: dict[str, Any]) -> dict[str, Any]:
+    """A milestone-id property widened to a string reference, keeping the
+    registry's own wording (what the argument does for THIS tool)."""
+    return {
+        **prop,
+        "type": "string",
+        "description": str(prop.get("description") or "").rstrip() + _MILESTONE_REF_HINT,
+    }
+
+
 def input_schema(tool: McpTool) -> dict[str, Any]:
     schema = _to_json_schema(REGISTRY[tool.registry_name].parameters_schema)
     if tool.schema_overrides:
         properties = dict(schema.get("properties") or {})
         properties.update(tool.schema_overrides)
         schema = {**schema, "properties": properties}
+    for arg in tool.milestone_ref_args:
+        properties = dict(schema.get("properties") or {})
+        if arg in properties:
+            properties[arg] = _milestone_ref_property(properties[arg])
+            schema = {**schema, "properties": properties}
+    for list_arg, item_key in tool.nested_milestone_ref_args:
+        # Same rebuild-without-mutating dance as the overrides below.
+        properties = dict(schema.get("properties") or {})
+        array_schema = dict(properties.get(list_arg) or {})
+        items = dict(array_schema.get("items") or {})
+        item_properties = dict(items.get("properties") or {})
+        if item_key in item_properties:
+            item_properties[item_key] = _milestone_ref_property(item_properties[item_key])
+            items["properties"] = item_properties
+            array_schema["items"] = items
+            properties[list_arg] = array_schema
+            schema = {**schema, "properties": properties}
     for (list_arg, item_key), override in tool.nested_schema_overrides.items():
         # Rebuild the path `properties[list_arg].items.properties[item_key]`
         # without mutating the registry's own schema dict, which is module
@@ -1098,6 +1155,20 @@ def call(
                 # into a confident write against the wrong table.
                 if note_type is not None:
                     args["note_type"] = note_type
+        for arg in tool.milestone_ref_args:
+            if arg in args and args[arg] is not None:
+                args[arg] = resolve_milestone_ref(
+                    args[arg], ctx.team_id, quiet=tool.quiet_milestone_refs
+                )
+        for list_arg, item_key in tool.nested_milestone_ref_args:
+            entries = args.get(list_arg)
+            if isinstance(entries, list):
+                args[list_arg] = [
+                    {**entry, item_key: resolve_milestone_ref(entry[item_key], ctx.team_id)}
+                    if isinstance(entry, dict) and entry.get(item_key) is not None
+                    else entry
+                    for entry in entries
+                ]
         for list_arg, item_key in tool.nested_task_ref_args:
             entries = args.get(list_arg)
             if not isinstance(entries, list):
