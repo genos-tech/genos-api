@@ -39,6 +39,21 @@ so no re-embedding) and then clears the marks it consumed. A pass with
 errors, a dry run, or an `--entity-types` subset that skips an
 ACL-bearing type keeps them for the next pass.
 
+Drift: the indexer trusts its `RagChunk` tracking table, so a document the
+index lost behind a row's back is never re-sent by a normal pass. `--repair`
+compares the table with the index (realtime `mget`) and REPORTS tracked
+chunks that are missing or stale there, plus indexed documents nobody
+tracks. It changes nothing until `--apply` is added, which drops the rows of
+the missing / stale chunks and runs a full pass over their entity types, so
+only those chunks are re-embedded:
+
+    python manage.py opensearch_reindex --repair            # report only
+    python manage.py opensearch_reindex --repair --apply
+
+`--repair-metadata` (with `--apply`) also blanks `meta_hash` on every tracked
+chunk of the selected types, so the pass re-sends their overlays as partial
+updates; metadata can't be compared, so this is the blunt tool for it.
+
 Schema versions: when the live index was built under a different
 `INDEX_SCHEMA_VERSION` than the code expects, the command prints a
 warning. The fix is to recreate the index:
@@ -55,13 +70,26 @@ from django.core.management.base import CommandError
 from opensearchpy.exceptions import NotFoundError
 
 from origin.management.cron_command import CronCommand
-from origin.search_engine import acl_dirty
+from origin.search_engine import acl_dirty, repair
 from origin.search_engine.index_config import INDEX_SCHEMA_VERSION
 from origin.search_engine.ingestion import ingest_all
 from origin.search_engine.opensearch_client import get_client, get_index_alias
 from origin.search_engine.purge import sweep_orphans
 
 log = logging.getLogger(__name__)
+
+_ALL_ENTITY_TYPES = [
+    "chat",
+    "task",
+    "milestone",
+    "note",
+    "note_folder",
+    "thread_summary",
+    "note_summary",
+    "todo",
+    "conversation",
+    "spotlight_answer",
+]
 
 
 class Command(CronCommand):
@@ -101,18 +129,7 @@ class Command(CronCommand):
             "--entity-types",
             nargs="+",
             default=None,
-            choices=[
-                "chat",
-                "task",
-                "milestone",
-                "note",
-                "note_folder",
-                "thread_summary",
-                "note_summary",
-                "todo",
-                "conversation",
-                "spotlight_answer",
-            ],
+            choices=_ALL_ENTITY_TYPES,
             help="Subset of entity types to ingest. Default: all.",
         )
         parser.add_argument(
@@ -144,7 +161,41 @@ class Command(CronCommand):
             ),
         )
 
+        parser.add_argument(
+            "--repair",
+            action="store_true",
+            help=(
+                "Compare the RagChunk tracking table with the index and "
+                "report drift (tracked chunks missing or stale in the index, "
+                "indexed documents with no row). Read-only without --apply."
+            ),
+        )
+        parser.add_argument(
+            "--apply",
+            action="store_true",
+            help=(
+                "With --repair: drop the tracking rows of missing / stale "
+                "chunks and re-ingest their entity types (full pass, so only "
+                "those chunks are re-embedded)."
+            ),
+        )
+        parser.add_argument(
+            "--repair-metadata",
+            action="store_true",
+            help=(
+                "With --repair --apply: also blank meta_hash on every "
+                "tracked chunk of --entity-types (default: all), so the "
+                "pass re-sends their overlays. Bulk updates, no embeddings."
+            ),
+        )
+
     def handle(self, *args, **options):
+        if (options.get("apply") or options.get("repair_metadata")) and not options.get(
+            "repair"
+        ):
+            raise CommandError("--apply and --repair-metadata only make sense with --repair.")
+        if options.get("repair_metadata") and not options.get("apply"):
+            raise CommandError("--repair-metadata needs --apply.")
         # Schema-version sanity check. Best-effort: a mismatched index
         # is still indexable (writes succeed; just the new fields are
         # absent from the live mappings), but the operator should know
@@ -177,6 +228,17 @@ class Command(CronCommand):
             self.stdout.write(self.style.SUCCESS("Orphan sweep complete."))
             self.stdout.write(json.dumps({"orphan_sweep": sweep_stats}, indent=2))
             return
+
+        if options.get("repair"):
+            if since is not None:
+                raise CommandError("--repair compares the whole table; drop --since*.")
+            entity_types = self._repair(options)
+            if entity_types is None:
+                return
+            options["entity_types"] = entity_types
+            # Rows were dropped for these types only; the full pass below
+            # re-embeds exactly those chunks (the rest are hash-unchanged).
+            since = None
 
         if since is not None:
             self.stdout.write(f"Incremental reindex since {since.isoformat()}...")
@@ -215,6 +277,31 @@ class Command(CronCommand):
         if sweep_stats is not None:
             payload["orphan_sweep"] = sweep_stats
         self.stdout.write(json.dumps(payload, indent=2))
+
+    def _repair(self, options):
+        """Report drift; with --apply fix the tracking table. Returns the
+        entity types the following ingestion pass should cover, or None when
+        the command should stop here (report only, or nothing to do)."""
+        dry_run = not options.get("apply") or options.get("dry_run")
+        drift = repair.find_drift(options.get("entity_types"))
+        self.stdout.write(json.dumps({"repair": drift.as_dict()}, indent=2))
+        if dry_run:
+            self.stdout.write(
+                self.style.WARNING("Repair is a dry run: nothing changed. Add --apply to fix.")
+            )
+            return None
+        types = set(drift.entity_types)
+        dropped = repair.apply(drift)
+        self.stdout.write(self.style.SUCCESS(f"Dropped {dropped} tracking row(s)."))
+        if options.get("repair_metadata"):
+            scope = options.get("entity_types")
+            blanked = repair.blank_meta_hashes(scope)
+            self.stdout.write(self.style.SUCCESS(f"Blanked meta_hash on {blanked} row(s)."))
+            types |= set(scope or _ALL_ENTITY_TYPES)
+        if not types:
+            self.stdout.write("Nothing to repair.")
+            return None
+        return sorted(types)
 
     def _warn_on_schema_mismatch(self):
         """Sample one chunk's `index_schema_version` and compare to the
