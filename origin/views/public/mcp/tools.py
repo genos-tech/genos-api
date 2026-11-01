@@ -254,9 +254,9 @@ CATALOG: tuple[McpTool, ...] = (
             "milestone is how a multi-task piece of work is grouped — start "
             "here when the user names one rather than a single task. A "
             "milestone is also backed by a task, so `update_task` on that "
-            "backing id is how a milestone's own title and dates change. Every tool "
-            "that takes a `milestone_id` also accepts that backing display id "
-            "(`display_id` on each row) or its Genos URL."
+            "backing id is how a milestone's own title and dates change. "
+            "`has_goal` is false when nobody has written what the milestone "
+            "is for."
         ),
         # The registry description of `assignee_id` points at
         # `list_my_milestones`, which this surface does not publish —
@@ -289,8 +289,9 @@ CATALOG: tuple[McpTool, ...] = (
             "One milestone in depth: its tasks, their statuses, what is done "
             "and what remains. Use it to plan the order of work across a "
             "milestone: it lists what is ready to start now (every blocker "
-            "closed, including its parent's), what is pending (waiting on someone), "
-            "what is blocked and by what, and the critical path."
+            "closed, including its parent's), what is blocked and by what, and "
+            "the critical path. `has_goal` is false when nobody has written "
+            "what the milestone is for."
         ),
     ),
     McpTool(
