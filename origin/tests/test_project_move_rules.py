@@ -9,14 +9,15 @@ the row kept the guest's — matched neither project's list and simply
 disappeared. Its notes, which carry their own copy of both columns, went
 with it.
 
-**The rule.** Only a milestone or a ROOT task — one with no parent task at
-all — changes project, and everything filed underneath comes along. Anything
-moved alone kept a `parent_task_id` in the project it left, and the
-destination's table nests rows under their parent, so it was invisible in
-both places. A task living in a milestone counts as filed underneath: it
-hangs off the milestone's backing row, so the milestone owns which project
-it is in. A milestone could not move at all; now it can, and it lands with
-no sprint because sprints are defined per project.
+**The rule.** Only a milestone, a ROOT task (no parent task at all) or a
+task directly in a milestone changes project, and everything filed
+underneath comes along. Anything filed under an ordinary task, moved alone,
+kept a `parent_task_id` in the project it left, and the destination's table
+nests rows under their parent, so it was invisible in both places. A task
+directly in a milestone hangs off the milestone's backing row; it may leave
+(MIP-786), shedding the milestone, its sprint and that parent edge. A
+milestone could not move at all; now it can, and it lands with no sprint
+because sprints are defined per project.
 """
 
 from datetime import date
@@ -121,7 +122,8 @@ class ProjectMoveTestBase(TestCase):
 
 
 class TaskProjectMoveRuleTests(ProjectMoveTestBase):
-    """Rule i: only a milestone or a root task may change project."""
+    """Rule i: only a milestone, a root task or a task directly in a milestone
+    may change project."""
 
     def test_top_level_task_moves(self):
         task = self._make_task(self.project_a)
@@ -132,12 +134,104 @@ class TaskProjectMoveRuleTests(ProjectMoveTestBase):
         task.refresh_from_db()
         self.assertEqual(task.project_id, self.project_b.project_id)
 
-    def test_task_inside_a_milestone_cannot_move_on_its_own(self):
-        """The milestone owns which project its tasks are in, and rule ii
-        says they travel WITH it. This once succeeded, on the reasoning that
-        a milestone contains its tasks rather than parenting them — so the
-        task moved out and shed the milestone, which is the opposite of
-        what the milestone moving would have done to it."""
+    def test_task_inside_a_milestone_moves_on_its_own_and_sheds_the_milestone(self):
+        """MIP-786: "Backlog" to another project's milestone is a detach plus a
+        move. It once failed by leaving the task nested under the old
+        milestone's backing row, invisible in both projects, so this pins
+        everything that has to be cleared."""
+        sprint = Sprint.objects.create(
+            team=self.team,
+            project=self.project_a,
+            name="S1",
+            sequence_number=1,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 14),
+        )
+        milestone = self._make_milestone(self.project_a, sprint=sprint)
+        task = self._make_task(
+            self.project_a,
+            milestone=milestone,
+            sprint=sprint,
+            parent_task_id=milestone.task_id,
+            root_task_id=milestone.task_id,
+        )
+
+        res = self._move_task(task, self.project_b)
+
+        self.assertEqual(res.status_code, 200, res.data)
+        task.refresh_from_db()
+        self.assertEqual(task.project_id, self.project_b.project_id)
+        self.assertIsNone(task.milestone_id)
+        self.assertIsNone(task.sprint_id)
+        self.assertIsNone(task.parent_task_id)
+        self.assertEqual(task.root_task_id, task.task_id)
+        self.assertEqual(self._open_task(task).status_code, 200)
+
+    def test_a_task_filed_under_a_milestone_by_parent_only_moves_too(self):
+        """The milestone rollup also counts tasks that hang off the backing row
+        with no milestone FK. The detach must not depend on the FK."""
+        milestone = self._make_milestone(self.project_a)
+        task = self._make_task(
+            self.project_a,
+            parent_task_id=milestone.task_id,
+            root_task_id=milestone.task_id,
+        )
+
+        res = self._move_task(task, self.project_b)
+
+        self.assertEqual(res.status_code, 200, res.data)
+        task.refresh_from_db()
+        self.assertEqual(task.project_id, self.project_b.project_id)
+        self.assertIsNone(task.parent_task_id)
+        self.assertEqual(task.root_task_id, task.task_id)
+
+    def test_the_moved_tasks_own_subtasks_come_along_out_of_the_milestone(self):
+        milestone = self._make_milestone(self.project_a)
+        member = self._make_task(
+            self.project_a,
+            milestone=milestone,
+            parent_task_id=milestone.task_id,
+            root_task_id=milestone.task_id,
+        )
+        sub = self._make_task(
+            self.project_a,
+            title="sub",
+            milestone=milestone,
+            parent_task_id=member.task_id,
+            root_task_id=milestone.task_id,
+        )
+
+        res = self._move_task(member, self.project_b)
+
+        self.assertEqual(res.status_code, 200, res.data)
+        member.refresh_from_db()
+        sub.refresh_from_db()
+        self.assertEqual(sub.project_id, self.project_b.project_id)
+        self.assertEqual(sub.parent_task_id, member.task_id)
+        self.assertEqual(sub.root_task_id, member.task_id)
+        self.assertIsNone(sub.milestone_id)
+
+    def test_it_can_land_in_the_destinations_milestone_in_the_same_request(self):
+        source = self._make_milestone(self.project_a, "From")
+        dest = self._make_milestone(self.project_b, "To")
+        task = self._make_task(
+            self.project_a,
+            milestone=source,
+            parent_task_id=source.task_id,
+            root_task_id=source.task_id,
+        )
+
+        res = self._move_task(
+            task, self.project_b, milestone=dest.milestone_id, parent_task_id=dest.task_id
+        )
+
+        self.assertEqual(res.status_code, 200, res.data)
+        task.refresh_from_db()
+        self.assertEqual(task.project_id, self.project_b.project_id)
+        self.assertEqual(task.milestone_id, dest.milestone_id)
+        self.assertEqual(task.parent_task_id, dest.task_id)
+
+    def test_the_source_milestone_no_longer_counts_the_task(self):
         milestone = self._make_milestone(self.project_a)
         task = self._make_task(
             self.project_a,
@@ -145,17 +239,15 @@ class TaskProjectMoveRuleTests(ProjectMoveTestBase):
             parent_task_id=milestone.task_id,
             root_task_id=milestone.task_id,
         )
+        self._move_task(task, self.project_b)
 
-        res = self._move_task(task, self.project_b)
+        from origin.services.task_project_move import milestone_subtree_task_ids
 
-        self.assertEqual(res.status_code, 400, res.data)
-        self.assertEqual(res.data.get("code"), "subtask_project_move_forbidden")
-        task.refresh_from_db()
-        self.assertEqual(task.project_id, self.project_a.project_id)
-        self.assertEqual(task.milestone_id, milestone.milestone_id)
+        self.assertNotIn(task.task_id, milestone_subtree_task_ids(milestone))
 
     def test_sub_task_of_a_task_inside_a_milestone_cannot_move_either(self):
-        """Two levels down, and neither level is allowed to leave alone."""
+        """Two levels down: the task in the milestone may leave, its sub-task
+        may not leave without it."""
         milestone = self._make_milestone(self.project_a)
         member = self._make_task(
             self.project_a,

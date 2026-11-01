@@ -336,9 +336,7 @@ class TestTaskProjectMove(TestCase):
         # Beta already owns number 1, so the naive carry-over collides.
         self._create_task(self.project_b, title="Beta's first")
         moving = self._create_task(self.project_a, title="draft", is_init_task=True)
-        self.assertEqual(
-            TaskMaster.objects.get(task_id=moving["task_id"]).project_task_number, 1
-        )
+        self.assertEqual(TaskMaster.objects.get(task_id=moving["task_id"]).project_task_number, 1)
 
         resp = self._put_task(moving["task_id"], self.project_b, title="real title")
 
@@ -355,9 +353,7 @@ class TestTaskProjectMove(TestCase):
     def test_move_to_empty_project_starts_that_projects_sequence(self):
         self._create_task(self.project_a, title="Alpha's first")
         moving = self._create_task(self.project_a, title="draft", is_init_task=True)
-        self.assertEqual(
-            TaskMaster.objects.get(task_id=moving["task_id"]).project_task_number, 2
-        )
+        self.assertEqual(TaskMaster.objects.get(task_id=moving["task_id"]).project_task_number, 2)
 
         resp = self._put_task(moving["task_id"], self.project_b)
 
@@ -399,9 +395,7 @@ class TestTaskProjectMove(TestCase):
         resp = self._put_task(root["task_id"], self.project_b, title="root")
         self.assertEqual(resp.status_code, 200, resp.data)
 
-        moved = [
-            TaskMaster.objects.get(task_id=t["task_id"]) for t in (root, child, grandchild)
-        ]
+        moved = [TaskMaster.objects.get(task_id=t["task_id"]) for t in (root, child, grandchild)]
         # The whole subtree lands in Beta, two levels deep included.
         for task in moved:
             self.assertEqual(task.project_id, self.project_b)
@@ -416,31 +410,31 @@ class TestTaskProjectMove(TestCase):
         self.assertEqual(moved[1].parent_task_id, root["task_id"])
         self.assertEqual(moved[2].parent_task_id, child["task_id"])
 
-    def test_a_task_in_a_milestone_does_not_move_on_its_own(self):
-        """Rule i: the milestone owns which project its tasks are in, so a
-        member travels when the MILESTONE moves and never by itself.
-
-        This used to be a move that needed cleaning up afterwards. The client
-        sends the source project's `milestone` right back (the project picker
-        resets `tags` but not milestone/sprint), and left alone the bridge
-        re-parented the task onto that milestone's backing task, dragging it
-        into the project it had just left. Refusing the move settles it a
-        step earlier; `test_task_project_move_milestone` still covers the
-        stale-link clear for the one member that can still reach it."""
+    def test_a_task_in_a_milestone_moves_on_its_own_and_sheds_it(self):
+        """MIP-786. The client sends the source project's `milestone` right
+        back with the new project (the project picker resets `tags` but not
+        milestone/sprint). Left alone, the bridge would re-parent the task onto
+        that milestone's backing task, dragging it into the project it had just
+        left; a project change clears it instead, and the task arrives as a
+        root task with a number of the destination's."""
         milestone_id, backing_task_id = self._create_milestone(self.project_a, "Alpha goal")
         moving = self._create_task(self.project_a, title="under the milestone")
         # Land it in the milestone first, the way the picker would.
         resp = self._put_task(moving["task_id"], self.project_a, milestone=milestone_id)
         self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(
+            TaskMaster.objects.get(task_id=moving["task_id"]).parent_task_id, backing_task_id
+        )
 
-        # Now try to move it to Beta, still sending Alpha's milestone.
+        # Now move it to Beta, still sending Alpha's milestone.
         resp = self._put_task(moving["task_id"], self.project_b, milestone=milestone_id)
 
-        self.assertEqual(resp.status_code, 400, resp.data)
+        self.assertEqual(resp.status_code, 200, resp.data)
         task = TaskMaster.objects.get(task_id=moving["task_id"])
-        self.assertEqual(task.project_id, self.project_a)
-        self.assertEqual(task.milestone_id, milestone_id)
-        self.assertEqual(task.parent_task_id, backing_task_id)
+        self.assertEqual(task.project_id, self.project_b)
+        self.assertIsNone(task.milestone_id)
+        self.assertIsNone(task.parent_task_id)
+        self.assertEqual(task.root_task_id, task.task_id)
 
     def test_move_frees_the_source_number_for_reuse(self):
         moving = self._create_task(self.project_a, title="draft", is_init_task=True)
@@ -449,6 +443,4 @@ class TestTaskProjectMove(TestCase):
         # Alpha's 1 is vacated by the move; Alpha's next create takes it
         # rather than 500ing on the unique constraint.
         next_a = self._create_task(self.project_a, title="after the move")
-        self.assertEqual(
-            TaskMaster.objects.get(task_id=next_a["task_id"]).project_task_number, 1
-        )
+        self.assertEqual(TaskMaster.objects.get(task_id=next_a["task_id"]).project_task_number, 1)
