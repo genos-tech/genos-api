@@ -179,7 +179,9 @@ CATALOG: tuple[McpTool, ...] = (
         registry_name="fetch_task",
         description=(
             "Read one task in full: title, status, priority, assignee, dates, "
-            "tags, its description, and its comments. Prefer `content_markdown` for "
+            "tags, where it sits (`parent_task_id`, `milestone_id`, and "
+            "`backs_milestone_id` when it is a milestone's own row), its "
+            "description, and its comments. Prefer `content_markdown` for "
             "the description when it is present — it keeps headings, checklists "
             "and code fences — and fall back to `content_text`, the same body "
             "flattened. This is the first call when the user names a task to "
