@@ -260,10 +260,10 @@ class ChatNoteToolTests(EverySpaceBase):
         push.assert_called_once_with("chat-note:7", [])
 
     def test_approval_card_names_the_chat_and_the_note(self):
-        out = _friendly_arguments({"note_type": "chat", "chat_id": str(self.gm.id)}, "create_note")
+        out = _friendly_arguments({"note_type": "chat", "chat_id": str(self.gm.id)}, "create_note", ctx=self.ctx)
         self.assertEqual(out["chat_name"], "Design")
         note_id = self._create(self.ctx, chat_id=str(self.gm.id))["note_id"]
-        out = _friendly_arguments({"note_type": "chat", "note_id": note_id}, "update_note")
+        out = _friendly_arguments({"note_type": "chat", "note_id": note_id}, "update_note", ctx=self.ctx)
         self.assertEqual(out["note_title"], "Decisions")
 
     def test_written_chat_note_gets_a_chip(self):

@@ -269,7 +269,7 @@ class FriendlyArgumentEnrichmentTests(OrganizeToolsTestBase):
                 }
             ]
         }
-        out = controller._friendly_arguments(raw, "update_tasks_bulk")
+        out = controller._friendly_arguments(raw, "update_tasks_bulk", ctx=self.ctx)
         row = out["updates"][0]
         self.assertEqual(row["display_id"], self.task_b.display_id)
         self.assertEqual(row["title"], "Implementation")
@@ -311,7 +311,7 @@ class FriendlyArgumentEnrichmentTests(OrganizeToolsTestBase):
                 {"task_id": self.task_a.task_id, "milestone_id": 999999, "rationale": "r"},
             ]
         }
-        rows = controller._friendly_arguments(raw, "update_tasks_bulk")["updates"]
+        rows = controller._friendly_arguments(raw, "update_tasks_bulk", ctx=self.ctx)["updates"]
         moves = [(r["current"]["milestone_id"], r["milestone_id"]) for r in rows]
         self.assertEqual(
             moves,
@@ -326,7 +326,7 @@ class FriendlyArgumentEnrichmentTests(OrganizeToolsTestBase):
 
     def test_bulk_update_rows_without_a_move_carry_no_proposed_milestone(self):
         raw = {"updates": [{"task_id": self.task_a.task_id, "priority": "High", "rationale": "r"}]}
-        row = controller._friendly_arguments(raw, "update_tasks_bulk")["updates"][0]
+        row = controller._friendly_arguments(raw, "update_tasks_bulk", ctx=self.ctx)["updates"][0]
         self.assertNotIn("milestone_id", row)
         self.assertIsNone(row["current"]["milestone_id"])
 
@@ -335,25 +335,25 @@ class FriendlyArgumentEnrichmentTests(OrganizeToolsTestBase):
         self.task_a.milestone = v1
         self.task_a.save(update_fields=["milestone"])
         raw = {"task_id": self.task_a.task_id, "milestone_id": v2.milestone_id}
-        out = controller._friendly_arguments(raw, "update_task")
+        out = controller._friendly_arguments(raw, "update_task", ctx=self.ctx)
         self.assertEqual(out["task_id"], self.task_a.display_id)
         self.assertEqual(out["milestone_id"], "v2.0")
         self.assertEqual(out["current"], {"milestone_id": "v1.0"})
         self.assertNotIn("current", raw)  # not mutated
 
         detach = controller._friendly_arguments(
-            {"task_id": self.task_a.task_id, "milestone_id": ""}, "update_task"
+            {"task_id": self.task_a.task_id, "milestone_id": ""}, "update_task", ctx=self.ctx
         )
         self.assertEqual((detach["current"]["milestone_id"], detach["milestone_id"]), ("v1.0", ""))
 
         into = controller._friendly_arguments(
-            {"task_id": self.task_b.task_id, "milestone_id": v1.milestone_id}, "update_task"
+            {"task_id": self.task_b.task_id, "milestone_id": v1.milestone_id}, "update_task", ctx=self.ctx
         )
         self.assertEqual((into["current"]["milestone_id"], into["milestone_id"]), (None, "v1.0"))
 
     def test_update_task_without_a_move_gains_no_current(self):
         out = controller._friendly_arguments(
-            {"task_id": self.task_a.task_id, "priority": "High"}, "update_task"
+            {"task_id": self.task_a.task_id, "priority": "High"}, "update_task", ctx=self.ctx
         )
         self.assertNotIn("current", out)
 
@@ -363,7 +363,7 @@ class FriendlyArgumentEnrichmentTests(OrganizeToolsTestBase):
             "milestone": {"title": "M", "assignee_ids": [str(self.user2.id)]},
             "tasks": [{"title": "T", "assignee_id": str(self.user.id)}],
         }
-        out = controller._friendly_arguments(raw, "create_task_plan")
+        out = controller._friendly_arguments(raw, "create_task_plan", ctx=self.ctx)
         self.assertEqual(out["project_id"], "Website Redesign")
         self.assertEqual(out["tasks"][0]["assignee_id"], "testuser")
         self.assertEqual(out["milestone"]["assignee_ids"], ["otheruser"])

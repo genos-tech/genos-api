@@ -42,7 +42,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 from uuid import UUID
 
 from django.conf import settings
@@ -54,6 +54,7 @@ from origin.search_engine.agent import tool_cache
 from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
 from origin.search_engine.agent.citation_resolver import resolve_unresolved_citations
 from origin.search_engine.agent.egress import EgressRefused, check_web_query
+from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.languages import language_directive
 from origin.search_engine.agent.model_fence import fence_for_model
 from origin.search_engine.agent.prompts import (
@@ -316,78 +317,44 @@ def _irrelevant_tool_families(query: str) -> set[str]:
 # them for human-readable labels before emission. The raw values stay
 # in the persisted `AgentStep.arguments_json` row so the resume path
 # still re-runs the tool with the canonical primary key.
-def _resolve_task_display_id(raw: Any) -> str | None:
-    """Look up `TaskMaster.display_id` ("WRD-5") for a raw task primary key."""
-    try:
-        tid = int(raw)
-    except (TypeError, ValueError):
-        return None
-    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
-
-    t = TaskMaster.objects.select_related("project").filter(task_id=tid).first()
-    return t.display_id if t else None
+#
+# The ids come from the model, so every label is looked up through
+# `LabelAccess` (MIP-842): a name is printed only when the caller may read
+# the object, by the same rule as the matching read tool. Anything else —
+# unreadable, another team's, or a miss — stays the raw id.
+def _resolve_task_display_id(raw: Any, access: LabelAccess) -> str | None:
+    """`TaskMaster.display_id` ("WRD-5") for a raw task primary key."""
+    return access.task_display_id(raw)
 
 
-def _resolve_project_name(raw: Any) -> str | None:
-    try:
-        pid = int(raw)
-    except (TypeError, ValueError):
-        return None
-    from origin.models.project.prj_models import ProjectMaster  # noqa: PLC0415
-
-    return (
-        ProjectMaster.objects.filter(project_id=pid).values_list("project_name", flat=True).first()
-    )
+def _resolve_project_name(raw: Any, access: LabelAccess) -> str | None:
+    return access.project_name(raw)
 
 
-def _resolve_user_name(raw: Any) -> str | None:
-    if not raw:
-        return None
-    from origin.models.common.user_models import CustomUser  # noqa: PLC0415
-
-    return CustomUser.objects.filter(id=str(raw)).values_list("username", flat=True).first()
+def _resolve_user_name(raw: Any, access: LabelAccess) -> str | None:
+    return access.username(raw) if raw else None
 
 
-def _resolve_todo_item_title(raw: Any) -> str | None:
-    """Look up `ToDoItem.title` for a raw item primary key so the
-    approval card surfaces the human-readable todo instead of "73".
-    Returns None when the id doesn't resolve (e.g. a non-todo tool
-    happens to use an `item_id` arg too — the raw value is shown).
+def _resolve_todo_item_title(raw: Any, access: LabelAccess) -> str | None:
+    """`ToDoItem.title` for a raw item primary key so the approval card
+    surfaces the human-readable todo instead of "73". None when the id
+    doesn't resolve (e.g. a non-todo tool happens to use an `item_id` arg
+    too — the raw value is shown).
     """
-    try:
-        tid = int(raw)
-    except (TypeError, ValueError):
-        return None
-    from origin.models.chat.todo_models import ToDoItem  # noqa: PLC0415
-
-    return ToDoItem.objects.filter(item_id=tid).values_list("title", flat=True).first()
+    return access.todo_title(raw)
 
 
-def _resolve_milestone_title(raw: Any) -> str | None:
-    try:
-        mid = int(raw)
-    except (TypeError, ValueError):
-        return None
-    from origin.models.task.milestone_models import MilestoneMaster  # noqa: PLC0415
-
-    return (
-        MilestoneMaster.objects.filter(milestone_id=mid).values_list("title", flat=True).first()
-    )
+def _resolve_milestone_title(raw: Any, access: LabelAccess) -> str | None:
+    return access.milestone_title(raw)
 
 
-def _resolve_note_folder_name(raw: Any) -> str | None:
-    try:
-        fid = int(raw)
-    except (TypeError, ValueError):
-        return None
-    from origin.models.note.personal_note_models import PersonalNoteFolder  # noqa: PLC0415
-
-    return PersonalNoteFolder.objects.filter(folder_id=fid).values_list("name", flat=True).first()
+def _resolve_note_folder_name(raw: Any, access: LabelAccess) -> str | None:
+    return access.folder_name(raw)
 
 
 # Argument-key → resolver. Resolvers return None on a miss so we fall
 # back to the raw value (the user sees the ID rather than a blank).
-_FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any], str | None]] = {
+_FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any, LabelAccess], str | None]] = {
     "task_id": _resolve_task_display_id,
     "project_id": _resolve_project_name,
     "assignee_id": _resolve_user_name,
@@ -403,18 +370,19 @@ _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any], str | None]] = {
 }
 
 
-def _friendly_task_plan_arguments(out: dict[str, Any], _args: dict[str, Any]) -> None:
+def _friendly_task_plan_arguments(
+    out: dict[str, Any], _args: dict[str, Any], access: LabelAccess
+) -> None:
     """In-place nested enrichment for `create_task_plan` arguments.
 
     The flat resolver pass above only touches top-level keys; a plan's
     assignees live inside `tasks[i].assignee_id` and
     `milestone.assignee_ids`. Resolve them all with ONE batched user
-    query so the approval card shows usernames, not UUIDs. Structure is
-    otherwise preserved — the frontend's structured preview renders the
-    same shape the model proposed.
+    query so the approval card shows usernames, not UUIDs. Only people
+    the caller may see by name get a label. Structure is otherwise
+    preserved — the frontend's structured preview renders the same shape
+    the model proposed.
     """
-    from origin.models.common.user_models import CustomUser  # noqa: PLC0415
-
     tasks = out.get("tasks") if isinstance(out.get("tasks"), list) else []
     milestone = out.get("milestone") if isinstance(out.get("milestone"), dict) else None
 
@@ -429,12 +397,7 @@ def _friendly_task_plan_arguments(out: dict[str, Any], _args: dict[str, Any]) ->
     if not ids:
         return
 
-    names = {
-        str(u_id): username
-        for u_id, username in CustomUser.objects.filter(id__in=list(ids)).values_list(
-            "id", "username"
-        )
-    }
+    names = access.usernames(ids)
     new_tasks = []
     for t in tasks:
         if isinstance(t, dict) and t.get("assignee_id"):
@@ -450,7 +413,9 @@ def _friendly_task_plan_arguments(out: dict[str, Any], _args: dict[str, Any]) ->
         }
 
 
-def _friendly_bulk_update_arguments(out: dict[str, Any], _args: dict[str, Any]) -> None:
+def _friendly_bulk_update_arguments(
+    out: dict[str, Any], _args: dict[str, Any], access: LabelAccess
+) -> None:
     """In-place nested enrichment for `update_tasks_bulk` arguments.
 
     Each update row gains `display_id` / `title` and a `current` snapshot
@@ -462,28 +427,19 @@ def _friendly_bulk_update_arguments(out: dict[str, Any], _args: dict[str, Any]) 
     card diffs it like any other field. The other proposed values and
     `task_id` stay untouched — the persisted `arguments_json` is raw
     anyway; this only shapes the wire event.
+
+    A row for a task the caller can't read is left exactly as proposed:
+    no title, no snapshot. The same goes for a milestone they can't read.
     """
     updates = out.get("updates")
     if not isinstance(updates, list) or not updates:
         return
 
-    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
-
-    ids: list[int] = []
-    for row in updates:
-        if isinstance(row, dict):
-            try:
-                ids.append(int(row.get("task_id")))
-            except (TypeError, ValueError):
-                continue
-    if not ids:
-        return
-
-    by_id = {
-        t.task_id: t
-        for t in TaskMaster.objects.select_related("project", "milestone").filter(task_id__in=ids)
-    }
-    targets = _milestone_titles(row.get("milestone_id") for row in updates if isinstance(row, dict))
+    ids = [row.get("task_id") for row in updates if isinstance(row, dict)]
+    by_id = access.tasks(ids)
+    targets = access.milestone_titles(
+        row.get("milestone_id") for row in updates if isinstance(row, dict)
+    )
     new_updates = []
     for row in updates:
         if isinstance(row, dict):
@@ -501,7 +457,7 @@ def _friendly_bulk_update_arguments(out: dict[str, Any], _args: dict[str, Any]) 
                         "effort_level": task.effort_level,
                         "status": task.status,
                         "due_date": task.due_date.isoformat() if task.due_date else None,
-                        "milestone_id": _current_milestone_title(task),
+                        "milestone_id": _current_milestone_title(task, access),
                     },
                 }
             row = _with_milestone_title(row, targets)
@@ -509,28 +465,14 @@ def _friendly_bulk_update_arguments(out: dict[str, Any], _args: dict[str, Any]) 
     out["updates"] = new_updates
 
 
-def _current_milestone_title(task: Any) -> str | None:
-    return task.milestone.title if task.milestone_id and task.milestone else None
-
-
-def _milestone_titles(raw_ids: Iterable[Any]) -> dict[int, str]:
-    """`milestone_id → title` for every integer id in `raw_ids`, in one query.
-    `''` (detach), None (no move) and junk are skipped."""
-    ids: set[int] = set()
-    for raw in raw_ids:
-        if raw is None or raw == "":
-            continue
-        try:
-            ids.add(int(raw))
-        except (TypeError, ValueError):
-            continue
-    if not ids:
-        return {}
-    from origin.models.task.milestone_models import MilestoneMaster  # noqa: PLC0415
-
-    return dict(
-        MilestoneMaster.objects.filter(milestone_id__in=ids).values_list("milestone_id", "title")
-    )
+def _current_milestone_title(task: Any, access: LabelAccess) -> Any:
+    """The task's present milestone title; None means "in no milestone". When
+    the caller can't read that milestone it stays the raw id — a task they
+    can see never leaks the name of one they can't, and the card doesn't
+    claim the task is in none."""
+    if not task.milestone_id or not task.milestone:
+        return None
+    return task.milestone.title if access.milestone_readable(task.milestone) else task.milestone_id
 
 
 def _with_milestone_title(row: dict[str, Any], titles: dict[int, str]) -> dict[str, Any]:
@@ -544,7 +486,9 @@ def _with_milestone_title(row: dict[str, Any], titles: dict[int, str]) -> dict[s
     return {**row, "milestone_id": title} if title is not None else row
 
 
-def _friendly_update_task_arguments(out: dict[str, Any], args: dict[str, Any]) -> None:
+def _friendly_update_task_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
     """In-place nested enrichment for `update_task` arguments.
 
     The flat pass already labels the proposed `milestone_id`; on a
@@ -552,56 +496,39 @@ def _friendly_update_task_arguments(out: dict[str, Any], args: dict[str, Any]) -
     milestone title, None = in no milestone) so the card can show
     old → new — the same shape a bulk row's `current` carries. The flat
     pass has also replaced `task_id` with a display id, so the task is
-    looked up from the raw `args`."""
+    looked up from the raw `args`. Nothing is added for a task the caller
+    can't read."""
     if args.get("milestone_id") is None:
         return
-    try:
-        tid = int(args.get("task_id"))
-    except (TypeError, ValueError):
-        return
-    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
-
-    task = TaskMaster.objects.select_related("milestone").filter(task_id=tid).first()
+    task = access.task(args.get("task_id"))
     if task is not None:
-        out["current"] = {"milestone_id": _current_milestone_title(task)}
+        out["current"] = {"milestone_id": _current_milestone_title(task, access)}
 
 
-def _friendly_update_note_arguments(out: dict[str, Any], _args: dict[str, Any]) -> None:
+def _friendly_update_note_arguments(
+    out: dict[str, Any], _args: dict[str, Any], access: LabelAccess
+) -> None:
     """In-place nested enrichment for `update_note` arguments.
 
     ADDS `note_title` (resolved from the note tables) so the approval
-    card can say which note is being edited. `note_id` itself is left
-    numeric — unlike the flat resolvers this must not replace the key,
-    because the preview needs both the label and the raw id."""
-    ntype = str(out.get("note_type") or "").lower()
-    try:
-        nid = int(out.get("note_id"))
-    except (TypeError, ValueError):
-        return
-    from origin.models.note.chat_note_models import ChatNoteMaster  # noqa: PLC0415
-    from origin.models.note.personal_note_models import PersonalNoteMaster  # noqa: PLC0415
-    from origin.models.note.task_note_models import TaskNoteMaster  # noqa: PLC0415
-
-    model = {
-        "personal": PersonalNoteMaster,
-        "team": PersonalNoteMaster,
-        "shared": PersonalNoteMaster,
-        "task": TaskNoteMaster,
-        "chat": ChatNoteMaster,
-    }.get(ntype)
-    if model is None:
-        return
-    title = model.objects.filter(note_id=nid).values_list("title", flat=True).first()
+    card can say which note is being edited — only when the caller may
+    read that note. `note_id` itself is left numeric — unlike the flat
+    resolvers this must not replace the key, because the preview needs
+    both the label and the raw id."""
+    title = access.note_title(out.get("note_type"), out.get("note_id"))
     if title:
         out["note_title"] = title
 
 
-def _friendly_create_note_arguments(out: dict[str, Any], args: dict[str, Any]) -> None:
+def _friendly_create_note_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
     """In-place nested enrichment for `create_note` arguments.
 
     ADDS `chat_name` for a chat note so the approval card can say which
     conversation the note goes on: the chat's title, or for a DM / MDM
-    (which have none) its members' names. `chat_id` stays as sent."""
+    (which have none) its members' names. `chat_id` stays as sent. Only
+    for a chat the caller is a member of."""
     if str(args.get("note_type") or "").lower() != "chat" or not args.get("chat_id"):
         return
     from origin.search_engine.agent.tools.base import ToolError  # noqa: PLC0415
@@ -611,9 +538,9 @@ def _friendly_create_note_arguments(out: dict[str, Any], args: dict[str, Any]) -
         channel_id, _thread = parse_chat_ref(args.get("chat_id"), args.get("thread_id"))
     except ToolError:
         return
-    from origin.models.chat.unified_models import Channel, ChannelMember  # noqa: PLC0415
+    from origin.models.chat.unified_models import ChannelMember  # noqa: PLC0415
 
-    channel = Channel.objects.filter(id=channel_id).only("title").first()
+    channel = access.readable_channel(channel_id)
     if channel is None:
         return
     name = (channel.title or "").strip()
@@ -628,13 +555,16 @@ def _friendly_create_note_arguments(out: dict[str, Any], args: dict[str, Any]) -
         out["chat_name"] = name
 
 
-def _friendly_dependency_arguments(out: dict[str, Any], _args: dict[str, Any]) -> None:
+def _friendly_dependency_arguments(
+    out: dict[str, Any], _args: dict[str, Any], access: LabelAccess
+) -> None:
     """In-place nested enrichment for `update_task_dependencies` arguments.
 
     Each `add` / `remove` edge names two raw task ids below the top level,
     where the flat pass can't reach; label both ends "PRJ-12 Title" (one
     batched query for the whole call) so the approval card says which
-    tasks get linked. An id that doesn't resolve stays raw."""
+    tasks get linked. An id that doesn't resolve, or names a task the
+    caller can't read, stays raw."""
     edges = [
         row
         for key in ("add", "remove")
@@ -642,22 +572,13 @@ def _friendly_dependency_arguments(out: dict[str, Any], _args: dict[str, Any]) -
         for row in out[key]
         if isinstance(row, dict)
     ]
-    ids: set[int] = set()
-    for row in edges:
-        for end in ("blocker_task_id", "blocked_task_id"):
-            try:
-                ids.add(int(row.get(end)))
-            except (TypeError, ValueError):
-                continue
-    if not ids:
+    readable = access.tasks(
+        row.get(end) for row in edges for end in ("blocker_task_id", "blocked_task_id")
+    )
+    if not readable:
         return
 
-    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
-
-    labels = {
-        t.task_id: f"{t.display_id} {t.title}".strip()
-        for t in TaskMaster.objects.select_related("project").filter(task_id__in=ids)
-    }
+    labels = {t.task_id: f"{t.display_id} {t.title}".strip() for t in readable.values()}
 
     def _label(raw: Any) -> Any:
         try:
@@ -682,7 +603,9 @@ def _friendly_dependency_arguments(out: dict[str, Any], _args: dict[str, Any]) -
 # Tool-name → nested enrichment pass, applied after the flat resolvers.
 # Each edits the labelled copy and may read the caller's raw args for an
 # id the flat pass has already replaced with a label.
-_FRIENDLY_NESTED_ENRICHERS: dict[str, Callable[[dict[str, Any], dict[str, Any]], None]] = {
+_FRIENDLY_NESTED_ENRICHERS: dict[
+    str, Callable[[dict[str, Any], dict[str, Any], LabelAccess], None]
+] = {
     "create_task_plan": _friendly_task_plan_arguments,
     "update_task": _friendly_update_task_arguments,
     "update_tasks_bulk": _friendly_bulk_update_arguments,
@@ -692,7 +615,9 @@ _FRIENDLY_NESTED_ENRICHERS: dict[str, Callable[[dict[str, Any], dict[str, Any]],
 }
 
 
-def _friendly_arguments(args: dict[str, Any], tool_name: str | None = None) -> dict[str, Any]:
+def _friendly_arguments(
+    args: dict[str, Any], tool_name: str | None = None, *, ctx: ToolContext
+) -> dict[str, Any]:
     """Return a copy of `args` with raw IDs replaced by human labels.
 
     Applied only at the wire-event boundary (the approval card + tool
@@ -700,13 +625,18 @@ def _friendly_arguments(args: dict[str, Any], tool_name: str | None = None) -> d
     the canonical primary keys so the resume path re-runs the tool
     correctly. `tool_name` selects an optional nested enrichment pass
     for composite tools whose IDs live below the top level.
+
+    The ids come from the model, so `ctx` is REQUIRED: a label is printed
+    only for an object the caller may read (`LabelAccess`, MIP-842). Any
+    other id, and any lookup that fails, stays raw.
     """
+    access = LabelAccess(ctx)
     out: dict[str, Any] = {}
     for key, value in args.items():
         resolver = _FRIENDLY_ARG_RESOLVERS.get(key)
         if resolver is not None:
             try:
-                friendly = resolver(value)
+                friendly = resolver(value, access)
             except Exception:  # noqa: BLE001 — labels never break the loop
                 # Not the value: the model sometimes passes a title for an id.
                 log.exception("Friendly-arg lookup failed for %s (%s)", key, type(value).__name__)
@@ -718,7 +648,7 @@ def _friendly_arguments(args: dict[str, Any], tool_name: str | None = None) -> d
     enricher = _FRIENDLY_NESTED_ENRICHERS.get(tool_name or "")
     if enricher is not None:
         try:
-            enricher(out, args)
+            enricher(out, args, access)
         except Exception:  # noqa: BLE001 — labels never break the loop
             log.exception("Nested friendly-arg enrichment failed for %s", tool_name)
     return out
@@ -1735,7 +1665,7 @@ def resume_agent(
             "type": "tool_call_start",
             "step": step_index,
             "tool_name": call_name,
-            "arguments": _friendly_arguments(call_args, call_name),
+            "arguments": _friendly_arguments(call_args, call_name, ctx=ctx),
         }
     )
 
@@ -2673,7 +2603,7 @@ def _drive_loop(
                         "type": "tool_call_start",
                         "step": step,
                         "tool_name": call.name,
-                        "arguments": _friendly_arguments(dict(call.args), call.name),
+                        "arguments": _friendly_arguments(dict(call.args), call.name, ctx=ctx),
                     }
                 )
             starts_pre_emitted = True
@@ -2695,7 +2625,7 @@ def _drive_loop(
                         "type": "tool_call_start",
                         "step": step,
                         "tool_name": call_name,
-                        "arguments": _friendly_arguments(call_args, call_name),
+                        "arguments": _friendly_arguments(call_args, call_name, ctx=ctx),
                     }
                 )
                 err = f"Unknown tool: {call_name}"
@@ -2738,7 +2668,7 @@ def _drive_loop(
                     "type": "tool_call_pending_approval",
                     "step": step,
                     "tool_name": call_name,
-                    "arguments": _friendly_arguments(call_args, call_name),
+                    "arguments": _friendly_arguments(call_args, call_name, ctx=ctx),
                     "approval_token": str(approval_token),
                 }
                 if run_id is not None:
@@ -2765,7 +2695,7 @@ def _drive_loop(
                         "type": "tool_call_start",
                         "step": step,
                         "tool_name": call_name,
-                        "arguments": _friendly_arguments(call_args, call_name),
+                        "arguments": _friendly_arguments(call_args, call_name, ctx=ctx),
                     }
                 )
             if call_idx in precomputed:
