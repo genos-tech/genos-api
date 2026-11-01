@@ -5,10 +5,12 @@ Dispatches by `note_type`:
   * "task"     → TaskNoteMaster
   * "chat"     → ChatNoteMaster
 
-ACL: re-derives the same membership set the note-chunker stamped onto
-the OpenSearch chunk at index time — owner + parent-context members
-+ explicit NotePermissionMaster grants. See `agent.acl` for the
-helpers.
+ACL: task and chat notes re-derive the same membership set the
+note-chunker stamped onto the OpenSearch chunk at index time — owner +
+parent-context members + explicit NotePermissionMaster grants (see
+`agent.acl`). Personal-family notes (personal, Team Notes, shared) use
+`acl.may_read_note` instead, because their index ACL can hold a
+`team:<id>` sentinel that no user id matches.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.search_engine.agent.acl import (
     chat_note_acl_user_ids,
-    personal_note_acl_user_ids,
+    may_read_note,
     task_note_acl_user_ids,
 )
 from origin.search_engine.agent.tools.base import (
@@ -31,7 +33,7 @@ from origin.search_engine.agent.tools.base import (
     wrap_workspace_content,
 )
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
-from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
+from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL, NOTE_TYPE_PERSONAL
 from origin.search_engine.text_extraction import extract_text
 
 _VALID_TYPES = {"personal", "task", "chat"}
@@ -67,8 +69,15 @@ def _fetch_personal(note_id: int, ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"Personal note {note_id} not found.")
     _check_team(note.team_id, ctx.team_id)
 
-    allowed = personal_note_acl_user_ids(owner_id=getattr(note, "owner_id", None), note_id=note_id)
-    if ctx.user_id not in allowed:
+    # NOT `ctx.user_id in personal_note_acl_user_ids(...)`: for a note in a
+    # public Team Notes folder that set holds a `team:<id>` sentinel, never
+    # a teammate's id (MIP-866). Same rule as `update_note` / the approval card.
+    if not may_read_note(
+        user_id=ctx.user_id,
+        note_type_code=NOTE_TYPE_PERSONAL,
+        note_id=note_id,
+        owner_id=getattr(note, "owner_id", None),
+    ):
         raise ToolForbidden(f"Not authorized to read personal note {note_id}.")
 
     return _shape_note(
