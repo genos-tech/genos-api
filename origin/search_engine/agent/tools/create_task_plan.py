@@ -611,7 +611,13 @@ CREATE_TASK_PLAN = Tool(
                             "the house milestone template: '### 🎯 Goal', "
                             "'### ✅ Success criteria' (bulleted), "
                             "'### 📦 In scope', '### 🚫 Out of scope', "
-                            "'### ⚠️ Risks & dependencies'."
+                            "'### ⚠️ Risks & dependencies', and "
+                            "'### 🧭 Order of work': the first task, numbered "
+                            "steps, which tasks can run in parallel, the gates "
+                            "(what must finish before what), when each parent "
+                            "task closes, and the critical path. Edges say what "
+                            "blocks what, not where to begin: write this "
+                            "whenever the plan has dependencies."
                         ),
                     },
                     "priority": {"type": "STRING", "enum": PRIORITY_ENUM},

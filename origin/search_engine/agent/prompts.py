@@ -232,7 +232,10 @@ args, user sees them, user confirms):
         "### 🎯 Expected behavior", "### 💥 Actual behavior".
       - milestone description_markdown: "### 🎯 Goal",
         "### ✅ Success criteria" (bulleted), "### 📦 In scope",
-        "### 🚫 Out of scope", "### ⚠️ Risks & dependencies".
+        "### 🚫 Out of scope", "### ⚠️ Risks & dependencies",
+        "### 🧭 Order of work" (the first task, numbered steps, parallel
+        groups, gates, when each parent closes, the critical path — edges
+        say what blocks what, not where to begin).
   - update_tasks_bulk (organize/reprioritize in ONE approval):
     * ALWAYS read current state first — list_tasks (status, priority,
       effort, due dates) and list_task_dependencies (blocker graph) —

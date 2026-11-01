@@ -1,7 +1,9 @@
 """`get_milestone_summary` tool — task-count statistics for one milestone.
 
 Returns total / per-status / per-priority / per-effort task counts and
-overdue count, plus the milestone's assignees. Counts tasks via the
+overdue count, plus the milestone's assignees, and where to start
+(`ready_now`, `in_progress`, `blocked` with their open blockers, and the
+`critical_path` — see `milestone_order`). Counts tasks via the
 `_milestone_task_q` predicate from `list_tasks` so subtasks (linked
 through `parent_task_id`) are included — same Q-union as
 `_serialize_milestone` in milestone_views.py, so the agent rollup
@@ -31,6 +33,7 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.list_tasks import _milestone_task_q
+from origin.search_engine.agent.tools.milestone_order import order_of_work
 from origin.services.user_time import today_for_user_id
 
 # Five-row breakdown (vs four in get_project_summary). "Deleted" is the
@@ -119,6 +122,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     overdue_n = agg.get("overdue_count", 0) or 0
     total = agg.get("total_tasks", 0) or 0
 
+    member_project_ids = set(
+        ProjectMembers.objects.filter(
+            attendee_id=ctx.user_id, project__team_id=ctx.team_id
+        ).values_list("project_id", flat=True)
+    )
+    order = order_of_work(m, member_project_ids)
+
     return {
         "milestone_id": m.milestone_id,
         "project_id": m.project_id,
@@ -136,10 +146,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "priority_breakdown": priority_breakdown,
         "effort_breakdown": effort_breakdown,
         "overdue_count": overdue_n,
+        **order,
         "__summary__": (
             f"Milestone '{m.title}': {total} task(s) — "
             f"{open_n} open, {wip_n} WIP, {closed_n} closed, "
-            f"{overdue_n} overdue"
+            f"{overdue_n} overdue; {order['ready_now_count']} ready to start, "
+            f"{order['blocked_count']} blocked"
         ),
     }
 
@@ -152,11 +164,17 @@ GET_MILESTONE_SUMMARY = Tool(
         "rows including the Deleted status enum, NOT soft-delete "
         "tombstones), priority_breakdown (Minimal/Low/Normal/High/Critical), "
         "effort_breakdown (Minimal/Low/Moderate/High/Extensive), overdue "
-        "count, unassigned count, and the milestone's assignees. Counts "
+        "count, unassigned count, and the milestone's assignees. It also "
+        "says where to start: `ready_now` (open tasks whose blockers are all "
+        "closed, counting the blockers of their parent tasks), `in_progress`, "
+        "`blocked` (each with its open blockers) and `critical_path` (the "
+        "longest chain of open tasks along the dependencies). 'Open' status "
+        "alone does not mean ready: use `ready_now`. Counts "
         "include subtasks (tasks whose parent_task_id is the milestone's "
         "backing task), matching the milestone table view. Use for 'how "
         "many tasks in milestone X?', 'how many Critical tasks under "
-        "milestone X?', 'what's overdue in milestone X?'. Resolve a "
+        "milestone X?', 'what's overdue in milestone X?', 'which task should "
+        "I take first in milestone X?'. Resolve a "
         "milestone name to a numeric id with `list_milestones` first if "
         "needed. Only accessible to project members."
     ),
