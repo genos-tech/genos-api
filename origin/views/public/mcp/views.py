@@ -60,6 +60,27 @@ class McpView(PublicApiView):
     # GET and carries on unbothered when it gets one.
     http_method_names = ["post", "options"]
 
+    def disabled_message(self) -> str | None:
+        # `PUBLIC_API_DISABLED` (all key access) or `MCP_DISABLED` (this
+        # endpoint only), MIP-865.
+        if getattr(settings, "MCP_DISABLED", False):
+            return "MCP is temporarily unavailable."
+        return super().disabled_message()
+
+    def disabled_response(self, message: str) -> Response:
+        # The transport's own convention is a JSON-RPC error body, so a
+        # client shows the message instead of a bare HTTP failure. 503
+        # is the HTTP half. The id is echoed when the body is readable.
+        request_id = None
+        try:
+            data = self.request.data
+            if isinstance(data, dict):
+                request_id = data.get("id")
+        except Exception:
+            pass
+        error = JsonRpcError(protocol.SERVICE_UNAVAILABLE, message, http_status=503)
+        return Response(error.as_response(request_id), status=error.http_status)
+
     def post(self, request):
         try:
             self._check_origin(request)
@@ -249,7 +270,7 @@ class McpView(PublicApiView):
             )
 
         scope = getattr(request.auth, "scope", SCOPE_READ)
-        return ToolContext(team_id=team_id, user_id=user_id), scope
+        return ToolContext(team_id=team_id, user_id=user_id, surface="mcp"), scope
 
     @staticmethod
     def _allows_destructive(request) -> bool:

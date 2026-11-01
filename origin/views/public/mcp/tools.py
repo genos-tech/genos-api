@@ -181,11 +181,15 @@ CATALOG: tuple[McpTool, ...] = (
             "Read one task in full: title, status, priority, assignee, dates, "
             "tags, where it sits (`parent_task_id`, `milestone_id`, and "
             "`backs_milestone_id` when it is a milestone's own row), its "
-            "description, and its comments. Prefer `content_markdown` for "
-            "the description when it is present — it keeps headings, checklists "
+            "description, and its comments. Read the description from "
+            "`content_markdown` when it is present — it keeps headings, checklists "
             "and code fences — and fall back to `content_text`, the same body "
-            "flattened. This is the first call when the user names a task to "
-            "work on."
+            "flattened, which is sent only when there is no markdown (the body "
+            "is never returned twice). Each comment's `markdown` keeps its "
+            "paragraphs, lists and code fences. `body_hash` identifies the body "
+            "you were shown: pass it to `update_task` as `base_body_hash` to "
+            "refuse an edit that would overwrite a newer one. This is the first call when the "
+            "user names a task to work on."
         ),
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
@@ -235,20 +239,27 @@ CATALOG: tuple[McpTool, ...] = (
             "milestone is also backed by a task, so `update_task` on that "
             "backing id is how a milestone's own title and dates change."
         ),
-        # The registry description of `assignee_user_id` points at
+        # The registry description of `assignee_id` points at
         # `list_my_milestones`, which this surface does not publish —
         # `_rewrite_refs` can only rename a tool, not remove a reference
         # to an absent one. Overridden rather than renamed: the caller
-        # already has `get_current_user` for "mine".
+        # already has `get_current_user` for "mine". `assignee_user_id` is the
+        # older spelling of the same filter; both are published because this
+        # layer refuses any argument not in the schema (MIP-827).
         schema_overrides={
-            "assignee_user_id": {
+            "assignee_id": {
                 "type": "string",
                 "description": (
                     "Only milestones this user is assigned to. A user UUID — "
                     "`get_current_user` for the caller's own, or "
-                    "`get_team_members` to resolve a name."
+                    "`get_team_members` to resolve a name. Same name as in "
+                    "`list_tasks`."
                 ),
-            }
+            },
+            "assignee_user_id": {
+                "type": "string",
+                "description": "Older spelling of `assignee_id`; send `assignee_id`.",
+            },
         },
     ),
     McpTool(
@@ -258,8 +269,8 @@ CATALOG: tuple[McpTool, ...] = (
             "One milestone in depth: its tasks, their statuses, what is done "
             "and what remains. Use it to plan the order of work across a "
             "milestone: it lists what is ready to start now (every blocker "
-            "closed, including its parent's), what is blocked and by what, and "
-            "the critical path."
+            "closed, including its parent's), what is pending (waiting on someone), "
+            "what is blocked and by what, and the critical path."
         ),
     ),
     McpTool(
@@ -319,7 +330,10 @@ CATALOG: tuple[McpTool, ...] = (
             "task or chat name also finds the notes inside it. Pass "
             "`project_id` (from `list_projects`) or `milestone_id` (from "
             "`list_milestones`) to search only that project or milestone; "
-            "the limit is filled from it, not from other projects."
+            "the limit is filled from it, not from other projects. Each "
+            "returned chunk's `text` is cut at 1,000 characters, and a cut "
+            "chunk carries `truncated: true`: call `get_task` / `get_note` "
+            "for the full text."
         ),
     ),
     McpTool(
@@ -510,7 +524,14 @@ CATALOG: tuple[McpTool, ...] = (
             "due date or milestone. Set status to 'WIP' when you start and "
             "'Closed' when the work is merged. `content_text` replaces the "
             "whole description, so read the task first and send the full new "
-            "body rather than a fragment. `milestone_id` (from "
+            "body rather than a fragment. To change part of it, send one of "
+            "`body_append` / `body_prepend` (markdown added at the end / "
+            "start) or `body_replace` ({old_text, new_text}: `old_text` must "
+            "match exactly once in `content_markdown`) instead of "
+            "`content_text`. Pass `base_body_hash` (the `body_hash` `get_task` "
+            "returned) and the call is refused, with nothing written, if the "
+            "body has changed since you read it; the result carries the new "
+            "`body_hash`. `milestone_id` (from "
             "`list_milestones`, same project) files the task and its sub-tasks "
             "under that milestone; '' takes it out. `tags` replaces the task's "
             "tags with names from `list_project_tags` ([] clears). Requires a "

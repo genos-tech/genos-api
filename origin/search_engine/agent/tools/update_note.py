@@ -37,6 +37,7 @@ from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
+from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_note_mentions
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
@@ -92,6 +93,7 @@ def _has_write_permission(*, owner_id, note_id: int, note_type_code: int, ctx: T
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    check_body_size(args.get("content_text"), "content_text")
     note_type = normalize_note_type(args.get("note_type"))
     if note_type in PERSONAL_FAMILY:
         note_type = "personal"
@@ -269,7 +271,7 @@ def _note_parent_context(note, note_type: str) -> dict[str, Any] | None:
     if note_type != "task":
         return None
     pc = {
-        "project_id": str(note.project_id) if note.project_id else None,
+        "project_id": note.project_id or None,
         "task_id": str(note.task_id) if note.task_id else None,
     }
     return {k: v for k, v in pc.items() if v is not None}

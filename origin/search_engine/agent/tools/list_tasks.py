@@ -38,6 +38,7 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
+from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.search_engine.agent.tools.task_tags import tag_names
 from origin.services.milestone_rollup import milestone_tasks_q
 from origin.services.user_time import today_for_user_id
@@ -221,8 +222,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "display_id": t.display_id,
                 "title": t.title,
                 "status": t.status,
-                "priority": t.priority,
-                "effort_level": t.effort_level,
+                "priority": blank_to_none(t.priority),
+                "effort_level": blank_to_none(t.effort_level),
                 "due_date": t.due_date.isoformat() if t.due_date else None,
                 "assignee_id": str(t.assignee_id) if t.assignee_id else None,
                 "tags": tag_names(t.tags),

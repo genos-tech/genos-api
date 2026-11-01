@@ -22,6 +22,7 @@ from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees
+from origin.views.utils.note_role import get_effective_role
 
 # Distinguishes "caller didn't say" (look it up) from an explicit
 # `folder_id=None` meaning the note is genuinely unfiled.
@@ -32,6 +33,30 @@ from origin.search_engine.chunkers.base import (
     NOTE_TYPE_PERSONAL,
     NOTE_TYPE_TASK,
 )
+
+
+def may_read_note(*, user_id, note_type_code: int, note_id: int, owner_id) -> bool:
+    """The one answer to "may THIS user read this note?" for the agent.
+
+    The owner, or anyone holding a role on the note (`get_effective_role`:
+    an explicit grant, task-note project membership, chat-note channel
+    membership, or a Team Notes folder chain). It is the rule `update_note`
+    authorizes with, and the one the approval card's `LabelAccess.note_title`
+    labels with.
+
+    Prefer this to `user_id in personal_note_acl_user_ids(...)` for a read
+    decision. That set is built for the search index, so a note in a PUBLIC
+    team folder contributes a single ``team:<id>`` sentinel instead of user
+    ids; a membership test against it refuses every teammate.
+
+    The caller still does the tenant check (`note.team_id == ctx.team_id`).
+    Fails closed on a missing user.
+    """
+    if not user_id:
+        return False
+    if owner_id and str(owner_id) == str(user_id):
+        return True
+    return get_effective_role(user_id, note_type_code, note_id) is not None
 
 
 def owns_personal_folder(*, folder_id, team_id: str, user_id: str) -> bool:

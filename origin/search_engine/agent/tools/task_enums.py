@@ -20,3 +20,14 @@ VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed"}
 PRIORITY_ENUM = sorted(VALID_PRIORITIES)
 EFFORT_ENUM = sorted(VALID_EFFORTS)
 STATUS_ENUM = sorted(VALID_STATUSES)
+
+
+def blank_to_none(value):
+    """`None` for an unset enum-like field, whichever way it was stored.
+
+    The REST writers store `""` as readily as NULL for priority and effort
+    (`task_views`, `milestone_views`, `v1_views` do not validate), so a row can
+    hold either. Tools report both as `null` (MIP-781): an empty string reads as
+    a real value, and two rows with the same meaning should not look different.
+    """
+    return value or None
