@@ -360,6 +360,13 @@ class CollaboratorsTests(WriteBase):
         backing.milestone = milestone
         return backing
 
+    def test_a_task_in_no_project_cannot_take_collaborators(self):
+        task = TaskMaster.objects.create(
+            team=self.team, project=None, reporter=self.user, title="t", status="Open"
+        )
+
+        self._refused_and_unchanged(task, "in no project", collaborators=[str(self.user2.id)])
+
     def test_the_team_membership_row_is_what_makes_a_team_member(self):
         """A user with a team row and no project row is allowed; remove the row
         and they are not."""
@@ -714,6 +721,15 @@ class CustomFieldsTests(WriteBase):
         self.assertEqual(
             sorted(out["changed_fields"]),
             sorted(["title", "start_date", "custom_fields", "collaborators"]),
+        )
+
+    def test_a_task_can_hold_at_most_the_stored_limit_of_values(self):
+        task = self._task("t", custom_field_values={str(100000 + i): "orphan" for i in range(100)})
+
+        self._refused_and_unchanged(
+            task,
+            "at most 100 custom values",
+            custom_fields=[{"name": "Customer", "value": "Acme"}],
         )
 
     def test_a_project_move_in_the_same_call_is_refused(self):
