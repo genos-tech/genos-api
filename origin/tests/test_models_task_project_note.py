@@ -69,12 +69,18 @@ class ProjectModelTests(BaseAPITestCase):
             code=code,
         )
 
-    def test_project_name_is_globally_unique(self):
+    def test_project_name_is_unique_per_team(self):
+        from origin.models.common.team_models import TeamMaster
+
         self._project(name="Unique Name")
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
-                # project_name has unique=True (NOT scoped to team).
                 self._project(name="Unique Name")
+        # Another team may use the same name (MIP-942).
+        team2 = TeamMaster.objects.create(
+            team_name="Name Team", team_email="name-team@example.com", owner=self.user
+        )
+        self._project(name="Unique Name", team=team2)
 
     def test_code_unique_per_team_when_set(self):
         self._project(name="P One", code="GEN")

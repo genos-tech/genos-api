@@ -23,7 +23,12 @@ class ProjectMaster(models.Model):
         to_field="team_id",
     )
     project_id = models.BigAutoField(primary_key=True, unique=True)
-    project_name = models.CharField(unique=True, blank=False)
+    # Unique per team (`project_name_unique_per_team` below), not across every
+    # company: the views only ever checked the caller's own team, so a global
+    # constraint made a name another team used a 500 on rename, and made the
+    # starter workspace (fixed project names) fail for every team after the
+    # first (MIP-942).
+    project_name = models.CharField(blank=False)
     profile_image_url = models.FileField(upload_to=profile_image_path, blank=True, null=True)
     profile_image_file_name = models.CharField(blank=True, null=True)
     project_system_user = models.ForeignKey(
@@ -77,6 +82,10 @@ class ProjectMaster(models.Model):
                 fields=["team", "code"],
                 name="project_code_unique_per_team",
                 condition=models.Q(code__isnull=False),
+            ),
+            models.UniqueConstraint(
+                fields=["team", "project_name"],
+                name="project_name_unique_per_team",
             ),
         ]
 
