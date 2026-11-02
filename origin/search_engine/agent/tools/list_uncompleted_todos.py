@@ -76,7 +76,9 @@ LIST_UNCOMPLETED_TODOS = Tool(
     name="list_uncompleted_todos",
     description=(
         "List the user's still-open todo items across the last N days "
-        "(default 14, max 365, capped at 50 items in the response). Use "
+        "(default 14, max 365), oldest day first and capped at 50 items: "
+        "when `truncated` is true it is the NEWEST items that are left "
+        "out, so narrow `date_range_days` to reach them. Use "
         "this when the user asks 'what's still open?', 'what did I miss "
         "this week?', or wants a backlog view of past-but-unfinished "
         "items. Each item carries `reminder_at` when a reminder is "

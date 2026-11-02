@@ -14,6 +14,9 @@ inconsistent rather than merely wrong:
   created on demand. Its sub-items go with it — a child lives in its
   parent's group by construction — and both days' "completed" flags are
   recomputed, because the day a to-do left may now be all done.
+* **A sub-item's category is its parent's** (`check_can_set_category`,
+  `cascade_category`): it can't be set on a child, and setting it on a parent
+  carries it to every child.
 * **Finishing a to-do retires its pending reminder** (`apply_completion`).
 * **Deleting cascades** to sub-items and their reminders through the FKs,
   and leaves the search index to a best-effort purge.
@@ -34,6 +37,7 @@ from origin.search_engine.purge import purge_todo_item
 from origin.services import todo_reminders
 
 SUBITEM_MOVE_REFUSAL = "Subitems move with their parent — move the parent instead."
+SUBITEM_CATEGORY_REFUSAL = "Children inherit the parent's tag — set it on the parent."
 
 
 class TodoItemError(ValueError):
@@ -70,6 +74,28 @@ def check_can_move(item) -> None:
     """
     if item.parent_item_id is not None:
         raise TodoItemError(SUBITEM_MOVE_REFUSAL)
+
+
+def check_can_set_category(item) -> None:
+    """Refuse to set (or clear) the category of a sub-item on its own.
+
+    Children mirror the parent's tag, so the app never shows one that
+    differs; a child carrying its own would be a state nothing else expects.
+    """
+    if item.parent_item_id is not None:
+        raise TodoItemError(SUBITEM_CATEGORY_REFUSAL)
+
+
+def cascade_category(item) -> None:
+    """Give every sub-item of `item` the category `item` now has.
+
+    Call after the parent's own category is saved. `ts_updated_at` is set
+    explicitly, as in `save_item`: `.update()` skips `auto_now`, and the
+    incremental chunker selects on it.
+    """
+    ToDoItem.objects.filter(parent_item_id=item.item_id).update(
+        category_id=item.category_id, ts_updated_at=timezone.now()
+    )
 
 
 def apply_completion(item, new_completed: bool) -> None:

@@ -569,12 +569,14 @@ CATALOG: tuple[McpTool, ...] = (
         name="list_uncompleted_todos",
         registry_name="list_uncompleted_todos",
         description=(
-            "The caller's still-open to-dos, newest first, with the `item_id` "
+            "The caller's still-open to-dos, oldest day first, with the `item_id` "
             "that `update_todo_item` and `delete_todo_item` take. This is how "
             "a to-do is found: "
             "`search_workspace` can surface one but does not return its id. "
             "Scans back `date_range_days` (default 14), so widen it for an "
-            "older item. A to-do with a pending reminder carries "
+            "older item. At most 50 come back; when `truncated` is true it is "
+            "the newest that were left out, so narrow `date_range_days` to "
+            "reach them. A to-do with a pending reminder carries "
             "`reminder_at`, in the caller's time zone with its offset."
         ),
     ),
@@ -986,7 +988,8 @@ CATALOG: tuple[McpTool, ...] = (
             "Add a personal to-do for the caller — a private checklist item, "
             "not project work anyone else can see. Use a task for work that "
             "belongs to a project. Only `title` is required; `target_date` "
-            "defaults to today. `remind_at` or `remind_in_minutes` also sets a "
+            "defaults to the caller's own today. `category` is a name, "
+            "created if new. `remind_at` or `remind_in_minutes` also sets a "
             "reminder, which arrives in the caller's Genos Inbox with a web "
             "push: 'remind me Friday to follow up with Sam' is one call with "
             "`target_date` and `remind_at` both Friday. `remind_at` is a "
@@ -1013,7 +1016,9 @@ CATALOG: tuple[McpTool, ...] = (
             "can't be given one. Get `item_id` from `list_uncompleted_todos` "
             "or `list_today_todos`, which also show a pending `reminder_at`. "
             '`notes_text: ""` clears the body; `clear_category: true` removes '
-            "the category. Requires a write-scoped API key."
+            "the category. A category goes on a to-do, not on its sub-items: "
+            "they take their parent's, so naming one on a sub-item is "
+            "refused. Requires a write-scoped API key."
         ),
         write=True,
     ),

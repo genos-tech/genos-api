@@ -9,6 +9,12 @@ The day move, completion and reminder rules are the UI's own
 (`services/todo_items`, `services/todo_reminders`): sub-items follow their
 parent to the new day, and ticking a to-do off retires its pending reminder.
 
+`category` is a NAME, found or created for the user, where the REST endpoint
+takes a `category_id`: an agent has names and no tool lists ids. The rules
+around it are the endpoint's (`services/todo_items`): a sub-item's category is
+its parent's, so it can't be set on one, and setting it on a parent carries it
+to its sub-items.
+
 ACL: the requesting user must own the group the item belongs to.
 """
 
@@ -72,6 +78,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         except todo_items.TodoItemError as exc:
             raise ToolError(str(exc)) from None
 
+    category_name = (args.get("category") or "").strip()
+    category_change = bool(args.get("clear_category")) or bool(category_name)
+    if category_change:
+        # A sub-item's category is its parent's, as in the app.
+        try:
+            todo_items.check_can_set_category(item)
+        except todo_items.TodoItemError as exc:
+            raise ToolError(str(exc)) from None
+
     cancel_reminder = bool(args.get("cancel_reminder"))
     remind_at = reminder_from_args(args, zone)
     if cancel_reminder and remind_at is not None:
@@ -109,7 +124,6 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # explicitly; passing a non-empty `category` overrides any clear.
         if args.get("clear_category"):
             item.category = None
-        category_name = (args.get("category") or "").strip()
         if category_name:
             category, _ = ToDoCategory.objects.get_or_create(
                 team_id=ctx.team_id,
@@ -121,6 +135,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # Saves the row, re-homing it into the target day (children follow)
         # and recomputing the completion of every day it touched.
         saved = todo_items.save_item(item, move_to=move_to)
+        if category_change:
+            todo_items.cascade_category(item)
 
         if cancel_reminder:
             todo_reminders.cancel_pending(item=item)
@@ -161,7 +177,8 @@ UPDATE_TODO_ITEM = Tool(
         "another day, set or cancel its reminder. Required: item_id. "
         "Optional patch fields: title, notes_text (empty string "
         "clears it), is_completed, category (free-form), clear_category "
-        "(set true to remove the existing category), target_date (move to "
+        "(set true to remove the existing category; a sub-item takes its "
+        "parent's category, so set it on the parent), target_date (move to "
         "that day), remind_at / remind_in_minutes (remind the user; one at "
         "most), cancel_reminder. Completing a to-do cancels its reminder."
     ),
