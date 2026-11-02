@@ -144,6 +144,107 @@ class MilestoneDeleteCascadeTests(CascadeHistoryBase):
         self.assertIsNone(parent.new_value)
         self.assertEqual(self._rows(loose, TaskActivityActionType.PARENT), [])
 
+    def _sprint(self, number):
+        return Sprint.objects.create(
+            team=self.team,
+            project=self.project,
+            name=f"Sprint {number}",
+            sequence_number=number,
+            start_date="2026-11-02",
+            end_date="2026-11-15",
+        )
+
+    def _file_task(self, title, **link):
+        """A task filed through the create endpoint, the way the app files one."""
+        res = self.client.post(
+            "/api/v2/task/",
+            {
+                "team": str(self.team.team_id),
+                "project": self.project.project_id,
+                "assignee": self.user.id,
+                "reporter": self.user.id,
+                "title": title,
+                "priority": "Medium",
+                "effort_level": "Medium",
+                "status": "Open",
+                "content": None,
+                "due_date": "2026-12-31",
+                "links": [],
+                "tags": [],
+                "is_init_task": False,
+                **link,
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        return TaskMaster.objects.get(task_id=res.data["task"]["task_id"])
+
+    def test_detached_tasks_at_every_depth_also_leave_the_milestones_sprint(self):
+        sprint = self._sprint(1)
+        milestone = self._milestone("Q3 launch", sprint=sprint)
+        top = self._file_task("top", milestone=milestone.milestone_id)
+        sub = self._file_task("sub", parent_task_id=top.task_id)
+        subsub = self._file_task("subsub", parent_task_id=sub.task_id)
+        chain = (top, sub, subsub)
+        # The create endpoint hands every depth the milestone, and with it the sprint.
+        for task in chain:
+            task.refresh_from_db()
+            self.assertEqual(task.milestone_id, milestone.milestone_id, task.title)
+            self.assertEqual(task.sprint_id, sprint.sprint_id, task.title)
+
+        res = self.client.delete(f"/api/v2/milestone/{milestone.milestone_id}/")
+        self.assertEqual(res.status_code, 200, res.data)
+
+        for task in chain:
+            task.refresh_from_db()
+            self.assertIsNone(task.milestone_id, task.title)
+            self.assertIsNone(task.sprint_id, task.title)
+            activity = self._only(task, TaskActivityActionType.SPRINT_LINK)
+            self.assertEqual(activity.old_value, sprint.sprint_id)
+            self.assertIsNone(activity.new_value)
+            self.assertEqual(activity.actor_id, self.user.id)
+            self.assertEqual(activity.metadata["via"], APP)
+            self.assertEqual(activity.metadata["cascade"], "milestone_delete")
+            self.assertEqual(activity.metadata["oldLabel"], "Sprint 1")
+        # The edge inside the chain is still there; only the one to the milestone went.
+        top.refresh_from_db()
+        sub.refresh_from_db()
+        subsub.refresh_from_db()
+        self.assertIsNone(top.parent_task_id)
+        self.assertEqual(sub.parent_task_id, top.task_id)
+        self.assertEqual(subsub.parent_task_id, sub.task_id)
+
+    def test_a_task_in_a_milestone_without_a_sprint_gets_no_sprint_history(self):
+        milestone = self._milestone("No sprint")
+        member = self._task("member", milestone=milestone, parent_task_id=milestone.task_id)
+
+        res = self.client.delete(f"/api/v2/milestone/{milestone.milestone_id}/")
+        self.assertEqual(res.status_code, 200, res.data)
+
+        member.refresh_from_db()
+        self.assertIsNone(member.milestone_id)
+        self.assertIsNone(member.sprint_id)
+        self.assertEqual(self._rows(member, TaskActivityActionType.SPRINT_LINK), [])
+        # The rest of the detach is as before.
+        self.assertEqual(len(self._rows(member, TaskActivityActionType.MILESTONE_LINK)), 1)
+
+    def test_another_milestone_in_the_same_sprint_keeps_its_tasks_there(self):
+        sprint = self._sprint(1)
+        doomed = self._milestone("Doomed", sprint=sprint)
+        kept = self._milestone("Kept", sprint=sprint)
+        gone = self._task("gone", milestone=doomed, parent_task_id=doomed.task_id, sprint=sprint)
+        stays = self._task("stays", milestone=kept, parent_task_id=kept.task_id, sprint=sprint)
+
+        res = self.client.delete(f"/api/v2/milestone/{doomed.milestone_id}/")
+        self.assertEqual(res.status_code, 200, res.data)
+
+        gone.refresh_from_db()
+        stays.refresh_from_db()
+        self.assertIsNone(gone.sprint_id)
+        self.assertEqual(stays.milestone_id, kept.milestone_id)
+        self.assertEqual(stays.sprint_id, sprint.sprint_id)
+        self.assertEqual(self._rows(stays, TaskActivityActionType.SPRINT_LINK), [])
+
 
 class MilestoneSprintCascadeTests(CascadeHistoryBase):
     def test_a_milestones_tasks_record_the_sprint_it_moved_to(self):

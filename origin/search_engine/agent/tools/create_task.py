@@ -297,13 +297,25 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # `due_date` is still the raw input string on the instance `create()`
     # returned (`2026-6-30`, a datetime), so read what was stored back: the
     # response shows what the row holds, not an echo of what was sent (MIP-828).
-    task.refresh_from_db(fields=["priority", "effort_level", "due_date", "start_date"])
+    # The parent and the milestone are read back the same way (MIP-924): which
+    # one a task hangs under is decided above from `milestone_id` or
+    # `parent_task_id`, and from either the row ends up with both.
+    task.refresh_from_db(
+        fields=[
+            "priority",
+            "effort_level",
+            "due_date",
+            "start_date",
+            "parent_task_id",
+            "milestone_id",
+        ]
+    )
     return {
         "task_id": task.task_id,
         "display_id": task.display_id,
         "project_id": project_id,
         "milestone_id": task.milestone_id,
-        "parent_task_id": parent.task_id if parent is not None else None,
+        "parent_task_id": task.parent_task_id,
         "assignee_id": str(assignee.id) if assignee is not None else None,
         "assignee_username": assignee_username,
         "tags": [tag["tagName"] for tag in tags],
