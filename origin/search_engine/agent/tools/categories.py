@@ -8,7 +8,6 @@ the same mechanism that keeps `WRITE_PREFIXES` honest.
 
 Why a central map rather than a field on each `Tool(...)`: the 60
 definitions live in 60 files, and the consumers of the grouping (the
-peripheral-family subsetting in `controller._tool_family`, the
 registry-generated prompt sections in `prompts.py`, and any future
 per-category telemetry slice) all want the whole taxonomy at once.
 A reviewed dict plus a two-way completeness test gives the same
@@ -18,12 +17,6 @@ The taxonomy mirrors the semantic groups the system prompt's
 TOOL SELECTION CHEAT-SHEET already teaches the model — categories are
 ROUTING metadata (what is this tool for), not permissions
 (`requires_approval` stays the write gate) and not cost.
-
-⚠️ `PERIPHERAL_FAMILIES` members feed `RAG_TOOL_SUBSETTING` (OFF — it
-regressed a pro-model eval once; see SPOTLIGHT_Q0_Q2_PROGRESS.md).
-Moving a category in or out of that tuple changes which tools that
-flag may drop. The four families reproduce the old name-regex
-`_tool_family` heuristic exactly — parity is pinned by test.
 """
 
 from __future__ import annotations
@@ -44,10 +37,6 @@ CATEGORIES = (
     "todo",  # personal daily todos
     "notes",  # note folders + note writes
 )
-
-# Categories the (dormant) per-query subsetting may drop when the query
-# shows no signal for them. Exactly the old `_tool_family` families.
-PERIPHERAL_FAMILIES = ("pr", "calendar", "todo", "me")
 
 TOOL_CATEGORY: dict[str, str] = {
     # --- search ---

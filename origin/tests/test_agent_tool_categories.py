@@ -5,9 +5,6 @@ two-way completeness tests, so forgetting to categorize a new tool
 fails CI with the name spelled out. Plus the guarantees that made this
 change safe to ship at all:
 
-  * `_tool_family` parity — the category-driven mapping reproduces the
-    old name-regex heuristic for every registered tool (first-ever
-    coverage of that function);
   * flag off ⇒ the system prompt is the legacy constant byte-for-byte;
   * the generated sections can't drift (write list == requires_approval
     set; directory names == the registry; true count);
@@ -18,11 +15,10 @@ change safe to ship at all:
 from django.test import SimpleTestCase, override_settings
 
 from origin.search_engine.agent import prompts
-from origin.search_engine.agent.controller import _build_tool_declarations, _tool_family
+from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.tools import REGISTRY
 from origin.search_engine.agent.tools.categories import (
     CATEGORIES,
-    PERIPHERAL_FAMILIES,
     TOOL_CATEGORY,
     tool_category,
 )
@@ -59,43 +55,9 @@ class CategoryMapTests(SimpleTestCase):
         unknown = {c for c in TOOL_CATEGORY.values() if c not in CATEGORIES}
         self.assertEqual(unknown, set())
 
-    def test_peripheral_families_are_categories(self):
-        self.assertTrue(set(PERIPHERAL_FAMILIES) <= set(CATEGORIES))
-
     def test_lookup_helper(self):
         self.assertEqual(tool_category("search_knowledge_base"), "search")
         self.assertIsNone(tool_category("not_a_tool"))
-
-
-class ToolFamilyParityTests(SimpleTestCase):
-    """`_tool_family` used to be name-substring guesswork; it now reads
-    the declared map. The mapping it feeds (`RAG_TOOL_SUBSETTING`'s
-    droppable families) must not change out from under the flag — the
-    old heuristic is re-stated here verbatim and compared across the
-    ENTIRE registry."""
-
-    @staticmethod
-    def _legacy_family(name: str) -> str | None:
-        if name == "fetch_pr" or name.startswith("list_pr_"):
-            return "pr"
-        if "calendar" in name:
-            return "calendar"
-        if "todo" in name:
-            return "todo"
-        if name.startswith("get_my_") or name.startswith("list_my_"):
-            return "me"
-        return None
-
-    def test_family_parity_across_the_whole_registry(self):
-        for name in REGISTRY:
-            self.assertEqual(
-                _tool_family(name),
-                self._legacy_family(name),
-                f"{name}: category-driven family diverges from the legacy heuristic",
-            )
-
-    def test_unknown_tool_is_core(self):
-        self.assertIsNone(_tool_family("not_a_tool"))
 
 
 class GeneratedPromptTests(SimpleTestCase):
