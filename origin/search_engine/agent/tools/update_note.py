@@ -35,11 +35,12 @@ from apis.request_id import log_failure
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
+from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_note_mentions
-from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
+from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
 from origin.search_engine.agent.tools.note_targets import (
     PERSONAL_FAMILY,

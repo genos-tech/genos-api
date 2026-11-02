@@ -130,7 +130,9 @@ CREATE_TODO_ITEM = Tool(
         "description), category (free-form label; created if new), "
         "target_date (ISO YYYY-MM-DD; default the user's own today), remind_at / "
         "remind_in_minutes (also remind the user; one at most). 'Remind me "
-        "Friday to X' is ONE call: target_date and remind_at both Friday."
+        "Friday to X' is ONE call: target_date and remind_at both Friday, with "
+        "X as the title in the user's words. Call it first: a person named in "
+        "X is only text, so there is nobody to look up."
     ),
     parameters_schema={
         "type": "OBJECT",

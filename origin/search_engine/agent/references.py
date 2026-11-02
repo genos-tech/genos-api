@@ -23,6 +23,8 @@ import copy
 from functools import lru_cache
 from typing import Any
 
+from origin.search_engine.agent.chip_syntax import CHIP_POINTER, CHIP_SYNTAX_HINT
+
 _MILESTONE_HINT = (
     " Also accepts the milestone's display id (the id of its backing task, e.g. "
     "PRJ-123) or its Genos URL; a bare number is always the milestone id."
@@ -50,6 +52,17 @@ def _with_hint(prop: dict[str, Any]) -> dict[str, Any]:
     return {**prop, "type": "STRING", "description": wording + _MILESTONE_HINT}
 
 
+def _point_at_chips(prop: dict[str, Any]) -> None:
+    """The system prompt carries the chip syntax once, so a body argument only
+    has to point at it. MCP has no such prompt and keeps the full text."""
+    if CHIP_SYNTAX_HINT in str(prop.get("description")):
+        prop["description"] = prop["description"].replace(CHIP_SYNTAX_HINT, CHIP_POINTER)
+    for child in ((prop.get("items") or {}).get("properties") or {}).values():
+        _point_at_chips(child)
+    for child in (prop.get("properties") or {}).values():
+        _point_at_chips(child)
+
+
 def declared_schema(name: str, schema: dict[str, Any]) -> dict[str, Any]:
     """The schema the model sees for tool `name`. `schema` is never mutated: it
     is module state, and MCP builds its own declaration from it."""
@@ -58,6 +71,8 @@ def declared_schema(name: str, schema: dict[str, Any]) -> dict[str, Any]:
         return schema
     declared = copy.deepcopy(schema)
     props = declared.get("properties") or {}
+    for prop in props.values():
+        _point_at_chips(prop)
     for arg in (*tool.task_ref_args, *tool.note_ref_args):
         if arg in props:
             props[arg] = _reference(props[arg], tool.schema_overrides.get(arg))

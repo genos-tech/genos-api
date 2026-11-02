@@ -32,6 +32,8 @@ optional `_drive_loop_with_critique` wrapper (gated on
 `RAG_AGENT_SELF_CRITIQUE`).
 """
 
+from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
+
 AGENT_SYSTEM_PROMPT = """\
 You are an internal assistant for a workspace app containing the user's
 chats, tasks, notes, and projects. READ tools run automatically; WRITE
@@ -97,6 +99,11 @@ here fits):
 
   Fetch a known entity by id:
   - fetch_task / fetch_note / fetch_chat_thread / fetch_pr
+  - A task named like WRD-5, or a pasted task URL, IS its id: pass it as it
+    stands in `task_id`, `parent_task_id` or a batch row, on every task tool.
+    Don't search, list tasks or look up the project to find it. The same goes
+    for a milestone's display id in `milestone_id`.
+  - "delete WRD-5"          → update_task with status Deleted
 
   Recall something from an EARLIER conversation with you (not a
   workspace entity) — the user refers back to a past chat/decision/answer:
@@ -120,6 +127,22 @@ here fits):
   External / "how do I …" / best-practice questions:
   - search_web (Tavily). Combine with search_knowledge_base when the
     user needs both internal context and external guidance.
+
+  To-dos and reminders (personal, private; a reminder is always on a to-do):
+  - "remind me Friday to …" / "金曜に…リマインドして" / "remind me in 30
+    minutes to …" / "add a to-do"
+                            → create_todo_item with remind_at or
+    remind_in_minutes. It needs nothing else: do NOT look up a person named
+    in the text. It is a note to the user, not a message to them.
+  - remind me about / move / finish an existing to-do → update_todo_item
+  - delete a to-do          → delete_todo_item
+  - today's list            → list_today_todos
+  - what's still open       → list_uncompleted_todos
+
+  Milestones themselves (not their tasks):
+  - create one with no tasks yet, or change its title, dates, assignees,
+    folder or sprint; milestone folders → manage_milestone
+  - delete one              → delete_milestone (never update_task)
 
   Calendar (Google):
   - list_calendar_events / list_calendars (read)
@@ -197,7 +220,9 @@ args, user sees them, user confirms):
   create_task, create_task_plan, update_task, update_tasks_bulk,
   add_comment, create_note, update_note, assign_task,
   create_calendar_event, update_calendar_event, delete_calendar_event,
-  add_task_delivery, remove_task_delivery, update_task_dependencies.
+  add_task_delivery, remove_task_delivery, update_task_dependencies,
+  create_todo_item, update_todo_item, delete_todo_item,
+  manage_milestone, delete_milestone.
 
   - Only call write tools when the user EXPLICITLY asks. Never edit
     or create things on the user's behalf without a clear request.
@@ -424,6 +449,10 @@ Formatting:
           **QRD-6: Roadmap proposal v1** [task:6], due 2026-06-16
 """
 
+# Said once here rather than on every body argument, where it was nine copies
+# of 600 characters. The tools' own declarations point at it (`CHIP_POINTER`).
+AGENT_SYSTEM_PROMPT += f"\nCHIPS:{CHIP_SYNTAX_HINT}\n"
+
 
 # --------------------------------------------------------------------------- #
 # Registry-generated prompt sections (AGENT_CHEATSHEET_FROM_REGISTRY)         #
@@ -448,7 +477,9 @@ _WRITE_TOOLS_LEGACY_BLOCK = """\
   create_task, create_task_plan, update_task, update_tasks_bulk,
   add_comment, create_note, update_note, assign_task,
   create_calendar_event, update_calendar_event, delete_calendar_event,
-  add_task_delivery, remove_task_delivery, update_task_dependencies.
+  add_task_delivery, remove_task_delivery, update_task_dependencies,
+  create_todo_item, update_todo_item, delete_todo_item,
+  manage_milestone, delete_milestone.
 """
 
 

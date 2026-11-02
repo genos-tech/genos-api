@@ -9,6 +9,7 @@ one canonical id, while the tools keep receiving integers.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -18,11 +19,13 @@ from django.test import SimpleTestCase, override_settings
 from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent import controller, references
+from origin.search_engine.agent import controller, prompts, references
+from origin.search_engine.agent.chip_syntax import CHIP_POINTER, CHIP_SYNTAX_HINT
+from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, AGENT_SYSTEM_PROMPT_REGISTRY
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError
 from origin.search_engine.llm.types import AgentMessage, FunctionCall
 from origin.tests.test_mcp_endpoint import McpBase
-from origin.views.public.mcp.tools import CATALOG
+from origin.views.public.mcp.tools import CATALOG, input_schema
 
 REFERENCE_ARGS = ("task_id", "parent_task_id", "milestone_id", "note_id")
 
@@ -289,3 +292,51 @@ class LoopTests(RefsBase):
             events, _pause, _persisted = self._loop(_Scripted(turn, DONE), RAG_PARALLEL_TOOLS=True)
         self.assertEqual(self._of_type(events, "tool_call_error"), [])
         self.assertCountEqual(seen, [self.task.task_id, second.task_id])
+
+
+class ChipSyntaxTests(SimpleTestCase):
+    """Nine copies of 600 characters became one, in the prompt."""
+
+    def _declarations(self) -> str:
+        return json.dumps(
+            [d.parameters_schema for d in controller._build_tool_declarations()],
+            ensure_ascii=False,
+        )
+
+    def test_no_declaration_repeats_the_syntax(self) -> None:
+        self.assertNotIn(CHIP_SYNTAX_HINT.strip()[:40], self._declarations())
+
+    def test_every_body_argument_still_says_it_takes_chips(self) -> None:
+        self.assertEqual(self._declarations().count(CHIP_POINTER.strip()), 9)
+
+    def test_the_prompt_the_model_reads_says_it_once(self) -> None:
+        for prompt in (AGENT_SYSTEM_PROMPT, AGENT_SYSTEM_PROMPT_REGISTRY):
+            self.assertEqual(prompt.count(CHIP_SYNTAX_HINT.strip()), 1)
+
+    def test_mcp_keeps_the_full_text_because_it_has_no_such_prompt(self) -> None:
+        tool = next(t for t in CATALOG if t.name == "update_task")
+        self.assertIn(CHIP_SYNTAX_HINT.strip()[:40], json.dumps(input_schema(tool)))
+        self.assertNotIn(CHIP_POINTER.strip(), json.dumps(input_schema(tool)))
+
+    def test_the_registry_schema_keeps_the_full_text(self) -> None:
+        schema = REGISTRY["add_comment"].parameters_schema
+        self.assertIn(CHIP_SYNTAX_HINT.strip()[:40], json.dumps(schema))
+
+
+class CheatSheetTests(SimpleTestCase):
+    def test_the_hand_written_write_list_names_every_write_tool(self) -> None:
+        # It had drifted: both to-do writes were never on it, and production
+        # serves this list.
+        for tool in REGISTRY.values():
+            if tool.requires_approval:
+                self.assertIn(tool.name, prompts._WRITE_TOOLS_LEGACY_BLOCK)
+
+    def test_every_write_tool_has_guidance_on_when_to_use_it(self) -> None:
+        sheet = AGENT_SYSTEM_PROMPT.split("WRITE tools (require user approval", 1)[0]
+        for name in ("create_todo_item", "update_todo_item", "delete_todo_item"):
+            self.assertIn(name, sheet)
+        for name in ("manage_milestone", "delete_milestone"):
+            self.assertIn(name, sheet)
+
+    def test_the_sheet_tells_the_model_a_display_id_is_an_id(self) -> None:
+        self.assertIn("IS its id", AGENT_SYSTEM_PROMPT)

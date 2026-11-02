@@ -49,11 +49,12 @@ from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
+from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
-from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
+from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.search_engine.agent.tools.task_custom_fields import (
     CUSTOM_FIELDS_SCHEMA,
     parse_iso_date,
