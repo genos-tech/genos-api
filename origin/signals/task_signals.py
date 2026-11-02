@@ -32,6 +32,7 @@ from typing import Any, Optional
 from django.db import transaction
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
+from django.utils import timezone
 
 from origin.middleware.current_user import get_current_source, get_current_user
 from origin.models.common.user_models import CustomUser
@@ -463,6 +464,12 @@ def update_tasks_recorded(queryset, *, cascade: str, **fields) -> int:
 
     Returns the update's row count, as `.update()` does.
     """
+    # A queryset `.update()` skips `auto_now`, so these rows would look
+    # untouched to a browser that syncs "rows changed since my checkpoint"
+    # (`getProjectTasks?since=`) and it would never learn of the move or the
+    # detach (MIP-936). Stamped here so every cascade that uses this helper
+    # reaches other browsers; a caller that passes its own value keeps it.
+    fields = {"ts_updated_at": timezone.now(), **fields}
     # `milestone=None` and `milestone_id=None` are the same write; the
     # tracked names are attnames, so map a relation's name onto its column.
     columns = {TaskMaster._meta.get_field(name).attname for name in fields}

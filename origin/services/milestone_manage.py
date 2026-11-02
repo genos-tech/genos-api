@@ -26,6 +26,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from django.utils import timezone
+
 from origin.models.task.milestone_models import MilestoneFolder, MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.purge import purge_milestone, purge_task
@@ -136,10 +138,15 @@ def delete_milestone(milestone: MilestoneMaster) -> None:
     milestone.is_deleted = True
     milestone.save(update_fields=["is_deleted", "ts_updated_at"])
     # Soft-delete the backing task too so the milestone disappears
-    # from the project's task table on the next reload.
+    # from the project's task table on the next reload. `ts_updated_at` is
+    # stamped by hand: a queryset `.update()` skips `auto_now`, and a browser
+    # that already holds this row only hears about a delete as a row changed
+    # since its checkpoint, so without it the milestone stayed on screen
+    # there for good, and the UI's own delete then found it already gone
+    # (MIP-936).
     if milestone.task_id is not None:
         TaskMaster.objects.filter(task_id=milestone.task_id).update(
-            is_deleted=True, status="Deleted"
+            is_deleted=True, status="Deleted", ts_updated_at=timezone.now()
         )
     # Detach child tasks so they remain visible in the project view
     # rather than disappearing alongside the milestone. Children
