@@ -18,9 +18,11 @@ ACL contract (UI parity — mirrors the REST layer's `require_write_role`):
   * Folder moves (personal family) go through the same authorization as
     the REST move (`personal_note_move`).
 
-Every successful title/body change also writes a version snapshot
-(`snapshot_note_version`, same coalescing as the REST PUT) so agent
-edits show up in the note's version history and can be restored.
+Every successful title/body change also writes a version snapshot so agent
+edits show up in the note's version history and can be restored. Unlike the
+REST PUT it never coalesces into the newest row, and it first makes sure the
+text it replaces is kept (`keep_current_state`): the row a coalescing write
+would overwrite is the only copy of what the edit replaced (MIP-883).
 
 All ids used for the ACL checks come from `ctx` or from the database
 record itself — never from the LLM's function-call arguments.
@@ -48,9 +50,9 @@ from origin.search_engine.agent.tools.note_targets import (
     normalize_note_type,
 )
 from origin.search_engine.chunkers.base import NOTE_TYPE_CHAT, NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
-from origin.services.collab_push import push_note_body
+from origin.services.collab_push import PushOutcome, push_note_body_now
 from origin.views.utils.note_role import ROLE_EDITOR, get_effective_role
-from origin.views.utils.note_version import snapshot_note_version
+from origin.views.utils.note_version import keep_current_state, snapshot_note_version
 from origin.views.utils.personal_note_move import (
     NoteMoveRefused,
     apply_personal_note_move,
@@ -292,6 +294,9 @@ def _apply_changes(
 ) -> dict[str, Any]:
     update_fields: list[str] = []
     changed: list[str] = []
+    # What the note holds now, before this edit changes it in memory: the text
+    # an agent edit is about to replace, which the version history must keep.
+    title_before, body_before = note.title, note.body
 
     if has_title:
         new_title = (args.get("title") or "").strip()
@@ -327,6 +332,18 @@ def _apply_changes(
         return result
 
     try:
+        if {"title", "body"} & set(update_fields):
+            # An edit by an agent or an API key is not a typing session, and the
+            # newest version row may hold exactly what it is about to replace (the
+            # user's own save a minute ago) or there may be no row at all. Keep
+            # the current state first, so the edit can always be walked back.
+            keep_current_state(
+                team=note.team,
+                note_type=note_type_code,
+                note_id=note_id,
+                title=title_before,
+                body=body_before,
+            )
         if update_fields:
             note.save(update_fields=update_fields)
         if move_plan is not None:
@@ -352,6 +369,7 @@ def _apply_changes(
                 note_id=note_id,
                 title=note.title,
                 body=note.body,
+                force_new=True,
             )
         except Exception:  # noqa: BLE001
             log.exception("update_note: version snapshot failed for note %s", note_id)
@@ -361,19 +379,30 @@ def _apply_changes(
     # was ever opened kept its old body on screen, and the next keystroke
     # saved the old body back (MIP-697). An MCP write has no browser
     # behind it to do this client-side.
+    live_editor = None
     if "body" in update_fields:
-        push_note_body(note_type, note_id, note.body or [])
+        live_editor = push_note_body_now(note_type, note_id, note.body or [])
         # `@` chips ping their people, diffed against the stored set
         # (MIP-708) — the hop the editor's `note_mention` socket makes.
         notify_note_mentions(note, note_type=note_type_code, actor_id=ctx.user_id)
 
+    summary = f"Updated {note_type} note #{note_id}: {', '.join(changed)}"
     result = {
         "note_id": note_id,
         "note_type": note_type,
         "title": note.title,
         "changed_fields": changed,
-        "__summary__": f"Updated {note_type} note #{note_id}: {', '.join(changed)}",
     }
+    if live_editor is not None:
+        result["live_editor"] = live_editor.value
+    if live_editor == PushOutcome.FAILED:
+        # Saved, but not in the open editor: say so, because an editor that is
+        # open keeps the old text and its next autosave writes it back.
+        summary += (
+            ". The edit is saved, but the live editor could not be updated, so an open "
+            "editor may still show the old text and overwrite this edit"
+        )
+    result["__summary__"] = summary
     if parent_context:
         result["parent_context"] = parent_context
     return result
