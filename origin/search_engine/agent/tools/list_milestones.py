@@ -22,8 +22,8 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
-from origin.search_engine.agent.tools.template_prompts import has_written_body
 from origin.search_engine.agent.tools.task_enums import blank_to_none
+from origin.search_engine.agent.tools.template_prompts import has_written_body
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.user_time import today_for_user_id
 
