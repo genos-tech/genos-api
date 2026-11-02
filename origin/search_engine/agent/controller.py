@@ -35,6 +35,7 @@ Event types emitted (full NDJSON protocol):
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import re
@@ -63,6 +64,7 @@ from origin.search_engine.agent.prompts import (
     AGENT_SELF_CRITIQUE_SYSTEM,
     agent_system_prompt,
 )
+from origin.search_engine.agent.references import declared_schema, resolve_call
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError
 from origin.search_engine.agent.tools.categories import PERIPHERAL_FAMILIES, TOOL_CATEGORY
 from origin.search_engine.agent.tools.task_custom_fields import (
@@ -267,7 +269,7 @@ def _build_tool_declarations(
         ToolDeclaration(
             name=t.name,
             description=t.description,
-            parameters_schema=t.parameters_schema,
+            parameters_schema=declared_schema(t.name, t.parameters_schema),
         )
         for t in REGISTRY.values()
         if t.name not in disabled
@@ -2956,6 +2958,21 @@ def _drive_loop(
                 )
                 break
 
+        # ---- A person says WRD-5, not 1234 (MIP-881) ----
+        # Resolved here, once, so the session cache, the approval card, the
+        # persisted step and the resume all see the same id. `call` itself
+        # stays as the model wrote it: that is what it is told back. A
+        # reference that names nothing is answered like an unknown tool, so a
+        # write can't reach an approval card for a task that isn't there.
+        resolved_args: list[dict[str, Any]] = []
+        ref_errors: dict[int, str] = {}
+        for i, c in enumerate(accumulated_function_calls):
+            try:
+                resolved_args.append(resolve_call(c.name, c.args, ctx.team_id))
+            except ToolError as exc:
+                resolved_args.append(dict(c.args))
+                ref_errors[i] = str(exc)
+
         # ---- C3: resolve session-cache hits before any execution ----
         # A follow-up turn re-calling the same read-only tool with the
         # same args inside the session TTL gets the stored result — no
@@ -2971,9 +2988,9 @@ def _drive_loop(
         if session_id and tool_cache.enabled():
             for i, c in enumerate(accumulated_function_calls):
                 t = REGISTRY.get(c.name)
-                if t is None or getattr(t, "requires_approval", False):
+                if t is None or getattr(t, "requires_approval", False) or i in ref_errors:
                     continue
-                hit = tool_cache.get_cached(session_id, c.name, dict(c.args))
+                hit = tool_cache.get_cached(session_id, c.name, dict(resolved_args[i]))
                 if hit is not None:
                     precomputed[i] = ("ok", {**hit["result"], "__summary__": hit["summary"]})
                     cached_indices.add(i)
@@ -2993,23 +3010,29 @@ def _drive_loop(
         if (
             settings.SEARCH_ENGINE.get("RAG_PARALLEL_TOOLS", False)
             and len(miss_indices) > 1
+            and not ref_errors
             and all(
                 REGISTRY.get(c.name) is not None
                 and not getattr(REGISTRY.get(c.name), "requires_approval", False)
                 for c in accumulated_function_calls
             )
         ):
-            for call in accumulated_function_calls:
+            for i, call in enumerate(accumulated_function_calls):
                 emit(
                     {
                         "type": "tool_call_start",
                         "step": step,
                         "tool_name": call.name,
-                        "arguments": _friendly_arguments(dict(call.args), call.name, ctx=ctx),
+                        "arguments": _friendly_arguments(
+                            dict(resolved_args[i]), call.name, ctx=ctx
+                        ),
                     }
                 )
             starts_pre_emitted = True
-            miss_calls = [accumulated_function_calls[i] for i in miss_indices]
+            miss_calls = [
+                dataclasses.replace(accumulated_function_calls[i], args=resolved_args[i])
+                for i in miss_indices
+            ]
             for i, (outcome, dur_ms) in zip(
                 miss_indices, _execute_batch_parallel(miss_calls, ctx, messages)
             ):
@@ -3017,11 +3040,11 @@ def _drive_loop(
                 tool_durations[i] = dur_ms
 
         for call_idx, call in enumerate(accumulated_function_calls):
-            call_args = dict(call.args)
+            call_args = dict(resolved_args[call_idx])
             call_name = call.name
 
             tool = REGISTRY.get(call_name)
-            if tool is None:
+            if tool is None or call_idx in ref_errors:
                 emit(
                     {
                         "type": "tool_call_start",
@@ -3030,7 +3053,7 @@ def _drive_loop(
                         "arguments": _friendly_arguments(call_args, call_name, ctx=ctx),
                     }
                 )
-                err = f"Unknown tool: {call_name}"
+                err = ref_errors.get(call_idx) or f"Unknown tool: {call_name}"
                 emit(
                     {
                         "type": "tool_call_error",
