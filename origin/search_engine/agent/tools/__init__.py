@@ -115,6 +115,8 @@ from origin.search_engine.agent.tools.list_tasks import LIST_TASKS
 from origin.search_engine.agent.tools.list_today_todos import LIST_TODAY_TODOS
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
 from origin.search_engine.agent.tools.manage_milestone import MANAGE_MILESTONE
+from origin.search_engine.agent.tools.manage_project import MANAGE_PROJECT
+from origin.search_engine.agent.tools.manage_project_members import MANAGE_PROJECT_MEMBERS
 from origin.search_engine.agent.tools.manage_sprint import MANAGE_SPRINT
 from origin.search_engine.agent.tools.remove_task_delivery import REMOVE_TASK_DELIVERY
 from origin.search_engine.agent.tools.restore_task_body import RESTORE_TASK_BODY
@@ -232,6 +234,9 @@ for _t in (
     # --- Write tools (MIP-882) — sprints ---
     MANAGE_SPRINT,
     DELETE_SPRINT,
+    # --- Write tools (MIP-882) — projects and who is in them ---
+    MANAGE_PROJECT,
+    MANAGE_PROJECT_MEMBERS,
 ):
     # Every tool, read and write, takes its arguments with any
     # <workspace_content> fence the model copied from a result taken off
@@ -248,6 +253,8 @@ __all__ = [
     "ADD_COMMENT",
     "ADD_TASK_DELIVERY",
     "DELETE_SPRINT",
+    "MANAGE_PROJECT",
+    "MANAGE_PROJECT_MEMBERS",
     "MANAGE_SPRINT",
     "REMOVE_TASK_DELIVERY",
     "ASSIGN_TASK",

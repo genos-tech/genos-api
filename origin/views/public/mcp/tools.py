@@ -1,6 +1,6 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 72 agent tools. This exposes 68. The four it leaves out are left out
+Genos has 74 agent tools. This exposes 70. The four it leaves out are left out
 on purpose (`WITHHELD` in `test_mcp_team_numbers`, with a reason each, and a
 test that fails when a tool is neither published nor listed there): a connected
 client has its own web search and its own memory, and the other two are
@@ -1369,6 +1369,43 @@ CATALOG: tuple[McpTool, ...] = (
             "Deleting an already-deleted sprint succeeds. Requires a "
             "write-scoped API key that its owner also opted into destructive "
             "tools."
+        ),
+        write=True,
+        destructive=True,
+    ),
+    McpTool(
+        name="manage_project",
+        registry_name="manage_project",
+        description=(
+            "Create a project, or rename one or change its code. `action` "
+            "'create' needs `name` (unique in the team); `is_private` and "
+            "`member_ids` (team members to add, from `get_team_members`) are "
+            "optional. The caller becomes the owner and the code is derived from "
+            "the name. `action` 'update' needs `project_id` (from "
+            "`list_projects`) and `name` and/or `code` (2-6 uppercase letters or "
+            "digits starting with a letter; it prefixes the project's task ids); "
+            "only the owner or an editor may. To add people use "
+            "`manage_project_members`. Requires a write-scoped API key."
+        ),
+        write=True,
+    ),
+    # Not a delete, but gated like one: it changes who can see and edit a
+    # project, and this surface has no approval step. The opt-in is per tool,
+    # so it has to be a tool of its own (MIP-882, Ken's decision 2).
+    McpTool(
+        name="manage_project_members",
+        registry_name="manage_project_members",
+        description=(
+            "Add a person to a project, or change a member's role. **This "
+            "changes who can see and edit the project, and nothing on this surface "
+            "asks the user first**, so it needs a write-scoped API key that its "
+            "owner also opted into destructive tools, the same opt-in a delete "
+            "needs. `action` 'add': any member of the project may add a "
+            "teammate (`user_id` from `get_team_members`), who also gets the "
+            "project's chat. `action` 'set_role': the owner or an editor sets "
+            "`role` to 'editor' or 'viewer'; the owner's own role can't be "
+            "changed. There is no way to remove someone. Get `project_id` from "
+            "`list_projects`."
         ),
         write=True,
         destructive=True,

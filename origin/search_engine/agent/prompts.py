@@ -224,7 +224,8 @@ args, user sees them, user confirms):
   create_todo_item, update_todo_item, delete_todo_item,
   manage_milestone, delete_milestone,
   update_comment, delete_comment, restore_task_body,
-  manage_sprint, delete_sprint.
+  manage_sprint, delete_sprint,
+  manage_project, manage_project_members.
 
   - Only call write tools when the user EXPLICITLY asks. Never edit
     or create things on the user's behalf without a clear request.
@@ -483,7 +484,8 @@ _WRITE_TOOLS_LEGACY_BLOCK = """\
   create_todo_item, update_todo_item, delete_todo_item,
   manage_milestone, delete_milestone,
   update_comment, delete_comment, restore_task_body,
-  manage_sprint, delete_sprint.
+  manage_sprint, delete_sprint,
+  manage_project, manage_project_members.
 """
 
 

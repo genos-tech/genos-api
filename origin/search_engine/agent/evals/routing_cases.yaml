@@ -293,6 +293,18 @@
   en: "Delete the Polish Week sprint in WRD"
   ja: "WRD の Polish Week スプリントを削除して"
   ok: [list_projects, list_sprints, delete_sprint]
+- id: project_create
+  en: "Create a new project called Website Rebuild"
+  ja: "Website Rebuild という新しいプロジェクトを作って"
+  ok: [manage_project]
+- id: project_rename
+  en: "Rename the WRD project to Web Platform"
+  ja: "WRD プロジェクトの名前を Web Platform に変更して"
+  ok: [list_projects, manage_project]
+- id: project_add_member
+  en: "Add Sam to the WRD project"
+  ja: "WRD プロジェクトに Sam を追加して"
+  ok: [get_team_members, list_projects, manage_project_members]
 - id: inbox_requests
   en: "Is anyone waiting for me to approve a request?"
   ja: "承認待ちのリクエストはある?"

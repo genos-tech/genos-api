@@ -1033,6 +1033,7 @@ class TestTheCatalogContract(McpBase):
             "comment_id": "get_task",
             "activity_id": "get_task_history",
             "sprint_id": "list_sprints",
+            "user_id": ("get_team_members", "list_project_members"),
         }
         published = {t.name for t in tools.CATALOG}
         undrivable = []
@@ -1812,6 +1813,7 @@ class TestPlantedInstructions(McpBase):
                 "delete_comment",
                 "delete_milestone",
                 "delete_sprint",
+                "manage_project_members",
                 "delete_todo_item",
             },
         )
