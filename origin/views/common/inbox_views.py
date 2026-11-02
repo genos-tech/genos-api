@@ -465,6 +465,7 @@ class JoinGMFromInboxView(AuthenticatedAPIView):
             title=f"Your request to join {gm_name or 'a group chat'} was approved",
             url="/workspace/inbox",
             actor=request.user,
+            team_id=gm_channel.team_id,
         )
 
         return Response(
@@ -822,6 +823,7 @@ class GrantNoteAccessFromInboxView(AuthenticatedAPIView):
             title=f"Your request to access {note_title} was approved",
             url="/workspace/inbox",
             actor=request.user,
+            team_id=note.team_id,
         )
 
         return Response(

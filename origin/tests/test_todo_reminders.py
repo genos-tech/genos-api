@@ -322,6 +322,9 @@ class ToDoReminderTickTests(_TodoReminderMixin):
         # Per reminder, not per to-do: two reminders on one item are two
         # moments and must not collapse into a single notification.
         self.assertEqual(kwargs["tag"], f"todo_reminder:{self.reminder.id}")
+        # The icon badge is counted for the team the reminder's card is in.
+        self.assertEqual(kwargs["team_id"], self.team.team_id)
+        self.assertEqual(kwargs["team_id"], item.team_id)
 
     def test_the_link_names_the_item_so_the_pane_can_focus_it(self):
         """A link that stops at the date drops the reader on a day's list

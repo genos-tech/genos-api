@@ -286,6 +286,9 @@ class MessageReminderTickTests(_ReminderMixin, BaseAPITestCase):
             kwargs["url"], f"/workspace/chat/gm/{self.channel.id}/message/{self.message.seq}"
         )
         self.assertEqual(kwargs["tag"], f"message_reminder:{self.reminder.id}")
+        # The icon badge is counted for the team the reminder's card is in.
+        self.assertEqual(kwargs["team_id"], self.channel.team_id)
+        self.assertEqual(kwargs["team_id"], item.team_id)
 
     def test_the_link_names_the_message_so_the_client_can_focus_it(self):
         """A link that stops at the channel drops the reader into the chat

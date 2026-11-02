@@ -112,6 +112,8 @@ class PushRunCompleteTests(BaseAPITestCase):
         self.assertEqual(kwargs["recipient_id"], str(self.user.id))
         self.assertEqual(kwargs["title"], "Your AI answer is ready")
         self.assertEqual(kwargs["tag"], f"agent_run_done:{run.run_id}")
+        # The icon badge is counted for the team the question was asked in.
+        self.assertEqual(kwargs["team_id"], str(self.team.team_id))
 
     def test_asks_for_user_wide_presence_suppression(self):
         """One visible device silences the fan-out for ALL of them.
