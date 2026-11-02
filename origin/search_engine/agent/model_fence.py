@@ -76,6 +76,8 @@ FENCED_KEYS_BY_TOOL: dict[str, frozenset[str]] = {
     "get_team_members": _PEOPLE,
     "list_project_members": _PEOPLE,
     "list_channel_members": _PEOPLE,
+    # The sender of a chat message; its text is fenced by the tool itself.
+    "fetch_chat_thread": frozenset({"sender_username"}),
     "get_workload_distribution": _PEOPLE,
     "get_top_task_closers": _PEOPLE,
     "get_milestone_assignee_counts": _PEOPLE,

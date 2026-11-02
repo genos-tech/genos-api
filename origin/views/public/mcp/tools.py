@@ -1,19 +1,21 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 60 agent tools. This exposes 39. That is not all of them and
+Genos has 64 agent tools. This exposes 46. That is not all of them and
 not a staging accident — every tool costs the connected agent context on
 *every* request it makes, and much of the 60 answers questions Genos's
 own assistant gets asked ("who closed the most tasks last sprint"), not
 questions something working in the workspace has.
 
-What the 39 are chosen to be is **every write Genos has actually built,
+What the 46 are chosen to be is **every write Genos has actually built,
 plus the reads needed to drive them**, plus the five GitHub PR reads that
 let an agent see what became of the PR it opened (MIP-689), plus
 `get_task_history` — on a surface with no approval gate and no undo, the
 read that lets an agent check its write stuck and who else touched the
 task (MIP-690) — plus the branch/PR → task lookup and its write, which
 record which PR delivers which task so that join is no longer only a
-comment (MIP-687). The earlier cut was 14, read-heavy and aimed narrowly
+comment (MIP-687), plus reading chats and threads (MIP-885: `list_my_chats`,
+`get_chat_thread`, `list_my_mentions`, `list_channel_members`). Chat is
+read-only here on purpose: no chat write is published. The earlier cut was 14, read-heavy and aimed narrowly
 at the code loop: find the task, read it, do the work, report back. It
 was sized by a fear that turns out to be misplaced — the measured cost
 of the full catalog is ~7.5k tokens against ~14k for the in-app
@@ -121,6 +123,7 @@ _RENAMES = {
     "search_knowledge_base": "search_workspace",
     "fetch_note": "get_note",
     "fetch_pr": "get_pr",
+    "fetch_chat_thread": "get_chat_thread",
 }
 _RENAME_RE = re.compile(r"\b(" + "|".join(map(re.escape, _RENAMES)) + r")\b")
 
@@ -374,6 +377,73 @@ CATALOG: tuple[McpTool, ...] = (
         ),
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+    ),
+    # ---- chats: read only (MIP-885). No chat write is published. ----
+    McpTool(
+        name="list_my_chats",
+        registry_name="list_my_chats",
+        description=(
+            "The caller's own chats — direct messages, group chats, multi-person "
+            "DMs and project chats — most recently active first. This is how a "
+            "chat is found by name ('my chat with Alice', 'the design group'): "
+            "pass `query`; a direct message is named after the other person. "
+            "Each row's `chat_type` and `chat_id` are what `get_chat_thread` "
+            "takes. Rows also carry `member_count`, `last_message_at` (null while "
+            "the chat has no message) and, for a project chat, `project_id`. At "
+            "most 50 a page: when `has_more` is true the list is partial, and "
+            "`next_cursor` (passed back as `cursor`, with the same filters) "
+            "returns the next page. These are the chats in the Genos chat list "
+            "for this team, including chats another team shared with it. Only "
+            "the caller's own chats; another person's are not reachable."
+        ),
+    ),
+    McpTool(
+        name="get_chat_thread",
+        registry_name="fetch_chat_thread",
+        description=(
+            "Read the messages in one chat the caller belongs to — a direct "
+            "message, group chat, multi-person DM or project chat — or in one "
+            "thread of it. Find the chat with `list_my_chats`, or take it from a "
+            "`search_workspace` chat hit (`chat_type`, `chat_id`, `thread_id`) or "
+            "from `list_my_mentions`; a Genos chat URL works as `chat_id`. "
+            "Without `thread_id` it returns the newest `limit` messages (50 "
+            "unless asked, at most 100), oldest first: when `has_more` is true "
+            "there are older ones, and `next_cursor`, passed back as `before`, "
+            "returns the page before this one. A message with `reply_count` "
+            "started a thread: pass its `message_id` as `thread_id` to read the "
+            "replies (a thread returns its first message and up to 100 replies, "
+            "and `has_more` says if there were more). Each message has "
+            "`sender_id`, `sender_username` and `ts`. Read-only: nothing here "
+            "posts to a chat. A chat the caller is not in is answered like one "
+            "that does not exist."
+        ),
+    ),
+    McpTool(
+        name="list_my_mentions",
+        registry_name="list_my_mentions",
+        description=(
+            "Recent chat messages that @mention the caller, newest first, each "
+            "with the sender, the text and where it was said. Direct @-mentions "
+            "only: a group mention (@engineering) and mentions in task or note "
+            "comments are not covered. `since` (an ISO date or datetime) keeps "
+            "only newer ones. To read around a mention, pass its "
+            "`chat_type_label` as `chat_type` and its `chat_id` to "
+            "`get_chat_thread`, with `thread_id` when it is not null. Chats of "
+            "this team the caller belongs to; another person's mentions are not "
+            "reachable."
+        ),
+    ),
+    McpTool(
+        name="list_channel_members",
+        registry_name="list_channel_members",
+        description=(
+            "Who is in ONE chat: each member's `user_id`, `username` and `role`, "
+            "by `channel_id` (the `chat_id` from `list_my_chats`). The caller "
+            "must be in the chat. Only chats that belong to this team: a chat "
+            "another team shared with it is refused here, though "
+            "`get_chat_thread` can read it. For the whole team use "
+            "`get_team_members`; for a project's roster, `list_project_members`."
+        ),
     ),
     McpTool(
         name="get_current_user",

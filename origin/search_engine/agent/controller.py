@@ -1369,6 +1369,16 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
             out_m.append(_chat_source(label, cid, tid_chat))
         return out_m
 
+    if call_name == "list_my_chats":
+        # One chip per chat, so the user can click straight into it. The name
+        # is the row's own `title`; it is bare here, the fence goes only on
+        # the copy the model reads.
+        return [
+            _chat_source(row["chat_type"], row["chat_id"], None, row.get("title"))
+            for row in result.get("chats") or []
+            if row.get("chat_type") and row.get("chat_id")
+        ]
+
     # list_my_inbox: items don't map to a clickable Spotlight entity_type
     # today (no inbox-deep-link surface). Return [] so the agent has to
     # describe the items in prose rather than emit broken chips.

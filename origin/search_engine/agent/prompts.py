@@ -62,6 +62,8 @@ here fits):
                             → list_my_inbox
   - "who @mentioned me" / "am I tagged anywhere"
                             → list_my_mentions
+  - "my chat with X" / "which chats am I in" / find a chat by name
+                            → list_my_chats, then fetch_chat_thread
 
   Single-entity status / rollup ("how is X going"):
   - one project              → get_project_summary
