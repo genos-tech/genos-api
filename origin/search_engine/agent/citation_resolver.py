@@ -43,8 +43,8 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import (
     chat_acl_user_ids,
     chat_note_acl_user_ids,
+    may_read_note,
     milestone_acl_user_ids,
-    personal_note_acl_user_ids,
     task_acl_user_ids,
     task_note_acl_user_ids,
 )
@@ -357,8 +357,14 @@ def _resolve_personal_notes(
         return []
     out: list[dict[str, Any]] = []
     for r in rows:
-        allowed = personal_note_acl_user_ids(owner_id=r["owner_id"], note_id=r["note_id"])
-        if user_id not in allowed:
+        # Not the search-index set: see `may_read_note` (MIP-869). The team
+        # is already scoped by the query above.
+        if not may_read_note(
+            user_id=user_id,
+            note_type_code=NOTE_TYPE_PERSONAL,
+            note_id=r["note_id"],
+            owner_id=r["owner_id"],
+        ):
             continue
         out.append(
             build(

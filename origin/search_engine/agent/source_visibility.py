@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
@@ -185,6 +186,44 @@ def source_acl_user_ids(
     return None
 
 
+_TEAM_SENTINEL_PREFIX = "team:"
+
+
+def _team_member_ids(team_id: str) -> set[str]:
+    """Every member of a team, the owner included: the owner is identified by
+    `TeamMaster.owner` and may have no `TeamMembers` row."""
+    ids = {
+        str(uid)
+        for uid in TeamMembers.objects.filter(team=team_id, is_deleted=False).values_list(
+            "attendee_id", flat=True
+        )
+        if uid
+    }
+    owner = TeamMaster.objects.filter(team_id=team_id).values_list("owner_id", flat=True).first()
+    if owner:
+        ids.add(str(owner))
+    return ids
+
+
+def _intersect_audiences(a: set[str], b: set[str]) -> set[str]:
+    """Who is in both audiences, reading a `team:<id>` sentinel as its members.
+
+    A note in a public Team Notes folder contributes one sentinel instead of a
+    user id per member (see `personal_note_acl_user_ids`), so a plain `a & b`
+    drops a teammate who can read that note and is named on the other side
+    (MIP-869). The sentinel itself survives only when both sides hold it, which
+    keeps an answer built purely on public notes to one entry on its chunk.
+    """
+    both = a & b
+    for side, other in ((a, b), (b, a)):
+        for principal in side - other:
+            if not principal.startswith(_TEAM_SENTINEL_PREFIX):
+                continue
+            members = _team_member_ids(principal[len(_TEAM_SENTINEL_PREFIX) :])
+            both |= {user for user in other if user in members}
+    return both
+
+
 def shareable_acl_for_sources(
     sources: list[dict[str, Any]], asker_id: Optional[str] = None
 ) -> Optional[list[str]]:
@@ -206,7 +245,7 @@ def shareable_acl_for_sources(
         acl = source_acl_user_ids(src, asker_id)
         if acl is None:
             return None  # unclassifiable source → fail closed
-        intersection = acl if intersection is None else (intersection & acl)
+        intersection = acl if intersection is None else _intersect_audiences(intersection, acl)
         if not intersection:
             return None  # already disjoint → no one could see all sources
 
