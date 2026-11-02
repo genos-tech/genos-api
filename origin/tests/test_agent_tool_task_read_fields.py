@@ -791,6 +791,14 @@ class ListTasksFilterTests(ReadFieldsBase):
 
         self.assertEqual(self._ids(parent_task_id=backing.task_id), {"filed"})
 
+    # -- ids that are not integers --
+
+    def test_a_sprint_or_parent_that_is_not_an_integer_is_refused(self):
+        for key in ("sprint_id", "parent_task_id"):
+            with self.subTest(key=key), self.assertRaises(ToolError) as caught:
+                self._list(**{key: "PRJ-1"})
+            self.assertIn(f"`{key}` must be an integer", str(caught.exception))
+
     # -- due range --
 
     def test_the_due_range_is_inclusive_and_leaves_out_tasks_with_no_due_date(self):
