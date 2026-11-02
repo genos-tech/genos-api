@@ -150,6 +150,50 @@ class DeleteMilestoneTwinTests(DeleteMilestoneBase):
             row = TaskActivity.objects.get(task=task, action_type="milestone_changed")
             self.assertEqual(row.metadata["cascade"], "milestone_delete")
 
+    def test_the_tasks_leave_the_milestones_sprint_and_history_says_so(self):
+        m, (top, child, loose, gone) = self._populated()
+        self.assertEqual(m.sprint_id, self.sprint.sprint_id)
+
+        self._delete(m)
+
+        # Every task, whatever its depth (and the one already Deleted), is out of
+        # the sprint it only had because of the milestone.
+        for task in (top, child, loose, gone):
+            task.refresh_from_db()
+            self.assertIsNone(task.milestone_id, task.title)
+            self.assertIsNone(task.sprint_id, task.title)
+        for task in (top, child, loose):
+            row = TaskActivity.objects.get(task=task, action_type="sprint_changed")
+            self.assertEqual(row.old_value, self.sprint.sprint_id)
+            self.assertIsNone(row.new_value)
+            self.assertEqual(row.metadata["cascade"], "milestone_delete")
+
+    def test_a_milestone_without_a_sprint_leaves_its_tasks_sprintless_and_unrecorded(self):
+        m = self._milestone("No sprint")
+        task = self._task("member", milestone=m, parent_task_id=m.task_id)
+
+        self._delete(m)
+
+        task.refresh_from_db()
+        self.assertIsNone(task.milestone_id)
+        self.assertIsNone(task.sprint_id)
+        self.assertFalse(
+            TaskActivity.objects.filter(task=task, action_type="sprint_changed").exists()
+        )
+
+    def test_the_milestones_sprint_keeps_the_tasks_of_the_milestones_that_stay(self):
+        doomed, (top, *_rest) = self._populated("Doomed")
+        kept = self._milestone("Kept", sprint=self.sprint)
+        stays = self._task("stays", milestone=kept, parent_task_id=kept.task_id, sprint=self.sprint)
+
+        self._delete(doomed)
+
+        top.refresh_from_db()
+        stays.refresh_from_db()
+        self.assertIsNone(top.sprint_id)
+        self.assertEqual(stays.sprint_id, self.sprint.sprint_id)
+        self.assertEqual(stays.milestone_id, kept.milestone_id)
+
     def test_the_milestone_disappears_from_the_reads(self):
         m, _ = self._populated()
         self._delete(m)
