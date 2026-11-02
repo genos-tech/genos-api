@@ -1,19 +1,21 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 60 agent tools. This exposes 39. That is not all of them and
+Genos has 63 agent tools. This exposes 44. That is not all of them and
 not a staging accident — every tool costs the connected agent context on
-*every* request it makes, and much of the 60 answers questions Genos's
+*every* request it makes, and much of the 63 answers questions Genos's
 own assistant gets asked ("who closed the most tasks last sprint"), not
 questions something working in the workspace has.
 
-What the 39 are chosen to be is **every write Genos has actually built,
+What the 44 are chosen to be is **every write Genos has actually built,
 plus the reads needed to drive them**, plus the five GitHub PR reads that
 let an agent see what became of the PR it opened (MIP-689), plus
 `get_task_history` — on a surface with no approval gate and no undo, the
 read that lets an agent check its write stuck and who else touched the
 task (MIP-690) — plus the branch/PR → task lookup and its write, which
 record which PR delivers which task so that join is no longer only a
-comment (MIP-687). The earlier cut was 14, read-heavy and aimed narrowly
+comment (MIP-687) — plus the two sprint reads, `list_sprints` and
+`get_sprint_summary`, which turn a sprint name into the id `list_tasks`
+filters by (MIP-877). The earlier cut was 14, read-heavy and aimed narrowly
 at the code loop: find the task, read it, do the work, report back. It
 was sized by a fear that turns out to be misplaced — the measured cost
 of the full catalog is ~7.5k tokens against ~14k for the in-app
@@ -197,9 +199,13 @@ CATALOG: tuple[McpTool, ...] = (
         name="get_task",
         registry_name="fetch_task",
         description=(
-            "Read one task in full: title, status, priority, assignee, dates, "
-            "tags, where it sits (`parent_task_id`, `milestone_id`, and "
-            "`backs_milestone_id` when it is a milestone's own row), its "
+            "Read one task in full: title, status, priority, assignee, dates "
+            "(`due_date`, `start_date`), tags, where it sits (`parent_task_id`, "
+            "`milestone_id`, and `backs_milestone_id` when it is a milestone's "
+            "own row), its `sprint` (id and name; a task takes its milestone's), "
+            "`collaborators` (user id and username), `links`, its custom fields "
+            "(`custom_fields`, by field name: `{name, type, value}`, or `values` "
+            "for a tag field, with only the fields that have a value), its "
             "description, and its comments. Read the description from "
             "`content_markdown` when it is present — it keeps headings, checklists "
             "and code fences — and fall back to `content_text`, the same body "
@@ -230,11 +236,23 @@ CATALOG: tuple[McpTool, ...] = (
         name="list_tasks",
         registry_name="list_tasks",
         milestone_ref_args=("milestone_id",),
+        task_ref_args=("parent_task_id",),
+        schema_overrides={
+            "parent_task_id": {
+                **_TASK_REF_SCHEMA,
+                "description": (
+                    "Optional: only the direct sub-tasks of this task: its display "
+                    "id (PRJ-123), its Genos URL, or its numeric id."
+                ),
+            }
+        },
         description=(
-            "List tasks with filters — by project, milestone, status, "
-            "priority, assignee, or overdue. Use this to survey a milestone "
-            "before starting, or to find a task whose id you don't have. Each "
-            "row carries its tag names. Rows are newest-updated first, at most "
+            "List tasks with filters — by project, milestone, sprint (from "
+            "`list_sprints`), parent task, status, priority, tag (names from "
+            "`list_project_tags`), assignee or `unassigned`, a due-date range "
+            "(`due_from` / `due_to`, inclusive), or overdue. Use this to survey "
+            "a milestone before starting, or to find a task whose id you don't "
+            "have. Each row carries its tag names. Rows are newest-updated first, at most "
             "50 a page: when `has_more` is true the list is partial, and "
             "`next_cursor` (passed back as `cursor`, with the same filters) "
             "returns the next page."
@@ -295,6 +313,29 @@ CATALOG: tuple[McpTool, ...] = (
             "closed, including its parent's), what is blocked and by what, and "
             "the critical path. `has_goal` is false when nobody has written "
             "what the milestone is for."
+        ),
+    ),
+    McpTool(
+        name="list_sprints",
+        registry_name="list_sprints",
+        description=(
+            "Sprints in the projects the caller is a member of, one row each: "
+            "`sprint_id`, project, name, dates, `status` (upcoming, active, "
+            "completed or archived), and how many of its tasks are closed. "
+            "Active sprints come first. Call it to turn a sprint name into the "
+            "`sprint_id` that `list_tasks` takes. A task has no sprint of its "
+            "own: it is in its milestone's, and `get_task` shows which."
+        ),
+    ),
+    McpTool(
+        name="get_sprint_summary",
+        registry_name="get_sprint_summary",
+        description=(
+            "One sprint in depth: its task counts by status and by priority, "
+            "how many are overdue, the days left until it ends (negative once "
+            "it has), and the milestones in it with their own progress. Use it "
+            "for 'how is this sprint going?'. Take the `sprint_id` from "
+            "`list_sprints`; list the sprint's tasks with `list_tasks`."
         ),
     ),
     McpTool(
@@ -405,11 +446,20 @@ CATALOG: tuple[McpTool, ...] = (
         name="list_project_tags",
         registry_name="list_project_tags",
         description=(
-            "The tags defined on ONE project — the only tags its tasks can "
-            "carry. Read it before setting `tags` on `create_task`, "
-            "`create_task_plan` or `update_task`, and pick only tags that "
-            "genuinely describe the task; if none fits, leave it untagged. "
-            "Tags can't be created through this connection."
+            "What a task in ONE project can carry. `tags` are the only tags "
+            "its tasks can have: read them before setting `tags` on "
+            "`create_task`, `create_task_plan` or `update_task`, and pick only "
+            "tags that genuinely describe the task; if none fits, leave it "
+            "untagged. Tags can't be created through this connection. "
+            "`custom_fields` are the project's own fields: each one's "
+            "`field_name`, its `type` (`tag`, `text`, `date` or `member`) and, "
+            "for a tag field, the `options` a value is chosen from; `get_task` "
+            "shows a task's values for them. `saved_filters` are the named "
+            "filters the project's members use in its task table, each listing "
+            "what it restricts (status, priority, effort_level, tags, "
+            "milestone_ids, sprint_ids, assignee_ids; 'none' and 'unassigned' "
+            "mean tasks with none): they show how the team slices its work. "
+            "You must be a member of the project."
         ),
     ),
     McpTool(
