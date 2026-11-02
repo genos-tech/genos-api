@@ -151,19 +151,6 @@ class StartDateTests(WriteBase):
 
         self.assertEqual(self._set(task, start_date="")["changed_fields"], [])
 
-    def test_the_uis_own_put_cannot_clear_a_start_date(self):
-        """Documents a gap in the REST PUT, not behaviour to rely on: its
-        None-strip drops `start_date: null` before the serializer sees it, and
-        only `due_date` has an explicit-clear branch. So the app's Clear button
-        on the start date does not persist. The tool clears it (above); this
-        test fails the day the PUT is fixed, which is the cue to drop it."""
-        task = self._task("t", start_date=date(2026, 11, 1))
-
-        self._ui_put(task, start_date=None)
-
-        task.refresh_from_db()
-        self.assertEqual(task.start_date, date(2026, 11, 1))
-
     def test_a_start_date_after_the_due_date_is_accepted_as_in_the_app(self):
         by_tool = self._task("by tool", due_date="2026-11-05")
         by_ui = self._task("by ui", due_date="2026-11-05")
@@ -277,16 +264,6 @@ class CollaboratorsTests(WriteBase):
 
         self.assertIn(str(self.outsider.id), message)
         self.assertEqual(self._collaborators(task), [])
-
-    def test_the_uis_put_does_not_apply_that_rule(self):
-        """Documents the gap the tool closes: the REST PUT hands the ids to
-        `sync_task_collaborators` unfiltered (only the create path filters with
-        `people_allowed_on`), so a user id from any team is accepted there."""
-        task = self._task("t")
-
-        self._ui_put(task, collaborators=[str(self.outsider.id)])
-
-        self.assertEqual(self._collaborators(task), [str(self.outsider.id)])
 
     def test_a_bad_list_is_refused_and_nothing_changes(self):
         task = self._task("t")
