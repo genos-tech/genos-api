@@ -93,8 +93,7 @@ log = logging.getLogger(__name__)
 # copies of this string would eventually drift and silently start
 # blaming the provider for our own ceiling.
 COST_CEILING_MESSAGE = (
-    "This request grew too large to finish. "
-    "Try narrowing it to a more specific question."
+    "This request grew too large to finish. Try narrowing it to a more specific question."
 )
 
 # Emitted when a run stops because the user's AI credits ran out
@@ -421,9 +420,7 @@ def _friendly_task_plan_arguments(
     if milestone and milestone.get("assignee_ids"):
         out["milestone"] = {
             **milestone,
-            "assignee_ids": [
-                names.get(str(uid), uid) for uid in milestone["assignee_ids"] if uid
-            ],
+            "assignee_ids": [names.get(str(uid), uid) for uid in milestone["assignee_ids"] if uid],
         }
 
 
@@ -522,23 +519,45 @@ def _with_milestone_title(row: dict[str, Any], titles: dict[int, str]) -> dict[s
     return {**row, "milestone_id": title} if title is not None else row
 
 
+def _current_parent_label(task: Any, access: LabelAccess) -> Any:
+    """The task's present parent as a display id; None means "top-level". A
+    parent the caller can't read stays the raw id, like the milestone: the
+    card neither names it nor claims the task has none."""
+    if not task.parent_task_id:
+        return None
+    label = access.task_display_id(task.parent_task_id)
+    return label if label is not None else task.parent_task_id
+
+
 def _friendly_update_task_arguments(
     out: dict[str, Any], args: dict[str, Any], access: LabelAccess
 ) -> None:
     """In-place nested enrichment for `update_task` arguments.
 
-    The flat pass already labels the proposed `milestone_id`; on a
-    milestone move this ADDS `current.milestone_id` (the task's present
-    milestone title, None = in no milestone) so the card can show
-    old → new — the same shape a bulk row's `current` carries. The flat
-    pass has also replaced `task_id` with a display id, so the task is
-    looked up from the raw `args`. Nothing is added for a task the caller
-    can't read."""
-    if args.get("milestone_id") is None:
+    The flat pass already labels the proposed `milestone_id`, `parent_task_id`
+    and `project_id`; for each one being changed this ADDS the task's
+    present value under `current` (a milestone title, a parent's display id,
+    a project name; None = none) so the card can show old → new — the same
+    shape a bulk row's `current` carries. The flat pass has also replaced
+    `task_id` with a display id, so the task is looked up from the raw
+    `args`. Nothing is added for a task the caller can't read."""
+    moving = [
+        k for k in ("milestone_id", "parent_task_id", "project_id") if args.get(k) is not None
+    ]
+    if not moving:
         return
     task = access.task(args.get("task_id"))
-    if task is not None:
-        out["current"] = {"milestone_id": _current_milestone_title(task, access)}
+    if task is None:
+        return
+    current: dict[str, Any] = {}
+    if "milestone_id" in moving:
+        current["milestone_id"] = _current_milestone_title(task, access)
+    if "parent_task_id" in moving:
+        current["parent_task_id"] = _current_parent_label(task, access)
+    if "project_id" in moving:
+        name = access.project_name(task.project_id)
+        current["project_id"] = name if name is not None else task.project_id
+    out["current"] = current
 
 
 def _friendly_update_note_arguments(
@@ -795,9 +814,7 @@ from origin.search_engine.friendly_titles import (
 )
 
 
-def _apply_friendly_titles(
-    sources: list[dict[str, Any]], ctx: ToolContext
-) -> list[dict[str, Any]]:
+def _apply_friendly_titles(sources: list[dict[str, Any]], ctx: ToolContext) -> list[dict[str, Any]]:
     """Replace placeholder chat titles ('DM 9') with viewer-friendly names.
 
     Thin adapter over the shared `friendly_titles.apply_friendly_titles`
@@ -1157,9 +1174,7 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
         # Milestones / sprints aren't a Spotlight entity_type today —
         # emit one project chip per distinct project so the user has at
         # least a deep-link surface to the right project.
-        rows = result.get("milestones") if call_name == "list_milestones" else result.get(
-            "sprints"
-        )
+        rows = result.get("milestones") if call_name == "list_milestones" else result.get("sprints")
         rows = rows or []
         seen: set[Any] = set()
         sources: list[dict[str, Any]] = []
@@ -1984,6 +1999,8 @@ def _execute_batch_parallel(
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         return list(pool.map(_run_in_context, zip(snapshots, calls)))
+
+
 def _resolve_planning_override() -> str | None:
     """B3 provider tier split (SPOTLIGHT_FUTURE_ARCHITECTURE.md §3).
 
@@ -2020,9 +2037,7 @@ def _resolve_planning_override() -> str | None:
         profile = active_effort_profile()
         if profile is not None and profile.loop_rung is not None:
             try:
-                planning = settings.LLM_CATALOG.model_for_rung(
-                    choice.provider, profile.loop_rung
-                )
+                planning = settings.LLM_CATALOG.model_for_rung(choice.provider, profile.loop_rung)
             except Exception:  # noqa: BLE001 — a pin failure must never kill the ask
                 log.warning(
                     "two-tier loop_rung %r failed for provider %r; single-model run",
@@ -2135,8 +2150,8 @@ def _emit_final_answer_events(
         build_todo_source=lambda item_id, title, local_date: _todo_source(
             item_id, title, local_date
         ),
-        build_milestone_source=lambda milestone_id, title, project_id, task_id: (
-            _milestone_source(milestone_id, title, project_id, task_id)
+        build_milestone_source=lambda milestone_id, title, project_id, task_id: _milestone_source(
+            milestone_id, title, project_id, task_id
         ),
     )
     if late_sources:
@@ -2271,9 +2286,7 @@ def _drive_loop(
     # an explicit caller budget (the self-critique continuation) is a
     # deliberate ceiling and is never extended. Resolved BEFORE max_steps
     # is filled in, because the check IS `max_steps is None`.
-    dynamic_steps = max_steps is None and settings.SEARCH_ENGINE.get(
-        "AGENT_DYNAMIC_STEPS", False
-    )
+    dynamic_steps = max_steps is None and settings.SEARCH_ENGINE.get("AGENT_DYNAMIC_STEPS", False)
     if max_steps is None:
         # An explicit max_steps argument still wins over the profile:
         # the critique continuation passes a computed budget that must
@@ -2633,9 +2646,7 @@ def _drive_loop(
         # _execute_batch_parallel), so the emit/persist/messages
         # sequence below is unchanged.
         starts_pre_emitted = False
-        miss_indices = [
-            i for i in range(len(accumulated_function_calls)) if i not in precomputed
-        ]
+        miss_indices = [i for i in range(len(accumulated_function_calls)) if i not in precomputed]
         if (
             settings.SEARCH_ENGINE.get("RAG_PARALLEL_TOOLS", False)
             and len(miss_indices) > 1
@@ -2887,12 +2898,7 @@ def _drive_loop(
         # the wrap-up. With the flag off `max_steps` never moves, so the
         # increment alone makes this identical to the old `for range`.
         step += 1
-        if (
-            dynamic_steps
-            and step >= max_steps
-            and step_did_new_work
-            and max_steps < hard_cap
-        ):
+        if dynamic_steps and step >= max_steps and step_did_new_work and max_steps < hard_cap:
             max_steps += 1
 
     # Step cap. The loop spent its whole budget on tool calls without
@@ -3277,9 +3283,7 @@ def _should_abstain_gate(
     return not is_abstention(answer)
 
 
-def _apply_abstention_to_events(
-    events: list[dict[str, Any]], message: str
-) -> list[dict[str, Any]]:
+def _apply_abstention_to_events(events: list[dict[str, Any]], message: str) -> list[dict[str, Any]]:
     """Rewrite a buffered event stream to replace the answer with `message`.
 
     Drops the draft `answer_delta`s and any `sources` (there is no genuine

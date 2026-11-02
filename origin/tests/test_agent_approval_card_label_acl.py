@@ -446,6 +446,71 @@ class NestedEnricherTests(ApprovalCardAclBase):
         )
         self.assertNotIn("current", self._card(args, "update_task", self.user2))
 
+    def test_update_task_shows_the_current_and_proposed_parent(self):
+        old_parent = self._task(self.project, "Old parent", self.user)
+        new_parent = self._task(self.project, "New parent", self.user)
+        self.task.parent_task_id = old_parent.task_id
+        self.task.save()
+        args = {"task_id": self.task.task_id, "parent_task_id": new_parent.task_id}
+
+        out = self._card(args, "update_task", self.user)
+
+        self.assertEqual(out["parent_task_id"], new_parent.display_id)
+        self.assertEqual(out["current"]["parent_task_id"], old_parent.display_id)
+
+    def test_making_a_task_top_level_shows_the_parent_it_leaves(self):
+        old_parent = self._task(self.project, "Old parent", self.user)
+        self.task.parent_task_id = old_parent.task_id
+        self.task.save()
+
+        out = self._card(
+            {"task_id": self.task.task_id, "parent_task_id": ""}, "update_task", self.user
+        )
+
+        self.assertEqual(out["parent_task_id"], "")
+        self.assertEqual(out["current"]["parent_task_id"], old_parent.display_id)
+
+    def test_a_parent_the_caller_cannot_read_stays_a_raw_id_either_side(self):
+        self.task.parent_task_id = self.secret_task.task_id
+        self.task.save()
+
+        leaving = self._card(
+            {"task_id": self.task.task_id, "parent_task_id": ""}, "update_task", self.user
+        )
+        joining = self._card(
+            {"task_id": self.task.task_id, "parent_task_id": self.secret_task.task_id},
+            "update_task",
+            self.user,
+        )
+
+        self.assertEqual(leaving["current"]["parent_task_id"], self.secret_task.task_id)
+        self.assertEqual(joining["parent_task_id"], self.secret_task.task_id)
+
+    def test_update_task_shows_the_current_and_proposed_project(self):
+        other = self._project(self.team, "Other", "OTH", self.user)
+        ProjectMembers.objects.create(team=self.team, project=other, attendee=self.user)
+
+        out = self._card(
+            {"task_id": self.task.task_id, "project_id": other.project_id}, "update_task", self.user
+        )
+
+        self.assertEqual(out["project_id"], "Other")
+        self.assertEqual(out["current"]["project_id"], "Website Redesign")
+
+    def test_a_project_the_caller_is_not_in_stays_a_raw_id(self):
+        out = self._card(
+            {"task_id": self.task.task_id, "project_id": self.secret.project_id},
+            "update_task",
+            self.user,
+        )
+
+        self.assertEqual(out["project_id"], self.secret.project_id)
+
+    def test_no_current_is_added_when_nothing_is_being_moved(self):
+        out = self._card({"task_id": self.task.task_id, "title": "x"}, "update_task", self.user)
+
+        self.assertNotIn("current", out)
+
     def test_dependency_ends_are_labelled_per_task(self):
         edge = {"blocker_task_id": self.task.task_id, "blocked_task_id": self.secret_task.task_id}
         out = self._card({"add": [edge]}, "update_task_dependencies", self.user)
