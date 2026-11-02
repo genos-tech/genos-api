@@ -29,6 +29,24 @@ Design decisions (plan §8.2 + the as-built deltas):
     feature the user didn't ask for at that moment must not consume
     their credits. The cost is still real to US: it is metered, and
     the rollup rows are how you size it.
+  * TWO-TIER LOOP (MIP-928). Nothing used to be bound for the run, so
+    no effort profile applied and every call of a digest (about seven)
+    ran on the one final model. It now binds the SERVER DEFAULT
+    provider at MEDIUM effort (`_digest_llm_choice`): planning steps
+    run on the rung-0 model, the final answer on the model the digest
+    already uses. Deliberately not the user's own effort preference —
+    the digest is a fixed product, not their ask. Switch:
+    `AGENT_DIGEST_TWO_TIER` (env, default on; `false` restores the
+    unbound run exactly, no deploy needed). It is also inert unless
+    `AGENT_EFFORT_LEVELS` and `AGENT_TWO_TIER_LOOP` are both on, so
+    rolling either back rolls the digest back with it. Binding medium
+    also brings that profile's step limit / rewrite variants / critique
+    steps — equal to the env defaults by the medium invariant — and the
+    spend ledger's `effort` label; the search_kb rewrite/rerank model
+    pins are opted out (`subprocess_pins=False`) so the split is the
+    only change. To A/B on one deployment:
+    `AGENT_DIGEST_TWO_TIER=false python manage.py agent_digest
+    --preview --user-id <id>` vs the same command without the prefix.
   * The agent run is READ-ONLY: every requires_approval tool is
     undeclared (a write would PAUSE the run with nobody there to
     approve it), and web search is out of scope for a workspace
@@ -49,6 +67,7 @@ Design decisions (plan §8.2 + the as-built deltas):
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 from datetime import timedelta
@@ -65,6 +84,12 @@ from origin.search_engine.agent.languages import LANGUAGE_NAMES
 from origin.search_engine.agent.tools import REGISTRY
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.entity_links import rewrite_citation_md
+from origin.search_engine.llm.choice import (
+    LlmChoice,
+    _server_default_choice,
+    reset_llm_choice,
+    set_llm_choice,
+)
 from origin.search_engine.metered import metered_request
 from origin.services import crypto
 from origin.services.user_time import resolve_zone
@@ -144,6 +169,50 @@ _TITLE_MAX = 90
 # body already had reported against it.
 _MD_LINK_RE = re.compile(r"\[([^\]\n]*)\]\([^)\n]*\)")  # [label](target) -> label
 _BARE_TOKEN_RE = re.compile(r"\[(?:chat|task|note|project|todo|milestone):[^\]\n]*\]", re.I)
+
+
+# The effort the digest's run is bound at. Medium is the rung whose
+# profile carries a `loop_rung` (planning model) — see llm_models.yaml.
+DIGEST_EFFORT = "medium"
+
+
+def _digest_llm_choice() -> LlmChoice | None:
+    """The LLM choice to bind for ONE user's digest run, or None.
+
+    None means "bind nothing" — today's run exactly: no effort profile,
+    every call on the server default model. That is the answer when
+    `AGENT_DIGEST_TWO_TIER` is off, and also when effort levels or the
+    two-tier loop are off globally: with either off the planning split
+    cannot happen, and binding medium alone would only change the step
+    limit / ledger label for nothing.
+
+    Built from `_server_default_choice()` rather than resolved through
+    the catalog's medium rung: that keeps the FINAL answer on exactly
+    the model the digest uses today (GEMINI_MODEL / CLAUDE_MODEL /
+    OPENAI_MODEL) by construction, not because the yaml's rung 1 happens
+    to agree with the env. Only the effort is added, which is what makes
+    `_resolve_planning_override` find the profile's `loop_rung`.
+    """
+    cfg = settings.SEARCH_ENGINE
+    if not cfg.get("AGENT_DIGEST_TWO_TIER"):
+        return None
+    # The cron service has its OWN environment on Railway (not inherited
+    # from backend-django), so these two can be off HERE while on in the
+    # web app. Say so, or the setting would be silently inert.
+    missing = [k for k in ("AGENT_EFFORT_LEVELS", "AGENT_TWO_TIER_LOOP") if not cfg.get(k)]
+    if missing:
+        log.warning(
+            "agent_digest: AGENT_DIGEST_TWO_TIER is on but %s is off in this "
+            "environment; the digest runs on a single model",
+            " and ".join(missing),
+        )
+        return None
+    return dataclasses.replace(
+        _server_default_choice(),
+        effort=DIGEST_EFFORT,
+        # search_kb's rewrite / rerank keep running where they do today.
+        subprocess_pins=False,
+    )
 
 
 def _digest_disabled_tools() -> set[str]:
@@ -487,14 +556,24 @@ class Command(HeartbeatCommand):
         )
         events: list[dict] = []
         ctx = ToolContext(team_id=team_id, user_id=user_id)
-        with metered_request(surface="digest", user_id=user_id, team_id=team_id):
-            run_agent(
-                prompt,
-                ctx,
-                events.append,
-                disabled_tools=_digest_disabled_tools(),
-                system_extra=DIGEST_SYSTEM_EXTRA,
-            )
+        # Bound per user and ALWAYS reset: this command loops over users
+        # on one thread, so a failed run must not hand its choice to the
+        # next one. `chosen=` makes the cost rollup's effort label agree
+        # with the per-call rows (which read the ContextVar).
+        chosen = _digest_llm_choice()
+        token = set_llm_choice(chosen) if chosen is not None else None
+        try:
+            with metered_request(surface="digest", user_id=user_id, team_id=team_id, chosen=chosen):
+                run_agent(
+                    prompt,
+                    ctx,
+                    events.append,
+                    disabled_tools=_digest_disabled_tools(),
+                    system_extra=DIGEST_SYSTEM_EXTRA,
+                )
+        finally:
+            if token is not None:
+                reset_llm_choice(token)
         if any(e.get("type") == "error" for e in events):
             raise RuntimeError("agent run emitted an error event")
         text = "".join(

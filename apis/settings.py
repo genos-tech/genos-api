@@ -1785,6 +1785,21 @@ SEARCH_ENGINE["AGENT_TWO_TIER_LOOP"] = (
     os.environ.get("AGENT_TWO_TIER_LOOP", "false").lower() == "true"
 )
 
+# The proactive digest (`agent_digest`) runs its agent loop at the SERVER
+# DEFAULT provider's MEDIUM effort, so the two-tier loop above applies to
+# it too: planning steps on the rung-0 model, the final answer on the
+# model the digest already uses. Before this the digest bound no LLM
+# choice at all, `active_effort_profile()` was None for it, and all of a
+# digest's ~7 calls ran on the final model (MIP-928). Deliberately NOT
+# the user's own effort preference: the digest is a fixed product, not
+# their ask. The no-deploy rollback is AGENT_DIGEST_TWO_TIER=false, which
+# restores the unbound run exactly. Also inert unless BOTH
+# AGENT_EFFORT_LEVELS and AGENT_TWO_TIER_LOOP are on, so rolling either
+# of those back rolls the digest back with it.
+SEARCH_ENGINE["AGENT_DIGEST_TWO_TIER"] = (
+    os.environ.get("AGENT_DIGEST_TWO_TIER", "true").lower() == "true"
+)
+
 # Claude prompt caching (LLM_TIER_COST_OPTIMIZATION.md §8.2). Anthropic
 # does NOT cache automatically — a cache_control breakpoint must mark
 # the stable prefix. We mark the TOOL DECLARATIONS block (~13k tokens,

@@ -54,12 +54,20 @@ class LlmChoice:
     ask worker replaces the choice with the routed one before the
     loop. Default False keeps every existing constructor site and
     equality check byte-identical.
+
+    `subprocess_pins` is True everywhere except the proactive digest
+    (MIP-928). It binds a choice to get the effort profile's two-tier
+    loop, but its `search_kb` rewrite / rerank calls have always run on
+    the server default model; letting the binding quietly move them to
+    the `subprocesses` rung 0 would be a second change under the same
+    switch. False makes `subprocess_model_override` stand down.
     """
 
     provider: str  # 'gemini' | 'claude' | 'openai'
     model: str  # e.g. 'gemini-2.5-pro' / 'claude-sonnet-4-6' / 'gpt-5.6-terra'
     effort: str = ""  # '' | 'low' | 'medium' | 'high'
     auto: bool = False  # provisional — the ask worker routes and replaces
+    subprocess_pins: bool = True  # False: rewrite/rerank/summaries inherit, as unbound
 
 
 _current_choice: ContextVar[LlmChoice | None] = ContextVar("llm_choice", default=None)
@@ -332,7 +340,8 @@ def subprocess_model_override(kind: str, choice: LlmChoice | None) -> str | None
          `subprocesses` rung from llm_models.yaml. Same-provider by
          construction, so the pin can never hand one provider's id to
          another provider's adapter.
-      3. None — inherit the synthesis model (today's behavior).
+      3. None — inherit the synthesis model (today's behavior). Also the
+         answer for a choice with `subprocess_pins=False` (the digest).
 
     Why callers pass `choice` explicitly instead of this reading the
     ContextVar: the summary calls run on the request thread BEFORE
@@ -348,6 +357,8 @@ def subprocess_model_override(kind: str, choice: LlmChoice | None) -> str | None
     provider = (choice.provider if choice else "") or ""
     if not provider:
         return None
+    if not choice.subprocess_pins:
+        return None  # the choice opted out: inherit, exactly as with no choice
     rung = settings.LLM_CATALOG.subprocess_rungs.get(kind)
     if rung is None:
         return None
