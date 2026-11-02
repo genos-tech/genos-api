@@ -481,10 +481,26 @@ class TaskMasterView(AuthenticatedAPIView):
         # same as null because some legacy callers ship `""` instead.
         clear_due_date = "due_date" in request.data and request.data.get("due_date") in (None, "")
 
+        # `start_date` is the same trap with the same answer (MIP-912): the
+        # strip below dropped `start_date: null`, so the app's Clear button
+        # never persisted. Key absent still means "leave it". The caller
+        # must therefore send null only for a real clear: the app's full
+        # save used to send `start_date: null` for any object that did not
+        # carry the field, which is why its fix ships first.
+        clear_start_date = "start_date" in request.data and request.data.get("start_date") in (
+            None,
+            "",
+        )
+
         # Remove None values from the update_data
         for key, val in request.data.items():
             if val is None:
                 update_data.pop(key)
+
+        # The strip leaves `""` in place and the serializer's DateField
+        # rejects it as a malformed date, so a clear never reaches it.
+        if clear_start_date:
+            update_data.pop("start_date", None)
 
         # Collaborators are a M2M synced explicitly after serializer.save()
         # (see below) — pop them AFTER the None-strip so the fields="__all__"
@@ -766,16 +782,25 @@ class TaskMasterView(AuthenticatedAPIView):
                 logger.exception("ensure_webhooks_for_links crashed (swallowed)")
 
             # Apply the explicit-clear intent captured above. The
-            # serializer never saw `due_date` (the None-strip removed
-            # it), so we have to write it ourselves; otherwise the
-            # column would still hold the previous value and a refresh
-            # would resurrect the old date that the user thought they
-            # cleared.
-            if clear_due_date:
+            # serializer never saw `due_date` / `start_date` (the
+            # None-strip removed them), so we have to write them
+            # ourselves; otherwise the column would still hold the
+            # previous value and a refresh would resurrect the old date
+            # that the user thought they cleared. One save for both, so
+            # the signals diff (history rows, webhook) runs once; and a
+            # column that is already null is not saved, so it writes
+            # no history row.
+            if clear_due_date or clear_start_date:
                 task.refresh_from_db()
-                if task.due_date is not None:
+                cleared_fields = []
+                if clear_due_date and task.due_date is not None:
                     task.due_date = None
-                    task.save(update_fields=["due_date", "ts_updated_at"])
+                    cleared_fields.append("due_date")
+                if clear_start_date and task.start_date is not None:
+                    task.start_date = None
+                    cleared_fields.append("start_date")
+                if cleared_fields:
+                    task.save(update_fields=[*cleared_fields, "ts_updated_at"])
 
             # Settle the task's own place in the hierarchy, then carry
             # its sub-tree along. Mirrors `TaskMasterView.post`'s bridge.
