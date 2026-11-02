@@ -106,8 +106,21 @@ def _normalise_tags(value: Any) -> Any:
     return value
 
 
+# A person is a UUID on the row but a string wherever an id arrives from a
+# request or a tool (`ctx.user_id`), and `TaskMaster.objects.create(
+# reporter_id="…")` leaves the instance holding that string. Compared as they
+# came, the unchanged person differed from themselves and every later save of
+# the instance wrote an `assignee_changed` / `reporter_changed` row from a
+# person to the same person (MIP-916).
+_PERSON_FIELDS = frozenset({"assignee_id", "reporter_id"})
+
+
 def _tracked_value(field: str, value: Any) -> Any:
-    return _normalise_tags(value) if field == "tags" else value
+    if field == "tags":
+        return _normalise_tags(value)
+    if field in _PERSON_FIELDS and value is not None:
+        return str(value)
+    return value
 
 
 def _to_jsonable(value: Any) -> Any:

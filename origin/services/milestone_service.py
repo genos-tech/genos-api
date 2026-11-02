@@ -213,4 +213,7 @@ def create_milestone(
     ensure_backing_task(milestone)
     if assignee_ids:
         sync_milestone_assignees(milestone, assignee_ids)
+        # The backing task was created above with the reporter as its
+        # assignee; now the milestone has assignees, mirror the first (MIP-916).
+        sync_backing_task(milestone)
     return milestone
