@@ -26,7 +26,7 @@ The second half of that sentence is load-bearing and was got wrong once:
 the calendar and todo writes shipped without the reads that return the
 `event_id` and `item_id` they require, leaving three published writes
 callable only by inventing an opaque id — `delete_calendar_event`, the
-one destructive tool here, among them. `test_every_published_write_can_be_driven`
+one destructive tool here at the time, among them. `test_every_published_write_can_be_driven`
 now fails if a write's required id has no published producer, because
 "published" and "usable" turned out to be different properties.
 
@@ -951,9 +951,9 @@ CATALOG: tuple[McpTool, ...] = (
             "`list_milestones` and check the title and task count you got back "
             "really are the milestone meant. To finish a milestone rather than "
             "remove it, set its status to 'Closed' with `manage_milestone`. "
-            "Deleting an already-deleted milestone succeeds. Requires a "
-            "write-scoped API key that its owner also opted into destructive "
-            "tools."
+            "Deleting an already-deleted milestone succeeds when you pass its "
+            "numeric `milestone_id`. Requires a write-scoped API key that its "
+            "owner also opted into destructive tools."
         ),
         write=True,
         destructive=True,
