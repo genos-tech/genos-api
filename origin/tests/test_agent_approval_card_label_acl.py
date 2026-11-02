@@ -228,6 +228,79 @@ class UserLabelTests(ApprovalCardAclBase):
         self.assertEqual(out["assignee_id"], "not-a-uuid")
 
 
+class ProjectMemberLabelTests(ApprovalCardAclBase):
+    """`manage_project_members` names the person it adds, and `manage_project`
+    the people a new project starts with."""
+
+    def test_the_person_being_added_is_named(self):
+        out = self._card(
+            {"action": "add", "project_id": self.project.project_id, "user_id": str(self.user2.id)},
+            "manage_project_members",
+            self.user,
+        )
+        self.assertEqual(out["user_id"], self.user2.username)
+        self.assertEqual(out["project_id"], "Website Redesign")
+
+    def test_a_person_outside_the_team_stays_a_uuid(self):
+        uid = str(self.stranger.id)
+        out = self._card({"action": "add", "user_id": uid}, "manage_project_members", self.user)
+        self.assertEqual(out["user_id"], uid)
+
+    def test_new_project_members_are_named_in_order(self):
+        out = self._card(
+            {
+                "action": "create",
+                "name": "Kitchen",
+                "member_ids": [str(self.user2.id), str(self.user.id)],
+            },
+            "manage_project",
+            self.user,
+        )
+        self.assertEqual(out["member_ids"], [self.user2.username, self.user.username])
+
+    def test_an_entry_the_caller_may_not_see_stays_as_written(self):
+        stranger = str(self.stranger.id)
+        out = self._card(
+            {
+                "action": "create",
+                "name": "Kitchen",
+                "member_ids": [str(self.user2.id), stranger, "junk"],
+            },
+            "manage_project",
+            self.user,
+        )
+        self.assertEqual(out["member_ids"], [self.user2.username, stranger, "junk"])
+
+    def test_a_differently_spelled_id_in_the_list_still_resolves(self):
+        out = self._card(
+            {"action": "create", "name": "Kitchen", "member_ids": [str(self.user2.id).upper()]},
+            "manage_project",
+            self.user,
+        )
+        self.assertEqual(out["member_ids"], [self.user2.username])
+
+    def test_something_that_is_not_a_list_is_left_alone(self):
+        out = self._card(
+            {"action": "create", "name": "Kitchen", "member_ids": str(self.user2.id)},
+            "manage_project",
+            self.user,
+        )
+        self.assertEqual(out["member_ids"], str(self.user2.id))
+
+    def test_an_empty_list_stays_empty(self):
+        out = self._card(
+            {"action": "create", "name": "Kitchen", "member_ids": []}, "manage_project", self.user
+        )
+        self.assertEqual(out["member_ids"], [])
+
+    def test_the_stored_arguments_keep_the_ids(self):
+        """Only the wire copy is relabelled; the resume path re-runs the tool
+        with the canonical ids."""
+        args = {"action": "create", "name": "Kitchen", "member_ids": [str(self.user2.id)]}
+        self._card(args, "manage_project", self.user)
+        self.assertEqual(args["member_ids"], [str(self.user2.id)])
+
+
 class TodoLabelTests(ApprovalCardAclBase):
     def setUp(self):
         super().setUp()
