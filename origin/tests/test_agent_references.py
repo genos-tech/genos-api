@@ -307,7 +307,7 @@ class ChipSyntaxTests(SimpleTestCase):
         self.assertNotIn(CHIP_SYNTAX_HINT.strip()[:40], self._declarations())
 
     def test_every_body_argument_still_says_it_takes_chips(self) -> None:
-        self.assertEqual(self._declarations().count(CHIP_POINTER.strip()), 9)
+        self.assertEqual(self._declarations().count(CHIP_POINTER.strip()), 10)
 
     def test_the_prompt_the_model_reads_says_it_once(self) -> None:
         for prompt in (AGENT_SYSTEM_PROMPT, AGENT_SYSTEM_PROMPT_REGISTRY):
