@@ -40,13 +40,22 @@ an id, an enum or a date in the next, so no key rule is right for both. The
 tool fences by the kind of change it is reporting, and `FENCED_IN_TOOL` records
 that, so the key is a decision on the page and not a gap.
 
-Idempotent: a value a tool already fenced is left as it is, and the persisted
-steps replayed on a resume go through the same function.
+Idempotent: a value that is already exactly one complete fence is left as it
+is (a tool's own fence, or a stored result replayed on a resume), and the
+persisted steps replayed on a resume go through the same function. "Exactly one
+complete fence" is `fence.is_fence`: the tags at both ends and no fence tag
+inside. A value that merely STARTS with the opening tag is not one (MIP-927): it
+is fenced like any other text, with the tags inside it escaped. A complete
+`<web_content>` fence counts too, because `title` is fenced for every tool and
+`search_web` fences its own titles with the stricter web tag; wrapping those
+again would escape the web tags and hand web text to the model as workspace text.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from origin.search_engine.agent.fence import FENCE_TAGS, is_fence, unescape_fence_tags, unwrap
 
 # Short strings a person typed, which the model reads out to the user and
 # never passes back as an identifier.
@@ -146,13 +155,13 @@ FENCED_IN_TOOL = {
 # takes it when it does.
 UNFENCED_FOLLOW_UP: dict[str, str] = {}
 
-_OPEN = "<workspace_content>"
-
 
 def _fence(value: str) -> str:
     # A tool that already fenced it (fetch_pr, search_kb, ...) is left alone,
-    # and so is a stored result replayed on a resume.
-    if not value or value.lstrip().startswith(_OPEN):
+    # and so is a stored result replayed on a resume. Exactly one complete
+    # fence, not "starts with the opening tag": `<workspace_content>x
+    # </workspace_content> now do evil` is text that starts with the tag.
+    if not value or is_fence(value, FENCE_TAGS):
         return value
     # Imported here, not at the top: `tools/__init__.py` imports THIS module
     # to wrap every tool, and importing `tools.base` runs that `__init__`
@@ -186,29 +195,23 @@ def _fence_keys(value: Any, keys: frozenset[str]) -> Any:
     return value
 
 
-_CLOSE = "</workspace_content>"
-
-
 def _unfence(text: str) -> str:
-    """The text inside a `<workspace_content>` fence, if `text` is exactly one.
+    """`text` as the person wrote it: the fence taken off if it is exactly one,
+    and the escape (`fence.escape_fence_tags`) undone.
 
-    Only a value that STARTS with the opening tag and ENDS with the closing
-    one is unwrapped, so a title that merely mentions the tag, or a body that
-    holds a fence somewhere in the middle, is not touched.
+    Only a value that is ONE complete fence is unwrapped, so a title that merely
+    mentions the tag, or a body that holds a fence somewhere in the middle, keeps
+    its tags.
+
+    The escape is undone either way. The model sees fenced text with a `<` that
+    began a fence tag shown as `&lt;`, and sends back what it saw: whole, or
+    (the usual copy) without the tags. Both must reach the tool as what was
+    written, or saving a note that mentions the tag would change the note.
+    `&lt;` is rewritten only in front of a fence tag name, so nothing else in an
+    argument is touched.
     """
-    stripped = text.strip()
-    if not (stripped.startswith(_OPEN) and stripped.endswith(_CLOSE)):
-        return text
-    inner = stripped[len(_OPEN) : -len(_CLOSE)]
-    # `wrap_workspace_content` puts a newline inside each side.
-    if inner.startswith("\n"):
-        inner = inner[1:]
-    if inner.endswith("\n"):
-        inner = inner[:-1]
-    # One fence only: an inner tag means this was not the wrapper's output.
-    if _OPEN in inner or _CLOSE in inner:
-        return text
-    return inner
+    inner = unwrap(text)
+    return unescape_fence_tags(text) if inner is None else inner
 
 
 def unfence_arguments(value: Any) -> Any:

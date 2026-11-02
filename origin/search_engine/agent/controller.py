@@ -54,6 +54,7 @@ from origin.search_engine.agent import tool_cache
 from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
 from origin.search_engine.agent.citation_resolver import resolve_unresolved_citations
 from origin.search_engine.agent.egress import EgressRefused, check_web_query
+from origin.search_engine.agent.fence import unwrap
 from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.languages import language_directive
 from origin.search_engine.agent.model_fence import fence_for_model
@@ -1061,17 +1062,14 @@ def _function_response_turn(name: str, response: dict[str, Any]) -> AgentMessage
     )
 
 
-_WORKSPACE_OPEN = "<workspace_content>\n"
-_WORKSPACE_CLOSE = "\n</workspace_content>"
-
-
 def _strip_workspace_marker(s: str | None) -> str | None:
-    """Reverse of `wrap_workspace_content` for UI-bound snippet text."""
+    """Reverse of `wrap_workspace_content` for UI-bound snippet text: the fence
+    off, and the escape of any fence tag in the text undone (MIP-927), so a chip
+    shows what was written. A snippet that is not exactly one fence is left."""
     if not s:
         return s
-    if s.startswith(_WORKSPACE_OPEN) and s.endswith(_WORKSPACE_CLOSE):
-        return s[len(_WORKSPACE_OPEN) : -len(_WORKSPACE_CLOSE)]
-    return s
+    inner = unwrap(s)
+    return s if inner is None else inner
 
 
 def _ui_source_for_match(match: dict[str, Any]) -> dict[str, Any]:

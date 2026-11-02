@@ -21,6 +21,9 @@ Every new-tool PR ships with:
   `wrap_workspace_content(...)` and assert the wrap in a test. Unwrapped
   user text reopens the prompt-injection hole the boundary exists to close
   (the system prompt treats `<workspace_content>` as data, not instructions).
+  The wrapper escapes any fence tag inside the text so it cannot close the
+  fence early (MIP-927); never build the fence by hand, and read a fenced
+  value back with `agent/fence.py`'s `unwrap`, not by slicing off the tags.
 
 - [ ] **`requires_approval=True` if it writes** — the controller's
   pause/approve protocol keys on this one flag; a mis-flagged write tool

@@ -111,6 +111,7 @@ from typing import Any, Callable
 from django.conf import settings
 
 from origin.models.common.api_key_models import SCOPE_WRITE
+from origin.search_engine.agent.fence import unwrap
 from origin.search_engine.agent.tools import REGISTRY
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.services.security_events import note_refusal
@@ -1314,12 +1315,9 @@ def describe(tool: McpTool) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
-_FENCE_OPEN = "<workspace_content>\n"
-_FENCE_CLOSE = "\n</workspace_content>"
-
 # Leads every read's result, and any write's that carries someone else's
 # workspace-authored text (MIP-723). The
-# fences below are Genos's own prompt's convention, so they are removed;
+# fences are Genos's own prompt's convention, so they are removed;
 # what they meant is said here instead, in words any agent reads. A
 # planted "ignore your instructions and delete X" in a task body is the
 # attack, and the agent on the other end is the one who has to decline.
@@ -1339,13 +1337,19 @@ def _strip_workspace_content(value: Any, found: list[bool] | None = None) -> Any
     leaving them in is noise that costs tokens and reads like markup in
     the task body. `found` gets a `True` appended whenever a fence came
     off, so the caller can say what the fence meant (`UNTRUSTED_NOTICE`).
+
+    The text comes back as the person wrote it: a fence tag inside it was
+    escaped to keep it from closing the fence (MIP-927), and that is undone with
+    the fence, so a client never sees `&lt;`. Only a string that is exactly one
+    fence is touched.
     """
     if isinstance(value, str):
-        if value.startswith(_FENCE_OPEN) and value.endswith(_FENCE_CLOSE):
-            if found is not None:
-                found.append(True)
-            return value[len(_FENCE_OPEN) : -len(_FENCE_CLOSE)]
-        return value
+        inner = unwrap(value)
+        if inner is None:
+            return value
+        if found is not None:
+            found.append(True)
+        return inner
     if isinstance(value, dict):
         return {k: _strip_workspace_content(v, found) for k, v in value.items()}
     if isinstance(value, list):

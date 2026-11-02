@@ -21,6 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from origin.search_engine.agent.fence import WEB_TAG, WORKSPACE_TAG, wrap
+
 
 @dataclass(frozen=True)
 class ToolContext:
@@ -123,12 +125,16 @@ def wrap_workspace_content(text: str) -> str:
     mitigation against prompt-injection attacks where a malicious chat
     message or note body tries to override the agent's behavior.
 
+    Text inside the value that looks like a fence tag (`</workspace_content>`,
+    `</ web_content >`, ...) is escaped first, so it cannot close the fence
+    early (MIP-927): see `agent/fence.py` for the scheme and how it is undone.
+
     Returns the input unchanged for empty / None values so we don't
     inflate payloads with empty boundary blocks.
     """
     if not text:
         return text
-    return f"<workspace_content>\n{text}\n</workspace_content>"
+    return wrap(WORKSPACE_TAG, text)
 
 
 def wrap_web_content(text: str) -> str:
@@ -137,8 +143,9 @@ def wrap_web_content(text: str) -> str:
     A separate tag, not the workspace one, because the two are not equally
     trusted: anyone on the internet can write a page `search_web` returns,
     so the prompt rule for this tag also forbids acting on links or images
-    it names (MIP-723).
+    it names (MIP-723). Its inner text is escaped by the same function, for both
+    tags: a page can try to close this fence or the workspace one.
     """
     if not text:
         return text
-    return f"<web_content>\n{text}\n</web_content>"
+    return wrap(WEB_TAG, text)
