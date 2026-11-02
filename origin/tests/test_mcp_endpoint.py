@@ -1804,7 +1804,7 @@ class TestPlantedInstructions(McpBase):
         `tools.py` docstring before changing this set."""
         self.assertEqual(
             {t.name for t in tools.CATALOG if t.destructive},
-            {"delete_calendar_event", "delete_todo_item"},
+            {"delete_calendar_event", "delete_milestone", "delete_todo_item"},
         )
         self.assertTrue(all(t.write for t in tools.CATALOG if t.destructive))
 

@@ -114,7 +114,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(
             f"{task.display_id} is a milestone, and update_task can't delete one: "
             "it would stay listed as Deleted with its tasks still attached. "
-            "Nothing was changed. Delete it from the milestone's menu in the app."
+            "Nothing was changed. Use `delete_milestone` to delete it."
         )
 
     display_id_before = task.display_id
