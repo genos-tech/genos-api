@@ -59,6 +59,7 @@ SINGLE_WRITE_TOOLS = frozenset(
         "delete_note",
         "delete_note_folder",
         "manage_note_sharing",
+        "restore_note_version",
         "delete_sprint",
     }
 )

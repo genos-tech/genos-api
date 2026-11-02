@@ -18,7 +18,13 @@ from origin.search_engine.agent.acl import may_read_note
 from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.search_engine.agent.tools.note_targets import PERSONAL_FAMILY, normalize_note_type
 from origin.search_engine.agent.tools.task_access import as_int
-from origin.views.utils.note_role import NOTE_TYPE_CHAT, NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
+from origin.views.utils.note_role import (
+    NOTE_TYPE_CHAT,
+    NOTE_TYPE_PERSONAL,
+    NOTE_TYPE_TASK,
+    ROLE_EDITOR,
+    get_effective_role,
+)
 
 _MODELS = {"personal": PersonalNoteMaster, "task": TaskNoteMaster, "chat": ChatNoteMaster}
 _CODES = {"personal": NOTE_TYPE_PERSONAL, "task": NOTE_TYPE_TASK, "chat": NOTE_TYPE_CHAT}
@@ -51,3 +57,19 @@ def load_readable_note(args: dict[str, Any], ctx: ToolContext) -> NoteRef:
             f"Note {note_id} not found. Find its id with a search or `list_note_folders`."
         )
     return NoteRef(family=family, code=_CODES[family], note_id=note_id, note=note)
+
+
+def has_write_permission(*, owner_id, note_id: int, note_type_code: int, ctx: ToolContext) -> bool:
+    """True if ctx.user_id may edit the note.
+
+    Check 1: owner, who always has write permission (covers legacy personal notes
+             created before role rows existed).
+    Check 2: effective role is Editor or stronger, the same resolution the REST layer's
+             `require_write_role` uses: an explicit NotePermissionMaster row wins;
+             otherwise task-note project members and chat members are implicit Editors,
+             and a personal note's Team Notes folder grants what it grants.
+    """
+    if str(owner_id or "") == ctx.user_id:
+        return True
+    role = get_effective_role(ctx.user_id, note_type_code, note_id)
+    return role is not None and role <= ROLE_EDITOR

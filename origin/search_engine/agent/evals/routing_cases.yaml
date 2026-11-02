@@ -483,6 +483,14 @@
   en: "Stop sharing personal note 42 with Sam."
   ja: "個人ノート42の Sam への共有を解除して"
   ok: [get_team_members, list_note_access, manage_note_sharing]
+- id: note_history
+  en: "Show me the version history of personal note 42."
+  ja: "個人ノート42の変更履歴を見せて"
+  ok: [fetch_note_history]
+- id: note_restore
+  en: "Undo the last change to personal note 42 by restoring its previous version."
+  ja: "個人ノート42の直前の変更を、前のバージョンに戻して"
+  ok: [fetch_note_history, restore_note_version]
 
 # --- search ----------------------------------------------------------------
 - id: workspace_decision

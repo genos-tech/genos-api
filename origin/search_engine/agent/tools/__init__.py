@@ -66,6 +66,7 @@ from origin.search_engine.agent.tools.delete_todo_item import DELETE_TODO_ITEM
 from origin.search_engine.agent.tools.favorite_note import FAVORITE_NOTE
 from origin.search_engine.agent.tools.fetch_chat_thread import FETCH_CHAT_THREAD
 from origin.search_engine.agent.tools.fetch_note import FETCH_NOTE
+from origin.search_engine.agent.tools.fetch_note_history import FETCH_NOTE_HISTORY
 from origin.search_engine.agent.tools.fetch_pr import FETCH_PR
 from origin.search_engine.agent.tools.fetch_task import FETCH_TASK
 from origin.search_engine.agent.tools.find_task_by_delivery import FIND_TASK_BY_DELIVERY
@@ -125,6 +126,7 @@ from origin.search_engine.agent.tools.manage_project import MANAGE_PROJECT
 from origin.search_engine.agent.tools.manage_project_members import MANAGE_PROJECT_MEMBERS
 from origin.search_engine.agent.tools.manage_sprint import MANAGE_SPRINT
 from origin.search_engine.agent.tools.remove_task_delivery import REMOVE_TASK_DELIVERY
+from origin.search_engine.agent.tools.restore_note_version import RESTORE_NOTE_VERSION
 from origin.search_engine.agent.tools.restore_task_body import RESTORE_TASK_BODY
 from origin.search_engine.agent.tools.search_kb import SEARCH_KNOWLEDGE_BASE
 from origin.search_engine.agent.tools.search_past_conversations import (
@@ -153,6 +155,7 @@ for _t in (
     FETCH_NOTE,
     LIST_NOTE_FOLDERS,
     LIST_NOTE_ACCESS,
+    FETCH_NOTE_HISTORY,
     # --- Read tools (Phase 13) ---
     LIST_PROJECTS,
     LIST_TASKS,
@@ -250,6 +253,7 @@ for _t in (
     DELETE_NOTE,
     DELETE_NOTE_FOLDER,
     MANAGE_NOTE_SHARING,
+    RESTORE_NOTE_VERSION,
 ):
     # Every tool, read and write, takes its arguments with any
     # <workspace_content> fence the model copied from a result taken off
@@ -274,6 +278,8 @@ __all__ = [
     "DELETE_NOTE_FOLDER",
     "MANAGE_NOTE_SHARING",
     "LIST_NOTE_ACCESS",
+    "FETCH_NOTE_HISTORY",
+    "RESTORE_NOTE_VERSION",
     "MANAGE_SPRINT",
     "REMOVE_TASK_DELIVERY",
     "ASSIGN_TASK",

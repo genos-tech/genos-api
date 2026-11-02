@@ -1,6 +1,6 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 80 agent tools. This exposes 76. The four it leaves out are left out
+Genos has 82 agent tools. This exposes 78. The four it leaves out are left out
 on purpose (`WITHHELD` in `test_mcp_team_numbers`, with a reason each, and a
 test that fails when a tool is neither published nor listed there): a connected
 client has its own web search and its own memory, and the other two are
@@ -138,6 +138,7 @@ _RENAMES = {
     "get_my_focus_tasks": "list_my_tasks",
     "search_knowledge_base": "search_workspace",
     "fetch_note": "get_note",
+    "fetch_note_history": "get_note_history",
     "fetch_pr": "get_pr",
     "fetch_chat_thread": "get_chat_thread",
 }
@@ -583,6 +584,20 @@ CATALOG: tuple[McpTool, ...] = (
             "may), and, for a note filed in a Team Notes folder, which folder, since "
             "that folder also decides who can open it. Name the note by its Genos "
             "URL, or by its numeric id with `note_type`."
+        ),
+        note_ref_args=("note_id",),
+        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+    ),
+    McpTool(
+        name="get_note_history",
+        registry_name="fetch_note_history",
+        description=(
+            "A note's saved versions, newest first, each with who saved it, when, "
+            "and a short preview, or one version in full (`body_markdown`) when "
+            "`version_no` is given. Use it to see what a note said before an edit, "
+            "and before `restore_note_version`. A version with `saved_by: null` is a "
+            "copy kept just before an edit or a restore, not something anyone typed. "
+            "Name the note by its Genos URL, or by its numeric id with `note_type`."
         ),
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
@@ -1506,6 +1521,23 @@ CATALOG: tuple[McpTool, ...] = (
         ),
         write=True,
         destructive=True,
+        note_ref_args=("note_id",),
+        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+    ),
+    McpTool(
+        name="restore_note_version",
+        registry_name="restore_note_version",
+        description=(
+            "Put an earlier version of a note back, title and body, to undo an edit. "
+            "`version_no` comes from `get_note_history`, which also shows what that "
+            "version says. What the note says now is kept as a version first, so a "
+            "restore can itself be undone, and it is not one of the destructive tools. "
+            "You must be able to edit the note. If the response says the live editor "
+            "could not be updated, an editor that is open may still show the old text "
+            "and overwrite the restore. Name the note by its Genos URL, or by its "
+            "numeric id with `note_type`. Requires a write-scoped API key."
+        ),
+        write=True,
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
     ),

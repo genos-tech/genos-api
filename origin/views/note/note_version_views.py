@@ -1,4 +1,3 @@
-from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -12,12 +11,12 @@ from origin.serializers.note.note_serializers import (
     NoteVersionDetailSerializer,
     NoteVersionListItemSerializer,
 )
+from origin.services.note_version_restore import RestoreRefused, restore_note_version
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_role import (
     require_read_role,
     require_write_role,
 )
-from origin.views.utils.note_version import snapshot_note_version
 from origin.views.utils.request_validators import validate_request_data
 
 VALID_NOTE_TYPES = {1, 2, 3}
@@ -27,6 +26,7 @@ NOTE_MODEL_BY_TYPE = {
     2: TaskNoteMaster,
     3: ChatNoteMaster,
 }
+FAMILY_BY_TYPE = {1: "personal", 2: "task", 3: "chat"}
 
 
 def _parse_int(value):
@@ -157,38 +157,20 @@ class NoteVersionRestoreView(AuthenticatedAPIView):
             return res
 
         try:
-            source = NoteVersionMaster.objects.get(
-                note_type=note_type, note_id=note_id, version_no=version_no
-            )
-        except NoteVersionMaster.DoesNotExist:
-            return Response({"error": "Version not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        model = NOTE_MODEL_BY_TYPE.get(note_type)
-        try:
-            note = model.objects.get(note_id=note_id)
-        except model.DoesNotExist:
-            return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        try:
             team = TeamMaster.objects.get(team_id=data["team_id"])
         except TeamMaster.DoesNotExist:
             return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            with transaction.atomic():
-                note.title = source.title
-                note.body = source.body
-                note.save(update_fields=["title", "body", "ts_updated_at"])
-
-                new_version = snapshot_note_version(
-                    team=team,
-                    editor=request.user,
-                    note_type=note_type,
-                    note_id=note_id,
-                    title=source.title,
-                    body=source.body,
-                    restored_from_version_no=version_no,
-                )
+            new_version, _source = restore_note_version(
+                team=team,
+                user=request.user,
+                family=FAMILY_BY_TYPE[note_type],
+                note_id=note_id,
+                version_no=version_no,
+            )
+        except RestoreRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
         except Exception as e:
             # The cause goes to the log, not to the client (MIP-622).
             return error_response(
