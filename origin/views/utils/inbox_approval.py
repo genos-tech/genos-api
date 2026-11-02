@@ -7,16 +7,17 @@ let the caller choose both the receiver and the type, so a "request" addressed
 to yourself was enough to add yourself to any project in your team, or to
 another team given its id.
 
-An item is a request only if all of these hold, and every failure is the same
-404 so nothing says which item ids exist:
+An item is a request only if it is addressed to the caller, is not deleted, and
+is of the type the endpoint answers. Every failure is the same 404, so nothing
+says which item ids exist.
 
-* it is addressed to the caller, is not deleted, and is of the type this
-  endpoint answers;
-* someone else sent it: a request you sent yourself proves nothing;
-* the team in the request body, if there is one, is the item's team.
+What the item may be used for is the view's to check, because only the view
+knows the thing it names:
 
-The caller must also be allowed to add people to the thing named in it, which
-only the view can check.
+* the team and the project are the ITEM's, never what the request body says;
+* the caller must be allowed to add people to that team or project; and
+* the item must still be pending (`is_still_open`), so an old approval cannot
+  put someone back who has since left.
 """
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ from rest_framework.response import Response
 from origin.models.common.inbox_models import InboxItems
 
 REQUEST_PENDING = "pending"
-REQUEST_APPROVED = "approved"
 
 # `item_type`s of the requests an approval answers (see `InboxItems`).
 JOIN_TEAM_REQUEST = 1
@@ -45,13 +45,7 @@ def already_answered() -> Response:
 
 
 def load_request_item(request, *, item_type: int) -> tuple[InboxItems | None, Response | None]:
-    """The request item `request.data["item_id"]` names, or the response to send.
-
-    A rejected request is refused here. An approved one is let through so that a
-    repeated click, or a retry after the approval half-finished, stays harmless:
-    the caller adds nobody for it unless it is still `pending`
-    (`is_still_open`).
-    """
+    """The request item `request.data["item_id"]` names, or the response to send."""
     try:
         item_id = int(request.data.get("item_id"))
     except (TypeError, ValueError):
@@ -60,20 +54,8 @@ def load_request_item(request, *, item_type: int) -> tuple[InboxItems | None, Re
     item = InboxItems.objects.filter(
         item_id=item_id, receiver=request.user, item_type=item_type, is_deleted=False
     ).first()
-    if (
-        item is None
-        or item.sender_id is None
-        or item.team_id is None
-        or str(item.sender_id) == str(request.user.id)
-    ):
+    if item is None or item.sender_id is None or item.team_id is None:
         return None, not_found()
-
-    claimed_team = request.data.get("team_id")
-    if claimed_team is not None and str(claimed_team) != str(item.team_id):
-        return None, not_found()
-
-    if item.request_status not in (REQUEST_PENDING, REQUEST_APPROVED):
-        return None, already_answered()
     return item, None
 
 

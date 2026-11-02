@@ -188,6 +188,24 @@ class NoticeEndpointOnlyMakesNoticesTests(ApprovalBase):
         self.assertEqual(res.status_code, 201, res.content)
         self.assertEqual(InboxItems.objects.get().item_type, 2)
 
+    def test_the_team_request_endpoint_decides_the_type_too(self):
+        outsider = User.objects.create_user(
+            username="outsider0", email="outsider0@example.com", password="pw-outsider-123"
+        )
+        self.authenticate(outsider)
+        res = self.client.post(
+            JOIN_TEAM_REQ,
+            {
+                "team_id": str(self.victim_team.team_id),
+                "item_body": "x",
+                "item_type": 2,
+                "item_optionals": {},
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, 201, res.content)
+        self.assertEqual(InboxItems.objects.get().item_type, 1)
+
     def test_asking_to_join_something_that_does_not_exist_is_a_404(self):
         self.authenticate(self.attacker)
         missing_project = self.client.post(
@@ -341,6 +359,36 @@ class ProjectApprovalTests(ApprovalBase):
         self.assertEqual(res.status_code, 409, res.content)
         self.assertFalse(self.is_project_member(self.project, self.attacker))
 
+    def test_an_editor_who_was_not_the_receiver_cannot_answer_it(self):
+        """The request is addressed to the owner; managing the project is not
+        the same as being the person it was sent to."""
+        editor = User.objects.create_user(
+            username="editor", email="editor@example.com", password="pw-editor-123"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=editor)
+        ProjectMembers.objects.create(
+            team=self.team, project=self.project, attendee=editor, member_role="editor"
+        )
+        item_id = self.request_to_join_project(self.project)
+        res = self.approve_project(item_id, as_user=editor)
+        self.assertEqual(res.status_code, 404, res.content)
+        self.assertFalse(self.is_project_member(self.project, self.attacker))
+
+    def test_the_project_must_belong_to_the_items_team(self):
+        """An item of the caller's team that names another team's project,
+        addressed to that project's owner: the owner is allowed to add people
+        to the project, but not on the strength of another team's item."""
+        item = self.forge(
+            item_type=2,
+            team=self.team,
+            sender=self.attacker,
+            receiver=self.victim,
+            optionals={"project_id": self.victim_project.project_id, "project_name": "x"},
+        )
+        res = self.approve_project(item.item_id, as_user=self.victim)
+        self.assertEqual(res.status_code, 404, res.content)
+        self.assertFalse(self.is_project_member(self.victim_project, self.attacker))
+
     def test_a_missing_item_id_is_a_400_not_a_crash(self):
         self.authenticate(self.user)
         res = self.client.post(APPROVE_PRJ, {"team_id": str(self.team.team_id)}, format="json")
@@ -398,6 +446,33 @@ class TeamApprovalTests(ApprovalBase):
         self.assertEqual(res.status_code, 201, res.content)
         self.assertEqual(res.data["teamName"], self.victim_team.team_name)
         self.assertTrue(self.is_team_member(self.victim_team, outsider))
+
+    def test_the_team_is_the_items_not_the_one_you_name(self):
+        """An item of another team, addressed to this team's owner, who then
+        names their own team in the request: it adds nobody to their team."""
+        item = self.forge(
+            item_type=1,
+            team=self.team,
+            sender=self.attacker,
+            receiver=self.victim,
+            optionals={"team_name": "x"},
+        )
+        res = self.approve_team(item.item_id, as_user=self.victim, team=self.victim_team)
+        self.assertEqual(res.status_code, 404, res.content)
+        self.assertFalse(self.is_team_member(self.victim_team, self.attacker))
+
+    def test_an_old_approval_does_not_put_someone_back(self):
+        outsider = User.objects.create_user(
+            username="outsider4", email="outsider4@example.com", password="pw-outsider-123"
+        )
+        item_id = self.request_to_join_team(self.victim_team, as_user=outsider)
+        self.approve_team(item_id, as_user=self.victim, team=self.victim_team)
+        InboxItems.objects.filter(item_id=item_id).update(request_status="approved")
+        TeamMembers.objects.filter(team=self.victim_team, attendee=outsider).update(is_deleted=True)
+
+        res = self.approve_team(item_id, as_user=self.victim, team=self.victim_team)
+        self.assertEqual(res.status_code, 409, res.content)
+        self.assertFalse(self.is_team_member(self.victim_team, outsider))
 
     def test_a_rejected_request_cannot_be_approved_later(self):
         outsider = User.objects.create_user(
