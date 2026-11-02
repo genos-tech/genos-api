@@ -45,6 +45,26 @@ def _canonical(raw):
         return None
 
 
+def refuse_unreachable_people(project, people) -> str | None:
+    """Why the people named can't be put on something in `project`, or None.
+
+    `people` is `(label, raw ids as sent, ids already there)` triples. Someone
+    already there is not judged again (see `refuse_new_people`); anyone else
+    has to pass `may_name_person`, and a malformed id is refused rather than
+    dropped. The message names the label and the id.
+    """
+    for label, raws, already in people:
+        for raw in raws:
+            if raw in (None, ""):
+                continue
+            canon = _canonical(raw)
+            if canon is not None and canon in already:
+                continue
+            if project is None or canon is None or not may_name_person(project, canon):
+                return f"{label}: {raw!r} is not a member of this project or its team."
+    return None
+
+
 def refuse_new_people(task, project, data) -> str | None:
     """Why a task PUT may not put the people it names on the task, or None.
 
@@ -60,32 +80,46 @@ def refuse_new_people(task, project, data) -> str | None:
     `project` is the project the task will be in once this save lands: a move
     is judged against its destination.
     """
-    named: list[tuple[str, str | None, str]] = []  # (label, raw as sent, canonical)
-
+    people = []
     for key, current in (("assignee", task.assignee_id), ("reporter", task.reporter_id)):
-        raw = data.get(key)
-        if raw in (None, ""):
-            continue
-        canon = _canonical(raw)
-        if canon is not None and canon == str(current):
-            continue
-        named.append((f"`{key}`", raw, canon or ""))
-
+        people.append((f"`{key}`", [data.get(key)], {str(current)}))
     raw_collaborators = data.get("collaborators")
     if isinstance(raw_collaborators, list):
         already = {str(pk) for pk in task.collaborators.values_list("id", flat=True)}
-        for raw in raw_collaborators:
-            if raw in (None, ""):
-                continue
-            canon = _canonical(raw)
-            if canon is not None and canon in already:
-                continue
-            named.append(("`collaborators`", raw, canon or ""))
+        people.append(("`collaborators`", raw_collaborators, already))
+    return refuse_unreachable_people(project, people)
 
-    for label, raw, canon in named:
-        if project is None or not canon or not may_name_person(project, canon):
-            return f"{label}: {raw!r} is not a member of this project or its team."
-    return None
+
+def refuse_new_milestone_people(milestone, project, data) -> str | None:
+    """`refuse_new_people` for a milestone create (`milestone` is None) or
+    PATCH (MIP-915): the people it names in `assignee_ids`, `reporter_id` and
+    `collaborators`, judged against `project`, the one it will be in.
+
+    A milestone's assignees are readers (`milestone_acl_user_ids`,
+    `LabelAccess.milestone_readable`), and its collaborators and reporter ride
+    on its backing task, where they are the same grants as on any task. People
+    already on the milestone are not judged again.
+    """
+    assignees = data.get("assignee_ids")
+    collaborators = data.get("collaborators")
+    already_assigned: set[str] = set()
+    already_collaborating: set[str] = set()
+    already_reporter: set[str] = set()
+    if milestone is not None:
+        already_assigned = {
+            str(pk) for pk in milestone.milestone_assignees.values_list("user_id", flat=True)
+        }
+        already_reporter = {str(milestone.reporter_id)}
+        if milestone.task_id is not None:
+            already_collaborating = {
+                str(pk) for pk in milestone.task.collaborators.values_list("id", flat=True)
+            }
+    people = [("`reporter_id`", [data.get("reporter_id")], already_reporter)]
+    if isinstance(assignees, list):
+        people.append(("`assignee_ids`", assignees, already_assigned))
+    if isinstance(collaborators, list):
+        people.append(("`collaborators`", collaborators, already_collaborating))
+    return refuse_unreachable_people(project, people)
 
 
 def sync_task_collaborators(task, raw_ids) -> None:
