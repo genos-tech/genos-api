@@ -456,7 +456,7 @@ class CommentChipTests(ChipTestBase):
         self.assertEqual([c["type"] for c in _chips(comment.comment_body)], ["mention", "hashTask"])
 
 
-@patch("origin.search_engine.agent.tools.update_note.push_note_body")
+@patch("origin.search_engine.agent.tools.update_note.push_note_body_now")
 class NoteChipTests(ChipTestBase):
     def test_task_note_create_and_update_file_mentions(self, _push):
         ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
