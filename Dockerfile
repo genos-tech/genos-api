@@ -62,6 +62,16 @@ EXPOSE 8000
 # the first request does not have to. Costs a few tens of MB more, because the
 # master now holds the imported app (the service is capped at 500 MB). Not removing
 # `--max-requests`: memory climbs from ~150 MB to 400-500 MB between recycles.
+#
+# `--keep-alive 0` (MIP-944, second half): a retiring gthread worker stops
+# accepting, then waits for every open connection before it exits, and the
+# replacement is only started after it has exited. An idle keep-alive connection
+# (Railway's proxy holds a pool of them) keeps it waiting: its timeout is only
+# checked when some socket event wakes the loop, so locally eight idle connections
+# held a retiring worker for the full 30 s `--graceful-timeout`, and in production
+# it waited about 4 s until the proxy closed them, with nothing answering new
+# connections. With 0 every response closes its connection, so there is nothing
+# idle to wait for. A connection is a cheap hop on Railway's private network.
 CMD ["sh", "-c", "\
   if [ -n \"$GEMINI_SA_BASE64\" ]; then \
     mkdir -p /tmp && echo \"$GEMINI_SA_BASE64\" | base64 -d > /tmp/gemini-sa.json && chmod 600 /tmp/gemini-sa.json; \
@@ -75,7 +85,7 @@ CMD ["sh", "-c", "\
     --worker-tmp-dir /dev/shm \
     --timeout ${GUNICORN_TIMEOUT:-60} \
     --graceful-timeout 30 \
-    --keep-alive 5 \
+    --keep-alive 0 \
     --preload \
     --max-requests 1000 \
     --max-requests-jitter 100"]
