@@ -1,27 +1,31 @@
 """The number on the installed app's icon (MIP-929).
 
 With the app closed the service worker writes `badge_count` from a Web
-Push payload to the home-screen icon, so the server has to count the same
-three things the open app counts (`App.tsx`: `useAppBadge(unReadInboxItemCount
-+ unReadChatAndActivityCounts)`):
+Push payload to the home-screen icon, so the server has to count what the
+open app counts (`App.tsx`: `useAppBadge(unReadInboxItemCount +
+unReadChatAndActivityCounts)`). Two of its three terms have simple rules and
+are counted here:
 
   * unread REQUESTS in the inbox (not the Activities half: item_type 0, 6
     Genos digest, 9 reminders),
-  * chats (DM, GM, PM, NOT MDM) with something new, ONE per chat,
-  * unread Activity feed topics, ONE per topic.
+  * chats (DM, GM, PM, NOT MDM) with something new, ONE per chat.
+
+The third, the Activity feed, is deliberately NOT counted: the app groups
+its rows by topic with rules that live in the frontend, and the server does
+not keep a second copy of them. The icon can therefore read lower than the
+app while it is closed; the app writes its own number when it comes back.
 
 All for the one team the app is showing, which for a push is the team the
 push is about. Before this the server added up every unread inbox item of
 every team and every unread message of every chat of every team, so an
 unread pile of daily digests kept the icon at 121 while the app said 0.
 
-Each test sets up ONE term, so the total is that term. The two `Parity`
-classes check the rule against what the endpoints the app reads actually
-return, with the app's own rule re-written from the wire shape.
+Each test sets up ONE term, so the total is that term. `ChatParityTests`
+checks the rule against what the endpoint the app reads actually returns,
+with the app's own rule re-written from the wire shape.
 """
 
 import uuid
-from datetime import timedelta
 from types import SimpleNamespace
 from unittest import mock
 
@@ -127,34 +131,17 @@ class _Fixture(BaseAPITestCase):
             defaults={"last_read_message": message},
         )
 
-    # -- activity ---------------------------------------------------------
-    def activity(
-        self,
-        activity_type=ActivityType.MESSAGE,
-        *,
-        channel=None,
-        message=None,
-        team=None,
-        recipient=None,
-        is_read=False,
-        age_days=0,
-        **kw,
-    ):
-        row = Activity.objects.create(
-            team=team or self.team_a,
-            recipient=recipient or self.me,
+    # -- activity (only to show it is NOT counted) -------------------------
+    def activity(self, activity_type=ActivityType.MESSAGE, *, channel=None, message=None, **kw):
+        return Activity.objects.create(
+            team=self.team_a,
+            recipient=self.me,
             actor=self.other,
             activity_type=activity_type,
             channel=channel,
             message=message,
-            is_read=is_read,
             **kw,
         )
-        if age_days:
-            Activity.objects.filter(pk=row.pk).update(
-                ts_created_at=timezone.now() - timedelta(days=age_days)
-            )
-        return row
 
     def feed(self, channel, n, activity_type=ActivityType.MESSAGE, **kw):
         """`n` unread activities, each on its own new top-level message."""
@@ -368,243 +355,27 @@ def _app_chat_count(channels, my_id):
 
 
 # ----------------------------------------------------------------------
-# Term 3: Activity feed topics
-# ----------------------------------------------------------------------
-class _ActivityFixture(_Fixture):
-    """Activities are filed for chats the person is not in, so that the chat
-    term stays out of the way; the three terms together are in `TotalTests`."""
-
-    def chat(self, kind=ChannelKind.GM, *, team=None, me_in=False, **kw):
-        return super().chat(kind, team=team, me_in=me_in, **kw)
-
-
-class ActivityTermTests(_ActivityFixture):
-    def test_an_unread_activity_counts(self):
-        self.feed(self.chat(), 1)
-        self.assertEqual(self.badge(), 1)
-
-    def test_a_burst_in_one_chat_is_one_topic(self):
-        # The feed collapses a run into one row and the badge counts rows.
-        a, b = self.chat(), self.chat()
-        self.feed(a, 5)
-        self.assertEqual(self.badge(), 1)
-        self.feed(b, 2)
-        self.assertEqual(self.badge(), 2)
-
-    def test_the_kind_of_activity_is_part_of_the_topic(self):
-        channel = self.chat()
-        self.feed(channel, 2, ActivityType.MESSAGE)
-        self.feed(channel, 2, ActivityType.MENTION)
-        self.assertEqual(self.badge(), 2)
-
-    def test_replies_collapse_per_thread(self):
-        channel = self.chat()
-        root_x, root_y = self.say(channel, 1), self.say(channel, 2)
-        for seq, root in ((3, root_x), (4, root_x), (5, root_x)):
-            self.activity(
-                ActivityType.THREAD_REPLY,
-                channel=channel,
-                message=self.say(channel, seq, thread_root=root),
-            )
-        self.assertEqual(self.badge(), 1)
-        self.activity(
-            ActivityType.THREAD_REPLY,
-            channel=channel,
-            message=self.say(channel, 6, thread_root=root_y),
-        )
-        self.assertEqual(self.badge(), 2)
-
-    def test_task_comments_collapse_per_task_not_per_thread(self):
-        channel = self.chat(ChannelKind.PM)
-        for n in (1, 2):
-            root = self.say(channel, n * 10)
-            self.activity(
-                ActivityType.THREAD_REPLY,
-                channel=channel,
-                message=self.say(
-                    channel, n * 10 + 1, thread_root=root, metadata={"taskCommentId": n}
-                ),
-            )
-        self.assertEqual(self.badge(), 1)
-
-    def test_replies_that_are_not_task_comments_stay_per_thread(self):
-        channel = self.chat(ChannelKind.PM)
-        for n in (1, 2):
-            root = self.say(channel, n * 10)
-            self.activity(
-                ActivityType.THREAD_REPLY,
-                channel=channel,
-                message=self.say(channel, n * 10 + 1, thread_root=root),
-            )
-        self.assertEqual(self.badge(), 2)
-
-    def test_reactions_are_one_topic_per_reacted_message(self):
-        channel = self.chat()
-        mine = [self.say(channel, seq, sender=self.me) for seq in (1, 2)]
-        for _ in range(3):
-            self.activity(ActivityType.REACTION, channel=channel, message=mine[0])
-        self.assertEqual(self.badge(), 1)
-        self.activity(ActivityType.REACTION, channel=channel, message=mine[1])
-        self.assertEqual(self.badge(), 2)
-
-    def test_a_reaction_to_someone_elses_message_is_not_counted(self):
-        # The app only shows a reaction to the person who was reacted to.
-        channel = self.chat()
-        self.activity(ActivityType.REACTION, channel=channel, message=self.say(channel, 1))
-        self.assertEqual(self.badge(), 0)
-
-    def test_note_and_task_body_mentions_are_topics_of_their_own(self):
-        for note_id in (1, 1, 2):
-            self.activity(ActivityType.MENTION, surface_type=6, meta={"noteId": note_id})
-        self.assertEqual(self.badge(), 2)
-        self.activity(ActivityType.MENTION, surface_type=7, meta={"noteId": 1})  # task note 1
-        self.assertEqual(self.badge(), 3)
-        for _ in range(2):
-            self.activity(ActivityType.MENTION, surface_type=5, meta={"taskId": 7})
-        self.assertEqual(self.badge(), 4)
-
-    def test_read_activities_and_other_peoples_do_not_count(self):
-        channel = self.chat()
-        self.feed(channel, 2, is_read=True)
-        self.feed(channel, 2, recipient=self.other)
-        self.assertEqual(self.badge(), 0)
-
-    def test_an_activity_in_the_other_team_does_not_count(self):
-        self.feed(self.chat(team=self.team_b), 1, team=self.team_b)
-        self.assertEqual(self.badge("a"), 0)
-        self.assertEqual(self.badge("b"), 1)
-
-    def test_the_feed_only_holds_thirty_days(self):
-        channel = self.chat()
-        self.feed(channel, 1, age_days=31)
-        self.assertEqual(self.badge(), 0)
-        self.feed(self.chat(), 1, age_days=29)
-        self.assertEqual(self.badge(), 1)
-
-    def test_the_synthetic_thread_first_message_is_dropped(self):
-        # `countUnreadActivityMessages` drops `isThread && messageId === 1`.
-        channel = self.chat()
-        root = self.say(channel, 0)
-        self.activity(
-            ActivityType.THREAD_REPLY,
-            channel=channel,
-            message=self.say(channel, 1, thread_root=root),
-        )
-        self.assertEqual(self.badge(), 0)
-        self.activity(
-            ActivityType.THREAD_REPLY,
-            channel=channel,
-            message=self.say(channel, 2, thread_root=root),
-        )
-        self.assertEqual(self.badge(), 1)
-
-
-class ActivityParityTests(_ActivityFixture):
-    """The server count against the feed the app receives, using the app's
-    own grouping rule (`activityTopicKey`) written out from the wire shape."""
-
-    def test_agrees_with_the_activity_feed_the_app_receives(self):
-        a, b, pm = self.chat(), self.chat(ChannelKind.MDM), self.chat(ChannelKind.PM)
-        self.feed(a, 3)
-        self.feed(a, 2, ActivityType.MENTION)
-        self.feed(b, 2)
-        root = self.say(a, 50)
-        for seq in (51, 52):
-            self.activity(
-                ActivityType.THREAD_REPLY, channel=a, message=self.say(a, seq, thread_root=root)
-            )
-        mine = self.say(a, 60, sender=self.me)
-        for _ in range(2):
-            self.activity(ActivityType.REACTION, channel=a, message=mine)
-        self.activity(ActivityType.REACTION, channel=a, message=self.say(a, 61))
-        for n in (1, 2):
-            troot = self.say(pm, n * 10)
-            self.activity(
-                ActivityType.THREAD_REPLY,
-                channel=pm,
-                message=self.say(pm, n * 10 + 1, thread_root=troot, metadata={"taskCommentId": n}),
-            )
-        for note_id in (3, 3, 4):
-            self.activity(ActivityType.MENTION, surface_type=8, meta={"noteId": note_id})
-        self.activity(ActivityType.MENTION, surface_type=5, meta={"taskId": 9, "projectId": 2})
-        self.feed(a, 2, is_read=True)
-        self.feed(self.chat(team=self.team_b), 2, team=self.team_b)
-        self.feed(a, 1, age_days=40)
-
-        self.authenticate(self.me)
-        for team in (self.team_a, self.team_b):
-            resp = self.client.get(
-                "/api/v3/activities/",
-                {
-                    "team_id": str(team.team_id),
-                    "since": (timezone.now() - timedelta(days=30)).isoformat(),
-                },
-            )
-            self.assertEqual(resp.status_code, 200)
-            self.assertEqual(
-                self.badge(team.team_id),
-                _app_activity_count(resp.data["activities"], str(self.me.id)),
-            )
-        self.assertGreater(self.badge("a"), 5)
-
-
-def _num(value):
-    """`num()` in `v3ActivityToLegacy`: numbers only, else 0."""
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
-
-
-def _app_activity_count(rows, my_id):
-    """`popActivityMessages` + `countUnreadActivityTopics`, from the wire shape."""
-    keys = set()
-    for row in rows:
-        if row["isRead"]:
-            continue
-        msg = row["message"]
-        t = row["activityType"]
-        # popActivityMessages: a reaction only matters to who was reacted to.
-        sender = (msg or {}).get("sender") or {}
-        if t == 2 and sender.get("userId") != my_id:
-            continue
-        # countUnreadActivityTopics: the synthetic thread first message.
-        if msg and msg["isThreadReply"] and msg["seq"] == 1:
-            continue
-        surface = row["surfaceType"]
-        meta = row["meta"] or {}
-        if surface is not None:
-            if 6 <= surface <= 8:
-                keys.add((t, "note", surface, _num(meta.get("noteId"))))
-            elif surface == 5:
-                keys.add((t, "taskbody", _num(meta.get("taskId"))))
-            else:
-                keys.add((t, "channel", _num(meta.get("noteId"))))
-            continue
-        kind, channel_id = row["channelKind"], row["channelId"]
-        task_id = msg.get("taskId") or 0
-        is_task_comment = bool((msg.get("metadata") or {}).get("taskCommentId")) or (
-            kind == 4 and bool(task_id)
-        )
-        if is_task_comment:
-            keys.add((t, "taskcomment", task_id))
-        elif t == 2:
-            keys.add((2, "reaction", channel_id, msg["id"]))
-        elif msg["isThreadReply"]:
-            keys.add((t, "thread", channel_id, msg["parentId"] or ""))
-        else:
-            keys.add((t, "channel", channel_id))
-    return len(keys)
-
-
-# ----------------------------------------------------------------------
 # The total
 # ----------------------------------------------------------------------
 class TotalTests(_Fixture):
-    def test_the_icon_is_the_sum_of_the_three_terms(self):
+    def test_the_icon_is_the_sum_of_the_two_terms(self):
         self.inbox(JOIN_TEAM)
         self.inbox(DIGEST)
         self.say(self.chat(), 1)
-        self.feed(self.chat(), 1)
-        # one request + (the new chat) + (the other chat) + its activity topic
-        self.assertEqual(self.badge(), 1 + 2 + 1)
+        self.say(self.chat(), 1)
+        # one request + two chats with something new
+        self.assertEqual(self.badge(), 1 + 2)
+
+    def test_the_activity_feed_is_not_counted(self):
+        # The app adds its Activity topics; the server leaves them out on
+        # purpose (see the module docstring), so the icon reads LOWER than the
+        # app until the app writes its own number.
+        channel = self.chat(me_in=False)
+        self.feed(channel, 3)
+        self.activity(ActivityType.MENTION, channel=channel, message=self.say(channel, 99))
+        self.assertEqual(self.badge(), 0)
+        self.inbox(JOIN_TEAM)
+        self.assertEqual(self.badge(), 1)
 
     def test_no_team_counts_every_team_of_the_user(self):
         # The fallback for a push that cannot name a team: an upper bound,
@@ -632,15 +403,15 @@ class TotalTests(_Fixture):
             return len(ctx)
 
         self.inbox(JOIN_TEAM)
-        self.feed(self.chat(), 1)
+        self.say(self.chat(), 1)
         small = (queries("a"), queries(None))
         for _ in range(8):
-            self.feed(self.chat(), 2)
+            self.say(self.chat(), 2)
             self.inbox(JOIN_TEAM)
         big = (queries("a"), queries(None))
         self.assertEqual(small, big)  # no per-chat or per-row queries
-        # requests 1 + activity 1 + chats 1 + the team's two share lookups
-        self.assertEqual(big, (5, 3))
+        # requests 1 + chats 1 + the team's two share lookups
+        self.assertEqual(big, (4, 2))
 
 
 # ----------------------------------------------------------------------
