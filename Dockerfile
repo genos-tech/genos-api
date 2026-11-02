@@ -37,6 +37,11 @@ EXPOSE 8000
 # path (see docs/RAILWAY_DEPLOY.md). Missing var = no-op (the
 # AI-Studio-API-key code path runs instead).
 #
+# `migrate` and `opensearch_setup` are NOT here: on Railway they run in
+# backend-django's pre-deploy step (genos-platform `.railway/railway.ts`,
+# MIP-938), before the swap. Every second of this CMD is API downtime,
+# because the uploads volume makes the old container stop first (MIP-933).
+#
 # Gunicorn concurrency is env-tunable so it can be sized to the Railway
 # instance's memory without a code change. Defaults raised from the old
 # 1 worker / 4 threads / 30s: gthread workers are I/O-bound (Postgres +
@@ -53,8 +58,6 @@ CMD ["sh", "-c", "\
     mkdir -p /tmp && echo \"$GEMINI_SA_BASE64\" | base64 -d > /tmp/gemini-sa.json && chmod 600 /tmp/gemini-sa.json; \
   fi && \
   python manage.py collectstatic --noinput && \
-  python manage.py migrate --noinput && \
-  python manage.py opensearch_setup || echo 'Warning: opensearch_setup failed — search features unavailable until OpenSearch is ready.' && \
   gunicorn apis.wsgi:application \
     --bind \"[::]:$PORT\" \
     --workers ${WEB_CONCURRENCY:-1} \
