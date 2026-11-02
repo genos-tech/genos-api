@@ -1819,6 +1819,13 @@ SEARCH_ENGINE["GEMINI_EXPLICIT_CACHE"] = (
 SEARCH_ENGINE["GEMINI_EXPLICIT_CACHE_TTL_S"] = int(
     os.environ.get("GEMINI_EXPLICIT_CACHE_TTL_S", "3600")
 )
+# A call whose conversation is bigger than this many times the cached prefix
+# skips the explicit cache, so Gemini's automatic caching can cover the growing
+# conversation (an explicit cache switches it off for the rest of the prompt).
+# 0 (or below) never skips it. MIP-937; see gemini_cache.history_outgrew_prefix.
+SEARCH_ENGINE["GEMINI_EXPLICIT_CACHE_MAX_HISTORY_RATIO"] = float(
+    os.environ.get("GEMINI_EXPLICIT_CACHE_MAX_HISTORY_RATIO", "1.0")
+)
 
 # --- Internal AI cost meter (Phase 0) ---
 # Writes the `AiSpendEvent` / `AiRequestCost` accounting ledger: one row

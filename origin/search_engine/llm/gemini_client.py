@@ -188,9 +188,17 @@ class GeminiClient:
         # the time on this exact prefix (see llm/gemini_cache.py). The
         # cache carries system + tools, so both leave the per-call
         # config; `None` from the helper means "send the full prefix",
-        # byte-identical to today.
+        # byte-identical to today. Once the conversation has outgrown the
+        # prefix the cache is skipped for this call: a request that uses one
+        # gets no implicit caching for the rest of its prompt, so every tool
+        # result would be re-sent at the full rate (MIP-937, see
+        # `gemini_cache.history_outgrew_prefix`).
         cached_name: str | None = None
-        if sdk_tools and settings.SEARCH_ENGINE.get("GEMINI_EXPLICIT_CACHE"):
+        if (
+            sdk_tools
+            and settings.SEARCH_ENGINE.get("GEMINI_EXPLICIT_CACHE")
+            and not gemini_cache.history_outgrew_prefix(system_instruction, tools, messages)
+        ):
             cached_name = gemini_cache.prefix_cache_name(
                 client=_get_client(),
                 model=model,
