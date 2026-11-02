@@ -46,25 +46,32 @@ REMIND_IN_MINUTES_SCHEMA = {
 }
 
 
-def load_owned_item(raw_id: Any, ctx: ToolContext, *, action: str) -> ToDoItem:
+def load_owned_item(raw_id: Any, ctx: ToolContext) -> ToDoItem:
     """The to-do `raw_id` names, when it is on the caller's own list in the
     caller's team. A to-do has no `user` column — ownership is its group's —
     so every per-item tool makes this walk, as `_get_owned_item` does for the
-    REST views."""
+    REST views.
+
+    A to-do that is someone else's, or in another team, gets the very answer
+    a missing one gets, word for word, so a caller can't probe which ids
+    exist. It is still a `ToolForbidden` rather than a plain `ToolError`: the
+    text is identical, but the MCP refusal-burst alert counts only the
+    former, and probing other people's ids is what it is there to see."""
     try:
         item_id = int(raw_id)
     except (TypeError, ValueError):
         raise ToolError(f"`item_id` must be an integer (got {raw_id!r}).")
 
+    not_found = f"Todo item {item_id} not found."
     try:
         item = ToDoItem.objects.select_related("group").get(item_id=item_id)
     except ToDoItem.DoesNotExist:
-        raise ToolError(f"Todo item {item_id} not found.")
+        raise ToolError(not_found)
 
     if str(item.group.user_id) != ctx.user_id:
-        raise ToolForbidden(f"Not authorized to {action} this todo item.")
+        raise ToolForbidden(not_found)
     if str(item.group.team_id or "") != ctx.team_id:
-        raise ToolForbidden("Todo item belongs to a different team.")
+        raise ToolForbidden(not_found)
     return item
 
 

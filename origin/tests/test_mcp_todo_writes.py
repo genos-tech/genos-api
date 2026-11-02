@@ -122,7 +122,8 @@ class TestDeleteNeedsTheDestructiveOptIn(McpTodoBase):
         self._key(scope=SCOPE_WRITE, allow_destructive=True)
         text, is_error = self._text("delete_todo_item", {"item_id": theirs.item_id})
         self.assertTrue(is_error)
-        self.assertIn("Not authorized", text)
+        self.assertIn(f"Todo item {theirs.item_id} not found.", text)
+        self.assertNotIn("Not authorized", text)
         self.assertTrue(ToDoItem.objects.filter(pk=theirs.pk).exists())
 
 

@@ -23,7 +23,7 @@ from origin.services import todo_items
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    item = load_owned_item(args.get("item_id"), ctx, action="delete")
+    item = load_owned_item(args.get("item_id"), ctx)
 
     item_id, title, local_date = item.item_id, item.title, item.group.local_date.isoformat()
     sub_items = ToDoItem.objects.filter(parent_item_id=item_id).count()

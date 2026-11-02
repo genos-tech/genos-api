@@ -53,7 +53,7 @@ def _wrap_notes(text: str) -> list[dict[str, Any]] | None:
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     check_body_size(args.get("notes_text"), "notes_text")
-    item = load_owned_item(args.get("item_id"), ctx, action="update")
+    item = load_owned_item(args.get("item_id"), ctx)
     zone = zone_for_user_id(ctx.user_id)
 
     # Everything that can be refused is checked here, before the first write:

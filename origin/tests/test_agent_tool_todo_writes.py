@@ -686,6 +686,37 @@ class WhoMayChangeATodo(TodoToolBase):
             self.update(elsewhere, target_date=self.day(3).isoformat())
         self.assertEqual(place(elsewhere)[0], self.day(0))
 
+    def test_someone_elses_to_do_looks_exactly_like_a_missing_one(self):
+        """A caller probing ids can't tell which exist: another user's to-do,
+        another team's, and one that isn't there all get the same words, from
+        the update and the delete alike. The first two are still a
+        `ToolForbidden` so the MCP refusal-burst alert counts them."""
+        other_team = TeamMaster.objects.create(
+            team_name="Elsewhere", team_email="e@example.com", owner=self.user
+        )
+        TeamMembers.objects.create(team=other_team, attendee=self.user)
+        theirs = self.todo("theirs", user=self.user2)
+        elsewhere = self.todo("elsewhere", team=other_team)
+        missing_id = ToDoItem.objects.order_by("-item_id").first().item_id + 1000
+
+        def refusal(run, item_id):
+            with self.assertRaises(ToolError) as caught:
+                run({"item_id": item_id}, self.ctx)
+            return caught.exception
+
+        for run in (UPDATE_TODO_ITEM.run, DELETE_TODO_ITEM.run):
+            gone = refusal(run, missing_id)
+            self.assertEqual(str(gone), f"Todo item {missing_id} not found.")
+            for item in (theirs, elsewhere):
+                refused = refusal(run, item.item_id)
+                self.assertIsInstance(refused, ToolForbidden)
+                self.assertEqual(str(refused), f"Todo item {item.item_id} not found.")
+                self.assertEqual(
+                    str(refused).replace(str(item.item_id), "N"),
+                    str(gone).replace(str(missing_id), "N"),
+                )
+        self.assertNotIsInstance(refusal(UPDATE_TODO_ITEM.run, missing_id), ToolForbidden)
+
     def test_an_edit_with_no_new_arguments_still_works(self):
         item = self.todo("x")
         out = self.update(item, title="y", is_completed=True, category="Calls")
