@@ -66,6 +66,11 @@ REMINDER_KIND = "todo_reminder"
 # off. Registered in `webpush_gating` under the `enable_inbox` master.
 PUSH_CATEGORY = "todo_reminder"
 
+# Why a completed to-do takes no reminder. A reminder about something already
+# ticked off would be retired unfired anyway (`_retire_if_moot`), so it is
+# refused rather than accepted as a promise we know we will not keep.
+ALREADY_COMPLETED = "This to-do is already completed."
+
 # To-do title carried on the inbox card and the push body. Matches
 # `message_reminders.PREVIEW_MAX` so a reminder reads the same either way.
 PREVIEW_MAX = 140
@@ -126,6 +131,18 @@ def pending_for_user(user):
         )
         .select_related("item", "item__group")
         .order_by("remind_at")
+    )
+
+
+def pending_by_item(item_ids) -> dict:
+    """`{item_id: remind_at}` for the pending reminders on these to-dos, in
+    one query — what a list needs to say "reminder set for …" per row."""
+    return dict(
+        ToDoItemReminder.objects.filter(
+            item_id__in=list(item_ids),
+            fired_at__isnull=True,
+            cancelled_at__isnull=True,
+        ).values_list("item_id", "remind_at")
     )
 
 

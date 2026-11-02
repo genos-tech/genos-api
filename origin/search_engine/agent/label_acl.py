@@ -259,7 +259,7 @@ class LabelAccess:
 
     # ---- todos ---------------------------------------------------------
 
-    def todo_title(self, raw: Any) -> str | None:
+    def todo_item(self, raw: Any) -> ToDoItem | None:
         """`update_todo_item`'s rule: the item is on the caller's own list, in
         this team."""
         tid = _as_int(raw)
@@ -270,7 +270,11 @@ class LabelAccess:
             return None
         if str(item.group.user_id) != self.user_id or str(item.group.team_id or "") != self.team_id:
             return None
-        return item.title
+        return item
+
+    def todo_title(self, raw: Any) -> str | None:
+        item = self.todo_item(raw)
+        return item.title if item is not None else None
 
     # ---- notes ---------------------------------------------------------
 

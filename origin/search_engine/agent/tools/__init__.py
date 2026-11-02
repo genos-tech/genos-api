@@ -58,6 +58,7 @@ from origin.search_engine.agent.tools.create_task_plan import CREATE_TASK_PLAN
 from origin.search_engine.agent.tools.create_todo_item import CREATE_TODO_ITEM
 from origin.search_engine.agent.tools.delete_calendar_event import DELETE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.delete_milestone import DELETE_MILESTONE
+from origin.search_engine.agent.tools.delete_todo_item import DELETE_TODO_ITEM
 from origin.search_engine.agent.tools.fetch_chat_thread import FETCH_CHAT_THREAD
 from origin.search_engine.agent.tools.fetch_note import FETCH_NOTE
 from origin.search_engine.agent.tools.fetch_pr import FETCH_PR
@@ -208,6 +209,7 @@ for _t in (
     # --- Todo write tools (requires_approval) ---
     CREATE_TODO_ITEM,
     UPDATE_TODO_ITEM,
+    DELETE_TODO_ITEM,
     # --- Write tools (MIP-687) — record a task's branch / PR ---
     ADD_TASK_DELIVERY,
     REMOVE_TASK_DELIVERY,
@@ -240,6 +242,7 @@ __all__ = [
     "CREATE_TODO_ITEM",
     "DELETE_CALENDAR_EVENT",
     "DELETE_MILESTONE",
+    "DELETE_TODO_ITEM",
     "FETCH_CHAT_THREAD",
     "FETCH_NOTE",
     "LIST_NOTE_FOLDERS",

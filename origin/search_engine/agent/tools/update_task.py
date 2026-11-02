@@ -2,7 +2,8 @@
 
 Partial-update one `TaskMaster` row. Any subset of `title`,
 `content_text`, `status`, `priority`, `effort_level`, `due_date`,
-`milestone_id`, `parent_task_id`, `project_id`, `tags` may be supplied; omitted fields are left as-is. The model should
+`milestone_id`, `parent_task_id`, `project_id`, `tags`, `start_date`, `collaborators`,
+`custom_fields` may be supplied; omitted fields are left as-is. The model should
 fetch the task first (via `fetch_task`) so it can propose changes
 that respect the existing state.
 
@@ -22,6 +23,7 @@ from typing import Any
 from django.db import transaction
 
 from apis.request_id import log_failure
+from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
@@ -36,10 +38,18 @@ from origin.search_engine.agent.tools.task_body_edit import (
     prepend_blocks,
     replace_in_body,
 )
+from origin.search_engine.agent.tools.task_custom_fields import (
+    CUSTOM_FIELDS_SCHEMA,
+    parse_iso_date,
+    plan_custom_fields,
+    project_fields,
+)
 from origin.search_engine.agent.tools.task_parent import require_readable_parent
+from origin.search_engine.agent.tools.task_people import plan_collaborators
 from origin.search_engine.agent.tools.task_tags import resolve_tags, tag_names
 from origin.services.collab_push import push_task_body
 from origin.services.milestone_service import sync_backing_task
+from origin.services.task_collaborators import sync_task_collaborators
 from origin.services.task_milestone_move import milestone_move_error, move_task_to_milestone
 from origin.services.task_reparent import (
     move_task_to_parent,
@@ -104,7 +114,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(
             f"{task.display_id} is a milestone, and update_task can't delete one: "
             "it would stay listed as Deleted with its tasks still attached. "
-            "Nothing was changed. Delete it from the milestone's menu in the app."
+            "Nothing was changed. Use `delete_milestone` to delete it."
         )
 
     display_id_before = task.display_id
@@ -241,6 +251,66 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             update_fields.append("tags")
             changed.append("tags" if new_tags else "tags(cleared)")
 
+    # --- start_date (ISO 8601 date, or empty string to clear) ---
+    # The UI checks nothing against `due_date` (no min or max on either picker,
+    # and the PUT does not compare them), so neither does this.
+    if "start_date" in args and args["start_date"] is not None:
+        raw_start = args["start_date"]
+        if raw_start == "":
+            if task.start_date is not None:
+                task.start_date = None
+                update_fields.append("start_date")
+                changed.append("start_date(cleared)")
+        else:
+            new_start = parse_iso_date(raw_start, "`start_date`")
+            if new_start != task.start_date:
+                task.start_date = new_start
+                update_fields.append("start_date")
+                changed.append("start_date")
+
+    # --- custom_fields (by name) and collaborators ---
+    # Planned here, written below with the rest. Both belong to the project the
+    # task is in, so neither rides along with a project move.
+    new_custom_values: dict[str, Any] | None = None
+    new_collaborators: list[str] | None = None
+    wants_custom = "custom_fields" in args and args["custom_fields"] is not None
+    wants_collaborators = "collaborators" in args and args["collaborators"] is not None
+    if (wants_custom or wants_collaborators) and args.get("project_id") is not None:
+        raise ToolError(
+            "`custom_fields` and `collaborators` belong to the project the task is in: "
+            "move the task with `project_id` first, then set them in a second call. "
+            "Nothing was changed."
+        )
+    if wants_custom:
+        # The project's fields are for its members (the REST list is member-gated,
+        # and `get_task` shows them only to a member). A task's assignee or
+        # reporter can write the task without being one, and a refusal that
+        # listed the field names, or said which names exist, would hand them over.
+        if not ProjectMembers.objects.filter(
+            project_id=task.project_id, attendee_id=ctx.user_id
+        ).exists():
+            raise ToolError(
+                "`custom_fields`: only a member of the task's project can set its custom "
+                "fields. Nothing was changed."
+            )
+        planned = plan_custom_fields(
+            args["custom_fields"],
+            project_fields(task.project_id),
+            task.custom_field_values,
+            task.project,
+        )
+        if planned != (task.custom_field_values or {}):
+            new_custom_values = planned
+            task.custom_field_values = planned
+            update_fields.append("custom_field_values")
+            changed.append("custom_fields")
+    if wants_collaborators:
+        current_people = {str(uid) for uid in task.collaborators.values_list("id", flat=True)}
+        planned_people = plan_collaborators(args["collaborators"], task.project, current_people)
+        if set(planned_people) != current_people:
+            new_collaborators = planned_people
+            changed.append("collaborators" if planned_people else "collaborators(cleared)")
+
     # --- milestone_id (move into / between milestones, '' to detach) ---
     # Validated here, before any write, but applied after the field save:
     # the move re-reads the row, and writes the hierarchy columns itself.
@@ -311,7 +381,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "sits; send one of them per call. Nothing was changed."
         )
 
-    if not update_fields and not move_milestone and not move_parent and not move_project:
+    if (
+        not update_fields
+        and new_collaborators is None
+        and not move_milestone
+        and not move_parent
+        and not move_project
+    ):
         return {
             "task_id": task_id,
             "changed_fields": [],
@@ -326,7 +402,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             else None
         )
         if not update_fields:
-            pass  # milestone move only — applied below
+            pass  # milestone move or collaborators only — applied below
         elif milestone is not None:
             # A milestone is a task with `is_milestone=True`, but its
             # AUTHORITATIVE values live on the MilestoneMaster side table;
@@ -341,15 +417,25 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             # The values are already assigned to `task`; copy them across
             # by field name (aliasing the two columns that differ) rather
             # than re-parsing the args.
+            #
+            # Custom values are the exception: they live on the backing row
+            # only (`MilestoneView.patch` writes them there, after the sync, and
+            # the sync never touches the column), so they are saved to it below.
             for field in update_fields:
+                if field == "custom_field_values":
+                    continue
                 milestone_field = _MILESTONE_FIELD_ALIASES.get(field, field)
                 setattr(milestone, milestone_field, getattr(task, field))
-            milestone.save()
-            sync_backing_task(milestone)
-            # `sync_backing_task` re-derived and saved the backing row from
-            # the milestone, so the `task` instance mutated above is stale
-            # — re-read it for the response payload.
-            task.refresh_from_db()
+            if update_fields != ["custom_field_values"]:
+                milestone.save()
+                sync_backing_task(milestone)
+                # `sync_backing_task` re-derived and saved the backing row from
+                # the milestone, so the `task` instance mutated above is stale
+                # — re-read it for the response payload.
+                task.refresh_from_db()
+            if new_custom_values is not None:
+                task.custom_field_values = new_custom_values
+                task.save(update_fields=["custom_field_values", "ts_updated_at"])
         else:
             # `ts_updated_at` is auto_now, but Django only runs pre_save()
             # on the fields named in update_fields — omit it and the
@@ -361,6 +447,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             # branch above saves the backing row wholesale, which bumps
             # every auto_now field, so it needs no explicit list.)
             task.save(update_fields=[*update_fields, "ts_updated_at"])
+        # The M2M is replaced wholesale, as the PUT does. It touches no column,
+        # so `ts_updated_at` (the incremental reindexer's and the client sync's
+        # watermark, and `list_tasks`' sort key) is bumped by hand; the PUT's
+        # full save bumps it on every edit.
+        if new_collaborators is not None:
+            with transaction.atomic():
+                sync_task_collaborators(task, new_collaborators)
+                task.save(update_fields=["ts_updated_at"])
         # The same bridge + sub-tree cascade the milestone picker runs, so
         # the task nests under the milestone row exactly as if a user had
         # moved it (MIP-692).
@@ -442,6 +536,10 @@ UPDATE_TASK = Tool(
         "milestone_id, parent_task_id and project_id per call. Status enum: Open, WIP, Blocked, Pending, Closed, "
         "Deleted. `tags` REPLACES the task's tags with names from "
         "list_project_tags (pass [] to clear); an unknown name is refused. "
+        "`start_date` sets the planned start, `collaborators` replaces the "
+        "collaborators, and `custom_fields` sets the project's custom fields by "
+        "name (list_project_tags lists them); send the last two apart from "
+        "`project_id`. '' or [] clears. "
         "Use `fetch_task` first to see the current state so "
         "you don't propose a no-op."
     ),
@@ -564,6 +662,24 @@ UPDATE_TASK = Tool(
                     "Pass [] to clear. Omit to leave unchanged."
                 ),
             },
+            "start_date": {
+                "type": "STRING",
+                "description": (
+                    "New planned start, ISO 8601 (YYYY-MM-DD). Omit to leave "
+                    "unchanged. Pass '' to clear."
+                ),
+            },
+            "collaborators": {
+                "type": "ARRAY",
+                "items": {"type": "STRING"},
+                "description": (
+                    "The task's full new set of collaborator user ids "
+                    "(get_team_members / list_project_members). Replaces the current "
+                    "set: include any you are keeping. New ones must be on the team "
+                    "or project. Pass [] to clear. Omit to leave unchanged."
+                ),
+            },
+            "custom_fields": CUSTOM_FIELDS_SCHEMA,
         },
         "required": ["task_id"],
     },

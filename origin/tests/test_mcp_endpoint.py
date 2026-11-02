@@ -1799,12 +1799,12 @@ class TestPlantedInstructions(McpBase):
         self.assertIn("read-only", text)
         sent.assert_not_called()
 
-    def test_the_delete_is_the_only_destructive_tool(self):
-        """Adding a second is a decision, not a side effect — see the
+    def test_the_deletes_are_the_only_destructive_tools(self):
+        """Adding another is a decision, not a side effect — see the
         `tools.py` docstring before changing this set."""
         self.assertEqual(
             {t.name for t in tools.CATALOG if t.destructive},
-            {"delete_calendar_event", "delete_milestone"},
+            {"delete_calendar_event", "delete_milestone", "delete_todo_item"},
         )
         self.assertTrue(all(t.write for t in tools.CATALOG if t.destructive))
 

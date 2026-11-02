@@ -65,6 +65,13 @@ from origin.search_engine.agent.prompts import (
 )
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError
 from origin.search_engine.agent.tools.categories import PERIPHERAL_FAMILIES, TOOL_CATEGORY
+from origin.search_engine.agent.tools.task_custom_fields import (
+    project_fields,
+    read_custom_fields,
+    resolve_field,
+    stored_member_ids,
+)
+from origin.search_engine.agent.tools.task_tags import tag_names
 from origin.search_engine.llm import (
     AgentMessage,
     CallUsage,
@@ -495,6 +502,8 @@ def _friendly_bulk_update_arguments(
                         "effort_level": task.effort_level,
                         "status": task.status,
                         "due_date": task.due_date.isoformat() if task.due_date else None,
+                        "start_date": task.start_date.isoformat() if task.start_date else None,
+                        "tags": tag_names(task.tags),
                         "milestone_id": _current_milestone_title(task, access),
                         "assignee_id": (
                             names.get(str(task.assignee_id), str(task.assignee_id))
@@ -541,6 +550,100 @@ def _current_parent_label(task: Any, access: LabelAccess) -> Any:
     return label if label is not None else task.parent_task_id
 
 
+def _friendly_task_fields(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess, project_id: Any, task: Any
+) -> dict[str, Any]:
+    """Label the people a task write proposes, and for an existing `task` return
+    the present value of each of `start_date`, `collaborators` and
+    `custom_fields` the call changes (MIP-878).
+
+    `collaborators` are user ids, and so are the values of member custom
+    fields; both become usernames in `out` for the people `LabelAccess` lets the
+    caller name, and stay raw ids otherwise. The custom fields are the
+    project's, shown by name only to a member of it (the REST list is
+    member-gated), so for anyone else they stay as proposed and no `current` is
+    added for them. Returns what to merge into `current` (empty for a create).
+    """
+    proposed_people = args.get("collaborators")
+    entries = args.get("custom_fields")
+    fields = (
+        project_fields(project_id)
+        if isinstance(entries, list) and access.project_name(project_id) is not None
+        else []
+    )
+    resolved: list[tuple[Any, Any]] = []
+    for entry in entries if isinstance(entries, list) else []:
+        try:
+            field = (
+                resolve_field(entry.get("name"), fields)
+                if isinstance(entry, dict) and fields
+                else None
+            )
+        except ToolError:
+            field = None
+        resolved.append((entry, field))
+
+    wanted: set[str] = set()
+    if isinstance(proposed_people, list):
+        wanted |= {i for i in proposed_people if isinstance(i, str)}
+    for entry, field in resolved:
+        if (
+            field is not None
+            and field.field_type == "member"
+            and isinstance(entry.get("value"), str)
+        ):
+            wanted.add(entry["value"])
+    if task is not None:
+        wanted |= {str(uid) for uid in task.collaborators.values_list("id", flat=True)}
+        wanted |= stored_member_ids(task.custom_field_values, fields)
+    names = access.usernames(wanted) if wanted else {}
+
+    def label(uid: Any) -> Any:
+        return names.get(str(uid), uid)
+
+    if isinstance(proposed_people, list):
+        out["collaborators"] = [label(i) if isinstance(i, str) else i for i in proposed_people]
+    if resolved:
+        out["custom_fields"] = [
+            {**entry, "value": label(entry["value"])}
+            if field is not None
+            and field.field_type == "member"
+            and isinstance(entry.get("value"), str)
+            and entry["value"]
+            else entry
+            for entry, field in resolved
+        ]
+
+    current: dict[str, Any] = {}
+    if task is None:
+        return current
+    if args.get("start_date") is not None:
+        current["start_date"] = task.start_date.isoformat() if task.start_date else None
+    if isinstance(proposed_people, list):
+        current["collaborators"] = sorted(
+            str(label(str(uid))) for uid in task.collaborators.values_list("id", flat=True)
+        )
+    if any(field is not None for _entry, field in resolved):
+        shown = {
+            row["name"]: row
+            for row in read_custom_fields(task.custom_field_values, fields, names, fence=False)
+        }
+        values: dict[str, Any] = {}
+        for entry, field in resolved:
+            if field is None:
+                continue
+            row = shown.get(field.field_name)
+            if row is None:
+                value: Any = None
+            elif field.field_type == "tag":
+                value = row.get("values")
+            else:
+                value = row.get("username") or row.get("value")
+            values[str(entry.get("name"))] = value
+        current["custom_fields"] = values
+    return current
+
+
 def _friendly_update_task_arguments(
     out: dict[str, Any], args: dict[str, Any], access: LabelAccess
 ) -> None:
@@ -550,18 +653,30 @@ def _friendly_update_task_arguments(
     and `project_id`; for each one being changed this ADDS the task's
     present value under `current` (a milestone title, a parent's display id,
     a project name; None = none) so the card can show old → new — the same
-    shape a bulk row's `current` carries. The flat pass has also replaced
-    `task_id` with a display id, so the task is looked up from the raw
-    `args`. Nothing is added for a task the caller can't read."""
+    shape a bulk row's `current` carries. The same goes for `start_date`
+    (an ISO date or None), `collaborators` (usernames) and `custom_fields`
+    (the present value of each field named, by the name the call used); the
+    proposed `collaborators` and member-field values are labelled with
+    usernames. The flat pass has also replaced `task_id` with a display id, so
+    the task is looked up from the raw `args`. Nothing is added for a task the
+    caller can't read."""
     moving = [
         k for k in ("milestone_id", "parent_task_id", "project_id") if args.get(k) is not None
     ]
-    if not moving:
+    planning = [
+        k for k in ("start_date", "collaborators", "custom_fields") if args.get(k) is not None
+    ]
+    if not moving and not planning:
         return
     task = access.task(args.get("task_id"))
+    if planning:
+        current = _friendly_task_fields(
+            out, args, access, task.project_id if task is not None else None, task
+        )
+    else:
+        current = {}
     if task is None:
         return
-    current: dict[str, Any] = {}
     if "milestone_id" in moving:
         current["milestone_id"] = _current_milestone_title(task, access)
     if "parent_task_id" in moving:
@@ -569,7 +684,89 @@ def _friendly_update_task_arguments(
     if "project_id" in moving:
         name = access.project_name(task.project_id)
         current["project_id"] = name if name is not None else task.project_id
-    out["current"] = current
+    if current:
+        out["current"] = current
+
+
+def _friendly_create_task_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """In-place nested enrichment for `create_task` arguments: the proposed
+    `collaborators` and member-field values as usernames. There is no present
+    value to show, so no `current`."""
+    if args.get("collaborators") is None and args.get("custom_fields") is None:
+        return
+    _friendly_task_fields(out, args, access, args.get("project_id"), None)
+
+
+def _friendly_update_todo_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """In-place nested enrichment for `update_todo_item` arguments.
+
+    For what the call changes, ADDS the to-do's present value under
+    `current` so the card can show old → new: `target_date` (the day it is on
+    now) and `reminder_at` (its pending reminder, None = none, in the
+    user's zone with the offset). `time_zone` names the zone a `remind_at`
+    will be read in, since the card shows the time as the model wrote it.
+    Nothing is added for a to-do that isn't on the caller's own list."""
+    from origin.search_engine.agent.tools.todo_args import local_iso  # noqa: PLC0415
+    from origin.services import todo_reminders  # noqa: PLC0415
+    from origin.services.user_time import zone_for_user_id  # noqa: PLC0415
+
+    item = access.todo_item(args.get("item_id"))
+    if item is None:
+        return
+    zone = zone_for_user_id(access.user_id)
+    current: dict[str, Any] = {}
+    if args.get("target_date") not in (None, ""):
+        current["target_date"] = item.group.local_date.isoformat()
+    if (
+        args.get("remind_at") not in (None, "")
+        or args.get("remind_in_minutes") is not None
+        or args.get("cancel_reminder")
+    ):
+        pending = todo_reminders.pending_by_item([item.item_id]).get(item.item_id)
+        current["reminder_at"] = local_iso(pending, zone)
+    if args.get("remind_at") not in (None, ""):
+        out["time_zone"] = zone.key
+    if current:
+        out["current"] = current
+
+
+def _friendly_create_todo_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """ADDS `time_zone` when the new to-do carries a `remind_at`: the zone the
+    time will be read in, which the model's own words don't say."""
+    from origin.services.user_time import zone_for_user_id  # noqa: PLC0415
+
+    if args.get("remind_at") not in (None, "") and access.usable:
+        out["time_zone"] = zone_for_user_id(access.user_id).key
+
+
+def _friendly_delete_todo_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """In-place nested enrichment for `delete_todo_item` arguments.
+
+    The flat pass names the to-do; this ADDS what else goes with it, under
+    `current`: its day, how many sub-items are deleted along, and its
+    pending reminder (None = none), so the card says what the delete takes.
+    Nothing is added for a to-do that isn't on the caller's own list."""
+    from origin.search_engine.agent.tools.todo_args import local_iso  # noqa: PLC0415
+    from origin.services import todo_reminders  # noqa: PLC0415
+    from origin.services.user_time import zone_for_user_id  # noqa: PLC0415
+
+    item = access.todo_item(args.get("item_id"))
+    if item is None:
+        return
+    pending = todo_reminders.pending_by_item([item.item_id]).get(item.item_id)
+    out["current"] = {
+        "target_date": item.group.local_date.isoformat(),
+        "sub_items": item.subitems.count(),
+        "reminder_at": local_iso(pending, zone_for_user_id(access.user_id)),
+    }
 
 
 def _friendly_update_note_arguments(
@@ -772,10 +969,14 @@ _FRIENDLY_NESTED_ENRICHERS: dict[
     "update_task": _friendly_update_task_arguments,
     "manage_milestone": _friendly_manage_milestone_arguments,
     "delete_milestone": _friendly_delete_milestone_arguments,
+    "update_todo_item": _friendly_update_todo_arguments,
+    "create_todo_item": _friendly_create_todo_arguments,
+    "delete_todo_item": _friendly_delete_todo_arguments,
     "update_tasks_bulk": _friendly_bulk_update_arguments,
     "update_task_dependencies": _friendly_dependency_arguments,
     "update_note": _friendly_update_note_arguments,
     "create_note": _friendly_create_note_arguments,
+    "create_task": _friendly_create_task_arguments,
 }
 
 
