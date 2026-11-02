@@ -269,6 +269,10 @@
   en: "Any notifications for me?"
   ja: "自分宛の通知はある?"
   ok: [list_my_inbox]
+- id: inbox_requests
+  en: "Is anyone waiting for me to approve a request?"
+  ja: "承認待ちのリクエストはある?"
+  ok: [list_my_inbox]
 - id: mentions
   en: "Who mentioned me in chat recently?"
   ja: "最近チャットで自分をメンションしたのは誰?"
