@@ -127,14 +127,16 @@ class CustomFieldRowTests(CustomFieldHistoryBase):
         self.assertEqual((rows[0].old_value, rows[0].new_value), (None, "2026-11-02"))
 
     def test_tag_values_resolve_to_option_labels(self):
-        task = self._task({self._key(self.tag): ["opt-ui"]})
+        # `opt-gone` was deleted from the field after it was picked: the PUT
+        # keeps it (it is not a NEW option, so it isn't judged again, MIP-913).
+        task = self._task({self._key(self.tag): ["opt-ui", "opt-gone"]})
         self._put(task, {self._key(self.tag): ["opt-api", "opt-ui", "opt-gone"]})
 
         (row,) = self._rows(task)
-        self.assertEqual(row.old_value, ["opt-ui"])
+        self.assertEqual(row.old_value, ["opt-gone", "opt-ui"])
         self.assertEqual(row.new_value, ["opt-api", "opt-gone", "opt-ui"])
-        self.assertEqual(row.metadata["oldLabel"], ["UI"])
         # A deleted option keeps its id, so the row still says something.
+        self.assertEqual(row.metadata["oldLabel"], ["opt-gone", "UI"])
         self.assertEqual(row.metadata["newLabel"], ["API", "opt-gone", "UI"])
 
     def test_member_values_resolve_to_usernames(self):

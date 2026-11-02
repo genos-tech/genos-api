@@ -31,7 +31,6 @@ never the keys or names a tool matches on.
 
 from __future__ import annotations
 
-import re
 from datetime import date
 from typing import Any
 
@@ -39,7 +38,12 @@ from origin.models.project.prj_models import ProjectCustomField
 from origin.search_engine.agent.model_fence import unfence_arguments
 from origin.search_engine.agent.tools.base import ToolError, wrap_workspace_content
 from origin.search_engine.agent.tools.task_people import person_id
-from origin.services.custom_fields import MAX_ENTRIES, MAX_TEXT_LEN, sanitize_custom_field_values
+from origin.services.custom_fields import (
+    MAX_ENTRIES,
+    MAX_TEXT_LEN,
+    parse_stored_date,
+    sanitize_custom_field_values,
+)
 
 
 def project_fields(project_id: int | None) -> list[ProjectCustomField]:
@@ -226,19 +230,14 @@ CUSTOM_FIELDS_SCHEMA = {
     ),
 }
 
-_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
-
 
 def parse_iso_date(raw: Any, where: str) -> date:
-    """`YYYY-MM-DD` only. `date.fromisoformat` also takes `20261120` and
-    `2026-W47-5`, which no date picker produces and a reader would not expect
-    to find stored."""
-    if isinstance(raw, str) and _ISO_DATE.fullmatch(raw.strip()):
-        try:
-            return date.fromisoformat(raw.strip())
-        except ValueError:
-            pass
-    raise ToolError(f"{where} must be a date as YYYY-MM-DD, such as 2026-11-20 (got {raw!r}).")
+    """`YYYY-MM-DD` only (the rule is `custom_fields.parse_stored_date`, shared
+    with the REST PUT)."""
+    parsed = parse_stored_date(raw)
+    if parsed is None:
+        raise ToolError(f"{where} must be a date as YYYY-MM-DD, such as 2026-11-20 (got {raw!r}).")
+    return parsed
 
 
 def _tag_option_ids(field: ProjectCustomField, picked: list[str], where: str) -> list[str]:

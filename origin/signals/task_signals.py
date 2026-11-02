@@ -243,6 +243,14 @@ def _custom_field_label(field: ProjectCustomField, value: Any, usernames: dict) 
     return value
 
 
+def _is_uuid(value) -> bool:
+    try:
+        uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True
+
+
 def _custom_field_changes(task: TaskMaster, old_map: Any, new_map: Any) -> list[dict]:
     """`_record` kwargs for each custom field whose value differs between
     two `custom_field_values` maps — one row per field, not one per map.
@@ -271,12 +279,16 @@ def _custom_field_changes(task: TaskMaster, old_map: Any, new_map: Any) -> list[
             project_id=task.project_id, field_id__in=field_ids
         )
     }
+    # Only well-formed ids go to the lookup: an `id__in` with one malformed
+    # string raises and 500s the whole save. Until the PUT judged what a value
+    # means (MIP-913) it stored any string in a member field, so such a value
+    # can already be on a row, and changing or clearing it must still work.
     member_ids = {
         str(value)
         for key, values in changed.items()
         if key in fields and fields[key].field_type == "member"
         for value in values
-        if value is not None
+        if value is not None and _is_uuid(value)
     }
     usernames = (
         {
