@@ -2,12 +2,13 @@ from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
-from origin.models.common.team_models import TeamMaster
+from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem, ToDoSchedule
+from origin.models.common.team_models import TeamMaster, TeamMembers
 
 User = get_user_model()
 
@@ -357,3 +358,245 @@ class TestToDoCategoryColors(TestCase):
         self.assertEqual(self._patch(theirs, color="#ff2323").status_code, 403)
         theirs.refresh_from_db()
         self.assertEqual(theirs.color, "#808080")
+
+
+class TestToDoCategoryMustBelongToTheTodosTeam(TestCase):
+    """MIP-918: a tag is per user AND per team, and the app lists them by team
+    (`ToDoCategoryListView`), so it can only ever offer a to-do or a schedule
+    the tags of ITS team. The four writes that take a `category_id` (create and
+    PATCH, for a to-do and for a schedule) used to check the user and not the
+    team, so a person in two teams could hang team A's tag on team B's to-do by
+    id. They answer such an id exactly as they answer one that does not exist.
+
+    A tag with no team (`team=None`: legacy, or its team was deleted) is not in
+    anyone's list either, and is refused the same way.
+    """
+
+    REFUSAL = {"error": "category_id not found for this user."}
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="twoteams", email="two@test.com", password="testpass123"
+        )
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(refresh.access_token)}")
+        self.team_a = TeamMaster.objects.create(
+            team_name="Team A", team_email="a@test.com", owner=self.user
+        )
+        self.team_b = TeamMaster.objects.create(
+            team_name="Team B", team_email="b@test.com", owner=self.user
+        )
+        TeamMembers.objects.create(team=self.team_a, attendee=self.user)
+        TeamMembers.objects.create(team=self.team_b, attendee=self.user)
+        # Same name in both teams: `uniq_todo_category_per_user` is per team.
+        self.cat_a = ToDoCategory.objects.create(team=self.team_a, user=self.user, name="work")
+        self.cat_b = ToDoCategory.objects.create(team=self.team_b, user=self.user, name="work")
+        self.legacy = ToDoCategory.objects.create(team=None, user=self.user, name="legacy")
+        self.today = timezone.localdate()
+        self.group_b = ToDoGroup.objects.create(
+            team=self.team_b, user=self.user, local_date=self.today
+        )
+        self.item_b = ToDoItem.objects.create(group=self.group_b, title="in team B")
+        self.child_b = ToDoItem.objects.create(
+            group=self.group_b, parent_item=self.item_b, title="step of B"
+        )
+        self.schedule_b = self._schedule(self.team_b)
+
+    def _schedule(self, team, **kw):
+        return ToDoSchedule.objects.create(
+            team=team,
+            user=self.user,
+            title="standup",
+            rrule="RRULE:FREQ=DAILY",
+            start_date=self.today,
+            **kw,
+        )
+
+    def _create_item(self, team, **body):
+        body.setdefault("team_id", team.team_id)
+        body.setdefault("local_date", self.today.isoformat())
+        body.setdefault("title", "brand new")
+        return self.client.post("/api/v2/todo/items/", body, format="json")
+
+    def _patch_item(self, item, **body):
+        url = reverse("todo_item_detail", args=[item.item_id])
+        return self.client.patch(url, body, format="json")
+
+    def _create_schedule(self, team, **body):
+        body.setdefault("team_id", team.team_id)
+        body.setdefault("title", "brand new rule")
+        body.setdefault("rrule", "RRULE:FREQ=DAILY")
+        body.setdefault("start_date", self.today.isoformat())
+        return self.client.post("/api/v2/todo/schedules/", body, format="json")
+
+    def _patch_schedule(self, schedule, **body):
+        url = reverse("todo_schedule_detail", args=[schedule.schedule_id])
+        return self.client.patch(url, body, format="json")
+
+    # -- create a to-do ------------------------------------------------------
+
+    def test_creating_a_todo_refuses_another_teams_tag(self):
+        res = self._create_item(self.team_b, category_id=self.cat_a.category_id)
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data, self.REFUSAL)
+        self.assertFalse(ToDoItem.objects.filter(title="brand new").exists())
+
+    def test_the_refusal_is_the_one_an_unknown_id_gets(self):
+        unknown = self._create_item(self.team_b, category_id=999999)
+        other_team = self._create_item(self.team_b, category_id=self.cat_a.category_id)
+        self.assertEqual(other_team.status_code, unknown.status_code)
+        self.assertEqual(other_team.data, unknown.data)
+
+    def test_creating_a_todo_takes_its_own_teams_tag(self):
+        res = self._create_item(self.team_b, category_id=self.cat_b.category_id)
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(
+            ToDoItem.objects.get(title="brand new").category_id, self.cat_b.category_id
+        )
+
+    def test_each_team_takes_its_own_tag_of_the_same_name(self):
+        res = self._create_item(self.team_a, category_id=self.cat_a.category_id)
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(
+            ToDoItem.objects.get(title="brand new").category_id, self.cat_a.category_id
+        )
+
+    def test_creating_a_todo_refuses_a_tag_with_no_team(self):
+        res = self._create_item(self.team_b, category_id=self.legacy.category_id)
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data, self.REFUSAL)
+        self.assertFalse(ToDoItem.objects.filter(title="brand new").exists())
+
+    # -- PATCH a to-do -------------------------------------------------------
+
+    def test_patching_a_todo_refuses_another_teams_tag_and_changes_nothing(self):
+        res = self._patch_item(self.item_b, title="renamed", category_id=self.cat_a.category_id)
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data, self.REFUSAL)
+        self.item_b.refresh_from_db()
+        self.child_b.refresh_from_db()
+        self.assertEqual(self.item_b.title, "in team B")
+        self.assertIsNone(self.item_b.category_id)
+        self.assertIsNone(self.child_b.category_id)
+
+    def test_patching_a_todo_takes_its_own_teams_tag_and_hands_it_to_the_subitems(self):
+        res = self._patch_item(self.item_b, category_id=self.cat_b.category_id)
+        self.assertEqual(res.status_code, 200)
+        self.item_b.refresh_from_db()
+        self.child_b.refresh_from_db()
+        self.assertEqual(self.item_b.category_id, self.cat_b.category_id)
+        self.assertEqual(self.child_b.category_id, self.cat_b.category_id)
+
+    def test_patching_a_todo_refuses_a_tag_with_no_team(self):
+        res = self._patch_item(self.item_b, category_id=self.legacy.category_id)
+        self.assertEqual(res.status_code, 400)
+        self.item_b.refresh_from_db()
+        self.assertIsNone(self.item_b.category_id)
+
+    def test_a_refused_tag_leaves_the_tag_the_todo_already_has(self):
+        self.item_b.category = self.cat_b
+        self.item_b.save(update_fields=["category"])
+        res = self._patch_item(self.item_b, category_id=self.cat_a.category_id)
+        self.assertEqual(res.status_code, 400)
+        self.item_b.refresh_from_db()
+        self.assertEqual(self.item_b.category_id, self.cat_b.category_id)
+
+    def test_a_todo_whose_team_is_gone_takes_no_tag_at_all(self):
+        """`team=None` on the group is a deleted team. `filter(team_id=None)`
+        would be `IS NULL` and match the team-less tag, so it is guarded."""
+        orphan = ToDoGroup.objects.create(
+            team=None, user=self.user, local_date=self.today - timedelta(days=1)
+        )
+        item = ToDoItem.objects.create(group=orphan, title="orphaned")
+        for category in (self.legacy, self.cat_a, self.cat_b):
+            with self.subTest(category=category.name, team=category.team_id):
+                res = self._patch_item(item, category_id=category.category_id)
+                self.assertEqual(res.status_code, 400)
+                item.refresh_from_db()
+                self.assertIsNone(item.category_id)
+
+    def test_clearing_the_tag_still_works(self):
+        self.item_b.category = self.cat_b
+        self.item_b.save(update_fields=["category"])
+        res = self._patch_item(self.item_b, category_id=None)
+        self.assertEqual(res.status_code, 200)
+        self.item_b.refresh_from_db()
+        self.assertIsNone(self.item_b.category_id)
+
+    # -- create a schedule ---------------------------------------------------
+
+    def test_creating_a_schedule_refuses_another_teams_tag(self):
+        res = self._create_schedule(self.team_b, category_id=self.cat_a.category_id)
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data, self.REFUSAL)
+        self.assertFalse(ToDoSchedule.objects.filter(title="brand new rule").exists())
+
+    def test_creating_a_schedule_takes_its_own_teams_tag(self):
+        res = self._create_schedule(self.team_b, category_id=self.cat_b.category_id)
+        self.assertEqual(res.status_code, 201)
+        schedule = ToDoSchedule.objects.get(title="brand new rule")
+        self.assertEqual(schedule.category_id, self.cat_b.category_id)
+        self.assertEqual(schedule.team_id, self.team_b.team_id)
+
+    def test_creating_a_schedule_without_a_tag_still_works(self):
+        res = self._create_schedule(self.team_b)
+        self.assertEqual(res.status_code, 201)
+        self.assertIsNone(ToDoSchedule.objects.get(title="brand new rule").category_id)
+
+    def test_creating_a_schedule_refuses_a_tag_with_no_team(self):
+        res = self._create_schedule(self.team_b, category_id=self.legacy.category_id)
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(ToDoSchedule.objects.filter(title="brand new rule").exists())
+
+    # -- PATCH a schedule ----------------------------------------------------
+
+    def test_patching_a_schedule_refuses_another_teams_tag_and_changes_nothing(self):
+        res = self._patch_schedule(
+            self.schedule_b, title="renamed", category_id=self.cat_a.category_id
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data, self.REFUSAL)
+        self.schedule_b.refresh_from_db()
+        self.assertEqual(self.schedule_b.title, "standup")
+        self.assertIsNone(self.schedule_b.category_id)
+
+    def test_patching_a_schedule_takes_its_own_teams_tag(self):
+        res = self._patch_schedule(self.schedule_b, category_id=self.cat_b.category_id)
+        self.assertEqual(res.status_code, 200)
+        self.schedule_b.refresh_from_db()
+        self.assertEqual(self.schedule_b.category_id, self.cat_b.category_id)
+
+    def test_patching_a_schedule_refuses_a_tag_with_no_team(self):
+        res = self._patch_schedule(self.schedule_b, category_id=self.legacy.category_id)
+        self.assertEqual(res.status_code, 400)
+        self.schedule_b.refresh_from_db()
+        self.assertIsNone(self.schedule_b.category_id)
+
+    def test_a_schedule_whose_team_is_gone_takes_no_tag_at_all(self):
+        orphan = self._schedule(None)
+        for category in (self.legacy, self.cat_a, self.cat_b):
+            with self.subTest(category=category.name, team=category.team_id):
+                res = self._patch_schedule(orphan, category_id=category.category_id)
+                self.assertEqual(res.status_code, 400)
+                orphan.refresh_from_db()
+                self.assertIsNone(orphan.category_id)
+
+    def test_clearing_a_schedules_tag_still_works(self):
+        self.schedule_b.category = self.cat_b
+        self.schedule_b.save(update_fields=["category"])
+        res = self._patch_schedule(self.schedule_b, category_id=None)
+        self.assertEqual(res.status_code, 200)
+        self.schedule_b.refresh_from_db()
+        self.assertIsNone(self.schedule_b.category_id)
+
+    def test_a_patch_that_does_not_mention_the_tag_keeps_it(self):
+        """The materializer PATCHes `lastMaterializedDate` every day. A body
+        without `category_id` must not go near the category check."""
+        self.schedule_b.category = self.cat_b
+        self.schedule_b.save(update_fields=["category"])
+        res = self._patch_schedule(self.schedule_b, is_active=False)
+        self.assertEqual(res.status_code, 200)
+        self.schedule_b.refresh_from_db()
+        self.assertFalse(self.schedule_b.is_active)
+        self.assertEqual(self.schedule_b.category_id, self.cat_b.category_id)
