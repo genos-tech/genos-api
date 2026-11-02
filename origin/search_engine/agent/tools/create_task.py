@@ -32,6 +32,11 @@ means unassigned — there is no implicit "assign to the caller" default.
 
 `tags` takes tag names from the project's catalogue (`list_project_tags`);
 an unknown name is refused, never created — see `task_tags`.
+
+`start_date`, `collaborators` and `custom_fields` (by field name) are the
+other fields the UI's create form sets (MIP-878). They are checked before the
+row exists, so a refused one creates nothing; see `task_custom_fields` and
+`task_people` for the rules.
 """
 
 from __future__ import annotations
@@ -49,7 +54,14 @@ from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
+from origin.search_engine.agent.tools.task_custom_fields import (
+    CUSTOM_FIELDS_SCHEMA,
+    parse_iso_date,
+    plan_custom_fields,
+    project_fields,
+)
 from origin.search_engine.agent.tools.task_parent import require_readable_parent
+from origin.search_engine.agent.tools.task_people import plan_collaborators
 from origin.search_engine.agent.tools.task_tags import resolve_tags
 from origin.search_engine.quota import (
     TASK_CREATE_KEY,
@@ -57,6 +69,7 @@ from origin.search_engine.quota import (
     increment_usage,
 )
 from origin.services.milestone_service import ensure_backing_task
+from origin.services.task_collaborators import sync_task_collaborators
 from origin.services.task_reparent import find_parent, milestone_for_parent
 from origin.views.utils.scope_guards import is_team_member
 
@@ -189,6 +202,17 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(
             f"`effort_level` must be one of {sorted(_VALID_EFFORTS)} (got {effort_level!r})."
         )
+    start_date = None
+    if args.get("start_date") not in (None, ""):
+        start_date = parse_iso_date(args["start_date"], "`start_date`")
+    collaborator_ids: list[str] = []
+    if args.get("collaborators") is not None:
+        collaborator_ids = plan_collaborators(args["collaborators"], project, set())
+    custom_values: dict[str, Any] = {}
+    if args.get("custom_fields") is not None:
+        custom_values = plan_custom_fields(
+            args["custom_fields"], project_fields(project_id), None, project
+        )
     due_date = args.get("due_date")
     # Let the model pass an ISO date string; pass it straight through to
     # Django which will parse it. Garbage gets a ToolError below.
@@ -213,6 +237,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         create_kwargs["effort_level"] = effort_level
     if due_date:
         create_kwargs["due_date"] = due_date
+    if start_date is not None:
+        create_kwargs["start_date"] = start_date
+    if custom_values:
+        create_kwargs["custom_field_values"] = custom_values
 
     # Tier quota: monthly task-creation cap. Pre-flight (fail-open on
     # infra errors); charged after the row exists so a failed create
@@ -251,6 +279,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         ref = log_failure("create_task tool failed", e)
         raise ToolError(f"Failed to create task (ref {ref}).")
 
+    # The M2M is set once the row exists, as `TaskMasterView.post` does.
+    sync_task_collaborators(task, collaborator_ids)
     increment_usage(ctx.user_id, TASK_CREATE_KEY)
     # An `@` chip in the body pings the person, as a typed one does.
     notify_task_body_mentions(task, actor_id=ctx.user_id)
@@ -267,7 +297,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # `due_date` is still the raw input string on the instance `create()`
     # returned (`2026-6-30`, a datetime), so read what was stored back: the
     # response shows what the row holds, not an echo of what was sent (MIP-828).
-    task.refresh_from_db(fields=["priority", "effort_level", "due_date"])
+    task.refresh_from_db(fields=["priority", "effort_level", "due_date", "start_date"])
     return {
         "task_id": task.task_id,
         "display_id": task.display_id,
@@ -282,6 +312,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "priority": task.priority or None,
         "effort_level": task.effort_level or None,
         "due_date": task.due_date.isoformat() if task.due_date else None,
+        "start_date": task.start_date.isoformat() if task.start_date else None,
+        "collaborators": collaborator_ids,
         "__summary__": summary,
     }
 
@@ -296,7 +328,10 @@ CREATE_TASK = Tool(
         "content_text (markdown body), milestone_id (file it under an "
         "existing milestone), parent_task_id (file it under an existing "
         "task in the same project; not together with milestone_id), assignee_id, tags, priority, effort_level, due_date "
-        "(ISO 8601, e.g. 2026-06-30). Status is always created as 'Open' "
+        "(ISO 8601, e.g. 2026-06-30), start_date (same format), collaborators "
+        "(user ids; team or project members) and custom_fields (the project's "
+        "own fields by name, from list_project_tags: [{name, value}], or "
+        "[{name, values}] for a tag field). Status is always created as 'Open' "
         "— users change it via the UI. Leave assignee_id out unless the "
         "user names an assignee; use get_current_user when they say "
         "'assign it to me'. For tags, call list_project_tags and pick only "
@@ -372,6 +407,20 @@ CREATE_TASK = Tool(
                 "type": "STRING",
                 "description": "Optional ISO 8601 date, e.g. 2026-06-30.",
             },
+            "start_date": {
+                "type": "STRING",
+                "description": "Optional planned start, ISO 8601 date, e.g. 2026-06-15.",
+            },
+            "collaborators": {
+                "type": "ARRAY",
+                "items": {"type": "STRING"},
+                "description": (
+                    "Optional collaborator user ids (get_team_members / "
+                    "list_project_members). Each must be a member of the team or "
+                    "the project; anyone else is refused."
+                ),
+            },
+            "custom_fields": CUSTOM_FIELDS_SCHEMA,
         },
         "required": ["title", "project_id"],
     },
