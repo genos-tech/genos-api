@@ -1,12 +1,13 @@
 """`list_my_inbox` tool — recent items from the caller's inbox.
 
 Surfaces the `InboxItems` model that backs the in-app `/workspace/inbox`
-route. Two main item shapes:
+route. The app splits it in two (`ACTIVITY_INBOX_ITEM_TYPES`), and so does this:
 
-  * Activities (`item_type=0`) — passive notifications, e.g. "Alice
-    closed task WRD-5", "Bob commented on your task".
-  * Requests (`item_type ∈ {1, 2, 3}`) — actionable join requests:
-    1=join team, 2=join project, 3=join GM. Each carries
+  * Activity — things that happened and need no answer: notices (0), the Genos
+    digest (6) and message reminders (9).
+  * Requests — everything else, which somebody is waiting on: join team (1),
+    project (2) and GM (3), note access (4), a team ownership claim (5), a team
+    connection (7) and an external share offer (8). Each carries
     `request_status` ("pending" / "approved" / "rejected").
 
 Use `category` to scope. Default is `all` so a single call answers
@@ -21,9 +22,10 @@ ACL contract:
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
-from origin.models.common.inbox_models import InboxItems
+from origin.models.common.inbox_models import ACTIVITY_INBOX_ITEM_TYPES, InboxItems
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 
 _MAX_LIMIT = 50
@@ -31,15 +33,42 @@ _DEFAULT_LIMIT = 20
 _VALID_CATEGORIES = {"activity", "requests", "all"}
 
 # Mirror of the mapping comment inside InboxItems.item_type (origin/models/
-# common/inbox_models.py:30-37). Kept here so the tool response is
-# self-descriptive — agents don't have to know the numeric code.
+# common/inbox_models.py). Kept here so the tool response is self-descriptive:
+# agents don't have to know the numeric code.
 _ITEM_TYPE_LABELS = {
     0: "activity",
     1: "join_team_request",
     2: "join_project_request",
     3: "join_gm_request",
+    4: "note_access_request",
+    5: "team_ownership_claim",
+    6: "genos_digest",
+    7: "team_connection_request",
+    8: "external_share_offer",
+    9: "message_reminder",
 }
-_REQUEST_ITEM_TYPES = (1, 2, 3)
+
+
+def _is_request(item_type: int) -> bool:
+    """The app's rule (and `unread_badge`'s): anything that is not an activity."""
+    return item_type not in ACTIVITY_INBOX_ITEM_TYPES
+
+
+def _target(row) -> dict[str, Any] | None:
+    """The id a join or access request is answered with, from what the requester
+    attached. That is theirs to write, so only an id of the right shape is
+    passed on; the names beside it are left out."""
+    optionals = row.item_optionals if isinstance(row.item_optionals, dict) else {}
+    try:
+        if row.item_type == 2:
+            return {"project_id": int(optionals["project_id"])}
+        if row.item_type == 3:
+            return {"gm_id": str(uuid.UUID(str(optionals["gm_id"])))}
+        if row.item_type == 4:
+            return {"note_type": int(optionals["note_type"]), "note_id": int(optionals["note_id"])}
+    except (KeyError, TypeError, ValueError):
+        return None
+    return None
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -63,9 +92,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         is_deleted=False,
     )
     if category == "activity":
-        qs = qs.filter(item_type=0)
+        qs = qs.filter(item_type__in=ACTIVITY_INBOX_ITEM_TYPES)
     elif category == "requests":
-        qs = qs.filter(item_type__in=_REQUEST_ITEM_TYPES)
+        qs = qs.exclude(item_type__in=ACTIVITY_INBOX_ITEM_TYPES)
     if not include_read:
         qs = qs.filter(is_read=False)
 
@@ -82,20 +111,20 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "sender_id": str(sender.id) if sender else None,
                 "sender_username": sender.username if sender else None,
                 "is_read": row.is_read,
-                "request_status": (
-                    row.request_status if row.item_type in _REQUEST_ITEM_TYPES else None
-                ),
+                "request_status": (row.request_status if _is_request(row.item_type) else None),
                 "item_body": row.item_body,
                 "ts_created_at": row.ts_created_at.isoformat(),
             }
         )
+        if target := _target(row):
+            items[-1]["target"] = target
 
     if items:
         unread_n = sum(1 for it in items if not it["is_read"])
         pending_requests = sum(
             1
             for it in items
-            if it["item_type"] in _REQUEST_ITEM_TYPES and it.get("request_status") == "pending"
+            if _is_request(it["item_type"]) and it.get("request_status") == "pending"
         )
         summary_bits = [f"{len(items)} inbox item(s)"]
         if not include_read:
@@ -120,12 +149,15 @@ LIST_MY_INBOX = Tool(
     name="list_my_inbox",
     description=(
         "Recent items from the current user's inbox (`InboxItems`). Two "
-        "broad kinds: activity notifications (item_type=0, e.g. 'Alice "
-        "closed task WRD-5') and join requests (item_type 1/2/3 — team/"
-        "project/GM, each with request_status 'pending'/'approved'/"
-        "'rejected'). Use for 'what's in my inbox?', 'any notifications "
-        "for me?', 'do I have pending requests?'. Returns items sorted "
-        "newest-first. By default only unread items are returned; pass "
+        "kinds. Activity: notifications (e.g. 'Alice closed task WRD-5'), the "
+        "Genos digest and message reminders. Requests, which someone is "
+        "waiting on: join team, project or group chat, note access, a team "
+        "ownership claim, a team connection and an external share offer, "
+        "each with request_status 'pending'/'approved'/'rejected'. A join-"
+        "project, join-GM or note-access request carries a `target` with the "
+        "id to answer it with. Use for 'what's in my inbox?', 'any "
+        "notifications for me?', 'do I have pending requests?'. Newest "
+        "first. By default only unread items are returned; pass "
         "`include_read=true` to include items already marked read. Pass "
         "`category` to scope to 'activity' or 'requests'. Caller's inbox "
         "only — there is no way to specify another user."
@@ -136,21 +168,17 @@ LIST_MY_INBOX = Tool(
             "category": {
                 "type": "STRING",
                 "enum": ["activity", "requests", "all"],
-                "description": (
-                    "Scope to activity notifications, join requests, or " "both. Default 'all'."
-                ),
+                "description": ("Scope to activity, requests, or both. Default 'all'."),
             },
             "include_read": {
                 "type": "BOOLEAN",
                 "description": (
-                    "If true, include items already marked read. Default " "false (only unread)."
+                    "If true, include items already marked read. Default false (only unread)."
                 ),
             },
             "limit": {
                 "type": "INTEGER",
-                "description": (
-                    f"Max items to return (1–{_MAX_LIMIT}). Default " f"{_DEFAULT_LIMIT}."
-                ),
+                "description": (f"Max items to return (1–{_MAX_LIMIT}). Default {_DEFAULT_LIMIT}."),
             },
         },
         "required": [],
