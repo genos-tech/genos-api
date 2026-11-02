@@ -83,6 +83,21 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if ctx.user_id not in allowed:
         raise ToolForbidden(f"Not authorized to update task {task_id}.")
 
+    # A milestone's backing row is a task, so `status: "Deleted"` would be
+    # accepted and mirrored onto the milestone, but that is only HALF of a
+    # delete. `MilestoneView.delete` also sets `is_deleted`, detaches the
+    # milestone's tasks and purges the search index; none of that happens
+    # here, so the milestone stayed in `list_milestones` as "Deleted" with
+    # its tasks still attached (MIP-876). Refuse rather than half-delete: a
+    # real milestone delete is destructive and belongs behind its own tool
+    # (MIP-879). `update_tasks_bulk` already refuses Deleted outright.
+    if task.is_milestone and args.get("status") == "Deleted":
+        raise ToolError(
+            f"{task.display_id} is a milestone, and update_task can't delete one: "
+            "it would stay listed as Deleted with its tasks still attached. "
+            "Nothing was changed. Delete it from the milestone's menu in the app."
+        )
+
     # --- body guards (MIP-824): validated before anything is touched ---
     edit_modes = [
         key
