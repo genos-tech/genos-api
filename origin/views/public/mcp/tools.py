@@ -478,9 +478,10 @@ CATALOG: tuple[McpTool, ...] = (
             "comments are not covered. `since` (an ISO date or datetime) keeps "
             "only newer ones. To read around a mention, pass its "
             "`chat_type_label` as `chat_type` and its `chat_id` to "
-            "`get_chat_thread`, with `thread_id` when it is not null. Chats of "
-            "this team the caller belongs to; another person's mentions are not "
-            "reachable."
+            "`get_chat_thread`, with `thread_id` when it is not null. The chats "
+            "in the caller's chat list for this team, including chats another "
+            "team shared with it; a chat the caller has left is not covered. "
+            "Another person's mentions are not reachable."
         ),
     ),
     McpTool(

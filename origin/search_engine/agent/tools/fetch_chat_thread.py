@@ -15,12 +15,13 @@ Two modes:
 Text extraction uses the same `extract_text(...)` helper the chunker
 uses on JSONField bodies — same BlockNote → plaintext conversion.
 
-ACL: derived via `agent.acl.chat_acl_user_ids`. Reuses the same logic
-the indexer used to stamp each chunk's `acl_user_ids`. On top of that the
-chat has to belong to the caller's chat list for THIS team
-(`channel_scope.team_scope_q`), so a key for one team cannot read the same
-person's chats in another. A chat the caller cannot read is answered exactly
-like one that does not exist.
+ACL: the caller is a member of the chat (the rule of
+`agent.acl.chat_acl_user_ids`, which the indexer used to stamp each chunk's
+`acl_user_ids`) AND the chat belongs to the caller's chat list for THIS team,
+so a key for one team cannot read the same person's chats in another. Both
+halves are `channel_scope.can_read_chat`, the one rule the approval card's
+`readable_channel` and `list_my_mentions` use too (MIP-917). A chat the caller
+cannot read is answered exactly like one that does not exist.
 """
 
 from __future__ import annotations
@@ -31,7 +32,6 @@ from typing import Any
 from django.core.exceptions import ValidationError
 
 from origin.models.chat.unified_models import Channel, Message
-from origin.search_engine.agent.acl import chat_acl_user_ids
 from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
@@ -42,7 +42,7 @@ from origin.search_engine.agent.tools.base import (
 from origin.search_engine.agent.tools.note_targets import parse_chat_ref
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.search_engine.text_extraction import extract_text
-from origin.services.channel_scope import team_scope_q
+from origin.services.channel_scope import can_read_chat
 
 # The page of main-channel messages a call returns unless asked for fewer or
 # more, and the most it will ever return. A thread keeps its own cap.
@@ -145,13 +145,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # refusal: the caller named the wrong kind, they did not probe.
         raise ToolError(_unreadable(chat_id))
     chat_type_label = CHAT_TYPE_LABEL[channel.kind]
-    # The team's own channel needs no lookup; a chat another team shared with
-    # this one (or a shared project's PM chat) is found by `team_scope_q`.
-    in_team_list = (
-        str(channel.team_id) == str(ctx.team_id)
-        or Channel.objects.filter(team_scope_q(ctx.team_id, ctx.user_id), id=channel.id).exists()
-    )
-    if ctx.user_id not in chat_acl_user_ids(channel.kind, chat_id) or not in_team_list:
+    if not can_read_chat(channel, ctx.team_id, ctx.user_id):
         # Found, and not the caller's: a refusal the burst alert counts, in
         # the same words as a chat that is not there.
         raise ToolForbidden(_unreadable(chat_id))
