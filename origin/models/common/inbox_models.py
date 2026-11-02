@@ -3,6 +3,14 @@ from django.db import models
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
 
+# The Activities half of the inbox: things that HAPPENED and need no answer
+# (0 notice, 6 Genos digest, 9 reminder). Every other item_type is a REQUEST
+# somebody is waiting on. The split decides which inbox tab an item lands on
+# and whether it counts toward the Requests badge, on screen and on the app
+# icon (`services/unread_badge`). Mirrors `ACTIVITY_ITEM_TYPES` in the
+# frontend's `features/inbox/utils/inboxItemTypes.ts`: change both together.
+ACTIVITY_INBOX_ITEM_TYPES = frozenset({0, 6, 9})
+
 
 class InboxItems(models.Model):
     team = models.ForeignKey(

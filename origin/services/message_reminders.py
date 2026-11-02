@@ -234,6 +234,9 @@ def fire(reminder, *, now=None) -> bool:
             # message are two separate moments and must not collapse.
             tag=f"message_reminder:{reminder.id}",
             actor=message.sender,
+            # The team the inbox card above is filed under, so the icon
+            # counts the way the app does for that team.
+            team_id=item.team_id,
         )
     logger.info(
         "[reminders] fired reminder=%s user=%s inbox_item=%s",

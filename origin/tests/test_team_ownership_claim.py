@@ -295,6 +295,20 @@ class TestFinalizing(ClaimTestCase):
         notified = {str(c.kwargs["recipient_id"]) for c in push.call_args_list}
         self.assertIn(str(self.owner.id), notified)
         self.assertIn(str(self.viewer.id), notified)
+        # The icon badge is counted for the team the notice is about.
+        self.assertTrue(push.call_args_list)
+        for call in push.call_args_list:
+            self.assertEqual(call.kwargs["team_id"], self.team.team_id)
+
+    def test_filing_and_answering_a_claim_name_the_team_too(self):
+        with patch("origin.services.webpush_dispatch.schedule_push_to_user") as push:
+            item_id = self.file_claim().json()["itemId"]
+            self.as_(self.owner).post(
+                RESPOND_URL, {"item_id": item_id, "decision": "approve"}, format="json"
+            )
+        self.assertEqual(push.call_count, 2)  # the owner is asked, the claimant told
+        for call in push.call_args_list:
+            self.assertEqual(call.kwargs["team_id"], self.team.team_id)
 
 
 class TestClaimStatus(ClaimTestCase):

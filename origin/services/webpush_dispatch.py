@@ -203,7 +203,16 @@ def _push_spec(act) -> dict | None:
 
 
 def _queue_push(
-    *, recipient_id, category, title, body, url, tag, actor=None, presence_scope="device"
+    *,
+    recipient_id,
+    category,
+    title,
+    body,
+    url,
+    tag,
+    actor=None,
+    presence_scope="device",
+    team_id=None,
 ) -> bool:
     """Core fan-out for ONE recipient: preference gate + presence skip +
     active-subscription lookup + queue the HTTP send. Returns True when at
@@ -231,6 +240,12 @@ def _queue_push(
     device with no push subscription of its own won't silence the
     others. That's the fail-open direction this module prefers
     throughout: a redundant card beats a missing one.
+
+    `team_id` is the team the push is about. It only decides the icon
+    badge: the number is what the app would show for that team (see
+    `services/unread_badge`). A caller with no team to name passes None and
+    gets the count across all of the recipient's teams, an upper bound the
+    app corrects when it opens. It never affects WHO is pushed.
     """
     recipient_id = str(recipient_id)
     if not should_push(recipient_id, category):
@@ -252,7 +267,7 @@ def _queue_push(
     # The service worker can't compute an unread total with the app
     # closed, which is exactly when the icon badge matters. Omitted when
     # unavailable; the client then increments locally.
-    badge_count = unread_badge_total(recipient_id)
+    badge_count = unread_badge_total(recipient_id, team_id=team_id)
     payload = {
         "title": title,
         "body": body,
@@ -315,6 +330,7 @@ def dispatch_push_for_activities(activities) -> None:
                 url=spec["url"],
                 tag=f"{spec['category']}:{act.id}",
                 actor=act.actor,
+                team_id=getattr(act, "team_id", None),
             )
         except Exception as exc:  # noqa: BLE001 — never break the caller
             logger.warning(
@@ -382,6 +398,7 @@ def dispatch_push_for_inbox_item(item, *, title: str | None = None) -> None:
             url="/workspace/inbox",
             tag=f"inbox:{item.item_id}",
             actor=item.sender,
+            team_id=getattr(item, "team_id", None),
         )
     except Exception as exc:  # noqa: BLE001 — never break the caller
         logger.warning(
@@ -405,7 +422,15 @@ def schedule_push_for_inbox_item(item, *, title: str | None = None) -> None:
 
 
 def schedule_push_for_reminder(
-    *, recipient_id, title, body, url, tag, actor=None, category="message_reminder"
+    *,
+    recipient_id,
+    title,
+    body,
+    url,
+    tag,
+    actor=None,
+    category="message_reminder",
+    team_id=None,
 ) -> None:
     """Deliver a due reminder ("remind me in 3 hours") as push.
 
@@ -426,6 +451,9 @@ def schedule_push_for_reminder(
     - **Push only, no email.** The email outbox coalesces and holds back on
       away/cooldown rules tuned for other-people's-activity; a reminder
       delivered an unknown number of minutes late is not a reminder.
+
+    `team_id` is the team of the thing being reminded about (the same one
+    its inbox card is filed under); see `_queue_push`.
     """
     if not recipient_id:
         return
@@ -444,6 +472,7 @@ def schedule_push_for_reminder(
                 tag=tag,
                 actor=actor,
                 presence_scope="ignore",
+                team_id=team_id,
             )
         except Exception as exc:  # noqa: BLE001 — never break the caller
             logger.warning("[webpush] reminder push error for %s: %s", rid, exc)
@@ -452,14 +481,23 @@ def schedule_push_for_reminder(
 
 
 def schedule_push_to_user(
-    *, recipient_id, category, title, url, actor=None, tag=None, presence_scope="device"
+    *,
+    recipient_id,
+    category,
+    title,
+    url,
+    actor=None,
+    tag=None,
+    presence_scope="device",
+    team_id=None,
 ) -> None:
     """Defer a one-off notification (push + email enqueue) to a single
     user not backed by an Activity or InboxItems row (e.g. the GM-join
     approval notice to the requester). Fires after commit; never raises.
 
-    `presence_scope` is forwarded to `_queue_push` — see its docstring.
-    Notices about something the user started themselves want `"user"`."""
+    `presence_scope` and `team_id` are forwarded to `_queue_push` — see its
+    docstring. Notices about something the user started themselves want
+    `"user"`; a notice about a team's affairs should name that team."""
     if not recipient_id:
         return
     rid = str(recipient_id)
@@ -483,6 +521,7 @@ def schedule_push_to_user(
                 tag=resolved_tag,
                 actor=actor,
                 presence_scope=presence_scope,
+                team_id=team_id,
             )
         except Exception as exc:  # noqa: BLE001 — never break the caller
             logger.warning("[webpush] user push error for %s: %s", rid, exc)
@@ -524,6 +563,7 @@ def dispatch_push_for_message(message, recipient_ids) -> None:
                 url=url,
                 tag=tag,
                 actor=message.sender,
+                team_id=getattr(channel, "team_id", None),
             )
         except Exception as exc:  # noqa: BLE001 — never break the caller
             logger.warning("[webpush] message push error for %s: %s", rid, exc)

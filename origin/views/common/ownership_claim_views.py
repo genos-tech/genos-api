@@ -39,10 +39,11 @@ def _team_or_none(team_id):
     return TeamMaster.objects.filter(team_id=team_id).first()
 
 
-def _notify(recipient_id, title):
+def _notify(recipient_id, title, team_id=None):
     """Best-effort push. There is no email channel yet, so in-app + push is
     the only warning any of these steps can give — see
-    PRODUCT_READINESS_PLAN §3.1."""
+    PRODUCT_READINESS_PLAN §3.1. `team_id` is the team whose ownership it
+    is about, which the icon badge is counted for."""
     from origin.services.webpush_dispatch import schedule_push_to_user
 
     schedule_push_to_user(
@@ -50,6 +51,7 @@ def _notify(recipient_id, title):
         category="inbox",
         title=title,
         url="/workspace/inbox",
+        team_id=team_id,
     )
 
 
@@ -138,6 +140,7 @@ class TeamOwnershipClaimRequestView(AuthenticatedAPIView):
             team.owner_id,
             f"{request.user.username or 'A team editor'} is requesting ownership of "
             f"{team.team_name}",
+            team.team_id,
         )
         return Response(
             {
@@ -315,9 +318,11 @@ class TeamOwnershipClaimRespondView(AuthenticatedAPIView):
                 )
 
         if decision == "reject":
-            _notify(claimant_id, f"Your ownership request for {team_name} was declined")
+            _notify(
+                claimant_id, f"Your ownership request for {team_name} was declined", team.team_id
+            )
         else:
-            _notify(claimant_id, f"You are now the owner of {team_name}")
+            _notify(claimant_id, f"You are now the owner of {team_name}", team.team_id)
         return Response({"status": item.request_status}, status=status.HTTP_200_OK)
 
 
@@ -417,7 +422,11 @@ class TeamOwnershipClaimFinalizeView(AuthenticatedAPIView):
         # Everyone hears about it. A silent ownership change is what would
         # make this feature a liability rather than a safety net.
         for member_id in member_ids:
-            _notify(member_id, f"Ownership of {team_name} was transferred to a team editor")
+            _notify(
+                member_id,
+                f"Ownership of {team_name} was transferred to a team editor",
+                team.team_id,
+            )
         return Response({"status": "approved"}, status=status.HTTP_200_OK)
 
 

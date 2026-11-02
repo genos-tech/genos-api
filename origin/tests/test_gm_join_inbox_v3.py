@@ -10,6 +10,8 @@ channel UUID):
   * `InboxItemForJoinGMRequestView`  POST /api/v2/inbox/joinGMRequest/
 """
 
+from unittest.mock import patch
+
 from django.urls import reverse
 from rest_framework import status
 
@@ -57,6 +59,17 @@ class JoinGMFromInboxViewTests(BaseAPITestCase):
                 channel=self.gm, user=self.user2, is_deleted=False
             ).exists()
         )
+
+    def test_the_approval_notice_is_about_the_gms_team(self):
+        # The requester's icon badge is counted for that team.
+        item = self._make_request_item(self.gm.id)
+        self.authenticate(self.user)
+        with patch("origin.services.webpush_dispatch.schedule_push_to_user") as push:
+            resp = self.client.post(self.url, {"item_id": item.item_id}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        push.assert_called_once()
+        self.assertEqual(push.call_args.kwargs["recipient_id"], self.user2.id)
+        self.assertEqual(push.call_args.kwargs["team_id"], self.gm.team_id)
 
     def test_member_approver_also_authorized(self):
         # A non-owner active member may also approve (owner-or-member gate).

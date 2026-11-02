@@ -10,6 +10,8 @@ Covers the two endpoints:
     non-owner approver gets 404 (no existence leak).
 """
 
+from unittest.mock import patch
+
 from origin.models.common.inbox_models import InboxItems
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
@@ -133,6 +135,17 @@ class NoteAccessRequestTests(BaseAPITestCase):
         )
         item.refresh_from_db()
         self.assertEqual(item.request_status, "approved")
+
+    def test_the_approval_notice_is_about_the_notes_team(self):
+        # The requester's icon badge is counted for that team.
+        item = self._file_and_get_item()
+        self.authenticate(self.user)
+        with patch("origin.services.webpush_dispatch.schedule_push_to_user") as push:
+            resp = self.client.post(GRANT_URL, {"item_id": item.item_id}, format="json")
+        self.assertEqual(resp.status_code, 201)
+        push.assert_called_once()
+        self.assertEqual(push.call_args.kwargs["recipient_id"], self.user2.id)
+        self.assertEqual(push.call_args.kwargs["team_id"], self.team.team_id)
 
     def test_non_owner_approver_gets_404(self):
         item = self._file_and_get_item()

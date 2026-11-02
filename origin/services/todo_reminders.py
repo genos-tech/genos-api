@@ -252,6 +252,9 @@ def fire(reminder, *, now=None) -> bool:
             # are two separate moments and must not collapse into one.
             tag=f"todo_reminder:{reminder.id}",
             actor=owner,
+            # The team the inbox card above is filed under, so the icon
+            # counts the way the app does for that team.
+            team_id=inbox_item.team_id,
         )
     logger.info(
         "[todo-reminders] fired reminder=%s user=%s inbox_item=%s",

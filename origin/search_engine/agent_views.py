@@ -1806,6 +1806,9 @@ def _push_run_complete(run, *, failed: bool) -> None:
             # Keyed on the run so a retry of the same ask still gets its
             # own card, but a duplicate close can't double-notify.
             tag=f"agent_run_done:{run.run_id}",
+            # The team the question was asked in (a text column on the run,
+            # so it is checked, not trusted, where the badge is counted).
+            team_id=run.team_id or None,
             # An answer to a question the user asked seconds ago from one
             # of their own devices, unlike everything else that pushes.
             # If ANY of their devices is being looked at, that device is
