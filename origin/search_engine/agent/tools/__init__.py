@@ -59,6 +59,7 @@ from origin.search_engine.agent.tools.create_todo_item import CREATE_TODO_ITEM
 from origin.search_engine.agent.tools.delete_calendar_event import DELETE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.delete_comment import DELETE_COMMENT
 from origin.search_engine.agent.tools.delete_milestone import DELETE_MILESTONE
+from origin.search_engine.agent.tools.delete_sprint import DELETE_SPRINT
 from origin.search_engine.agent.tools.delete_todo_item import DELETE_TODO_ITEM
 from origin.search_engine.agent.tools.fetch_chat_thread import FETCH_CHAT_THREAD
 from origin.search_engine.agent.tools.fetch_note import FETCH_NOTE
@@ -114,6 +115,7 @@ from origin.search_engine.agent.tools.list_tasks import LIST_TASKS
 from origin.search_engine.agent.tools.list_today_todos import LIST_TODAY_TODOS
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
 from origin.search_engine.agent.tools.manage_milestone import MANAGE_MILESTONE
+from origin.search_engine.agent.tools.manage_sprint import MANAGE_SPRINT
 from origin.search_engine.agent.tools.remove_task_delivery import REMOVE_TASK_DELIVERY
 from origin.search_engine.agent.tools.restore_task_body import RESTORE_TASK_BODY
 from origin.search_engine.agent.tools.search_kb import SEARCH_KNOWLEDGE_BASE
@@ -227,6 +229,9 @@ for _t in (
     UPDATE_COMMENT,
     DELETE_COMMENT,
     RESTORE_TASK_BODY,
+    # --- Write tools (MIP-882) — sprints ---
+    MANAGE_SPRINT,
+    DELETE_SPRINT,
 ):
     # Every tool, read and write, takes its arguments with any
     # <workspace_content> fence the model copied from a result taken off
@@ -242,6 +247,8 @@ for _t in (
 __all__ = [
     "ADD_COMMENT",
     "ADD_TASK_DELIVERY",
+    "DELETE_SPRINT",
+    "MANAGE_SPRINT",
     "REMOVE_TASK_DELIVERY",
     "ASSIGN_TASK",
     "CREATE_CALENDAR_EVENT",

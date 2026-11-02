@@ -1,17 +1,19 @@
 from datetime import date, datetime, timedelta
 
 from django.db import transaction
-from django.db.models import Q
 from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.project.prj_models import ProjectMaster
-from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint, SprintConfig
+from origin.services.sprint_manage import (
+    SprintRefused,
+    create_sprint,
+    delete_sprint,
+    update_sprint,
+)
 from origin.services.sprint_status import (
     SPRINT_STATUS_ACTIVE,
-    SPRINT_STATUS_ARCHIVED,
-    SPRINT_STATUS_COMPLETED,
     SPRINT_STATUS_UPCOMING,
     derive_status,
 )
@@ -172,13 +174,18 @@ def _create_upcoming_sprints(project: ProjectMaster, config: SprintConfig) -> No
     existing_sprints = list(
         Sprint.objects.filter(project=project, is_deleted=False).order_by("start_date")
     )
-    max_seq = 0
-    occupied_starts = set()
+    # A deleted sprint still holds its `sequence_number` (the unique constraint
+    # counts it) and its slot (so it stays deleted instead of being filled in
+    # again under a new number). Both come from every row, deleted or not;
+    # counting only the live ones is what made the list answer 500 once the
+    # newest sprint was deleted (MIP-941).
+    taken = list(
+        Sprint.objects.filter(project=project).values_list("sequence_number", "start_date")
+    )
+    max_seq = max((seq for seq, _ in taken), default=0)
+    occupied_starts = {start for _, start in taken}
     sprints_per_year: dict = {}
     for s in existing_sprints:
-        if s.sequence_number > max_seq:
-            max_seq = s.sequence_number
-        occupied_starts.add(s.start_date)
         sprints_per_year[s.start_date.year] = sprints_per_year.get(s.start_date.year, 0) + 1
 
     horizon = max(1, config.upcoming_horizon)
@@ -388,34 +395,10 @@ class SprintView(AuthenticatedAPIView):
         if not is_project_member(project.project_id, request.user.id):
             return _deny_not_found("Project")
 
-        # Reject overlap with existing non-deleted sprints.
-        overlapping = Sprint.objects.filter(project=project, is_deleted=False).filter(
-            Q(start_date__lte=end) & Q(end_date__gte=start)
-        )
-        if overlapping.exists():
-            return Response(
-                {"error": "Sprint window overlaps an existing sprint."},
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        with transaction.atomic():
-            max_seq = (
-                Sprint.objects.filter(project=project)
-                .order_by("-sequence_number")
-                .values_list("sequence_number", flat=True)
-                .first()
-                or 0
-            )
-            sprint = Sprint.objects.create(
-                project=project,
-                team=project.team,
-                name=data["name"],
-                sequence_number=max_seq + 1,
-                start_date=start,
-                end_date=end,
-                status=SPRINT_STATUS_UPCOMING,
-                is_auto_generated=False,
-            )
+        try:
+            sprint = create_sprint(project=project, name=data["name"], start=start, end=end)
+        except SprintRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
 
         return Response(
             {"sprint": _serialize_sprint(sprint, date.today())},
@@ -435,38 +418,12 @@ class SprintView(AuthenticatedAPIView):
         new_end = _parse_iso_date(request.data.get("end_date"))
         new_status = request.data.get("status")
 
-        if new_name is not None:
-            sprint.name = new_name
-        if new_start is not None:
-            sprint.start_date = new_start
-        if new_end is not None:
-            sprint.end_date = new_end
-        if sprint.end_date < sprint.start_date:
-            return Response(
-                {"error": "end_date must be >= start_date."},
-                status=status.HTTP_400_BAD_REQUEST,
+        try:
+            sprint = update_sprint(
+                sprint, name=new_name, start=new_start, end=new_end, status=new_status
             )
-        if new_status in {
-            SPRINT_STATUS_UPCOMING,
-            SPRINT_STATUS_ACTIVE,
-            SPRINT_STATUS_COMPLETED,
-            SPRINT_STATUS_ARCHIVED,
-        }:
-            sprint.status = new_status
-
-        # Overlap guard against other live sprints in the same project.
-        overlap = (
-            Sprint.objects.filter(project_id=sprint.project_id, is_deleted=False)
-            .exclude(sprint_id=sprint.sprint_id)
-            .filter(Q(start_date__lte=sprint.end_date) & Q(end_date__gte=sprint.start_date))
-        )
-        if overlap.exists():
-            return Response(
-                {"error": "Updated window overlaps another sprint."},
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        sprint.save()
+        except SprintRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
         return Response(
             {"sprint": _serialize_sprint(sprint, date.today())},
             status=status.HTTP_200_OK,
@@ -479,12 +436,9 @@ class SprintView(AuthenticatedAPIView):
             return Response({"error": "Sprint not found."}, status=status.HTTP_404_NOT_FOUND)
         if not is_project_member(sprint.project_id, request.user.id):
             return _deny_not_found("Sprint")
-        sprint.is_deleted = True
-        sprint.save(update_fields=["is_deleted", "ts_updated_at"])
-        # Detach milestones from a deleted sprint so they fall back into
-        # the "No sprint / Backlog" bucket and the frontend doesn't try
-        # to render them inside a now-invisible sprint.
-        MilestoneMaster.objects.filter(sprint=sprint).update(sprint=None)
+        # Shared with the agent's sprint tool: soft-deletes, and detaches the
+        # sprint's milestones and their tasks so other browsers see it (MIP-941).
+        delete_sprint(sprint)
         return Response(
             {"message": "Sprint soft-deleted."},
             status=status.HTTP_200_OK,

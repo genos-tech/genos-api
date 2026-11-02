@@ -1,6 +1,6 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 70 agent tools. This exposes 66. The four it leaves out are left out
+Genos has 72 agent tools. This exposes 68. The four it leaves out are left out
 on purpose (`WITHHELD` in `test_mcp_team_numbers`, with a reason each, and a
 test that fails when a tool is neither published nor listed there): a connected
 client has its own web search and its own memory, and the other two are
@@ -1337,6 +1337,38 @@ CATALOG: tuple[McpTool, ...] = (
             "Deleting an already-deleted milestone succeeds when you pass its "
             "numeric `milestone_id`. Requires a write-scoped API key that its "
             "owner also opted into destructive tools."
+        ),
+        write=True,
+        destructive=True,
+    ),
+    McpTool(
+        name="manage_sprint",
+        registry_name="manage_sprint",
+        description=(
+            "Create a sprint, or change one. `action` 'create' needs `project_id` "
+            "(from `list_projects`), `name`, and `start_date` and `end_date` as "
+            "YYYY-MM-DD; the window may not overlap another sprint of the "
+            "project. `action` 'update' needs `sprint_id` (from `list_sprints`) "
+            "and any of `name`, `start_date`, `end_date`; what you leave out "
+            "stays. To end a sprint early, set its `end_date`: its status follows "
+            "its dates, and there is no separate end action. To delete one use "
+            "`delete_sprint`. Requires a write-scoped API key."
+        ),
+        write=True,
+    ),
+    McpTool(
+        name="delete_sprint",
+        registry_name="delete_sprint",
+        description=(
+            "Delete a sprint. **This is not reversible from here** — there is no "
+            "undo on this surface and the sprint would have to be recreated by "
+            "hand. Its milestones and their tasks are kept: they stay in the "
+            "project, no longer in a sprint. Only call it when the user asked for "
+            "that specific sprint to go; get `sprint_id` from `list_sprints` and "
+            "check the name and dates you got back really are the sprint meant. "
+            "Deleting an already-deleted sprint succeeds. Requires a "
+            "write-scoped API key that its owner also opted into destructive "
+            "tools."
         ),
         write=True,
         destructive=True,

@@ -281,6 +281,18 @@
   en: "Undo my last description rewrite on WRD-5"
   ja: "WRD-5 の説明文の最後の書き換えを元に戻して"
   ok: [get_task_history, restore_task_body]
+- id: sprint_create
+  en: "Create a sprint called Polish Week in WRD from Nov 9 to Nov 20"
+  ja: "WRD に Polish Week というスプリントを 11月9日から11月20日で作って"
+  ok: [list_projects, manage_sprint]
+- id: sprint_end
+  en: "End the current sprint of WRD today"
+  ja: "WRD の今のスプリントを今日で終わらせて"
+  ok: [list_projects, list_sprints, manage_sprint]
+- id: sprint_delete
+  en: "Delete the Polish Week sprint in WRD"
+  ja: "WRD の Polish Week スプリントを削除して"
+  ok: [list_projects, list_sprints, delete_sprint]
 - id: inbox_requests
   en: "Is anyone waiting for me to approve a request?"
   ja: "承認待ちのリクエストはある?"
