@@ -54,6 +54,7 @@ from typing import Any
 from django.conf import settings
 
 from apis.request_id import describe_upstream
+from origin.search_engine.agent.fence import unwrap
 from origin.search_engine.llm import AgentMessage, get_model_client, spend
 from origin.search_engine.llm.choice import (
     get_llm_choice,
@@ -487,6 +488,20 @@ def _rerank_cohere(
     return [candidates[i] for i in indices[:output_k]]
 
 
+def _without_fence_tags(snippet: str) -> str:
+    """`snippet` without the `<workspace_content>` boundary tags.
+
+    A snippet `search_kb` wrapped has the tag-shaped text inside it escaped
+    (MIP-927), so it is taken out of its fence first and the escape undone;
+    `&lt;` never reaches the reranker. One that was never wrapped is left as
+    written. Either way the literal tags that remain are dropped, as before.
+    """
+    inner = unwrap(snippet)
+    if inner is not None:
+        snippet = inner
+    return snippet.replace("<workspace_content>", "").replace("</workspace_content>", "")
+
+
 def _cohere_doc_text(entity: dict[str, Any]) -> str:
     """Flatten an entity to the single string Cohere reranks against.
 
@@ -496,10 +511,7 @@ def _cohere_doc_text(entity: dict[str, Any]) -> str:
     Cohere would reject.
     """
     title = (entity.get("title") or "").strip()
-    snippet = (entity.get("snippet") or "").strip()
-    snippet = (
-        snippet.replace("<workspace_content>", "").replace("</workspace_content>", "").strip()
-    )
+    snippet = _without_fence_tags((entity.get("snippet") or "").strip()).strip()
     if len(snippet) > _SNIPPET_TRUNCATE:
         snippet = snippet[:_SNIPPET_TRUNCATE].rstrip() + "…"
     if title and snippet:
@@ -522,8 +534,7 @@ def _build_user_prompt(query: str, candidates: list[dict[str, Any]]) -> str:
         # Strip the Phase-4 boundary tags if a snippet was wrapped on
         # its way out of `search_kb` — they're noise for the reranker
         # which already understands the candidates are workspace data.
-        snippet = snippet.replace("<workspace_content>", "").replace("</workspace_content>", "")
-        snippet = snippet.strip()
+        snippet = _without_fence_tags(snippet).strip()
         if len(snippet) > _SNIPPET_TRUNCATE:
             snippet = snippet[:_SNIPPET_TRUNCATE].rstrip() + "…"
         lines.append(f"[{i}] {eid} | {title} | {snippet}")
