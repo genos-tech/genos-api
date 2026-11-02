@@ -117,17 +117,42 @@ class TheBoundedPatternsMatchWhatTheOldOnesDid(SimpleTestCase):
 
 
 class TheCostIsNoLongerQuadratic(SimpleTestCase):
-    """Absolute time is machine-dependent, so the assertion is a generous ceiling
-    that the old patterns exceeded by two orders of magnitude (192 KB: ~26 s)."""
+    """What is asserted here is CPU time, not wall clock (MIP-914).
 
-    CEILING_SECONDS = 3.0
+    Wall clock also counts the time this process spent waiting for a core. On a
+    busy machine (CI running other jobs, a laptop running the rest of the suite)
+    the same ~1 s of regex work read 3 s and failed an unrelated PR, so the
+    clock is `time.process_time()`: only the CPU this process itself used.
+
+    Two things are asserted, on inputs the old patterns could not survive:
+
+    * a ceiling: each 200,000-character hostile input is searched within
+      CEILING_CPU_SECONDS of CPU. The bounded patterns need about 1 s (2 s on a
+      machine running four times more busy processes than it has cores); the
+      old quadratic ones needed 46 to 122 s on these inputs. The ceiling sits
+      well clear of both, so a busy machine does not reach it.
+    * the shape of the curve, which a ceiling alone could hide: 4x the input
+      must cost under GROWTH_LIMIT (9x) the CPU. Linear is ~4x, quadratic ~16x.
+      Each size is the best of RUNS runs, because the fastest run is the one
+      the machine disturbed least.
+    """
+
+    CEILING_CPU_SECONDS = 10.0
+    GROWTH_LIMIT = 9
+    RUNS = 3
     SIZE = 200_000
 
-    def _fast(self, rx, text):
-        t0 = time.perf_counter()
+    @staticmethod
+    def _cpu_seconds(rx, text):
+        t0 = time.process_time()
         rx.search(text)
-        elapsed = time.perf_counter() - t0
-        self.assertLess(elapsed, self.CEILING_SECONDS, f"{elapsed:.2f}s on {len(text)} chars")
+        return time.process_time() - t0
+
+    def _fast(self, rx, text):
+        elapsed = self._cpu_seconds(rx, text)
+        self.assertLess(
+            elapsed, self.CEILING_CPU_SECONDS, f"{elapsed:.2f}s of CPU on {len(text)} chars"
+        )
 
     def test_a_run_of_opening_tokens_is_fast(self):
         self._fast(entity_links._BARE_TOKEN_RE, "[task:" * (self.SIZE // 6))
@@ -146,10 +171,9 @@ class TheCostIsNoLongerQuadratic(SimpleTestCase):
 
         def cost(n):
             text = "[a](" * n
-            t0 = time.perf_counter()
-            entity_links._MD_LINK_RE.search(text)
-            return time.perf_counter() - t0
+            return min(self._cpu_seconds(entity_links._MD_LINK_RE, text) for _ in range(self.RUNS))
 
         small, large = cost(10_000), cost(40_000)  # 4x the input
-        # Linear is ~4x. Allow for noise up to 9x; quadratic is ~16x.
-        self.assertLess(large, max(small, 0.005) * 9, f"{small:.4f}s -> {large:.4f}s")
+        self.assertLess(
+            large, max(small, 0.005) * self.GROWTH_LIMIT, f"{small:.4f}s -> {large:.4f}s of CPU"
+        )
