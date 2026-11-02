@@ -196,6 +196,33 @@ class ToDoItemDetailView(AuthenticatedAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+        # Same for the category, and the same reason: `Response(...)` returned
+        # inside `transaction.atomic()` COMMITS (only an exception rolls back),
+        # so a 400 from there left whatever had already been written — the
+        # reminder `apply_completion` cancels the moment it sees
+        # `is_completed` (MIP-908).
+        category_change = "category_id" in request.data
+        new_category = None
+        if category_change:
+            # Children mirror the parent's tag — clients cannot set a tag
+            # directly on a child. The cascade below propagates the new tag
+            # to all subitems.
+            if item.parent_item_id is not None:
+                return Response(
+                    {"error": "Children inherit the parent's tag — set it on the parent."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            cat_id = request.data.get("category_id")
+            if cat_id is not None:
+                new_category = ToDoCategory.objects.filter(
+                    category_id=cat_id, user_id=request.user.id
+                ).first()
+                if new_category is None:
+                    return Response(
+                        {"error": "category_id not found for this user."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
         with transaction.atomic():
             if "title" in request.data:
                 item.title = (request.data.get("title") or "").strip()
@@ -206,34 +233,14 @@ class ToDoItemDetailView(AuthenticatedAPIView):
             if "is_completed" in request.data:
                 # Finishing the to-do retires any pending reminder.
                 todo_items.apply_completion(item, bool(request.data.get("is_completed")))
-            if "category_id" in request.data:
-                # Children mirror the parent's tag — clients cannot
-                # set a tag directly on a child. The cascade further
-                # down propagates the new tag to all subitems.
-                if item.parent_item_id is not None:
-                    return Response(
-                        {"error": "Children inherit the parent's tag — set it on the parent."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                cat_id = request.data.get("category_id")
-                if cat_id is None:
-                    item.category = None
-                else:
-                    category = ToDoCategory.objects.filter(
-                        category_id=cat_id, user_id=request.user.id
-                    ).first()
-                    if category is None:
-                        return Response(
-                            {"error": "category_id not found for this user."},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-                    item.category = category
+            if category_change:
+                item.category = new_category
             # Re-home into the target day, creating that group on demand
             # exactly as item creation does; the children follow and both
             # days' completion flags are recomputed.
             saved = todo_items.save_item(item, move_to=move_to)
             # Propagate tag change to children of a top-level item.
-            if "category_id" in request.data and item.parent_item_id is None:
+            if category_change:
                 ToDoItem.objects.filter(parent_item_id=item.item_id).update(
                     category_id=item.category_id
                 )
@@ -472,9 +479,9 @@ class ToDoScheduleListView(AuthenticatedAPIView):
         if res := validate_request_data({"team_id": team_id}):
             return res
         # List active AND inactive so the modal can show paused rules.
-        schedules = ToDoSchedule.objects.filter(
-            team_id=team_id, user_id=request.user.id
-        ).order_by("-ts_created_at")
+        schedules = ToDoSchedule.objects.filter(team_id=team_id, user_id=request.user.id).order_by(
+            "-ts_created_at"
+        )
         return Response(
             ToDoScheduleSerializer(schedules, many=True).data, status=status.HTTP_200_OK
         )
@@ -510,9 +517,7 @@ class ToDoScheduleListView(AuthenticatedAPIView):
             category=category,
             is_active=bool(request.data.get("is_active", True)),
         )
-        return Response(
-            ToDoScheduleSerializer(schedule).data, status=status.HTTP_201_CREATED
-        )
+        return Response(ToDoScheduleSerializer(schedule).data, status=status.HTTP_201_CREATED)
 
 
 class ToDoScheduleDetailView(AuthenticatedAPIView):

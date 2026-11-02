@@ -33,7 +33,12 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from origin.models.chat.todo_models import ToDoGroup, ToDoItem, ToDoItemReminder
+from origin.models.chat.todo_models import (
+    ToDoCategory,
+    ToDoGroup,
+    ToDoItem,
+    ToDoItemReminder,
+)
 from origin.models.common.inbox_models import InboxItems
 from origin.models.common.team_models import TeamMaster
 from origin.services import todo_reminders
@@ -193,6 +198,81 @@ class ToDoReminderCompletionTests(_TodoReminderMixin):
     def test_an_unrelated_patch_leaves_the_reminder_alone(self):
         self.client.patch(self.detail_url, {"title": "renamed"}, format="json")
         self.assertTrue(self._pending().exists())
+
+    # A 400 changes nothing (MIP-908). The patch used to cancel the reminder as
+    # it applied `is_completed`, and only then reach the category check, whose
+    # 400 does not roll the cancel back (returning a response commits).
+    def _assert_refused_and_untouched(self, body):
+        res = self.client.patch(self.detail_url, body, format="json")
+        self.assertEqual(res.status_code, 400)
+        self.item.refresh_from_db()
+        self.assertFalse(self.item.is_completed)
+        self.assertIsNone(self.item.ts_completed_at)
+        self.assertTrue(self._pending().exists())
+
+    def test_a_refused_category_does_not_cancel_the_reminder(self):
+        self._assert_refused_and_untouched({"is_completed": True, "category_id": 999999})
+
+    def test_another_users_category_is_refused_the_same_way(self):
+        other = User.objects.create_user(
+            username="other", email="o@test.com", password="pw12345678"
+        )
+        theirs = ToDoCategory.objects.create(team=self.team, user=other, name="theirs")
+        self._assert_refused_and_untouched(
+            {"is_completed": True, "category_id": theirs.category_id}
+        )
+
+    def test_a_category_on_a_subitem_is_refused_without_cancelling_its_reminder(self):
+        child = ToDoItem.objects.create(group=self.group, parent_item=self.item, title="step")
+        self._set(item=child)
+        category = ToDoCategory.objects.create(team=self.team, user=self.user, name="work")
+        url = reverse("todo_item_detail", args=[child.item_id])
+        res = self.client.patch(
+            url, {"is_completed": True, "category_id": category.category_id}, format="json"
+        )
+        self.assertEqual(res.status_code, 400)
+        child.refresh_from_db()
+        self.assertFalse(child.is_completed)
+        self.assertTrue(self._pending(child).exists())
+
+    def test_a_refused_edit_does_not_apply_its_other_fields_either(self):
+        self.client.patch(
+            self.detail_url, {"title": "renamed", "category_id": 999999}, format="json"
+        )
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.title, "ship the release notes")
+
+    def test_a_valid_category_still_completes_and_cancels(self):
+        category = ToDoCategory.objects.create(team=self.team, user=self.user, name="work")
+        res = self.client.patch(
+            self.detail_url,
+            {"is_completed": True, "category_id": category.category_id},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200)
+        self.item.refresh_from_db()
+        self.assertTrue(self.item.is_completed)
+        self.assertEqual(self.item.category_id, category.category_id)
+        self.assertFalse(self._pending().exists())
+
+    def test_a_parents_category_still_reaches_its_subitems(self):
+        child = ToDoItem.objects.create(group=self.group, parent_item=self.item, title="step")
+        category = ToDoCategory.objects.create(team=self.team, user=self.user, name="work")
+        res = self.client.patch(
+            self.detail_url, {"category_id": category.category_id}, format="json"
+        )
+        self.assertEqual(res.status_code, 200)
+        child.refresh_from_db()
+        self.assertEqual(child.category_id, category.category_id)
+
+    def test_clearing_the_category_still_works(self):
+        category = ToDoCategory.objects.create(team=self.team, user=self.user, name="work")
+        self.item.category = category
+        self.item.save(update_fields=["category"])
+        res = self.client.patch(self.detail_url, {"category_id": None}, format="json")
+        self.assertEqual(res.status_code, 200)
+        self.item.refresh_from_db()
+        self.assertIsNone(self.item.category_id)
 
     def test_deleting_the_todo_takes_the_reminder_with_it(self):
         self.assertEqual(self.client.delete(self.detail_url).status_code, 204)
