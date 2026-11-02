@@ -26,6 +26,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from django.db.models import BigIntegerField, Case, Q, Value, When
 from django.utils import timezone
 
 from origin.models.task.milestone_models import MilestoneFolder, MilestoneMaster
@@ -37,6 +38,8 @@ from origin.services.milestone_service import (
     sync_milestone_assignees,
 )
 from origin.services.task_cache import invalidate_project_tasks_cache
+from origin.services.task_project_move import collect_descendant_task_ids
+from origin.services.task_reparent import resolve_root_task_id
 from origin.signals.task_signals import update_tasks_recorded
 
 # "The request did not say": distinct from None, which clears a sprint / folder
@@ -133,6 +136,114 @@ def update_milestone(
         sync_backing_task(milestone)
 
 
+# How far down the `parent_task_id` chain the re-root follows, and how far up it
+# walks a stray row: the same cap `resolve_root_task_id` uses, so a cyclic or
+# corrupt chain ends instead of spinning.
+REROOT_DEPTH_LIMIT = 64
+
+
+def reroot_detached_tasks(backing_task_id: int, milestone_id: int) -> int:
+    """Give every task that hung under a milestone's backing row a root of its
+    own, as `reparent_task` does for any other detach. Returns how many rows
+    changed (MIP-931).
+
+    A task in a milestone is filed under the backing row and is rooted at it
+    (`bridge_milestone_to_parent`), and so is everything below it (a new
+    sub-task copies its parent's root). Cutting those tasks loose from a
+    deleted backing row without moving the root left every one of them pointing
+    at a dead row, which the task diagram, the sub-task drawer and every new
+    sub-task anchor on. After this, each task that hung DIRECTLY off the backing
+    row is its own root and each of its descendants points at it. A row still
+    rooted at the backing row but not under it by `parent_task_id` (legacy
+    data) is rooted by its own parent chain, or by itself when it has none.
+
+    A row filed in ANOTHER milestone is not this delete's to change, even when
+    it hangs under one of these tasks (the milestone picker accepts an explicit
+    parent, and keeps the milestone's own backing row as the root): it, and
+    whatever hangs under it, keeps its stored root. Only a root that is the
+    dead backing row itself is replaced, by the chain rule above.
+
+    Call it BEFORE the direct children lose their `parent_task_id`: the chain is
+    what tells a descendant which top it belongs to. The tree is read in a
+    fixed handful of queries (one per level plus one for the rows) and written
+    in one, so the cost does not grow with the number of tasks. Rows whose root
+    is already right are left alone. The backing row keeps its own row.
+
+    Not `cascade_tree_position_to_subtasks`: it walks one top task at a time
+    (a loop of queries on a milestone with hundreds of tasks) and also pushes
+    `milestone_id` / `sprint_id`, which the detach has just cleared in its own,
+    labelled write.
+    """
+    below = collect_descendant_task_ids(backing_task_id, depth_limit=REROOT_DEPTH_LIMIT)
+    rows = {
+        task_id: (parent_id, root_id, in_milestone_id)
+        for task_id, parent_id, root_id, in_milestone_id in TaskMaster.objects.filter(
+            Q(task_id__in=below) | Q(root_task_id=backing_task_id)
+        )
+        .exclude(task_id=backing_task_id)
+        .values_list("task_id", "parent_task_id", "root_task_id", "milestone_id")
+    }
+
+    def elsewhere(task_id: int) -> bool:
+        _parent, root_id, in_milestone_id = rows[task_id]
+        return in_milestone_id not in (None, milestone_id) and root_id != backing_task_id
+
+    # task -> (its root once the backing row is gone, whether the chain above it
+    # runs through a row filed elsewhere)
+    settled_root: dict[int, tuple[int | None, bool]] = {}
+    for task_id in rows:
+        if task_id in settled_root:
+            continue
+        path: list[int] = []
+        current = task_id
+        while True:
+            path.append(current)
+            parent_id = rows[current][0]
+            if elsewhere(current):
+                settled = (rows[current][1], True)
+            elif parent_id is None or parent_id == backing_task_id:
+                settled = (current, False)  # the top of its own sub-tree
+            elif parent_id in settled_root:
+                settled = settled_root[parent_id]
+            elif parent_id in rows and parent_id not in path and len(path) < REROOT_DEPTH_LIMIT:
+                current = parent_id
+                continue
+            elif parent_id in rows:
+                settled = (current, False)  # a cycle, or a chain too long to be real: anchor here
+            else:
+                # Filed under a task that is not part of this tree (legacy
+                # data): it roots wherever that task's chain does. A chain that
+                # somehow still ends at the backing row anchors on the row.
+                root = resolve_root_task_id(current, parent_id)
+                settled = (current if root == backing_task_id else root, False)
+            break
+        for member in path:
+            settled_root[member] = settled
+
+    changed: dict[int, int] = {}
+    for task_id, (root, behind_elsewhere) in settled_root.items():
+        stored = rows[task_id][1]
+        if root is None or root == stored:
+            continue
+        if behind_elsewhere and stored != backing_task_id:
+            continue
+        changed[task_id] = root
+    if not changed:
+        return 0
+    # One write for every row, whatever its new root. Stamped by hand through
+    # `update_tasks_recorded`: `root_task_id` is part of the task payload and
+    # a bare `.update()` would leave `ts_updated_at` alone, so a browser that
+    # syncs "rows changed since my checkpoint" would never hear of it (MIP-936).
+    return update_tasks_recorded(
+        TaskMaster.objects.filter(task_id__in=changed),
+        cascade="milestone_delete",
+        root_task_id=Case(
+            *[When(task_id=task_id, then=Value(root)) for task_id, root in changed.items()],
+            output_field=BigIntegerField(),
+        ),
+    )
+
+
 def delete_milestone(milestone: MilestoneMaster) -> None:
     """Soft-delete a milestone the way `MilestoneView.delete` does."""
     milestone.is_deleted = True
@@ -148,6 +259,9 @@ def delete_milestone(milestone: MilestoneMaster) -> None:
         TaskMaster.objects.filter(task_id=milestone.task_id).update(
             is_deleted=True, status="Deleted", ts_updated_at=timezone.now()
         )
+    # Re-root first: it reads the parent edges the unparenting below cuts.
+    if milestone.task_id is not None:
+        reroot_detached_tasks(milestone.task_id, milestone.milestone_id)
     # Detach child tasks so they remain visible in the project view
     # rather than disappearing alongside the milestone. Children
     # tracked via parent_task_id are also unparented.
