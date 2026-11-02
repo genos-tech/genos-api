@@ -1223,6 +1223,33 @@ class AccessTests(MilestoneToolBase):
         )
         self.assertIsInstance(refused, ToolForbidden)
 
+    def test_a_project_of_another_team_is_refused_even_for_one_of_its_members(self):
+        """Creating in it, or touching its folders, needs the run to be in its team
+        too: membership alone is not enough."""
+        ProjectMembers.objects.create(
+            team=self.other_team, project=self.other_project, attendee=self.user
+        )
+        unchanged = self._unchanged()
+        calls = (
+            {"action": "create", "project_id": self.other_project.project_id, "title": "Sneak"},
+            {
+                "action": "create_folder",
+                "project_id": self.other_project.project_id,
+                "folder_name": "Sneak",
+            },
+            {
+                "action": "rename_folder",
+                "milestone_folder_id": self.foreign_folder.folder_id,
+                "folder_name": "Sneak",
+            },
+            {"action": "delete_folder", "milestone_folder_id": self.foreign_folder.folder_id},
+        )
+        for call in calls:
+            with self.subTest(call=call["action"]):
+                refused = self._refusal_text(**call)
+                self.assertIsInstance(refused, ToolForbidden)
+        unchanged()
+
     def test_a_deleted_project_is_not_found(self):
         ProjectMaster.objects.filter(pk=self.project.pk).update(is_deleted=True)
         with self.assertRaises(ToolError):
