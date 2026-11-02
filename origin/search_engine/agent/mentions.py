@@ -327,7 +327,7 @@ def _resolve_note(entry: dict[str, Any], ctx) -> ResolvedMention | None:
     from origin.models.note.task_note_models import TaskNoteMaster  # noqa: PLC0415
     from origin.search_engine.agent.acl import (  # noqa: PLC0415
         chat_note_acl_user_ids,
-        personal_note_acl_user_ids,
+        may_read_note,
         task_note_acl_user_ids,
     )
     from origin.search_engine.chunkers.base import (  # noqa: PLC0415
@@ -343,14 +343,19 @@ def _resolve_note(entry: dict[str, Any], ctx) -> ResolvedMention | None:
         note = PersonalNoteMaster.objects.filter(note_id=note_id).first()
         if note is None:
             return None
-        allowed = personal_note_acl_user_ids(
-            owner_id=getattr(note, "owner_id", None), note_id=note_id
+        # Not the search-index set: a note in a public Team Notes folder
+        # holds a `team:<id>` sentinel there, not user ids (MIP-869).
+        may_read = may_read_note(
+            user_id=ctx.user_id,
+            note_type_code=NOTE_TYPE_PERSONAL,
+            note_id=note_id,
+            owner_id=getattr(note, "owner_id", None),
         )
     elif note_type == NOTE_TYPE_TASK:
         note = TaskNoteMaster.objects.filter(note_id=note_id).first()
         if note is None:
             return None
-        allowed = task_note_acl_user_ids(
+        may_read = ctx.user_id in task_note_acl_user_ids(
             owner_id=getattr(note, "owner_id", None),
             project_id=getattr(note, "project_id", None),
             note_id=note_id,
@@ -363,7 +368,7 @@ def _resolve_note(entry: dict[str, Any], ctx) -> ResolvedMention | None:
         note = ChatNoteMaster.objects.filter(note_id=note_id).first()
         if note is None:
             return None
-        allowed = chat_note_acl_user_ids(
+        may_read = ctx.user_id in chat_note_acl_user_ids(
             owner_id=getattr(note, "owner_id", None),
             chat_type_code=note.chat_type,
             channel_id=note.channel_id,
@@ -378,7 +383,7 @@ def _resolve_note(entry: dict[str, Any], ctx) -> ResolvedMention | None:
 
     if str(getattr(note, "team_id", "") or "") != ctx.team_id:
         return None
-    if ctx.user_id not in allowed:
+    if not may_read:
         return None
     return ResolvedMention(
         kind="note",

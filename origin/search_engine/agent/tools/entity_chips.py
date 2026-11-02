@@ -37,11 +37,12 @@ import re
 from typing import Any, Callable
 
 from origin.search_engine.agent.acl import (
+    may_read_note,
     milestone_acl_user_ids,
-    personal_note_acl_user_ids,
     task_acl_user_ids,
     task_note_acl_user_ids,
 )
+from origin.search_engine.chunkers.base import NOTE_TYPE_PERSONAL
 
 _UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 _USER_RE = re.compile(rf"^user:({_UUID})$")
@@ -242,11 +243,15 @@ def _personal_note_chip(note_id: int, team_id: str, user_id: str) -> dict[str, A
     note = PersonalNoteMaster.objects.filter(note_id=note_id, team_id=team_id).first()
     if note is None:
         return None
-    allowed = personal_note_acl_user_ids(
-        owner_id=note.owner_id, note_id=note.note_id, folder_id=note.folder_id
-    )
-    # A public team folder grants through a team sentinel, not per user.
-    if user_id not in allowed and f"team:{team_id}" not in allowed:
+    # Not the search-index set: a public team folder grants through a sentinel
+    # there, and the sentinel alone doesn't say this user is in that team
+    # (MIP-869).
+    if not may_read_note(
+        user_id=user_id,
+        note_type_code=NOTE_TYPE_PERSONAL,
+        note_id=note.note_id,
+        owner_id=note.owner_id,
+    ):
         return None
     # The same three kinds the editor's menu tags a note_type-1 note with;
     # each opens a different sidebar route.

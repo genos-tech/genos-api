@@ -41,7 +41,7 @@ from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.search_engine.agent.acl import (
     chat_note_acl_user_ids,
-    personal_note_acl_user_ids,
+    may_read_note,
     task_note_acl_user_ids,
 )
 from origin.search_engine.chunkers.base import (
@@ -135,10 +135,16 @@ def _fetch_personal(note_id: int, user_id: str) -> NoteRecord:
     except PersonalNoteMaster.DoesNotExist:
         raise NoteSummaryError(f"Personal note {note_id} not found.")
     owner_id = str(getattr(note, "owner_id", "") or "")
-    allowed = personal_note_acl_user_ids(owner_id=owner_id or None, note_id=note_id)
-    if not allowed:
-        raise NoteSummaryError("Note not found or has no readers.")
-    if user_id not in allowed:
+    # `may_read_note`, not the search-index set: a note in a public Team Notes
+    # folder holds a `team:<id>` sentinel there, not user ids (MIP-869). This
+    # path has no tenant check of its own; the folder role checks membership
+    # of the folder's own team.
+    if not may_read_note(
+        user_id=user_id,
+        note_type_code=NOTE_TYPE_PERSONAL,
+        note_id=note_id,
+        owner_id=owner_id or None,
+    ):
         raise NoteSummaryError("Not authorized to read this note.")
     return NoteRecord(
         note_type=NOTE_TYPE_PERSONAL,
