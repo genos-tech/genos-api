@@ -20,6 +20,7 @@ from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools import ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.fetch_task import FETCH_TASK
+from origin.search_engine.agent.tools.get_sprint_summary import GET_SPRINT_SUMMARY
 from origin.search_engine.agent.tools.list_project_tags import LIST_PROJECT_TAGS
 from origin.search_engine.agent.tools.list_tasks import LIST_TASKS
 from origin.search_engine.agent.tools.task_custom_fields import (
@@ -722,6 +723,48 @@ class ListTasksFilterTests(ReadFieldsBase):
             self._list(sprint_id=foreign.sprint_id)
         with self.assertRaises(ToolError):
             self._list(sprint_id=999999)
+
+    def test_a_missing_sprint_one_in_another_team_and_one_the_caller_is_not_in_answer_alike(self):
+        """The three cases say the same words, so `sprint_id` can't be used to
+        find out which sprint ids exist elsewhere. The two that exist are still
+        a ToolForbidden, which the MCP refusal counter counts."""
+        hidden_project = self._other_project()
+        not_a_member = Sprint.objects.create(
+            team=self.team,
+            project=hidden_project,
+            name="Hidden",
+            sequence_number=1,
+            start_date="2026-10-01",
+            end_date="2026-10-14",
+        )
+        foreign_team = TeamMaster.objects.create(
+            team_name="B", team_email="b@example.com", owner=self.user2
+        )
+        other_team = Sprint.objects.create(
+            team=foreign_team,
+            project=self.project,
+            name="Foreign",
+            sequence_number=2,
+            start_date="2026-10-01",
+            end_date="2026-10-14",
+        )
+        cases = {
+            "missing": (999999, ToolError),
+            "other team": (other_team.sprint_id, ToolForbidden),
+            "not a member": (not_a_member.sprint_id, ToolForbidden),
+        }
+
+        for tool_run in (
+            lambda n: self._list(sprint_id=n),
+            lambda n: GET_SPRINT_SUMMARY.run({"sprint_id": n}, self.ctx),
+        ):
+            texts = set()
+            for label, (sprint_id, kind) in cases.items():
+                with self.subTest(label), self.assertRaises(kind) as caught:
+                    tool_run(sprint_id)
+                texts.add(str(caught.exception).replace(str(sprint_id), "N"))
+                self.assertEqual(str(caught.exception), f"Sprint {sprint_id} not found.")
+            self.assertEqual(texts, {"Sprint N not found."})
 
     def test_a_deleted_sprint_is_not_found(self):
         Sprint.objects.filter(pk=self.sprint.pk).update(is_deleted=True)

@@ -10,6 +10,7 @@ found.
 from __future__ import annotations
 
 from origin.models.common.api_key_models import SCOPE_READ
+from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import (
     ProjectCustomField,
     ProjectMaster,
@@ -222,3 +223,38 @@ class SprintReadsOverMcpTests(McpReadFieldsBase):
 
         self.assertTrue(result["isError"])
         self.assertNotIn("Hidden", repr(listing))
+
+    def test_a_sprint_that_is_missing_foreign_or_not_the_callers_reads_the_same(self):
+        other = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Secret",
+            code="SEC",
+            owner=self.user2,
+            project_system_user=self.user2,
+        )
+        not_a_member = Sprint.objects.create(
+            team=self.team,
+            project=other,
+            name="Hidden",
+            sequence_number=1,
+            start_date="2026-10-01",
+            end_date="2026-10-14",
+        )
+        foreign = Sprint.objects.create(
+            team=TeamMaster.objects.create(
+                team_name="B", team_email="b@example.com", owner=self.user2
+            ),
+            project=self.project,
+            name="Foreign",
+            sequence_number=2,
+            start_date="2026-10-01",
+            end_date="2026-10-14",
+        )
+
+        for tool, key in (("get_sprint_summary", "sprint_id"), ("list_tasks", "sprint_id")):
+            answers = set()
+            for sprint_id in (999999, not_a_member.sprint_id, foreign.sprint_id):
+                result = self._result(self._call(tool, {key: sprint_id}))
+                self.assertTrue(result["isError"], (tool, sprint_id))
+                answers.add(result["content"][0]["text"].replace(str(sprint_id), "N"))
+            self.assertEqual(answers, {"Sprint N not found."}, tool)

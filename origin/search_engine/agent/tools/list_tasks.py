@@ -257,16 +257,19 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             qs = qs.filter(tag_q)
 
     if (sprint_id := _int_arg(args, "sprint_id")) is not None:
+        not_found = f"Sprint {sprint_id} not found."
         sprint = Sprint.objects.filter(sprint_id=sprint_id, is_deleted=False).first()
         if sprint is None:
-            raise ToolError(f"Sprint {sprint_id} not found.")
-        if str(getattr(sprint, "team_id", "") or "") != ctx.team_id:
-            raise ToolForbidden("Not authorized: sprint is in a different team.")
-        if sprint.project_id not in member_project_ids:
-            raise ToolForbidden(
-                f"Not authorized to list tasks in sprint {sprint_id}. "
-                "You are not a member of that project."
-            )
+            raise ToolError(not_found)
+        # A sprint in another team, or in a project the caller isn't in, answers
+        # with the same words as one that doesn't exist, so the filter can't be
+        # used to find out which sprint ids are in use. It is still a
+        # ToolForbidden, so the MCP refusal counter sees the probe.
+        if (
+            str(getattr(sprint, "team_id", "") or "") != ctx.team_id
+            or sprint.project_id not in member_project_ids
+        ):
+            raise ToolForbidden(not_found)
         qs = qs.filter(sprint_id=sprint_id)
 
     if (parent_id := _int_arg(args, "parent_task_id")) is not None:
