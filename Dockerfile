@@ -53,6 +53,15 @@ EXPOSE 8000
 # `[::]` listens on IPv6 and IPv4 both: Railway's private network is
 # IPv6-only on legacy environments, and genos-collab reaches this service
 # there (MIP-621). Quoted so sh doesn't read the brackets as a glob.
+#
+# `--preload` (MIP-944): the app is imported once, in the master, and a worker is
+# a fork. With one worker, `--max-requests` retiring it meant nothing answered
+# until a fresh worker had imported Django and every view (about 7 s on Railway,
+# a hang rather than an error: the master keeps the socket open). A fork is up in
+# a fraction of a second, and `apis/wsgi.py` imports the URLconf in the master so
+# the first request does not have to. Costs a few tens of MB more, because the
+# master now holds the imported app (the service is capped at 500 MB). Not removing
+# `--max-requests`: memory climbs from ~150 MB to 400-500 MB between recycles.
 CMD ["sh", "-c", "\
   if [ -n \"$GEMINI_SA_BASE64\" ]; then \
     mkdir -p /tmp && echo \"$GEMINI_SA_BASE64\" | base64 -d > /tmp/gemini-sa.json && chmod 600 /tmp/gemini-sa.json; \
@@ -67,5 +76,6 @@ CMD ["sh", "-c", "\
     --timeout ${GUNICORN_TIMEOUT:-60} \
     --graceful-timeout 30 \
     --keep-alive 5 \
+    --preload \
     --max-requests 1000 \
     --max-requests-jitter 100"]

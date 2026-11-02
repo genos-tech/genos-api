@@ -30,3 +30,14 @@ validate_web_config(
     blind_index_keys=settings.BLIND_INDEX_KEYS,
     search_engine=settings.SEARCH_ENGINE,
 )
+
+# Import the URLconf, and with it every view module, now rather than on the first
+# request (MIP-944). Under `gunicorn --preload` this runs once, in the master, so a
+# worker recycled by `--max-requests` is a fork that already has everything loaded
+# instead of a first request that spends a second or more importing views.
+from django.urls import Resolver404, resolve  # noqa: E402
+
+try:
+    resolve("/")
+except Resolver404:
+    pass
