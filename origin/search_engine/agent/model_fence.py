@@ -78,6 +78,10 @@ FENCED_KEYS_BY_TOOL: dict[str, frozenset[str]] = {
     "list_channel_members": _PEOPLE,
     # The sender of a chat message; its text is fenced by the tool itself.
     "fetch_chat_thread": frozenset({"sender_username"}),
+    # A mention's sender and the chat's title (MIP-917). The chips under the
+    # answer read neither (`_chat_source` takes the ids), and nothing passes
+    # them back: a chat is addressed by `chat_id`.
+    "list_my_mentions": frozenset({"sender_username", "channel_title"}),
     "get_workload_distribution": _PEOPLE,
     "get_top_task_closers": _PEOPLE,
     "get_milestone_assignee_counts": _PEOPLE,

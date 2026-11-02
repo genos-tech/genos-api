@@ -24,14 +24,25 @@ Scope (documented so the model doesn't over-claim):
     "tagged anywhere" surface is a tracked follow-up.
 
 ACL contract:
-  * Tenant guard: only mentions in `ctx.team_id` channels.
+  * Which chats: the ones `list_my_chats` lists and `fetch_chat_thread` reads
+    for `ctx.team_id` (`channel_scope.readable_chats_qs`, MIP-917) — the team's
+    own chats, the chats another team shared with it that the caller was
+    admitted to, and the PM chat of a project shared with it. A chat of an
+    unrelated team is not in it. This used to be `channel.team_id ==
+    ctx.team_id`, which left every shared chat out of a list that included it.
   * Scope: `mentioned_user_id == ctx.user_id` (server-trusted) — no way
     for the LLM to read another user's mentions.
   * Live membership: only mentions in chats the user is CURRENTLY a member
-    of (ChannelMember for DM/GM/MDM; ProjectMembers for PM), mirroring
+    of (ChannelMember for DM/GM/MDM; ProjectMembers for PM), the rule of
     `chat_acl_user_ids` — a mention in a channel the user has since left is
     not surfaced.
   * Soft-deleted messages / channels are excluded.
+
+Names: `sender_username` and `channel_title` are typed by people, so they are
+fenced for the model by `model_fence` (the tool keeps them bare: the chat chips
+and the stored step read this result). The one-line `__summary__` does NOT carry
+them. It is the first line an MCP client reads and the label the app shows for
+the step, and a fence in either is literal tags; the rows have the names.
 """
 
 from __future__ import annotations
@@ -39,12 +50,10 @@ from __future__ import annotations
 from datetime import datetime, time
 from typing import Any
 
-from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 
-from origin.models.chat.unified_models import ChannelMember, MessageMention
-from origin.models.project.prj_models import ProjectMembers
+from origin.models.chat.unified_models import MessageMention
 from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
@@ -53,6 +62,7 @@ from origin.search_engine.agent.tools.base import (
 )
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.search_engine.text_extraction import extract_text
+from origin.services.channel_scope import readable_chats_qs
 
 _MAX_LIMIT = 50
 _DEFAULT_LIMIT = 20
@@ -109,37 +119,18 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     since_dt = _parse_since(args.get("since"))
 
-    # Live ACL, computed once and applied in-SQL (the me-scoped pattern —
-    # cf. list_my_milestones). A mention is surfaced only if the user is
-    # CURRENTLY a member of its chat: DM/GM/MDM via ChannelMember, PM via
-    # the channel's project's ProjectMembers. Union of the two mirrors
-    # `chat_acl_user_ids`; a mention in a channel the user has left drops.
-    member_channel_ids = set(
-        ChannelMember.objects.filter(
-            user_id=ctx.user_id,
-            is_deleted=False,
-            channel__team_id=ctx.team_id,
-        ).values_list("channel_id", flat=True)
-    )
-    member_project_ids = set(
-        ProjectMembers.objects.filter(
-            attendee_id=ctx.user_id,
-            project__team_id=ctx.team_id,
-        ).values_list("project_id", flat=True)
-    )
-    visible = Q(message__channel_id__in=member_channel_ids) | Q(
-        message__channel__project_id__in=member_project_ids
-    )
-
-    qs = (
-        MessageMention.objects.select_related("message", "message__channel", "message__sender")
-        .filter(
-            mentioned_user_id=ctx.user_id,
-            message__channel__team_id=ctx.team_id,
-            message__deleted_at__isnull=True,
-            message__channel__is_deleted=False,
-        )
-        .filter(visible)
+    # Live ACL, applied in SQL (the me-scoped pattern — cf. list_my_milestones):
+    # a mention is surfaced only if its chat is one the caller may read in this
+    # team, the rule `fetch_chat_thread` applies (`readable_chats_qs`). It is a
+    # filter and not a check on the rows after the cut, so `limit` counts
+    # mentions the caller can see. A chat that is deleted, that the caller has
+    # left, or that is in another team and was not shared with this one, drops.
+    qs = MessageMention.objects.select_related(
+        "message", "message__channel", "message__sender"
+    ).filter(
+        mentioned_user_id=ctx.user_id,
+        message__deleted_at__isnull=True,
+        message__channel_id__in=readable_chats_qs(ctx.team_id, ctx.user_id).values("id"),
     )
     if since_dt is not None:
         qs = qs.filter(ts_created_at__gte=since_dt)
@@ -175,10 +166,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         )
 
     if mentions:
-        latest = mentions[0]
-        who = latest["sender_username"] or "someone"
-        where = latest["channel_title"] or latest["chat_type_label"]
-        summary = f"{len(mentions)} recent mention(s); latest from @{who} in {where}."
+        # No names: see the module docstring. The kind of chat is ours, not typed.
+        summary = (
+            f"{len(mentions)} recent mention(s); latest in a {mentions[0]['chat_type_label']} chat."
+        )
     else:
         summary = "No recent @mentions."
 
@@ -196,10 +187,12 @@ LIST_MY_MENTIONS = Tool(
         "'who @mentioned me?', 'am I tagged anywhere?', 'any mentions for "
         "me?'. Returns chat messages where the caller was directly "
         "@-mentioned (DM/GM/PM/MDM), newest-first, each with the sender, "
-        "text, and a link into the chat/thread. Direct @you mentions only "
-        "— group @-mentions (e.g. @engineering) and task/note comment "
-        "mentions are not covered yet. Caller's own mentions only; there "
-        "is no way to specify another user."
+        "text, and a link into the chat/thread. Covers the chats in the "
+        "caller's chat list for this team, including chats another team "
+        "shared with it; a chat the caller has left is not. Direct @you "
+        "mentions only — group @-mentions (e.g. @engineering) and task/note "
+        "comment mentions are not covered yet. Caller's own mentions only; "
+        "there is no way to specify another user."
     ),
     parameters_schema={
         "type": "OBJECT",

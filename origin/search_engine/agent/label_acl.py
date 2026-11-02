@@ -39,8 +39,9 @@ from origin.models.task.milestone_models import (
 )
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent.acl import chat_acl_user_ids, may_read_note, owns_personal_folder
+from origin.search_engine.agent.acl import may_read_note, owns_personal_folder
 from origin.search_engine.agent.tools.base import ToolContext
+from origin.services.channel_scope import can_read_chat
 from origin.views.utils.note_folder_role import get_folder_role
 from origin.views.utils.note_role import NOTE_TYPE_CHAT, NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
 from origin.views.utils.scope_guards import (
@@ -327,15 +328,18 @@ class LabelAccess:
     # ---- chats ---------------------------------------------------------
 
     def readable_channel(self, channel_id: Any) -> Channel | None:
-        """`fetch_chat_thread`'s rule: the caller is a member of the channel
-        (`chat_acl_user_ids`)."""
+        """`fetch_chat_thread`'s rule, which is `channel_scope.can_read_chat`
+        and not a copy of it: the caller is a member of the chat AND the chat is
+        in this team's list. It had only the first half (MIP-917), so a chat in
+        another of the caller's teams would have been labelled here and refused
+        by the tool."""
         if not self.usable:
             return None
         try:
             channel = Channel.objects.filter(id=channel_id, is_deleted=False).first()
         except (ValidationError, ValueError, TypeError):
-            # Malformed UUID — not found, same as `chat_acl_user_ids`.
+            # Malformed UUID — not found, same as `fetch_chat_thread`.
             return None
         if channel is None:
             return None
-        return channel if self.user_id in chat_acl_user_ids(channel.kind, channel_id) else None
+        return channel if can_read_chat(channel, self.team_id, self.user_id) else None

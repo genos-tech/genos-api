@@ -26,16 +26,24 @@ import yaml
 from django.db.models import Max
 from django.utils import timezone
 
-from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember, Message
+from origin.models.chat.unified_models import (
+    Channel,
+    ChannelKind,
+    ChannelMember,
+    Message,
+    MessageMention,
+)
 from origin.models.common.team_models import TeamMembers
-from origin.models.project.prj_models import ProjectMembers
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.agent.controller import _ui_sources_from_tool_result
 from origin.search_engine.agent.evals import runner
+from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.model_fence import fence_for_model
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.categories import TOOL_CATEGORY
 from origin.search_engine.agent.tools.fetch_chat_thread import FETCH_CHAT_THREAD
 from origin.search_engine.agent.tools.list_my_chats import LIST_MY_CHATS
+from origin.search_engine.agent.tools.list_my_mentions import LIST_MY_MENTIONS
 from origin.services.external_grants import add_external_participants
 from origin.tests.cross_team_fixtures import CrossTeamTestCase
 
@@ -813,3 +821,104 @@ class ListMyChatsTests(ChatFixtures, CrossTeamTestCase):
             set(),
             "chat is read-only for now: no chat write tool",
         )
+
+
+class OneRuleForReadingAChatTests(ChatFixtures, CrossTeamTestCase):
+    """`fetch_chat_thread`, the approval card's `readable_channel` and
+    `list_my_mentions` answer "may this person read this chat, in this team?"
+    with ONE rule (`channel_scope.readable_chats_qs`), and a table of chats
+    holds the three to the same answer (MIP-917).
+
+    `readable_channel` was documented as `fetch_chat_thread`'s rule and had
+    drifted: it lacked the team gate. Nothing leaked, because it only labels
+    the caller's own chats, but two answers to one question is how the next
+    change fixes one and not the other.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # The host project, with its owner on it and its PM chat shared with team B.
+        ProjectMembers.objects.create(team=self.team_a, project=self.project, attendee=self.a_owner)
+        self.active_project_grant()
+        self.pm = Channel.objects.get(project=self.project, kind=ChannelKind.PM)
+        self.shared, grant = self.shared_chat()
+        add_external_participants(grant, [self.b_owner.id], self.b_owner)
+
+        self.own = self.group("Own", [self.a_owner, self.a_editor])
+        self.left = self.group("Left", [self.a_editor])
+        ChannelMember.objects.create(channel=self.left, user=self.a_owner, is_deleted=True)
+        self.never = self.group("Never joined", [self.a_editor, self.a_viewer])
+        self.gone = self.group("Deleted", [self.a_owner], is_deleted=True)
+        TeamMembers.objects.create(team=self.team_b, attendee=self.a_owner)
+        self.in_b = self.group("In B", [self.a_owner, self.b_owner], team=self.team_b)
+        self.host_only = self.group("Host only", [self.a_owner])
+        # A channel row on a project the person is not on: not a way in.
+        stray_project = ProjectMaster.objects.create(
+            team=self.team_a,
+            project_name="Stray",
+            owner=self.a_editor,
+            project_system_user=self.a_editor,
+        )
+        self.stray_pm = Channel.objects.get(project=stray_project, kind=ChannelKind.PM)
+        ChannelMember.objects.update_or_create(
+            channel=self.stray_pm, user=self.a_owner, defaults={"is_deleted": False}
+        )
+
+    def _may_read(self, user, team, channel):
+        """What each of the three says about `channel`, for `user` in `team`."""
+        ctx = self.ctx(user, team)
+        label = LabelAccess(ctx).readable_channel(channel.id) is not None
+        try:
+            FETCH_CHAT_THREAD.run({"chat_id": str(channel.id)}, ctx)
+            fetch = True
+        except ToolError:
+            fetch = False
+        # A mention of the person in a message of that chat, and whether it is listed.
+        seq = (Message.objects.filter(channel=channel).aggregate(m=Max("seq"))["m"] or 0) + 1
+        message = Message.objects.create(channel=channel, sender=self.a_editor, seq=seq, body=[])
+        MessageMention.objects.create(message=message, mentioned_user=user)
+        listed = str(channel.id) in {
+            row["chat_id"] for row in LIST_MY_MENTIONS.run({"limit": 50}, ctx)["mentions"]
+        }
+        return {"label": label, "fetch": fetch, "mentions": listed}
+
+    def test_the_three_agree_on_every_kind_of_chat(self):
+        a, b = (self.a_owner, self.team_a), (self.b_owner, self.team_b)
+        table = [
+            # (who, name, chat, may they read it)
+            (a, "own team's chat", self.own, True),
+            (a, "project chat of a project they are on", self.pm, True),
+            (a, "chat they host, shared with another team", self.shared, True),
+            (a, "chat they left", self.left, False),
+            (a, "chat they never joined", self.never, False),
+            (a, "deleted chat", self.gone, False),
+            (a, "chat of another team, asked from this one", self.in_b, False),
+            (a, "project chat with a stray channel row", self.stray_pm, False),
+            (b, "chat shared with their team", self.shared, True),
+            (b, "project chat shared with their team", self.pm, True),
+            (b, "their own team's chat", self.in_b, True),
+            (b, "host-only chat", self.host_only, False),
+            ((self.b_viewer, self.team_b), "chat shared with a colleague", self.shared, False),
+            ((self.b_viewer, self.team_b), "project chat shared with a colleague", self.pm, False),
+        ]
+        for (user, team), name, channel, expected in table:
+            with self.subTest(name, user=user.username):
+                got = self._may_read(user, team, channel)
+                self.assertEqual(got, {k: expected for k in got}, got)
+
+    def test_the_other_teams_chat_is_readable_in_the_team_it_belongs_to(self):
+        """The same person, the same chat: a team's gate, not a person's."""
+        self.assertEqual(
+            self._may_read(self.a_owner, self.team_b, self.in_b),
+            {"label": True, "fetch": True, "mentions": True},
+        )
+
+    def test_a_context_with_no_user_reads_nothing(self):
+        """`ProjectMembers.attendee` is nullable (a deleted user leaves the row
+        behind), so a missing user must not match the empty slot."""
+        from origin.services.channel_scope import can_read_chat
+
+        ProjectMembers.objects.create(team=self.team_a, project=self.project, attendee=None)
+
+        self.assertFalse(can_read_chat(self.pm, self.team_a.team_id, None))
+        self.assertFalse(can_read_chat(self.pm, self.team_a.team_id, ""))
