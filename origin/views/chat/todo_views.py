@@ -58,6 +58,26 @@ def _get_owned_item(request, item_id):
 _get_or_create_group = todo_items.get_or_create_group
 
 
+def _get_team_category(category_id, user_id, team_id):
+    """The caller's category `category_id` IN `team_id`, or None.
+
+    A category is per user AND team (`uniq_todo_category_per_user`) and the app
+    lists them by team (`ToDoCategoryListView`), so an id from another of the
+    caller's teams is one the app can never have offered. Checking only the
+    user let a person in two teams hang team A's tag on a team B to-do by id.
+
+    A to-do or schedule with no team (its team was deleted: SET_NULL) takes no
+    category. Said out loud because the ORM would not: `filter(team_id=None)`
+    is `IS NULL`, which would match a legacy category that has no team either.
+    Neither is in anyone's list, so neither is reachable from the app.
+    """
+    if team_id is None:
+        return None
+    return ToDoCategory.objects.filter(
+        category_id=category_id, user_id=user_id, team_id=team_id
+    ).first()
+
+
 class ToDoGroupListView(AuthenticatedAPIView):
     """GET /api/v2/todo/groups/?team_id=&from=&to=  → list groups with items."""
 
@@ -145,9 +165,7 @@ class ToDoItemListView(AuthenticatedAPIView):
             else:
                 category = None
                 if category_id is not None:
-                    category = ToDoCategory.objects.filter(
-                        category_id=category_id, user_id=request.user.id
-                    ).first()
+                    category = _get_team_category(category_id, request.user.id, group.team_id)
                     if category is None:
                         return Response(
                             {"error": "category_id not found for this user."},
@@ -210,9 +228,7 @@ class ToDoItemDetailView(AuthenticatedAPIView):
                 return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
             cat_id = request.data.get("category_id")
             if cat_id is not None:
-                new_category = ToDoCategory.objects.filter(
-                    category_id=cat_id, user_id=request.user.id
-                ).first()
+                new_category = _get_team_category(cat_id, request.user.id, item.group.team_id)
                 if new_category is None:
                     return Response(
                         {"error": "category_id not found for this user."},
@@ -493,9 +509,7 @@ class ToDoScheduleListView(AuthenticatedAPIView):
         category = None
         category_id = request.data.get("category_id")
         if category_id is not None:
-            category = ToDoCategory.objects.filter(
-                category_id=category_id, user_id=request.user.id
-            ).first()
+            category = _get_team_category(category_id, request.user.id, team_id)
             if category is None:
                 return Response(
                     {"error": "category_id not found for this user."},
@@ -560,9 +574,7 @@ class ToDoScheduleDetailView(AuthenticatedAPIView):
             if cat_id is None:
                 schedule.category = None
             else:
-                category = ToDoCategory.objects.filter(
-                    category_id=cat_id, user_id=request.user.id
-                ).first()
+                category = _get_team_category(cat_id, request.user.id, schedule.team_id)
                 if category is None:
                     return Response(
                         {"error": "category_id not found for this user."},
