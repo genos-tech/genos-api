@@ -14,7 +14,9 @@ from typing import Any
 
 from origin.models.chat.todo_models import ToDoGroup
 from origin.search_engine.agent.tools.base import Tool, ToolContext
-from origin.services.user_time import today_for_user_id
+from origin.search_engine.agent.tools.todo_args import local_iso
+from origin.services import todo_reminders
+from origin.services.user_time import today_for_user_id, zone_for_user_id
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -33,19 +35,25 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "__summary__": "No todos for today yet.",
         }
 
+    rows = list(group.items.all().order_by("sort_order", "item_id"))
+    # One query for every pending reminder on the day, in the user's zone.
+    reminders = todo_reminders.pending_by_item(i.item_id for i in rows)
+    zone = zone_for_user_id(ctx.user_id) if reminders else None
+
     items = []
     completed = 0
-    for item in group.items.all().order_by("sort_order", "item_id"):
+    for item in rows:
         if item.is_completed:
             completed += 1
-        items.append(
-            {
-                "item_id": item.item_id,
-                "title": item.title,
-                "is_completed": item.is_completed,
-                "category_name": item.category.name if item.category_id else None,
-            }
-        )
+        row = {
+            "item_id": item.item_id,
+            "title": item.title,
+            "is_completed": item.is_completed,
+            "category_name": item.category.name if item.category_id else None,
+        }
+        if item.item_id in reminders:
+            row["reminder_at"] = local_iso(reminders[item.item_id], zone)
+        items.append(row)
 
     total = len(items)
     return {
@@ -62,7 +70,8 @@ LIST_TODAY_TODOS = Tool(
     description=(
         "List the user's todo items for today (the current calendar day). "
         "Returns each item with title, completion status, and optional "
-        "category. Use this when the user asks 'what's on my list today?', "
+        "category, and `reminder_at` when a reminder is pending on it. Use "
+        "this when the user asks 'what's on my list today?', "
         "'what's left for today?', or similar. Read-only — does not require "
         "approval."
     ),

@@ -447,7 +447,8 @@ CREATE_NOTE = Tool(
                 "type": "STRING",
                 "description": (
                     "Required when note_type='chat': the chat's id (a UUID, "
-                    "e.g. a search result's chat_id) or its Genos URL."
+                    "e.g. a search result's chat_id, or one from "
+                    "list_my_chats) or its Genos URL."
                 ),
             },
             "thread_id": {

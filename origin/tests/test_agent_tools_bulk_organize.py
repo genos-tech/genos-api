@@ -417,6 +417,8 @@ class FriendlyArgumentEnrichmentTests(OrganizeToolsTestBase):
                 "effort_level": None,
                 "status": "Open",
                 "due_date": "2026-08-01",
+                "start_date": None,
+                "tags": [],
                 "milestone_id": None,
                 "assignee_id": None,
             },

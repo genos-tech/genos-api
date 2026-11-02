@@ -93,6 +93,18 @@ class TodoWriteChipTests(SimpleTestCase):
         self.assertEqual(chips[0]["entity_id"], "todo:2026-07-28:item:88")
         self.assertTrue(chips[0]["operated"])
 
+    def test_a_deleted_todo_is_not_chipped_there_is_nothing_to_open(self):
+        # The delete result carries no `local_date` beside `item_id`, and the
+        # tool is not in the todo branch: a chip would be a dead link.
+        result = {"item_id": 88, "title": "buy cake", "deleted": True}
+        self.assertEqual(_ui_sources_from_tool_result("delete_todo_item", result), [])
+        self.assertEqual(
+            _ui_sources_from_tool_result(
+                "delete_todo_item", {**result, "local_date": "2026-07-28"}
+            ),
+            [],
+        )
+
 
 class OperatedMarkScopeTests(SimpleTestCase):
     def test_read_tools_are_never_marked_operated(self):

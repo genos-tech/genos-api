@@ -234,7 +234,7 @@ class TestMilestoneToolsTakeADisplayId(MilestoneRefBase):
         self.assertIn("not a milestone", text)
 
     def test_every_milestone_argument_is_published_as_a_string_reference(self):
-        """All eight arguments (seven top-level + the bulk row key)."""
+        """All ten arguments (nine top-level + the bulk row key)."""
         published = []
         for tool in tools.CATALOG:
             schema = tools.input_schema(tool)
@@ -248,7 +248,7 @@ class TestMilestoneToolsTakeADisplayId(MilestoneRefBase):
                 self.assertEqual(prop["type"], "string")
                 self.assertIn("display id", prop["description"])
                 published.append(f"{tool.name}.{list_arg}[].{item_key}")
-        self.assertEqual(len(published), 8, published)
+        self.assertEqual(len(published), 10, published)
 
     def test_every_declared_milestone_ref_arg_is_a_real_property(self):
         from origin.search_engine.agent.tools import REGISTRY
