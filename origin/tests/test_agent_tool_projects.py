@@ -221,8 +221,14 @@ class CreateProjectTests(ProjectToolBase):
         )
 
     def test_member_ids_must_be_a_list(self):
-        with self.assertRaises(ToolError):
-            self.create(name="x", member_ids="sam")
+        """A dict keyed by user ids would add them if it were walked like a list, so
+        the type check is what stops it, not the lookup that follows."""
+        sam = self.new_person("sam")
+        for bad in ("sam", {str(sam.id): True}, 5):
+            with self.subTest(member_ids=bad):
+                with self.assertRaisesMessage(ToolError, "`member_ids` must be a list"):
+                    self.create(name="x", member_ids=bad)
+        self.assertFalse(ProjectMaster.objects.filter(project_name="x").exists())
 
     def test_someone_outside_the_team_cannot_create(self):
         outsider = self.new_person("outsider", in_team=False)
@@ -475,6 +481,15 @@ class AddMemberTests(ProjectToolBase):
         self.assertEqual(
             ProjectMembers.objects.filter(project=self.project, attendee=sam).count(), 1
         )
+
+    def test_the_person_must_be_named(self):
+        """Left out, it must say so, not fall through to a lookup of nobody."""
+        for action in ("add", "set_role"):
+            for missing in ("", "  ", None):
+                with self.subTest(action=action, user_id=missing):
+                    with self.assertRaisesMessage(ToolError, "`user_id` is required"):
+                        self.members(action, user_id=missing, role="editor")
+        self.assertEqual(ProjectMembers.objects.filter(project=self.project).count(), 1)
 
     def test_a_person_outside_the_team_cannot_be_added(self):
         outsider = self.new_person("outsider", in_team=False)
