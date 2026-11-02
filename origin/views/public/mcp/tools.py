@@ -618,8 +618,20 @@ CATALOG: tuple[McpTool, ...] = (
             "sub-tasks to another project, so their display ids change. Send "
             "only one of `milestone_id`, `parent_task_id` and `project_id` per "
             "call. `tags` replaces the task's "
-            "tags with names from `list_project_tags` ([] clears). Requires a "
-            "write-scoped API key."
+            "tags with names from `list_project_tags` ([] clears). "
+            "`start_date` (YYYY-MM-DD, '' clears) sets the planned start; "
+            "nothing checks it against the due date. `collaborators` replaces "
+            "the task's collaborators with user ids ([] clears; "
+            "`get_team_members` / `list_project_members`), so send the ones you "
+            "are keeping too: `get_task` lists them. Anyone new must be on the "
+            "team or the project, or the call is refused. `custom_fields` sets "
+            "the project's own fields by name, as a list of `{name, value}` "
+            "(`{name, values}` for a tag field): `list_project_tags` gives each "
+            "field's type and options, and only the fields you name change. A "
+            "tag field takes option labels, a date field YYYY-MM-DD, a member "
+            "field a user id, a text field text; `value: ''` clears a field. "
+            "Send `collaborators` and `custom_fields` without `project_id`. "
+            "Requires a write-scoped API key."
         ),
         write=True,
         task_ref_args=("task_id", "parent_task_id"),
@@ -734,7 +746,12 @@ CATALOG: tuple[McpTool, ...] = (
             "assigns it in the same call, on the same terms as `assign_task` "
             "— `get_current_user` for yourself; omit it to leave the task "
             "unassigned. `tags` takes names from `list_project_tags` — only "
-            "tags that fit the task; leave it out if none does. Requires a "
+            "tags that fit the task; leave it out if none does. `start_date` "
+            "(YYYY-MM-DD), `collaborators` (user ids from `get_team_members` "
+            "or `list_project_members`) and `custom_fields` (the project's own "
+            "fields by name, as `{name, value}` or `{name, values}` for a tag "
+            "field; `list_project_tags` lists them with their types and "
+            "options) are set at creation too. Requires a "
             "write-scoped API key."
         ),
         write=True,
@@ -769,11 +786,14 @@ CATALOG: tuple[McpTool, ...] = (
         registry_name="update_tasks_bulk",
         nested_milestone_ref_args=(("updates", "milestone_id"),),
         description=(
-            "Change priority, due date, status, effort, assignee or milestone on "
+            "Change priority, due date, start date, status, effort, tags, assignee "
+            "or milestone on "
             "MANY tasks in one call — for reprioritizing or tidying a milestone, "
             "filing a batch of tasks under one (`milestone_id`, '' to take a "
             "task out), or assigning a batch (`assignee_id`, '' to unassign; "
-            "not for a milestone's own backing task). Read the "
+            "not for a milestone's own backing task). `start_date` is "
+            "YYYY-MM-DD ('' clears); `tags` replaces a task's tags with names "
+            "from `list_project_tags` ([] clears). Read the "
             "current state first (`list_tasks`, and `list_task_dependencies` "
             "so blockers land before what they block), since each entry needs "
             "a one-sentence `rationale` recorded with the change. "
