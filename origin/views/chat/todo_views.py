@@ -9,7 +9,6 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem, ToDoSchedule
-from origin.search_engine.purge import purge_todo_item
 from origin.serializers.chat.todo_serializers import (
     ToDoCategorySerializer,
     ToDoGroupSerializer,
@@ -17,7 +16,7 @@ from origin.serializers.chat.todo_serializers import (
     ToDoItemSerializer,
     ToDoScheduleSerializer,
 )
-from origin.services import todo_reminders
+from origin.services import todo_items, todo_reminders
 from origin.services.user_time import user_today
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data
@@ -38,9 +37,9 @@ def _parse_date(value, default=None):
         return None
 
 
-def _recompute_group_completion(group_id):
-    has_open = ToDoItem.objects.filter(group_id=group_id, is_completed=False).exists()
-    ToDoGroup.objects.filter(group_id=group_id).update(is_completed=not has_open)
+# The group helpers moved to `services.todo_items` so the agent tools share
+# them; the names stay here for the views below.
+_recompute_group_completion = todo_items.recompute_group_completion
 
 
 def _get_owned_item(request, item_id):
@@ -56,14 +55,7 @@ def _get_owned_item(request, item_id):
     return item
 
 
-def _get_or_create_group(team_id, user_id, local_date):
-    group, _ = ToDoGroup.objects.get_or_create(
-        team_id=team_id,
-        user_id=user_id,
-        local_date=local_date,
-        defaults={"is_completed": False},
-    )
-    return group
+_get_or_create_group = todo_items.get_or_create_group
 
 
 class ToDoGroupListView(AuthenticatedAPIView):
@@ -193,16 +185,10 @@ class ToDoItemDetailView(AuthenticatedAPIView):
         # nothing, not a rollback of half-applied sibling fields.
         move_to = None
         if "local_date" in request.data:
-            # A subitem's day is its parent's: `parent_item` is looked up
-            # scoped to the group on create, so re-homing a child alone would
-            # put it in a group its parent isn't in — a subitem orphaned from
-            # the row it's a step of. Moving the parent takes its children
-            # along (below), which is the operation the user actually wants.
-            if item.parent_item_id is not None:
-                return Response(
-                    {"error": "Subitems move with their parent — move the parent instead."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+            try:
+                todo_items.check_can_move(item)
+            except todo_items.TodoItemError as exc:
+                return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
             move_to = _parse_date(request.data.get("local_date"))
             if move_to is None:
                 return Response(
@@ -218,19 +204,8 @@ class ToDoItemDetailView(AuthenticatedAPIView):
             if "sort_order" in request.data:
                 item.sort_order = int(request.data.get("sort_order") or 0)
             if "is_completed" in request.data:
-                new_completed = bool(request.data.get("is_completed"))
-                if new_completed and not item.is_completed:
-                    item.ts_completed_at = timezone.now()
-                    # Finishing the to-do retires any pending reminder: a
-                    # nudge about something the user has already dealt with
-                    # is the noise that gets notifications switched off.
-                    # Re-opening it does NOT restore the reminder — the time
-                    # that was asked for has most likely passed, and
-                    # resurrecting it would fire immediately.
-                    todo_reminders.cancel_pending(item=item)
-                elif not new_completed:
-                    item.ts_completed_at = None
-                item.is_completed = new_completed
+                # Finishing the to-do retires any pending reminder.
+                todo_items.apply_completion(item, bool(request.data.get("is_completed")))
             if "category_id" in request.data:
                 # Children mirror the parent's tag — clients cannot
                 # set a tag directly on a child. The cascade further
@@ -254,61 +229,27 @@ class ToDoItemDetailView(AuthenticatedAPIView):
                         )
                     item.category = category
             # Re-home into the target day, creating that group on demand
-            # exactly as item creation does. `old_group_id` is kept because
-            # emptying a group can flip its completion flag: a day whose only
-            # open to-do just left is now a completed day.
-            old_group_id = item.group_id
-            if move_to is not None and move_to != item.group.local_date:
-                item.group = _get_or_create_group(item.group.team_id, request.user.id, move_to)
-            item.save()
+            # exactly as item creation does; the children follow and both
+            # days' completion flags are recomputed.
+            saved = todo_items.save_item(item, move_to=move_to)
             # Propagate tag change to children of a top-level item.
             if "category_id" in request.data and item.parent_item_id is None:
                 ToDoItem.objects.filter(parent_item_id=item.item_id).update(
                     category_id=item.category_id
                 )
-            # Children follow the parent, keeping the whole to-do in one day.
-            moved_child_ids = []
-            if item.group_id != old_group_id:
-                children = ToDoItem.objects.filter(parent_item_id=item.item_id)
-                moved_child_ids = list(children.values_list("item_id", flat=True))
-                # `ts_updated_at` is set explicitly: `auto_now` only fires on
-                # `save()`, and the incremental chunker selects on it. Without
-                # this the children's purged chunks (below) would stay gone
-                # until the next full reindex — the subitems would vanish from
-                # search while their parent reappeared under the new date.
-                children.update(group_id=item.group_id, ts_updated_at=timezone.now())
-                _recompute_group_completion(old_group_id)
-            _recompute_group_completion(item.group_id)
 
         item.refresh_from_db()
-        # The search entity id embeds the group's date
-        # (`todo:<local_date>:item:<id>`), so a moved row's old chunk is now
-        # indexed under a date the to-do is no longer on — it would keep
-        # answering searches with the wrong day. Drop it and let the chunker
-        # re-index under the new date; `purge_todo_item` matches on the stable
-        # `:item:<id>` suffix, so it clears whichever date was there. Children
-        # are indexed as their own entities, so each one needs the same purge.
-        if item.group_id != old_group_id:
-            purge_todo_item(item.item_id)
-            for child_id in moved_child_ids:
-                purge_todo_item(child_id)
+        # A moved row's search chunk is indexed under a date it is no longer
+        # on, and so are its children's.
+        saved.purge_stale_chunks()
         return Response(ToDoItemSerializer(item).data, status=status.HTTP_200_OK)
 
     def delete(self, request, item_id):
         item = _get_owned_item(request, item_id)
         if item is None:
             return Response({"error": "forbidden"}, status=status.HTTP_403_FORBIDDEN)
-        group_id = item.group_id
-        with transaction.atomic():
-            # Any pending reminder goes with it through the FK cascade —
-            # `ToDoItemReminder.item` is CASCADE, and a subitem's reminders
-            # cascade twice (parent → child → reminder).
-            item.delete()
-            _recompute_group_completion(group_id)
-        # Best-effort: drop the item's chunk from OpenSearch — chunkers
-        # never revisit deleted rows. The orphan sweep retries if this
-        # fails.
-        purge_todo_item(item_id)
+        # A hard delete: sub-items and every pending reminder go with it.
+        todo_items.delete_item(item)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
