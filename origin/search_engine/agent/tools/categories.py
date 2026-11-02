@@ -110,6 +110,7 @@ TOOL_CATEGORY: dict[str, str] = {
     "list_my_milestones": "me",
     "list_my_inbox": "me",
     "list_my_mentions": "me",
+    "list_my_chats": "me",
     # --- pr ---
     "fetch_pr": "pr",
     "list_pr_comments": "pr",

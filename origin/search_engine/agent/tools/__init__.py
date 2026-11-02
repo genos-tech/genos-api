@@ -95,6 +95,7 @@ from origin.search_engine.agent.tools.list_calendar_events import LIST_CALENDAR_
 from origin.search_engine.agent.tools.list_calendars import LIST_CALENDARS
 from origin.search_engine.agent.tools.list_channel_members import LIST_CHANNEL_MEMBERS
 from origin.search_engine.agent.tools.list_milestones import LIST_MILESTONES
+from origin.search_engine.agent.tools.list_my_chats import LIST_MY_CHATS
 from origin.search_engine.agent.tools.list_my_inbox import LIST_MY_INBOX
 from origin.search_engine.agent.tools.list_my_mentions import LIST_MY_MENTIONS
 from origin.search_engine.agent.tools.list_my_milestones import LIST_MY_MILESTONES
@@ -201,6 +202,7 @@ for _t in (
     LIST_MY_MILESTONES,
     LIST_MY_INBOX,
     LIST_MY_MENTIONS,
+    LIST_MY_CHATS,
     GET_MY_BLOCKERS,
     GET_MY_THROUGHPUT,
     # --- Todo tools ---
@@ -271,6 +273,7 @@ __all__ = [
     "LIST_CALENDAR_EVENTS",
     "LIST_CALENDARS",
     "LIST_MILESTONES",
+    "LIST_MY_CHATS",
     "LIST_MY_INBOX",
     "LIST_MY_MENTIONS",
     "LIST_MY_MILESTONES",

@@ -72,9 +72,7 @@ class ListProjectMembersTests(BaseAPITestCase):
             LIST_PROJECT_MEMBERS.run({"project_id": self.project.project_id}, ctx_other)
 
     def test_deleted_and_system_users_are_hidden(self):
-        ghost = User.objects.create_user(
-            username="ghost", email="ghost@example.com", password="x"
-        )
+        ghost = User.objects.create_user(username="ghost", email="ghost@example.com", password="x")
         ghost.is_deleted = True
         ghost.save(update_fields=["is_deleted"])
         bot = User.objects.create_user(username="bot", email="bot@example.com", password="x")
@@ -141,7 +139,9 @@ class ListChannelMembersTests(BaseAPITestCase):
             team_name="Other", team_email="other-team@example.com", owner=self.user2
         )
         ctx_other = ToolContext(team_id=str(other_team.team_id), user_id=str(self.user2.id))
-        with self.assertRaisesMessage(ToolError, "different team"):
+        # Answered as a channel that is not there (MIP-885), so the reply does not
+        # say that it exists in another team.
+        with self.assertRaisesMessage(ToolError, "not found, or you are not a member"):
             LIST_CHANNEL_MEMBERS.run({"channel_id": str(self.channel.id)}, ctx_other)
 
     def test_bad_uuid_and_missing_channel(self):
