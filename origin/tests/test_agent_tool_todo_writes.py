@@ -28,7 +28,7 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
-from origin.models.chat.todo_models import ToDoGroup, ToDoItem, ToDoItemReminder
+from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem, ToDoItemReminder
 from origin.models.common.inbox_models import InboxItems
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.search_engine.agent import controller
@@ -722,3 +722,121 @@ class WhoMayChangeATodo(TodoToolBase):
         out = self.update(item, title="y", is_completed=True, category="Calls")
         self.assertEqual((out["title"], out["is_completed"], out["category"]), ("y", True, "Calls"))
         self.assertNotIn("reminder_time_zone", out)
+
+
+class CategoryRulesMatchTheApp(TodoToolBase):
+    """The tool finds or creates a category by NAME where REST takes an id (an
+    agent has names, and no tool lists ids), but the rules around it are the
+    endpoint's (MIP-909): a sub-item's category is its parent's."""
+
+    def category(self, name="Calls"):
+        return ToDoCategory.objects.create(team=self.team, user=self.user, name=name)
+
+    def test_a_category_on_a_subitem_is_refused_like_the_endpoint_refuses_it(self):
+        parent = self.todo("parent")
+        child = self.todo("child", parent=parent)
+
+        with self.assertRaises(ToolError) as caught:
+            self.update(child, category="Calls")
+        res = self.client.patch(
+            f"/api/v2/todo/items/{child.item_id}/",
+            {"category_id": self.category("Other").category_id},
+            format="json",
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(str(caught.exception), res.data["error"])
+        child.refresh_from_db()
+        self.assertIsNone(child.category_id)
+        self.assertFalse(ToDoCategory.objects.filter(name="Calls").exists())
+
+    def test_clearing_a_subitems_category_is_refused_too(self):
+        parent = self.todo("parent", category=self.category())
+        child = self.todo("child", parent=parent, category=parent.category)
+        with self.assertRaises(ToolError):
+            self.update(child, clear_category=True)
+        child.refresh_from_db()
+        self.assertEqual(child.category_id, parent.category_id)
+
+    def test_a_refused_category_changes_nothing_else_in_the_call(self):
+        parent = self.todo("parent")
+        child = self.todo("child", parent=parent)
+        self.remind(child)
+        with self.assertRaises(ToolError):
+            self.update(child, category="Calls", title="renamed", is_completed=True)
+        child.refresh_from_db()
+        self.assertEqual((child.title, child.is_completed), ("child", False))
+        self.assertTrue(self.pending(child).exists())
+
+    def test_a_parents_category_reaches_its_subitems_like_the_endpoint(self):
+        tool_parent = self.todo("tool parent")
+        tool_child = self.todo("tool child", parent=tool_parent)
+        ui_parent = self.todo("ui parent")
+        ui_child = self.todo("ui child", parent=ui_parent)
+
+        self.update(tool_parent, category="Calls")
+        self.ui_patch(ui_parent, category_id=self.category("Calls UI").category_id)
+
+        for item in (tool_parent, tool_child, ui_parent, ui_child):
+            item.refresh_from_db()
+        self.assertEqual(tool_child.category_id, tool_parent.category_id)
+        self.assertEqual(ui_child.category_id, ui_parent.category_id)
+        self.assertIsNotNone(tool_child.category_id)
+
+    def test_clearing_a_parents_category_clears_its_subitems(self):
+        category = self.category()
+        parent = self.todo("parent", category=category)
+        child = self.todo("child", parent=parent, category=category)
+
+        self.update(parent, clear_category=True)
+
+        child.refresh_from_db()
+        self.assertIsNone(child.category_id)
+
+    def test_the_cascade_marks_the_subitems_for_reindexing(self):
+        # `.update()` skips `auto_now`, and the incremental chunker selects on
+        # `ts_updated_at`.
+        parent = self.todo("parent")
+        child = self.todo("child", parent=parent)
+        before = ToDoItem.objects.get(pk=child.pk).ts_updated_at
+
+        self.update(parent, category="Calls")
+
+        self.assertGreater(ToDoItem.objects.get(pk=child.pk).ts_updated_at, before)
+
+    def test_a_top_level_item_still_takes_a_category_by_name(self):
+        item = self.todo("x")
+        out = self.update(item, category="Calls")
+        self.assertEqual(out["category"], "Calls")
+        self.assertEqual(ToDoCategory.objects.filter(name="Calls", user=self.user).count(), 1)
+
+
+class DescriptionsSayWhatTheCodeDoes(TodoToolBase):
+    def test_the_backlog_comes_back_oldest_day_first_and_the_newest_are_cut(self):
+        # What the descriptions of `list_uncompleted_todos` promise.
+        for n in range(30):
+            self.todo(f"old {n}", self.day(-5))
+        for n in range(30):
+            self.todo(f"new {n}", self.day(-1))
+
+        out = LIST_UNCOMPLETED_TODOS.run({}, self.ctx)
+
+        dates = [i["local_date"] for i in out["items"]]
+        self.assertEqual(dates, sorted(dates))
+        self.assertEqual(len(out["items"]), 50)
+        self.assertTrue(out["truncated"])
+        self.assertEqual(
+            {i["title"] for i in out["items"] if i["local_date"] == self.day(-1).isoformat()},
+            {f"new {n}" for n in range(20)},
+        )
+
+    def test_neither_description_claims_what_is_not_true(self):
+        backlog = LIST_UNCOMPLETED_TODOS.description
+        self.assertIn("oldest", backlog)
+        self.assertIn("NEWEST", backlog)
+        self.assertNotIn("newest first", backlog.lower())
+
+        schema = CREATE_TODO_ITEM.parameters_schema["properties"]["target_date"]["description"]
+        self.assertNotIn("server-local", schema)
+        self.assertIn("own time zone", schema)
+        self.assertNotIn("server-local", CREATE_TODO_ITEM.description)

@@ -194,3 +194,28 @@ class TestRescheduleAndRemindOverMcp(McpTodoBase):
         created = ToDoItem.objects.get(title="Follow up with Sam")
         self.assertEqual(created.group.local_date, friday)
         self.assertEqual(self._pending(created).get().remind_at.astimezone(TOKYO).hour, 9)
+
+
+class TestPublishedDescriptions(McpTodoBase):
+    """MIP-909: the text a client reads says what the code does."""
+
+    def test_the_backlog_says_oldest_first_and_which_end_is_cut(self):
+        self._key(scope=SCOPE_READ)
+        text = self._listed()["list_uncompleted_todos"]["description"]
+        self.assertIn("oldest day first", text)
+        self.assertNotIn("newest first", text)
+        self.assertIn("truncated", text)
+
+    def test_create_says_whose_today_it_defaults_to_and_that_a_category_is_a_name(self):
+        self._key(scope=SCOPE_WRITE)
+        text = self._listed()["create_todo_item"]["description"]
+        self.assertIn("own today", text)
+        self.assertIn("category", text)
+        schema = self._listed()["create_todo_item"]["inputSchema"]["properties"]["target_date"]
+        self.assertNotIn("server-local", schema["description"])
+
+    def test_update_says_a_subitem_takes_its_parents_category(self):
+        self._key(scope=SCOPE_WRITE)
+        text = self._listed()["update_todo_item"]["description"]
+        self.assertIn("take their parent's", text)
+        self.assertIn("refused", text)

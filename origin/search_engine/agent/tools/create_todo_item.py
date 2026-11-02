@@ -128,7 +128,7 @@ CREATE_TODO_ITEM = Tool(
         "execute. Use this when the user asks to add / create / file a "
         "todo. Required: title. Optional: notes_text (plain-text "
         "description), category (free-form label; created if new), "
-        "target_date (ISO YYYY-MM-DD; default today), remind_at / "
+        "target_date (ISO YYYY-MM-DD; default the user's own today), remind_at / "
         "remind_in_minutes (also remind the user; one at most). 'Remind me "
         "Friday to X' is ONE call: target_date and remind_at both Friday."
     ),
@@ -152,7 +152,9 @@ CREATE_TODO_ITEM = Tool(
             },
             "target_date": {
                 "type": "STRING",
-                "description": ("Optional ISO YYYY-MM-DD date. Default is today (server-local)."),
+                "description": (
+                    "Optional ISO YYYY-MM-DD date. Default is today in the user's own time zone."
+                ),
             },
             "remind_at": REMIND_AT_SCHEMA,
             "remind_in_minutes": REMIND_IN_MINUTES_SCHEMA,

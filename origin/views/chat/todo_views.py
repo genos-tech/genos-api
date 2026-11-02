@@ -204,14 +204,10 @@ class ToDoItemDetailView(AuthenticatedAPIView):
         category_change = "category_id" in request.data
         new_category = None
         if category_change:
-            # Children mirror the parent's tag — clients cannot set a tag
-            # directly on a child. The cascade below propagates the new tag
-            # to all subitems.
-            if item.parent_item_id is not None:
-                return Response(
-                    {"error": "Children inherit the parent's tag — set it on the parent."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+            try:
+                todo_items.check_can_set_category(item)
+            except todo_items.TodoItemError as exc:
+                return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
             cat_id = request.data.get("category_id")
             if cat_id is not None:
                 new_category = ToDoCategory.objects.filter(
@@ -241,9 +237,7 @@ class ToDoItemDetailView(AuthenticatedAPIView):
             saved = todo_items.save_item(item, move_to=move_to)
             # Propagate tag change to children of a top-level item.
             if category_change:
-                ToDoItem.objects.filter(parent_item_id=item.item_id).update(
-                    category_id=item.category_id
-                )
+                todo_items.cascade_category(item)
 
         item.refresh_from_db()
         # A moved row's search chunk is indexed under a date it is no longer
