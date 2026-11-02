@@ -161,8 +161,17 @@ class GeminiClient:
         config_kwargs: dict[str, Any] = {
             "tools": sdk_tools,
             "system_instruction": system_instruction,
-            "temperature": 0.2,
         }
+        # Sent unless the catalog says this model does not honour it.
+        # Gemini 3.x on Vertex accepts `temperature` and IGNORES it
+        # (measured MIP-859 on gemini-3.8-flash: temperature=0.0 and 2.0
+        # both gave the same answer 10/10), so the 0.2 never made output
+        # more deterministic. A model that declares `supports_temperature:
+        # false` gets no `temperature`, so a later Google change from
+        # "ignored" to "rejected" cannot 400 it. Undeclared / uncatalogued
+        # models keep the exact request they always got.
+        if settings.LLM_CATALOG.supports_temperature(model):
+            config_kwargs["temperature"] = 0.2
         if params and params.max_output_tokens:
             config_kwargs["max_output_tokens"] = params.max_output_tokens
         # Thinking bills at the OUTPUT rate ($7.50/1M on 3.6-flash) and

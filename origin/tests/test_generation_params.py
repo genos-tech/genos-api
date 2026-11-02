@@ -27,6 +27,13 @@ def _se(**overrides):
     return cfg
 
 
+def _catalog(*no_temperature):
+    """A catalog stub whose `supports_temperature` is false for the named models."""
+    cat = MagicMock()
+    cat.supports_temperature.side_effect = lambda m: m not in no_temperature
+    return cat
+
+
 # --------------------------------------------------------------------------- #
 # Claude                                                                      #
 # --------------------------------------------------------------------------- #
@@ -123,13 +130,14 @@ class OpenAIParamsTests(SimpleTestCase):
 
 
 class GeminiParamsTests(SimpleTestCase):
-    def _config(self, *, params=None):
+    def _config(self, *, params=None, model="gemini-3.6-flash", catalog=None):
         from origin.search_engine.llm.gemini_client import GeminiClient
 
         client = MagicMock()
         client.models.generate_content_stream.return_value = iter(())
         with (
-            override_settings(SEARCH_ENGINE=_se(GEMINI_MODEL="gemini-3.6-flash")),
+            override_settings(SEARCH_ENGINE=_se(GEMINI_MODEL=model)),
+            patch("django.conf.settings.LLM_CATALOG", catalog or _catalog(), create=True),
             patch(
                 "origin.search_engine.llm.gemini_client._get_client", return_value=client
             ),
@@ -144,6 +152,21 @@ class GeminiParamsTests(SimpleTestCase):
         config = self._config(params=None)
         self.assertIsNone(getattr(config, "max_output_tokens", None))
         self.assertEqual(config.temperature, 0.2)
+
+    def test_a_model_that_ignores_temperature_is_not_sent_one(self):
+        """MIP-859: Gemini 3.x on Vertex accepts `temperature` and then
+        ignores it, so a catalog entry with `supports_temperature: false`
+        gets a request without one."""
+        config = self._config(model="g-no-temp", catalog=_catalog("g-no-temp"))
+        self.assertIsNone(getattr(config, "temperature", None))
+
+    def test_a_model_without_the_flag_keeps_the_exact_old_request(self):
+        """Undeclared models (catalog entries without the flag, and
+        operator-pinned ids outside the catalog) keep temperature=0.2."""
+        for model in ("gemini-3.6-flash", "gemini-uncatalogued-preview"):
+            with self.subTest(model=model):
+                config = self._config(model=model, catalog=_catalog("g-no-temp"))
+                self.assertEqual(config.temperature, 0.2)
 
     def test_per_call_cap_is_applied(self):
         config = self._config(params=GenerationParams(max_output_tokens=4096))
