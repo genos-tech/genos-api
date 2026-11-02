@@ -5,9 +5,9 @@ from rest_framework.response import Response
 
 from apis.request_id import error_response
 from origin.models.note.personal_note_models import PersonalNoteFolder
-from origin.search_engine.purge import purge_note
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
+from origin.services.note_delete import DeleteRefused, delete_note
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 from origin.views.utils.mention_membership import (
@@ -18,13 +18,11 @@ from origin.views.utils.mention_membership import (
 from origin.views.utils.note_role import (
     ROLE_EDITOR,
     ROLE_OWNER,
-    delete_note_permissions,
     get_effective_role,
     require_read_role,
     require_write_role,
 )
 from origin.views.utils.note_version import (
-    delete_note_versions,
     snapshot_note_version,
 )
 from origin.views.utils.quota_guards import check_monthly_creation_quota
@@ -384,24 +382,13 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
             return res
 
         try:
-            with transaction.atomic():
-                note = PersonalNoteMaster.objects.get(team=data["team"], note_id=data["note_id"])
-                note.delete()
-                delete_note_permissions(NOTE_TYPE, data["note_id"])
-                delete_note_versions(NOTE_TYPE, data["note_id"])
-            # Best-effort (after the commit): drop the note's chunks from
-            # OpenSearch — chunkers never revisit deleted rows. The orphan
-            # sweep in the reindex cron retries if this fails.
-            purge_note("personal", data["note_id"])
-            return Response(
-                {"message": "Note deleted successfully."},
-                status=status.HTTP_204_NO_CONTENT,
-            )
-        except PersonalNoteMaster.DoesNotExist:
-            return Response(
-                {"error": "Note not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            delete_note(team_id=data["team"], family="personal", note_id=data["note_id"])
+        except DeleteRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
+        return Response(
+            {"message": "Note deleted successfully."},
+            status=status.HTTP_204_NO_CONTENT,
+        )
 
 
 class SinglePersonalNoteView(AuthenticatedAPIView):

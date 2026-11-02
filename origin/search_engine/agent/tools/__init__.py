@@ -59,6 +59,8 @@ from origin.search_engine.agent.tools.create_todo_item import CREATE_TODO_ITEM
 from origin.search_engine.agent.tools.delete_calendar_event import DELETE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.delete_comment import DELETE_COMMENT
 from origin.search_engine.agent.tools.delete_milestone import DELETE_MILESTONE
+from origin.search_engine.agent.tools.delete_note import DELETE_NOTE
+from origin.search_engine.agent.tools.delete_note_folder import DELETE_NOTE_FOLDER
 from origin.search_engine.agent.tools.delete_sprint import DELETE_SPRINT
 from origin.search_engine.agent.tools.delete_todo_item import DELETE_TODO_ITEM
 from origin.search_engine.agent.tools.favorite_note import FAVORITE_NOTE
@@ -242,6 +244,8 @@ for _t in (
     # --- Write tools (MIP-883) — organizing notes ---
     MANAGE_NOTE_FOLDER,
     FAVORITE_NOTE,
+    DELETE_NOTE,
+    DELETE_NOTE_FOLDER,
 ):
     # Every tool, read and write, takes its arguments with any
     # <workspace_content> fence the model copied from a result taken off
@@ -262,6 +266,8 @@ __all__ = [
     "MANAGE_PROJECT_MEMBERS",
     "MANAGE_NOTE_FOLDER",
     "FAVORITE_NOTE",
+    "DELETE_NOTE",
+    "DELETE_NOTE_FOLDER",
     "MANAGE_SPRINT",
     "REMOVE_TASK_DELIVERY",
     "ASSIGN_TASK",

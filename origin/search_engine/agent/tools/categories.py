@@ -131,6 +131,8 @@ TOOL_CATEGORY: dict[str, str] = {
     "update_note": "notes",
     "manage_note_folder": "notes",
     "favorite_note": "notes",
+    "delete_note": "notes",
+    "delete_note_folder": "notes",
 }
 
 

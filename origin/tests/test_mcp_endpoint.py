@@ -1814,6 +1814,8 @@ class TestPlantedInstructions(McpBase):
                 "delete_milestone",
                 "delete_sprint",
                 "manage_project_members",
+                "delete_note",
+                "delete_note_folder",
                 "delete_todo_item",
             },
         )

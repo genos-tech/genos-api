@@ -1,6 +1,6 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 76 agent tools. This exposes 72. The four it leaves out are left out
+Genos has 78 agent tools. This exposes 74. The four it leaves out are left out
 on purpose (`WITHHELD` in `test_mcp_team_numbers`, with a reason each, and a
 test that fails when a tool is neither published nor listed there): a connected
 client has its own web search and its own memory, and the other two are
@@ -1440,6 +1440,40 @@ CATALOG: tuple[McpTool, ...] = (
         write=True,
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+    ),
+    McpTool(
+        name="delete_note",
+        registry_name="delete_note",
+        description=(
+            "Delete a note for good: its text, its whole version history and its "
+            "search entries, with **no way back**. It is stricter than the app: only "
+            "the note's author, or someone who holds the Owner role on it (the owner "
+            "of the Team Notes folder it is filed in counts), may delete it, even where "
+            "the app would let any editor. A note that has sub-notes is refused. Name "
+            "the note by its Genos URL, or by its numeric id with `note_type`; find it "
+            "with `search_workspace` first. Needs a write-scoped API key that its owner "
+            "also opted into destructive tools."
+        ),
+        write=True,
+        destructive=True,
+        note_ref_args=("note_id",),
+        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+    ),
+    McpTool(
+        name="delete_note_folder",
+        registry_name="delete_note_folder",
+        description=(
+            "Delete a note folder, and everything in it, for good: the notes inside, "
+            "their version histories and any folders below, with **no way back**. "
+            "`folder_id` comes from `list_note_folders`, which also shows what is "
+            "inside. A folder that holds notes or folders is refused unless "
+            "`include_contents` is true. A My Notes folder is refused while a note in "
+            "it is shared with other people; a Team Notes folder only by its owner, and "
+            "never while anyone else's notes or folders are inside. Needs a "
+            "write-scoped API key that its owner also opted into destructive tools."
+        ),
+        write=True,
+        destructive=True,
     ),
 )
 
