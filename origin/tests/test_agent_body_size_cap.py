@@ -309,6 +309,7 @@ GUARDED = {
     "create_task_plan": {"content_markdown", "description_markdown"},
     "create_todo_item": {"notes_text"},
     "update_todo_item": {"notes_text"},
+    "manage_milestone": {"description_markdown"},
 }
 # Deliberately not capped here: the text is forwarded to Google Calendar, which
 # enforces its own limit, and it is not a note, comment or task body.
