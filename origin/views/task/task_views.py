@@ -17,7 +17,7 @@ from rest_framework.response import Response
 
 from origin.models.project.prj_models import *
 from origin.models.task.task_models import *
-from origin.search_engine.purge import purge_task, purge_task_comment
+from origin.search_engine.purge import purge_task
 from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
 from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.serializers.task.task_serializers import *
@@ -34,6 +34,7 @@ from origin.services.task_collaborators import may_name_person as _may_name_pers
 from origin.services.task_collaborators import people_allowed_on as _people_allowed_on
 from origin.services.task_collaborators import refuse_new_people, sync_task_collaborators
 from origin.services.task_comment_fanout import fan_out_task_comment
+from origin.services.task_comment_manage import soft_delete_comment
 from origin.services.task_milestone_move import (
     bridge_milestone_to_parent as _bridge_milestone_to_parent,
 )
@@ -2240,6 +2241,14 @@ class TaskCommentsView(AuthenticatedAPIView):
         serializer = TaskCommentsSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            # The PM thread shows the comment through its mirror row, so the
+            # edit has to reach it too (MIP-946).
+            if "comment_body" in update_data:
+                unified_writer.update_task_comment_thread_reply(
+                    task_id=int(task_id),
+                    comment_id=int(comment_id),
+                    body=serializer.instance.comment_body,
+                )
             return Response(
                 {**serializer.data, **_comment_broadcast_context(task_id)},
                 status=status.HTTP_200_OK,
@@ -2289,28 +2298,13 @@ class TaskCommentsView(AuthenticatedAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if not comment.is_deleted:
-            # `ts_updated_at` is `auto_now`, so it must be listed for the
-            # save to refresh it.
-            comment.is_deleted = True
-            comment.save(update_fields=["is_deleted", "ts_updated_at"])
-            # Tombstone the v3 mirror too — the PM task thread renders
-            # comments ONLY through it, so skipping this leaves the
-            # deleted comment on screen there.
-            unified_writer.soft_delete_task_comment_as_thread_reply(
-                task_id=int(task_id),
-                comment_id=int(comment_id),
-            )
-            # Best-effort: drop the comment's chunk from OpenSearch now.
-            # The `ts_updated_at` bump above also marks the task dirty for
-            # the incremental reindexer, which re-chunks without it.
-            purge_task_comment(task_id, comment_id)
-
-        # The authoritative live count, echoed so the Flask handler can
-        # broadcast it: the FE's comment chip is bumped live from the
-        # socket payload and only otherwise re-derived by a full channel
-        # resync, which nothing triggers on delete.
-        live_count = TaskComments.objects.filter(task=task_id, is_deleted=False).count()
+        # The soft delete, the mirror's tombstone and the search purge are
+        # shared with the agent's `delete_comment` tool. The count comes back
+        # authoritative, echoed so the Flask handler can broadcast it: the
+        # FE's comment chip is bumped live from the socket payload and only
+        # otherwise re-derived by a full channel resync, which nothing
+        # triggers on delete.
+        live_count = soft_delete_comment(comment)
         return Response(
             {
                 **_comment_broadcast_context(task_id),
