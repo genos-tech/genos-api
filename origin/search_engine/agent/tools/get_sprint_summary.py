@@ -42,21 +42,24 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     except (TypeError, ValueError):
         raise ToolError(f"`sprint_id` must be an integer (got {raw_id!r}).")
 
+    not_found = f"Sprint {sprint_id} not found."
     try:
         sprint = Sprint.objects.select_related("project").get(sprint_id=sprint_id, is_deleted=False)
     except Sprint.DoesNotExist:
-        raise ToolError(f"Sprint {sprint_id} not found.")
+        raise ToolError(not_found)
 
+    # A sprint in another team, or in a project the caller isn't in, answers
+    # with the same words as one that doesn't exist, so the id can't be probed
+    # (this tool is published over MCP, MIP-877). Still a ToolForbidden, so the
+    # MCP refusal counter sees the probe.
     if str(getattr(sprint, "team_id", "") or "") != ctx.team_id:
-        raise ToolForbidden("Not authorized: sprint is in a different team.")
+        raise ToolForbidden(not_found)
     is_member = ProjectMembers.objects.filter(
         project_id=sprint.project_id,
         attendee_id=ctx.user_id,
     ).exists()
     if not is_member:
-        raise ToolForbidden(
-            f"Not authorized to access sprint {sprint_id}. You are not a member of that project."
-        )
+        raise ToolForbidden(not_found)
 
     today = today_for_user_id(ctx.user_id)
 

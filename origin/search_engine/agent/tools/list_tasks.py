@@ -29,14 +29,16 @@ from __future__ import annotations
 import base64
 import binascii
 import json
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from django.db.models import Q
 
-from origin.models.project.prj_models import ProjectMembers
+from origin.models.project.prj_models import ProjectMembers, ProjectTags
 from origin.models.task.milestone_models import MilestoneMaster
+from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.search_engine.agent.tools.task_tags import tag_names
@@ -78,6 +80,67 @@ def _milestone_task_q(milestone: MilestoneMaster) -> Q:
     return milestone_tasks_q(milestone)
 
 
+def _int_arg(args: dict[str, Any], key: str) -> int | None:
+    raw = args.get(key)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise ToolError(f"`{key}` must be an integer (got {raw!r}).")
+
+
+def _date_arg(args: dict[str, Any], key: str) -> date | None:
+    raw = args.get(key)
+    if raw in (None, ""):
+        return None
+    try:
+        return date.fromisoformat(str(raw))
+    except ValueError:
+        raise ToolError(f"`{key}` must be an ISO 8601 date such as 2026-06-30 (got {raw!r}).")
+
+
+def _tag_q(raw: Any, project_ids: set[int]) -> Q | None:
+    """Tasks carrying ANY of the named tags, as the app's tag filter does.
+
+    A name is matched against the tags of the project asked about (or of every
+    project the caller is in): exactly, else case-insensitively. A name no such
+    project has is refused with the names that exist, because an empty page
+    would read as "no task has it".
+    """
+    names = [raw] if isinstance(raw, str) else raw
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise ToolError(f"`tag` must be a tag name or a list of tag names (got {raw!r}).")
+    wanted = {n.strip() for n in names if n.strip()}
+    if not wanted:
+        return None
+    known = set(
+        ProjectTags.objects.filter(project_id__in=project_ids).values_list("tag_name", flat=True)
+    )
+    matched: set[str] = set()
+    unknown: list[str] = []
+    for name in sorted(wanted):
+        found = {k for k in known if k == name} or {
+            k for k in known if k.casefold() == name.casefold()
+        }
+        if found:
+            matched |= found
+        else:
+            unknown.append(name)
+    if unknown:
+        listed = ", ".join(repr(k) for k in sorted(known)[:30]) or "none"
+        raise ToolError(
+            f"`tag`: unknown tag(s) {', '.join(repr(n) for n in unknown)}. "
+            f"Tags in scope: {listed}. `list_project_tags` shows a project's tags."
+        )
+    # A task's tags are stored as `[{tagName, tagColor, ...}]`; containment
+    # matches the element by name whatever else it carries.
+    query = Q()
+    for name in sorted(matched):
+        query |= Q(tags__contains=[{"tagName": name}])
+    return query
+
+
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # --- Derive the set of project ids the user belongs to. ---
     # Used both for the base ACL filter and for validating explicit
@@ -106,6 +169,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # --- Optional caller filters ---
 
     raw_project_id = args.get("project_id")
+    scoped_project_id: int | None = None
     if raw_project_id is not None:
         try:
             project_id = int(raw_project_id)
@@ -120,6 +184,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "You are not a member of that project."
             )
         qs = qs.filter(project_id=project_id)
+        scoped_project_id = project_id
 
     raw_statuses = args.get("status")
     if raw_statuses is not None:
@@ -183,6 +248,58 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         qs = qs.filter(
             milestone_tasks_q(milestone, own_row=False, deleted=asked_for_deleted)
         ).distinct()
+
+    # --- Tag, sprint, parent, due-date range, unassigned (MIP-877) ---
+    # All validated before the query runs, like the filters above.
+    if args.get("tag") is not None:
+        tag_scope = {scoped_project_id} if scoped_project_id is not None else member_project_ids
+        if (tag_q := _tag_q(args["tag"], tag_scope)) is not None:
+            qs = qs.filter(tag_q)
+
+    if (sprint_id := _int_arg(args, "sprint_id")) is not None:
+        not_found = f"Sprint {sprint_id} not found."
+        sprint = Sprint.objects.filter(sprint_id=sprint_id, is_deleted=False).first()
+        if sprint is None:
+            raise ToolError(not_found)
+        # A sprint in another team, or in a project the caller isn't in, answers
+        # with the same words as one that doesn't exist, so the filter can't be
+        # used to find out which sprint ids are in use. It is still a
+        # ToolForbidden, so the MCP refusal counter sees the probe.
+        if (
+            str(getattr(sprint, "team_id", "") or "") != ctx.team_id
+            or sprint.project_id not in member_project_ids
+        ):
+            raise ToolForbidden(not_found)
+        qs = qs.filter(sprint_id=sprint_id)
+
+    if (parent_id := _int_arg(args, "parent_task_id")) is not None:
+        parent = TaskMaster.objects.filter(task_id=parent_id, is_deleted=False).first()
+        # A parent the caller cannot read answers as one that does not exist, so
+        # the filter cannot be used to find out which task ids are in use.
+        if (
+            parent is None
+            or str(getattr(parent, "team_id", "") or "") != ctx.team_id
+            or ctx.user_id
+            not in task_acl_user_ids(parent.project_id, parent.assignee_id, parent.reporter_id)
+        ):
+            raise ToolError(f"Task {parent_id} not found.")
+        qs = qs.filter(parent_task_id=parent_id)
+
+    due_from, due_to = _date_arg(args, "due_from"), _date_arg(args, "due_to")
+    if due_from and due_to and due_from > due_to:
+        raise ToolError(f"`due_from` ({due_from}) is after `due_to` ({due_to}).")
+    if due_from:
+        qs = qs.filter(due_date__gte=due_from)
+    if due_to:
+        qs = qs.filter(due_date__lte=due_to)
+
+    if args.get("unassigned"):
+        if raw_assignee_id:
+            raise ToolError(
+                "`unassigned` and `assignee_id` can't be combined: one asks for "
+                "tasks nobody has, the other for one person's."
+            )
+        qs = qs.filter(assignee_id__isnull=True)
 
     if args.get("overdue_only"):
         today = today_for_user_id(ctx.user_id)
@@ -250,8 +367,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 LIST_TASKS = Tool(
     name="list_tasks",
     description=(
-        "Structured query for tasks: filter by project, milestone, status, "
-        "priority, assignee, or overdue date. Use this instead of "
+        "Structured query for tasks: filter by project, milestone, sprint, "
+        "parent task, status, priority, tag, assignee (or `unassigned`), "
+        "a due-date range, or overdue. Use this instead of "
         "search_knowledge_base when the user asks a structural question like "
         "'what are my open tasks?', 'which Critical tasks are in milestone X?', "
         "'overdue tasks in project Y', or 'list all WIP tasks assigned to me'. "
@@ -326,6 +444,45 @@ LIST_TASKS = Tool(
                 "description": (
                     "If true, only return tasks whose due_date is in the past "
                     "and status is not Closed or Deleted."
+                ),
+            },
+            "tag": {
+                "type": "ARRAY",
+                "items": {"type": "STRING"},
+                "description": (
+                    "Only tasks carrying at least one of these tags, by name "
+                    "(from `list_project_tags`). An unknown name is refused."
+                ),
+            },
+            "sprint_id": {
+                "type": "INTEGER",
+                "description": (
+                    "Only tasks in this sprint (from `list_sprints`). A task takes "
+                    "its milestone's sprint. You must be a member of its project."
+                ),
+            },
+            "parent_task_id": {
+                "type": "INTEGER",
+                "description": (
+                    "Only the direct sub-tasks of this task. A milestone's own "
+                    "backing task lists the tasks filed under that milestone."
+                ),
+            },
+            "due_from": {
+                "type": "STRING",
+                "description": "Only tasks due on or after this ISO 8601 date (2026-06-01).",
+            },
+            "due_to": {
+                "type": "STRING",
+                "description": (
+                    "Only tasks due on or before this ISO 8601 date. With `due_from`, "
+                    "a range; tasks with no due date are left out of either."
+                ),
+            },
+            "unassigned": {
+                "type": "BOOLEAN",
+                "description": (
+                    "If true, only tasks nobody is assigned to. Not together with `assignee_id`."
                 ),
             },
             "limit": {

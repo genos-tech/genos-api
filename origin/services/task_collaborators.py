@@ -11,6 +11,30 @@ from __future__ import annotations
 import uuid
 
 from origin.models.common.user_models import CustomUser
+from origin.views.utils.scope_guards import is_project_member, is_team_member
+
+
+def may_name_person(project, user_id) -> bool:
+    """May this person be put on a task in `project`?
+
+    Its members, plus its team's members: the same rule the agent's
+    `create_task` applies to an assignee, so a teammate can be assigned
+    before they are added to the project. Not anyone else, because the
+    assignee and the reporter are both grants (`can_access_task` lets them
+    open the task) and both surface the task in that person's lists.
+    """
+    return is_project_member(project.project_id, user_id) or is_team_member(
+        project.team_id, user_id
+    )
+
+
+def people_allowed_on(project, raw_ids):
+    """`raw_ids` with everyone who may not be on a task in `project` left
+    out. `None` stays `None`, which `sync_task_collaborators` reads as
+    "leave the set alone"."""
+    if raw_ids is None:
+        return None
+    return [raw for raw in raw_ids if raw and may_name_person(project, raw)]
 
 
 def sync_task_collaborators(task, raw_ids) -> None:
