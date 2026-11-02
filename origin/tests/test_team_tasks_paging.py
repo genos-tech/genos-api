@@ -203,13 +203,26 @@ class TeamTasksPagingTests(BaseAPITestCase):
 
     def test_a_row_is_byte_identical_to_the_unpaged_routes(self):
         """Both build the row with `_team_task_row`; a copy that drifted would
-        show here."""
-        self._make(2)
+        show here.
+
+        Rows are compared by id, not by position: the paged route orders by
+        `task_id`, but the unpaged one has no ORDER BY, so it returns rows in
+        whatever order Postgres reads them. A row UPDATE can move a row in
+        that order, and whether it does depends on free space left by earlier
+        tests, so a positional comparison passed or failed by luck (MIP-894:
+        it failed once on CI with the same two rows swapped). The UPDATE
+        below makes the reorder likely; the comparison by id is what makes
+        the test correct whether or not it happens.
+        """
+        made = self._make(2)
+        TaskMaster.objects.filter(task_id=made[0].task_id).update(title="t000 renamed")
 
         old = self._get(OLD)
         new, _ = self._all_pages(limit=1)
 
-        self.assertEqual(new, old)
+        by_id = lambda rows: sorted(rows, key=lambda r: int(r["id"]))  # noqa: E731
+        self.assertEqual(len(new), 2)
+        self.assertEqual(by_id(new), by_id(old))
 
     # ── the unpaged route is unchanged ────────────────────────────────
 
