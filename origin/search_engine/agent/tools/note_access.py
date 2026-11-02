@@ -48,6 +48,6 @@ def load_readable_note(args: dict[str, Any], ctx: ToolContext) -> NoteRef:
         )
     ):
         raise ToolError(
-            f"Note {note_id} not found. Get ids from `search_workspace` or `list_note_folders`."
+            f"Note {note_id} not found. Find its id with a search or `list_note_folders`."
         )
     return NoteRef(family=family, code=_CODES[family], note_id=note_id, note=note)
