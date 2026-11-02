@@ -11,7 +11,6 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
 from origin.models.chat.unified_models import Channel
-from origin.models.common.inbox_models import InboxItems
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import ExternalGrant, TeamMaster, TeamMembers
 from origin.models.project.prj_models import *
@@ -29,10 +28,18 @@ from origin.services.member_roles import (
 from origin.services.project_code import derive_project_code
 from origin.services.security_events import record_security_event, user_label
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.inbox_approval import (
+    JOIN_PROJECT_REQUEST,
+    already_answered,
+    is_still_open,
+    load_request_item,
+    not_found,
+)
 from origin.views.utils.request_validators import validate_request_data
 from origin.views.utils.roster_fields import shown_location
 from origin.views.utils.scope_guards import (
     guest_project_ids,
+    is_guest,
     is_project_member,
     is_team_member,
     require_project_member_or_response,
@@ -767,62 +774,67 @@ class LeaveProjectView(AuthenticatedAPIView):
 
 
 class JoinProjectFromInboxView(AuthenticatedAPIView):
+    """Approve a join-project request from the inbox.
+
+    The item is the authorization, so it has to be a real request (MIP-940, see
+    `inbox_approval`): addressed to the caller, sent by someone else, of the
+    join-project type, and still pending. The project comes from the ITEM and
+    must be in the item's team, and the caller must be allowed to add people to
+    it. Before, a request addressed to yourself added you to any project in
+    your own team, or to another team's given its id.
+    """
+
     def post(self, request):
-        team_id = request.data["team_id"]
-        inbox_item_id = int(request.data["item_id"])
+        item, error = load_request_item(request, item_type=JOIN_PROJECT_REQUEST)
+        if error is not None:
+            return error
 
-        # Approving a join request is a membership mutation, and the item
-        # was previously fetched by id alone — so anyone could approve
-        # anyone's request into any project by counting. The item is
-        # addressed TO its approver, so scoping the lookup to
-        # `receiver=request.user` is both the authorization check and the
-        # fetch; a 404 leaks nothing about which item ids exist.
-        inbox_item = (
-            InboxItems.objects.filter(item_id=inbox_item_id, receiver=request.user)
-            .values_list("sender", "item_optionals")
-            .first()
-        )
-        if inbox_item is None:
-            return Response({"error": "Inbox item not found."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            project_id = int((item.item_optionals or {}).get("project_id"))
+        except (TypeError, ValueError, AttributeError):
+            return not_found()
+        project = ProjectMaster.objects.filter(
+            team_id=item.team_id, project_id=project_id
+        ).first()
+        if project is None or not can_manage(resolve_project_role(project, request.user.id)):
+            return not_found()
 
-        attendee_id = inbox_item[0]
-        project_id = inbox_item[1]["project_id"]
-        project_name = inbox_item[1]["project_name"]
+        attendee_id = str(item.sender_id)
+        data = {"team": str(item.team_id), "project": project.project_id, "attendee": attendee_id}
+        project_name = project.project_name
 
-        # Check if the attendee is not joined yet.
-        is_joined = ProjectMembers.objects.filter(
-            Q(team_id=team_id, project_id=project_id, attendee_id=attendee_id)
-        ).exists()
-
-        data = {"team": team_id, "project": project_id, "attendee": attendee_id}
-        if is_joined:
+        # Already in: nothing to add. This is also the repeated click.
+        if ProjectMembers.objects.filter(
+            team_id=item.team_id, project_id=project.project_id, attendee_id=attendee_id
+        ).exists():
             data["projectName"] = project_name
             return Response(data, status=status.HTTP_201_CREATED)
-        else:
-            project_exists = ProjectMaster.objects.filter(
-                Q(team=team_id, project_id=project_id)
-            ).exists()
-            if project_exists:
-                serializer = ProjectMembersSerializer(data=data)
-                if serializer.is_valid():
-                    serializer.save()
-                    project = ProjectMaster.objects.get(team=team_id, project_id=project_id)
-                    _record_project_member(
-                        SecurityAction.MEMBER_ADDED,
-                        request,
-                        project,
-                        attendee_id,
-                        via="join_request",
-                    )
-                    res = serializer.data
-                    res["projectName"] = project_name
-                    return Response(res, status=status.HTTP_201_CREATED)
-            else:
-                data["projectName"] = project_name
-                return Response(data, status=status.HTTP_200_OK)
+
+        if not is_still_open(item):
+            return already_answered()
+        # The requester may have left the team since they asked.
+        if not (is_team_member(item.team_id, attendee_id) or is_guest(item.team_id, attendee_id)):
+            return Response(
+                {"error": "The requester is no longer in the team."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        serializer = ProjectMembersSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+            _record_project_member(
+                SecurityAction.MEMBER_ADDED,
+                request,
+                project,
+                attendee_id,
+                via="join_request",
+            )
+            res = serializer.data
+            res["projectName"] = project_name
+            return Response(res, status=status.HTTP_201_CREATED)
 
         error = serializer.errors
-        error["hint"] = f"Failed to join project: {project_id}"
+        error["hint"] = f"Failed to join project: {project.project_id}"
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
 

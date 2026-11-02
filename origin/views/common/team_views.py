@@ -22,7 +22,6 @@ from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
 from apis.request_id import describe_exception
-from origin.models.common.inbox_models import InboxItems
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
@@ -51,6 +50,13 @@ from origin.services.team_membership import (
 from origin.services.throttles import InviteThrottle, RecordedThrottleMixin, with_defaults
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.batch_limits import MAX_INVITE_EMAILS, check_batch_size
+from origin.views.utils.inbox_approval import (
+    JOIN_TEAM_REQUEST,
+    already_answered,
+    is_still_open,
+    load_request_item,
+    not_found,
+)
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
@@ -554,24 +560,26 @@ class LeaveTeamView(AuthenticatedAPIView):
 
 
 class JoinTeamFromInboxView(AuthenticatedAPIView):
-    def post(self, request):
-        team_id = request.data["team_id"]
-        team_name = request.data["team_name"]
-        inbox_item_id = int(request.data["item_id"])
+    """Approve a join-team request from the inbox.
 
-        # The item is addressed TO its approver, so scoping the lookup
-        # to `receiver=request.user` is both the authorization check and
-        # the fetch. Previously the item was found by id alone, so anyone
-        # could approve anyone's join request into any team by counting —
-        # the same shape as the `/team/join/` hole, one step removed.
-        row = (
-            InboxItems.objects.filter(item_id=inbox_item_id, receiver=request.user)
-            .values_list("sender", flat=True)
-            .first()
-        )
-        if row is None:
-            return Response({"error": "Inbox item not found."}, status=status.HTTP_404_NOT_FOUND)
-        attendee_id = str(row)
+    The item is the authorization, so it has to be a real request (MIP-940, see
+    `inbox_approval`): addressed to the caller, sent by someone else, of the
+    join-team type, and still pending. The team is the ITEM's, never the one in
+    the request body, and the caller must be allowed to add people to it.
+    Before, a request addressed to yourself added you to any team whose id you
+    knew.
+    """
+
+    def post(self, request):
+        item, error = load_request_item(request, item_type=JOIN_TEAM_REQUEST)
+        if error is not None:
+            return error
+
+        team = TeamMaster.objects.filter(team_id=item.team_id, is_deleted=False).first()
+        if team is None or not can_manage(resolve_team_role(team, request.user.id)):
+            return not_found()
+        team_id = str(team.team_id)
+        attendee_id = str(item.sender_id)
 
         # Re-join path: a previously soft-deleted membership row gets
         # un-deleted in place. Without this, the unique constraint on
@@ -579,12 +587,18 @@ class JoinTeamFromInboxView(AuthenticatedAPIView):
         # stay out of the team after the owner's approve click.
         data = {"team": team_id, "attendee": attendee_id}
         existing = TeamMembers.objects.filter(team_id=team_id, attendee_id=attendee_id).first()
+        if existing is not None and not existing.is_deleted:
+            data["teamName"] = team.team_name
+            return Response(data, status=status.HTTP_201_CREATED)
+
+        if not is_still_open(item):
+            return already_answered()
+
         if existing is not None:
-            if existing.is_deleted:
-                existing.is_deleted = False
-                existing.save(update_fields=["is_deleted", "ts_updated_at"])
-                _record_member_added(request, team_id, attendee_id, via="join_request")
-            data["teamName"] = team_name
+            existing.is_deleted = False
+            existing.save(update_fields=["is_deleted", "ts_updated_at"])
+            _record_member_added(request, team_id, attendee_id, via="join_request")
+            data["teamName"] = team.team_name
             return Response(data, status=status.HTTP_201_CREATED)
 
         serializer = TeamMembersSerializer(data=data)
@@ -592,7 +606,7 @@ class JoinTeamFromInboxView(AuthenticatedAPIView):
             serializer.save()
             _record_member_added(request, team_id, attendee_id, via="join_request")
             res = serializer.data
-            res["teamName"] = team_name
+            res["teamName"] = team.team_name
             return Response(res, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

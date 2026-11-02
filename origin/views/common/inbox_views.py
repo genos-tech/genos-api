@@ -88,12 +88,22 @@ class InboxItemView(AuthenticatedAPIView):
     def post(self, request):
         if res := _require_team(request, request.data.get("team_id")):
             return res
+        # Only notices are made here. A request (join team, project, GM, ...)
+        # is what an approval acts on, and it has its own endpoint that decides
+        # who it goes to: letting the caller pick the type and the receiver
+        # here is how a user approved their own "request" into someone else's
+        # team (MIP-940).
+        if str(request.data.get("item_type")) != "0":
+            return Response(
+                {"error": "Only notices (item_type 0) can be created here."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         data = {
             "team": request.data["team_id"],
             "sender": request.user.id,
             "receiver": request.data["receiver_id"],
             "item_body": request.data["item_body"],
-            "item_type": request.data["item_type"],  # Must be '0'
+            "item_type": 0,
             # Optional, unlike the joinXRequest/ endpoints where it's the
             # required routing payload. This endpoint used to drop it on the
             # floor: callers could send `item_optionals` and it silently never
@@ -262,16 +272,20 @@ class InboxItemView(AuthenticatedAPIView):
 
 class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
     def post(self, request):
-        team_owner_id = TeamMaster.objects.filter(team_id=request.data["team_id"]).values_list(
-            "owner__id", flat=True
+        team_owner_id = list(
+            TeamMaster.objects.filter(team_id=request.data["team_id"], is_deleted=False)
+            .exclude(owner__isnull=True)
+            .values_list("owner__id", flat=True)
         )
+        if not team_owner_id:
+            return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 
         data = {
             "team": request.data["team_id"],
             "sender": request.user.id,
             "receiver": team_owner_id[0],  # Send to the team owner
             "item_body": request.data["item_body"],
-            "item_type": request.data["item_type"],  # Must be '1'
+            "item_type": 1,  # Always: the approval refuses anything else
             "item_optionals": request.data["item_optionals"],
             "is_read": False,
         }
@@ -322,17 +336,23 @@ class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
     def post(self, request):
         if res := _require_team(request, request.data.get("team_id")):
             return res
-        project_owner_id = ProjectMaster.objects.filter(
-            team_id=request.data["team_id"],
-            project_id=request.data["item_optionals"]["project_id"],
-        ).values_list("owner", flat=True)
+        project_owner_id = list(
+            ProjectMaster.objects.filter(
+                team_id=request.data["team_id"],
+                project_id=request.data["item_optionals"]["project_id"],
+            )
+            .exclude(owner__isnull=True)
+            .values_list("owner", flat=True)
+        )
+        if not project_owner_id:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
 
         data = {
             "team": request.data["team_id"],
             "sender": request.user.id,
             "receiver": project_owner_id[0],  # Send to the project owner
             "item_body": request.data["item_body"],
-            "item_type": request.data["item_type"],  # Must be '2'
+            "item_type": 2,  # Always: the approval refuses anything else
             "item_optionals": request.data["item_optionals"],
             "is_read": False,
         }
