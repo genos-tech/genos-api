@@ -627,6 +627,16 @@
     # Metric-only (§4.1): a grounded answer exists → must NOT abstain.
     should_abstain: false
 
+- id: find_my_chats
+  # MIP-885: a chat is found by name, not only from a search hit. The fixture
+  # user may be in no chats; the case checks the route (list_my_chats, not a
+  # semantic search or a made-up answer), not the contents.
+  query: "Which group chats am I in?"
+  fixture: true
+  expect:
+    tools_used_contains: ["list_my_chats"]
+    no_errors: true
+
 # --------------------------------------------------------------------- #
 # B (expand). Specific-entity fetch                                     #
 # --------------------------------------------------------------------- #

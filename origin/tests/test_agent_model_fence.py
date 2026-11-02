@@ -236,6 +236,7 @@ class FenceByToolTests(SimpleTestCase):
                 "get_team_members": ["username"],
                 "list_project_members": ["username"],
                 "list_channel_members": ["username"],
+                "fetch_chat_thread": ["sender_username"],
                 "get_workload_distribution": ["username"],
                 "get_top_task_closers": ["username"],
                 "get_milestone_assignee_counts": ["username"],
