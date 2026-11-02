@@ -44,7 +44,7 @@ from typing import Any
 from django.conf import settings
 
 from origin.search_engine.llm import spend
-from origin.search_engine.llm.types import CallUsage, ToolDeclaration
+from origin.search_engine.llm.types import AgentMessage, CallUsage, ToolDeclaration
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +91,49 @@ def _digest(model: str, system_instruction: str, tools: list[ToolDeclaration]) -
     return h.hexdigest()
 
 
+def approx_prefix_chars(system_instruction: str, tools: list[ToolDeclaration]) -> int:
+    """How big the prefix an explicit cache would pin is, in characters."""
+    return len(system_instruction) + sum(
+        len(t.name) + len(t.description) + len(str(t.parameters_schema)) for t in tools
+    )
+
+
+def approx_history_chars(messages: list[AgentMessage]) -> int:
+    """How much conversation rides along after the prefix, in characters."""
+    total = 0
+    for m in messages:
+        total += len(m.text or "")
+        if m.function_call is not None:
+            total += len(m.function_call.name) + len(str(m.function_call.args))
+        if m.function_response is not None:
+            total += len(str(m.function_response))
+    return total
+
+
+def history_outgrew_prefix(
+    system_instruction: str, tools: list[ToolDeclaration], messages: list[AgentMessage]
+) -> bool:
+    """True once the conversation is bigger than `GEMINI_EXPLICIT_CACHE_MAX_HISTORY_RATIO`
+    times the prefix, which is when the explicit cache costs more than it saves (MIP-937).
+
+    A request that references an explicit cache gets implicit caching for NOTHING else:
+    measured on Vertex (gemini-3.6-flash), `cached_content_token_count` stays pinned at
+    the cache's size on every call while the conversation grows, so each tool result is
+    re-sent at the full input rate on every later call. The same calls without an
+    explicit cache have implicit caching cover the previous call's whole prompt (60%,
+    72%, 79% of the next three calls), including the part an earlier explicit-cache call
+    had already sent. So the explicit cache earns its keep while the prefix is most of
+    the prompt (the first step, and short asks), and is given up once tool results have
+    made the history the bigger part (the digest: 16k prefix, 20k+ of results).
+
+    0 or less never gives it up (the behaviour before MIP-937).
+    """
+    ratio = float(settings.SEARCH_ENGINE.get("GEMINI_EXPLICIT_CACHE_MAX_HISTORY_RATIO", 1.0))
+    if ratio <= 0:
+        return False
+    return approx_history_chars(messages) > ratio * approx_prefix_chars(system_instruction, tools)
+
+
 def prefix_cache_name(
     *,
     client: Any,
@@ -106,10 +149,7 @@ def prefix_cache_name(
     """
     if not tools or not system_instruction:
         return None
-    approx_chars = len(system_instruction) + sum(
-        len(t.name) + len(t.description) + len(str(t.parameters_schema)) for t in tools
-    )
-    if approx_chars < _MIN_PREFIX_CHARS:
+    if approx_prefix_chars(system_instruction, tools) < _MIN_PREFIX_CHARS:
         return None
 
     key = _digest(model, system_instruction, tools)
