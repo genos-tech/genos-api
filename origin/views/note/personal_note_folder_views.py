@@ -33,6 +33,11 @@ from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.search_engine.purge import purge_note_folders
+from origin.services.note_folder_manage import (
+    FolderRefused,
+    clean_name,
+    create_personal_folder,
+)
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.personal_note_move import NoteMoveRefused, move_personal_note
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
@@ -117,30 +122,15 @@ class PersonalNoteFolderView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
-        name = str(data["name"]).strip()
-        if name == "" or len(name) > 255:
-            return Response(
-                {"error": "Folder name must be 1-255 characters."},
-                status=status.HTTP_400_BAD_REQUEST,
+        try:
+            folder = create_personal_folder(
+                team_id=data["team_id"],
+                owner_id=data["user_id"],
+                name=data["name"],
+                parent_folder_id=request.data.get("parent_folder_id"),
             )
-
-        parent_folder_id = request.data.get("parent_folder_id")
-        if parent_folder_id is not None:
-            try:
-                _get_owned_folder(parent_folder_id, data["team_id"], data["user_id"])
-            except PersonalNoteFolder.DoesNotExist:
-                return Response(
-                    {"error": "Parent folder not found."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-        folder = PersonalNoteFolder.objects.create(
-            team_id=data["team_id"],
-            owner_id=data["user_id"],
-            parent_folder_id=parent_folder_id,
-            name=name,
-            scope=SCOPE,
-        )
+        except FolderRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
 
         return Response(_folder_dict(folder), status=status.HTTP_201_CREATED)
 
@@ -166,13 +156,10 @@ class PersonalNoteFolderView(AuthenticatedAPIView):
 
         # Rename — only when a non-empty name is supplied.
         if "name" in request.data and request.data.get("name") is not None:
-            name = str(request.data["name"]).strip()
-            if name == "" or len(name) > 255:
-                return Response(
-                    {"error": "Folder name must be 1-255 characters."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            folder.name = name
+            try:
+                folder.name = clean_name(request.data["name"])
+            except FolderRefused as refused:
+                return Response({"error": refused.message}, status=refused.status)
 
         # Move — key presence means intent; an explicit null moves the
         # folder to root.

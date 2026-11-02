@@ -443,6 +443,22 @@
   en: "Show me personal note 42."
   ja: "個人ノート42を見せて"
   ok: [fetch_note]
+- id: note_folder_create
+  en: "Make a new folder called Recipes in my notes."
+  ja: "自分のノートに「レシピ」という新しいフォルダを作って"
+  ok: [list_note_folders, manage_note_folder]
+- id: note_folder_rename
+  en: "Rename my Projects notes folder to Archive."
+  ja: "ノートの「Projects」フォルダを「Archive」に名前変更して"
+  ok: [list_note_folders, manage_note_folder]
+- id: note_favorite
+  en: "Add personal note 42 to my favorites."
+  ja: "個人ノート42をお気に入りに追加して"
+  ok: [favorite_note]
+- id: note_folder_favorite
+  en: "Star my Projects notes folder."
+  ja: "ノートの「Projects」フォルダをお気に入りにして"
+  ok: [list_note_folders, favorite_note]
 
 # --- search ----------------------------------------------------------------
 - id: workspace_decision

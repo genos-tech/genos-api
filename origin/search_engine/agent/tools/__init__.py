@@ -61,6 +61,7 @@ from origin.search_engine.agent.tools.delete_comment import DELETE_COMMENT
 from origin.search_engine.agent.tools.delete_milestone import DELETE_MILESTONE
 from origin.search_engine.agent.tools.delete_sprint import DELETE_SPRINT
 from origin.search_engine.agent.tools.delete_todo_item import DELETE_TODO_ITEM
+from origin.search_engine.agent.tools.favorite_note import FAVORITE_NOTE
 from origin.search_engine.agent.tools.fetch_chat_thread import FETCH_CHAT_THREAD
 from origin.search_engine.agent.tools.fetch_note import FETCH_NOTE
 from origin.search_engine.agent.tools.fetch_pr import FETCH_PR
@@ -115,6 +116,7 @@ from origin.search_engine.agent.tools.list_tasks import LIST_TASKS
 from origin.search_engine.agent.tools.list_today_todos import LIST_TODAY_TODOS
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
 from origin.search_engine.agent.tools.manage_milestone import MANAGE_MILESTONE
+from origin.search_engine.agent.tools.manage_note_folder import MANAGE_NOTE_FOLDER
 from origin.search_engine.agent.tools.manage_project import MANAGE_PROJECT
 from origin.search_engine.agent.tools.manage_project_members import MANAGE_PROJECT_MEMBERS
 from origin.search_engine.agent.tools.manage_sprint import MANAGE_SPRINT
@@ -237,6 +239,9 @@ for _t in (
     # --- Write tools (MIP-882) — projects and who is in them ---
     MANAGE_PROJECT,
     MANAGE_PROJECT_MEMBERS,
+    # --- Write tools (MIP-883) — organizing notes ---
+    MANAGE_NOTE_FOLDER,
+    FAVORITE_NOTE,
 ):
     # Every tool, read and write, takes its arguments with any
     # <workspace_content> fence the model copied from a result taken off
@@ -255,6 +260,8 @@ __all__ = [
     "DELETE_SPRINT",
     "MANAGE_PROJECT",
     "MANAGE_PROJECT_MEMBERS",
+    "MANAGE_NOTE_FOLDER",
+    "FAVORITE_NOTE",
     "MANAGE_SPRINT",
     "REMOVE_TASK_DELIVERY",
     "ASSIGN_TASK",

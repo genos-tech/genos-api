@@ -1,6 +1,6 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 74 agent tools. This exposes 70. The four it leaves out are left out
+Genos has 76 agent tools. This exposes 72. The four it leaves out are left out
 on purpose (`WITHHELD` in `test_mcp_team_numbers`, with a reason each, and a
 test that fails when a tool is neither published nor listed there): a connected
 client has its own web search and its own memory, and the other two are
@@ -1409,6 +1409,37 @@ CATALOG: tuple[McpTool, ...] = (
         ),
         write=True,
         destructive=True,
+    ),
+    McpTool(
+        name="manage_note_folder",
+        registry_name="manage_note_folder",
+        description=(
+            "Create a folder for notes, or rename one. `action` 'create' makes a "
+            "My Notes folder (`space` 'personal', the default) or a Team Notes "
+            "folder (`space` 'team'), at the top or inside `parent_folder_id`; the "
+            "space then follows the parent. A new top-level Team Notes folder is "
+            "private to its creator, and this tool can't share a folder or change "
+            "who sees it. `action` 'rename' renames `folder_id` (Editor on a Team "
+            "Notes folder). Ids come from `list_note_folders`. It can't move or "
+            "delete a folder. To file a note in a folder use `create_note` or "
+            "`update_note` with `folder_id`. Requires a write-scoped API key."
+        ),
+        write=True,
+    ),
+    McpTool(
+        name="favorite_note",
+        registry_name="favorite_note",
+        description=(
+            "Star a note or a note folder as a favorite, or unstar it: the caller's "
+            "own bookmark in their sidebar, and nothing else changes. Pass "
+            "`folder_id` (from `list_note_folders`) for a folder, or a note's Genos "
+            "URL (or its numeric id with `note_type`) for a note. `favorite` is "
+            "true to star (the default) and false to unstar. Requires a "
+            "write-scoped API key."
+        ),
+        write=True,
+        note_ref_args=("note_id",),
+        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
     ),
 )
 

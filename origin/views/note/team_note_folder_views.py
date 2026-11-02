@@ -46,6 +46,11 @@ from origin.models.note.version_note_models import NoteVersionMaster
 from origin.search_engine.purge import purge_note_folders
 from origin.services.external_grants import external_objects_for_member, externally_shared
 from origin.services.group_expansion import expand_groups
+from origin.services.note_folder_manage import (
+    VALID_VISIBILITIES,
+    FolderRefused,
+    create_team_folder,
+)
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.note.note_folder_tag_views import sync_folder_tags
 from origin.views.utils.note_acl_resync import (
@@ -66,10 +71,6 @@ from origin.views.utils.request_validators import validate_request_data, validat
 NOTE_TYPE = 1  # Team notes are personal notes; the folder holds the ACL.
 SCOPE = PersonalNoteFolder.SCOPE_TEAM
 
-VALID_VISIBILITIES = {
-    PersonalNoteFolder.VISIBILITY_PUBLIC,
-    PersonalNoteFolder.VISIBILITY_PRIVATE,
-}
 VALID_ROLE_IDS = {ROLE_OWNER, ROLE_EDITOR, ROLE_VIEWER}
 
 
@@ -406,91 +407,10 @@ class TeamNoteFolderView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
-        name = str(data["name"]).strip()
-        if name == "" or len(name) > 255:
-            return Response(
-                {"error": "Folder name must be 1-255 characters."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        parent_folder_id = request.data.get("parent_folder_id")
-        visibility = request.data.get("visibility")
-
-        # Which team the folder will belong to. For a SUBFOLDER that is the
-        # parent's team, not the team the client happens to be viewing: a
-        # folder shared with you belongs to the host, and a child filed
-        # under the viewer's team instead would sit in a tree neither side
-        # can see.
-        owning_team_id = data["team_id"]
-        if parent_folder_id is not None:
-            parent_team_id = (
-                PersonalNoteFolder.objects.filter(folder_id=parent_folder_id, scope=SCOPE)
-                .values_list("team_id", flat=True)
-                .first()
-            )
-            if parent_team_id is None:
-                return Response(
-                    {"error": "Parent folder not found."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            owning_team_id = str(parent_team_id)
-
-        # Team membership gates a ROOT folder only. A subfolder is
-        # authorized by the role on its parent, which is what lets an
-        # editor admitted through a share organize the work inside it —
-        # the parity the feature claimed and did not have: they could write
-        # notes in the shared folder but not group them.
-        is_host_member = is_team_member(owning_team_id, request_user_id)
-        if parent_folder_id is None:
-            if not is_host_member:
-                return Response(
-                    {"error": "You are not a member of this team."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-            if visibility not in VALID_VISIBILITIES:
-                return Response(
-                    {"error": 'A top-level folder must be "public" or "private".'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-        else:
-            if visibility is not None and visibility not in VALID_VISIBILITIES:
-                return Response(
-                    {"error": 'visibility must be "public", "private", or null to inherit.'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if not _can_write(get_folder_role(request_user_id, parent_folder_id, owning_team_id)):
-                return Response(
-                    {"error": "You do not have permission to add folders here."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-            if not is_host_member:
-                # An outsider's subfolder inherits and grants nobody.
-                # `visibility="public"` would hand every member of a
-                # company they don't work for a folder inside their own
-                # share, and an explicit roster would re-share the host's
-                # data onward to a third party — the one thing every other
-                # path in this feature refuses.
-                visibility = None
-
-        with transaction.atomic():
-            folder = PersonalNoteFolder.objects.create(
-                team_id=owning_team_id,
-                owner_id=request_user_id,
-                parent_folder_id=parent_folder_id,
-                name=name,
-                scope=SCOPE,
-                visibility=visibility,
-            )
-            # The creator's OWNER row is written explicitly rather than
-            # inferred, so the roster and member count tell the truth and
-            # ownership can later be transferred like any other grant.
-            NoteFolderPermission.objects.create(
-                team_id=owning_team_id,
-                folder=folder,
-                user_id=request_user_id,
-                role_id=ROLE_OWNER,
-                granted_by_id=request_user_id,
-            )
+        def add_roster(folder, owning_team_id, is_host_member):
+            # What only the page adds, in the same transaction as the folder. An
+            # outsider's subfolder grants nobody: an explicit roster would re-share
+            # the host's data onward to a third party.
             _grant_members(
                 folder=folder,
                 team_id=owning_team_id,
@@ -500,6 +420,18 @@ class TeamNoteFolderView(AuthenticatedAPIView):
                 role_id=request.data.get("role_id") or ROLE_EDITOR,
             )
             sync_folder_tags(folder, owning_team_id, request.data.get("tag_ids"))
+
+        try:
+            folder, owning_team_id = create_team_folder(
+                team_id=data["team_id"],
+                user_id=request_user_id,
+                name=data["name"],
+                parent_folder_id=request.data.get("parent_folder_id"),
+                visibility=request.data.get("visibility"),
+                after_create=add_roster,
+            )
+        except FolderRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
 
         folders = load_team_folder_index(owning_team_id)
         return Response(

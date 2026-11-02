@@ -129,6 +129,8 @@ TOOL_CATEGORY: dict[str, str] = {
     "list_note_folders": "notes",
     "create_note": "notes",
     "update_note": "notes",
+    "manage_note_folder": "notes",
+    "favorite_note": "notes",
 }
 
 

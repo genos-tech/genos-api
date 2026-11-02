@@ -45,6 +45,7 @@ WRITE_PREFIXES = (
     "remove_",
     "manage_",
     "restore_",
+    "favorite_",
 )
 
 # Schema `type` values both provider adapters accept. Tools are authored
