@@ -125,6 +125,7 @@ TOOL_CATEGORY: dict[str, str] = {
     "list_uncompleted_todos": "todo",
     "create_todo_item": "todo",
     "update_todo_item": "todo",
+    "delete_todo_item": "todo",
     # --- notes ---
     "list_note_folders": "notes",
     "create_note": "notes",

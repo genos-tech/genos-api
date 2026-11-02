@@ -277,7 +277,7 @@ class ToDoItemReminderView(AuthenticatedAPIView):
         # the option on a completed row — this is for anything else.
         if item.is_completed:
             return Response(
-                {"error": "This to-do is already completed."},
+                {"error": todo_reminders.ALREADY_COMPLETED},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

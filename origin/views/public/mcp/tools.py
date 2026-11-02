@@ -1,12 +1,12 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 60 agent tools. This exposes 39. That is not all of them and
+Genos has 64 agent tools. This exposes 43. That is not all of them and
 not a staging accident — every tool costs the connected agent context on
-*every* request it makes, and much of the 60 answers questions Genos's
+*every* request it makes, and much of the 64 answers questions Genos's
 own assistant gets asked ("who closed the most tasks last sprint"), not
 questions something working in the workspace has.
 
-What the 39 are chosen to be is **every write Genos has actually built,
+What the 43 are chosen to be is **every write Genos has actually built,
 plus the reads needed to drive them**, plus the five GitHub PR reads that
 let an agent see what became of the PR it opened (MIP-689), plus
 `get_task_history` — on a surface with no approval gate and no undo, the
@@ -25,8 +25,8 @@ cost the connected agent the ability to do what the user can do.
 The second half of that sentence is load-bearing and was got wrong once:
 the calendar and todo writes shipped without the reads that return the
 `event_id` and `item_id` they require, leaving three published writes
-callable only by inventing an opaque id — `delete_calendar_event`, the
-one destructive tool here, among them. `test_every_published_write_can_be_driven`
+callable only by inventing an opaque id — `delete_calendar_event`, a
+destructive tool, among them. `test_every_published_write_can_be_driven`
 now fails if a write's required id has no published producer, because
 "published" and "usable" turned out to be different properties.
 
@@ -65,12 +65,15 @@ answer is a hang. Two consequences, both load-bearing:
 * **A destructive tool needs a real undo before it belongs here.**
   `delete_calendar_event` is published because the registry's own
   description calls it out as destructive and a user asks for it by name;
-  it is the only delete in the registry, and the asymmetry is on purpose
-  rather than an oversight to be "fixed" by adding more. (The one
-  removal besides it, `remove_task_delivery` (MIP-834), is not a delete in
+  `delete_todo_item` (MIP-884) is published on the same grounds: the
+  UI's delete is a hard delete that takes the sub-items and reminders with
+  it, and a user asks an assistant to "delete that to-do" by name. Each
+  delete is published deliberately, behind the opt-in below, and not as a
+  side effect of the tool having been built. (The one
+  removal besides them, `remove_task_delivery` (MIP-834), is not a delete in
   this sense: it only takes back a link `add_task_delivery` made, and
   adding it again is the undo, so it needs no opt-in.) Write scope
-  alone doesn't reach it: it is `destructive=True`, which also needs the
+  alone doesn't reach them: they are `destructive=True`, which also needs the
   key's `allow_destructive` opt-in (MIP-723). An instruction planted in a
   task body is read by the agent on the other end, and write scope is
   what a key minted to edit tasks already has — so a delete waits for
@@ -441,10 +444,12 @@ CATALOG: tuple[McpTool, ...] = (
         registry_name="list_uncompleted_todos",
         description=(
             "The caller's still-open to-dos, newest first, with the `item_id` "
-            "that `update_todo_item` takes. This is how a to-do is found: "
+            "that `update_todo_item` and `delete_todo_item` take. This is how "
+            "a to-do is found: "
             "`search_workspace` can surface one but does not return its id. "
             "Scans back `date_range_days` (default 14), so widen it for an "
-            "older item."
+            "older item. A to-do with a pending reminder carries "
+            "`reminder_at`, in the caller's time zone with its offset."
         ),
     ),
     McpTool(
@@ -454,7 +459,8 @@ CATALOG: tuple[McpTool, ...] = (
             "The caller's to-dos for today, with their `item_id`s. Narrower "
             "than `list_uncompleted_todos` and it includes items already "
             "ticked off, so prefer it for 'what is left today' and that one "
-            "for anything older."
+            "for anything older. A to-do with a pending reminder carries "
+            "`reminder_at`, in the caller's time zone with its offset."
         ),
     ),
     McpTool(
@@ -834,7 +840,15 @@ CATALOG: tuple[McpTool, ...] = (
             "Add a personal to-do for the caller — a private checklist item, "
             "not project work anyone else can see. Use a task for work that "
             "belongs to a project. Only `title` is required; `target_date` "
-            "defaults to today. Requires a write-scoped API key."
+            "defaults to today. `remind_at` or `remind_in_minutes` also sets a "
+            "reminder, which arrives in the caller's Genos Inbox with a web "
+            "push: 'remind me Friday to follow up with Sam' is one call with "
+            "`target_date` and `remind_at` both Friday. `remind_at` is a "
+            "date-time in the caller's own time zone (2026-11-06T09:00; a bare "
+            "date means 09:00) or an ISO time that carries its own offset; "
+            "`remind_in_minutes` counts from now. A time in the past is "
+            "refused, so is one more than a year out. Requires a write-scoped "
+            "API key."
         ),
         write=True,
     ),
@@ -843,12 +857,37 @@ CATALOG: tuple[McpTool, ...] = (
         registry_name="update_todo_item",
         description=(
             "Change one of the caller's to-dos: tick it off with "
-            "`is_completed`, edit the title, or replace its notes. Get "
-            "`item_id` from `list_uncompleted_todos` or `list_today_todos`. "
+            "`is_completed`, edit the title, replace its notes, or move it to "
+            "another day with `target_date` (YYYY-MM-DD; its sub-items go with "
+            "it, and a sub-item can't be moved on its own). `remind_at` or "
+            "`remind_in_minutes` sets a reminder on the same terms as "
+            "`create_todo_item` (a to-do has one reminder, so a new one "
+            "replaces the old) and `cancel_reminder: true` removes it. "
+            "Ticking a to-do off cancels its reminder, and a completed to-do "
+            "can't be given one. Get `item_id` from `list_uncompleted_todos` "
+            "or `list_today_todos`, which also show a pending `reminder_at`. "
             '`notes_text: ""` clears the body; `clear_category: true` removes '
             "the category. Requires a write-scoped API key."
         ),
         write=True,
+    ),
+    McpTool(
+        name="delete_todo_item",
+        registry_name="delete_todo_item",
+        description=(
+            "Permanently delete one of the caller's to-dos, with its sub-items "
+            "and their reminders. **This is not reversible from here** — "
+            "there is no undo on this surface and the to-do would have to be "
+            "typed in again, so only call it when the user asked for that "
+            "specific to-do to be removed; to record that one is done, use "
+            "`update_todo_item` with `is_completed` instead. Get `item_id` "
+            "from `list_uncompleted_todos` or `list_today_todos` and check "
+            "the title you got back really is the to-do meant: an id is not "
+            "something to construct or guess. Requires a write-scoped API key "
+            "that its owner also opted into destructive tools."
+        ),
+        write=True,
+        destructive=True,
     ),
     McpTool(
         name="create_calendar_event",
