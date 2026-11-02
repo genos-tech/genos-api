@@ -486,6 +486,60 @@ class CreateTaskParentTests(ReparentBase):
             (by_milestone.milestone_id, by_milestone.parent_task_id, by_milestone.sprint_id),
         )
 
+    def _assert_answer_is_the_row(self, out):
+        """What the tool answered is what was written: read the row back from
+        the database, not from the instance the tool created."""
+        row = TaskMaster.objects.values("parent_task_id", "milestone_id").get(
+            task_id=out["task_id"]
+        )
+        self.assertEqual(out["parent_task_id"], row["parent_task_id"])
+        self.assertEqual(out["milestone_id"], row["milestone_id"])
+        return row
+
+    def test_the_answer_for_a_task_filed_in_a_milestone_names_its_parent(self):
+        """MIP-924: `milestone_id` hangs the task under the milestone's backing
+        row, and the answer said it was top-level (`parent_task_id: null`)."""
+        out = self._create(milestone_id=self.ms_a.milestone_id)
+
+        row = self._assert_answer_is_the_row(out)
+        self.assertEqual(row["parent_task_id"], self.ms_a.task_id)
+        self.assertEqual(out["parent_task_id"], self.ms_a.task_id)
+        self.assertEqual(out["milestone_id"], self.ms_a.milestone_id)
+
+    def test_the_answer_for_a_task_filed_under_a_parent_matches_the_row(self):
+        parent = self._task("parent", milestone=self.ms_a, parent_task_id=self.ms_a.task_id)
+
+        out = self._create(parent_task_id=parent.task_id)
+
+        row = self._assert_answer_is_the_row(out)
+        self.assertEqual(row["parent_task_id"], parent.task_id)
+        # It joined the milestone its parent lives in, and the answer says so.
+        self.assertEqual(out["milestone_id"], self.ms_a.milestone_id)
+
+    def test_the_answer_for_a_task_filed_under_a_milestone_row_matches_the_row(self):
+        out = self._create(parent_task_id=self.ms_a.task_id)
+
+        row = self._assert_answer_is_the_row(out)
+        self.assertEqual(row["parent_task_id"], self.ms_a.task_id)
+        self.assertEqual(out["milestone_id"], self.ms_a.milestone_id)
+
+    def test_the_answer_for_a_task_filed_under_a_parent_outside_any_milestone(self):
+        parent = self._task("parent")
+
+        out = self._create(parent_task_id=parent.task_id)
+
+        row = self._assert_answer_is_the_row(out)
+        self.assertEqual(row["parent_task_id"], parent.task_id)
+        self.assertIsNone(out["milestone_id"])
+
+    def test_a_top_level_task_answers_no_parent_and_no_milestone(self):
+        out = self._create()
+
+        row = self._assert_answer_is_the_row(out)
+        self.assertIsNone(row["parent_task_id"])
+        self.assertIsNone(out["parent_task_id"])
+        self.assertIsNone(out["milestone_id"])
+
     def test_a_parent_in_another_project_creates_nothing(self):
         elsewhere = TaskMaster.objects.create(
             team=self.team, project=self.other, reporter=self.user, title="x", status="Open"
