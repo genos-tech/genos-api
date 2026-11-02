@@ -32,7 +32,7 @@ from origin.services.task_cache import (
 )
 from origin.services.task_collaborators import may_name_person as _may_name_person
 from origin.services.task_collaborators import people_allowed_on as _people_allowed_on
-from origin.services.task_collaborators import sync_task_collaborators
+from origin.services.task_collaborators import refuse_new_people, sync_task_collaborators
 from origin.services.task_comment_fanout import fan_out_task_comment
 from origin.services.task_milestone_move import (
     bridge_milestone_to_parent as _bridge_milestone_to_parent,
@@ -569,6 +569,21 @@ class TaskMasterView(AuthenticatedAPIView):
             and update_data["project"] is not None
             and str(update_data["project"]) != str(old_project_id)
         )
+
+        # The people this save names have to be people who could be put on the
+        # task (MIP-911), judged against the project it ends up in. Before the
+        # destination is validated below, so a refused person changes nothing;
+        # an unknown destination is that block's 404, not this check's.
+        people_project = task.project
+        if project_changed:
+            people_project = (
+                ProjectMaster.objects.filter(
+                    project_id=update_data["project"], is_deleted=False
+                ).first()
+                or people_project
+            )
+        if message := refuse_new_people(task, people_project, request.data):
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
 
         if project_changed:
             try:
