@@ -4,13 +4,13 @@ import json
 import logging
 import os
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 logger = logging.getLogger(__name__)
-from django.db.models import Case, F, IntegerField, Max, Q, Value, When
+from django.db.models import Case, Count, F, IntegerField, Max, Q, Sum, Value, When
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
@@ -1789,7 +1789,25 @@ class GetProjectTasksView(AuthenticatedAPIView):
     previewed fine beside them, and it stayed empty after the server was
     fixed. Handing over the count lets the client notice it is short and
     ask for everything again.
+
+    `idSum` is the same check made stronger (MIP-945). One stale row plus one
+    missing row is still the right COUNT, so a count alone lets the pair
+    stand for good; the sum of the ids does not balance unless the sets are
+    the same, and costs one number, not a list of ids. It is computed in the
+    same query as the count.
+
+    A delta looks back `DELTA_LOOKBACK` before the client's checkpoint
+    (MIP-945). `ts_updated_at` is `auto_now`, stamped when `.save()` runs,
+    BEFORE its transaction commits. A sync that snapshots `server_time`
+    between the stamp and the commit cannot see the row, and its checkpoint
+    then moves past the stamp: no later `ts_updated_at > since` returns it.
+    Re-sending the last few seconds covers a transaction shorter than the
+    look-back; the client's apply is an upsert or a delete, so a row sent
+    twice costs nothing. Only the query looks back: `server_time`, which the
+    client stores, stays the moment of the snapshot.
     """
+
+    DELTA_LOOKBACK = timedelta(seconds=30)
 
     def get(self, request):
         team_id = request.GET.get("team_id")
@@ -1846,8 +1864,9 @@ class GetProjectTasksView(AuthenticatedAPIView):
             qs = qs.filter(is_deleted=False)
         else:
             # Incremental: include deleted rows so the client can apply
-            # tombstones; bound by ts_updated_at against the checkpoint.
-            qs = qs.filter(ts_updated_at__gt=since)
+            # tombstones; bound by ts_updated_at against the checkpoint,
+            # less the look-back (see the class docstring).
+            qs = qs.filter(ts_updated_at__gt=since - self.DELTA_LOOKBACK)
 
         response_data = []
         for t in qs:
@@ -1900,9 +1919,11 @@ class GetProjectTasksView(AuthenticatedAPIView):
             # Only on the incremental path: a full answer IS the count,
             # and the full path is the cached one — no reason to spend a
             # query there.
-            payload["totalCount"] = TaskMaster.objects.filter(
+            held = TaskMaster.objects.filter(
                 team=team_id, project=project_id, is_init_task=False, is_deleted=False
-            ).count()
+            ).aggregate(count=Count("task_id"), id_sum=Sum("task_id"))
+            payload["totalCount"] = held["count"]
+            payload["idSum"] = held["id_sum"] or 0
         return Response(
             build_delta_response(payload, server_time, force_full_reload=force_full),
             status=status.HTTP_200_OK,
