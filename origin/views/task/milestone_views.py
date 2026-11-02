@@ -23,7 +23,11 @@ from origin.services.milestone_service import (
     sync_milestone_assignees,
 )
 from origin.services.task_cache import invalidate_project_tasks_cache
-from origin.services.task_collaborators import sync_task_collaborators
+from origin.services.task_collaborators import (
+    may_name_person,
+    refuse_new_milestone_people,
+    sync_task_collaborators,
+)
 from origin.services.task_project_move import milestone_subtree_task_ids, relocate_tasks
 from origin.services.thread_link import find_thread_link_conflict
 from origin.signals.task_signals import update_tasks_recorded
@@ -286,6 +290,13 @@ class MilestoneView(AuthenticatedAPIView):
         if res := refuse_unsafe_link_urls(request.data.get("links")):
             return res
 
+        # The reporter, the assignees and the collaborators are grants
+        # (assignees read the milestone), so they have to be people who could
+        # be put on it: a member of the project or of its team (MIP-915).
+        # The reporter defaults to the caller, who is a member by the gate above.
+        if message := refuse_new_milestone_people(None, project, request.data):
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
         sprint_id = request.data.get("sprint_id")
         sprint = None
         if sprint_id is not None:
@@ -405,6 +416,15 @@ class MilestoneView(AuthenticatedAPIView):
                 return _deny_not_found("Project")
             if str(dest_project.project_id) != str(source_project_id):
                 project_move = dest_project
+
+        # Only people being ADDED are checked (the app re-sends the whole lists
+        # on a save, and someone who has since left must not block it), judged
+        # against the project the milestone ends up in (MIP-915). Before the
+        # transaction, so a refused person changes nothing.
+        if message := refuse_new_milestone_people(
+            milestone, project_move or milestone.project, request.data
+        ):
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
 
         # Validate custom field values BEFORE the transaction below —
         # rejecting them mid-transaction (after milestone.save()) would
@@ -678,6 +698,16 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
             user = CustomUser.objects.get(id=user_id)
         except CustomUser.DoesNotExist:
             return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # An assignee reads the milestone, so a new one has to be a member of
+        # the project or of its team. Someone already assigned is left as is.
+        if not MilestoneAssignees.objects.filter(
+            milestone=milestone, user=user
+        ).exists() and not may_name_person(milestone.project, user.id):
+            return Response(
+                {"error": "User is not a member of this project or its team."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         MilestoneAssignees.objects.get_or_create(
             milestone=milestone,
