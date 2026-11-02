@@ -42,9 +42,12 @@ SINGLE_WRITE_TOOLS = frozenset(
         "remove_task_delivery",
         "create_todo_item",
         "update_todo_item",
+        "delete_todo_item",
         "create_calendar_event",
         "update_calendar_event",
         "delete_calendar_event",
+        "manage_milestone",
+        "delete_milestone",
     }
 )
 

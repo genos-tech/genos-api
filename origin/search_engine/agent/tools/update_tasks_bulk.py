@@ -35,6 +35,7 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.task_custom_fields import parse_iso_date
 from origin.search_engine.agent.tools.task_enums import (
     EFFORT_ENUM,
     PRIORITY_ENUM,
@@ -43,6 +44,7 @@ from origin.search_engine.agent.tools.task_enums import (
     VALID_PRIORITIES,
     VALID_STATUSES,
 )
+from origin.search_engine.agent.tools.task_tags import resolve_tags, tag_names
 from origin.services.milestone_service import sync_backing_task
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_milestone_move import milestone_move_error, move_task_to_milestone
@@ -204,6 +206,23 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                         f"(got {raw_due!r}). Use '' to clear."
                     )
 
+        # `start_date` ('' clears) and `tags` (names from the project's
+        # catalogue, [] clears), checked the way `update_task` checks them (MIP-878).
+        if "start_date" in row and row["start_date"] is not None:
+            raw_start = row["start_date"]
+            if raw_start == "":
+                changes["start_date"] = None
+            else:
+                try:
+                    changes["start_date"] = parse_iso_date(raw_start, "`start_date`")
+                except ToolError as exc:
+                    errors.append(f"{where}: {exc}")
+        if "tags" in row and row["tags"] is not None:
+            try:
+                changes["tags"] = resolve_tags(row["tags"], task.project_id)
+            except ToolError as exc:
+                errors.append(f"{where}: {exc}")
+
         # Applied after the field diffs, through the milestone picker's own
         # bridge + cascade (see `move_task_to_milestone`); kept out of the
         # field loop because it writes hierarchy columns, not `field`.
@@ -253,7 +272,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         if not changes:
             errors.append(
                 f"{where}: no changes given for task {tid} — provide at least one of "
-                "priority / effort_level / status / due_date / milestone_id / assignee_id."
+                "priority / effort_level / status / due_date / start_date / tags / "
+                "milestone_id / assignee_id."
             )
         planned.append((task, changes, rationale))
 
@@ -293,6 +313,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     current = getattr(task, field)
                     if field == _ASSIGNEE_KEY:
                         differs = str(current or "") != str(new_value or "")
+                    elif field == "tags":
+                        # Compared as name sets: the UI keeps no tag order, and
+                        # the history signal ignores a reorder too. [] and NULL
+                        # both mean no tags, stored as NULL like `update_task`.
+                        differs = set(tag_names(current)) != set(tag_names(new_value))
+                        new_value = new_value or None
                     else:
                         differs = current != new_value
                     if differs:
@@ -300,7 +326,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                         update_fields.append(field)
                         changed.append(
                             f"{field}(cleared)"
-                            if field in ("due_date", _ASSIGNEE_KEY) and new_value is None
+                            if field in ("due_date", "start_date", "tags", _ASSIGNEE_KEY)
+                            and not new_value
                             else field
                         )
                 milestone = milestone_by_task_id.get(task.task_id)
@@ -372,8 +399,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 UPDATE_TASKS_BULK = Tool(
     name="update_tasks_bulk",
     description=(
-        "Change priority / due_date / status / effort_level / milestone_id / "
-        "assignee_id on MANY tasks in ONE approval — the tool for 'reprioritize', 'organize', "
+        "Change priority / due_date / start_date / status / effort_level / tags / "
+        "milestone_id / assignee_id on MANY tasks in ONE approval — the tool for 'reprioritize', 'organize', "
         "or 'clean up' the tasks in a milestone or project, or for filing a "
         "batch of tasks under a milestone. REQUIRES USER APPROVAL — "
         "the user sees every proposed change WITH your per-task rationale "
@@ -411,6 +438,24 @@ UPDATE_TASKS_BULK = Tool(
                             "description": (
                                 "New ISO 8601 date (YYYY-MM-DD). Omit to leave "
                                 "unchanged. Pass '' to clear."
+                            ),
+                        },
+                        "start_date": {
+                            "type": "STRING",
+                            "description": (
+                                "New planned start, ISO 8601 date (YYYY-MM-DD). Omit "
+                                "to leave unchanged. Pass '' to clear."
+                            ),
+                        },
+                        "tags": {
+                            "type": "ARRAY",
+                            "items": {"type": "STRING"},
+                            "description": (
+                                "The task's full new set of tag names, from "
+                                "list_project_tags (the task's project). Replaces the "
+                                "current tags: include any you are keeping. Pass [] "
+                                "to clear. An unknown name rejects the whole batch. "
+                                "Omit to leave unchanged."
                             ),
                         },
                         "status": {

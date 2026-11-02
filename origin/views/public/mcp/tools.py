@@ -1,19 +1,24 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 60 agent tools. This exposes 39. That is not all of them and
+Genos has 67 agent tools. This exposes 51. That is not all of them and
 not a staging accident — every tool costs the connected agent context on
-*every* request it makes, and much of the 60 answers questions Genos's
+*every* request it makes, and much of the 64 answers questions Genos's
 own assistant gets asked ("who closed the most tasks last sprint"), not
 questions something working in the workspace has.
 
-What the 39 are chosen to be is **every write Genos has actually built,
+What the 51 are chosen to be is **every write Genos has actually built,
 plus the reads needed to drive them**, plus the five GitHub PR reads that
 let an agent see what became of the PR it opened (MIP-689), plus
 `get_task_history` — on a surface with no approval gate and no undo, the
 read that lets an agent check its write stuck and who else touched the
 task (MIP-690) — plus the branch/PR → task lookup and its write, which
 record which PR delivers which task so that join is no longer only a
-comment (MIP-687). The earlier cut was 14, read-heavy and aimed narrowly
+comment (MIP-687) — plus the two sprint reads, `list_sprints` and
+`get_sprint_summary`, which turn a sprint name into the id `list_tasks`
+filters by (MIP-877) — plus reading chats and threads (MIP-885:
+`list_my_chats`, `get_chat_thread`, `list_my_mentions`,
+`list_channel_members`). Chat is read-only here on purpose: no chat write is
+published. The earlier cut was 14, read-heavy and aimed narrowly
 at the code loop: find the task, read it, do the work, report back. It
 was sized by a fear that turns out to be misplaced — the measured cost
 of the full catalog is ~7.5k tokens against ~14k for the in-app
@@ -25,8 +30,8 @@ cost the connected agent the ability to do what the user can do.
 The second half of that sentence is load-bearing and was got wrong once:
 the calendar and todo writes shipped without the reads that return the
 `event_id` and `item_id` they require, leaving three published writes
-callable only by inventing an opaque id — `delete_calendar_event`, the
-one destructive tool here, among them. `test_every_published_write_can_be_driven`
+callable only by inventing an opaque id — `delete_calendar_event`, a
+destructive tool, among them. `test_every_published_write_can_be_driven`
 now fails if a write's required id has no published producer, because
 "published" and "usable" turned out to be different properties.
 
@@ -65,12 +70,18 @@ answer is a hang. Two consequences, both load-bearing:
 * **A destructive tool needs a real undo before it belongs here.**
   `delete_calendar_event` is published because the registry's own
   description calls it out as destructive and a user asks for it by name;
-  it is the only delete in the registry, and the asymmetry is on purpose
-  rather than an oversight to be "fixed" by adding more. (The one
-  removal besides it, `remove_task_delivery` (MIP-834), is not a delete in
+  `delete_milestone` (MIP-879: a soft delete that keeps the milestone's
+  tasks, its own tool so the opt-in covers the delete and nothing else) and
+  `delete_todo_item` (MIP-884: the UI's delete is a hard delete that takes
+  the sub-items and reminders with it) are published on the same grounds,
+  since a user asks an assistant to delete a milestone or "that to-do" by
+  name. Each delete is published deliberately, behind the opt-in below, and
+  not as a side effect of the tool having been built; the asymmetry is on
+  purpose rather than an oversight to be "fixed" by adding more. (The one
+  removal besides them, `remove_task_delivery` (MIP-834), is not a delete in
   this sense: it only takes back a link `add_task_delivery` made, and
   adding it again is the undo, so it needs no opt-in.) Write scope
-  alone doesn't reach it: it is `destructive=True`, which also needs the
+  alone doesn't reach them: they are `destructive=True`, which also needs the
   key's `allow_destructive` opt-in (MIP-723). An instruction planted in a
   task body is read by the agent on the other end, and write scope is
   what a key minted to edit tasks already has — so a delete waits for
@@ -121,6 +132,7 @@ _RENAMES = {
     "search_knowledge_base": "search_workspace",
     "fetch_note": "get_note",
     "fetch_pr": "get_pr",
+    "fetch_chat_thread": "get_chat_thread",
 }
 _RENAME_RE = re.compile(r"\b(" + "|".join(map(re.escape, _RENAMES)) + r")\b")
 
@@ -197,9 +209,13 @@ CATALOG: tuple[McpTool, ...] = (
         name="get_task",
         registry_name="fetch_task",
         description=(
-            "Read one task in full: title, status, priority, assignee, dates, "
-            "tags, where it sits (`parent_task_id`, `milestone_id`, and "
-            "`backs_milestone_id` when it is a milestone's own row), its "
+            "Read one task in full: title, status, priority, assignee, dates "
+            "(`due_date`, `start_date`), tags, where it sits (`parent_task_id`, "
+            "`milestone_id`, and `backs_milestone_id` when it is a milestone's "
+            "own row), its `sprint` (id and name; a task takes its milestone's), "
+            "`collaborators` (user id and username), `links`, its custom fields "
+            "(`custom_fields`, by field name: `{name, type, value}`, or `values` "
+            "for a tag field, with only the fields that have a value), its "
             "description, and its comments. Read the description from "
             "`content_markdown` when it is present — it keeps headings, checklists "
             "and code fences — and fall back to `content_text`, the same body "
@@ -230,11 +246,23 @@ CATALOG: tuple[McpTool, ...] = (
         name="list_tasks",
         registry_name="list_tasks",
         milestone_ref_args=("milestone_id",),
+        task_ref_args=("parent_task_id",),
+        schema_overrides={
+            "parent_task_id": {
+                **_TASK_REF_SCHEMA,
+                "description": (
+                    "Optional: only the direct sub-tasks of this task: its display "
+                    "id (PRJ-123), its Genos URL, or its numeric id."
+                ),
+            }
+        },
         description=(
-            "List tasks with filters — by project, milestone, status, "
-            "priority, assignee, or overdue. Use this to survey a milestone "
-            "before starting, or to find a task whose id you don't have. Each "
-            "row carries its tag names. Rows are newest-updated first, at most "
+            "List tasks with filters — by project, milestone, sprint (from "
+            "`list_sprints`), parent task, status, priority, tag (names from "
+            "`list_project_tags`), assignee or `unassigned`, a due-date range "
+            "(`due_from` / `due_to`, inclusive), or overdue. Use this to survey "
+            "a milestone before starting, or to find a task whose id you don't "
+            "have. Each row carries its tag names. Rows are newest-updated first, at most "
             "50 a page: when `has_more` is true the list is partial, and "
             "`next_cursor` (passed back as `cursor`, with the same filters) "
             "returns the next page."
@@ -255,9 +283,11 @@ CATALOG: tuple[McpTool, ...] = (
         description=(
             "Milestones in a project, with due dates and progress. A "
             "milestone is how a multi-task piece of work is grouped — start "
-            "here when the user names one rather than a single task. A "
-            "milestone is also backed by a task, so `update_task` on that "
-            "backing id is how a milestone's own title and dates change. "
+            "here when the user names one rather than a single task. Each "
+            "milestone carries its `folder_id`, `sprint_id` and `assignee_ids`, "
+            "and `folders` lists the project's milestone folders: the ids "
+            "`manage_milestone` takes. `manage_milestone` is how a milestone's "
+            "own title, dates, assignees, folder and sprint change. "
             "`has_goal` is false when nobody has written what the milestone "
             "is for."
         ),
@@ -295,6 +325,29 @@ CATALOG: tuple[McpTool, ...] = (
             "closed, including its parent's), what is blocked and by what, and "
             "the critical path. `has_goal` is false when nobody has written "
             "what the milestone is for."
+        ),
+    ),
+    McpTool(
+        name="list_sprints",
+        registry_name="list_sprints",
+        description=(
+            "Sprints in the projects the caller is a member of, one row each: "
+            "`sprint_id`, project, name, dates, `status` (upcoming, active, "
+            "completed or archived), and how many of its tasks are closed. "
+            "Active sprints come first. Call it to turn a sprint name into the "
+            "`sprint_id` that `list_tasks` takes. A task has no sprint of its "
+            "own: it is in its milestone's, and `get_task` shows which."
+        ),
+    ),
+    McpTool(
+        name="get_sprint_summary",
+        registry_name="get_sprint_summary",
+        description=(
+            "One sprint in depth: its task counts by status and by priority, "
+            "how many are overdue, the days left until it ends (negative once "
+            "it has), and the milestones in it with their own progress. Use it "
+            "for 'how is this sprint going?'. Take the `sprint_id` from "
+            "`list_sprints`; list the sprint's tasks with `list_tasks`."
         ),
     ),
     McpTool(
@@ -375,6 +428,73 @@ CATALOG: tuple[McpTool, ...] = (
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
     ),
+    # ---- chats: read only (MIP-885). No chat write is published. ----
+    McpTool(
+        name="list_my_chats",
+        registry_name="list_my_chats",
+        description=(
+            "The caller's own chats — direct messages, group chats, multi-person "
+            "DMs and project chats — most recently active first. This is how a "
+            "chat is found by name ('my chat with Alice', 'the design group'): "
+            "pass `query`; a direct message is named after the other person. "
+            "Each row's `chat_type` and `chat_id` are what `get_chat_thread` "
+            "takes. Rows also carry `member_count`, `last_message_at` (null while "
+            "the chat has no message) and, for a project chat, `project_id`. At "
+            "most 50 a page: when `has_more` is true the list is partial, and "
+            "`next_cursor` (passed back as `cursor`, with the same filters) "
+            "returns the next page. These are the chats in the Genos chat list "
+            "for this team, including chats another team shared with it. Only "
+            "the caller's own chats; another person's are not reachable."
+        ),
+    ),
+    McpTool(
+        name="get_chat_thread",
+        registry_name="fetch_chat_thread",
+        description=(
+            "Read the messages in one chat the caller belongs to — a direct "
+            "message, group chat, multi-person DM or project chat — or in one "
+            "thread of it. Find the chat with `list_my_chats`, or take it from a "
+            "`search_workspace` chat hit (`chat_type`, `chat_id`, `thread_id`) or "
+            "from `list_my_mentions`; a Genos chat URL works as `chat_id`. "
+            "Without `thread_id` it returns the newest `limit` messages (50 "
+            "unless asked, at most 100), oldest first: when `has_more` is true "
+            "there are older ones, and `next_cursor`, passed back as `before`, "
+            "returns the page before this one. A message with `reply_count` "
+            "started a thread: pass its `message_id` as `thread_id` to read the "
+            "replies (a thread returns its first message and up to 100 replies, "
+            "and `has_more` says if there were more). Each message has "
+            "`sender_id`, `sender_username` and `ts`. Read-only: nothing here "
+            "posts to a chat. A chat the caller is not in is answered like one "
+            "that does not exist."
+        ),
+    ),
+    McpTool(
+        name="list_my_mentions",
+        registry_name="list_my_mentions",
+        description=(
+            "Recent chat messages that @mention the caller, newest first, each "
+            "with the sender, the text and where it was said. Direct @-mentions "
+            "only: a group mention (@engineering) and mentions in task or note "
+            "comments are not covered. `since` (an ISO date or datetime) keeps "
+            "only newer ones. To read around a mention, pass its "
+            "`chat_type_label` as `chat_type` and its `chat_id` to "
+            "`get_chat_thread`, with `thread_id` when it is not null. Chats of "
+            "this team the caller belongs to; another person's mentions are not "
+            "reachable."
+        ),
+    ),
+    McpTool(
+        name="list_channel_members",
+        registry_name="list_channel_members",
+        description=(
+            "Who is in ONE chat: each member's `user_id`, `username` and `role`, "
+            "by `channel_id` (the `chat_id` from `list_my_chats`). The caller "
+            "must be in the chat. Only chats that belong to this team: a chat "
+            "another team shared with it is refused here, though "
+            "`get_chat_thread` can read it. For the whole team use "
+            "`get_team_members`; for a project's roster, `list_project_members`."
+        ),
+    ),
     McpTool(
         name="get_current_user",
         registry_name="get_current_user",
@@ -405,11 +525,20 @@ CATALOG: tuple[McpTool, ...] = (
         name="list_project_tags",
         registry_name="list_project_tags",
         description=(
-            "The tags defined on ONE project — the only tags its tasks can "
-            "carry. Read it before setting `tags` on `create_task`, "
-            "`create_task_plan` or `update_task`, and pick only tags that "
-            "genuinely describe the task; if none fits, leave it untagged. "
-            "Tags can't be created through this connection."
+            "What a task in ONE project can carry. `tags` are the only tags "
+            "its tasks can have: read them before setting `tags` on "
+            "`create_task`, `create_task_plan` or `update_task`, and pick only "
+            "tags that genuinely describe the task; if none fits, leave it "
+            "untagged. Tags can't be created through this connection. "
+            "`custom_fields` are the project's own fields: each one's "
+            "`field_name`, its `type` (`tag`, `text`, `date` or `member`) and, "
+            "for a tag field, the `options` a value is chosen from; `get_task` "
+            "shows a task's values for them. `saved_filters` are the named "
+            "filters the project's members use in its task table, each listing "
+            "what it restricts (status, priority, effort_level, tags, "
+            "milestone_ids, sprint_ids, assignee_ids; 'none' and 'unassigned' "
+            "mean tasks with none): they show how the team slices its work. "
+            "You must be a member of the project."
         ),
     ),
     McpTool(
@@ -441,10 +570,12 @@ CATALOG: tuple[McpTool, ...] = (
         registry_name="list_uncompleted_todos",
         description=(
             "The caller's still-open to-dos, newest first, with the `item_id` "
-            "that `update_todo_item` takes. This is how a to-do is found: "
+            "that `update_todo_item` and `delete_todo_item` take. This is how "
+            "a to-do is found: "
             "`search_workspace` can surface one but does not return its id. "
             "Scans back `date_range_days` (default 14), so widen it for an "
-            "older item."
+            "older item. A to-do with a pending reminder carries "
+            "`reminder_at`, in the caller's time zone with its offset."
         ),
     ),
     McpTool(
@@ -454,7 +585,8 @@ CATALOG: tuple[McpTool, ...] = (
             "The caller's to-dos for today, with their `item_id`s. Narrower "
             "than `list_uncompleted_todos` and it includes items already "
             "ticked off, so prefer it for 'what is left today' and that one "
-            "for anything older."
+            "for anything older. A to-do with a pending reminder carries "
+            "`reminder_at`, in the caller's time zone with its offset."
         ),
     ),
     McpTool(
@@ -568,8 +700,20 @@ CATALOG: tuple[McpTool, ...] = (
             "sub-tasks to another project, so their display ids change. Send "
             "only one of `milestone_id`, `parent_task_id` and `project_id` per "
             "call. `tags` replaces the task's "
-            "tags with names from `list_project_tags` ([] clears). Requires a "
-            "write-scoped API key."
+            "tags with names from `list_project_tags` ([] clears). "
+            "`start_date` (YYYY-MM-DD, '' clears) sets the planned start; "
+            "nothing checks it against the due date. `collaborators` replaces "
+            "the task's collaborators with user ids ([] clears; "
+            "`get_team_members` / `list_project_members`), so send the ones you "
+            "are keeping too: `get_task` lists them. Anyone new must be on the "
+            "team or the project, or the call is refused. `custom_fields` sets "
+            "the project's own fields by name, as a list of `{name, value}` "
+            "(`{name, values}` for a tag field): `list_project_tags` gives each "
+            "field's type and options, and only the fields you name change. A "
+            "tag field takes option labels, a date field YYYY-MM-DD, a member "
+            "field a user id, a text field text; `value: ''` clears a field. "
+            "Send `collaborators` and `custom_fields` without `project_id`. "
+            "Requires a write-scoped API key."
         ),
         write=True,
         task_ref_args=("task_id", "parent_task_id"),
@@ -684,7 +828,12 @@ CATALOG: tuple[McpTool, ...] = (
             "assigns it in the same call, on the same terms as `assign_task` "
             "— `get_current_user` for yourself; omit it to leave the task "
             "unassigned. `tags` takes names from `list_project_tags` — only "
-            "tags that fit the task; leave it out if none does. Requires a "
+            "tags that fit the task; leave it out if none does. `start_date` "
+            "(YYYY-MM-DD), `collaborators` (user ids from `get_team_members` "
+            "or `list_project_members`) and `custom_fields` (the project's own "
+            "fields by name, as `{name, value}` or `{name, values}` for a tag "
+            "field; `list_project_tags` lists them with their types and "
+            "options) are set at creation too. Requires a "
             "write-scoped API key."
         ),
         write=True,
@@ -719,11 +868,14 @@ CATALOG: tuple[McpTool, ...] = (
         registry_name="update_tasks_bulk",
         nested_milestone_ref_args=(("updates", "milestone_id"),),
         description=(
-            "Change priority, due date, status, effort, assignee or milestone on "
+            "Change priority, due date, start date, status, effort, tags, assignee "
+            "or milestone on "
             "MANY tasks in one call — for reprioritizing or tidying a milestone, "
             "filing a batch of tasks under one (`milestone_id`, '' to take a "
             "task out), or assigning a batch (`assignee_id`, '' to unassign; "
-            "not for a milestone's own backing task). Read the "
+            "not for a milestone's own backing task). `start_date` is "
+            "YYYY-MM-DD ('' clears); `tags` replaces a task's tags with names "
+            "from `list_project_tags` ([] clears). Read the "
             "current state first (`list_tasks`, and `list_task_dependencies` "
             "so blockers land before what they block), since each entry needs "
             "a one-sentence `rationale` recorded with the change. "
@@ -789,7 +941,7 @@ CATALOG: tuple[McpTool, ...] = (
             "Team Notes folder you can add to; needs `folder_id`), 'task' "
             "(shared with a project, needs `project_id`, optionally `task_id` "
             "to attach it to one task) or 'chat' (on a chat you're in, needs "
-            "`chat_id` — its id or Genos URL — optionally `thread_id`). Folder "
+            "`chat_id` — its id (from `list_my_chats`) or Genos URL — optionally `thread_id`). Folder "
             "ids come from `list_note_folders`. `content_text` is markdown — "
             "headings, lists and code fences are preserved. When the work "
             "wants TASKS rather than a document, use `create_task_plan`. "
@@ -834,7 +986,15 @@ CATALOG: tuple[McpTool, ...] = (
             "Add a personal to-do for the caller — a private checklist item, "
             "not project work anyone else can see. Use a task for work that "
             "belongs to a project. Only `title` is required; `target_date` "
-            "defaults to today. Requires a write-scoped API key."
+            "defaults to today. `remind_at` or `remind_in_minutes` also sets a "
+            "reminder, which arrives in the caller's Genos Inbox with a web "
+            "push: 'remind me Friday to follow up with Sam' is one call with "
+            "`target_date` and `remind_at` both Friday. `remind_at` is a "
+            "date-time in the caller's own time zone (2026-11-06T09:00; a bare "
+            "date means 09:00) or an ISO time that carries its own offset; "
+            "`remind_in_minutes` counts from now. A time in the past is "
+            "refused, so is one more than a year out. Requires a write-scoped "
+            "API key."
         ),
         write=True,
     ),
@@ -843,12 +1003,37 @@ CATALOG: tuple[McpTool, ...] = (
         registry_name="update_todo_item",
         description=(
             "Change one of the caller's to-dos: tick it off with "
-            "`is_completed`, edit the title, or replace its notes. Get "
-            "`item_id` from `list_uncompleted_todos` or `list_today_todos`. "
+            "`is_completed`, edit the title, replace its notes, or move it to "
+            "another day with `target_date` (YYYY-MM-DD; its sub-items go with "
+            "it, and a sub-item can't be moved on its own). `remind_at` or "
+            "`remind_in_minutes` sets a reminder on the same terms as "
+            "`create_todo_item` (a to-do has one reminder, so a new one "
+            "replaces the old) and `cancel_reminder: true` removes it. "
+            "Ticking a to-do off cancels its reminder, and a completed to-do "
+            "can't be given one. Get `item_id` from `list_uncompleted_todos` "
+            "or `list_today_todos`, which also show a pending `reminder_at`. "
             '`notes_text: ""` clears the body; `clear_category: true` removes '
             "the category. Requires a write-scoped API key."
         ),
         write=True,
+    ),
+    McpTool(
+        name="delete_todo_item",
+        registry_name="delete_todo_item",
+        description=(
+            "Permanently delete one of the caller's to-dos, with its sub-items "
+            "and their reminders. **This is not reversible from here** — "
+            "there is no undo on this surface and the to-do would have to be "
+            "typed in again, so only call it when the user asked for that "
+            "specific to-do to be removed; to record that one is done, use "
+            "`update_todo_item` with `is_completed` instead. Get `item_id` "
+            "from `list_uncompleted_todos` or `list_today_todos` and check "
+            "the title you got back really is the to-do meant: an id is not "
+            "something to construct or guess. Requires a write-scoped API key "
+            "that its owner also opted into destructive tools."
+        ),
+        write=True,
+        destructive=True,
     ),
     McpTool(
         name="create_calendar_event",
@@ -887,6 +1072,69 @@ CATALOG: tuple[McpTool, ...] = (
             "construct or guess. Deleting an already-deleted event succeeds. "
             "Requires a write-scoped API key that its owner also opted into "
             "destructive tools."
+        ),
+        write=True,
+        destructive=True,
+    ),
+    McpTool(
+        name="manage_milestone",
+        registry_name="manage_milestone",
+        milestone_ref_args=("milestone_id",),
+        description=(
+            "Create or change a milestone, or manage a project's milestone "
+            "folders; `action` says which. 'create' makes a milestone with no "
+            "tasks yet (`project_id`, `title`; for a milestone together with its "
+            "tasks use `create_task_plan`). 'update' changes the milestone in "
+            "`milestone_id`: send only what changes: `title`, "
+            "`description_markdown` (replaces the whole description), "
+            "`start_date` / `due_date` (YYYY-MM-DD, '' clears), `priority`, "
+            "`effort_level`, `status`, `tags` (names from `list_project_tags`; "
+            "replaces, [] clears), `assignee_ids` (the FULL set of assignees; "
+            "replaces, [] clears; each must be on the team or the project), "
+            "`milestone_folder_id` and `sprint_id` ('' takes it out of its "
+            "folder / sprint). Read `list_milestones` first: it returns the "
+            "milestone ids, each milestone's current folder, sprint and "
+            "assignees, and the project's `folders`. 'create_folder' "
+            "(`project_id`, `folder_name`), 'rename_folder' and 'delete_folder' "
+            "(`milestone_folder_id`) manage the folders; deleting a folder "
+            "deletes no milestone, they become unfiled, and are not put back if "
+            "the folder is recreated. A milestone can't be moved to another "
+            "project, and its status can't be 'Deleted': use `delete_milestone`. "
+            "Everything is checked before anything is written, so a refused call "
+            "changes nothing. Requires a write-scoped API key."
+        ),
+        write=True,
+        # The registry's text sends the caller to `list_sprints`, which this
+        # surface does not publish; each milestone's current sprint is in
+        # `list_milestones`.
+        schema_overrides={
+            "sprint_id": {
+                "type": "string",
+                "description": (
+                    "A sprint of the milestone's project to put it in; its tasks "
+                    "follow the milestone. `list_milestones` shows each "
+                    "milestone's current `sprint_id`. '' takes the milestone out "
+                    "of its sprint."
+                ),
+            },
+        },
+    ),
+    McpTool(
+        name="delete_milestone",
+        registry_name="delete_milestone",
+        milestone_ref_args=("milestone_id",),
+        description=(
+            "Delete a milestone. **This is not reversible from here** — there is "
+            "no undo on this surface and the milestone would have to be recreated "
+            "by hand. Its tasks are kept: they stay in the project, no longer in "
+            "the milestone. Only call it when the user has asked for that "
+            "specific milestone to be deleted; get `milestone_id` from "
+            "`list_milestones` and check the title and task count you got back "
+            "really are the milestone meant. To finish a milestone rather than "
+            "remove it, set its status to 'Closed' with `manage_milestone`. "
+            "Deleting an already-deleted milestone succeeds when you pass its "
+            "numeric `milestone_id`. Requires a write-scoped API key that its "
+            "owner also opted into destructive tools."
         ),
         write=True,
         destructive=True,
@@ -1113,6 +1361,10 @@ _ARGUMENT_ALIASES = {
     "description": "content_text",
     "body": "content_text",
     "content": "content_text",
+    # `list_milestones` returns a folder as `folder_id`; the write that files a
+    # milestone in it takes `milestone_folder_id`, so it can't be mistaken for a
+    # note folder (MIP-879). Ignored by any tool that does not accept it.
+    "folder_id": "milestone_folder_id",
 }
 
 

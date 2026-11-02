@@ -2,7 +2,12 @@
 
 Patch fields on an existing todo item the user owns. Common use:
 toggle `is_completed`, edit `title`, change `category`, set / clear
-`notes_text`.
+`notes_text`, move it to another day (`target_date`), and set or cancel
+its reminder (`remind_at`, `remind_in_minutes`, `cancel_reminder`).
+
+The day move, completion and reminder rules are the UI's own
+(`services/todo_items`, `services/todo_reminders`): sub-items follow their
+parent to the new day, and ticking a to-do off retires its pending reminder.
 
 ACL: the requesting user must own the group the item belongs to.
 """
@@ -12,11 +17,20 @@ from __future__ import annotations
 from typing import Any
 
 from django.db import transaction
-from django.utils import timezone
 
-from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
+from origin.models.chat.todo_models import ToDoCategory
+from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.body_limits import check_body_size
+from origin.search_engine.agent.tools.todo_args import (
+    REMIND_AT_SCHEMA,
+    REMIND_IN_MINUTES_SCHEMA,
+    load_owned_item,
+    local_iso,
+    parse_iso_date,
+    reminder_from_args,
+)
+from origin.services import todo_items, todo_reminders
+from origin.services.user_time import zone_for_user_id
 
 
 def _wrap_notes(text: str) -> list[dict[str, Any]] | None:
@@ -39,28 +53,47 @@ def _wrap_notes(text: str) -> list[dict[str, Any]] | None:
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     check_body_size(args.get("notes_text"), "notes_text")
-    raw_id = args.get("item_id")
-    try:
-        item_id = int(raw_id)
-    except (TypeError, ValueError):
-        raise ToolError(f"`item_id` must be an integer (got {raw_id!r}).")
+    item = load_owned_item(args.get("item_id"), ctx)
+    zone = zone_for_user_id(ctx.user_id)
 
-    try:
-        item = ToDoItem.objects.select_related("group").get(item_id=item_id)
-    except ToDoItem.DoesNotExist:
-        raise ToolError(f"Todo item {item_id} not found.")
+    # Everything that can be refused is checked here, before the first write:
+    # a refused call changes nothing, even when it also carried valid edits.
+    new_title = None
+    if "title" in args and args["title"] is not None:
+        new_title = (args["title"] or "").strip()
+        if not new_title:
+            raise ToolError("`title`, if provided, must not be blank.")
 
-    if str(item.group.user_id) != ctx.user_id:
-        raise ToolForbidden("Not authorized to update this todo item.")
-    if str(item.group.team_id or "") != ctx.team_id:
-        raise ToolForbidden("Todo item belongs to a different team.")
+    move_to = None
+    if args.get("target_date") not in (None, ""):
+        move_to = parse_iso_date(args["target_date"], "target_date")
+        try:
+            todo_items.check_can_move(item)
+        except todo_items.TodoItemError as exc:
+            raise ToolError(str(exc)) from None
+
+    cancel_reminder = bool(args.get("cancel_reminder"))
+    remind_at = reminder_from_args(args, zone)
+    if cancel_reminder and remind_at is not None:
+        raise ToolError(
+            "`cancel_reminder` can't be combined with `remind_at` or `remind_in_minutes`: "
+            "to change the reminder, just set the new one."
+        )
+    if remind_at is not None:
+        # Judged on the state the call leaves behind, the one the REST
+        # endpoint sees on a separate request: reopening and re-reminding in
+        # one call is fine; ticking off and reminding is a contradiction.
+        completing = args.get("is_completed")
+        if completing:
+            raise ToolError("A to-do this call marks complete takes no reminder.")
+        if completing is None and item.is_completed:
+            raise ToolError(
+                f"{todo_reminders.ALREADY_COMPLETED} Reopen it (`is_completed: false`) "
+                "to give it a reminder."
+            )
 
     with transaction.atomic():
-        # Title
-        if "title" in args and args["title"] is not None:
-            new_title = (args["title"] or "").strip()
-            if not new_title:
-                raise ToolError("`title`, if provided, must not be blank.")
+        if new_title is not None:
             item.title = new_title
 
         # Notes — replace with wrapped paragraphs. Pass an empty string
@@ -68,14 +101,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         if "notes_text" in args:
             item.notes = _wrap_notes((args.get("notes_text") or "").strip())
 
-        # Completion
+        # Completion — ticking it off retires the pending reminder.
         if "is_completed" in args and args["is_completed"] is not None:
-            new_completed = bool(args["is_completed"])
-            if new_completed and not item.is_completed:
-                item.ts_completed_at = timezone.now()
-            elif not new_completed:
-                item.ts_completed_at = None
-            item.is_completed = new_completed
+            todo_items.apply_completion(item, bool(args["is_completed"]))
 
         # Category (free-form). `clear_category=true` removes it
         # explicitly; passing a non-empty `category` overrides any clear.
@@ -90,22 +118,38 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             )
             item.category = category
 
-        item.save()
+        # Saves the row, re-homing it into the target day (children follow)
+        # and recomputing the completion of every day it touched.
+        saved = todo_items.save_item(item, move_to=move_to)
 
-        # Recompute the group's cached completion.
-        has_open = ToDoItem.objects.filter(group=item.group, is_completed=False).exists()
-        ToDoGroup.objects.filter(group_id=item.group_id).update(is_completed=not has_open)
+        if cancel_reminder:
+            todo_reminders.cancel_pending(item=item)
+        if remind_at is not None:
+            todo_reminders.set_reminder(item=item, remind_at=remind_at)
+    saved.purge_stale_chunks()
 
     item.refresh_from_db()
-    return {
+    reminder = todo_reminders.pending_by_item([item.item_id]).get(item.item_id)
+    out: dict[str, Any] = {
         "item_id": item.item_id,
         "group_id": item.group_id,
         "local_date": item.group.local_date.isoformat(),
         "title": item.title,
         "is_completed": item.is_completed,
         "category": item.category.name if item.category_id else None,
-        "__summary__": f"Updated todo {item.item_id}: {item.title}",
+        "reminder_at": local_iso(reminder, zone),
     }
+    notes = []
+    if saved.moved:
+        notes.append(f"moved to {out['local_date']}")
+    if remind_at is not None:
+        out["reminder_time_zone"] = zone.key
+        notes.append(f"reminder set for {out['reminder_at']}")
+    elif cancel_reminder:
+        notes.append("reminder cancelled")
+    suffix = f" ({', '.join(notes)})" if notes else ""
+    out["__summary__"] = f"Updated todo {item.item_id}: {item.title}{suffix}"
+    return out
 
 
 UPDATE_TODO_ITEM = Tool(
@@ -113,10 +157,13 @@ UPDATE_TODO_ITEM = Tool(
     description=(
         "Update fields on one of the user's existing todo items. REQUIRES "
         "USER APPROVAL. Common uses: mark complete/incomplete, edit title, "
-        "change category, replace or clear the notes body. Required: "
-        "item_id. Optional patch fields: title, notes_text (empty string "
+        "change category, replace or clear the notes body, move it to "
+        "another day, set or cancel its reminder. Required: item_id. "
+        "Optional patch fields: title, notes_text (empty string "
         "clears it), is_completed, category (free-form), clear_category "
-        "(set true to remove the existing category)."
+        "(set true to remove the existing category), target_date (move to "
+        "that day), remind_at / remind_in_minutes (remind the user; one at "
+        "most), cancel_reminder. Completing a to-do cancels its reminder."
     ),
     parameters_schema={
         "type": "OBJECT",
@@ -152,6 +199,23 @@ UPDATE_TODO_ITEM = Tool(
                 "description": (
                     "Set to true to remove the existing category. Ignored "
                     "if `category` is also provided."
+                ),
+            },
+            "target_date": {
+                "type": "STRING",
+                "description": (
+                    "Move the to-do to this day (ISO YYYY-MM-DD), taking its "
+                    "sub-items along. A sub-item can't be moved on its own: "
+                    "name its parent."
+                ),
+            },
+            "remind_at": REMIND_AT_SCHEMA,
+            "remind_in_minutes": REMIND_IN_MINUTES_SCHEMA,
+            "cancel_reminder": {
+                "type": "BOOLEAN",
+                "description": (
+                    "Set to true to cancel the to-do's pending reminder. Not "
+                    "with `remind_at` / `remind_in_minutes`."
                 ),
             },
         },

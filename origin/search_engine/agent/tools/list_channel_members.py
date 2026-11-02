@@ -8,10 +8,14 @@ parent channel's roster (this tool) or the distinct senders inside it
 (readable via fetch_chat_thread).
 
 ACL contract:
-  * Tenant guard: channel.team_id must equal ctx.team_id.
+  * Tenant guard: channel.team_id must equal ctx.team_id. Stricter than
+    the chat list (`list_my_chats`, `fetch_chat_thread`): a chat another team
+    shared with this one is refused here.
   * Membership guard: the requester must hold a non-deleted
     ChannelMember row on the channel — non-members may not enumerate a
     private channel's roster.
+  * A missing channel, another team's and a non-member's get the same
+    message.
   * Soft-deleted memberships and system/deleted users are excluded.
 """
 
@@ -38,22 +42,23 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     except (TypeError, ValueError):
         raise ToolError(f"`channel_id` must be a UUID (got {raw_channel_id!r}).")
 
+    # One answer for a channel that is missing, in another team, or not the
+    # caller's, so the reply says nothing about which. The last two are still
+    # refusals (`ToolForbidden`), which MCP counts toward its burst alert.
+    unreadable = f"Channel {channel_id} not found, or you are not a member of it."
     try:
         channel = Channel.objects.get(id=channel_id, is_deleted=False)
     except Channel.DoesNotExist:
-        raise ToolError(f"Channel {channel_id} not found.")
+        raise ToolError(unreadable)
 
     if str(getattr(channel, "team_id", "") or "") != ctx.team_id:
-        raise ToolForbidden("Not authorized: channel belongs to a different team.")
+        raise ToolForbidden(unreadable)
 
-    memberships = ChannelMember.objects.filter(
-        channel=channel, is_deleted=False
-    ).select_related("user")
+    memberships = ChannelMember.objects.filter(channel=channel, is_deleted=False).select_related(
+        "user"
+    )
     if not any(str(m.user_id) == ctx.user_id for m in memberships):
-        raise ToolForbidden(
-            f"Not authorized to access channel {channel_id}. "
-            "You are not a member of that channel."
-        )
+        raise ToolForbidden(unreadable)
 
     members = []
     for m in memberships:

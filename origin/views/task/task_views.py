@@ -30,6 +30,8 @@ from origin.services.task_cache import (
     invalidate_project_tasks_cache,
     set_cached_project_tasks,
 )
+from origin.services.task_collaborators import may_name_person as _may_name_person
+from origin.services.task_collaborators import people_allowed_on as _people_allowed_on
 from origin.services.task_collaborators import sync_task_collaborators
 from origin.services.task_comment_fanout import fan_out_task_comment
 from origin.services.task_milestone_move import (
@@ -106,29 +108,6 @@ def _no_task():
     `BigAutoField`) tells nobody which tasks exist.
     """
     return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
-
-
-def _may_name_person(project, user_id) -> bool:
-    """May this person be put on a task in `project`?
-
-    Its members, plus its team's members: the same rule the agent's
-    `create_task` applies to an assignee, so a teammate can be assigned
-    before they are added to the project. Not anyone else, because the
-    assignee and the reporter are both grants (`can_access_task` lets them
-    open the task) and both surface the task in that person's lists.
-    """
-    return is_project_member(project.project_id, user_id) or is_team_member(
-        project.team_id, user_id
-    )
-
-
-def _people_allowed_on(project, raw_ids):
-    """`raw_ids` with everyone who may not be on a task in `project` left
-    out. `None` stays `None`, which `sync_task_collaborators` reads as
-    "leave the set alone"."""
-    if raw_ids is None:
-        return None
-    return [raw for raw in raw_ids if raw and _may_name_person(project, raw)]
 
 
 def _refuse_unreachable_task_links(request, project):

@@ -21,7 +21,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Count, OuterRef, Q, Subquery
+from django.db.models import Count, OuterRef, Subquery
 from django.db.models.functions import Coalesce
 from django.http import Http404
 from rest_framework import status
@@ -42,11 +42,11 @@ from origin.serializers.chat.unified_serializers import (
     ChannelSerializer,
     MessageSerializer,
 )
+from origin.services.channel_scope import team_scope_q, user_channels_qs
 from origin.services.external_grants import (
     ExternalGrantError,
     active_grants_for_object,
     add_external_participants,
-    external_objects_for_member,
     grant_admitting,
     offer_grant,
     remove_external_participants,
@@ -179,18 +179,9 @@ def _verify_team_member(user, team_id):
         raise Http404("Team not found.")
 
 
-def _user_channels_qs(user):
-    """Active channels the given user is a member of, with related fields
-    needed for serialization preloaded."""
-    return (
-        Channel.objects.filter(
-            members__user=user,
-            members__is_deleted=False,
-            is_deleted=False,
-        )
-        .select_related("project", "team", "owner")
-        .distinct()
-    )
+# The scoping now lives in `origin/services/channel_scope.py`, shared with the
+# agent's chat tools; the old name stays for the callers in this module.
+_user_channels_qs = user_channels_qs
 
 
 def _get_channel_for_user(channel_id, user):
@@ -355,32 +346,10 @@ class ChannelListView(AuthenticatedAPIView):
                 return Response({"channels": []})
             # Narrowing only — `_user_channels_qs` has already restricted
             # this to the caller's own memberships, so naming a team you
-            # are not in yields nothing rather than anything new.
-            #
-            # Plus the chats another team shared WITH this one that this
-            # person was admitted to. They are the caller's own memberships
-            # too, and narrowing by the owning team's id was hiding them
-            # from the only sidebar the caller looks at: an external chat
-            # showed up solely while viewing the host team, which is not
-            # where anyone goes to read their messages.
-            shared = external_objects_for_member(ExternalGrant.ObjectType.CHANNEL, team_id, user.id)
-            scope = Q(team_id=team_id)
-            if shared:
-                scope |= Q(id__in=list(shared.keys()))
-            # And the PM chat of a project shared with this team. A project
-            # grant admits its guests to the project's own channel (via the
-            # `ProjectMembers` -> `ChannelMember` mirror), but nothing named
-            # that channel here, so the row stayed out of the guest's
-            # sidebar. It was not merely a missing conversation: the PM chat
-            # is where a project's avatar lives and the only route into the
-            # project profile, so a shared project rendered with no icon and
-            # no way to open its settings.
-            shared_projects = external_objects_for_member(
-                ExternalGrant.ObjectType.PROJECT, team_id, user.id
-            )
-            if shared_projects:
-                scope |= Q(kind=ChannelKind.PM, project_id__in=list(shared_projects.keys()))
-            qs = qs.filter(scope)
+            # are not in yields nothing rather than anything new. The scope
+            # (the team's own chats, chats shared with it, a shared
+            # project's PM chat) is `channel_scope.team_scope_q`.
+            qs = qs.filter(team_scope_q(team_id, user.id))
 
         # Paging is opt-in: with neither `cursor` nor `limit` this is every
         # channel, as it has always been (MIP-808). Applied to the queryset

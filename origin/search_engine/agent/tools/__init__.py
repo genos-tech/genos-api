@@ -57,6 +57,8 @@ from origin.search_engine.agent.tools.create_task import CREATE_TASK
 from origin.search_engine.agent.tools.create_task_plan import CREATE_TASK_PLAN
 from origin.search_engine.agent.tools.create_todo_item import CREATE_TODO_ITEM
 from origin.search_engine.agent.tools.delete_calendar_event import DELETE_CALENDAR_EVENT
+from origin.search_engine.agent.tools.delete_milestone import DELETE_MILESTONE
+from origin.search_engine.agent.tools.delete_todo_item import DELETE_TODO_ITEM
 from origin.search_engine.agent.tools.fetch_chat_thread import FETCH_CHAT_THREAD
 from origin.search_engine.agent.tools.fetch_note import FETCH_NOTE
 from origin.search_engine.agent.tools.fetch_pr import FETCH_PR
@@ -93,6 +95,7 @@ from origin.search_engine.agent.tools.list_calendar_events import LIST_CALENDAR_
 from origin.search_engine.agent.tools.list_calendars import LIST_CALENDARS
 from origin.search_engine.agent.tools.list_channel_members import LIST_CHANNEL_MEMBERS
 from origin.search_engine.agent.tools.list_milestones import LIST_MILESTONES
+from origin.search_engine.agent.tools.list_my_chats import LIST_MY_CHATS
 from origin.search_engine.agent.tools.list_my_inbox import LIST_MY_INBOX
 from origin.search_engine.agent.tools.list_my_mentions import LIST_MY_MENTIONS
 from origin.search_engine.agent.tools.list_my_milestones import LIST_MY_MILESTONES
@@ -109,6 +112,7 @@ from origin.search_engine.agent.tools.list_task_dependencies import LIST_TASK_DE
 from origin.search_engine.agent.tools.list_tasks import LIST_TASKS
 from origin.search_engine.agent.tools.list_today_todos import LIST_TODAY_TODOS
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
+from origin.search_engine.agent.tools.manage_milestone import MANAGE_MILESTONE
 from origin.search_engine.agent.tools.remove_task_delivery import REMOVE_TASK_DELIVERY
 from origin.search_engine.agent.tools.search_kb import SEARCH_KNOWLEDGE_BASE
 from origin.search_engine.agent.tools.search_past_conversations import (
@@ -198,6 +202,7 @@ for _t in (
     LIST_MY_MILESTONES,
     LIST_MY_INBOX,
     LIST_MY_MENTIONS,
+    LIST_MY_CHATS,
     GET_MY_BLOCKERS,
     GET_MY_THROUGHPUT,
     # --- Todo tools ---
@@ -206,11 +211,15 @@ for _t in (
     # --- Todo write tools (requires_approval) ---
     CREATE_TODO_ITEM,
     UPDATE_TODO_ITEM,
+    DELETE_TODO_ITEM,
     # --- Write tools (MIP-687) — record a task's branch / PR ---
     ADD_TASK_DELIVERY,
     REMOVE_TASK_DELIVERY,
     # --- Write tools (MIP-730) — link / unlink existing tasks ---
     UPDATE_TASK_DEPENDENCIES,
+    # --- Write tools (MIP-879) — milestones end to end ---
+    MANAGE_MILESTONE,
+    DELETE_MILESTONE,
 ):
     # Every tool, read and write, takes its arguments with any
     # <workspace_content> fence the model copied from a result taken off
@@ -234,6 +243,8 @@ __all__ = [
     "CREATE_TASK_PLAN",
     "CREATE_TODO_ITEM",
     "DELETE_CALENDAR_EVENT",
+    "DELETE_MILESTONE",
+    "DELETE_TODO_ITEM",
     "FETCH_CHAT_THREAD",
     "FETCH_NOTE",
     "LIST_NOTE_FOLDERS",
@@ -262,6 +273,7 @@ __all__ = [
     "LIST_CALENDAR_EVENTS",
     "LIST_CALENDARS",
     "LIST_MILESTONES",
+    "LIST_MY_CHATS",
     "LIST_MY_INBOX",
     "LIST_MY_MENTIONS",
     "LIST_MY_MILESTONES",
@@ -275,6 +287,7 @@ __all__ = [
     "LIST_TASKS",
     "LIST_TODAY_TODOS",
     "LIST_UNCOMPLETED_TODOS",
+    "MANAGE_MILESTONE",
     "REGISTRY",
     "SEARCH_KNOWLEDGE_BASE",
     "Tool",

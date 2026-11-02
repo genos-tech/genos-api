@@ -90,6 +90,8 @@ TOOL_CATEGORY: dict[str, str] = {
     "get_milestone_assignee_counts": "milestones",
     "list_sprints": "milestones",
     "get_sprint_summary": "milestones",
+    "manage_milestone": "milestones",
+    "delete_milestone": "milestones",
     # --- team ---
     "get_team_members": "team",
     "list_project_members": "team",
@@ -108,6 +110,7 @@ TOOL_CATEGORY: dict[str, str] = {
     "list_my_milestones": "me",
     "list_my_inbox": "me",
     "list_my_mentions": "me",
+    "list_my_chats": "me",
     # --- pr ---
     "fetch_pr": "pr",
     "list_pr_comments": "pr",
@@ -125,6 +128,7 @@ TOOL_CATEGORY: dict[str, str] = {
     "list_uncompleted_todos": "todo",
     "create_todo_item": "todo",
     "update_todo_item": "todo",
+    "delete_todo_item": "todo",
     # --- notes ---
     "list_note_folders": "notes",
     "create_note": "notes",
