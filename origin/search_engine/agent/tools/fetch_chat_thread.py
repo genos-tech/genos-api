@@ -98,9 +98,18 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError("chat_id must be a non-empty UUID string (the Channel id) or a chat URL.")
     if len(str(raw_chat)) > _MAX_REF_CHARS:
         raise ToolError("chat_id is too long: pass the chat's id (a UUID) or its Genos URL.")
-    chat_id, thread_id = parse_chat_ref(raw_chat, args.get("thread_id"))
+    try:
+        chat_id, url_thread = parse_chat_ref(raw_chat)
+    except ToolError:
+        # Something that is not a chat id reads like a chat that is not there
+        # (it always has), with a hint for the next try.
+        raise ToolError(
+            f"Chat {str(raw_chat).strip()[:80]!r} not found, or you are not a member of it. "
+            "`chat_id` is the chat's id (a UUID) or its Genos URL."
+        )
     chat_id = str(uuid.UUID(chat_id))
-    thread_id = str(uuid.UUID(thread_id)) if thread_id else None
+    raw_thread = str(args.get("thread_id") or "").strip() or url_thread
+    thread_id = _as_uuid(raw_thread, "thread_id") if raw_thread else None
 
     chat_type_label = (args.get("chat_type") or "").lower().strip()
     if chat_type_label and chat_type_label not in _LABEL_TO_CODE:

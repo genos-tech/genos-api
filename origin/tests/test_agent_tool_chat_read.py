@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import re
 from datetime import timedelta
+from pathlib import Path
 
+import yaml
 from django.db.models import Max
 from django.utils import timezone
 
@@ -28,6 +30,7 @@ from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMembe
 from origin.models.common.team_models import TeamMembers
 from origin.models.project.prj_models import ProjectMembers
 from origin.search_engine.agent.controller import _ui_sources_from_tool_result
+from origin.search_engine.agent.evals import runner
 from origin.search_engine.agent.model_fence import fence_for_model
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.categories import TOOL_CATEGORY
@@ -318,9 +321,14 @@ class FetchChatThreadPagingTests(ChatFixtures, CrossTeamTestCase):
         self.assertEqual(both["messages"], thread["messages"])
 
     def test_things_that_are_not_a_chat_are_an_error(self):
-        for bad in ("", "   ", "not a chat"):
+        for bad in ("", "   ", "not a chat", "1", "pm:1"):
             with self.subTest(chat_id=bad[:20]), self.assertRaises(ToolError):
                 self.read({"chat_id": bad})
+        # A made-up id reads like a chat that is not there, with a hint to retry.
+        with self.assertRaisesMessage(ToolError, "not found, or you are not a member of it"):
+            self.read({"chat_id": "1"})
+        with self.assertRaisesMessage(ToolError, "the chat's id (a UUID) or its Genos URL"):
+            self.read({"chat_id": "1"})
         # Too long to be a chat URL: refused before any pattern runs over it.
         with self.assertRaisesMessage(ToolError, "too long"):
             self.read({"chat_id": "x" * 3000})
@@ -398,6 +406,21 @@ class FetchChatThreadAccessTests(ChatFixtures, CrossTeamTestCase):
 
         self.assertEqual(len(set(answers.values())), 1, answers)
         self.assertIn("not found, or you are not a member", answers["missing"])
+
+    def test_the_eval_case_for_a_refused_chat_still_matches_what_the_tool_says(self):
+        """`acl_unauthorized_fetch_pm_chat` asserts the request was refused by
+        looking for words in the tool's error. The words changed in MIP-885, and a
+        case that looks for the old ones fails on every eval run."""
+        cases = yaml.safe_load((Path(runner.__file__).parent / "cases.yaml").read_text())
+        case = next(c for c in cases if c["id"] == "acl_unauthorized_fetch_pm_chat")
+        wanted = [w.lower() for w in case["expect"]["tool_call_errors_contain_any"]]
+        theirs = self.group("Theirs", [self.a_editor])
+
+        for chat_id in ("1", str(theirs.id), "11111111-2222-4333-8444-555555555555"):
+            with self.subTest(chat_id=chat_id), self.assertRaises(ToolError) as caught:
+                self.read({"chat_type": "pm", "chat_id": chat_id})
+            said = str(caught.exception).lower()
+            self.assertTrue(any(w in said for w in wanted), said)
 
     def test_found_and_refused_is_a_refusal_the_burst_alert_counts(self):
         """MCP counts `ToolForbidden`. A missing chat is a typo, not a probe."""
