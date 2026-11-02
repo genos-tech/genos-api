@@ -1,14 +1,14 @@
 """Turn however a human named a task or a note into the ids tools take.
 
-Genos's own tools take `task_id` as an integer, which is right for an
-LLM that just read the id out of a search result. It is wrong for this
-surface, where the reference is typed by a person: they say "work on
-PRJ-123", or paste the URL out of their browser. Numeric ids are the one
-form nobody has to hand.
+Genos's own tools take `task_id` as an integer, which is right for code
+that just read the id out of a result. It is wrong wherever the reference
+comes from a person: they say "work on PRJ-123", or paste the URL out of
+their browser. Numeric ids are the one form nobody has to hand. That goes
+for the in-app agent as much as for MCP (`agent/references.py`).
 
-So the MCP task tools take a string reference and it is resolved here,
-before the underlying tool ever sees it. Four forms, all of which a
-person plausibly produces:
+So the task tools take a string reference and it is resolved here, before
+the underlying tool ever sees it. Four forms, all of which a person
+plausibly produces:
 
     PRJ-123                                          the display id
     https://app.genosai.dev/workspace/tasks/…/task/7 a pasted URL
