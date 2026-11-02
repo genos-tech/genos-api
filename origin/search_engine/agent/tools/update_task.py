@@ -2,7 +2,7 @@
 
 Partial-update one `TaskMaster` row. Any subset of `title`,
 `content_text`, `status`, `priority`, `effort_level`, `due_date`,
-`milestone_id`, `tags` may be supplied; omitted fields are left as-is. The model should
+`milestone_id`, `parent_task_id`, `project_id`, `tags` may be supplied; omitted fields are left as-is. The model should
 fetch the task first (via `fetch_task`) so it can propose changes
 that respect the existing state.
 
@@ -19,6 +19,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from django.db import transaction
+
 from apis.request_id import log_failure
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
@@ -34,10 +36,17 @@ from origin.search_engine.agent.tools.task_body_edit import (
     prepend_blocks,
     replace_in_body,
 )
+from origin.search_engine.agent.tools.task_parent import require_readable_parent
 from origin.search_engine.agent.tools.task_tags import resolve_tags, tag_names
 from origin.services.collab_push import push_task_body
 from origin.services.milestone_service import sync_backing_task
 from origin.services.task_milestone_move import milestone_move_error, move_task_to_milestone
+from origin.services.task_reparent import (
+    move_task_to_parent,
+    move_task_to_project,
+    parent_move_error,
+    project_move_error,
+)
 
 # Backing-task columns whose milestone twin has a different name. Every
 # other mirrored field shares its name across the two models.
@@ -97,6 +106,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "it would stay listed as Deleted with its tasks still attached. "
             "Nothing was changed. Delete it from the milestone's menu in the app."
         )
+
+    display_id_before = task.display_id
 
     # --- body guards (MIP-824): validated before anything is touched ---
     edit_modes = [
@@ -247,7 +258,60 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         if error := milestone_move_error(task, target_milestone_id, ctx.team_id):
             raise ToolError(error)
 
-    if not update_fields and not move_milestone:
+    # --- parent_task_id (hang under another task, '' for top-level) and
+    # project_id (move to another project) ---
+    # Validated here, before any write, and applied after the field save for
+    # the same reason as the milestone move. Each one places the task in the
+    # hierarchy, and so does `milestone_id`: they are separate calls, or the
+    # order they apply in would decide where the task ends up (MIP-899).
+    move_parent = "parent_task_id" in args and args["parent_task_id"] is not None
+    move_project = "project_id" in args and args["project_id"] is not None
+    target_parent_id: int | None = None
+    target_project_id: int | None = None
+    if move_parent:
+        raw_parent = args["parent_task_id"]
+        if raw_parent != "":
+            try:
+                target_parent_id = int(raw_parent)
+            except (TypeError, ValueError):
+                raise ToolError(
+                    f"`parent_task_id` must be a task id (got {raw_parent!r}). "
+                    "Use '' to make the task top-level."
+                )
+        if target_parent_id is not None:
+            require_readable_parent(target_parent_id, ctx)
+        if target_parent_id == task.parent_task_id:
+            move_parent = False  # already there
+        elif error := parent_move_error(task, target_parent_id, ctx.team_id):
+            raise ToolError(error)
+    if move_project:
+        try:
+            target_project_id = int(args["project_id"])
+        except (TypeError, ValueError):
+            raise ToolError(f"`project_id` must be an integer (got {args['project_id']!r}).")
+        if target_project_id == task.project_id:
+            move_project = False  # already there
+        elif move_parent and target_parent_id is not None:
+            raise ToolError(
+                "Move the project and set a parent in two calls: the parent has to be in "
+                "the task's project. Pass `parent_task_id: ''` with `project_id` to take "
+                "the task out from under its parent while it moves."
+            )
+        elif error := project_move_error(
+            task,
+            target_project_id,
+            ctx.team_id,
+            ctx.user_id,
+            detaching=move_parent and target_parent_id is None,
+        ):
+            raise ToolError(error)
+    if move_milestone and (move_parent or move_project):
+        raise ToolError(
+            "`milestone_id`, `parent_task_id` and `project_id` each decide where the task "
+            "sits; send one of them per call. Nothing was changed."
+        )
+
+    if not update_fields and not move_milestone and not move_parent and not move_project:
         return {
             "task_id": task_id,
             "changed_fields": [],
@@ -302,6 +366,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # moved it (MIP-692).
         if move_milestone and move_task_to_milestone(task, target_milestone_id):
             changed.append("milestone" if target_milestone_id is not None else "milestone(cleared)")
+        # Parent, then project: with both, the parent edge is cut first
+        # (validated above), which is what lets a nested task move.
+        if move_parent or move_project:
+            with transaction.atomic():
+                if move_parent and move_task_to_parent(task, target_parent_id):
+                    changed.append("parent" if target_parent_id is not None else "parent(cleared)")
+                if move_project:
+                    move_task_to_project(task, target_project_id)
+                    changed.append("project")
     except ToolError:
         raise
     except Exception as e:  # noqa: BLE001
@@ -337,9 +410,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "changed_fields": changed,
         "status": task.status,
         "title": task.title,
+        "display_id": task.display_id,
         "milestone_id": task.milestone_id,
+        "parent_task_id": task.parent_task_id,
+        "project_id": task.project_id,
         **hash_field,
-        "__summary__": f"Updated task {task.display_id}: {', '.join(changed)}",
+        "__summary__": (
+            f"Updated task {task.display_id}: {', '.join(changed)}"
+            + (f" (was {display_id_before})" if task.display_id != display_id_before else "")
+        ),
     }
 
 
@@ -350,14 +429,17 @@ UPDATE_TASK = Tool(
         "APPROVAL — the user sees your proposed changes and decides "
         "whether to execute. Required: task_id. Optional (omit fields "
         "you don't want to change): title, content_text, status, "
-        "priority, effort_level, due_date, milestone_id, tags. To change "
+        "priority, effort_level, due_date, milestone_id, parent_task_id, project_id, tags. To change "
         "part of the body, send ONE of body_append, body_prepend or "
         "body_replace instead of content_text (which rewrites all of it); "
         "pass base_body_hash (the body_hash fetch_task returned) to refuse "
         "the edit if the body changed since you read it. Pass `due_date: ''` to "
         "clear the due date. Pass `milestone_id` (from `list_milestones`, same "
         "project) to move the task and its sub-tasks into that milestone, or "
-        "`milestone_id: ''` to take it out. Status enum: Open, WIP, Blocked, Pending, Closed, "
+        "`milestone_id: ''` to take it out. `parent_task_id` re-parents the "
+        "task within its project ('' makes it top-level) and `project_id` "
+        "moves it, with its sub-tasks, to another project; send only one of "
+        "milestone_id, parent_task_id and project_id per call. Status enum: Open, WIP, Blocked, Pending, Closed, "
         "Deleted. `tags` REPLACES the task's tags with names from "
         "list_project_tags (pass [] to clear); an unknown name is refused. "
         "Use `fetch_task` first to see the current state so "
@@ -452,6 +534,25 @@ UPDATE_TASK = Tool(
                     "Milestone id (from list_milestones, same project) to move "
                     "the task into; its sub-tasks move with it. Omit to leave "
                     "unchanged. Pass '' to take the task out of its milestone."
+                ),
+            },
+            "parent_task_id": {
+                "type": "STRING",
+                "description": (
+                    "Task id to hang this task under, in the same project; its "
+                    "sub-tasks move with it and it joins that task's milestone. "
+                    "Omit to leave unchanged. Pass '' to make it top-level, which "
+                    "also takes it out of its milestone."
+                ),
+            },
+            "project_id": {
+                "type": "INTEGER",
+                "description": (
+                    "Project id (from list_projects) to move the task and its "
+                    "sub-tasks to. They are renumbered there, so the display id "
+                    "changes, and tags and milestone are cleared. A sub-task "
+                    "follows its parent: pass parent_task_id '' with it. Omit to "
+                    "leave unchanged."
                 ),
             },
             "tags": {

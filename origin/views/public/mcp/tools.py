@@ -160,6 +160,9 @@ class McpTool:
     # Argument names whose value is a task reference to resolve before
     # the underlying tool sees it.
     task_ref_args: tuple[str, ...] = ()
+    # Task-reference arguments where '' is a real value ("no task": make it
+    # top-level) and passes through unresolved. Every other blank is refused.
+    clearable_task_ref_args: tuple[str, ...] = ()
     # Argument names holding a note reference. Resolving one may also
     # determine `note_type`, so it is resolved as a pair.
     note_ref_args: tuple[str, ...] = ()
@@ -558,13 +561,30 @@ CATALOG: tuple[McpTool, ...] = (
             "body has changed since you read it; the result carries the new "
             "`body_hash`. `milestone_id` (from "
             "`list_milestones`, same project) files the task and its sub-tasks "
-            "under that milestone; '' takes it out. `tags` replaces the task's "
+            "under that milestone; '' takes it out. `parent_task_id` hangs the "
+            "task, with its sub-tasks, under another task in its project; '' "
+            "makes it top-level and takes it out of its milestone. "
+            "`project_id` (from `list_projects`) moves the task and its "
+            "sub-tasks to another project, so their display ids change. Send "
+            "only one of `milestone_id`, `parent_task_id` and `project_id` per "
+            "call. `tags` replaces the task's "
             "tags with names from `list_project_tags` ([] clears). Requires a "
             "write-scoped API key."
         ),
         write=True,
-        task_ref_args=("task_id",),
-        schema_overrides={"task_id": _TASK_REF_SCHEMA},
+        task_ref_args=("task_id", "parent_task_id"),
+        clearable_task_ref_args=("parent_task_id",),
+        schema_overrides={
+            "task_id": _TASK_REF_SCHEMA,
+            "parent_task_id": {
+                **_TASK_REF_SCHEMA,
+                "description": (
+                    "Optional: the task to hang this one under, in the same "
+                    "project: its display id (PRJ-123), its Genos URL, or its "
+                    "numeric id. '' makes this task top-level."
+                ),
+            },
+        },
     ),
     McpTool(
         name="add_comment",
@@ -658,7 +678,9 @@ CATALOG: tuple[McpTool, ...] = (
             "project id from `list_projects`. `content_text` is markdown — "
             "headings, check lists, code fences and tables are preserved — "
             "and `milestone_id` (from `list_milestones`) files the task under "
-            "an existing milestone in the same project. `assignee_id` "
+            "an existing milestone in the same project; `parent_task_id` "
+            "files it as a sub-task of an existing task in that project "
+            "(not together with `milestone_id`). `assignee_id` "
             "assigns it in the same call, on the same terms as `assign_task` "
             "— `get_current_user` for yourself; omit it to leave the task "
             "unassigned. `tags` takes names from `list_project_tags` — only "
@@ -666,6 +688,17 @@ CATALOG: tuple[McpTool, ...] = (
             "write-scoped API key."
         ),
         write=True,
+        task_ref_args=("parent_task_id",),
+        schema_overrides={
+            "parent_task_id": {
+                **_TASK_REF_SCHEMA,
+                "description": (
+                    "Optional: file the new task as a sub-task of this task, "
+                    "in the same project: its display id (PRJ-123), its "
+                    "Genos URL, or its numeric id."
+                ),
+            }
+        },
     ),
     McpTool(
         name="assign_task",
@@ -1169,6 +1202,8 @@ def call(
     try:
         for arg in tool.task_ref_args:
             if arg in args and args[arg] is not None:
+                if args[arg] == "" and arg in tool.clearable_task_ref_args:
+                    continue
                 args[arg] = resolve_task_ref(args[arg], ctx.team_id)
         for arg in tool.note_ref_args:
             if arg in args and args[arg] is not None:

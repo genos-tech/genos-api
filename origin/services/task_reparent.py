@@ -7,8 +7,22 @@ UI's PUT writes, without importing a DRF view. The view keeps thin aliases,
 so its PUT behavior is unchanged.
 """
 
+from django.db import transaction
+
+from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.milestone_models import MilestoneMaster
-from origin.models.task.task_models import TaskMaster
+from origin.models.task.task_models import TaskMaster, claim_project_task_number
+from origin.services.task_cache import invalidate_for_task, invalidate_project_tasks_cache
+from origin.services.task_milestone_move import (
+    bridge_milestone_to_parent,
+    cascade_tree_position_to_subtasks,
+)
+from origin.services.task_project_move import (
+    collect_descendant_task_ids,
+    relocate_task_satellites,
+    relocate_tasks,
+)
+from origin.views.utils.scope_guards import is_project_member
 
 
 def is_nested_task(task) -> bool:
@@ -161,3 +175,153 @@ def reparent_task(task, parent_task_id):
             "ts_updated_at",
         ]
     )
+
+
+def find_parent(parent_task_id, team_id):
+    """The live task `parent_task_id` names, as `(task, None)`, or
+    `(None, why_not)`. A deleted task, or one in another team, is not a
+    parent anyone can file work under."""
+    parent = (
+        TaskMaster.objects.filter(task_id=parent_task_id, is_deleted=False)
+        .exclude(status="Deleted")
+        .first()
+    )
+    if parent is None:
+        return None, f"Task {parent_task_id} not found."
+    if str(parent.team_id or "") != str(team_id):
+        return None, "Not authorized: that task belongs to a different team."
+    return parent, None
+
+
+def parent_move_error(task, parent_task_id, team_id) -> str | None:
+    """Why `task` can't hang under `parent_task_id`, or None when it can.
+    `parent_task_id` None means "make it top-level".
+
+    The UI only offers parents from the task's own project and a PUT checks
+    nothing but the cycle, so a tool that can name any id needs the rest
+    here. The caller's access to the parent is the tool's to check, as it
+    does for the task itself.
+    """
+    # A milestone's backing row holds the milestone's comments and
+    # sub-tasks, and `reparent_task` leaves it alone for the same reason.
+    if task.is_milestone:
+        return f"Task {task.display_id} is a milestone; it can't be filed under a task."
+    if parent_task_id is None:
+        return None
+    parent, error = find_parent(parent_task_id, team_id)
+    if error:
+        return error
+    if parent.task_id == task.task_id or parent.task_id in collect_descendant_task_ids(
+        task.task_id
+    ):
+        return "A task cannot be moved under itself or one of its own sub-tasks."
+    if parent.project_id != task.project_id:
+        return (
+            f"Task {parent.display_id} is in project {parent.project_id}, not "
+            f"{task.display_id}'s project {task.project_id}. Move the task into that "
+            "project first, then set its parent."
+        )
+    return None
+
+
+def move_task_to_parent(task, parent_task_id) -> bool:
+    """Hang `task` under `parent_task_id` (None = top-level) and carry its
+    sub-tree along. Validate with `parent_move_error` first.
+
+    The two steps `TaskMasterView.put` runs for a parent change with no
+    `milestone` key: settle the task's own links, then cascade only if its
+    place in the tree actually changed. Returns whether the parent changed.
+    """
+    task.refresh_from_db()
+    if task.parent_task_id == parent_task_id:
+        return False
+    before = (task.milestone_id, task.sprint_id, task.root_task_id)
+    reparent_task(task, parent_task_id)
+    task.refresh_from_db()
+    if (task.milestone_id, task.sprint_id, task.root_task_id) != before:
+        cascade_tree_position_to_subtasks(task)
+    return True
+
+
+def project_move_error(task, project_id, team_id, user_id, *, detaching=False) -> str | None:
+    """Why `task` can't move to project `project_id`, or None when it can.
+
+    `detaching` says the caller is taking the task out from under its parent
+    first, which is what lets a nested task move at all.
+    """
+    if task.is_milestone:
+        return (
+            f"Task {task.display_id} is a milestone; move it from the milestone's own "
+            "menu in the app."
+        )
+    destination = ProjectMaster.objects.filter(project_id=project_id, is_deleted=False).first()
+    # 404-shaped for a project the caller can't see: ids are sequential.
+    if destination is None or not is_project_member(destination.project_id, user_id):
+        return f"Project {project_id} not found."
+    if str(destination.team_id or "") != str(team_id):
+        return "Not authorized: that project belongs to a different team."
+    if not detaching and not task.is_init_task and is_nested_task(task):
+        return (
+            f"Task {task.display_id} follows the project of the task or milestone it is "
+            "filed under. Move that one instead, or take this one out first with "
+            "`parent_task_id: ''`."
+        )
+    return None
+
+
+def move_task_to_project(task, project_id) -> None:
+    """Move `task`, its sub-tree and the rows keyed to it into `project_id`.
+    Validate with `project_move_error` first.
+
+    What `TaskMasterView.put` does for a changed `project`: the row's team
+    follows its project, its number is re-claimed in the destination, the
+    milestone, sprint and any parent edge into the project it left are cut,
+    the sub-tree and the satellites (notes, dependency edges) cross with it,
+    and both projects' task lists are dropped from the cache. The task's own
+    tags are cleared, as the project picker does: they are the old project's.
+    """
+    destination = ProjectMaster.objects.get(project_id=project_id)
+    old_project_id, old_team_id = task.project_id, task.team_id
+    with transaction.atomic():
+        task.project_id = destination.project_id
+        task.team_id = destination.team_id
+        # Unique per project: null it so the move can't collide, then
+        # re-claim a free number in the destination.
+        task.project_task_number = None
+        task.tags = None
+        task.save(update_fields=["project", "team", "project_task_number", "tags", "ts_updated_at"])
+        claim_project_task_number(task)
+        task.refresh_from_db()
+
+        # Milestone and sprint belong to the project the task left, so the
+        # destination starts without them; the bridge's CLEAR branch also
+        # detaches a task whose only parent was that milestone's backing row.
+        before = (task.milestone_id, task.sprint_id, task.root_task_id)
+        bridge_milestone_to_parent(task, None, None)
+        task.refresh_from_db()
+        if (task.milestone_id, task.sprint_id, task.root_task_id) != before:
+            cascade_tree_position_to_subtasks(task)
+        # A task filed under a milestone's backing row by `parent_task_id`
+        # alone has no milestone FK for the CLEAR branch to find (MIP-786).
+        if task.parent_task_id is not None:
+            parent = (
+                TaskMaster.objects.filter(task_id=task.parent_task_id, is_milestone=True)
+                .only("task_id", "project_id")
+                .first()
+            )
+            if parent is not None and parent.project_id != task.project_id:
+                task.parent_task_id = None
+                task.root_task_id = task.task_id
+                task.save(update_fields=["parent_task_id", "root_task_id", "ts_updated_at"])
+                cascade_tree_position_to_subtasks(task)
+
+        relocate_tasks(
+            collect_descendant_task_ids(task.task_id),
+            project_id=task.project_id,
+            team_id=task.team_id,
+        )
+        relocate_task_satellites({task.task_id}, project_id=task.project_id, team_id=task.team_id)
+        task.refresh_from_db()
+
+    invalidate_for_task(task)
+    invalidate_project_tasks_cache(old_team_id, old_project_id)

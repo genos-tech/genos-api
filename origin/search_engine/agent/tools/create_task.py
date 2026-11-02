@@ -49,6 +49,7 @@ from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
+from origin.search_engine.agent.tools.task_parent import require_readable_parent
 from origin.search_engine.agent.tools.task_tags import resolve_tags
 from origin.search_engine.quota import (
     TASK_CREATE_KEY,
@@ -56,6 +57,7 @@ from origin.search_engine.quota import (
     increment_usage,
 )
 from origin.services.milestone_service import ensure_backing_task
+from origin.services.task_reparent import find_parent, milestone_for_parent
 from origin.views.utils.scope_guards import is_team_member
 
 _DEFAULT_STATUS = "Open"
@@ -106,6 +108,24 @@ def _resolve_assignee(raw_id: Any, project_acl: set[str], ctx: ToolContext) -> C
     return assignee
 
 
+def _resolve_parent(raw_id: Any, project_id: int, ctx: ToolContext) -> TaskMaster:
+    """The task a new task is filed under (MIP-899). It must be one the
+    caller can read, in the caller's team and in the new task's project."""
+    try:
+        parent_id = int(raw_id)
+    except (TypeError, ValueError):
+        raise ToolError(f"`parent_task_id` must be a task id (got {raw_id!r}).")
+    require_readable_parent(parent_id, ctx)
+    parent, error = find_parent(parent_id, ctx.team_id)
+    if error:
+        raise ToolError(error)
+    if parent.project_id != project_id:
+        raise ToolError(
+            f"Task {parent.display_id} is in project {parent.project_id}, not {project_id}."
+        )
+    return parent
+
+
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     check_body_size(args.get("content_text"), "content_text")
     title = (args.get("title") or "").strip()
@@ -141,6 +161,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     milestone = None
     if args.get("milestone_id") is not None:
         milestone = _resolve_milestone(args["milestone_id"], project_id, ctx)
+
+    parent = None
+    if args.get("parent_task_id") not in (None, ""):
+        if milestone is not None:
+            raise ToolError(
+                "`milestone_id` and `parent_task_id` each decide where the new task "
+                "sits; send one of them. Nothing was created."
+            )
+        parent = _resolve_parent(args["parent_task_id"], project_id, ctx)
 
     assignee = None
     raw_assignee_id = args.get("assignee_id")
@@ -205,6 +234,16 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             create_kwargs["milestone"] = milestone
             create_kwargs["parent_task_id"] = backing.task_id
             create_kwargs["sprint_id"] = milestone.sprint_id
+        if parent is not None:
+            # Hung under a task, it joins the milestone and sprint that task
+            # lives in (or backs): the UI's POST derives the same. The root
+            # signal then derives the chain from the parent.
+            create_kwargs["parent_task_id"] = parent.task_id
+            parent_milestone_id = milestone_for_parent(parent.task_id)
+            if parent_milestone_id is not None:
+                parent_milestone = MilestoneMaster.objects.get(milestone_id=parent_milestone_id)
+                create_kwargs["milestone"] = parent_milestone
+                create_kwargs["sprint_id"] = parent_milestone.sprint_id
         task = TaskMaster.objects.create(**create_kwargs)
     except Exception as e:  # noqa: BLE001 — surface as ToolError for the model
         # The model and the MCP caller read this; the database error
@@ -219,6 +258,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     summary = f"Created task {task.display_id}: {task.title}"
     if milestone is not None:
         summary += f' in milestone "{milestone.title}"'
+    if parent is not None:
+        summary += f" under {parent.display_id}"
     assignee_username = None
     if assignee is not None:
         assignee_username = assignee.username or str(assignee.id)
@@ -231,7 +272,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "task_id": task.task_id,
         "display_id": task.display_id,
         "project_id": project_id,
-        "milestone_id": milestone.milestone_id if milestone is not None else None,
+        "milestone_id": task.milestone_id,
+        "parent_task_id": parent.task_id if parent is not None else None,
         "assignee_id": str(assignee.id) if assignee is not None else None,
         "assignee_username": assignee_username,
         "tags": [tag["tagName"] for tag in tags],
@@ -252,7 +294,8 @@ CREATE_TASK = Tool(
         "execute. Use this when the user explicitly asks you to create / "
         "add / file a task. Required: title, project_id. Optional: "
         "content_text (markdown body), milestone_id (file it under an "
-        "existing milestone), assignee_id, tags, priority, effort_level, due_date "
+        "existing milestone), parent_task_id (file it under an existing "
+        "task in the same project; not together with milestone_id), assignee_id, tags, priority, effort_level, due_date "
         "(ISO 8601, e.g. 2026-06-30). Status is always created as 'Open' "
         "— users change it via the UI. Leave assignee_id out unless the "
         "user names an assignee; use get_current_user when they say "
@@ -288,6 +331,14 @@ CREATE_TASK = Tool(
                     "Optional: file the task under this existing milestone "
                     "(numeric milestone id from `list_milestones`). It must be "
                     "in the same project."
+                ),
+            },
+            "parent_task_id": {
+                "type": "STRING",
+                "description": (
+                    "Optional: file the new task under this existing task, as a "
+                    "sub-task. It must be in the same project, and the new task "
+                    "joins its milestone. Not together with milestone_id."
                 ),
             },
             "assignee_id": {
