@@ -22,7 +22,7 @@ from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
 from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.serializers.task.task_serializers import *
 from origin.services import unified_writer
-from origin.services.custom_fields import sanitize_custom_field_values
+from origin.services.custom_fields import refuse_changed_values, sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.task_cache import (
     get_cached_project_tasks,
@@ -312,6 +312,8 @@ class TaskMasterView(AuthenticatedAPIView):
                     {"error": "custom_field_values must be an object."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+        if message := refuse_changed_values(raw_custom_values, cleaned_values, {}, project):
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
         data["custom_field_values"] = cleaned_values
 
         # One task per chat thread. The frontend hides its "Create task"
@@ -505,6 +507,25 @@ class TaskMasterView(AuthenticatedAPIView):
                     {"error": "custom_field_values must be an object."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # What the values MEAN, for the ones that changed: judged against
+            # the project the task ends up in (MIP-913).
+            values_project = task.project
+            if update_data.get("project") not in (None, "") and str(update_data["project"]) != str(
+                task.project_id
+            ):
+                values_project = (
+                    ProjectMaster.objects.filter(
+                        project_id=update_data["project"], is_deleted=False
+                    ).first()
+                    or values_project
+                )
+            if message := refuse_changed_values(
+                request.data.get("custom_field_values"),
+                cleaned_values,
+                task.custom_field_values,
+                values_project,
+            ):
+                return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
             update_data["custom_field_values"] = cleaned_values
 
         # One task per chat thread. Enforced only when this PUT *claims*
