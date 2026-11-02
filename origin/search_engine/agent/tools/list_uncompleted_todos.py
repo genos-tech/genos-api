@@ -11,7 +11,9 @@ from typing import Any
 
 from origin.models.chat.todo_models import ToDoItem
 from origin.search_engine.agent.tools.base import Tool, ToolContext
-from origin.services.user_time import today_for_user_id
+from origin.search_engine.agent.tools.todo_args import local_iso
+from origin.services import todo_reminders
+from origin.services.user_time import today_for_user_id, zone_for_user_id
 
 _MAX_ITEMS = 50
 _DEFAULT_DAYS = 14
@@ -38,16 +40,24 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         .order_by("group__local_date", "sort_order", "item_id")[: _MAX_ITEMS + 1]
     )
 
-    items = [
-        {
+    fetched = list(qs)
+    rows = fetched[:_MAX_ITEMS]
+    truncated = len(fetched) > _MAX_ITEMS
+    # One query for every pending reminder on the page, in the user's zone.
+    reminders = todo_reminders.pending_by_item(i.item_id for i in rows)
+    zone = zone_for_user_id(ctx.user_id) if reminders else None
+
+    items = []
+    for i in rows:
+        row = {
             "item_id": i.item_id,
             "title": i.title,
             "local_date": i.group.local_date.isoformat(),
             "category_name": i.category.name if i.category_id else None,
         }
-        for i in qs[:_MAX_ITEMS]
-    ]
-    truncated = len(qs) > _MAX_ITEMS
+        if i.item_id in reminders:
+            row["reminder_at"] = local_iso(reminders[i.item_id], zone)
+        items.append(row)
 
     summary = f"{len(items)} open item(s) in the last {days} days"
     if truncated:
@@ -69,7 +79,8 @@ LIST_UNCOMPLETED_TODOS = Tool(
         "(default 14, max 365, capped at 50 items in the response). Use "
         "this when the user asks 'what's still open?', 'what did I miss "
         "this week?', or wants a backlog view of past-but-unfinished "
-        "items. Read-only — does not require approval."
+        "items. Each item carries `reminder_at` when a reminder is "
+        "pending on it. Read-only — does not require approval."
     ),
     parameters_schema={
         "type": "OBJECT",

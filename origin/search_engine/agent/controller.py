@@ -687,6 +687,76 @@ def _friendly_create_task_arguments(
     _friendly_task_fields(out, args, access, args.get("project_id"), None)
 
 
+def _friendly_update_todo_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """In-place nested enrichment for `update_todo_item` arguments.
+
+    For what the call changes, ADDS the to-do's present value under
+    `current` so the card can show old → new: `target_date` (the day it is on
+    now) and `reminder_at` (its pending reminder, None = none, in the
+    user's zone with the offset). `time_zone` names the zone a `remind_at`
+    will be read in, since the card shows the time as the model wrote it.
+    Nothing is added for a to-do that isn't on the caller's own list."""
+    from origin.search_engine.agent.tools.todo_args import local_iso  # noqa: PLC0415
+    from origin.services import todo_reminders  # noqa: PLC0415
+    from origin.services.user_time import zone_for_user_id  # noqa: PLC0415
+
+    item = access.todo_item(args.get("item_id"))
+    if item is None:
+        return
+    zone = zone_for_user_id(access.user_id)
+    current: dict[str, Any] = {}
+    if args.get("target_date") not in (None, ""):
+        current["target_date"] = item.group.local_date.isoformat()
+    if (
+        args.get("remind_at") not in (None, "")
+        or args.get("remind_in_minutes") is not None
+        or args.get("cancel_reminder")
+    ):
+        pending = todo_reminders.pending_by_item([item.item_id]).get(item.item_id)
+        current["reminder_at"] = local_iso(pending, zone)
+    if args.get("remind_at") not in (None, ""):
+        out["time_zone"] = zone.key
+    if current:
+        out["current"] = current
+
+
+def _friendly_create_todo_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """ADDS `time_zone` when the new to-do carries a `remind_at`: the zone the
+    time will be read in, which the model's own words don't say."""
+    from origin.services.user_time import zone_for_user_id  # noqa: PLC0415
+
+    if args.get("remind_at") not in (None, "") and access.usable:
+        out["time_zone"] = zone_for_user_id(access.user_id).key
+
+
+def _friendly_delete_todo_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """In-place nested enrichment for `delete_todo_item` arguments.
+
+    The flat pass names the to-do; this ADDS what else goes with it, under
+    `current`: its day, how many sub-items are deleted along, and its
+    pending reminder (None = none), so the card says what the delete takes.
+    Nothing is added for a to-do that isn't on the caller's own list."""
+    from origin.search_engine.agent.tools.todo_args import local_iso  # noqa: PLC0415
+    from origin.services import todo_reminders  # noqa: PLC0415
+    from origin.services.user_time import zone_for_user_id  # noqa: PLC0415
+
+    item = access.todo_item(args.get("item_id"))
+    if item is None:
+        return
+    pending = todo_reminders.pending_by_item([item.item_id]).get(item.item_id)
+    out["current"] = {
+        "target_date": item.group.local_date.isoformat(),
+        "sub_items": item.subitems.count(),
+        "reminder_at": local_iso(pending, zone_for_user_id(access.user_id)),
+    }
+
+
 def _friendly_update_note_arguments(
     out: dict[str, Any], _args: dict[str, Any], access: LabelAccess
 ) -> None:
@@ -790,6 +860,9 @@ _FRIENDLY_NESTED_ENRICHERS: dict[
 ] = {
     "create_task_plan": _friendly_task_plan_arguments,
     "update_task": _friendly_update_task_arguments,
+    "update_todo_item": _friendly_update_todo_arguments,
+    "create_todo_item": _friendly_create_todo_arguments,
+    "delete_todo_item": _friendly_delete_todo_arguments,
     "update_tasks_bulk": _friendly_bulk_update_arguments,
     "update_task_dependencies": _friendly_dependency_arguments,
     "update_note": _friendly_update_note_arguments,
