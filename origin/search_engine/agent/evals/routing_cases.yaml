@@ -1,0 +1,434 @@
+# Routing cases: which tool does the model reach for FIRST? (MIP-881)
+#
+# `agent_eval_routing` sends each prompt to the planning model once, with the
+# real system prompt and tool declarations, and reads the first turn's
+# function calls. Nothing runs: no tool, no database, no OpenSearch. That makes
+# a case cost about a tenth of a cent, and it means a surface can be compared
+# before it is built.
+#
+# The behavior suite (`cases.yaml`) can't do this job. No case there needs a
+# calendar, to-do, PR or "me" tool, so it stays green whatever those tools do
+# (`runner._surface_metric` says so).
+#
+# Every intent is asked in English and in Japanese. `ok` lists every right first
+# step, and one rule decides what else counts: a read that the tool's own
+# description or the system prompt tells the model to do first is right, because
+# the model is doing as it was told. `manage_milestone` says "Read
+# `list_milestones` first", so that read passes. A read nothing asked for does
+# not pass, however harmless. Above all a search to turn WRD-5 into a numeric id
+# is a miss: it costs a full search and a model call on the commonest kind of
+# request there is.
+#
+# `no_tool: true` means the right first step is to answer without a tool.
+#
+# Every registered tool appears in at least one `ok` list. A test enforces it.
+
+# --- task reads ------------------------------------------------------------
+- id: task_fetch
+  en: "Show me WRD-5."
+  ja: "WRD-5 を見せて"
+  ok: [fetch_task]
+- id: task_status_owner
+  en: "What's the status of WRD-5 and who owns it?"
+  ja: "WRD-5 のステータスと担当者は?"
+  ok: [fetch_task]
+- id: task_find_by_topic
+  en: "Find the task about responsive navigation."
+  ja: "レスポンシブナビゲーションに関するタスクを探して"
+  ok: [search_knowledge_base, list_tasks]
+- id: tasks_overdue_in_project
+  en: "Which tasks are overdue in project 3?"
+  ja: "プロジェクト3で期限切れのタスクは?"
+  ok: [list_tasks]
+- id: tasks_unassigned_high
+  en: "Show unassigned high priority tasks in project 3."
+  ja: "プロジェクト3の未割り当てで優先度Highのタスクを見せて"
+  ok: [list_tasks]
+- id: tasks_by_tag_due
+  en: "List tasks tagged backend in project 3 that are due next week."
+  ja: "プロジェクト3でbackendタグが付いていて来週期限のタスクを一覧して"
+  ok: [list_tasks, list_project_tags, list_projects]
+- id: tasks_in_sprint
+  en: "What's in the active sprint for project 3?"
+  ja: "プロジェクト3の今のスプリントには何が入ってる?"
+  ok: [list_sprints, get_sprint_summary, list_tasks, list_projects]
+- id: dependency_graph
+  en: "Show me the dependency graph for project 3."
+  ja: "プロジェクト3の依存関係グラフを見せて"
+  ok: [list_task_dependencies]
+- id: task_blockers
+  en: "What is blocking WRD-5?"
+  ja: "WRD-5 をブロックしているものは?"
+  ok: [get_task_blockers]
+- id: my_blockers
+  en: "What's blocking me right now, and who am I holding up?"
+  ja: "今自分をブロックしているものと、自分が止めている相手を教えて"
+  ok: [get_my_blockers]
+- id: task_history
+  en: "Who changed the priority of WRD-5, and when?"
+  ja: "WRD-5 の優先度を誰がいつ変更した?"
+  ok: [get_task_history]
+- id: stale_tasks
+  en: "Which tasks haven't been touched in over a month?"
+  ja: "1か月以上更新されていないタスクは?"
+  ok: [get_stale_tasks]
+- id: team_throughput
+  en: "How many tasks were closed across my projects last week?"
+  ja: "先週、自分のプロジェクト全体で何件のタスクがクローズされた?"
+  ok: [get_task_throughput_stats]
+- id: my_throughput
+  en: "What did I ship this week?"
+  ja: "今週自分が完了したタスクは?"
+  ok: [get_my_throughput]
+- id: find_task_by_branch
+  en: "Which task is the branch feature/login-fix delivering?"
+  ja: "ブランチ feature/login-fix はどのタスクの対応?"
+  ok: [find_task_by_delivery]
+
+# --- task writes -----------------------------------------------------------
+- id: task_create
+  en: "Create a task in project 3 titled 'Fix login timeout'."
+  ja: "プロジェクト3に「ログインタイムアウトの修正」というタスクを作成して"
+  ok: [create_task, list_projects, list_project_tags]
+- id: task_plan
+  en: "Plan a Beta launch milestone in project 3 with tasks for QA, docs and release, with QA done first."
+  ja: "プロジェクト3にBetaリリースのマイルストーンを計画して。QA、ドキュメント、リリースのタスクを作り、QAを最初に終わらせる依存関係で"
+  ok: [create_task_plan, list_projects, list_project_tags]
+- id: task_close
+  en: "Mark WRD-5 as closed."
+  ja: "WRD-5 をクローズにして"
+  ok: [update_task, fetch_task]
+- id: task_start_date
+  en: "Set the start date of WRD-5 to 2026-11-16."
+  ja: "WRD-5 の開始日を2026-11-16にして"
+  ok: [update_task, fetch_task]
+- id: task_custom_field
+  en: "Set the Estimate custom field on WRD-5 to 5."
+  ja: "WRD-5 のカスタムフィールド Estimate を5にして"
+  ok: [update_task, fetch_task, list_project_tags]
+- id: task_collaborator
+  en: "Add Alice as a collaborator on WRD-5."
+  ja: "WRD-5 のコラボレーターにAliceを追加して"
+  ok: [update_task, fetch_task, get_team_members, list_project_members]
+- id: tasks_bulk_due
+  en: "Push the due dates of WRD-5, WRD-6 and WRD-7 to 2026-11-20."
+  ja: "WRD-5、WRD-6、WRD-7 の期限を2026-11-20に延ばして"
+  ok: [update_tasks_bulk, list_tasks, fetch_task]
+- id: task_assign
+  en: "Assign WRD-5 to Alice."
+  ja: "WRD-5 をAliceに割り当てて"
+  ok: [assign_task, get_team_members, list_project_members, fetch_task]
+- id: task_comment
+  en: "Comment on WRD-5 that the fix is on staging."
+  ja: "WRD-5 に「修正はステージングに反映済み」とコメントして"
+  ok: [add_comment]
+- id: delivery_add
+  en: "Link https://github.com/acme/app/pull/12 to WRD-5."
+  ja: "https://github.com/acme/app/pull/12 を WRD-5 に紐付けて"
+  ok: [add_task_delivery]
+- id: delivery_remove
+  en: "https://github.com/acme/app/pull/12 was linked to WRD-5 by mistake. Unlink it."
+  ja: "https://github.com/acme/app/pull/12 は誤って WRD-5 に紐付けられた。解除して"
+  ok: [remove_task_delivery]
+- id: dependency_add
+  en: "WRD-6 is blocked by WRD-5. Record that."
+  ja: "WRD-6 は WRD-5 にブロックされている。依存関係を登録して"
+  ok: [update_task_dependencies, list_task_dependencies]
+- id: task_delete
+  en: "Delete WRD-5."
+  ja: "WRD-5 を削除して"
+  ok: [update_task, fetch_task]
+- id: task_move_parent
+  en: "Move WRD-5 under WRD-2."
+  ja: "WRD-5 を WRD-2 の子タスクに移動して"
+  ok: [update_task, fetch_task]
+- id: task_move_project
+  en: "Move WRD-5 to project 7."
+  ja: "WRD-5 をプロジェクト7に移動して"
+  ok: [update_task, fetch_task]
+
+# --- projects --------------------------------------------------------------
+- id: projects_list
+  en: "What projects am I in?"
+  ja: "自分が参加しているプロジェクトは?"
+  ok: [list_projects]
+- id: project_summary
+  en: "How is project 3 going?"
+  ja: "プロジェクト3の進み具合はどう?"
+  ok: [get_project_summary, list_projects]
+- id: project_ranking
+  en: "Which of my projects has the most open work?"
+  ja: "自分のプロジェクトで未完了の作業が一番多いのはどれ?"
+  ok: [get_project_activity_ranking]
+- id: project_tags
+  en: "What tags can tasks in project 3 use?"
+  ja: "プロジェクト3のタスクで使えるタグは?"
+  ok: [list_project_tags, list_projects]
+- id: project_custom_fields
+  en: "What custom fields does project 3 have?"
+  ja: "プロジェクト3にはどんなカスタムフィールドがある?"
+  ok: [list_project_tags, list_projects]
+- id: project_members
+  en: "Who is on project 3?"
+  ja: "プロジェクト3のメンバーは?"
+  ok: [list_project_members, list_projects]
+
+# --- milestones and sprints ------------------------------------------------
+- id: milestones_list
+  en: "List the milestones in project 3."
+  ja: "プロジェクト3のマイルストーンを一覧して"
+  ok: [list_milestones]
+- id: milestone_summary
+  en: "How is milestone 12 progressing?"
+  ja: "マイルストーン12の進捗は?"
+  ok: [get_milestone_summary, list_milestones]
+- id: milestone_owners
+  en: "Who owns the most milestones?"
+  ja: "一番多くのマイルストーンを担当しているのは誰?"
+  ok: [get_milestone_assignee_counts]
+- id: sprints_list
+  en: "What sprints does project 3 have?"
+  ja: "プロジェクト3にはどんなスプリントがある?"
+  ok: [list_sprints]
+- id: sprint_summary
+  en: "How is sprint 8 going?"
+  ja: "スプリント8の状況は?"
+  ok: [get_sprint_summary, list_sprints]
+- id: milestone_create
+  en: "Create a milestone called Beta in project 3. No tasks yet."
+  ja: "プロジェクト3にBetaというマイルストーンを作成して。タスクはまだ不要"
+  ok: [manage_milestone, list_projects]
+- id: milestone_update
+  en: "Rename milestone 12 to Beta launch and move its due date to 2026-12-01."
+  ja: "マイルストーン12の名前をBeta launchに変えて、期限を2026-12-01にして"
+  ok: [manage_milestone, list_milestones]
+- id: milestone_folder
+  en: "Create a milestone folder named Releases in project 3."
+  ja: "プロジェクト3にReleasesというマイルストーンフォルダを作って"
+  ok: [manage_milestone, list_projects, list_milestones]
+- id: milestone_sprint
+  en: "Put milestone 12 in sprint 8."
+  ja: "マイルストーン12をスプリント8に入れて"
+  ok: [manage_milestone, list_milestones, list_sprints]
+- id: milestone_delete
+  en: "Delete milestone 12."
+  ja: "マイルストーン12を削除して"
+  ok: [delete_milestone, list_milestones]
+- id: milestone_delete_by_name
+  en: "Delete the Beta milestone in project 3."
+  ja: "プロジェクト3のBetaマイルストーンを削除して"
+  ok: [list_milestones, delete_milestone]
+- id: my_milestones
+  en: "What milestones am I on?"
+  ja: "自分が担当しているマイルストーンは?"
+  ok: [list_my_milestones]
+
+# --- team and identity -----------------------------------------------------
+- id: team_members
+  en: "Who is on my team?"
+  ja: "チームのメンバーは?"
+  ok: [get_team_members]
+- id: workload
+  en: "Who is overloaded right now?"
+  ja: "今、仕事を抱えすぎている人は?"
+  ok: [get_workload_distribution]
+- id: top_closers
+  en: "Who closed the most tasks this month?"
+  ja: "今月一番タスクをクローズしたのは誰?"
+  ok: [get_top_task_closers]
+- id: workspace_state
+  en: "What's the overall state of the workspace across all projects?"
+  ja: "全プロジェクトを通したワークスペース全体の状況は?"
+  ok: [get_team_task_summary]
+- id: whoami
+  en: "What is my user id?"
+  ja: "自分のユーザーIDは?"
+  ok: [get_current_user]
+
+# --- the asking user's own work --------------------------------------------
+- id: my_task_counts
+  en: "How many open tasks do I have?"
+  ja: "自分の未完了タスクは何件?"
+  ok: [get_my_task_summary, list_tasks]
+- id: my_focus
+  en: "What should I work on first today?"
+  ja: "今日は何から手を付けるべき?"
+  ok: [get_my_focus_tasks]
+- id: my_plate
+  en: "What's on my plate this week?"
+  ja: "今週の自分の予定とタスクは?"
+  ok: [get_my_schedule, get_my_focus_tasks, get_my_task_summary]
+- id: overdue_unscoped
+  en: "What's overdue?"
+  ja: "期限切れのものは?"
+  ok: [list_tasks, get_my_focus_tasks, get_my_task_summary, get_my_schedule, get_team_task_summary]
+- id: prep_next_week
+  en: "Help me prep for next week."
+  ja: "来週の準備を手伝って"
+  ok: [get_my_schedule, list_calendar_events, get_my_focus_tasks, list_tasks, get_my_task_summary]
+- id: inbox
+  en: "Any notifications for me?"
+  ja: "自分宛の通知はある?"
+  ok: [list_my_inbox]
+- id: mentions
+  en: "Who mentioned me in chat recently?"
+  ja: "最近チャットで自分をメンションしたのは誰?"
+  ok: [list_my_mentions]
+
+# --- chat, read only -------------------------------------------------------
+- id: chat_find
+  en: "Find the chat with Alice."
+  ja: "Aliceとのチャットを探して"
+  ok: [list_my_chats]
+- id: chat_list
+  en: "Which chats do I have?"
+  ja: "自分のチャット一覧を見せて"
+  ok: [list_my_chats]
+- id: chat_catch_up
+  en: "Catch me up on the design group chat."
+  ja: "デザイングループのチャットの最新状況を教えて"
+  ok: [list_my_chats, search_knowledge_base]
+- id: chat_read
+  en: "Read the latest messages in chat 2ea5e352-1530-4172-a645-2f104c7c90d3."
+  ja: "チャット 2ea5e352-1530-4172-a645-2f104c7c90d3 の最新メッセージを読んで"
+  ok: [fetch_chat_thread]
+- id: chat_members
+  en: "Who is in channel 2ea5e352-1530-4172-a645-2f104c7c90d3?"
+  ja: "チャンネル 2ea5e352-1530-4172-a645-2f104c7c90d3 のメンバーは?"
+  ok: [list_channel_members]
+
+# --- GitHub pull requests --------------------------------------------------
+- id: pr_summary
+  en: "Summarize https://github.com/acme/app/pull/12."
+  ja: "https://github.com/acme/app/pull/12 の概要を教えて"
+  ok: [fetch_pr]
+- id: pr_reviews
+  en: "Has anyone approved https://github.com/acme/app/pull/12?"
+  ja: "https://github.com/acme/app/pull/12 は承認された?"
+  ok: [list_pr_reviews, fetch_pr]
+- id: pr_files
+  en: "Which files changed in https://github.com/acme/app/pull/12?"
+  ja: "https://github.com/acme/app/pull/12 で変更されたファイルは?"
+  ok: [list_pr_files]
+- id: pr_commits
+  en: "Show the commits in https://github.com/acme/app/pull/12."
+  ja: "https://github.com/acme/app/pull/12 のコミットを見せて"
+  ok: [list_pr_commits]
+- id: pr_comments
+  en: "What did people say in the comments on https://github.com/acme/app/pull/12?"
+  ja: "https://github.com/acme/app/pull/12 のコメントでは何が議論された?"
+  ok: [list_pr_comments]
+
+# --- calendar --------------------------------------------------------------
+- id: calendar_tomorrow
+  en: "What's on my calendar tomorrow?"
+  ja: "明日のカレンダーの予定は?"
+  ok: [list_calendar_events, get_my_schedule]
+- id: calendar_today_natural
+  en: "Do I have anything Friday afternoon?"
+  ja: "今日の予定を教えて"
+  ok: [list_calendar_events, get_my_schedule]
+- id: calendars_list
+  en: "Which Google calendars do I have connected?"
+  ja: "連携しているGoogleカレンダーの一覧は?"
+  ok: [list_calendars]
+- id: calendar_create
+  en: "Book a 30 minute meeting titled Sync tomorrow at 15:00."
+  ja: "明日15時から30分、Syncというミーティングを入れて"
+  ok: [create_calendar_event]
+- id: calendar_move_named
+  en: "Move my standup tomorrow to 16:00."
+  ja: "明日のスタンドアップを16時に変更して"
+  ok: [list_calendar_events]
+- id: calendar_update_by_id
+  en: "Rename calendar event abc123 to Sync."
+  ja: "カレンダーイベント abc123 の名前をSyncに変えて"
+  ok: [update_calendar_event]
+- id: calendar_delete_by_id
+  en: "Delete calendar event abc123."
+  ja: "カレンダーイベント abc123 を削除して"
+  ok: [delete_calendar_event]
+
+# --- to-dos and reminders --------------------------------------------------
+- id: todo_today
+  en: "What's on my to-do list today?"
+  ja: "今日のTo-Doは?"
+  ok: [list_today_todos]
+- id: todo_open
+  en: "Which to-dos are still open from the last two weeks?"
+  ja: "ここ2週間で未完了のTo-Doは?"
+  ok: [list_uncompleted_todos]
+- id: todo_create
+  en: "Add a to-do to call Sam."
+  ja: "サムに電話するというTo-Doを追加して"
+  ok: [create_todo_item]
+- id: reminder_friday
+  en: "Remind me Friday to follow up with Sam."
+  ja: "金曜にサムへフォローアップするようリマインドして"
+  ok: [create_todo_item]
+- id: reminder_minutes
+  en: "Remind me in 30 minutes to stretch."
+  ja: "30分後にストレッチするようリマインドして"
+  ok: [create_todo_item]
+- id: todo_done
+  en: "Mark to-do 73 as done."
+  ja: "To-Do 73 を完了にして"
+  ok: [update_todo_item]
+- id: todo_remind_existing
+  en: "Remind me about to-do 73 tomorrow at 09:00."
+  ja: "To-Do 73 を明日9時にリマインドして"
+  ok: [update_todo_item]
+- id: todo_move_day
+  en: "Move to-do 73 to 2026-11-20."
+  ja: "To-Do 73 を2026-11-20に移動して"
+  ok: [update_todo_item]
+- id: todo_delete
+  en: "Delete to-do 73."
+  ja: "To-Do 73 を削除して"
+  ok: [delete_todo_item]
+
+# --- notes -----------------------------------------------------------------
+- id: notes_organized
+  en: "How are my notes organized into folders?"
+  ja: "自分のノートはどのフォルダに整理されている?"
+  ok: [list_note_folders]
+- id: note_create
+  en: "Create a personal note titled Ideas that says we should try a weekly review."
+  ja: "「アイデア」というタイトルで、週次レビューを試すべきと書いた個人ノートを作成して"
+  ok: [create_note]
+- id: note_update
+  en: "Change the title of personal note 42 to Roadmap."
+  ja: "個人ノート42のタイトルをRoadmapに変更して"
+  ok: [update_note, fetch_note]
+- id: note_read
+  en: "Show me personal note 42."
+  ja: "個人ノート42を見せて"
+  ok: [fetch_note]
+
+# --- search ----------------------------------------------------------------
+- id: workspace_decision
+  en: "What did the team decide about the pricing page?"
+  ja: "料金ページについてチームは何を決めた?"
+  ok: [search_knowledge_base]
+- id: workspace_topic
+  en: "Is there anything in our workspace about the OAuth migration?"
+  ja: "ワークスペースにOAuth移行に関する情報はある?"
+  ok: [search_knowledge_base]
+- id: past_conversation
+  en: "What did you and I talk about last week regarding the rollout?"
+  ja: "先週あなたと話したロールアウトの件は何だった?"
+  ok: [search_past_conversations]
+- id: web_search
+  en: "Search the web for the latest Gemini pricing."
+  ja: "最新のGeminiの料金をWebで調べて"
+  ok: [search_web]
+
+# --- no tool needed --------------------------------------------------------
+- id: greeting
+  en: "Hello!"
+  ja: "こんにちは"
+  no_tool: true
+- id: arithmetic
+  en: "What is 12 times 12?"
+  ja: "12かける12は?"
+  no_tool: true
