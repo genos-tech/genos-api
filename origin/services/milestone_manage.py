@@ -86,7 +86,8 @@ def update_milestone(
          that row wholesale;
       4. a sprint change is pushed to the milestone's tasks, so the sprint
          board and analytics stay in step;
-      5. the assignee join is reconciled.
+      5. the assignee join is reconciled, and the backing task mirrored once
+         more so it shows the new first assignee.
     """
     sprint_changed = sprint is not UNSET
     if sprint_changed:
@@ -123,6 +124,11 @@ def update_milestone(
 
     if assignee_ids is not UNSET:
         sync_milestone_assignees(milestone, assignee_ids)
+        # The backing task shows the milestone's first assignee (else its
+        # reporter), and step 2 ran before the assignees were written, so it
+        # still showed the reporter (MIP-916). Mirror once more. Same as the
+        # per-person endpoint, and a no-op for every other column.
+        sync_backing_task(milestone)
 
 
 def delete_milestone(milestone: MilestoneMaster) -> None:
