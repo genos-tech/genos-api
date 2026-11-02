@@ -23,6 +23,7 @@ from typing import Any
 from django.db import transaction
 
 from apis.request_id import log_failure
+from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
@@ -281,6 +282,17 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "Nothing was changed."
         )
     if wants_custom:
+        # The project's fields are for its members (the REST list is member-gated,
+        # and `get_task` shows them only to a member). A task's assignee or
+        # reporter can write the task without being one, and a refusal that
+        # listed the field names, or said which names exist, would hand them over.
+        if not ProjectMembers.objects.filter(
+            project_id=task.project_id, attendee_id=ctx.user_id
+        ).exists():
+            raise ToolError(
+                "`custom_fields`: only a member of the task's project can set its custom "
+                "fields. Nothing was changed."
+            )
         planned = plan_custom_fields(
             args["custom_fields"],
             project_fields(task.project_id),

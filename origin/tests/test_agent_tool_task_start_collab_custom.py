@@ -20,7 +20,7 @@ from origin.models.project.prj_models import ProjectMembers, ProjectTags
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent.tools import ToolError
+from origin.search_engine.agent.tools import ToolContext, ToolError
 from origin.search_engine.agent.tools.create_task import CREATE_TASK
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
 from origin.search_engine.agent.tools.update_tasks_bulk import UPDATE_TASKS_BULK
@@ -279,6 +279,32 @@ class CollaboratorsTests(WriteBase):
             with self.subTest(label):
                 self._refused_and_unchanged(task, "`collaborators`", collaborators=bad)
         self.assertEqual(self._collaborators(task), [str(self.user2.id)])
+
+    def test_an_unknown_a_deleted_and_an_outside_user_get_the_same_answer(self):
+        """Whether a user id exists is not for the caller to learn: the three say
+        the same words (up to the id they sent)."""
+        get_user_model().objects.filter(pk=self.guest.pk).update(is_deleted=True)
+        task = self._task("t")
+        ids = {
+            "unknown": "12345678-1234-5678-1234-567812345678",
+            "deleted": str(self.guest.id),
+            "outside": str(self.outsider.id),
+        }
+        answers = set()
+
+        for label, uid in ids.items():
+            with self.subTest(label), self.assertRaises(ToolError) as caught:
+                self._set(task, collaborators=[uid])
+            answers.add(str(caught.exception).replace(uid, "ID"))
+        with self.assertRaises(ToolError) as caught:
+            self._set(task, custom_fields=[{"name": "QA owner", "value": ids["outside"]}])
+        answers.add(
+            str(caught.exception)
+            .replace(ids["outside"], "ID")
+            .replace("`custom_fields`[0]", "`collaborators`")
+        )
+
+        self.assertEqual(len(answers), 1, answers)
 
     def test_a_deleted_account_is_refused(self):
         get_user_model().objects.filter(pk=self.guest.pk).update(is_deleted=True)
@@ -548,6 +574,32 @@ class CustomFieldsTests(WriteBase):
             "listed twice",
             custom_fields=[{"name": "Customer", "value": "a"}, {"name": "customer", "value": "b"}],
         )
+
+    def test_a_reader_who_is_not_on_the_project_cannot_set_fields_or_learn_their_names(self):
+        """The assignee can write the task without being on its project, and the
+        project's fields are for its members. A real name and an invented one get
+        the same answer, and it names no field."""
+        task = self._task("t", assignee=self.user2)
+        outside = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user2.id))
+        before = self._snapshot(task)
+        answers = set()
+
+        for name in ("Customer", "Budget"):
+            with self.assertRaises(ToolError) as caught:
+                UPDATE_TASK.run(
+                    {
+                        "task_id": task.task_id,
+                        "title": "A new title",
+                        "custom_fields": [{"name": name, "value": "x"}],
+                    },
+                    outside,
+                )
+            answers.add(str(caught.exception))
+
+        self.assertEqual(len(answers), 1)
+        self.assertIn("only a member of the task's project", answers.pop())
+        self.assertNotIn("Customer", str(caught.exception))
+        self.assertEqual(self._snapshot(task), before)
 
     # -- the shape of the argument --
 
