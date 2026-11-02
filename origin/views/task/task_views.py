@@ -2240,6 +2240,14 @@ class TaskCommentsView(AuthenticatedAPIView):
         serializer = TaskCommentsSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            # The PM thread shows the comment through its mirror row, so the
+            # edit has to reach it too (MIP-946).
+            if "comment_body" in update_data:
+                unified_writer.update_task_comment_thread_reply(
+                    task_id=int(task_id),
+                    comment_id=int(comment_id),
+                    body=serializer.instance.comment_body,
+                )
             return Response(
                 {**serializer.data, **_comment_broadcast_context(task_id)},
                 status=status.HTTP_200_OK,

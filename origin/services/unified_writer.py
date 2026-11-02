@@ -478,11 +478,7 @@ def write_read_cursor(
             defaults={"last_read_message": last_msg},
         )
         # Forward-only: only update if the incoming `seq` is higher.
-        if (
-            not created
-            and cursor.last_read_message
-            and last_msg.seq > cursor.last_read_message.seq
-        ):
+        if not created and cursor.last_read_message and last_msg.seq > cursor.last_read_message.seq:
             cursor.last_read_message = last_msg
             cursor.save(update_fields=["last_read_message"])
         return cursor
@@ -674,9 +670,7 @@ def write_task_comment_as_thread_reply(
                 # not insert a duplicate header.
                 Channel.objects.select_for_update().filter(pk=channel.pk).first()
                 parent = (
-                    Message.objects.filter(
-                        channel=channel, task_id=task_id, is_thread_reply=False
-                    )
+                    Message.objects.filter(channel=channel, task_id=task_id, is_thread_reply=False)
                     .only("id", "reply_count")
                     .first()
                 )
@@ -692,9 +686,7 @@ def write_task_comment_as_thread_reply(
                     parent = Message.objects.create(
                         channel=channel,
                         seq=header_seq,
-                        sender_id=(
-                            task_row.reporter_id or task_row.assignee_id or sender_id
-                        ),
+                        sender_id=(task_row.reporter_id or task_row.assignee_id or sender_id),
                         body=[
                             {
                                 "type": "heading",
@@ -704,9 +696,7 @@ def write_task_comment_as_thread_reply(
                                     "textAlignment": "left",
                                     "backgroundColor": "default",
                                 },
-                                "content": [
-                                    {"type": "text", "text": f"🧾 {title}", "styles": {}}
-                                ],
+                                "content": [{"type": "text", "text": f"🧾 {title}", "styles": {}}],
                                 "children": [],
                             }
                         ],
@@ -790,6 +780,48 @@ def write_task_comment_as_thread_reply(
         return None
 
 
+def update_task_comment_thread_reply(
+    *,
+    task_id: int,
+    comment_id: int,
+    body: list,
+) -> Optional[Message]:
+    """Carry an edit of a `TaskComments` row over to its v3 mirror.
+
+    The PM task thread renders a task comment only through the mirror, so an
+    edit that stops at the comment row leaves the old text in the thread for
+    good (MIP-946). Like the thread's own edit (`MessageDetailView.patch`), this
+    sets the body, its plain text and `edited_at`; `ts_updated_at` moves with the
+    save, which is what a client syncing the thread by `?since=` sees.
+
+    Only a live mirror is touched: a comment with none (older than the thread,
+    or never mirrored) has nothing to update, and a tombstoned one stays
+    deleted. Returns the mirror when this call updated it, else None. Never
+    raises: the caller's `TaskComments` row is the source of truth and must not
+    be affected by a mirror failure.
+    """
+    from django.utils import timezone
+
+    try:
+        msg = Message.objects.filter(
+            id=task_comment_message_uuid(task_id, comment_id), deleted_at__isnull=True
+        ).first()
+        if msg is None:
+            return None
+        msg.body = body or []
+        msg.body_text = _body_text_from_body(body)
+        msg.edited_at = timezone.now()
+        msg.save(update_fields=["body", "body_text", "edited_at", "ts_updated_at"])
+        return msg
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "[unified_writer] update_task_comment_thread_reply failed: task=%s comment=%s",
+            task_id,
+            comment_id,
+        )
+        return None
+
+
 def soft_delete_task_comment_as_thread_reply(
     *,
     task_id: int,
@@ -834,8 +866,7 @@ def soft_delete_task_comment_as_thread_reply(
         return True
     except Exception:  # noqa: BLE001
         logger.exception(
-            "[unified_writer] soft_delete_task_comment_as_thread_reply failed: "
-            "task=%s comment=%s",
+            "[unified_writer] soft_delete_task_comment_as_thread_reply failed: task=%s comment=%s",
             task_id,
             comment_id,
         )
