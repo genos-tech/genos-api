@@ -11,22 +11,29 @@ from origin.models.task.milestone_models import (
 )
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.purge import purge_milestone, purge_task
 from origin.services import mention_extractor
 from origin.services.custom_fields import sanitize_custom_field_values
+from origin.services.milestone_manage import (
+    FOLDER_NAME_MAX,
+    PATCHABLE_FIELDS,
+    UNSET,
+    clean_folder_name,
+    create_folder,
+    delete_milestone,
+    folder_name_taken,
+    update_milestone,
+)
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.milestone_service import (
     create_milestone,
     ensure_backing_task,
     parse_iso_date,
     sync_backing_task,
-    sync_milestone_assignees,
 )
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_collaborators import sync_task_collaborators
 from origin.services.task_project_move import milestone_subtree_task_ids, relocate_tasks
 from origin.services.thread_link import find_thread_link_conflict
-from origin.signals.task_signals import update_tasks_recorded
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import resolve_group_members
 from origin.views.utils.request_validators import (
@@ -424,17 +431,35 @@ class MilestoneView(AuthenticatedAPIView):
         # Folder move (MIP-847): resolved before the transaction like the other
         # lookups. A project move leaves the folder behind (folders belong to
         # one project), so a `folder_id` riding along with it is ignored.
-        folder_in_request = project_move is None and "folder_id" in request.data
-        new_folder = None
-        if folder_in_request:
+        new_folder = UNSET
+        if project_move is None and "folder_id" in request.data:
             new_folder, res = _resolve_folder(request.data, milestone.project_id)
             if res:
                 return res
 
+        # Sprint move support: explicit `sprint_id` key (including
+        # `None`) is honored; absent key leaves the sprint as-is. Resolved
+        # before the transaction, like the folder.
+        new_sprint = UNSET
+        if project_move is None and "sprint_id" in request.data:
+            new_sprint_id = request.data.get("sprint_id")
+            if new_sprint_id in (None, "null", ""):
+                new_sprint = None
+            else:
+                try:
+                    new_sprint = Sprint.objects.get(
+                        sprint_id=new_sprint_id,
+                        project_id=milestone.project_id,
+                        is_deleted=False,
+                    )
+                except Sprint.DoesNotExist:
+                    return Response(
+                        {"error": "Target sprint not found in this project."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
         with transaction.atomic():
-            # Sprint move support: explicit `sprint_id` key (including
-            # `None`) is honored; absent key leaves the sprint as-is.
-            sprint_changed = False
+            fields = {f: request.data.get(f) for f in PATCHABLE_FIELDS if f in request.data}
             if project_move is not None:
                 milestone.project = project_move
                 milestone.team_id = project_move.team_id
@@ -444,103 +469,53 @@ class MilestoneView(AuthenticatedAPIView):
                 # and the user re-picks a sprint there. Any `sprint_id` in
                 # the same payload is ignored for the same reason — it names
                 # a sprint in one project or the other, and both are wrong.
-                milestone.sprint = None
-                # Fans the cleared sprint out to the member tasks below.
-                sprint_changed = True
+                # (Cleared through the sprint parameter, which also fans the
+                # cleared sprint out to the member tasks.)
+                new_sprint = None
                 # Folders belong to one project; the milestone lands unfiled.
                 milestone.folder = None
-            elif "sprint_id" in request.data:
-                sprint_changed = True
-                new_sprint_id = request.data.get("sprint_id")
-                if new_sprint_id in (None, "null", ""):
-                    milestone.sprint = None
-                else:
-                    try:
-                        target = Sprint.objects.get(
-                            sprint_id=new_sprint_id,
-                            project_id=milestone.project_id,
-                            is_deleted=False,
-                        )
-                    except Sprint.DoesNotExist:
-                        return Response(
-                            {"error": "Target sprint not found in this project."},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-                    milestone.sprint = target
-
-            if folder_in_request:
-                milestone.folder = new_folder
-
-            for field in (
-                "title",
-                "description",
-                "status",
-                "status_code",
-                "priority",
-                "priority_code",
-                "effort_level",
-                "effort_level_code",
-                "reporter_id",
-                "tags",
-                "links",
-            ):
-                if field in request.data:
-                    setattr(milestone, field, request.data.get(field))
-
-            if "start_date" in request.data:
-                milestone.start_date = _parse_iso_date(request.data.get("start_date"))
-
-            if "due_date" in request.data:
-                milestone.due_date = _parse_iso_date(request.data.get("due_date"))
-
-            if project_move is not None:
                 # Tags are project-scoped rows, and another tenant's labels
-                # once a team boundary is crossed. Cleared after the field
-                # loop so a `tags` value in the same payload can't reinstate
-                # the source project's labels.
-                milestone.tags = None
+                # once a team boundary is crossed. Cleared after the payload's
+                # own fields, so a `tags` value in the same payload can't
+                # reinstate the source project's labels.
+                fields["tags"] = None
 
-            milestone.save()
-            _sync_backing_task(milestone)
+            def _backing_only_writes():
+                # Custom field values are stored on the backing task only —
+                # written AFTER _sync_backing_task so this save is never
+                # overwritten by the mirror pass (which doesn't touch the
+                # column). Replace-whole-map semantics, same as the task PUT.
+                # (Validated before the transaction opened.)
+                if custom_values_in_request:
+                    backing = _ensure_backing_task(milestone)
+                    backing.custom_field_values = cleaned_custom_values
+                    backing.save(update_fields=["custom_field_values", "ts_updated_at"])
 
-            # Custom field values are stored on the backing task only —
-            # written AFTER _sync_backing_task so this save is never
-            # overwritten by the mirror pass (which doesn't touch the
-            # column). Replace-whole-map semantics, same as the task PUT.
-            # (Validated before the transaction opened.)
-            if custom_values_in_request:
-                backing = _ensure_backing_task(milestone)
-                backing.custom_field_values = cleaned_custom_values
-                backing.save(update_fields=["custom_field_values", "ts_updated_at"])
+                # Collaborators live on the backing task M2M (see
+                # _serialize_milestone). Absent key => leave untouched, a list
+                # (incl. []) => wholesale replace — same contract as the task
+                # PUT. Independent of _sync_backing_task, which only mirrors
+                # scalar milestone columns and never touches the M2M.
+                if "collaborators" in request.data:
+                    backing = _ensure_backing_task(milestone)
+                    sync_task_collaborators(backing, request.data.get("collaborators"))
 
-            # Collaborators live on the backing task M2M (see
-            # _serialize_milestone). Absent key => leave untouched, a list
-            # (incl. []) => wholesale replace — same contract as the task
-            # PUT. Independent of _sync_backing_task, which only mirrors
-            # scalar milestone columns and never touches the M2M.
-            if "collaborators" in request.data:
-                backing = _ensure_backing_task(milestone)
-                sync_task_collaborators(backing, request.data.get("collaborators"))
-
-            # Tasks linked to this milestone inherit the milestone's
-            # sprint by convention (the frontend doesn't expose a
-            # direct sprint picker on tasks). When the milestone moves
-            # between sprints, push the new sprint to every task that
-            # cites it so sprint board / sprint analytics stay in sync.
-            # `_sync_backing_task` already handles the backing row;
-            # this catches the rest. Scoped to the sprint-changed path
-            # so a no-op patch (e.g. status flip) doesn't churn rows.
-            if sprint_changed:
-                update_tasks_recorded(
-                    TaskMaster.objects.filter(milestone=milestone).exclude(
-                        sprint_id=milestone.sprint_id
-                    ),
-                    cascade="milestone_sprint",
-                    sprint_id=milestone.sprint_id,
-                )
-
-            if "assignee_ids" in request.data:
-                self._sync_assignees(milestone, request.data.get("assignee_ids") or [])
+            update_milestone(
+                milestone,
+                fields=fields,
+                start_date=request.data.get("start_date")
+                if "start_date" in request.data
+                else UNSET,
+                due_date=request.data.get("due_date") if "due_date" in request.data else UNSET,
+                sprint=new_sprint,
+                folder=new_folder,
+                assignee_ids=(
+                    (request.data.get("assignee_ids") or [])
+                    if "assignee_ids" in request.data
+                    else UNSET
+                ),
+                after_sync=_backing_only_writes,
+            )
 
             # Carry the milestone's world into the destination project.
             # LAST in the transaction: `_sync_backing_task` above may have
@@ -619,44 +594,11 @@ class MilestoneView(AuthenticatedAPIView):
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
         if not is_project_member(milestone.project_id, request.user.id):
             return _deny_not_found("Milestone")
-        milestone.is_deleted = True
-        milestone.save(update_fields=["is_deleted", "ts_updated_at"])
-        # Soft-delete the backing task too so the milestone disappears
-        # from the project's task table on the next reload.
-        if milestone.task_id is not None:
-            TaskMaster.objects.filter(task_id=milestone.task_id).update(
-                is_deleted=True, status="Deleted"
-            )
-        # Detach child tasks so they remain visible in the project view
-        # rather than disappearing alongside the milestone. Children
-        # tracked via parent_task_id are also unparented.
-        update_tasks_recorded(
-            TaskMaster.objects.filter(milestone=milestone),
-            cascade="milestone_delete",
-            milestone=None,
-        )
-        if milestone.task_id is not None:
-            update_tasks_recorded(
-                TaskMaster.objects.filter(parent_task_id=milestone.task_id),
-                cascade="milestone_delete",
-                parent_task_id=None,
-            )
-        # Backing task got soft-deleted + every child detached → next
-        # project-tasks read needs a fresh DB pull.
-        invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
-        # Best-effort: drop the milestone's chunks (and its soft-deleted
-        # backing task's) from OpenSearch — chunkers skip `is_deleted`
-        # rows, so nothing else cleans these up until the orphan sweep.
-        purge_milestone(milestone_id)
-        if milestone.task_id is not None:
-            purge_task(milestone.task_id)
+        delete_milestone(milestone)
         return Response(
             {"message": "Milestone soft-deleted."},
             status=status.HTTP_200_OK,
         )
-
-    def _sync_assignees(self, milestone: MilestoneMaster, assignee_ids):
-        sync_milestone_assignees(milestone, assignee_ids)
 
 
 class MilestoneAssigneesView(AuthenticatedAPIView):
@@ -725,7 +667,7 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
         )
 
 
-_FOLDER_NAME_MAX = MilestoneFolder._meta.get_field("name").max_length
+_FOLDER_NAME_MAX = FOLDER_NAME_MAX
 
 
 def _serialize_folder(f: MilestoneFolder) -> dict:
@@ -741,8 +683,8 @@ def _serialize_folder(f: MilestoneFolder) -> dict:
 
 def _clean_folder_name(raw):
     """`(name, error_response)`: trimmed, non-empty, within the column."""
-    name = raw.strip() if isinstance(raw, str) else ""
-    if not name or len(name) > _FOLDER_NAME_MAX:
+    name = clean_folder_name(raw)
+    if name is None:
         return None, Response(
             {"error": f"name is required, at most {_FOLDER_NAME_MAX} characters."},
             status=status.HTTP_400_BAD_REQUEST,
@@ -784,23 +726,12 @@ class MilestoneFolderListView(AuthenticatedAPIView):
         name, res = _clean_folder_name(request.data.get("name"))
         if res:
             return res
-        if MilestoneFolder.objects.filter(project=project, name=name).exists():
+        if folder_name_taken(project.project_id, name):
             return Response(
                 {"error": "This project already has a folder with that name."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        last = (
-            MilestoneFolder.objects.filter(project=project)
-            .order_by("-sort_order")
-            .values_list("sort_order", flat=True)
-            .first()
-        )
-        folder = MilestoneFolder.objects.create(
-            team=project.team,
-            project=project,
-            name=name,
-            sort_order=(last + 1) if last is not None else 0,
-        )
+        folder = create_folder(project, name)
         return Response({"folder": _serialize_folder(folder)}, status=status.HTTP_201_CREATED)
 
 
@@ -828,11 +759,7 @@ class MilestoneFolderView(AuthenticatedAPIView):
             name, res = _clean_folder_name(request.data.get("name"))
             if res:
                 return res
-            if (
-                MilestoneFolder.objects.filter(project_id=folder.project_id, name=name)
-                .exclude(folder_id=folder.folder_id)
-                .exists()
-            ):
+            if folder_name_taken(folder.project_id, name, exclude_folder_id=folder.folder_id):
                 return Response(
                     {"error": "This project already has a folder with that name."},
                     status=status.HTTP_400_BAD_REQUEST,
