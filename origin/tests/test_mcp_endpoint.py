@@ -1397,6 +1397,44 @@ class TestUnknownArgumentsAreRefused(McpBase):
 
         self.assertEqual(self._milestones(assignee_id=who, assignee_user_id=who), ["Mine"])
 
+    def test_list_milestones_takes_the_same_status_name_as_list_tasks(self):
+        """`list_tasks` says `status`; `list_milestones` said `statuses`, so an
+        example carried across was refused as an unknown argument (MIP-871).
+        Both work, and a bare string is accepted like a list."""
+        self._key(scope=SCOPE_READ)
+        MilestoneMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            reporter=self.user,
+            title="Stuck",
+            status="Blocked",
+        )
+        MilestoneMaster.objects.create(
+            team=self.team, project=self.project, reporter=self.user, title="Fine", status="Open"
+        )
+
+        self.assertEqual(self._milestones(status=["Blocked"]), ["Stuck"])
+        self.assertEqual(self._milestones(statuses=["Blocked"]), ["Stuck"])
+        self.assertEqual(self._milestones(status="Blocked"), ["Stuck"])
+        self.assertEqual(self._milestones(status=["Blocked"], statuses=["Blocked"]), ["Stuck"])
+
+    def test_list_milestones_publishes_both_status_names_and_says_which_to_send(self):
+        props = tools.input_schema(tools.BY_NAME["list_milestones"])["properties"]
+
+        self.assertIn("list_tasks", props["status"]["description"])
+        self.assertIn("Older spelling", props["statuses"]["description"])
+        self.assertEqual(props["status"]["items"], props["statuses"]["items"])
+
+    def test_list_milestones_refuses_two_different_status_filters(self):
+        self._key(scope=SCOPE_READ)
+
+        text, is_error = self._tool_text(
+            self._call("list_milestones", {"status": ["Blocked"], "statuses": ["Open"]})
+        )
+
+        self.assertTrue(is_error)
+        self.assertIn("different values", text)
+
     def test_the_check_reads_the_published_schema_so_a_documented_key_is_never_refused(self):
         """Today an override only changes a property's type, so the registry's
         schema and the published one name the same keys. The check must read the

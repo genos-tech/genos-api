@@ -42,6 +42,13 @@ def _backing_display_id(m: MilestoneMaster) -> str | None:
     return None if shown.startswith("#") else shown
 
 
+def _as_status_list(value: Any) -> list[Any]:
+    """A status filter arrives as a list, or as one bare string."""
+    if isinstance(value, str):
+        return [value]
+    return list(value) if isinstance(value, (list, tuple, set)) else [value]
+
+
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     member_project_ids = set(
         ProjectMembers.objects.filter(
@@ -65,11 +72,22 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             )
         scoped_project_ids = {project_id}
 
-    raw_statuses = args.get("statuses")
+    # `status` is the name `list_tasks` takes; `statuses` is the older spelling,
+    # kept as an alias (MIP-871).
+    new_status, old_status = args.get("status"), args.get("statuses")
+    if (
+        new_status is not None
+        and old_status is not None
+        and _as_status_list(new_status) != _as_status_list(old_status)
+    ):
+        raise ToolError(
+            "`status` and `statuses` are the same filter and were given different "
+            "values. Send one of them (`status`)."
+        )
+    raw_statuses = new_status if new_status is not None else old_status
     statuses_filter: list[str] | None = None
     if raw_statuses is not None:
-        if isinstance(raw_statuses, str):
-            raw_statuses = [raw_statuses]
+        raw_statuses = _as_status_list(raw_statuses)
         invalid = set(raw_statuses) - _VALID_STATUSES
         if invalid:
             raise ToolError(
@@ -206,16 +224,25 @@ LIST_MILESTONES = Tool(
                 "type": "INTEGER",
                 "description": ("Restrict to one project. Omit to span all accessible projects."),
             },
-            "statuses": {
+            "status": {
                 "type": "ARRAY",
                 "items": {
                     "type": "STRING",
                     "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"],
                 },
                 "description": (
-                    "Filter milestones by one or more status values. Omit "
-                    "to include all non-tombstone milestones."
+                    "Filter milestones by one or more status values (the same "
+                    "argument `list_tasks` takes). Omit to include all "
+                    "non-tombstone milestones."
                 ),
+            },
+            "statuses": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "STRING",
+                    "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"],
+                },
+                "description": ("Older spelling of `status`; accepted for now. Send `status`."),
             },
             "assignee_id": {
                 "type": "STRING",
