@@ -1316,19 +1316,23 @@ class ListMilestonesSourcesTests(MilestoneToolBase):
         )
         self.assertEqual(row["folder_id"], folder_id)
 
-    def test_assignees_cost_no_extra_queries(self):
+    def test_assignees_are_read_in_one_query_however_many_milestones(self):
+        """Not one `.count()` / lookup per row."""
         from django.db import connection
         from django.test.utils import CaptureQueriesContext
 
-        milestones = [self._milestone(f"M{i}") for i in range(3)]
-        with CaptureQueriesContext(connection) as before:
-            LIST_MILESTONES.run({"project_id": self.project.project_id}, self.ctx)
-        for m in milestones:
+        for i in range(3):
+            m = self._milestone(f"M{i}")
             MilestoneAssignees.objects.create(team=self.team, milestone=m, user=self.user)
             MilestoneAssignees.objects.create(team=self.team, milestone=m, user=self.user2)
-        with CaptureQueriesContext(connection) as after:
-            LIST_MILESTONES.run({"project_id": self.project.project_id}, self.ctx)
-        self.assertEqual(len(after), len(before))
+
+        with CaptureQueriesContext(connection) as queries:
+            out = LIST_MILESTONES.run({"project_id": self.project.project_id}, self.ctx)
+
+        # (the base fixture already holds two milestones with no assignees)
+        self.assertEqual(sorted(r["assignee_count"] for r in out["milestones"]), [0, 0, 2, 2, 2])
+        on_assignees = [q["sql"] for q in queries if "milestoneassignees" in q["sql"].lower()]
+        self.assertEqual(len(on_assignees), 1, on_assignees)
 
 
 # --------------------------------------------------------------------------
