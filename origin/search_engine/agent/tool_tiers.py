@@ -45,6 +45,8 @@ SINGLE_WRITE_TOOLS = frozenset(
         "create_calendar_event",
         "update_calendar_event",
         "delete_calendar_event",
+        "manage_milestone",
+        "delete_milestone",
     }
 )
 

@@ -90,6 +90,8 @@ TOOL_CATEGORY: dict[str, str] = {
     "get_milestone_assignee_counts": "milestones",
     "list_sprints": "milestones",
     "get_sprint_summary": "milestones",
+    "manage_milestone": "milestones",
+    "delete_milestone": "milestones",
     # --- team ---
     "get_team_members": "team",
     "list_project_members": "team",

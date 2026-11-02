@@ -1803,7 +1803,8 @@ class TestPlantedInstructions(McpBase):
         """Adding a second is a decision, not a side effect — see the
         `tools.py` docstring before changing this set."""
         self.assertEqual(
-            {t.name for t in tools.CATALOG if t.destructive}, {"delete_calendar_event"}
+            {t.name for t in tools.CATALOG if t.destructive},
+            {"delete_calendar_event", "delete_milestone"},
         )
         self.assertTrue(all(t.write for t in tools.CATALOG if t.destructive))
 

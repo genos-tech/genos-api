@@ -1,12 +1,12 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 60 agent tools. This exposes 39. That is not all of them and
+Genos has 65 agent tools. This exposes 44. That is not all of them and
 not a staging accident — every tool costs the connected agent context on
 *every* request it makes, and much of the 60 answers questions Genos's
 own assistant gets asked ("who closed the most tasks last sprint"), not
 questions something working in the workspace has.
 
-What the 39 are chosen to be is **every write Genos has actually built,
+What the 44 are chosen to be is **every write Genos has actually built,
 plus the reads needed to drive them**, plus the five GitHub PR reads that
 let an agent see what became of the PR it opened (MIP-689), plus
 `get_task_history` — on a surface with no approval gate and no undo, the
@@ -65,7 +65,9 @@ answer is a hang. Two consequences, both load-bearing:
 * **A destructive tool needs a real undo before it belongs here.**
   `delete_calendar_event` is published because the registry's own
   description calls it out as destructive and a user asks for it by name;
-  it is the only delete in the registry, and the asymmetry is on purpose
+  with `delete_milestone` (MIP-879: a soft delete that keeps the milestone's
+  tasks, its own tool so the opt-in covers the delete and nothing else) it is
+  one of the registry's two deletes, and the asymmetry is on purpose
   rather than an oversight to be "fixed" by adding more. (The one
   removal besides it, `remove_task_delivery` (MIP-834), is not a delete in
   this sense: it only takes back a link `add_task_delivery` made, and
@@ -255,9 +257,11 @@ CATALOG: tuple[McpTool, ...] = (
         description=(
             "Milestones in a project, with due dates and progress. A "
             "milestone is how a multi-task piece of work is grouped — start "
-            "here when the user names one rather than a single task. A "
-            "milestone is also backed by a task, so `update_task` on that "
-            "backing id is how a milestone's own title and dates change. "
+            "here when the user names one rather than a single task. Each "
+            "milestone carries its `folder_id`, `sprint_id` and `assignee_ids`, "
+            "and `folders` lists the project's milestone folders: the ids "
+            "`manage_milestone` takes. `manage_milestone` is how a milestone's "
+            "own title, dates, assignees, folder and sprint change. "
             "`has_goal` is false when nobody has written what the milestone "
             "is for."
         ),
@@ -891,6 +895,69 @@ CATALOG: tuple[McpTool, ...] = (
         write=True,
         destructive=True,
     ),
+    McpTool(
+        name="manage_milestone",
+        registry_name="manage_milestone",
+        milestone_ref_args=("milestone_id",),
+        description=(
+            "Create or change a milestone, or manage a project's milestone "
+            "folders; `action` says which. 'create' makes a milestone with no "
+            "tasks yet (`project_id`, `title`; for a milestone together with its "
+            "tasks use `create_task_plan`). 'update' changes the milestone in "
+            "`milestone_id`: send only what changes: `title`, "
+            "`description_markdown` (replaces the whole description), "
+            "`start_date` / `due_date` (YYYY-MM-DD, '' clears), `priority`, "
+            "`effort_level`, `status`, `tags` (names from `list_project_tags`; "
+            "replaces, [] clears), `assignee_ids` (the FULL set of assignees; "
+            "replaces, [] clears; each must be on the team or the project), "
+            "`milestone_folder_id` and `sprint_id` ('' takes it out of its "
+            "folder / sprint). Read `list_milestones` first: it returns the "
+            "milestone ids, each milestone's current folder, sprint and "
+            "assignees, and the project's `folders`. 'create_folder' "
+            "(`project_id`, `folder_name`), 'rename_folder' and 'delete_folder' "
+            "(`milestone_folder_id`) manage the folders; deleting a folder "
+            "deletes no milestone, they become unfiled, and are not put back if "
+            "the folder is recreated. A milestone can't be moved to another "
+            "project, and its status can't be 'Deleted': use `delete_milestone`. "
+            "Everything is checked before anything is written, so a refused call "
+            "changes nothing. Requires a write-scoped API key."
+        ),
+        write=True,
+        # The registry's text sends the caller to `list_sprints`, which this
+        # surface does not publish; each milestone's current sprint is in
+        # `list_milestones`.
+        schema_overrides={
+            "sprint_id": {
+                "type": "string",
+                "description": (
+                    "A sprint of the milestone's project to put it in; its tasks "
+                    "follow the milestone. `list_milestones` shows each "
+                    "milestone's current `sprint_id`. '' takes the milestone out "
+                    "of its sprint."
+                ),
+            },
+        },
+    ),
+    McpTool(
+        name="delete_milestone",
+        registry_name="delete_milestone",
+        milestone_ref_args=("milestone_id",),
+        description=(
+            "Delete a milestone. **This is not reversible from here** — there is "
+            "no undo on this surface and the milestone would have to be recreated "
+            "by hand. Its tasks are kept: they stay in the project, no longer in "
+            "the milestone. Only call it when the user has asked for that "
+            "specific milestone to be deleted; get `milestone_id` from "
+            "`list_milestones` and check the title and task count you got back "
+            "really are the milestone meant. To finish a milestone rather than "
+            "remove it, set its status to 'Closed' with `manage_milestone`. "
+            "Deleting an already-deleted milestone succeeds. Requires a "
+            "write-scoped API key that its owner also opted into destructive "
+            "tools."
+        ),
+        write=True,
+        destructive=True,
+    ),
 )
 
 BY_NAME = {t.name: t for t in CATALOG}
@@ -1113,6 +1180,10 @@ _ARGUMENT_ALIASES = {
     "description": "content_text",
     "body": "content_text",
     "content": "content_text",
+    # `list_milestones` returns a folder as `folder_id`; the write that files a
+    # milestone in it takes `milestone_folder_id`, so it can't be mistaken for a
+    # note folder (MIP-879). Ignored by any tool that does not accept it.
+    "folder_id": "milestone_folder_id",
 }
 
 

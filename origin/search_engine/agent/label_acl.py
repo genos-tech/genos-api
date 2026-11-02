@@ -32,7 +32,12 @@ from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMembers
-from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
+from origin.models.task.milestone_models import (
+    MilestoneAssignees,
+    MilestoneFolder,
+    MilestoneMaster,
+)
+from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import chat_acl_user_ids, may_read_note, owns_personal_folder
 from origin.search_engine.agent.tools.base import ToolContext
@@ -144,6 +149,57 @@ class LabelAccess:
 
     def milestone_title(self, raw: Any) -> str | None:
         return self.milestone_titles([raw]).get(_as_int(raw))
+
+    def milestone(self, raw: Any) -> MilestoneMaster | None:
+        """The live milestone `raw` names, if the caller may read it (the
+        rule of `milestone_titles`); None otherwise."""
+        mid = _as_int(raw)
+        if mid is None or not self.usable:
+            return None
+        m = (
+            MilestoneMaster.objects.select_related("project")
+            .filter(milestone_id=mid, is_deleted=False)
+            .first()
+        )
+        return m if m is not None and self.milestone_readable(m) else None
+
+    # ---- milestone folders and sprints (MIP-879) -------------------------
+
+    def _project_object_readable(self, project: Any) -> bool:
+        """A live project in the caller's team that the caller belongs to: the
+        rule `manage_milestone` applies to a folder or sprint of that project."""
+        return (
+            self.usable
+            and not project.is_deleted
+            and str(project.team_id or "") == self.team_id
+            and project.project_id in self._projects()
+        )
+
+    def milestone_folder(self, raw: Any) -> MilestoneFolder | None:
+        """A milestone folder, if the caller belongs to its project. A folder's
+        own `team` can be NULL, so the tenant is the project's. NOT the note
+        folders of `folder_name`: a different table with a different id space."""
+        fid = _as_int(raw)
+        if fid is None or not self.usable:
+            return None
+        folder = MilestoneFolder.objects.select_related("project").filter(folder_id=fid).first()
+        if folder is None or not self._project_object_readable(folder.project):
+            return None
+        return folder
+
+    def milestone_folder_name(self, raw: Any) -> str | None:
+        folder = self.milestone_folder(raw)
+        return folder.name if folder else None
+
+    def sprint_name(self, raw: Any) -> str | None:
+        """A live sprint's name, if the caller belongs to its project."""
+        sid = _as_int(raw)
+        if sid is None or not self.usable:
+            return None
+        sprint = Sprint.objects.select_related("project").filter(sprint_id=sid).first()
+        if sprint is None or sprint.is_deleted or not self._project_object_readable(sprint.project):
+            return None
+        return sprint.name
 
     # ---- projects ------------------------------------------------------
 

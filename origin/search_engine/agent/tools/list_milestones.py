@@ -16,10 +16,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.db.models import Count, Q
+from django.db.models import Count, Prefetch, Q
 
 from origin.models.project.prj_models import ProjectMembers
-from origin.models.task.milestone_models import MilestoneMaster
+from origin.models.task.milestone_models import MilestoneAssignees, MilestoneFolder, MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.task_enums import blank_to_none
@@ -119,10 +119,19 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         limit = 50
     limit = max(1, min(limit, _MAX_LIMIT))
 
-    qs = MilestoneMaster.objects.select_related("project", "task", "folder").filter(
-        team_id=ctx.team_id,
-        project_id__in=scoped_project_ids,
-        is_deleted=False,
+    qs = (
+        MilestoneMaster.objects.select_related("project", "task", "folder")
+        .prefetch_related(
+            Prefetch(
+                "milestone_assignees",
+                queryset=MilestoneAssignees.objects.order_by("ts_created_at", "id"),
+            )
+        )
+        .filter(
+            team_id=ctx.team_id,
+            project_id__in=scoped_project_ids,
+            is_deleted=False,
+        )
     )
     if statuses_filter:
         qs = qs.filter(status__in=statuses_filter)
@@ -151,7 +160,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 & ~Q(status__in=_CLOSED_STATUSES),
             ),
         )
-        assignee_count = m.milestone_assignees.count()
+        # Prefetched above; `.count()` would be one query per row.
+        assignee_ids = [str(a.user_id) for a in m.milestone_assignees.all()]
         milestones.append(
             {
                 "milestone_id": m.milestone_id,
@@ -160,6 +170,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 # Grouping folder (MIP-847); null when unfiled.
                 "folder_id": m.folder_id,
                 "folder_name": m.folder.name if m.folder_id else None,
+                # The sprint it is planned in; null when unplanned.
+                "sprint_id": m.sprint_id,
                 # Backing task (every milestone is mirrored by a task row;
                 # None for legacy milestones created before the mirror).
                 # Needed to attach a plan NOTE to a milestone — task notes
@@ -175,7 +187,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "tasks_total": agg.get("tasks_total", 0) or 0,
                 "tasks_closed": agg.get("tasks_closed", 0) or 0,
                 "overdue_count": agg.get("overdue", 0) or 0,
-                "assignee_count": assignee_count,
+                "assignee_count": len(assignee_ids),
+                "assignee_ids": assignee_ids,
                 # False when the description is empty or only the unmodified
                 # template: nobody has written what this milestone is for.
                 "has_goal": has_written_body(m.description),
@@ -192,9 +205,20 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     else:
         summary = "No milestones in scope."
 
+    # The projects' milestone folders (MIP-847), so a folder id has a source:
+    # `manage_milestone` files a milestone by `milestone_folder_id` and
+    # renames / deletes a folder by it.
+    folders = [
+        {"folder_id": f.folder_id, "project_id": f.project_id, "name": f.name}
+        for f in MilestoneFolder.objects.filter(project_id__in=scoped_project_ids).order_by(
+            "project_id", "sort_order", "folder_id"
+        )
+    ]
+
     return {
         "project_id": int(raw_project_id) if raw_project_id is not None else None,
         "milestones": milestones,
+        "folders": folders,
         "__summary__": summary,
     }
 
@@ -214,7 +238,10 @@ LIST_MILESTONES = Tool(
         "table view. Each row's task_id is the milestone's BACKING task "
         "(use it e.g. to attach a plan note to the milestone; null on "
         "legacy milestones); display_id is that task's display id (PRJ-123), "
-        "the name people use for the milestone. Scoped to milestones in projects the "
+        "the name people use for the milestone. Each row also carries its "
+        "folder_id, sprint_id and assignee_ids; `folders` lists the milestone "
+        "folders ({folder_id, project_id, name}) of the projects in scope, for "
+        "manage_milestone. Scoped to milestones in projects the "
         "current user is a member of."
     ),
     parameters_schema={

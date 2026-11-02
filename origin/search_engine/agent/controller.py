@@ -364,6 +364,14 @@ def _resolve_note_folder_name(raw: Any, access: LabelAccess) -> str | None:
     return access.folder_name(raw)
 
 
+def _resolve_milestone_folder_name(raw: Any, access: LabelAccess) -> str | None:
+    return access.milestone_folder_name(raw)
+
+
+def _resolve_sprint_name(raw: Any, access: LabelAccess) -> str | None:
+    return access.sprint_name(raw)
+
+
 # Argument-key → resolver. Resolvers return None on a miss so we fall
 # back to the raw value (the user sees the ID rather than a blank).
 _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any, LabelAccess], str | None]] = {
@@ -380,6 +388,10 @@ _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any, LabelAccess], str | None]] = {
     "parent_task_id": _resolve_task_display_id,
     # Only the note tools take `folder_id` (My-Notes sidebar folders).
     "folder_id": _resolve_note_folder_name,
+    # A milestone's folder is another table; its argument has its own name so
+    # the note-folder resolver above can never label it (MIP-879).
+    "milestone_folder_id": _resolve_milestone_folder_name,
+    "sprint_id": _resolve_sprint_name,
 }
 
 
@@ -655,6 +667,101 @@ def _friendly_dependency_arguments(
             ]
 
 
+def _friendly_manage_milestone_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """In-place nested enrichment for `manage_milestone` arguments (MIP-879).
+
+    The flat pass labels `project_id`, `milestone_id`, `milestone_folder_id` and
+    `sprint_id`. This names the people in `assignee_ids` (a list, below the flat
+    pass) and, for an update, ADDS the present value of every field being
+    changed under `current`, keyed by argument name, so the card can show
+    old → new. A rename or delete of a folder gets the folder's present name
+    (and how many milestones a delete unfiles). Nothing is added for an object
+    the caller can't read."""
+    from origin.models.task.milestone_models import (  # noqa: PLC0415
+        MilestoneAssignees,
+        MilestoneMaster,
+    )
+    from origin.search_engine.agent.tools.task_tags import tag_names  # noqa: PLC0415
+
+    proposed = args.get("assignee_ids")
+    proposed = [u for u in proposed if u] if isinstance(proposed, list) else []
+    action = args.get("action")
+
+    milestone = access.milestone(args.get("milestone_id")) if action == "update" else None
+    current_people = (
+        [
+            str(uid)
+            for uid in MilestoneAssignees.objects.filter(milestone=milestone).values_list(
+                "user_id", flat=True
+            )
+        ]
+        if milestone is not None and args.get("assignee_ids") is not None
+        else []
+    )
+    names = access.usernames([*proposed, *current_people]) if proposed or current_people else {}
+    if proposed:
+        out["assignee_ids"] = [names.get(str(u), u) for u in proposed]
+
+    if milestone is not None:
+        current: dict[str, Any] = {}
+        for key in ("title", "status", "priority", "effort_level"):
+            if args.get(key) is not None:
+                current[key] = getattr(milestone, key) or None
+        for key in ("start_date", "due_date"):
+            if args.get(key) is not None:
+                value = getattr(milestone, key)
+                current[key] = value.isoformat() if value else None
+        if args.get("tags") is not None:
+            current["tags"] = tag_names(milestone.tags)
+        if args.get("assignee_ids") is not None:
+            current["assignee_ids"] = [names.get(uid, uid) for uid in current_people]
+        if args.get("milestone_folder_id") is not None:
+            current["milestone_folder_id"] = (
+                (access.milestone_folder_name(milestone.folder_id) or milestone.folder_id)
+                if milestone.folder_id
+                else None
+            )
+        if args.get("sprint_id") is not None:
+            current["sprint_id"] = (
+                (access.sprint_name(milestone.sprint_id) or milestone.sprint_id)
+                if milestone.sprint_id
+                else None
+            )
+        out["current"] = current
+        return
+
+    if action in ("rename_folder", "delete_folder"):
+        folder = access.milestone_folder(args.get("milestone_folder_id"))
+        if folder is None:
+            return
+        current = {"folder_name": folder.name}
+        if action == "delete_folder":
+            current["milestones"] = MilestoneMaster.objects.filter(
+                folder=folder, is_deleted=False
+            ).count()
+        out["current"] = current
+
+
+def _friendly_delete_milestone_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """In-place nested enrichment for `delete_milestone` arguments (MIP-879).
+
+    ADDS what the approver is about to lose track of: the milestone's present
+    title and how many tasks the delete detaches (they are kept). Only for a
+    milestone the caller can read."""
+    from origin.search_engine.agent.tools.delete_milestone import (  # noqa: PLC0415
+        milestone_task_count,
+    )
+
+    milestone = access.milestone(args.get("milestone_id"))
+    if milestone is None:
+        return
+    out["current"] = {"title": milestone.title, "tasks": milestone_task_count(milestone)}
+
+
 # Tool-name → nested enrichment pass, applied after the flat resolvers.
 # Each edits the labelled copy and may read the caller's raw args for an
 # id the flat pass has already replaced with a label.
@@ -663,6 +770,8 @@ _FRIENDLY_NESTED_ENRICHERS: dict[
 ] = {
     "create_task_plan": _friendly_task_plan_arguments,
     "update_task": _friendly_update_task_arguments,
+    "manage_milestone": _friendly_manage_milestone_arguments,
+    "delete_milestone": _friendly_delete_milestone_arguments,
     "update_tasks_bulk": _friendly_bulk_update_arguments,
     "update_task_dependencies": _friendly_dependency_arguments,
     "update_note": _friendly_update_note_arguments,
@@ -1129,6 +1238,29 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
                 display_id=result.get("display_id"),
             )
         ]
+
+    if call_name == "manage_milestone":
+        # A milestone action → the milestone's chip; a folder action has no
+        # milestone, so the chip is its project's.
+        if result.get("milestone_id"):
+            return [
+                _milestone_source(
+                    result["milestone_id"],
+                    result.get("title"),
+                    result.get("project_id"),
+                    result.get("task_id"),
+                )
+            ]
+        if result.get("project_id"):
+            return [_project_source(result["project_id"], result.get("project_name"))]
+        return []
+
+    if call_name == "delete_milestone":
+        # The milestone is gone, so a chip for it would be a dead link; the
+        # project it left is the place to go.
+        if result.get("project_id"):
+            return [_project_source(result["project_id"], result.get("project_name"))]
+        return []
 
     if call_name in ("create_todo_item", "update_todo_item"):
         # Todo write tools → chip the operated item (same entity_id
