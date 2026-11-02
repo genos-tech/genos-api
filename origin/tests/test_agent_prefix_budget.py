@@ -24,9 +24,10 @@ from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
 
 # 112,091 when this was set: about 26.5k tokens by Gemini's own count. Raised to
-# 118,500 for MIP-880's three tools (115,393 measured), with the routing cases
-# for them in both languages, as the rule above asks.
-BUDGET_CHARS = 118_500
+# 118,000 for MIP-880's three tools (115,095 measured, the same headroom as
+# before), with the routing cases for them in both languages, as the rule above
+# asks.
+BUDGET_CHARS = 118_000
 
 
 def _declared_chars() -> int:
