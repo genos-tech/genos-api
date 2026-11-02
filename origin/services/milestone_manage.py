@@ -144,10 +144,15 @@ def delete_milestone(milestone: MilestoneMaster) -> None:
     # Detach child tasks so they remain visible in the project view
     # rather than disappearing alongside the milestone. Children
     # tracked via parent_task_id are also unparented.
+    # A task has no sprint of its own: it is in its milestone's sprint
+    # (`sprint_id` mirrors the milestone's, see `reparent_task`). So the sprint
+    # leaves with the milestone, in the same write so the history records it
+    # (MIP-923); left behind, the task sat in a sprint it had no way to leave.
     update_tasks_recorded(
         TaskMaster.objects.filter(milestone=milestone),
         cascade="milestone_delete",
         milestone=None,
+        sprint=None,
     )
     if milestone.task_id is not None:
         update_tasks_recorded(
