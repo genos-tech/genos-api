@@ -61,7 +61,8 @@ def _schedule_webhook(comment: TaskComments, task_id: int) -> None:
         logger.warning("webhook comment enqueue failed", exc_info=True)
 
 
-def _mentioned_ids(comment_body: Any) -> set[str]:
+def mentioned_ids(comment_body: Any) -> set[str]:
+    """Everyone a comment body @-mentions, groups expanded to their members."""
     body = comment_body or []
     mentioned = set(mention_extractor.extract_mentioned_user_ids(body))
     group_ids = mention_extractor.extract_mention_group_ids(body)
@@ -152,7 +153,7 @@ def fan_out_task_comment(comment: TaskComments) -> CommentFanout:
     # comment is already saved. On error we skip the live broadcast — the
     # activity feed reconciles on next load.
     try:
-        mentioned = _mentioned_ids(comment.comment_body)
+        mentioned = mentioned_ids(comment.comment_body)
         result.mentioned_user_ids = list(mentioned)
 
         # `skip_actor=False`: tagging yourself in a comment still pings,

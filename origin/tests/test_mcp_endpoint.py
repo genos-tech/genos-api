@@ -1030,6 +1030,8 @@ class TestTheCatalogContract(McpBase):
             "milestone_id": "list_milestones",
             "assignee_id": "get_team_members",
             "folder_id": "list_note_folders",
+            "comment_id": "get_task",
+            "activity_id": "get_task_history",
         }
         published = {t.name for t in tools.CATALOG}
         undrivable = []
@@ -1804,7 +1806,7 @@ class TestPlantedInstructions(McpBase):
         `tools.py` docstring before changing this set."""
         self.assertEqual(
             {t.name for t in tools.CATALOG if t.destructive},
-            {"delete_calendar_event", "delete_milestone", "delete_todo_item"},
+            {"delete_calendar_event", "delete_comment", "delete_milestone", "delete_todo_item"},
         )
         self.assertTrue(all(t.write for t in tools.CATALOG if t.destructive))
 

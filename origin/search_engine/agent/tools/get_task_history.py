@@ -207,6 +207,10 @@ def _entry(row: TaskActivity, usernames: dict[str, str]) -> dict[str, Any]:
         # Whether the body from before this edit was kept, so it can be put
         # back from the task's history in the app (MIP-738).
         entry["restorable"] = bool((row.metadata or {}).get("previousBodyKept"))
+        if entry["restorable"]:
+            # What `restore_task_body` takes: the OLD text of this edit is the
+            # one that comes back.
+            entry["activity_id"] = row.activity_id
     # Carried along by a change to another row (a milestone move, a
     # project move, …) rather than edited on this task directly.
     if cascade := (row.metadata or {}).get("cascade"):

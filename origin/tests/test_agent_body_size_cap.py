@@ -203,6 +203,21 @@ class EveryWritePathRefusesAnOversizeBody(BaseAPITestCase):
         self._run("add_comment", {**args, "body_text": self.ok})
         self.assertEqual(TaskComments.objects.count(), before + 1)
 
+    # -- update_comment --
+
+    def test_update_comment(self):
+        args = {"task_id": self.task.task_id}
+        comment_id = self._run("add_comment", {**args, "body_text": "first draft"})["comment_id"]
+        row = TaskComments.objects.get(task=self.task, comment_id=comment_id)
+        before = row.comment_body
+        update = {**args, "comment_id": comment_id}
+        self._refused("update_comment", {**update, "body_text": self.big}, "body_text")
+        row.refresh_from_db()
+        self.assertEqual(row.comment_body, before, "a refused edit changes nothing")
+        self._run("update_comment", {**update, "body_text": self.ok})
+        row.refresh_from_db()
+        self.assertNotEqual(row.comment_body, before)
+
     # -- create_task / update_task --
 
     def test_create_task(self):
@@ -304,6 +319,7 @@ GUARDED = {
     "create_note": {"content_text"},
     "update_note": {"content_text"},
     "add_comment": {"body_text"},
+    "update_comment": {"body_text"},
     "create_task": {"content_text"},
     "update_task": {"content_text", "body_append", "body_prepend", "old_text", "new_text"},
     "create_task_plan": {"content_markdown", "description_markdown"},

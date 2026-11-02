@@ -7,6 +7,7 @@ from rest_framework.response import Response
 
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
+from origin.services.task_body_restore import RestoreRefused, restore_task_body
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import can_access_task
 
@@ -572,41 +573,12 @@ class TaskBodyRestoreView(AuthenticatedAPIView):
         if not can_access_task(task_id, request.user.id):
             return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        row = TaskActivity.objects.filter(
-            activity_id=activity_id,
-            task_id=task_id,
-            action_type=TaskActivityActionType.DESCRIPTION,
-        ).first()
-        if row is None:
-            return Response({"error": "Activity not found."}, status=status.HTTP_404_NOT_FOUND)
-        if not (row.metadata or {}).get("previousBodyKept") or not isinstance(row.old_value, list):
-            return Response(
-                {"error": "That edit did not keep the previous description."},
-                status=status.HTTP_400_BAD_REQUEST,
+        try:
+            result = restore_task_body(
+                task=TaskMaster.objects.get(task_id=task_id),
+                activity_id=activity_id,
+                actor_id=request.user.id,
             )
-
-        task = TaskMaster.objects.get(task_id=task_id)
-        previous_body = row.old_value
-        replaced_body = task.content
-
-        from origin.search_engine.agent.tools.body_mentions import (  # noqa: PLC0415
-            notify_task_body_mentions,
-        )
-        from origin.services.collab_push import push_task_body  # noqa: PLC0415
-
-        # A restore must be restorable: the signal keeps the previous body only
-        # for agent and API-key writes, and this one arrives as the app.
-        task.content = previous_body
-        task._keep_previous_body = True
-        task.save(update_fields=["content"])
-        push_task_body(task.task_id, previous_body)
-        notify_task_body_mentions(task, actor_id=str(request.user.id))
-
-        return Response(
-            {
-                "taskId": task.task_id,
-                "restoredFrom": row.activity_id,
-                "replacedBodyKept": isinstance(replaced_body, list),
-            },
-            status=status.HTTP_200_OK,
-        )
+        except RestoreRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
+        return Response(result, status=status.HTTP_200_OK)

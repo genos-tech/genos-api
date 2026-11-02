@@ -1,6 +1,6 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 67 agent tools. This exposes 63. The four it leaves out are left out
+Genos has 70 agent tools. This exposes 66. The four it leaves out are left out
 on purpose (`WITHHELD` in `test_mcp_team_numbers`, with a reason each, and a
 test that fails when a tool is neither published nor listed there): a connected
 client has its own web search and its own memory, and the other two are
@@ -885,6 +885,57 @@ CATALOG: tuple[McpTool, ...] = (
             "Post a comment on a task. This is how you report back — the PR "
             "link, what you changed, anything you had to decide. The comment "
             "appears in the task's thread and notifies the assignee. "
+            "Requires a write-scoped API key."
+        ),
+        write=True,
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
+        name="update_comment",
+        registry_name="update_comment",
+        description=(
+            "Replace the text of one of the caller's own comments on a task. "
+            "The whole comment is replaced, so send the full new text. Get "
+            "`comment_id` from `get_task` (each comment lists its `comment_id` "
+            "and `sender_id`; only comments the caller wrote can be changed, so "
+            "match `sender_id` against `get_current_user`). "
+            "Anyone the new text newly @-mentions is notified. Requires a "
+            "write-scoped API key."
+        ),
+        write=True,
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
+        name="delete_comment",
+        registry_name="delete_comment",
+        description=(
+            "Delete one of the caller's own comments on a task. **This is not "
+            "reversible from here** — the comment disappears from the task, its "
+            "thread and search, and there is no undo on this surface, so only "
+            "call it when the user asked for that specific comment to go; to fix "
+            "a comment use `update_comment`. Get `comment_id` from `get_task`, "
+            "matching `sender_id` against `get_current_user`. "
+            "Deleting an already-deleted comment succeeds. Requires a "
+            "write-scoped API key that its owner also opted into destructive "
+            "tools."
+        ),
+        write=True,
+        destructive=True,
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
+        name="restore_task_body",
+        registry_name="restore_task_body",
+        description=(
+            "Put a task's description back to what it was before an earlier "
+            "edit. Get `activity_id` from `get_task_history`: pick a "
+            "`description_edited` entry whose `restorable` is true, and the "
+            "text from BEFORE that edit comes back. The description being "
+            "replaced is kept, so a restore can be undone the same way. Use it "
+            "to walk back a rewrite; for a small change use `update_task`. "
             "Requires a write-scoped API key."
         ),
         write=True,
