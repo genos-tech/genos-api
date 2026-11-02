@@ -1243,6 +1243,54 @@ def input_schema(tool: McpTool) -> dict[str, Any]:
     return schema
 
 
+def resolve_references(tool: McpTool, args: dict[str, Any], team_id: str) -> dict[str, Any]:
+    """`args` with every reference `tool` takes turned into the id it wants.
+
+    The one place that says what a reference is, used by this endpoint and by
+    the in-app agent (`agent/references.py`), so the two can't come to disagree.
+    Raises `ToolError` for a reference that names nothing. `args` is untouched.
+    """
+    args = dict(args)
+    for arg in tool.task_ref_args:
+        if arg in args and args[arg] is not None:
+            if args[arg] == "" and arg in tool.clearable_task_ref_args:
+                continue
+            args[arg] = resolve_task_ref(args[arg], team_id)
+    for arg in tool.note_ref_args:
+        if arg in args and args[arg] is not None:
+            note_id, note_type = resolve_note_ref(args[arg], team_id)
+            args[arg] = note_id
+            # Only a reference that actually determined the family
+            # overrides what the caller passed. A bare id determines
+            # nothing, and guessing would turn a wrong `note_type`
+            # into a confident write against the wrong table.
+            if note_type is not None:
+                args["note_type"] = note_type
+    for arg in tool.milestone_ref_args:
+        if arg in args and args[arg] is not None:
+            args[arg] = resolve_milestone_ref(args[arg], team_id, quiet=tool.quiet_milestone_refs)
+    for list_arg, item_key in tool.nested_milestone_ref_args:
+        entries = args.get(list_arg)
+        if isinstance(entries, list):
+            args[list_arg] = [
+                {**entry, item_key: resolve_milestone_ref(entry[item_key], team_id)}
+                if isinstance(entry, dict) and entry.get(item_key) is not None
+                else entry
+                for entry in entries
+            ]
+    for list_arg, item_key in tool.nested_task_ref_args:
+        entries = args.get(list_arg)
+        if not isinstance(entries, list):
+            continue
+        resolved = []
+        for entry in entries:
+            if isinstance(entry, dict) and entry.get(item_key) is not None:
+                entry = {**entry, item_key: resolve_task_ref(entry[item_key], team_id)}
+            resolved.append(entry)
+        args[list_arg] = resolved
+    return args
+
+
 def _disabled_tools() -> set[str]:
     """The `AGENT_DISABLED_TOOLS` ops kill switch, honoured here too.
 
@@ -1458,45 +1506,7 @@ def call(
         log.info("MCP %s refused unknown argument(s): %s", name, ", ".join(unknown))
         return _refuse_unknown_arguments(tool, unknown)
     try:
-        for arg in tool.task_ref_args:
-            if arg in args and args[arg] is not None:
-                if args[arg] == "" and arg in tool.clearable_task_ref_args:
-                    continue
-                args[arg] = resolve_task_ref(args[arg], ctx.team_id)
-        for arg in tool.note_ref_args:
-            if arg in args and args[arg] is not None:
-                note_id, note_type = resolve_note_ref(args[arg], ctx.team_id)
-                args[arg] = note_id
-                # Only a reference that actually determined the family
-                # overrides what the caller passed. A bare id determines
-                # nothing, and guessing would turn a wrong `note_type`
-                # into a confident write against the wrong table.
-                if note_type is not None:
-                    args["note_type"] = note_type
-        for arg in tool.milestone_ref_args:
-            if arg in args and args[arg] is not None:
-                args[arg] = resolve_milestone_ref(
-                    args[arg], ctx.team_id, quiet=tool.quiet_milestone_refs
-                )
-        for list_arg, item_key in tool.nested_milestone_ref_args:
-            entries = args.get(list_arg)
-            if isinstance(entries, list):
-                args[list_arg] = [
-                    {**entry, item_key: resolve_milestone_ref(entry[item_key], ctx.team_id)}
-                    if isinstance(entry, dict) and entry.get(item_key) is not None
-                    else entry
-                    for entry in entries
-                ]
-        for list_arg, item_key in tool.nested_task_ref_args:
-            entries = args.get(list_arg)
-            if not isinstance(entries, list):
-                continue
-            resolved = []
-            for entry in entries:
-                if isinstance(entry, dict) and entry.get(item_key) is not None:
-                    entry = {**entry, item_key: resolve_task_ref(entry[item_key], ctx.team_id)}
-                resolved.append(entry)
-            args[list_arg] = resolved
+        args = resolve_references(tool, args, ctx.team_id)
         payload = REGISTRY[tool.registry_name].run(args, ctx)
     except ToolError as exc:
         # The tool's own vocabulary — not authorized, not found, invalid
