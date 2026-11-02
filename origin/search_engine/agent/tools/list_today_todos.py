@@ -1,11 +1,9 @@
 """`list_today_todos` — read-only tool.
 
-Returns the requesting user's todos for today (server-local date).
-ACL is implicit: filters by `group.user_id == ctx.user_id`.
-
-Note(tz): the server-local date is used as a proxy for the user's
-"today". Multi-region usage would require a per-user timezone
-preference; flagged for the deferred Phase 4 work.
+Returns the requesting user's todos for their own today, in the team the
+call runs in. ACL is implicit: a day's group is per user AND team, so both
+are filtered on. Without the team, someone in two teams could be handed the
+other team's day, whose ids `update_todo_item` then refuses (MIP-907).
 """
 
 from __future__ import annotations
@@ -22,7 +20,7 @@ from origin.services.user_time import today_for_user_id, zone_for_user_id
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     today = today_for_user_id(ctx.user_id)
     group = (
-        ToDoGroup.objects.filter(user_id=ctx.user_id, local_date=today)
+        ToDoGroup.objects.filter(user_id=ctx.user_id, team_id=ctx.team_id, local_date=today)
         .prefetch_related("items", "items__category")
         .first()
     )

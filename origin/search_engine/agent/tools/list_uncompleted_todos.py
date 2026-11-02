@@ -1,7 +1,8 @@
 """`list_uncompleted_todos` — read-only tool.
 
 Returns the user's still-open todo items across the past N days
-(default 14). Capped at 50 items to keep the LLM payload reasonable.
+(default 14), in the team the call runs in. Capped at 50 items to keep the
+LLM payload reasonable.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     qs = (
         ToDoItem.objects.filter(
             group__user_id=ctx.user_id,
+            group__team_id=ctx.team_id,
             group__local_date__gte=from_date,
             group__local_date__lte=today,
             is_completed=False,
