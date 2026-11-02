@@ -67,7 +67,6 @@ from origin.search_engine.agent.prompts import (
 )
 from origin.search_engine.agent.references import declared_schema, resolve_call
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError
-from origin.search_engine.agent.tools.categories import PERIPHERAL_FAMILIES, TOOL_CATEGORY
 from origin.search_engine.agent.tools.task_custom_fields import (
     project_fields,
     read_custom_fields,
@@ -275,61 +274,6 @@ def _build_tool_declarations(
         for t in REGISTRY.values()
         if t.name not in disabled
     ]
-
-
-# Per-context tool subsetting (RAG_TOOL_SUBSETTING — §4.5). Peripheral
-# tool families are dropped from the declared tool list when the query
-# shows no keyword signal for them. Families are derived from tool NAMES
-# (robust to new tools joining a family); keywords use word boundaries so
-# short tokens ("pr", "i") don't match inside unrelated words ("project",
-# "list"). Core task/note/chat/project/analytics tools belong to no
-# family and are never dropped.
-_PERIPHERAL_FAMILY_KEYWORDS: dict[str, "re.Pattern[str]"] = {
-    "pr": re.compile(
-        r"\b(pr|prs|pull requests?|pull-requests?|github|merge|merged|commit|commits|"
-        r"code review|diff)\b"
-    ),
-    "calendar": re.compile(
-        r"\b(calendar|schedule|scheduling|meeting|meetings|event|events|"
-        r"appointment|availability|agenda)\b"
-    ),
-    "todo": re.compile(r"\b(todo|todos|to-do|to do|checklist)\b"),
-    "me": re.compile(r"\b(my|me|mine|i|i'm|im)\b|assigned to me|do i|am i|should i"),
-}
-
-
-def _tool_family(name: str) -> str | None:
-    """Map a tool name to its peripheral family, or None for a core tool
-    (core tools are never subset out).
-
-    Reads the declared `TOOL_CATEGORY` map rather than the old
-    name-substring heuristics — a new tool now gets its family from the
-    reviewed taxonomy (which the registry test forces to be complete)
-    instead of from whatever its name happens to contain. Same four
-    families as before; parity with the old heuristic is pinned by
-    `test_agent_tool_categories`.
-    """
-    category = TOOL_CATEGORY.get(name)
-    return category if category in PERIPHERAL_FAMILIES else None
-
-
-def _irrelevant_tool_families(query: str) -> set[str]:
-    """Tool names to disable for `query` under RAG_TOOL_SUBSETTING.
-
-    A peripheral family is excluded only when the query contains NONE of
-    its keywords. Errs toward keeping: an over-broad keyword match keeps a
-    possibly-unneeded family (harmless); a missed match would drop a
-    needed family (the failure mode — minimised by conservative keyword
-    lists and the one-shot caveat documented on the setting). Pure (no
-    I/O) — unit-testable.
-    """
-    q = (query or "").lower()
-    triggered = {fam for fam, rx in _PERIPHERAL_FAMILY_KEYWORDS.items() if rx.search(q)}
-    return {
-        t.name
-        for t in REGISTRY.values()
-        if (fam := _tool_family(t.name)) is not None and fam not in triggered
-    }
 
 
 # Tool arguments that are raw DB primary keys. The agent emits these
@@ -1933,20 +1877,6 @@ def run_agent(
         messages.append(_user_turn(prior_query))
         messages.append(AgentMessage(role="assistant", text=prior_answer))
     messages.append(_user_turn(query))
-
-    # §4.5 — per-context tool subsetting. Drop peripheral families the
-    # query shows no signal for, unioned with anything the caller already
-    # disabled (e.g. the web-search toggle). Cuts the declared tool
-    # surface; never touches core tools. Off by default.
-    if settings.SEARCH_ENGINE.get("RAG_TOOL_SUBSETTING", False):
-        excluded = _irrelevant_tool_families(query)
-        if excluded:
-            disabled_tools = (disabled_tools or set()) | excluded
-            log.info(
-                "Tool subsetting: dropped %d peripheral tool(s); %d declared",
-                len(excluded),
-                len(REGISTRY) - len(disabled_tools),
-            )
 
     # Phase 3.2 — optional self-critique pass. Dispatched here so the
     # resume_agent path (write-tool approval flow) is NOT critiqued;

@@ -35,11 +35,8 @@ Every new-tool PR ships with:
 - [ ] **Category** — add the tool's name to `TOOL_CATEGORY` in
   [`categories.py`](categories.py). The registry test fails with the
   missing name spelled out until you do. Categories drive the
-  registry-generated prompt directory and the peripheral-family
-  subsetting map — pick the existing category that matches the tool's
-  *purpose* (add a new one only with a real new domain, and note that
-  `PERIPHERAL_FAMILIES` membership decides whether `RAG_TOOL_SUBSETTING`
-  may drop it).
+  registry-generated prompt directory — pick the existing category that
+  matches the tool's *purpose* (add a new one only with a real new domain).
 
 - [ ] **Quota / tier accounting** — external or per-call-expensive tools
   (network APIs, LLM-heavy work) are wired into the tier quotas
@@ -51,6 +48,13 @@ Every new-tool PR ships with:
   [`../evals/cases.yaml`](../evals/cases.yaml) exercising the tool
   (eval-first is the house rule — genos-docs
   `spotlight/SPOTLIGHT_EVALS_CI.md` §6.1).
+
+- [ ] **It fits the budget, and the model finds it** — every declaration is
+  paid on every model call. `test_agent_prefix_budget` holds the prefix to a
+  number, and `agent_eval_routing` shows whether the model reaches for the
+  new tool. Add a prompt in both languages to
+  [`../evals/routing_cases.yaml`](../evals/routing_cases.yaml): a test fails
+  until you do.
 
 - [ ] **Description says *when*, not just what** — the model chooses among
   all 61 registered tools by description alone (count enforced honest by

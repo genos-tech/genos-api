@@ -7,8 +7,7 @@
 # before it is built.
 #
 # The behavior suite (`cases.yaml`) can't do this job. No case there needs a
-# calendar, to-do, PR or "me" tool, so it stays green whatever those tools do
-# (`runner._surface_metric` says so).
+# calendar, to-do, PR or "me" tool, so it stays green whatever those tools do.
 #
 # Every intent is asked in English and in Japanese. `ok` lists every right first
 # step, and one rule decides what else counts: a read that the tool's own

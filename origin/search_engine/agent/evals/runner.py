@@ -42,9 +42,9 @@ from typing import Any
 import yaml
 
 from origin.search_engine.agent.abstention import is_abstention
-from origin.search_engine.agent.controller import _irrelevant_tool_families, run_agent
+from origin.search_engine.agent.controller import run_agent
 from origin.search_engine.agent.evals import web_injection
-from origin.search_engine.agent.tools import REGISTRY, ToolContext
+from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.llm import spend
 from origin.search_engine.llm.spend import spend_purpose
 from origin.search_engine.search import search
@@ -472,7 +472,6 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
                 **_tool_selection_metrics(events, expect),
                 **_abstention_metric(events, expect),
                 **_citation_style_metric(events, expect),
-                **_surface_metric(query),
             },
             **_case_cost(),
         )
@@ -653,7 +652,6 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
             **_tool_selection_metrics(last_events, final_expect),
             **_abstention_metric(last_events, final_expect),
             **_citation_style_metric(last_events, final_expect),
-            **_surface_metric(last_query),
         },
     )
 
@@ -787,27 +785,6 @@ def _abstention_metric(events: list[dict[str, Any]], expect: dict[str, Any]) -> 
     answer = "".join((e.get("text") or "") for e in events if e.get("type") == "answer_delta")
     correct = is_abstention(answer) == bool(expect["should_abstain"])
     return {"abstention_correct": 1.0 if correct else 0.0}
-
-
-def _surface_metric(query: str) -> dict[str, float]:
-    """Deterministic tool-surface size under RAG_TOOL_SUBSETTING (§4.5).
-
-    `tools_declared` = how many tools the model would see for this query.
-    A SURFACE / COST signal, NOT a quality score: the A/B diff shows it
-    shrink when subsetting is on. Always emitted so both runs carry it for
-    a clean delta. The tool-selection-*quality* benefit is a hypothesis to
-    validate on production (the F2 judge sampler), not on this fixture
-    suite — no case here exercises the peripheral families subsetting
-    drops, so the suite only confirms no-regression.
-    """
-    from django.conf import settings  # noqa: PLC0415 — lazy: Django app-ready
-
-    excluded = (
-        _irrelevant_tool_families(query)
-        if settings.SEARCH_ENGINE.get("RAG_TOOL_SUBSETTING", False)
-        else set()
-    )
-    return {"tools_declared": float(len(REGISTRY) - len(excluded))}
 
 
 def _tool_selection_metrics(
