@@ -1,12 +1,17 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 67 agent tools. This exposes 51. That is not all of them and
-not a staging accident — every tool costs the connected agent context on
-*every* request it makes, and much of the 64 answers questions Genos's
-own assistant gets asked ("who closed the most tasks last sprint"), not
-questions something working in the workspace has.
+Genos has 67 agent tools. This exposes 63. The four it leaves out are left out
+on purpose (`WITHHELD` in `test_mcp_team_numbers`, with a reason each, and a
+test that fails when a tool is neither published nor listed there): a connected
+client has its own web search and its own memory, and the other two are
+`list_milestones` with the caller's id and a due-date range over `list_tasks`
+and the calendar. Until MIP-930 this was 51, and withholding twelve of the
+reads people ask for was a fear of context cost that measured small: those
+twelve add about 1.7k tokens (18.2k to 19.9k for the whole catalog). The rule
+from 2026-11-02 is that Genos must do what a person asks, in the app and over
+MCP.
 
-What the 51 are chosen to be is **every write Genos has actually built,
+What the first 51 were chosen to be is **every write Genos has actually built,
 plus the reads needed to drive them**, plus the five GitHub PR reads that
 let an agent see what became of the PR it opened (MIP-689), plus
 `get_task_history` — on a surface with no approval gate and no undo, the
@@ -18,7 +23,8 @@ comment (MIP-687) — plus the two sprint reads, `list_sprints` and
 filters by (MIP-877) — plus reading chats and threads (MIP-885:
 `list_my_chats`, `get_chat_thread`, `list_my_mentions`,
 `list_channel_members`). Chat is read-only here on purpose: no chat write is
-published. The earlier cut was 14, read-heavy and aimed narrowly
+published. MIP-930 then added the twelve numbers about the caller and the team
+("what is blocking me?", "who is overloaded?", "what is stuck?"). The earlier cut was 14, read-heavy and aimed narrowly
 at the code loop: find the task, read it, do the work, report back. It
 was sized by a fear that turns out to be misplaced — the measured cost
 of the full catalog is ~7.5k tokens against ~14k for the in-app
@@ -290,7 +296,8 @@ CATALOG: tuple[McpTool, ...] = (
             "`manage_milestone` takes. `manage_milestone` is how a milestone's "
             "own title, dates, assignees, folder and sprint change. "
             "`has_goal` is false when nobody has written what the milestone "
-            "is for."
+            "is for. For the milestones the caller is on, pass their own id "
+            "from `get_current_user` as `assignee_id`."
         ),
         # The registry description of `assignee_id` points at
         # `list_my_milestones`, which this surface does not publish —
@@ -615,6 +622,143 @@ CATALOG: tuple[McpTool, ...] = (
             "non-primary calendar — every calendar tool defaults to the "
             "primary one, so skip this unless the user names a specific "
             "calendar."
+        ),
+    ),
+    # ---- numbers about the caller and the team (MIP-930) ----
+    # Reads the in-app assistant has always had and this surface held back on a
+    # fear of context cost that measured small (see the module docstring). Each
+    # answers a question people ask that could otherwise be approximated only by
+    # paging through list calls. `list_my_milestones` is not here: `list_milestones`
+    # takes `assignee_id`, and `get_my_schedule` is `list_tasks` over a due range
+    # plus `list_calendar_events`.
+    McpTool(
+        name="get_my_blockers",
+        registry_name="get_my_blockers",
+        description=(
+            "What blocks the caller, and who the caller is holding up: "
+            "`blocked_on_me` (their open tasks with an unfinished blocker) and "
+            "`blocking_others` (open tasks waiting on one of theirs), each edge "
+            "with the other task's id, title, status, project and assignee. Use "
+            "it for 'what is blocking me?'. Edges into projects the caller "
+            "cannot see are dropped and counted in `redacted_count`: say the "
+            "picture is partial when it is not 0. For one task's blockers use "
+            "`get_task_blockers`."
+        ),
+    ),
+    McpTool(
+        name="list_my_inbox",
+        registry_name="list_my_inbox",
+        description=(
+            "The caller's inbox, newest first. Two kinds: activity "
+            "(notifications, the Genos digest, reminders) and requests someone "
+            "is waiting on (join a team, project or group chat, note access, an "
+            "ownership claim, a team connection, a share offer), each with a "
+            "`request_status`. A join-project, join-chat or note-access request "
+            "carries a `target` with the id that answers it. Only unread items "
+            "unless `include_read` is true; `category` narrows to `activity` or "
+            "`requests`."
+        ),
+    ),
+    McpTool(
+        name="get_my_throughput",
+        registry_name="get_my_throughput",
+        description=(
+            "How many tasks the caller created and closed in the last `days` "
+            "days (default 7), with `net` and up to 10 recent closes. `bucket` "
+            "`day` or `week` adds a series; periods with no activity are left "
+            "out, so treat a missing bucket as zero. Use it for 'what did I "
+            "ship this week?'."
+        ),
+    ),
+    McpTool(
+        name="get_workload_distribution",
+        registry_name="get_workload_distribution",
+        description=(
+            "Open, in-progress, blocked and pending task counts per assignee, "
+            "with `overdue_count` (a subset of those, not another bucket). "
+            "Unassigned and closed tasks are left out. Use it for 'who is "
+            "overloaded?'. Scoped to the caller's projects; `project_id` "
+            "narrows it."
+        ),
+    ),
+    McpTool(
+        name="get_top_task_closers",
+        registry_name="get_top_task_closers",
+        description=(
+            "Who closed the most tasks in the last `days` days (required), as "
+            "`{user_id, username, closed_count}`, most first. `project_id` "
+            "narrows it to one project and `limit` caps the list (default 10)."
+        ),
+    ),
+    McpTool(
+        name="get_task_throughput_stats",
+        registry_name="get_task_throughput_stats",
+        description=(
+            "Tasks created and closed in the last `days` days (required) across "
+            "the caller's projects, or in one with `project_id`. `bucket` `day` "
+            "or `week` gives a series, with empty buckets left out. Use it for "
+            "'how many tasks closed last week?'. For the caller's own numbers "
+            "use `get_my_throughput`."
+        ),
+    ),
+    McpTool(
+        name="get_stale_tasks",
+        registry_name="get_stale_tasks",
+        description=(
+            "Open tasks nobody has touched for at least `stale_days` days "
+            "(required), oldest first, with `days_stale`. Use it for 'what is "
+            "stuck?'. Scoped to the caller's projects; `project_id` narrows it "
+            "and `limit` caps the list (default 20)."
+        ),
+    ),
+    McpTool(
+        name="get_team_task_summary",
+        registry_name="get_team_task_summary",
+        description=(
+            "A task rollup across every project the caller is in: totals by "
+            "status and by priority, `overdue_count`, and the 10 biggest "
+            "projects. Use it for 'what is the state of the workspace?'. When "
+            "a project is named, use `get_project_summary`."
+        ),
+    ),
+    McpTool(
+        name="get_project_activity_ranking",
+        registry_name="get_project_activity_ranking",
+        description=(
+            "Rank the caller's projects by `task_count`, `open_task_count` or "
+            "`note_count` (task notes only), most first. Use it for 'which "
+            "project has the most open work?'. `limit` caps the list (default "
+            "10)."
+        ),
+    ),
+    McpTool(
+        name="get_milestone_assignee_counts",
+        registry_name="get_milestone_assignee_counts",
+        description=(
+            "How many milestones each person is assigned to, as "
+            "`milestone_count` and `open_milestone_count`. Use it for 'who "
+            "owns the most milestones?'. `project_id` narrows it to one project "
+            "and `limit` caps the list (default 20)."
+        ),
+    ),
+    McpTool(
+        name="get_project_summary",
+        registry_name="get_project_summary",
+        description=(
+            "Task counts for one project: the total, a breakdown by status, "
+            "and how many are overdue. Use it for 'how is project X going?'. "
+            "Take `project_id` from `list_projects`. Project members only."
+        ),
+    ),
+    McpTool(
+        name="get_my_task_summary",
+        registry_name="get_my_task_summary",
+        description=(
+            "The caller's own task numbers: the total, by status and by "
+            "priority, overdue, due in the next 7 days, the completion "
+            "percentage, and their 10 biggest projects. Use it for 'how many "
+            "open tasks do I have?'. The numbers match the dashboard's My "
+            "Tasks strip. To see the tasks themselves use `list_my_tasks`."
         ),
     ),
     # ---- GitHub pull requests ----
