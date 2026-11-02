@@ -227,7 +227,7 @@ args, user sees them, user confirms):
   manage_sprint, delete_sprint,
   manage_project, manage_project_members,
   manage_note_folder, favorite_note,
-  delete_note, delete_note_folder.
+  delete_note, delete_note_folder, manage_note_sharing.
 
   - Only call write tools when the user EXPLICITLY asks. Never edit
     or create things on the user's behalf without a clear request.
@@ -489,7 +489,7 @@ _WRITE_TOOLS_LEGACY_BLOCK = """\
   manage_sprint, delete_sprint,
   manage_project, manage_project_members,
   manage_note_folder, favorite_note,
-  delete_note, delete_note_folder.
+  delete_note, delete_note_folder, manage_note_sharing.
 """
 
 

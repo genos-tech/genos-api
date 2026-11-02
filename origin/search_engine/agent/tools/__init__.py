@@ -104,6 +104,7 @@ from origin.search_engine.agent.tools.list_my_chats import LIST_MY_CHATS
 from origin.search_engine.agent.tools.list_my_inbox import LIST_MY_INBOX
 from origin.search_engine.agent.tools.list_my_mentions import LIST_MY_MENTIONS
 from origin.search_engine.agent.tools.list_my_milestones import LIST_MY_MILESTONES
+from origin.search_engine.agent.tools.list_note_access import LIST_NOTE_ACCESS
 from origin.search_engine.agent.tools.list_note_folders import LIST_NOTE_FOLDERS
 from origin.search_engine.agent.tools.list_pr_comments import LIST_PR_COMMENTS
 from origin.search_engine.agent.tools.list_pr_commits import LIST_PR_COMMITS
@@ -119,6 +120,7 @@ from origin.search_engine.agent.tools.list_today_todos import LIST_TODAY_TODOS
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
 from origin.search_engine.agent.tools.manage_milestone import MANAGE_MILESTONE
 from origin.search_engine.agent.tools.manage_note_folder import MANAGE_NOTE_FOLDER
+from origin.search_engine.agent.tools.manage_note_sharing import MANAGE_NOTE_SHARING
 from origin.search_engine.agent.tools.manage_project import MANAGE_PROJECT
 from origin.search_engine.agent.tools.manage_project_members import MANAGE_PROJECT_MEMBERS
 from origin.search_engine.agent.tools.manage_sprint import MANAGE_SPRINT
@@ -150,6 +152,7 @@ for _t in (
     FETCH_CHAT_THREAD,
     FETCH_NOTE,
     LIST_NOTE_FOLDERS,
+    LIST_NOTE_ACCESS,
     # --- Read tools (Phase 13) ---
     LIST_PROJECTS,
     LIST_TASKS,
@@ -246,6 +249,7 @@ for _t in (
     FAVORITE_NOTE,
     DELETE_NOTE,
     DELETE_NOTE_FOLDER,
+    MANAGE_NOTE_SHARING,
 ):
     # Every tool, read and write, takes its arguments with any
     # <workspace_content> fence the model copied from a result taken off
@@ -268,6 +272,8 @@ __all__ = [
     "FAVORITE_NOTE",
     "DELETE_NOTE",
     "DELETE_NOTE_FOLDER",
+    "MANAGE_NOTE_SHARING",
+    "LIST_NOTE_ACCESS",
     "MANAGE_SPRINT",
     "REMOVE_TASK_DELIVERY",
     "ASSIGN_TASK",

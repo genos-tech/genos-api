@@ -471,6 +471,18 @@
   en: "Delete my Recipes notes folder and everything in it."
   ja: "ノートの「Recipes」フォルダを中身ごと削除して"
   ok: [list_note_folders, delete_note_folder]
+- id: note_access
+  en: "Who can see personal note 42?"
+  ja: "個人ノート42は誰が見られる?"
+  ok: [list_note_access]
+- id: note_share
+  en: "Share personal note 42 with Sam as a viewer."
+  ja: "個人ノート42を Sam に閲覧のみで共有して"
+  ok: [get_team_members, list_note_access, manage_note_sharing]
+- id: note_unshare
+  en: "Stop sharing personal note 42 with Sam."
+  ja: "個人ノート42の Sam への共有を解除して"
+  ok: [get_team_members, list_note_access, manage_note_sharing]
 
 # --- search ----------------------------------------------------------------
 - id: workspace_decision

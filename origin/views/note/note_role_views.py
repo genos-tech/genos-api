@@ -1,18 +1,15 @@
-from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 
 from apis.request_id import error_response
-from origin.models.common.team_models import TeamMaster, TeamMembers
-from origin.models.common.user_models import CustomUser
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.serializers.note.note_serializers import NoteRoleMemberSerializer
+from origin.services.note_sharing import SharingRefused, share_note, unshare_note
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_role import (
     ROLE_OWNER,
     get_effective_role,
-    get_explicit_role,
     note_exists,
 )
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
@@ -53,54 +50,17 @@ class NoteRoleView(AuthenticatedAPIView):
         if role_id not in VALID_ROLE_IDS:
             return Response({"error": "Invalid role_id."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Caller must be owner.
-        caller_role = get_explicit_role(request_user_id, note_type, note_id)
-        if caller_role != ROLE_OWNER:
-            return Response(
-                {"error": "Only the note owner can grant roles."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        target_user_id = data["target_user_id"]
-        if str(target_user_id) == str(request_user_id):
-            return Response(
-                {"error": "You cannot change your own role."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Target must be in the same team.
-        if not TeamMembers.objects.filter(
-            team=data["team_id"], attendee=target_user_id, is_deleted=False
-        ).exists():
-            return Response(
-                {"error": "Target user is not in the same team."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Granting a fresh "owner" would create two owners; v1 disallows.
-        if role_id == ROLE_OWNER:
-            return Response(
-                {"error": "Owner transfer is not supported in this version."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         try:
-            team = TeamMaster.objects.get(team_id=data["team_id"])
-            target_user = CustomUser.objects.get(id=target_user_id)
-        except (TeamMaster.DoesNotExist, CustomUser.DoesNotExist):
-            return Response(
-                {"error": "Team or target user not found."},
-                status=status.HTTP_404_NOT_FOUND,
+            permission = share_note(
+                team_id=data["team_id"],
+                granter_id=request_user_id,
+                note_type=note_type,
+                note_id=note_id,
+                target_user_id=data["target_user_id"],
+                role_id=role_id,
             )
-
-        try:
-            with transaction.atomic():
-                permission, _ = NotePermissionMaster.objects.update_or_create(
-                    user=target_user,
-                    note_type=note_type,
-                    note_id=note_id,
-                    defaults={"team": team, "role_id": role_id},
-                )
+        except SharingRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
         except Exception as e:
             # The cause goes to the log, not to the client (MIP-622).
             return error_response("note role grant failed", e, message="Failed to grant role.")
@@ -132,28 +92,15 @@ class NoteRoleView(AuthenticatedAPIView):
         if note_type not in VALID_NOTE_TYPES:
             return Response({"error": "Invalid note_type."}, status=status.HTTP_400_BAD_REQUEST)
 
-        caller_role = get_explicit_role(request_user_id, note_type, note_id)
-        if caller_role != ROLE_OWNER:
-            return Response(
-                {"error": "Only the note owner can revoke roles."},
-                status=status.HTTP_403_FORBIDDEN,
+        try:
+            unshare_note(
+                granter_id=request_user_id,
+                note_type=note_type,
+                note_id=note_id,
+                target_user_id=data["target_user_id"],
             )
-
-        if str(data["target_user_id"]) == str(request_user_id):
-            return Response(
-                {"error": "Owners cannot revoke themselves."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        deleted, _ = NotePermissionMaster.objects.filter(
-            user=data["target_user_id"], note_type=note_type, note_id=note_id
-        ).delete()
-
-        if deleted == 0:
-            return Response(
-                {"error": "No matching role found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        except SharingRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 

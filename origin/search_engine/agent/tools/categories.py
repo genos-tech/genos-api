@@ -127,6 +127,8 @@ TOOL_CATEGORY: dict[str, str] = {
     "delete_todo_item": "todo",
     # --- notes ---
     "list_note_folders": "notes",
+    "list_note_access": "notes",
+    "manage_note_sharing": "notes",
     "create_note": "notes",
     "update_note": "notes",
     "manage_note_folder": "notes",
