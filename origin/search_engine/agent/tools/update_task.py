@@ -524,15 +524,10 @@ UPDATE_TASK = Tool(
         "milestone_id, parent_task_id and project_id per call. Status enum: Open, WIP, Blocked, Pending, Closed, "
         "Deleted. `tags` REPLACES the task's tags with names from "
         "list_project_tags (pass [] to clear); an unknown name is refused. "
-        "`start_date` sets the planned start ('' clears it). `collaborators` "
-        "REPLACES the task's collaborators with user ids (pass [] to clear); "
-        "anyone new must be a member of the team or the project. "
-        "`custom_fields` sets the project's custom fields by NAME "
-        "(list_project_tags lists them with their types and options): a list "
-        "of {name, value} objects, or {name, values} for a tag field, that "
-        "changes only the fields named. Pass `value: ''` (or `values: []`) to "
-        "clear one. Send `collaborators` and `custom_fields` in a call of "
-        "their own, not with `project_id`. "
+        "`start_date` sets the planned start, `collaborators` replaces the "
+        "collaborators, and `custom_fields` sets the project's custom fields by "
+        "name (list_project_tags lists them); send the last two apart from "
+        "`project_id`. '' or [] clears. "
         "Use `fetch_task` first to see the current state so "
         "you don't propose a no-op."
     ),
@@ -658,9 +653,8 @@ UPDATE_TASK = Tool(
             "start_date": {
                 "type": "STRING",
                 "description": (
-                    "New planned start as an ISO 8601 date (YYYY-MM-DD). Omit to "
-                    "leave unchanged. Pass '' to clear. Not checked against the due "
-                    "date, as in the app."
+                    "New planned start, ISO 8601 (YYYY-MM-DD). Omit to leave "
+                    "unchanged. Pass '' to clear."
                 ),
             },
             "collaborators": {
@@ -669,9 +663,8 @@ UPDATE_TASK = Tool(
                 "description": (
                     "The task's full new set of collaborator user ids "
                     "(get_team_members / list_project_members). Replaces the current "
-                    "collaborators: include any you are keeping (fetch_task lists "
-                    "them). Anyone new must be a member of the team or the project. "
-                    "Pass [] to clear. Omit to leave unchanged."
+                    "set: include any you are keeping. New ones must be on the team "
+                    "or project. Pass [] to clear. Omit to leave unchanged."
                 ),
             },
             "custom_fields": CUSTOM_FIELDS_SCHEMA,

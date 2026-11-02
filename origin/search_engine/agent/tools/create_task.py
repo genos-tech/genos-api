@@ -328,10 +328,9 @@ CREATE_TASK = Tool(
         "content_text (markdown body), milestone_id (file it under an "
         "existing milestone), parent_task_id (file it under an existing "
         "task in the same project; not together with milestone_id), assignee_id, tags, priority, effort_level, due_date "
-        "(ISO 8601, e.g. 2026-06-30), start_date (same format), collaborators "
-        "(user ids; team or project members) and custom_fields (the project's "
-        "own fields by name, from list_project_tags: [{name, value}], or "
-        "[{name, values}] for a tag field). Status is always created as 'Open' "
+        "(ISO 8601, e.g. 2026-06-30), start_date (same), collaborators (user "
+        "ids) and custom_fields (the project's own fields by name, from "
+        "list_project_tags). Status is always created as 'Open' "
         "— users change it via the UI. Leave assignee_id out unless the "
         "user names an assignee; use get_current_user when they say "
         "'assign it to me'. For tags, call list_project_tags and pick only "
@@ -416,8 +415,7 @@ CREATE_TASK = Tool(
                 "items": {"type": "STRING"},
                 "description": (
                     "Optional collaborator user ids (get_team_members / "
-                    "list_project_members). Each must be a member of the team or "
-                    "the project; anyone else is refused."
+                    "list_project_members); each must be on the team or project."
                 ),
             },
             "custom_fields": CUSTOM_FIELDS_SCHEMA,

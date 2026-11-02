@@ -203,9 +203,8 @@ CUSTOM_FIELDS_SCHEMA = {
             "value": {
                 "type": "STRING",
                 "description": (
-                    "The new value: the text for a text field, a date as YYYY-MM-DD "
-                    "for a date field, a user id for a member field. '' clears the "
-                    "field. For a tag field send `values` instead."
+                    "The new value: text, a YYYY-MM-DD date, or a user id (member "
+                    "field). '' clears the field. A tag field takes `values`."
                 ),
             },
             "values": {
@@ -220,13 +219,13 @@ CUSTOM_FIELDS_SCHEMA = {
         "required": ["name"],
     },
     "description": (
-        "Custom fields to set, by name: [{name, value}] (or [{name, values}] for a "
-        "tag field). Only the fields named change; the rest keep their values. "
-        "Each value is checked against its field's type: a tag option must be one "
-        "of the field's options, a date must be YYYY-MM-DD, a member must be on "
-        "the team or the project. Omit to leave all unchanged."
+        "Custom fields to set, by name: [{name, value}], or [{name, values}] for a tag "
+        "field. Only the fields named change. A tag option must be one of the field's "
+        "options, a date YYYY-MM-DD, a member someone on the team or project. Omit to "
+        "leave all unchanged."
     ),
 }
+
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
