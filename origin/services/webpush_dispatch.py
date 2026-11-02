@@ -242,10 +242,11 @@ def _queue_push(
     throughout: a redundant card beats a missing one.
 
     `team_id` is the team the push is about. It only decides the icon
-    badge: the number is what the app would show for that team (see
-    `services/unread_badge`). A caller with no team to name passes None and
-    gets the count across all of the recipient's teams, an upper bound the
-    app corrects when it opens. It never affects WHO is pushed.
+    badge: the number is the requests and chats the app would show for that
+    team (see `services/unread_badge`; the Activity feed is left to the app).
+    A caller with no team to name passes None and gets the count across all
+    of the recipient's teams, an upper bound the app corrects when it opens.
+    It never affects WHO is pushed.
     """
     recipient_id = str(recipient_id)
     if not should_push(recipient_id, category):
