@@ -102,9 +102,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         chat_id, url_thread = parse_chat_ref(raw_chat)
     except ToolError:
         # Something that is not a chat id reads like a chat that is not there
-        # (it always has), with a hint for the next try.
+        # (it always has, in these words), with a hint for the next try. A
+        # mistake and not a refusal, so a plain ToolError.
         raise ToolError(
-            f"Chat {str(raw_chat).strip()[:80]!r} not found, or you are not a member of it. "
+            f"Chat {str(raw_chat).strip()[:80]!r} not found or has no members. "
             "`chat_id` is the chat's id (a UUID) or its Genos URL."
         )
     chat_id = str(uuid.UUID(chat_id))

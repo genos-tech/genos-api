@@ -325,8 +325,12 @@ class FetchChatThreadPagingTests(ChatFixtures, CrossTeamTestCase):
             with self.subTest(chat_id=bad[:20]), self.assertRaises(ToolError):
                 self.read({"chat_id": bad})
         # A made-up id reads like a chat that is not there, with a hint to retry.
-        with self.assertRaisesMessage(ToolError, "not found, or you are not a member of it"):
+        # It is a mistake, not a refusal: a plain ToolError, in the words the
+        # tool has always used for it.
+        with self.assertRaises(ToolError) as caught:
             self.read({"chat_id": "1"})
+        self.assertNotIsInstance(caught.exception, ToolForbidden)
+        self.assertIn("not found or has no members", str(caught.exception))
         with self.assertRaisesMessage(ToolError, "the chat's id (a UUID) or its Genos URL"):
             self.read({"chat_id": "1"})
         # Too long to be a chat URL: refused before any pattern runs over it.
