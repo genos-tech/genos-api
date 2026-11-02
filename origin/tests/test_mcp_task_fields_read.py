@@ -9,6 +9,8 @@ found.
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from origin.models.common.api_key_models import SCOPE_READ
 from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import (
@@ -30,9 +32,11 @@ class McpReadFieldsBase(McpBase):
             project=self.project,
             name="Sprint 1",
             sequence_number=1,
-            start_date="2026-10-01",
-            end_date="2026-10-14",
-            status="active",
+            # Running now by its dates; the stored status is the stale value a
+            # sprint is created with, which the tools must not report (MIP-922).
+            start_date=date.today() - timedelta(days=30),
+            end_date=date.today() + timedelta(days=30),
+            status="upcoming",
         )
         self.customer = ProjectCustomField.objects.create(
             team=self.team, project=self.project, field_name="Customer", field_type="text"

@@ -6,6 +6,13 @@ project X?" or "how is sprint 4 going?" with a single call. Pair
 with `get_sprint_summary(sprint_id)` for the deeper per-sprint
 breakdown.
 
+Status is the one `get_sprint_summary` and the sprint board show: derived from
+the sprint's dates and the asking user's today (`services/sprint_status.py`),
+not the stored `Sprint.status` column, which is a snapshot nothing rolls over
+(MIP-922). The `status` filter, the "active first" order and the `limit` all
+work on that derived status, in the query, so the current sprint can't be cut
+off by a limit applied before the sort.
+
 ACL contract:
   * Tenant guard: ctx.team_id.
   * Membership guard: only sprints in projects where ctx.user_id is a
@@ -24,9 +31,24 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
+from origin.services.sprint_status import (
+    SPRINT_STATUS_ACTIVE,
+    SPRINT_STATUS_ARCHIVED,
+    SPRINT_STATUS_COMPLETED,
+    SPRINT_STATUS_UPCOMING,
+    derive_status,
+    derived_status_rank,
+    status_q,
+)
+from origin.services.user_time import today_for_user_id
 
 _MAX_LIMIT = 50
-_VALID_STATUSES = {"upcoming", "active", "completed", "archived"}
+_VALID_STATUSES = {
+    SPRINT_STATUS_UPCOMING,
+    SPRINT_STATUS_ACTIVE,
+    SPRINT_STATUS_COMPLETED,
+    SPRINT_STATUS_ARCHIVED,
+}
 _CLOSED_STATUSES = ["Closed", "Deleted"]
 
 
@@ -72,26 +94,30 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         limit = 20
     limit = max(1, min(limit, _MAX_LIMIT))
 
+    # The asking user's day, the same one `get_sprint_summary` uses.
+    today = today_for_user_id(ctx.user_id)
+
     qs = Sprint.objects.select_related("project").filter(
         team_id=ctx.team_id,
         project_id__in=scoped_project_ids,
         is_deleted=False,
     )
     if statuses:
-        qs = qs.filter(status__in=statuses)
+        # On the derived status, not the stored column. Combine with OR.
+        status_filter = status_q(statuses[0], today)
+        for status in statuses[1:]:
+            status_filter |= status_q(status, today)
+        qs = qs.filter(status_filter)
 
-    # Show active first, then upcoming, then completed (most recent
-    # first). The model's default ordering is by start_date; override
-    # so callers get the "what's happening now" view by default.
-    status_order = {"active": 0, "upcoming": 1, "completed": 2, "archived": 3}
-    sprints_raw = list(qs[: limit * 4])  # over-fetch so the python sort can still cap
-    sprints_raw.sort(
-        key=lambda s: (
-            status_order.get(s.status, 99),
-            -(s.start_date.toordinal() if s.start_date else 0),
-        )
+    # Show active first, then upcoming, then completed, then archived (most
+    # recent first within each). The model's default ordering is by start_date;
+    # override so callers get the "what's happening now" view by default. The
+    # order is applied in the query, BEFORE the limit.
+    sprints_raw = list(
+        qs.annotate(status_rank=derived_status_rank(today)).order_by(
+            "status_rank", "-start_date", "project_id", "sprint_id"
+        )[:limit]
     )
-    sprints_raw = sprints_raw[:limit]
 
     sprints: list[dict[str, Any]] = []
     for sp in sprints_raw:
@@ -123,7 +149,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "sequence_number": sp.sequence_number,
                 "start_date": sp.start_date.isoformat() if sp.start_date else None,
                 "end_date": sp.end_date.isoformat() if sp.end_date else None,
-                "status": sp.status,
+                "status": derive_status(sp, today),
                 "tasks_total": agg.get("tasks_total", 0) or 0,
                 "tasks_closed": agg.get("tasks_closed", 0) or 0,
                 "milestone_count": milestone_count,

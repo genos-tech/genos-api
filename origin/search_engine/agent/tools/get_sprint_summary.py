@@ -28,6 +28,7 @@ from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.services.milestone_rollup import milestone_work_q
+from origin.services.sprint_status import derive_status
 from origin.services.user_time import today_for_user_id
 
 _STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"]
@@ -126,6 +127,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if sprint.end_date is not None:
         days_remaining = (sprint.end_date - today).days
 
+    # Derived from the dates and the same `today` as `days_remaining`, so the
+    # two can't disagree; the stored column is a snapshot that goes stale (MIP-922).
+    status = derive_status(sprint, today)
+
     total = agg.get("total_tasks", 0) or 0
     open_n = status_breakdown.get("Open", 0)
     wip_n = status_breakdown.get("WIP", 0)
@@ -138,7 +143,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "project_name": sprint.project.project_name if sprint.project_id else None,
         "name": sprint.name,
         "sequence_number": sprint.sequence_number,
-        "status": sprint.status,
+        "status": status,
         "start_date": sprint.start_date.isoformat() if sprint.start_date else None,
         "end_date": sprint.end_date.isoformat() if sprint.end_date else None,
         "days_remaining": days_remaining,
@@ -148,7 +153,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "overdue_count": overdue_n,
         "milestones": milestones,
         "__summary__": (
-            f"Sprint '{sprint.name}' ({sprint.status}): {total} task(s) — "
+            f"Sprint '{sprint.name}' ({status}): {total} task(s) — "
             f"{open_n} open, {wip_n} WIP, {closed_n} closed, "
             f"{overdue_n} overdue"
             + (f", {days_remaining} day(s) left" if days_remaining is not None else "")
