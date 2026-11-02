@@ -189,6 +189,24 @@ class FenceByToolTests(SimpleTestCase):
         self.assertEqual(out["entries"][0]["actor"]["username"], wrap_workspace_content(INJECTION))
         self.assertEqual(out["entries"][0]["actor"]["user_id"], "u1")
 
+    def test_an_api_keys_name_is_fenced_on_a_history_entry(self):
+        """MIP-870: whoever creates an API key names it, and a write through
+        the key stamps that name on the entry. The generated parts stay bare."""
+        via = {"kind": "api_key", "key_id": "7", "key_name": INJECTION, "key_prefix": "gk_abc"}
+
+        out = fence_for_model({"history": [{"via": via}]}, "get_task_history")
+
+        fenced = out["history"][0]["via"]
+        self.assertEqual(fenced["key_name"], wrap_workspace_content(INJECTION))
+        self.assertEqual(fenced["key_id"], "7")
+        self.assertEqual(fenced["key_prefix"], "gk_abc")
+        self.assertEqual(fenced["kind"], "api_key")
+
+    def test_key_name_is_only_fenced_where_it_is_declared(self):
+        data = {"via": {"key_name": "CI bot"}}
+
+        self.assertEqual(fence_for_model(data, "get_task"), data)
+
     def test_an_already_fenced_calendar_summary_is_not_fenced_twice(self):
         """`shape_event` fences an event's summary itself."""
         already = wrap_workspace_content("Standup")
@@ -223,7 +241,7 @@ class FenceByToolTests(SimpleTestCase):
                 "get_milestone_assignee_counts": ["username"],
                 "get_milestone_summary": ["username"],
                 "get_current_user": ["username"],
-                "get_task_history": ["username"],
+                "get_task_history": ["key_name", "username"],
                 "list_calendars": ["summary"],
                 "create_calendar_event": ["displayName", "summary"],
                 "list_calendar_events": ["displayName"],
@@ -554,8 +572,7 @@ class FencedInToolDecisionTests(SimpleTestCase):
     def test_the_follow_up_list_is_pinned(self):
         """What is still undecided is a short, named list: adding to it or
         clearing it is a choice made on purpose."""
-        self.assertEqual(sorted(UNFENCED_FOLLOW_UP), ["key_name"])
-        self.assertNotIn("key_name", set(FENCED_KEYS).union(*FENCED_KEYS_BY_TOOL.values()))
+        self.assertEqual(sorted(UNFENCED_FOLLOW_UP), [])
 
 
 class TaskHistoryValueTests(BaseAPITestCase):

@@ -81,8 +81,11 @@ FENCED_KEYS_BY_TOOL: dict[str, frozenset[str]] = {
     "get_milestone_assignee_counts": _PEOPLE,
     "get_milestone_summary": _PEOPLE,
     "get_current_user": _PEOPLE,
-    # Not in MIP-801's list: `actor.username` on every history entry.
-    "get_task_history": _PEOPLE,
+    # Not in MIP-801's list: `actor.username` on every history entry. And
+    # `via.key_name` (MIP-870): whoever creates an API key names it, and a write
+    # through that key stamps the name on the entry. Nothing takes it back as an
+    # argument, so it is display text. `key_id` and `key_prefix` are generated.
+    "get_task_history": _PEOPLE | {"key_name"},
     # A calendar's name. An EVENT's `summary` (list/create/update_calendar_event)
     # is already fenced by `calendar.shape_event`; it is listed for
     # `create_calendar_event` so the fence holds if that changes. Idempotent.
@@ -135,14 +138,7 @@ FENCED_IN_TOOL = {
 # a non-text field), not a blanket rule. A string found bare goes here until it
 # has that decision, and `FENCED_KEYS_BY_TOOL`, `EXEMPT_*` or `FENCED_IN_TOOL`
 # takes it when it does.
-UNFENCED_FOLLOW_UP = {
-    # Found reading `get_task_history` for MIP-867; not part of it.
-    "key_name": (
-        "get_task_history: `via.key_name`, the name someone gave an API key (a write "
-        "through that key is stamped with it); never passed back, so it can be fenced "
-        "by (tool, key)"
-    ),
-}
+UNFENCED_FOLLOW_UP: dict[str, str] = {}
 
 _OPEN = "<workspace_content>"
 
