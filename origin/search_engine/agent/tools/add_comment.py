@@ -22,10 +22,11 @@ from django.db import transaction
 from apis.request_id import log_failure
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
+from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
-from origin.search_engine.agent.tools.entity_chips import CHIP_SYNTAX_HINT, chip_resolver
+from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
 from origin.services.task_comment_fanout import fan_out_task_comment
 
