@@ -206,6 +206,27 @@ class EffortSeamsTests(SimpleTestCase):
         with override_settings(SEARCH_ENGINE=_se(AGENT_EFFORT_LEVELS=True)):
             self.assertIsNone(subprocess_model_override("rerank", None))
 
+    def test_a_choice_can_opt_out_of_the_pins(self):
+        # The digest binds a provider (to get the two-tier loop) without
+        # wanting its search_kb rewrite/rerank calls moved to rung 0.
+        with override_settings(SEARCH_ENGINE=_se(AGENT_EFFORT_LEVELS=True)):
+            pinned = LlmChoice("gemini", "gemini-3.6-flash", "medium")
+            self.assertTrue(pinned.subprocess_pins, "pins stay ON by default")
+            for kind in ("rewrite", "rerank", "summaries"):
+                self.assertIsNotNone(subprocess_model_override(kind, pinned))
+                self.assertIsNone(
+                    subprocess_model_override(
+                        kind,
+                        LlmChoice("gemini", "gemini-3.6-flash", "medium", subprocess_pins=False),
+                    )
+                )
+
+    def test_opting_out_does_not_change_the_profile(self):
+        choice = LlmChoice("gemini", "gemini-3.6-flash", "medium", subprocess_pins=False)
+        self._bound(choice)
+        with override_settings(SEARCH_ENGINE=_se(AGENT_EFFORT_LEVELS=True)):
+            self.assertIsNotNone(active_effort_profile())
+
 
 class PreferenceEndpointEffortTests(TestCase):
     def setUp(self):
