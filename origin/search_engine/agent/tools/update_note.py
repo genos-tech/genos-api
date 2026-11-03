@@ -44,6 +44,7 @@ from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_note_mentions
 from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
+from origin.search_engine.agent.tools.note_access import has_write_permission
 from origin.search_engine.agent.tools.note_targets import (
     PERSONAL_FAMILY,
     chat_note_parent_context,
@@ -51,7 +52,6 @@ from origin.search_engine.agent.tools.note_targets import (
 )
 from origin.search_engine.chunkers.base import NOTE_TYPE_CHAT, NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
 from origin.services.collab_push import PushOutcome, push_note_body_now
-from origin.views.utils.note_role import ROLE_EDITOR, get_effective_role
 from origin.views.utils.note_version import keep_current_state, snapshot_note_version
 from origin.views.utils.personal_note_move import (
     NoteMoveRefused,
@@ -76,23 +76,6 @@ def _wrap_blocknote(text: str, ctx: ToolContext) -> list[dict[str, Any]]:
         entity_link_resolver=lambda token: resolve_note_entity_link(token, team_id=ctx.team_id),
         entity_chip_resolver=chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id),
     )
-
-
-def _has_write_permission(*, owner_id, note_id: int, note_type_code: int, ctx: ToolContext) -> bool:
-    """True if ctx.user_id may edit the note.
-
-    Check 1: owner — always has write permission (covers legacy personal
-             notes created before role rows existed).
-    Check 2: effective role is Editor or stronger — same resolution the
-             REST layer's `require_write_role` uses: an explicit
-             NotePermissionMaster row wins; otherwise task-note project
-             members and chat members are implicit Editors, and a
-             personal note's Team Notes folder grants what it grants.
-    """
-    if str(owner_id or "") == ctx.user_id:
-        return True
-    role = get_effective_role(ctx.user_id, note_type_code, note_id)
-    return role is not None and role <= ROLE_EDITOR
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -160,7 +143,7 @@ def _update_personal(
         raise ToolForbidden("Not authorized: note belongs to a different team.")
 
     # Write ACL: owner, editor grant, or editor of its Team Notes folder.
-    if not _has_write_permission(
+    if not has_write_permission(
         owner_id=getattr(note, "owner_id", None),
         note_id=note_id,
         note_type_code=note_type_code,
@@ -241,7 +224,7 @@ def _update_shared_surface_note(
     # Write ACL: owner, implicit Editor (project member / chat member), or
     # explicit editor grant — matching the note UI. An explicit Viewer row
     # still locks a member out.
-    if not _has_write_permission(
+    if not has_write_permission(
         owner_id=getattr(note, "owner_id", None),
         note_id=note_id,
         note_type_code=note_type_code,

@@ -937,6 +937,7 @@ _FRIENDLY_NESTED_ENRICHERS: dict[
     "favorite_note": _friendly_update_note_arguments,
     "delete_note": _friendly_update_note_arguments,
     "manage_note_sharing": _friendly_update_note_arguments,
+    "restore_note_version": _friendly_update_note_arguments,
     "delete_todo_item": _friendly_delete_todo_arguments,
     "update_tasks_bulk": _friendly_bulk_update_arguments,
     "update_task_dependencies": _friendly_dependency_arguments,

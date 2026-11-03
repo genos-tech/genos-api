@@ -27,9 +27,10 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
 # 118,000 for MIP-880's three tools (115,095 measured, the same headroom as
 # before), and to 122,000 for MIP-882's sprint and project tools (119,270 measured
 # with the project tools), and to 126,000 for MIP-883's note folder, favorite and
-# delete tools (123,487 measured), each time with the routing cases for them in both
+# delete tools (123,487 measured), and to 130,000 for the note sharing, history and
+# restore tools (127,860 measured), each time with the routing cases for them in both
 # languages, as the rule above asks.
-BUDGET_CHARS = 126_000
+BUDGET_CHARS = 130_000
 
 
 def _declared_chars() -> int:
