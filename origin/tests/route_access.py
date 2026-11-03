@@ -234,6 +234,10 @@ REGISTRY = {
     "origin.views.common.calendar_views.CalendarListView": self_only(
         "the caller's own calendars, through their own OAuth token"
     ),
+    # views.common.client_perf_views
+    "origin.views.common.client_perf_views.ClientPerfView": signed_in(
+        "logs the caller's own interaction timings; reads and writes no workspace data"
+    ),
     # views.common.gif_views
     "origin.views.common.gif_views.GifSearchView": signed_in(
         "proxies a GIPHY search; no workspace data"
