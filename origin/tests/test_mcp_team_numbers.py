@@ -52,6 +52,10 @@ WITHHELD = {
     # A connected client has its own web search and its own memory.
     "search_web": "the client has its own",
     "search_past_conversations": "the client has its own",
+    # Destroys a project's tasks, milestones, sprints and members with no undo. A connected
+    # agent has no approval card to put in front of that, and an opt-in on the key is not
+    # the same as the user seeing which project is meant (MIP-882, Ken's decision 3).
+    "delete_project": "in the app only: no undo, and this surface has no approval step",
 }
 
 

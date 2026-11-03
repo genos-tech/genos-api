@@ -226,7 +226,7 @@ args, user sees them, user confirms):
   update_comment, delete_comment, restore_task_body,
   manage_sprint, delete_sprint,
   manage_project, manage_project_members, add_project_tag, manage_project_labels,
-  approve_join_request, decline_join_request,
+  approve_join_request, decline_join_request, delete_project,
   manage_note_folder, favorite_note,
   delete_note, delete_note_folder, manage_note_sharing, restore_note_version.
 
@@ -489,7 +489,7 @@ _WRITE_TOOLS_LEGACY_BLOCK = """\
   update_comment, delete_comment, restore_task_body,
   manage_sprint, delete_sprint,
   manage_project, manage_project_members, add_project_tag, manage_project_labels,
-  approve_join_request, decline_join_request,
+  approve_join_request, decline_join_request, delete_project,
   manage_note_folder, favorite_note,
   delete_note, delete_note_folder, manage_note_sharing, restore_note_version.
 """

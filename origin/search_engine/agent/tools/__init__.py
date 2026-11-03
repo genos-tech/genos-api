@@ -64,6 +64,7 @@ from origin.search_engine.agent.tools.delete_comment import DELETE_COMMENT
 from origin.search_engine.agent.tools.delete_milestone import DELETE_MILESTONE
 from origin.search_engine.agent.tools.delete_note import DELETE_NOTE
 from origin.search_engine.agent.tools.delete_note_folder import DELETE_NOTE_FOLDER
+from origin.search_engine.agent.tools.delete_project import DELETE_PROJECT
 from origin.search_engine.agent.tools.delete_sprint import DELETE_SPRINT
 from origin.search_engine.agent.tools.delete_todo_item import DELETE_TODO_ITEM
 from origin.search_engine.agent.tools.favorite_note import FAVORITE_NOTE
@@ -255,6 +256,7 @@ for _t in (
     MANAGE_PROJECT_LABELS,
     APPROVE_JOIN_REQUEST,
     DECLINE_JOIN_REQUEST,
+    DELETE_PROJECT,
     # --- Write tools (MIP-883) — organizing notes ---
     MANAGE_NOTE_FOLDER,
     FAVORITE_NOTE,
@@ -284,6 +286,7 @@ __all__ = [
     "MANAGE_PROJECT_LABELS",
     "APPROVE_JOIN_REQUEST",
     "DECLINE_JOIN_REQUEST",
+    "DELETE_PROJECT",
     "MANAGE_NOTE_FOLDER",
     "FAVORITE_NOTE",
     "DELETE_NOTE",

@@ -317,14 +317,18 @@
   en: "Put the Client Work label on the WRD project"
   ja: "WRD プロジェクトに Client Work ラベルを付けて"
   ok: [list_projects, list_project_tags, manage_project_labels]
+- id: project_delete
+  en: "Delete the Website Rebuild project"
+  ja: "Website Rebuild プロジェクトを削除して"
+  ok: [list_projects, delete_project]
 - id: join_request_approve
   en: "Approve Sam's request to join the WRD project"
   ja: "Sam の WRD プロジェクトへの参加リクエストを承認して"
-  ok: [list_my_inbox, approve_join_request]
+  ok: [list_my_inbox, list_projects, approve_join_request]
 - id: join_request_decline
   en: "Decline the request to join the WRD project"
   ja: "WRD プロジェクトへの参加リクエストを断って"
-  ok: [list_my_inbox, decline_join_request]
+  ok: [list_my_inbox, list_projects, decline_join_request]
 - id: inbox_requests
   en: "Is anyone waiting for me to approve a request?"
   ja: "承認待ちのリクエストはある?"

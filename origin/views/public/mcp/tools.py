@@ -1,11 +1,13 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 86 agent tools. This exposes 82. The four it leaves out are left out
+Genos has 87 agent tools. This exposes 82. The five it leaves out are left out
 on purpose (`WITHHELD` in `test_mcp_team_numbers`, with a reason each, and a
 test that fails when a tool is neither published nor listed there): a connected
-client has its own web search and its own memory, and the other two are
-`list_milestones` with the caller's id and a due-date range over `list_tasks`
-and the calendar. Until MIP-930 this was 51, and withholding twelve of the
+client has its own web search and its own memory, two are `list_milestones`
+with the caller's id and a due-date range over `list_tasks` and the calendar,
+and `delete_project` is in the app only, because it destroys a project's tasks,
+milestones, sprints and members with no undo and this surface has no approval
+step to put in front of that (Ken's decision 3, MIP-882). Until MIP-930 this was 51, and withholding twelve of the
 reads people ask for was a fear of context cost that measured small: those
 twelve add about 1.7k tokens (18.2k to 19.9k for the whole catalog). The rule
 from 2026-11-02 is that Genos must do what a person asks, in the app and over

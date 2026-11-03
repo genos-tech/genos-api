@@ -249,7 +249,10 @@ LIST_MILESTONES = Tool(
         "properties": {
             "project_id": {
                 "type": "INTEGER",
-                "description": ("Restrict to one project. Omit to span all accessible projects."),
+                "description": (
+                    "Restrict to one project: the id the user gives ('project 3' is 3), "
+                    "or one from list_projects for a name. Omit to span all accessible projects."
+                ),
             },
             "status": {
                 "type": "ARRAY",
