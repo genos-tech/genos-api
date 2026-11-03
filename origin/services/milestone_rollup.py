@@ -22,7 +22,11 @@ the full set (the milestone's own dependency edges, the order of work, the
 
 from __future__ import annotations
 
+from collections import defaultdict
+
 from django.db.models import Q
+
+from origin.models.task.task_models import TaskMaster
 
 
 def milestone_tasks_q(milestone, *, own_row: bool = True, deleted: bool = True) -> Q:
@@ -53,3 +57,59 @@ def milestone_tasks_q(milestone, *, own_row: bool = True, deleted: bool = True) 
 def milestone_work_q(milestone) -> Q:
     """The milestone's live work: what its progress and totals are counted over."""
     return milestone_tasks_q(milestone, own_row=False, deleted=False)
+
+
+def milestone_work_counts(milestones) -> dict[int, tuple[int, int]]:
+    """`{milestone_id: (total, closed)}` for many milestones, in ONE query.
+
+    The numbers `milestone_work_q` gives one milestone at a time (two COUNTs
+    each), for a list that would otherwise cost two round trips per milestone.
+    Every milestone passed in has an entry, `(0, 0)` when it has no work.
+
+    This has to be one query over the rows rather than a GROUP BY: a task can
+    be the work of one milestone through its FK and of ANOTHER through its
+    parent, and a GROUP BY on `milestone_id` would only ever see the first. So
+    the candidate rows are loaded (five narrow columns) and each is sorted into
+    the milestones it belongs to here, by the same rules as `milestone_work_q`:
+
+      * through the FK (`milestone_id`), or through the parent (`parent_task_id`
+        is the milestone's backing row, and the task is not itself a milestone);
+      * counted once per milestone, even when it matches both ways;
+      * never the milestone's own backing row;
+      * never a soft-deleted row, a create-form scaffold row, or a task whose
+        status is "Deleted".
+
+    A milestone without a backing row yet (legacy) counts through its FK only.
+    Callers that need the full set of a single milestone still use
+    `milestone_tasks_q`; `test_milestone_list_queries` keeps the two in step.
+    """
+    by_id = {m.milestone_id: m for m in milestones}
+    counts = {milestone_id: [0, 0] for milestone_id in by_id}
+    if not by_id:
+        return {}
+    by_backing = defaultdict(list)
+    for m in by_id.values():
+        if m.task_id is not None:
+            by_backing[m.task_id].append(m.milestone_id)
+
+    matches = Q(milestone_id__in=list(by_id))
+    if by_backing:
+        matches |= Q(parent_task_id__in=list(by_backing))
+    rows = (
+        TaskMaster.objects.filter(matches, is_deleted=False, is_init_task=False)
+        .exclude(status="Deleted")
+        .values_list("task_id", "milestone_id", "parent_task_id", "is_milestone", "status")
+    )
+    for task_id, milestone_id, parent_task_id, is_milestone, task_status in rows:
+        owners = set()
+        if milestone_id in counts:
+            owners.add(milestone_id)
+        if parent_task_id is not None and not is_milestone:
+            owners.update(by_backing.get(parent_task_id, ()))
+        for owner in owners:
+            if task_id == by_id[owner].task_id:
+                continue  # the milestone's own backing row is not its work
+            counts[owner][0] += 1
+            if task_status == "Closed":
+                counts[owner][1] += 1
+    return {milestone_id: (total, closed) for milestone_id, (total, closed) in counts.items()}
