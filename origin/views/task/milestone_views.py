@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.db.models import Prefetch
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -23,7 +24,7 @@ from origin.services.milestone_manage import (
     folder_name_taken,
     update_milestone,
 )
-from origin.services.milestone_rollup import milestone_work_q
+from origin.services.milestone_rollup import milestone_work_counts, milestone_work_q
 from origin.services.milestone_service import (
     create_milestone,
     ensure_backing_task,
@@ -111,7 +112,23 @@ def _serialize_assignee(a: MilestoneAssignees) -> dict:
     return _serialize_user(user) or {"userId": None, "username": None}
 
 
-def _serialize_milestone(m: MilestoneMaster, *, with_aggregates: bool = True) -> dict:
+def _serialize_milestone(
+    m: MilestoneMaster,
+    *,
+    with_aggregates: bool = True,
+    counts: tuple[int, int] | None = None,
+    assignees=None,
+) -> dict:
+    """One milestone as the API describes it.
+
+    Alone (the detail / PATCH / assignee endpoints) it asks the database for
+    its own assignees and progress. The list passes `assignees` (the milestone's
+    `MilestoneAssignees` rows with `user` loaded, from a prefetch) and `counts`
+    (`(total, closed)` from `milestone_work_counts`) so that a list of N
+    milestones does not cost N times those queries.
+    """
+    if assignees is None:
+        assignees = m.milestone_assignees.select_related("user").order_by("id")
     out = {
         "milestoneId": m.milestone_id,
         "taskId": m.task_id,
@@ -182,17 +199,18 @@ def _serialize_milestone(m: MilestoneMaster, *, with_aggregates: bool = True) ->
         "isDeleted": m.is_deleted,
         "tsCreatedAt": m.ts_created_at,
         "tsUpdatedAt": m.ts_updated_at,
-        "assignees": [
-            _serialize_assignee(a) for a in m.milestone_assignees.select_related("user").all()
-        ],
+        "assignees": [_serialize_assignee(a) for a in assignees],
     }
     if with_aggregates:
         # Progress is counted over the milestone's live work (MIP-777): not its
         # own backing row, and not "Deleted" tasks (gone, not finished). One
         # definition, shared with the agent/MCP rollups so they reconcile.
-        tasks = TaskMaster.objects.filter(milestone_work_q(m)).distinct()
-        total = tasks.count()
-        closed = tasks.filter(status="Closed").count()
+        if counts is not None:
+            total, closed = counts
+        else:
+            tasks = TaskMaster.objects.filter(milestone_work_q(m)).distinct()
+            total = tasks.count()
+            closed = tasks.filter(status="Closed").count()
         out["tasksTotal"] = total
         out["tasksClosed"] = closed
     return out
@@ -216,10 +234,21 @@ class ProjectMilestonesView(AuthenticatedAPIView):
         statuses_param = request.GET.get("statuses")
         sprint_id_param = request.GET.get("sprint_id")
 
+        # The query count of this list does not depend on how many milestones
+        # there are (MIP-966): everything a milestone needs is joined, prefetched
+        # or counted for all of them at once. `task__project` is there because
+        # `displayId` reads the project's code; the assignees are ordered by their
+        # row id so the order is the order they were added in.
         qs = (
             MilestoneMaster.objects.filter(project=project, is_deleted=False)
-            .select_related("task", "reporter")
-            .prefetch_related("milestone_assignees__user", "task__collaborators")
+            .select_related("task__project", "reporter")
+            .prefetch_related(
+                Prefetch(
+                    "milestone_assignees",
+                    queryset=MilestoneAssignees.objects.select_related("user").order_by("id"),
+                ),
+                "task__collaborators",
+            )
             .order_by("-ts_updated_at")
         )
 
@@ -242,7 +271,14 @@ class ProjectMilestonesView(AuthenticatedAPIView):
             if m.task_id is None:
                 _ensure_backing_task(m)
 
-        milestones = [_serialize_milestone(m) for m in milestones_list]
+        # After the backfill, so every milestone has its backing row to count by.
+        counts = milestone_work_counts(milestones_list)
+        milestones = [
+            _serialize_milestone(
+                m, counts=counts[m.milestone_id], assignees=m.milestone_assignees.all()
+            )
+            for m in milestones_list
+        ]
         return Response({"milestones": milestones}, status=status.HTTP_200_OK)
 
 
