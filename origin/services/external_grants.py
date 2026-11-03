@@ -790,8 +790,9 @@ def rows_for_grant(grant: ExternalGrant) -> list:
 
     Both sides of the share, unnarrowed — `participant_ids` is the guest
     half. Public because "who is in this object" is also the question the
-    people directory asks (`scope_guards.external_people_for_member`), and
-    it needs the host's people too.
+    people directory asks, and it needs the host's people too. The directory
+    walks many grants, so it asks `rosters_of_held_objects`, the batched form
+    of this, instead of calling this once per grant.
     """
     if grant.object_type == ExternalGrant.ObjectType.CHANNEL:
         from origin.models.chat.unified_models import ChannelMember
@@ -818,6 +819,114 @@ def rows_for_grant(grant: ExternalGrant) -> list:
             )
         )
     return []
+
+
+def _object_key(object_type, object_id):
+    """`object_id` the way the database reads it.
+
+    `object_id` is text, stored as the client sent it, so `"0042"` or an
+    upper-case UUID can be on file. A single-object lookup matches those
+    through the ORM's own coercion; rows read back for many objects at once
+    come back in canonical form, so the grants are keyed the same way or they
+    would silently match nothing.
+
+    Raises `ValueError` for an id that is not an id of this type at all (what
+    the single-object lookup raises too). An integer too large for the column
+    is not an error: it simply matches no row, in a lookup of one id and in an
+    `__in` of many.
+    """
+    if object_type == ExternalGrant.ObjectType.CHANNEL:
+        return uuid.UUID(str(object_id))
+    return int(object_id)
+
+
+def rosters_of_held_objects(grants, user_id) -> dict:
+    """For each grant whose object `user_id` is on, everyone on that object.
+
+    The batched form of "is this person on the object" followed by
+    `rows_for_grant`, for callers that walk many grants: one query per object
+    type instead of two or three per grant. Returns `{grant.id: [user id, ...]}`
+    with the person's own row included. A grant whose object they are NOT on is
+    absent, and its roster is never read.
+
+    "On the object" is the same test the per-object checks use: a live
+    `ChannelMember` row, a `NoteFolderPermission` row, and for a project a
+    `ProjectMembers` row OR being the project's owner (an owner need not hold a
+    member row, which is why `_objects_held_by` cannot stand in for this: it
+    skips the owner). The roster of a project is its `ProjectMembers` rows only,
+    exactly as `rows_for_grant` reads it.
+
+    Ids that are not ids of their type fail as they always did. A channel or
+    folder grant with one raises `ValueError`, which the callers
+    (`scope_guards`, behind `_no_such`) turn into "nobody" for the whole call;
+    a project grant with one is simply skipped, because `is_project_member`
+    has always swallowed that per grant. Grants of a type this does not know
+    are ignored.
+    """
+    from django.db.models import Exists, OuterRef
+
+    from origin.models.chat.unified_models import ChannelMember
+    from origin.models.note.common_note_models import NoteFolderPermission
+    from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+
+    by_type: dict[str, list[ExternalGrant]] = {}
+    for grant in grants:
+        by_type.setdefault(grant.object_type, []).append(grant)
+
+    rosters: dict = {}
+
+    def keyed(kind, lenient=False):
+        keys = {}
+        for grant in by_type.get(kind, ()):
+            try:
+                keys[grant.id] = _object_key(kind, grant.object_id)
+            except ValueError:
+                if not lenient:
+                    raise
+        return keys
+
+    def collect(kind, keys, rows):
+        on_object: dict = {}
+        for key, uid in rows:
+            on_object.setdefault(key, []).append(uid)
+        for grant in by_type.get(kind, ()):
+            if grant.id in keys and keys[grant.id] in on_object:
+                rosters[grant.id] = on_object[keys[grant.id]]
+
+    keys = keyed(ExternalGrant.ObjectType.CHANNEL)
+    if keys:
+        mine = ChannelMember.objects.filter(
+            channel_id=OuterRef("channel_id"), user_id=user_id, is_deleted=False
+        )
+        rows = (
+            ChannelMember.objects.filter(channel_id__in=set(keys.values()), is_deleted=False)
+            .filter(Exists(mine))
+            .values_list("channel_id", "user_id")
+        )
+        collect(ExternalGrant.ObjectType.CHANNEL, keys, rows)
+
+    keys = keyed(ExternalGrant.ObjectType.PROJECT, lenient=True)
+    if keys:
+        mine = ProjectMembers.objects.filter(project_id=OuterRef("project_id"), attendee_id=user_id)
+        owned = ProjectMaster.objects.filter(project_id=OuterRef("project_id"), owner_id=user_id)
+        rows = (
+            ProjectMembers.objects.filter(project_id__in=set(keys.values()))
+            .filter(Exists(mine) | Exists(owned))
+            .values_list("project_id", "attendee_id")
+        )
+        collect(ExternalGrant.ObjectType.PROJECT, keys, rows)
+
+    keys = keyed(ExternalGrant.ObjectType.NOTE_FOLDER)
+    if keys:
+        mine = NoteFolderPermission.objects.filter(folder_id=OuterRef("folder_id"), user_id=user_id)
+        rows = (
+            NoteFolderPermission.objects.filter(folder_id__in=set(keys.values()))
+            .filter(Exists(mine))
+            .values_list("folder_id", "user_id")
+        )
+        collect(ExternalGrant.ObjectType.NOTE_FOLDER, keys, rows)
+
+    return rosters
 
 
 # ── the delegated roster ───────────────────────────────────────────────

@@ -1,0 +1,497 @@
+# external_people_for_member(team, viewer): person -> their own team
+a_owner @ Test Team: {"b_editor": "Guest Team", "b_extra": "Guest Team", "b_owner": "Guest Team", "b_viewer": "Guest Team", "bc_both1": "<by grant order>", "bc_both2": "<by grant order>", "bc_rev": "<by grant order>", "bc_same": "<by grant order>", "c_member": "Stranger Team", "c_owner": "Stranger Team", "d_member": "Delta Team", "d_owner": "Delta Team", "deleted_user": "Guest Team", "p6_only": "Guest Team"} names={"b_editor": "Guest Team", "b_extra": "Guest Team", "b_owner": "Guest Team", "b_viewer": "Guest Team", "bc_both1": "<by grant order>", "bc_both2": "<by grant order>", "bc_rev": "<by grant order>", "bc_same": "<by grant order>", "c_member": "Stranger Team", "c_owner": "Stranger Team", "d_member": "Delta Team", "d_owner": "Delta Team", "deleted_user": "Guest Team", "p6_only": "Guest Team"}
+a_editor @ Test Team: {"b_editor": "Guest Team", "b_owner": "Guest Team", "b_viewer": "Guest Team", "bc_both1": "<by grant order>", "c_member": "Stranger Team", "c_owner": "Stranger Team", "deleted_user": "Guest Team"} names={"b_editor": "Guest Team", "b_owner": "Guest Team", "b_viewer": "Guest Team", "bc_both1": "<by grant order>", "c_member": "Stranger Team", "c_owner": "Stranger Team", "deleted_user": "Guest Team"}
+a_viewer @ Test Team: {"b_editor": "Guest Team", "b_owner": "Guest Team", "c_member": "Stranger Team", "c_owner": "Stranger Team"} names={"b_editor": "Guest Team", "b_owner": "Guest Team", "c_member": "Stranger Team", "c_owner": "Stranger Team"}
+a_plain @ Test Team: {} names={}
+b_owner @ Test Team: {"b_editor": "Guest Team", "b_extra": "Guest Team", "b_viewer": "Guest Team", "bc_both1": "<by grant order>", "bc_both2": "<by grant order>", "bc_rev": "<by grant order>", "bc_same": "<by grant order>", "c_owner": "Stranger Team", "deleted_user": "Guest Team", "p6_only": "Guest Team"} names={"b_editor": "Guest Team", "b_extra": "Guest Team", "b_viewer": "Guest Team", "bc_both1": "<by grant order>", "bc_both2": "<by grant order>", "bc_rev": "<by grant order>", "bc_same": "<by grant order>", "c_owner": "Stranger Team", "deleted_user": "Guest Team", "p6_only": "Guest Team"}
+b_editor @ Test Team: {"b_owner": "Guest Team", "bc_both1": "<by grant order>", "deleted_user": "Guest Team"} names={"b_owner": "Guest Team", "bc_both1": "<by grant order>", "deleted_user": "Guest Team"}
+b_viewer @ Test Team: {"b_owner": "Guest Team", "bc_both2": "<by grant order>"} names={"b_owner": "Guest Team", "bc_both2": "<by grant order>"}
+b_extra @ Test Team: {"b_owner": "Guest Team", "bc_rev": "<by grant order>"} names={"b_owner": "Guest Team", "bc_rev": "<by grant order>"}
+b_gone @ Test Team: {"b_editor": "Guest Team", "b_owner": "Guest Team", "bc_both1": "<by grant order>", "deleted_user": "Guest Team"} names={"b_editor": "Guest Team", "b_owner": "Guest Team", "bc_both1": "<by grant order>", "deleted_user": "Guest Team"}
+deleted_user @ Test Team: {"b_editor": "Guest Team", "b_owner": "Guest Team", "bc_both1": "<by grant order>"} names={"b_editor": "Guest Team", "b_owner": "Guest Team", "bc_both1": "<by grant order>"}
+pending_only @ Test Team: {} names={}
+bc_both1 @ Test Team: {"b_editor": "Guest Team", "b_owner": "Guest Team", "bc_both2": "<by grant order>", "c_owner": "Stranger Team", "deleted_user": "Guest Team"} names={"b_editor": "Guest Team", "b_owner": "Guest Team", "bc_both2": "<by grant order>", "c_owner": "Stranger Team", "deleted_user": "Guest Team"}
+bc_both2 @ Test Team: {"b_owner": "Guest Team", "b_viewer": "Guest Team", "bc_both1": "<by grant order>", "c_owner": "Stranger Team"} names={"b_owner": "Guest Team", "b_viewer": "Guest Team", "bc_both1": "<by grant order>", "c_owner": "Stranger Team"}
+bc_same @ Test Team: {"b_owner": "Guest Team", "c_owner": "Stranger Team"} names={"b_owner": "Guest Team", "c_owner": "Stranger Team"}
+bc_rev @ Test Team: {"b_extra": "Guest Team", "b_owner": "Guest Team", "c_owner": "Stranger Team"} names={"b_extra": "Guest Team", "b_owner": "Guest Team", "c_owner": "Stranger Team"}
+ab_both @ Test Team: {"b_editor": "Guest Team", "b_owner": "Guest Team", "bc_both1": "<by grant order>", "deleted_user": "Guest Team"} names={"b_editor": "Guest Team", "b_owner": "Guest Team", "bc_both1": "<by grant order>", "deleted_user": "Guest Team"}
+p6_only @ Test Team: {"b_owner": "Guest Team"} names={"b_owner": "Guest Team"}
+c_owner @ Test Team: {"b_owner": "Guest Team", "bc_both1": "<by grant order>", "bc_both2": "<by grant order>", "bc_rev": "<by grant order>", "bc_same": "<by grant order>", "c_member": "Stranger Team"} names={"b_owner": "Guest Team", "bc_both1": "<by grant order>", "bc_both2": "<by grant order>", "bc_rev": "<by grant order>", "bc_same": "<by grant order>", "c_member": "Stranger Team"}
+c_member @ Test Team: {"c_owner": "Stranger Team"} names={"c_owner": "Stranger Team"}
+third_party @ Test Team: {"b_editor": "Guest Team", "b_owner": "Guest Team", "b_viewer": "Guest Team", "bc_both1": "<by grant order>", "bc_both2": "<by grant order>", "deleted_user": "Guest Team"} names={"b_editor": "Guest Team", "b_owner": "Guest Team", "b_viewer": "Guest Team", "bc_both1": "<by grant order>", "bc_both2": "<by grant order>", "deleted_user": "Guest Team"}
+revoked_only @ Test Team: {} names={}
+declined_only @ Test Team: {} names={}
+d_owner @ Test Team: {"d_member": "Delta Team"} names={"d_member": "Delta Team"}
+d_member @ Test Team: {"d_owner": "Delta Team"} names={"d_owner": "Delta Team"}
+e_owner @ Test Team: {} names={}
+proj_guest @ Test Team: {"b_editor": "Guest Team", "b_owner": "Guest Team", "bc_both1": "<by grant order>", "deleted_user": "Guest Team"} names={"b_editor": "Guest Team", "b_owner": "Guest Team", "bc_both1": "<by grant order>", "deleted_user": "Guest Team"}
+a_owner @ Guest Team: {"a_editor": "Test Team", "a_viewer": "Test Team"} names={"a_editor": "Test Team", "a_viewer": "Test Team"}
+a_editor @ Guest Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+a_viewer @ Guest Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+a_plain @ Guest Team: {} names={}
+b_owner @ Guest Team: {"a_editor": "Test Team", "a_owner": "Test Team", "a_viewer": "Test Team", "c_owner": "Stranger Team"} names={"a_editor": "Test Team", "a_owner": "Test Team", "a_viewer": "Test Team", "c_owner": "Stranger Team"}
+b_editor @ Guest Team: {"a_editor": "Test Team", "a_owner": "Test Team", "a_viewer": "Test Team"} names={"a_editor": "Test Team", "a_owner": "Test Team", "a_viewer": "Test Team"}
+b_viewer @ Guest Team: {"a_editor": "Test Team", "a_owner": "Test Team"} names={"a_editor": "Test Team", "a_owner": "Test Team"}
+b_extra @ Guest Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+b_gone @ Guest Team: {"a_editor": "Test Team", "a_owner": "Test Team"} names={"a_editor": "Test Team", "a_owner": "Test Team"}
+deleted_user @ Guest Team: {"a_editor": "Test Team", "a_owner": "Test Team"} names={"a_editor": "Test Team", "a_owner": "Test Team"}
+pending_only @ Guest Team: {} names={}
+bc_both1 @ Guest Team: {"a_editor": "Test Team", "a_owner": "Test Team"} names={"a_editor": "Test Team", "a_owner": "Test Team"}
+bc_both2 @ Guest Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+bc_same @ Guest Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+bc_rev @ Guest Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+ab_both @ Guest Team: {"a_editor": "Test Team", "a_owner": "Test Team"} names={"a_editor": "Test Team", "a_owner": "Test Team"}
+p6_only @ Guest Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+c_owner @ Guest Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+c_member @ Guest Team: {} names={}
+third_party @ Guest Team: {"a_editor": "Test Team", "a_owner": "Test Team"} names={"a_editor": "Test Team", "a_owner": "Test Team"}
+revoked_only @ Guest Team: {} names={}
+declined_only @ Guest Team: {} names={}
+d_owner @ Guest Team: {} names={}
+d_member @ Guest Team: {} names={}
+e_owner @ Guest Team: {} names={}
+proj_guest @ Guest Team: {"a_editor": "Test Team", "a_owner": "Test Team"} names={"a_editor": "Test Team", "a_owner": "Test Team"}
+a_owner @ Stranger Team: {"a_editor": "Test Team"} names={"a_editor": "Test Team"}
+a_editor @ Stranger Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+a_viewer @ Stranger Team: {"a_editor": "Test Team", "a_owner": "Test Team"} names={"a_editor": "Test Team", "a_owner": "Test Team"}
+a_plain @ Stranger Team: {} names={}
+b_owner @ Stranger Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+b_editor @ Stranger Team: {} names={}
+b_viewer @ Stranger Team: {} names={}
+b_extra @ Stranger Team: {} names={}
+b_gone @ Stranger Team: {} names={}
+deleted_user @ Stranger Team: {} names={}
+pending_only @ Stranger Team: {} names={}
+bc_both1 @ Stranger Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+bc_both2 @ Stranger Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+bc_same @ Stranger Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+bc_rev @ Stranger Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+ab_both @ Stranger Team: {} names={}
+p6_only @ Stranger Team: {} names={}
+c_owner @ Stranger Team: {"a_editor": "Test Team", "a_owner": "Test Team", "b_owner": "Guest Team"} names={"a_editor": "Test Team", "a_owner": "Test Team", "b_owner": "Guest Team"}
+c_member @ Stranger Team: {"a_editor": "Test Team", "a_owner": "Test Team"} names={"a_editor": "Test Team", "a_owner": "Test Team"}
+third_party @ Stranger Team: {} names={}
+revoked_only @ Stranger Team: {} names={}
+declined_only @ Stranger Team: {} names={}
+d_owner @ Stranger Team: {} names={}
+d_member @ Stranger Team: {} names={}
+e_owner @ Stranger Team: {} names={}
+proj_guest @ Stranger Team: {} names={}
+a_owner @ Delta Team: {} names={}
+a_editor @ Delta Team: {} names={}
+a_viewer @ Delta Team: {} names={}
+a_plain @ Delta Team: {} names={}
+b_owner @ Delta Team: {} names={}
+b_editor @ Delta Team: {} names={}
+b_viewer @ Delta Team: {} names={}
+b_extra @ Delta Team: {} names={}
+b_gone @ Delta Team: {} names={}
+deleted_user @ Delta Team: {} names={}
+pending_only @ Delta Team: {} names={}
+bc_both1 @ Delta Team: {} names={}
+bc_both2 @ Delta Team: {} names={}
+bc_same @ Delta Team: {} names={}
+bc_rev @ Delta Team: {} names={}
+ab_both @ Delta Team: {} names={}
+p6_only @ Delta Team: {} names={}
+c_owner @ Delta Team: {} names={}
+c_member @ Delta Team: {} names={}
+third_party @ Delta Team: {} names={}
+revoked_only @ Delta Team: {} names={}
+declined_only @ Delta Team: {} names={}
+d_owner @ Delta Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+d_member @ Delta Team: {"a_owner": "Test Team"} names={"a_owner": "Test Team"}
+e_owner @ Delta Team: {} names={}
+proj_guest @ Delta Team: {} names={}
+a_owner @ Epsilon Team: {} names={}
+a_editor @ Epsilon Team: {} names={}
+a_viewer @ Epsilon Team: {} names={}
+a_plain @ Epsilon Team: {} names={}
+b_owner @ Epsilon Team: {} names={}
+b_editor @ Epsilon Team: {} names={}
+b_viewer @ Epsilon Team: {} names={}
+b_extra @ Epsilon Team: {} names={}
+b_gone @ Epsilon Team: {} names={}
+deleted_user @ Epsilon Team: {} names={}
+pending_only @ Epsilon Team: {} names={}
+bc_both1 @ Epsilon Team: {} names={}
+bc_both2 @ Epsilon Team: {} names={}
+bc_same @ Epsilon Team: {} names={}
+bc_rev @ Epsilon Team: {} names={}
+ab_both @ Epsilon Team: {} names={}
+p6_only @ Epsilon Team: {} names={}
+c_owner @ Epsilon Team: {} names={}
+c_member @ Epsilon Team: {} names={}
+third_party @ Epsilon Team: {} names={}
+revoked_only @ Epsilon Team: {} names={}
+declined_only @ Epsilon Team: {} names={}
+d_owner @ Epsilon Team: {} names={}
+d_member @ Epsilon Team: {} names={}
+e_owner @ Epsilon Team: {} names={}
+proj_guest @ Epsilon Team: {} names={}
+# external_visible_user_ids(team, viewer)
+a_owner @ Test Team: []
+a_editor @ Test Team: []
+a_viewer @ Test Team: []
+a_plain @ Test Team: []
+b_owner @ Test Team: ["a_editor", "a_owner", "b_editor", "b_extra", "b_owner", "b_viewer", "bc_both2", "bc_rev", "third_party"]
+b_editor @ Test Team: ["a_editor", "b_editor", "b_owner"]
+b_viewer @ Test Team: ["a_owner", "b_owner", "b_viewer", "bc_both2", "third_party"]
+b_extra @ Test Team: ["a_owner", "b_extra", "b_owner", "bc_rev"]
+b_gone @ Test Team: []
+deleted_user @ Test Team: []
+pending_only @ Test Team: []
+bc_both1 @ Test Team: ["a_owner", "bc_both1", "bc_both2", "c_owner"]
+bc_both2 @ Test Team: ["a_owner", "b_owner", "b_viewer", "bc_both1", "bc_both2", "c_owner", "third_party"]
+bc_same @ Test Team: []
+bc_rev @ Test Team: ["a_owner", "b_extra", "b_owner", "bc_rev"]
+ab_both @ Test Team: []
+p6_only @ Test Team: []
+c_owner @ Test Team: ["a_owner", "bc_both1", "bc_both2", "c_owner"]
+c_member @ Test Team: []
+third_party @ Test Team: []
+revoked_only @ Test Team: []
+declined_only @ Test Team: []
+d_owner @ Test Team: ["a_owner", "d_member", "d_owner"]
+d_member @ Test Team: ["a_owner", "d_member", "d_owner"]
+e_owner @ Test Team: []
+proj_guest @ Test Team: []
+a_owner @ Guest Team: ["a_editor", "a_owner", "b_editor", "b_owner", "b_viewer"]
+a_editor @ Guest Team: ["a_editor", "a_owner", "b_owner", "b_viewer"]
+a_viewer @ Guest Team: []
+a_plain @ Guest Team: []
+b_owner @ Guest Team: []
+b_editor @ Guest Team: []
+b_viewer @ Guest Team: []
+b_extra @ Guest Team: []
+b_gone @ Guest Team: []
+deleted_user @ Guest Team: []
+pending_only @ Guest Team: []
+bc_both1 @ Guest Team: []
+bc_both2 @ Guest Team: []
+bc_same @ Guest Team: []
+bc_rev @ Guest Team: []
+ab_both @ Guest Team: []
+p6_only @ Guest Team: []
+c_owner @ Guest Team: []
+c_member @ Guest Team: []
+third_party @ Guest Team: []
+revoked_only @ Guest Team: []
+declined_only @ Guest Team: []
+d_owner @ Guest Team: []
+d_member @ Guest Team: []
+e_owner @ Guest Team: []
+proj_guest @ Guest Team: []
+a_owner @ Stranger Team: []
+a_editor @ Stranger Team: []
+a_viewer @ Stranger Team: []
+a_plain @ Stranger Team: []
+b_owner @ Stranger Team: []
+b_editor @ Stranger Team: []
+b_viewer @ Stranger Team: []
+b_extra @ Stranger Team: []
+b_gone @ Stranger Team: []
+deleted_user @ Stranger Team: []
+pending_only @ Stranger Team: []
+bc_both1 @ Stranger Team: []
+bc_both2 @ Stranger Team: []
+bc_same @ Stranger Team: []
+bc_rev @ Stranger Team: []
+ab_both @ Stranger Team: []
+p6_only @ Stranger Team: []
+c_owner @ Stranger Team: []
+c_member @ Stranger Team: []
+third_party @ Stranger Team: []
+revoked_only @ Stranger Team: []
+declined_only @ Stranger Team: []
+d_owner @ Stranger Team: []
+d_member @ Stranger Team: []
+e_owner @ Stranger Team: []
+proj_guest @ Stranger Team: []
+a_owner @ Delta Team: []
+a_editor @ Delta Team: []
+a_viewer @ Delta Team: []
+a_plain @ Delta Team: []
+b_owner @ Delta Team: []
+b_editor @ Delta Team: []
+b_viewer @ Delta Team: []
+b_extra @ Delta Team: []
+b_gone @ Delta Team: []
+deleted_user @ Delta Team: []
+pending_only @ Delta Team: []
+bc_both1 @ Delta Team: []
+bc_both2 @ Delta Team: []
+bc_same @ Delta Team: []
+bc_rev @ Delta Team: []
+ab_both @ Delta Team: []
+p6_only @ Delta Team: []
+c_owner @ Delta Team: []
+c_member @ Delta Team: []
+third_party @ Delta Team: []
+revoked_only @ Delta Team: []
+declined_only @ Delta Team: []
+d_owner @ Delta Team: []
+d_member @ Delta Team: []
+e_owner @ Delta Team: []
+proj_guest @ Delta Team: []
+a_owner @ Epsilon Team: []
+a_editor @ Epsilon Team: []
+a_viewer @ Epsilon Team: []
+a_plain @ Epsilon Team: []
+b_owner @ Epsilon Team: []
+b_editor @ Epsilon Team: []
+b_viewer @ Epsilon Team: []
+b_extra @ Epsilon Team: []
+b_gone @ Epsilon Team: []
+deleted_user @ Epsilon Team: []
+pending_only @ Epsilon Team: []
+bc_both1 @ Epsilon Team: []
+bc_both2 @ Epsilon Team: []
+bc_same @ Epsilon Team: []
+bc_rev @ Epsilon Team: []
+ab_both @ Epsilon Team: []
+p6_only @ Epsilon Team: []
+c_owner @ Epsilon Team: []
+c_member @ Epsilon Team: []
+third_party @ Epsilon Team: []
+revoked_only @ Epsilon Team: []
+declined_only @ Epsilon Team: []
+d_owner @ Epsilon Team: []
+d_member @ Epsilon Team: []
+e_owner @ Epsilon Team: []
+proj_guest @ Epsilon Team: []
+# getTeamMembers, every caller x every team: status, then (name, external, role, home)
+a_owner @ Test Team: 200 [["a_editor", false, "editor", null], ["a_owner", false, "viewer", null], ["a_plain", false, "viewer", null], ["a_viewer", false, "viewer", null], ["ab_both", false, "viewer", null], ["b_editor", true, "guest", "Guest Team"], ["b_extra", true, "guest", "Guest Team"], ["b_owner", true, "guest", "Guest Team"], ["b_viewer", true, "guest", "Guest Team"], ["bc_both1", true, "guest", "<by grant order>"], ["bc_both2", true, "guest", "<by grant order>"], ["bc_rev", true, "guest", "<by grant order>"], ["bc_same", true, "guest", "<by grant order>"], ["c_member", true, "guest", "Stranger Team"], ["c_owner", true, "guest", "Stranger Team"], ["d_member", true, "guest", "Delta Team"], ["d_owner", true, "guest", "Delta Team"], ["p6_only", true, "guest", "Guest Team"]]
+a_editor @ Test Team: 200 [["a_editor", false, "editor", null], ["a_owner", false, "viewer", null], ["a_plain", false, "viewer", null], ["a_viewer", false, "viewer", null], ["ab_both", false, "viewer", null], ["b_editor", true, "guest", "Guest Team"], ["b_owner", true, "guest", "Guest Team"], ["b_viewer", true, "guest", "Guest Team"], ["bc_both1", true, "guest", "<by grant order>"], ["c_member", true, "guest", "Stranger Team"], ["c_owner", true, "guest", "Stranger Team"]]
+a_viewer @ Test Team: 200 [["a_editor", false, "editor", null], ["a_owner", false, "viewer", null], ["a_plain", false, "viewer", null], ["a_viewer", false, "viewer", null], ["ab_both", false, "viewer", null], ["b_editor", true, "guest", "Guest Team"], ["b_owner", true, "guest", "Guest Team"], ["c_member", true, "guest", "Stranger Team"], ["c_owner", true, "guest", "Stranger Team"]]
+a_plain @ Test Team: 200 [["a_editor", false, "editor", null], ["a_owner", false, "viewer", null], ["a_plain", false, "viewer", null], ["a_viewer", false, "viewer", null], ["ab_both", false, "viewer", null]]
+b_owner @ Test Team: 200 [["a_editor", false, "editor", null], ["a_owner", false, "viewer", null], ["ab_both", false, "viewer", null]]
+b_editor @ Test Team: 200 [["a_editor", false, "editor", null], ["a_owner", false, "viewer", null], ["ab_both", false, "viewer", null]]
+b_viewer @ Test Team: 200 [["a_owner", false, "viewer", null]]
+b_extra @ Test Team: 200 [["a_owner", false, "viewer", null]]
+b_gone @ Test Team: 200 [["a_editor", false, "editor", null], ["a_owner", false, "viewer", null], ["ab_both", false, "viewer", null]]
+deleted_user @ Test Team: 200 [["a_editor", false, "editor", null], ["a_owner", false, "viewer", null], ["ab_both", false, "viewer", null]]
+pending_only @ Test Team: 200 [["a_owner", false, "viewer", null]]
+bc_both1 @ Test Team: 200 [["a_editor", false, "editor", null], ["a_owner", false, "viewer", null], ["ab_both", false, "viewer", null]]
+bc_both2 @ Test Team: 200 [["a_owner", false, "viewer", null]]
+bc_same @ Test Team: 200 [["a_owner", false, "viewer", null]]
+bc_rev @ Test Team: 200 [["a_owner", false, "viewer", null]]
+ab_both @ Test Team: 200 [["a_editor", false, "editor", null], ["a_owner", false, "viewer", null], ["a_plain", false, "viewer", null], ["a_viewer", false, "viewer", null], ["ab_both", false, "viewer", null], ["b_editor", true, "guest", "Guest Team"], ["b_owner", true, "guest", "Guest Team"], ["bc_both1", true, "guest", "<by grant order>"]]
+p6_only @ Test Team: 200 [["a_owner", false, "viewer", null]]
+c_owner @ Test Team: 200 [["a_editor", false, "editor", null], ["a_owner", false, "viewer", null], ["a_viewer", false, "viewer", null]]
+c_member @ Test Team: 200 [["a_editor", false, "editor", null], ["a_owner", false, "viewer", null], ["a_viewer", false, "viewer", null]]
+third_party @ Test Team: 200 [["a_editor", false, "editor", null], ["a_owner", false, "viewer", null], ["ab_both", false, "viewer", null]]
+revoked_only @ Test Team: 404
+declined_only @ Test Team: 404
+d_owner @ Test Team: 200 [["a_owner", false, "viewer", null]]
+d_member @ Test Team: 200 [["a_owner", false, "viewer", null]]
+e_owner @ Test Team: 404
+proj_guest @ Test Team: 200 [["a_editor", false, "editor", null], ["a_owner", false, "viewer", null], ["ab_both", false, "viewer", null]]
+a_owner @ Guest Team: 200 [["b_editor", false, "editor", null], ["b_owner", false, "viewer", null], ["b_viewer", false, "viewer", null]]
+a_editor @ Guest Team: 200 [["b_owner", false, "viewer", null], ["b_viewer", false, "viewer", null]]
+a_viewer @ Guest Team: 200 [["b_editor", false, "editor", null], ["b_owner", false, "viewer", null]]
+a_plain @ Guest Team: 404
+b_owner @ Guest Team: 200 [["a_editor", true, "guest", "Test Team"], ["a_owner", true, "guest", "Test Team"], ["a_viewer", true, "guest", "Test Team"], ["ab_both", false, "viewer", null], ["b_editor", false, "editor", null], ["b_extra", false, "viewer", null], ["b_owner", false, "viewer", null], ["b_viewer", false, "viewer", null], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["c_owner", true, "guest", "Stranger Team"], ["p6_only", false, "viewer", null], ["pending_only", false, "viewer", null]]
+b_editor @ Guest Team: 200 [["a_editor", true, "guest", "Test Team"], ["a_owner", true, "guest", "Test Team"], ["a_viewer", true, "guest", "Test Team"], ["ab_both", false, "viewer", null], ["b_editor", false, "editor", null], ["b_extra", false, "viewer", null], ["b_owner", false, "viewer", null], ["b_viewer", false, "viewer", null], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["p6_only", false, "viewer", null], ["pending_only", false, "viewer", null]]
+b_viewer @ Guest Team: 200 [["a_editor", true, "guest", "Test Team"], ["a_owner", true, "guest", "Test Team"], ["ab_both", false, "viewer", null], ["b_editor", false, "editor", null], ["b_extra", false, "viewer", null], ["b_owner", false, "viewer", null], ["b_viewer", false, "viewer", null], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["p6_only", false, "viewer", null], ["pending_only", false, "viewer", null]]
+b_extra @ Guest Team: 200 [["a_owner", true, "guest", "Test Team"], ["ab_both", false, "viewer", null], ["b_editor", false, "editor", null], ["b_extra", false, "viewer", null], ["b_owner", false, "viewer", null], ["b_viewer", false, "viewer", null], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["p6_only", false, "viewer", null], ["pending_only", false, "viewer", null]]
+b_gone @ Guest Team: 404
+deleted_user @ Guest Team: 200 [["a_editor", true, "guest", "Test Team"], ["a_owner", true, "guest", "Test Team"], ["ab_both", false, "viewer", null], ["b_editor", false, "editor", null], ["b_extra", false, "viewer", null], ["b_owner", false, "viewer", null], ["b_viewer", false, "viewer", null], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["p6_only", false, "viewer", null], ["pending_only", false, "viewer", null]]
+pending_only @ Guest Team: 200 [["ab_both", false, "viewer", null], ["b_editor", false, "editor", null], ["b_extra", false, "viewer", null], ["b_owner", false, "viewer", null], ["b_viewer", false, "viewer", null], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["p6_only", false, "viewer", null], ["pending_only", false, "viewer", null]]
+bc_both1 @ Guest Team: 200 [["a_editor", true, "guest", "Test Team"], ["a_owner", true, "guest", "Test Team"], ["ab_both", false, "viewer", null], ["b_editor", false, "editor", null], ["b_extra", false, "viewer", null], ["b_owner", false, "viewer", null], ["b_viewer", false, "viewer", null], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["p6_only", false, "viewer", null], ["pending_only", false, "viewer", null]]
+bc_both2 @ Guest Team: 200 [["a_owner", true, "guest", "Test Team"], ["ab_both", false, "viewer", null], ["b_editor", false, "editor", null], ["b_extra", false, "viewer", null], ["b_owner", false, "viewer", null], ["b_viewer", false, "viewer", null], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["p6_only", false, "viewer", null], ["pending_only", false, "viewer", null]]
+bc_same @ Guest Team: 200 [["a_owner", true, "guest", "Test Team"], ["ab_both", false, "viewer", null], ["b_editor", false, "editor", null], ["b_extra", false, "viewer", null], ["b_owner", false, "viewer", null], ["b_viewer", false, "viewer", null], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["p6_only", false, "viewer", null], ["pending_only", false, "viewer", null]]
+bc_rev @ Guest Team: 200 [["a_owner", true, "guest", "Test Team"], ["ab_both", false, "viewer", null], ["b_editor", false, "editor", null], ["b_extra", false, "viewer", null], ["b_owner", false, "viewer", null], ["b_viewer", false, "viewer", null], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["p6_only", false, "viewer", null], ["pending_only", false, "viewer", null]]
+ab_both @ Guest Team: 200 [["a_editor", true, "guest", "Test Team"], ["a_owner", true, "guest", "Test Team"], ["ab_both", false, "viewer", null], ["b_editor", false, "editor", null], ["b_extra", false, "viewer", null], ["b_owner", false, "viewer", null], ["b_viewer", false, "viewer", null], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["p6_only", false, "viewer", null], ["pending_only", false, "viewer", null]]
+p6_only @ Guest Team: 200 [["a_owner", true, "guest", "Test Team"], ["ab_both", false, "viewer", null], ["b_editor", false, "editor", null], ["b_extra", false, "viewer", null], ["b_owner", false, "viewer", null], ["b_viewer", false, "viewer", null], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["p6_only", false, "viewer", null], ["pending_only", false, "viewer", null]]
+c_owner @ Guest Team: 200 [["b_owner", false, "viewer", null]]
+c_member @ Guest Team: 404
+third_party @ Guest Team: 404
+revoked_only @ Guest Team: 404
+declined_only @ Guest Team: 404
+d_owner @ Guest Team: 404
+d_member @ Guest Team: 404
+e_owner @ Guest Team: 404
+proj_guest @ Guest Team: 404
+a_owner @ Stranger Team: 404
+a_editor @ Stranger Team: 404
+a_viewer @ Stranger Team: 404
+a_plain @ Stranger Team: 404
+b_owner @ Stranger Team: 404
+b_editor @ Stranger Team: 404
+b_viewer @ Stranger Team: 404
+b_extra @ Stranger Team: 404
+b_gone @ Stranger Team: 404
+deleted_user @ Stranger Team: 404
+pending_only @ Stranger Team: 404
+bc_both1 @ Stranger Team: 200 [["a_owner", true, "guest", "Test Team"], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["c_member", false, "editor", null], ["c_owner", false, "viewer", null], ["declined_only", false, "viewer", null], ["revoked_only", false, "viewer", null], ["third_party", false, "viewer", null]]
+bc_both2 @ Stranger Team: 200 [["a_owner", true, "guest", "Test Team"], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["c_member", false, "editor", null], ["c_owner", false, "viewer", null], ["declined_only", false, "viewer", null], ["revoked_only", false, "viewer", null], ["third_party", false, "viewer", null]]
+bc_same @ Stranger Team: 200 [["a_owner", true, "guest", "Test Team"], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["c_member", false, "editor", null], ["c_owner", false, "viewer", null], ["declined_only", false, "viewer", null], ["revoked_only", false, "viewer", null], ["third_party", false, "viewer", null]]
+bc_rev @ Stranger Team: 200 [["a_owner", true, "guest", "Test Team"], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["c_member", false, "editor", null], ["c_owner", false, "viewer", null], ["declined_only", false, "viewer", null], ["revoked_only", false, "viewer", null], ["third_party", false, "viewer", null]]
+ab_both @ Stranger Team: 404
+p6_only @ Stranger Team: 404
+c_owner @ Stranger Team: 200 [["a_editor", true, "guest", "Test Team"], ["a_owner", true, "guest", "Test Team"], ["b_owner", true, "guest", "Guest Team"], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["c_member", false, "editor", null], ["c_owner", false, "viewer", null], ["declined_only", false, "viewer", null], ["revoked_only", false, "viewer", null], ["third_party", false, "viewer", null]]
+c_member @ Stranger Team: 200 [["a_editor", true, "guest", "Test Team"], ["a_owner", true, "guest", "Test Team"], ["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["c_member", false, "editor", null], ["c_owner", false, "viewer", null], ["declined_only", false, "viewer", null], ["revoked_only", false, "viewer", null], ["third_party", false, "viewer", null]]
+third_party @ Stranger Team: 200 [["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["c_member", false, "editor", null], ["c_owner", false, "viewer", null], ["declined_only", false, "viewer", null], ["revoked_only", false, "viewer", null], ["third_party", false, "viewer", null]]
+revoked_only @ Stranger Team: 200 [["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["c_member", false, "editor", null], ["c_owner", false, "viewer", null], ["declined_only", false, "viewer", null], ["revoked_only", false, "viewer", null], ["third_party", false, "viewer", null]]
+declined_only @ Stranger Team: 200 [["bc_both1", false, "viewer", "<by grant order>"], ["bc_both2", false, "viewer", "<by grant order>"], ["bc_rev", false, "viewer", "<by grant order>"], ["bc_same", false, "viewer", "<by grant order>"], ["c_member", false, "editor", null], ["c_owner", false, "viewer", null], ["declined_only", false, "viewer", null], ["revoked_only", false, "viewer", null], ["third_party", false, "viewer", null]]
+d_owner @ Stranger Team: 404
+d_member @ Stranger Team: 404
+e_owner @ Stranger Team: 404
+proj_guest @ Stranger Team: 404
+a_owner @ Delta Team: 404
+a_editor @ Delta Team: 404
+a_viewer @ Delta Team: 404
+a_plain @ Delta Team: 404
+b_owner @ Delta Team: 404
+b_editor @ Delta Team: 404
+b_viewer @ Delta Team: 404
+b_extra @ Delta Team: 404
+b_gone @ Delta Team: 404
+deleted_user @ Delta Team: 404
+pending_only @ Delta Team: 404
+bc_both1 @ Delta Team: 404
+bc_both2 @ Delta Team: 404
+bc_same @ Delta Team: 404
+bc_rev @ Delta Team: 404
+ab_both @ Delta Team: 404
+p6_only @ Delta Team: 404
+c_owner @ Delta Team: 404
+c_member @ Delta Team: 404
+third_party @ Delta Team: 404
+revoked_only @ Delta Team: 404
+declined_only @ Delta Team: 404
+d_owner @ Delta Team: 200 [["a_owner", true, "guest", "Test Team"], ["d_member", false, "viewer", null]]
+d_member @ Delta Team: 200 [["a_owner", true, "guest", "Test Team"], ["d_member", false, "viewer", null]]
+e_owner @ Delta Team: 404
+proj_guest @ Delta Team: 404
+a_owner @ Epsilon Team: 404
+a_editor @ Epsilon Team: 404
+a_viewer @ Epsilon Team: 404
+a_plain @ Epsilon Team: 404
+b_owner @ Epsilon Team: 404
+b_editor @ Epsilon Team: 404
+b_viewer @ Epsilon Team: 404
+b_extra @ Epsilon Team: 404
+b_gone @ Epsilon Team: 404
+deleted_user @ Epsilon Team: 404
+pending_only @ Epsilon Team: 404
+bc_both1 @ Epsilon Team: 404
+bc_both2 @ Epsilon Team: 404
+bc_same @ Epsilon Team: 404
+bc_rev @ Epsilon Team: 404
+ab_both @ Epsilon Team: 404
+p6_only @ Epsilon Team: 404
+c_owner @ Epsilon Team: 404
+c_member @ Epsilon Team: 404
+third_party @ Epsilon Team: 404
+revoked_only @ Epsilon Team: 404
+declined_only @ Epsilon Team: 404
+d_owner @ Epsilon Team: 404
+d_member @ Epsilon Team: 404
+e_owner @ Epsilon Team: 200 [["e_owner", false, "viewer", null]]
+proj_guest @ Epsilon Team: 404
+# getTeamMembers, the whole response (key order included)
+## a_owner @ Test Team: 200
+{"server_time": "<time>"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_editor", "userName": "a_editor", "userEmail": "a_editor@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "editor", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_owner", "userName": "a_owner", "userEmail": "test@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_plain", "userName": "a_plain", "userEmail": "a_plain@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_viewer", "userName": "a_viewer", "userEmail": "other@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "ab_both", "userName": "ab_both", "userEmail": "ab_both@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "b_editor", "userName": "b_editor", "userEmail": "b_editor@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "away", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Guest Team", "homeTeamName": "Guest Team", "homeTeamImgPath": "teams/beta.png"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "b_extra", "userName": "b_extra", "userEmail": "b_extra@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Guest Team", "homeTeamName": "Guest Team", "homeTeamImgPath": "teams/beta.png"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "b_owner", "userName": "b_owner", "userEmail": "b_owner@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "Designer", "memberRole": "guest", "baseCountry": "JP", "currentLocation": "", "timezone": "", "aboutMe": "Runs the guest team", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Guest Team", "homeTeamName": "Guest Team", "homeTeamImgPath": "teams/beta.png"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "b_viewer", "userName": "b_viewer", "userEmail": "b_viewer@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Guest Team", "homeTeamName": "Guest Team", "homeTeamImgPath": "teams/beta.png"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "bc_both1", "userName": "bc_both1", "userEmail": "bc_both1@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "<by grant order>", "homeTeamName": "<by grant order>", "homeTeamImgPath": "<by grant order>"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "bc_both2", "userName": "bc_both2", "userEmail": "bc_both2@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "<by grant order>", "homeTeamName": "<by grant order>", "homeTeamImgPath": "<by grant order>"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "bc_rev", "userName": "bc_rev", "userEmail": "bc_rev@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "<by grant order>", "homeTeamName": "<by grant order>", "homeTeamImgPath": "<by grant order>"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "bc_same", "userName": "bc_same", "userEmail": "bc_same@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "<by grant order>", "homeTeamName": "<by grant order>", "homeTeamImgPath": "<by grant order>"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "c_member", "userName": "c_member", "userEmail": "c_member@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "Lagos", "timezone": "Africa/Lagos", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Stranger Team", "homeTeamName": "Stranger Team", "homeTeamImgPath": "teams/gamma.png"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "c_owner", "userName": "c_owner", "userEmail": "c_owner@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Stranger Team", "homeTeamName": "Stranger Team", "homeTeamImgPath": "teams/gamma.png"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "d_member", "userName": "d_member", "userEmail": "d_member@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Delta Team", "homeTeamName": "Delta Team", "homeTeamImgPath": ""}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "d_owner", "userName": "d_owner", "userEmail": "d_owner@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Delta Team", "homeTeamName": "Delta Team", "homeTeamImgPath": ""}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "p6_only", "userName": "p6_only", "userEmail": "p6_only@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Guest Team", "homeTeamName": "Guest Team", "homeTeamImgPath": "teams/beta.png"}
+## a_editor @ Test Team: 200
+{"server_time": "<time>"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_editor", "userName": "a_editor", "userEmail": "a_editor@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "editor", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_owner", "userName": "a_owner", "userEmail": "test@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_plain", "userName": "a_plain", "userEmail": "a_plain@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_viewer", "userName": "a_viewer", "userEmail": "other@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "ab_both", "userName": "ab_both", "userEmail": "ab_both@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "b_editor", "userName": "b_editor", "userEmail": "b_editor@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "away", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Guest Team", "homeTeamName": "Guest Team", "homeTeamImgPath": "teams/beta.png"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "b_owner", "userName": "b_owner", "userEmail": "b_owner@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "Designer", "memberRole": "guest", "baseCountry": "JP", "currentLocation": "", "timezone": "", "aboutMe": "Runs the guest team", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Guest Team", "homeTeamName": "Guest Team", "homeTeamImgPath": "teams/beta.png"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "b_viewer", "userName": "b_viewer", "userEmail": "b_viewer@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Guest Team", "homeTeamName": "Guest Team", "homeTeamImgPath": "teams/beta.png"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "bc_both1", "userName": "bc_both1", "userEmail": "bc_both1@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "<by grant order>", "homeTeamName": "<by grant order>", "homeTeamImgPath": "<by grant order>"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "c_member", "userName": "c_member", "userEmail": "c_member@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "Lagos", "timezone": "Africa/Lagos", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Stranger Team", "homeTeamName": "Stranger Team", "homeTeamImgPath": "teams/gamma.png"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "c_owner", "userName": "c_owner", "userEmail": "c_owner@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Stranger Team", "homeTeamName": "Stranger Team", "homeTeamImgPath": "teams/gamma.png"}
+## a_viewer @ Test Team: 200
+{"server_time": "<time>"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_editor", "userName": "a_editor", "userEmail": "a_editor@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "editor", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_owner", "userName": "a_owner", "userEmail": "test@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_plain", "userName": "a_plain", "userEmail": "a_plain@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_viewer", "userName": "a_viewer", "userEmail": "other@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "ab_both", "userName": "ab_both", "userEmail": "ab_both@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "b_editor", "userName": "b_editor", "userEmail": "b_editor@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "away", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Guest Team", "homeTeamName": "Guest Team", "homeTeamImgPath": "teams/beta.png"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "b_owner", "userName": "b_owner", "userEmail": "b_owner@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "Designer", "memberRole": "guest", "baseCountry": "JP", "currentLocation": "", "timezone": "", "aboutMe": "Runs the guest team", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Guest Team", "homeTeamName": "Guest Team", "homeTeamImgPath": "teams/beta.png"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "c_member", "userName": "c_member", "userEmail": "c_member@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "Lagos", "timezone": "Africa/Lagos", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Stranger Team", "homeTeamName": "Stranger Team", "homeTeamImgPath": "teams/gamma.png"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "c_owner", "userName": "c_owner", "userEmail": "c_owner@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Stranger Team", "homeTeamName": "Stranger Team", "homeTeamImgPath": "teams/gamma.png"}
+## a_plain @ Test Team: 200
+{"server_time": "<time>"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_editor", "userName": "a_editor", "userEmail": "a_editor@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "editor", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_owner", "userName": "a_owner", "userEmail": "test@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_plain", "userName": "a_plain", "userEmail": "a_plain@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_viewer", "userName": "a_viewer", "userEmail": "other@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "ab_both", "userName": "ab_both", "userEmail": "ab_both@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+## proj_guest @ Test Team: 200
+{"server_time": "<time>"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_editor", "userName": "a_editor", "userEmail": "a_editor@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "editor", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_owner", "userName": "a_owner", "userEmail": "test@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "ab_both", "userName": "ab_both", "userEmail": "ab_both@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+## b_owner @ Test Team: 200
+{"server_time": "<time>"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_editor", "userName": "a_editor", "userEmail": "a_editor@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "editor", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_owner", "userName": "a_owner", "userEmail": "test@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "ab_both", "userName": "ab_both", "userEmail": "ab_both@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+## b_viewer @ Test Team: 200
+{"server_time": "<time>"}
+{"teamId": "Test Team", "teamName": "Test Team", "userId": "a_owner", "userName": "a_owner", "userEmail": "test@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+## b_owner @ Guest Team: 200
+{"server_time": "<time>"}
+{"teamId": "Guest Team", "teamName": "Guest Team", "userId": "ab_both", "userName": "ab_both", "userEmail": "ab_both@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Guest Team", "teamName": "Guest Team", "userId": "b_editor", "userName": "b_editor", "userEmail": "b_editor@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "editor", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "away", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Guest Team", "teamName": "Guest Team", "userId": "b_extra", "userName": "b_extra", "userEmail": "b_extra@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Guest Team", "teamName": "Guest Team", "userId": "b_owner", "userName": "b_owner", "userEmail": "b_owner@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "Designer", "memberRole": "viewer", "baseCountry": "JP", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "Runs the guest team", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Guest Team", "teamName": "Guest Team", "userId": "b_viewer", "userName": "b_viewer", "userEmail": "b_viewer@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Guest Team", "teamName": "Guest Team", "userId": "bc_both1", "userName": "bc_both1", "userEmail": "bc_both1@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Guest Team", "teamName": "Guest Team", "userId": "bc_both2", "userName": "bc_both2", "userEmail": "bc_both2@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Guest Team", "teamName": "Guest Team", "userId": "bc_rev", "userName": "bc_rev", "userEmail": "bc_rev@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Guest Team", "teamName": "Guest Team", "userId": "bc_same", "userName": "bc_same", "userEmail": "bc_same@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Guest Team", "teamName": "Guest Team", "userId": "p6_only", "userName": "p6_only", "userEmail": "p6_only@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Guest Team", "teamName": "Guest Team", "userId": "pending_only", "userName": "pending_only", "userEmail": "pending_only@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Guest Team", "teamName": "Guest Team", "userId": "a_editor", "userName": "a_editor", "userEmail": "a_editor@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Test Team", "homeTeamName": "Test Team", "homeTeamImgPath": "teams/alpha.png"}
+{"teamId": "Guest Team", "teamName": "Guest Team", "userId": "a_owner", "userName": "a_owner", "userEmail": "test@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Test Team", "homeTeamName": "Test Team", "homeTeamImgPath": "teams/alpha.png"}
+{"teamId": "Guest Team", "teamName": "Guest Team", "userId": "a_viewer", "userName": "a_viewer", "userEmail": "other@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Test Team", "homeTeamName": "Test Team", "homeTeamImgPath": "teams/alpha.png"}
+{"teamId": "Guest Team", "teamName": "Guest Team", "userId": "c_owner", "userName": "c_owner", "userEmail": "c_owner@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Stranger Team", "homeTeamName": "Stranger Team", "homeTeamImgPath": "teams/gamma.png"}
+## c_owner @ Stranger Team: 200
+{"server_time": "<time>"}
+{"teamId": "Stranger Team", "teamName": "Stranger Team", "userId": "bc_both1", "userName": "bc_both1", "userEmail": "bc_both1@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Stranger Team", "teamName": "Stranger Team", "userId": "bc_both2", "userName": "bc_both2", "userEmail": "bc_both2@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Stranger Team", "teamName": "Stranger Team", "userId": "bc_rev", "userName": "bc_rev", "userEmail": "bc_rev@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Stranger Team", "teamName": "Stranger Team", "userId": "bc_same", "userName": "bc_same", "userEmail": "bc_same@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Stranger Team", "teamName": "Stranger Team", "userId": "c_member", "userName": "c_member", "userEmail": "c_member@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "editor", "baseCountry": "", "phoneNumber": "", "currentLocation": "Lagos", "timezone": "Africa/Lagos", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Stranger Team", "teamName": "Stranger Team", "userId": "c_owner", "userName": "c_owner", "userEmail": "c_owner@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Stranger Team", "teamName": "Stranger Team", "userId": "declined_only", "userName": "declined_only", "userEmail": "declined_only@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Stranger Team", "teamName": "Stranger Team", "userId": "revoked_only", "userName": "revoked_only", "userEmail": "revoked_only@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Stranger Team", "teamName": "Stranger Team", "userId": "third_party", "userName": "third_party", "userEmail": "third_party@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Stranger Team", "teamName": "Stranger Team", "userId": "a_editor", "userName": "a_editor", "userEmail": "a_editor@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Test Team", "homeTeamName": "Test Team", "homeTeamImgPath": "teams/alpha.png"}
+{"teamId": "Stranger Team", "teamName": "Stranger Team", "userId": "a_owner", "userName": "a_owner", "userEmail": "test@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Test Team", "homeTeamName": "Test Team", "homeTeamImgPath": "teams/alpha.png"}
+{"teamId": "Stranger Team", "teamName": "Stranger Team", "userId": "b_owner", "userName": "b_owner", "userEmail": "b_owner@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "Designer", "memberRole": "guest", "baseCountry": "JP", "currentLocation": "", "timezone": "", "aboutMe": "Runs the guest team", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Guest Team", "homeTeamName": "Guest Team", "homeTeamImgPath": "teams/beta.png"}
+## d_owner @ Delta Team: 200
+{"server_time": "<time>"}
+{"teamId": "Delta Team", "teamName": "Delta Team", "userId": "d_member", "userName": "d_member", "userEmail": "d_member@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "viewer", "baseCountry": "", "phoneNumber": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false}
+{"teamId": "Delta Team", "teamName": "Delta Team", "userId": "a_owner", "userName": "a_owner", "userEmail": "test@example.com", "avatarImgPath": null, "isOfflineForced": "", "role": "", "memberRole": "guest", "baseCountry": "", "currentLocation": "", "timezone": "", "aboutMe": "", "customStatus": "", "customStatusExpiry": null, "tsLastSeen": "", "tsJoined": "<time>", "isDeleted": false, "isExternal": true, "homeTeamId": "Test Team", "homeTeamName": "Test Team", "homeTeamImgPath": "teams/alpha.png"}
+## b_owner @ Delta Team: 404
+{"error": "Team not found."}
+## e_owner @ Test Team: 404
+{"error": "Team not found."}
