@@ -301,6 +301,15 @@ def _resolve_user_name(raw: Any, access: LabelAccess) -> str | None:
     return access.username(raw) if raw else None
 
 
+def _resolve_user_names(raw: Any, access: LabelAccess) -> list[Any] | None:
+    """`member_ids`: a list of people, one query. Each id the caller may see
+    becomes a name; every other entry stays as the model wrote it."""
+    if not isinstance(raw, list):
+        return None
+    names = access.usernames(raw)
+    return [names.get(str(item), item) for item in raw]
+
+
 def _resolve_todo_item_title(raw: Any, access: LabelAccess) -> str | None:
     """`ToDoItem.title` for a raw item primary key so the approval card
     surfaces the human-readable todo instead of "73". None when the id
@@ -335,6 +344,10 @@ _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any, LabelAccess], str | None]] = {
     "default_assignee_id": _resolve_user_name,
     "reporter_id": _resolve_user_name,
     "new_assignee_id": _resolve_user_name,
+    # The project tools: the person being added, and the people a new project
+    # starts with. (Only the project tools take either argument.)
+    "user_id": _resolve_user_name,
+    "member_ids": _resolve_user_names,
     "item_id": _resolve_todo_item_title,
     "parent_item_id": _resolve_todo_item_title,
     "milestone_id": _resolve_milestone_title,

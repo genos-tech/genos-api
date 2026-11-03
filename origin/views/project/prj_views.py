@@ -1,4 +1,3 @@
-import re
 import time
 from collections import defaultdict
 
@@ -14,18 +13,21 @@ from origin.models.chat.unified_models import Channel
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import ExternalGrant, TeamMaster, TeamMembers
 from origin.models.project.prj_models import *
-from origin.search_engine.acl_dirty import mark_projects_dirty
 from origin.serializers.project.prj_serializers import *
 from origin.services.custom_fields import CUSTOM_FIELD_TYPES, validate_field_options
 from origin.services.external_grants import external_objects_for_member
 from origin.services.member_roles import (
-    ASSIGNABLE_ROLES,
     OWNER,
     can_manage,
-    is_assignable,
     resolve_project_role,
 )
 from origin.services.project_code import derive_project_code
+from origin.services.project_manage import (
+    ProjectRefused,
+    change_member_role,
+    set_project_code,
+    set_project_name,
+)
 from origin.services.security_events import record_security_event, user_label
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.inbox_approval import (
@@ -46,8 +48,6 @@ from origin.views.utils.scope_guards import (
     require_team_member_or_response,
 )
 from origin.views.utils.upload_validation import check_image_upload
-
-_PROJECT_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
 
 
 class ProjectMasterView(AuthenticatedAPIView):
@@ -92,91 +92,43 @@ class ProjectMasterView(AuthenticatedAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        if new_code is not None:
-            new_code = (new_code or "").strip().upper()
-            if not new_code:
-                return Response(
-                    {"error": "Code cannot be empty."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if not _PROJECT_CODE_RE.match(new_code):
-                return Response(
-                    {"error": "Code must be 2-6 uppercase letters/digits, starting with a letter."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if (
-                ProjectMaster.objects.filter(team=project.team_id, code=new_code)
-                .exclude(project_id=project.project_id)
-                .exists()
-            ):
-                return Response(
-                    {"error": "Another project in this team already uses that code."},
-                    status=status.HTTP_409_CONFLICT,
-                )
-            project.code = new_code
-            project.save(update_fields=["code", "ts_updated_at"])
-            # The code prefixes every task's display id, which search
-            # indexes (MIP-739): re-emit the project's tasks and milestones
-            # on the next incremental pass. Bumping each task's own
-            # `ts_updated_at` instead would reorder every list sorted by it.
-            mark_projects_dirty([project.project_id])
-
-        # Authorization for these two happened above (rename => manager,
-        # transfer => owner). What is left here is validation.
-        if new_name is not None or new_owner_id is not None:
-            owner_update_fields = []
+        try:
+            if new_code is not None:
+                set_project_code(project, new_code)
             if new_name is not None:
-                new_name = (new_name or "").strip()
-                if not new_name:
-                    return Response(
-                        {"error": "project_name cannot be empty."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                collision = (
-                    ProjectMaster.objects.filter(team=project.team_id, project_name=new_name)
-                    .exclude(project_id=project.project_id)
-                    .exists()
-                )
-                if collision:
-                    return Response(
-                        {"error": "Another project in this team already uses that name."},
-                        status=status.HTTP_409_CONFLICT,
-                    )
-                project.project_name = new_name
-                owner_update_fields.append("project_name")
+                set_project_name(project, new_name)
+        except ProjectRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
 
-            if new_owner_id is not None and str(new_owner_id) != str(project.owner.id):
-                is_member = ProjectMembers.objects.filter(
-                    team=project.team_id,
-                    project=project.project_id,
-                    attendee_id=new_owner_id,
-                ).exists()
-                if not is_member:
-                    return Response(
-                        {"error": "The new owner must already be a member of the project."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                previous_owner_id = project.owner_id
-                project.owner_id = new_owner_id
-                owner_update_fields.append("owner")
-
-            if owner_update_fields:
-                owner_update_fields.append("ts_updated_at")
-                project.save(update_fields=owner_update_fields)
-            if "owner" in owner_update_fields:
-                record_security_event(
-                    SecurityAction.OWNER_TRANSFERRED,
-                    request=request,
-                    team_id=project.team_id,
-                    target_type="project",
-                    target_id=project.project_id,
-                    target_label=project.project_name,
-                    metadata={
-                        "from_user_id": str(previous_owner_id),
-                        "to_user_id": str(project.owner_id),
-                        "to_user": user_label(project.owner_id),
-                    },
+        # Authorization for the owner transfer happened above (owner only).
+        # What is left here is validation.
+        if new_owner_id is not None and str(new_owner_id) != str(project.owner.id):
+            is_member = ProjectMembers.objects.filter(
+                team=project.team_id,
+                project=project.project_id,
+                attendee_id=new_owner_id,
+            ).exists()
+            if not is_member:
+                return Response(
+                    {"error": "The new owner must already be a member of the project."},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
+            previous_owner_id = project.owner_id
+            project.owner_id = new_owner_id
+            project.save(update_fields=["owner", "ts_updated_at"])
+            record_security_event(
+                SecurityAction.OWNER_TRANSFERRED,
+                request=request,
+                team_id=project.team_id,
+                target_type="project",
+                target_id=project.project_id,
+                target_label=project.project_name,
+                metadata={
+                    "from_user_id": str(previous_owner_id),
+                    "to_user_id": str(project.owner_id),
+                    "to_user": user_label(project.owner_id),
+                },
+            )
 
         return Response(ProjectMasterSerializer(project).data, status=status.HTTP_200_OK)
 
@@ -2267,47 +2219,10 @@ class ProjectMemberRoleView(AuthenticatedAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        if not is_assignable(member_role):
-            return Response(
-                {"error": f"member_role must be one of {list(ASSIGNABLE_ROLES)}."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if project.owner_id is not None and str(project.owner_id) == str(user_id):
-            return Response(
-                {
-                    "error": "The project owner's role cannot be changed. "
-                    "Transfer ownership instead."
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        row = ProjectMembers.objects.filter(project_id=project_id, attendee_id=user_id).first()
-        if row is None:
-            return Response(
-                {"error": "That user is not a member of this project."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        previous_role = row.member_role
-        row.member_role = member_role
-        row.save(update_fields=["member_role", "ts_updated_at"])
-        if previous_role != member_role:
-            record_security_event(
-                SecurityAction.ROLE_CHANGED,
-                request=request,
-                team_id=project.team_id,
-                target_type="user",
-                target_id=user_id,
-                target_label=user_label(user_id),
-                metadata={
-                    "scope": "project",
-                    "project_id": project.project_id,
-                    "project": project.project_name,
-                    "from": previous_role,
-                    "to": member_role,
-                },
-            )
+        try:
+            change_member_role(project, user_id, member_role, request=request)
+        except ProjectRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
 
         return Response(
             {"userId": str(user_id), "memberRole": member_role},

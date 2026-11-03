@@ -84,6 +84,8 @@ TOOL_CATEGORY: dict[str, str] = {
     "get_sprint_summary": "milestones",
     "manage_milestone": "milestones",
     "manage_sprint": "milestones",
+    "manage_project": "projects",
+    "manage_project_members": "projects",
     "delete_sprint": "milestones",
     "delete_milestone": "milestones",
     # --- team ---

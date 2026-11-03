@@ -52,6 +52,8 @@ SINGLE_WRITE_TOOLS = frozenset(
         "manage_milestone",
         "delete_milestone",
         "manage_sprint",
+        "manage_project",
+        "manage_project_members",
         "delete_sprint",
     }
 )
