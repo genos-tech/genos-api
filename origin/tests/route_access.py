@@ -519,7 +519,7 @@ REGISTRY = {
     "origin.views.project.prj_views.ProjectTaskFieldRulesView": checked("_is_member", "can_manage"),
     "origin.views.project.prj_views.ProjectTaskTemplateView": checked("_is_member"),
     "origin.views.project.prj_views.ProjectTemplateDefaultsView": checked("_is_member"),
-    "origin.views.project.prj_views.ProjectsView": checked("require_team_member_or_response"),
+    "origin.views.project.prj_views.ProjectsView": checked("is_team_member"),
     # views.public.mcp.views
     "origin.views.public.mcp.views.McpView": checked("is_team_member"),
     # views.public.openapi

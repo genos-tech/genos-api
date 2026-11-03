@@ -447,20 +447,19 @@ class ProjectsView(AuthenticatedAPIView):
         # affordance — an outsider enumerating the host's projects is the
         # roster-exposure failure in a different costume.
         visible_project_ids = None
-        # Projects another team shared with THIS team, that this person was
-        # admitted to. They belong in the caller's own list: a shared
-        # project is work you do, and requiring people to notice the host
-        # company in their team switcher and change teams to reach it meant
-        # nobody found it at all. Keyed per-person, so a colleague who was
-        # never admitted still sees nothing.
-        external_grants = {}
-        if is_team_member(team_id, attendee_id):
-            # Keeps the deleted-team check that the plain guard performs.
-            if res := require_team_member_or_response(request.user, team_id):
-                return res
-            external_grants = external_objects_for_member(
-                ExternalGrant.ObjectType.PROJECT, team_id, attendee_id
-            )
+        # Membership is decided ONCE, before the cache is read: a removed
+        # member must not be handed the list that was cached while they
+        # still belonged. The cache sits right below it for the opposite
+        # reason: the shared-project lookup further down is only needed to
+        # BUILD the list, so a hit skips it (the cached list already holds
+        # whatever it found).
+        is_member = is_team_member(team_id, attendee_id)
+        if is_member:
+            # The deleted-team check the plain guard
+            # (`require_team_member_or_response`) performs. Not called here:
+            # it asks `is_team_member` a second time for an answer we hold.
+            if not TeamMaster.objects.filter(team_id=team_id, is_deleted=False).exists():
+                return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
         else:
             visible_project_ids = guest_project_ids(team_id, attendee_id)
             if not visible_project_ids:
@@ -470,6 +469,18 @@ class ProjectsView(AuthenticatedAPIView):
         cached = cache.get(cache_key)
         if cached is not None:
             return Response(cached, status=status.HTTP_200_OK)
+
+        # Projects another team shared with THIS team, that this person was
+        # admitted to. They belong in the caller's own list: a shared
+        # project is work you do, and requiring people to notice the host
+        # company in their team switcher and change teams to reach it meant
+        # nobody found it at all. Keyed per-person, so a colleague who was
+        # never admitted still sees nothing.
+        external_grants = {}
+        if is_member:
+            external_grants = external_objects_for_member(
+                ExternalGrant.ObjectType.PROJECT, team_id, attendee_id
+            )
 
         # Deliberately not scoped by `team`: the row that matters for an
         # external project is the one written against the HOST team, and
@@ -493,8 +504,10 @@ class ProjectsView(AuthenticatedAPIView):
         for project_tag in (
             ProjectTags.objects.filter(team=team_id).order_by("ts_updated_at").reverse()
         ):
-            if project_tag.project:
-                project_tags[project_tag.project.project_id].append(
+            # `project_id` is the column the row already holds; `.project`
+            # would load the whole project once per tag row.
+            if project_tag.project_id is not None:
+                project_tags[project_tag.project_id].append(
                     {
                         "tagName": project_tag.tag_name,
                         "tagColor": project_tag.tag_color,
@@ -528,7 +541,10 @@ class ProjectsView(AuthenticatedAPIView):
                 "projectLabels": project_labels[project.project_id],
                 "isPrivate": project.is_private,
                 "isJoined": project.is_joined,
-                "systemUserId": project.project_system_user.id,
+                # The FK column, not `project_system_user.id`: that loaded
+                # the user once per project. Null (a deleted system user)
+                # reads as null rather than failing the whole list.
+                "systemUserId": project.project_system_user_id,
                 # Named so the client can badge the row and, more
                 # importantly, address the host team when it loads the
                 # project's tasks — those endpoints are still scoped to the
