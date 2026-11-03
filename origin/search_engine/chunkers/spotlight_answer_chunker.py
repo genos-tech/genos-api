@@ -25,6 +25,14 @@ v1 collects single-turn runs only (the first/only run in a session): a
 follow-up turn can lean on a prior turn's private source its own steps don't
 record, so gating it from its own sources alone would be unsound.
 
+An ask opened from a thread or a note ("Ask about this thread / note") is never
+collected (MIP-978): the model was handed an LLM-made summary of that thread /
+note in its system prompt. That summary is not a tool result, so it is not one
+of the run's sources and the audience above does not cover it; an answer that
+quotes it would reach everyone who can see whatever else the run read. Such a
+run is a tombstone (`shared_answers.is_scoped_session`), so a copy collected
+before the rule is purged.
+
 The asker can also keep an answer out of this lane (MIP-891): a per-user
 preference ("let my answers help teammates", `CustomUser.share_answers_with_team`,
 default on) and a per-run withdrawal (`AgentRun.withheld_from_team_answers`).

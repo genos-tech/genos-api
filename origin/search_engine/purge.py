@@ -29,11 +29,12 @@ Fail-safe rules the sweep MUST keep:
 
 Known limitation: a `spotlight_answer` / `conversation` chunk is purged
 only when its `AgentRun` row is gone (a `spotlight_answer` chunk also when its
-asker withdrew it or opted out of sharing: the cheap, DB-only half of the
-collection rule, `shared_answers.still_shareable`). An old answer whose *sources* were
-since deleted keeps its (already-collected) text until the run itself is
-deleted — re-auditing every run's source ACLs per sweep is deliberately
-out of scope (see `source_visibility.py` for the collection-time rule).
+asker withdrew it or opted out of sharing, or it was asked from a thread / note:
+the cheap, DB-only half of the collection rule, `shared_answers.still_shareable`).
+An old answer whose *sources* were since deleted keeps its (already-collected)
+text until the run itself is deleted — re-auditing every run's source ACLs per
+sweep is deliberately out of scope (see `source_visibility.py` for the
+collection-time rule).
 """
 
 from __future__ import annotations
